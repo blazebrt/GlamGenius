@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -14,17 +14,46 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useUserStore } from '../../src/store/userStore';
 
 const OCCASIONS = [
-  { id: 'everyday', label: 'Everyday', icon: 'sunny-outline' },
+  { id: 'everyday', label: 'Daily', icon: 'sunny-outline' },
   { id: 'office', label: 'Office', icon: 'briefcase-outline' },
   { id: 'party', label: 'Party', icon: 'sparkles-outline' },
-  { id: 'wedding', label: 'Wedding', icon: 'heart-outline' },
-  { id: 'date', label: 'Date Night', icon: 'moon-outline' },
+  { id: 'wedding', label: 'Shaadi', icon: 'heart-outline' },
+  { id: 'festival', label: 'Festival', icon: 'star-outline' },
+  { id: 'date', label: 'Date', icon: 'moon-outline' },
 ];
 
 const QUICK_ACTIONS = [
   { id: 'scan', label: 'AI Scan', icon: 'scan', color: '#D4AF37', route: '/scan' },
-  { id: 'quiz', label: 'Style Quiz', icon: 'help-circle', color: '#9B59B6', route: '/quiz' },
-  { id: 'recommend', label: 'Get Advice', icon: 'sparkles', color: '#3498DB', route: '/quiz' },
+  { id: 'quiz', label: 'Build Profile', icon: 'person-add', color: '#9B59B6', route: '/style-quiz' },
+  { id: 'recommend', label: 'Get Advice', icon: 'sparkles', color: '#3498DB', route: '/get-advice' },
+];
+
+// Hourly changing tips for Indian beauty care
+const BEAUTY_TIPS = [
+  { tip: "Apply haldi (turmeric) face pack weekly for natural glow!", icon: "flower" },
+  { tip: "Drink nimbu paani (lemon water) daily for clear skin.", icon: "water" },
+  { tip: "Use coconut oil for deep hair conditioning - desi beauty secret!", icon: "leaf" },
+  { tip: "Rose water toner keeps skin fresh in Indian weather.", icon: "rose" },
+  { tip: "Aloe vera gel is perfect for post-sun skin care.", icon: "sunny" },
+  { tip: "Multani mitti removes tan and brightens skin naturally.", icon: "sparkles" },
+  { tip: "Massage scalp with warm oil before every hair wash.", icon: "hand-left" },
+  { tip: "Green tea helps reduce puffy eyes - try ice cubes!", icon: "cafe" },
+  { tip: "Besan (gram flour) pack is great for oily skin.", icon: "nutrition" },
+  { tip: "Stay hydrated - drink 8 glasses of water daily!", icon: "water" },
+  { tip: "Apply sunscreen before stepping out - even on cloudy days.", icon: "shield-checkmark" },
+  { tip: "Amla (gooseberry) juice strengthens hair from roots.", icon: "leaf" },
+  { tip: "Cucumber slices reduce dark circles naturally.", icon: "eye" },
+  { tip: "Hibiscus oil promotes hair growth and prevents greying.", icon: "flower" },
+  { tip: "Neem face wash controls acne and pimples effectively.", icon: "medical" },
+  { tip: "Papaya pack exfoliates dead skin cells gently.", icon: "nutrition" },
+  { tip: "Fenugreek (methi) seeds are amazing for hair health.", icon: "leaf" },
+  { tip: "Honey and lemon face mask brightens dull skin.", icon: "sunny" },
+  { tip: "Regular threading keeps eyebrows neat and shaped.", icon: "eye" },
+  { tip: "Apply kajal/kohl before bed to keep eyes cool.", icon: "eye" },
+  { tip: "Curd (dahi) pack adds shine and softness to hair.", icon: "nutrition" },
+  { tip: "Sandalwood paste soothes skin and reduces blemishes.", icon: "flower" },
+  { tip: "Drink coconut water for natural skin hydration.", icon: "water" },
+  { tip: "Regular facials keep skin clean and glowing.", icon: "sparkles" },
 ];
 
 export default function HomeScreen() {
@@ -33,6 +62,7 @@ export default function HomeScreen() {
   const { user, fetchUser, userId } = useUserStore();
   const [refreshing, setRefreshing] = useState(false);
   const [greeting, setGreeting] = useState('');
+  const [currentTip, setCurrentTip] = useState(BEAUTY_TIPS[0]);
 
   useEffect(() => {
     const hour = new Date().getHours();
@@ -40,19 +70,36 @@ export default function HomeScreen() {
     else if (hour < 17) setGreeting('Good Afternoon');
     else setGreeting('Good Evening');
 
+    // Set tip based on current hour
+    const tipIndex = hour % BEAUTY_TIPS.length;
+    setCurrentTip(BEAUTY_TIPS[tipIndex]);
+
     if (userId) {
       fetchUser();
     }
+
+    // Update tip every hour
+    const interval = setInterval(() => {
+      const newHour = new Date().getHours();
+      const newTipIndex = newHour % BEAUTY_TIPS.length;
+      setCurrentTip(BEAUTY_TIPS[newTipIndex]);
+    }, 60 * 60 * 1000); // Every hour
+
+    return () => clearInterval(interval);
   }, [userId]);
 
-  const onRefresh = async () => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await fetchUser();
+    // Update tip on refresh too
+    const hour = new Date().getHours();
+    const tipIndex = hour % BEAUTY_TIPS.length;
+    setCurrentTip(BEAUTY_TIPS[tipIndex]);
     setRefreshing(false);
-  };
+  }, [fetchUser]);
 
   const handleOccasionSelect = (occasion: string) => {
-    router.push({ pathname: '/quiz', params: { occasion } });
+    router.push({ pathname: '/get-advice', params: { occasion } });
   };
 
   return (
@@ -68,7 +115,7 @@ export default function HomeScreen() {
         <Animated.View entering={FadeInDown.delay(100)} style={styles.header}>
           <View>
             <Text style={styles.greeting}>{greeting}</Text>
-            <Text style={styles.userName}>{user?.name || 'Beauty Enthusiast'}</Text>
+            <Text style={styles.userName}>{user?.name || 'Beauty Lover'}</Text>
           </View>
           <TouchableOpacity style={styles.notificationBtn}>
             <Ionicons name="notifications-outline" size={24} color="#FFFFFF" />
@@ -105,7 +152,7 @@ export default function HomeScreen() {
             <Ionicons name="scan-circle" size={40} color="#D4AF37" />
             <View style={styles.scanPromptText}>
               <Text style={styles.scanPromptTitle}>Complete Your Profile</Text>
-              <Text style={styles.scanPromptDesc}>Take a scan to get personalized recommendations</Text>
+              <Text style={styles.scanPromptDesc}>Take AI scan for personalized packages</Text>
             </View>
             <TouchableOpacity
               style={styles.scanPromptBtn}
@@ -137,7 +184,7 @@ export default function HomeScreen() {
 
         {/* Occasions */}
         <Animated.View entering={FadeInDown.delay(400)} style={styles.section}>
-          <Text style={styles.sectionTitle}>What's the Occasion?</Text>
+          <Text style={styles.sectionTitle}>Aaj Ka Mood? (Today's Occasion)</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.occasionsScroll}>
             {OCCASIONS.map((occasion) => (
               <TouchableOpacity
@@ -157,38 +204,42 @@ export default function HomeScreen() {
         {/* Featured Services */}
         <Animated.View entering={FadeInDown.delay(500)} style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Featured Services</Text>
+            <Text style={styles.sectionTitle}>Popular Packages</Text>
             <TouchableOpacity onPress={() => router.push('/(tabs)/services')}>
               <Text style={styles.seeAllText}>See All</Text>
             </TouchableOpacity>
           </View>
           <View style={styles.featuredServices}>
-            <TouchableOpacity style={styles.featuredCard}>
+            <TouchableOpacity style={styles.featuredCard} onPress={() => router.push('/(tabs)/services')}>
               <View style={styles.featuredIconContainer}>
                 <Ionicons name="cut" size={28} color="#D4AF37" />
               </View>
-              <Text style={styles.featuredTitle}>Luxury Hair Cut</Text>
-              <Text style={styles.featuredPrice}>From $80</Text>
+              <Text style={styles.featuredTitle}>Hair Styling</Text>
+              <Text style={styles.featuredPrice}>From ₹499</Text>
+              <View style={styles.valueBadge}>
+                <Text style={styles.valueBadgeText}>Value Deal</Text>
+              </View>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.featuredCard}>
+            <TouchableOpacity style={styles.featuredCard} onPress={() => router.push('/(tabs)/services')}>
               <View style={styles.featuredIconContainer}>
                 <Ionicons name="flower" size={28} color="#D4AF37" />
               </View>
-              <Text style={styles.featuredTitle}>Hydrating Facial</Text>
-              <Text style={styles.featuredPrice}>From $120</Text>
+              <Text style={styles.featuredTitle}>Glow Facial</Text>
+              <Text style={styles.featuredPrice}>From ₹799</Text>
+              <View style={styles.valueBadge}>
+                <Text style={styles.valueBadgeText}>Best Seller</Text>
+              </View>
             </TouchableOpacity>
           </View>
         </Animated.View>
 
-        {/* Tip of the Day */}
+        {/* Tip of the Hour */}
         <Animated.View entering={FadeInDown.delay(600)} style={styles.tipCard}>
           <View style={styles.tipHeader}>
-            <Ionicons name="bulb" size={20} color="#D4AF37" />
-            <Text style={styles.tipTitle}>Tip of the Day</Text>
+            <Ionicons name={currentTip.icon as any} size={20} color="#D4AF37" />
+            <Text style={styles.tipTitle}>Beauty Tip of the Hour</Text>
           </View>
-          <Text style={styles.tipText}>
-            Apply sunscreen even on cloudy days! UV rays can penetrate clouds and cause skin damage.
-          </Text>
+          <Text style={styles.tipText}>{currentTip.tip}</Text>
         </Animated.View>
       </ScrollView>
     </View>
@@ -334,6 +385,7 @@ const styles = StyleSheet.create({
   quickActionLabel: {
     fontSize: 12,
     color: 'rgba(255, 255, 255, 0.8)',
+    textAlign: 'center',
   },
   occasionsScroll: {
     marginLeft: -4,
@@ -341,12 +393,12 @@ const styles = StyleSheet.create({
   occasionItem: {
     alignItems: 'center',
     marginRight: 16,
-    width: 80,
+    width: 70,
   },
   occasionIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     backgroundColor: 'rgba(212, 175, 55, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -355,7 +407,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(212, 175, 55, 0.3)',
   },
   occasionLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: 'rgba(255, 255, 255, 0.8)',
     textAlign: 'center',
   },
@@ -388,9 +440,22 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   featuredPrice: {
-    fontSize: 12,
+    fontSize: 14,
+    fontWeight: '700',
     color: '#D4AF37',
     marginTop: 4,
+  },
+  valueBadge: {
+    backgroundColor: 'rgba(46, 204, 113, 0.2)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginTop: 8,
+  },
+  valueBadgeText: {
+    fontSize: 10,
+    color: '#2ECC71',
+    fontWeight: '600',
   },
   tipCard: {
     backgroundColor: 'rgba(212, 175, 55, 0.08)',

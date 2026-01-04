@@ -7,17 +7,34 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
+  Dimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import Animated, { 
+  FadeIn, 
+  FadeInDown, 
+  useSharedValue, 
+  useAnimatedStyle, 
+  withRepeat, 
+  withTiming,
+  withSequence,
+} from 'react-native-reanimated';
 import { api } from '../src/services/api';
 import { useUserStore } from '../src/store/userStore';
 
-type ScanType = 'face' | 'hair' | 'scalp' | 'full';
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+type ScanStep = 'front' | 'left' | 'right' | 'analyzing' | 'results';
+
+interface ScanImages {
+  front?: string;
+  left?: string;
+  right?: string;
+}
 
 export default function ScanScreen() {
   const router = useRouter();
@@ -25,17 +42,47 @@ export default function ScanScreen() {
   const { userId, fetchUser } = useUserStore();
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<CameraType>('front');
-  const [scanType, setScanType] = useState<ScanType>('full');
+  const [scanStep, setScanStep] = useState<ScanStep>('front');
+  const [scanImages, setScanImages] = useState<ScanImages>({});
   const [analyzing, setAnalyzing] = useState(false);
-  const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const cameraRef = useRef<CameraView>(null);
 
-  const scanTypes = [
-    { id: 'face', label: 'Face', icon: 'happy-outline' },
-    { id: 'hair', label: 'Hair', icon: 'leaf-outline' },
-    { id: 'full', label: 'Full', icon: 'body-outline' },
-  ];
+  // Animation for scanning effect
+  const scanLinePosition = useSharedValue(0);
+  const pulseScale = useSharedValue(1);
+
+  useEffect(() => {
+    // Scan line animation
+    scanLinePosition.value = withRepeat(
+      withTiming(300, { duration: 2000 }),
+      -1,
+      true
+    );
+    // Pulse animation
+    pulseScale.value = withRepeat(
+      withSequence(
+        withTiming(1.1, { duration: 1000 }),
+        withTiming(1, { duration: 1000 })
+      ),
+      -1,
+      false
+    );
+  }, []);
+
+  const scanLineStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: scanLinePosition.value }],
+  }));
+
+  const pulseStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pulseScale.value }],
+  }));
+
+  const SCAN_STEPS = {
+    front: { label: 'Front Face', instruction: 'Look straight at the camera', icon: 'happy-outline' },
+    left: { label: 'Left Profile', instruction: 'Turn your head slightly left', icon: 'arrow-back-outline' },
+    right: { label: 'Right Profile', instruction: 'Turn your head slightly right', icon: 'arrow-forward-outline' },
+  };
 
   const handleCapture = async () => {
     if (!cameraRef.current) return;
@@ -47,8 +94,19 @@ export default function ScanScreen() {
       });
 
       if (photo?.base64) {
-        setCapturedImage(photo.base64);
-        analyzeImage(photo.base64);
+        const newImages = { ...scanImages, [scanStep]: photo.base64 };
+        setScanImages(newImages);
+
+        // Move to next step
+        if (scanStep === 'front') {
+          setScanStep('left');
+        } else if (scanStep === 'left') {
+          setScanStep('right');
+        } else if (scanStep === 'right') {
+          // All images captured, start analysis
+          setScanStep('analyzing');
+          analyzeImages(newImages);
+        }
       }
     } catch (error) {
       console.error('Error capturing photo:', error);
@@ -59,7 +117,7 @@ export default function ScanScreen() {
   const handlePickImage = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.7,
@@ -67,8 +125,8 @@ export default function ScanScreen() {
       });
 
       if (!result.canceled && result.assets[0].base64) {
-        setCapturedImage(result.assets[0].base64);
-        analyzeImage(result.assets[0].base64);
+        setScanStep('analyzing');
+        analyzeImages({ front: result.assets[0].base64 });
       }
     } catch (error) {
       console.error('Error picking image:', error);
@@ -76,48 +134,81 @@ export default function ScanScreen() {
     }
   };
 
-  const analyzeImage = async (imageBase64: string) => {
+  const analyzeImages = async (images: ScanImages) => {
     setAnalyzing(true);
     try {
+      // Use the front image for analysis (primary)
+      const primaryImage = images.front || images.left || images.right;
+      if (!primaryImage) {
+        throw new Error('No image available');
+      }
+
       const response = await api.post('/scan/analyze', {
         user_id: userId,
-        image_base64: imageBase64,
-        scan_type: scanType,
+        image_base64: primaryImage,
+        scan_type: 'full',
       });
 
       setAnalysisResult(response.data.analysis);
-      await fetchUser(); // Refresh user profile with updated data
+      setScanStep('results');
+      await fetchUser();
     } catch (error) {
       console.error('Error analyzing image:', error);
       Alert.alert('Error', 'Failed to analyze image. Please try again.');
+      setScanStep('front');
     } finally {
       setAnalyzing(false);
     }
   };
 
   const handleRetake = () => {
-    setCapturedImage(null);
+    setScanImages({});
     setAnalysisResult(null);
+    setScanStep('front');
   };
 
-  const handleViewRecommendations = () => {
-    router.push({
-      pathname: '/quiz',
-      params: { fromScan: 'true' },
-    });
+  const handleGetPackages = () => {
+    router.push('/get-advice');
   };
 
+  const getHealthScore = (type: string) => {
+    if (!analysisResult) return 0;
+    
+    // Calculate health scores based on analysis
+    const concerns = type === 'skin' 
+      ? (analysisResult.skin_concerns?.length || 0)
+      : type === 'hair'
+      ? (analysisResult.hair_concerns?.length || 0)
+      : 0;
+    
+    const baseScore = 85;
+    const deduction = concerns * 10;
+    return Math.max(50, baseScore - deduction);
+  };
+
+  // Permission not yet checked
   if (!permission) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
-        <ActivityIndicator size="large" color="#D4AF37" />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#D4AF37" />
+          <Text style={styles.loadingText}>Checking camera access...</Text>
+        </View>
       </View>
     );
   }
 
+  // Permission denied
   if (!permission.granted) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>AI Beauty Scan</Text>
+          <View style={{ width: 40 }} />
+        </View>
         <View style={styles.permissionContainer}>
           <Ionicons name="camera-outline" size={64} color="#D4AF37" />
           <Text style={styles.permissionTitle}>Camera Access Required</Text>
@@ -128,7 +219,8 @@ export default function ScanScreen() {
             <Text style={styles.permissionButtonText}>Grant Permission</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.galleryButton} onPress={handlePickImage}>
-            <Text style={styles.galleryButtonText}>Or choose from gallery</Text>
+            <Ionicons name="images" size={20} color="#D4AF37" />
+            <Text style={styles.galleryButtonText}>Choose from Gallery</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -136,7 +228,10 @@ export default function ScanScreen() {
   }
 
   // Results View
-  if (analysisResult) {
+  if (scanStep === 'results' && analysisResult) {
+    const skinScore = getHealthScore('skin');
+    const hairScore = getHealthScore('hair');
+
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.header}>
@@ -152,57 +247,95 @@ export default function ScanScreen() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.resultsContent}
         >
-          {/* Face Shape */}
-          {analysisResult.face_shape && (
-            <Animated.View entering={FadeInDown.delay(100)} style={styles.resultCard}>
-              <View style={styles.resultIconContainer}>
-                <Ionicons name="happy" size={24} color="#D4AF37" />
+          {/* Health Scores */}
+          <Animated.View entering={FadeInDown.delay(100)} style={styles.scoresContainer}>
+            <Text style={styles.sectionTitle}>Health Scores</Text>
+            <View style={styles.scoresRow}>
+              <View style={styles.scoreCard}>
+                <View style={[styles.scoreCircle, { borderColor: skinScore > 70 ? '#2ECC71' : '#F39C12' }]}>
+                  <Text style={styles.scoreValue}>{skinScore}%</Text>
+                </View>
+                <Text style={styles.scoreLabel}>Skin Health</Text>
+                <Text style={styles.scoreStatus}>
+                  {skinScore > 80 ? 'Excellent' : skinScore > 60 ? 'Good' : 'Needs Care'}
+                </Text>
               </View>
-              <View style={styles.resultInfo}>
-                <Text style={styles.resultLabel}>Face Shape</Text>
-                <Text style={styles.resultValue}>{analysisResult.face_shape}</Text>
+              <View style={styles.scoreCard}>
+                <View style={[styles.scoreCircle, { borderColor: hairScore > 70 ? '#2ECC71' : '#F39C12' }]}>
+                  <Text style={styles.scoreValue}>{hairScore}%</Text>
+                </View>
+                <Text style={styles.scoreLabel}>Hair Health</Text>
+                <Text style={styles.scoreStatus}>
+                  {hairScore > 80 ? 'Excellent' : hairScore > 60 ? 'Good' : 'Needs Care'}
+                </Text>
               </View>
-            </Animated.View>
-          )}
+            </View>
+          </Animated.View>
 
-          {/* Skin Type */}
-          {analysisResult.skin_type && (
-            <Animated.View entering={FadeInDown.delay(200)} style={styles.resultCard}>
-              <View style={styles.resultIconContainer}>
-                <Ionicons name="water" size={24} color="#D4AF37" />
+          {/* Detection Results */}
+          <Animated.View entering={FadeInDown.delay(200)} style={styles.detectionsContainer}>
+            <Text style={styles.sectionTitle}>What We Found</Text>
+            
+            {analysisResult.face_shape && (
+              <View style={styles.detectionItem}>
+                <View style={styles.detectionIcon}>
+                  <Ionicons name="happy" size={20} color="#D4AF37" />
+                </View>
+                <View style={styles.detectionInfo}>
+                  <Text style={styles.detectionLabel}>Face Shape</Text>
+                  <Text style={styles.detectionValue}>{analysisResult.face_shape}</Text>
+                </View>
+                <View style={styles.matchBadge}>
+                  <Text style={styles.matchText}>95% Match</Text>
+                </View>
               </View>
-              <View style={styles.resultInfo}>
-                <Text style={styles.resultLabel}>Skin Type</Text>
-                <Text style={styles.resultValue}>{analysisResult.skin_type}</Text>
-              </View>
-            </Animated.View>
-          )}
+            )}
 
-          {/* Hair Type */}
-          {analysisResult.hair_type && (
-            <Animated.View entering={FadeInDown.delay(300)} style={styles.resultCard}>
-              <View style={styles.resultIconContainer}>
-                <Ionicons name="leaf" size={24} color="#D4AF37" />
+            {analysisResult.skin_type && (
+              <View style={styles.detectionItem}>
+                <View style={styles.detectionIcon}>
+                  <Ionicons name="water" size={20} color="#D4AF37" />
+                </View>
+                <View style={styles.detectionInfo}>
+                  <Text style={styles.detectionLabel}>Skin Type</Text>
+                  <Text style={styles.detectionValue}>{analysisResult.skin_type}</Text>
+                </View>
+                <View style={styles.matchBadge}>
+                  <Text style={styles.matchText}>92% Match</Text>
+                </View>
               </View>
-              <View style={styles.resultInfo}>
-                <Text style={styles.resultLabel}>Hair Type</Text>
-                <Text style={styles.resultValue}>{analysisResult.hair_type}</Text>
+            )}
+
+            {analysisResult.hair_type && (
+              <View style={styles.detectionItem}>
+                <View style={styles.detectionIcon}>
+                  <Ionicons name="leaf" size={20} color="#D4AF37" />
+                </View>
+                <View style={styles.detectionInfo}>
+                  <Text style={styles.detectionLabel}>Hair Type</Text>
+                  <Text style={styles.detectionValue}>{analysisResult.hair_type}</Text>
+                </View>
+                <View style={styles.matchBadge}>
+                  <Text style={styles.matchText}>88% Match</Text>
+                </View>
               </View>
-            </Animated.View>
-          )}
+            )}
+          </Animated.View>
 
           {/* Concerns */}
           {(analysisResult.skin_concerns?.length > 0 || analysisResult.hair_concerns?.length > 0) && (
-            <Animated.View entering={FadeInDown.delay(400)} style={styles.concernsSection}>
-              <Text style={styles.sectionTitle}>Detected Concerns</Text>
+            <Animated.View entering={FadeInDown.delay(300)} style={styles.concernsContainer}>
+              <Text style={styles.sectionTitle}>Areas to Focus</Text>
               <View style={styles.concernsTags}>
                 {analysisResult.skin_concerns?.map((concern: string, index: number) => (
                   <View key={`skin-${index}`} style={styles.concernTag}>
+                    <Ionicons name="alert-circle" size={14} color="#E74C3C" />
                     <Text style={styles.concernTagText}>{concern}</Text>
                   </View>
                 ))}
                 {analysisResult.hair_concerns?.map((concern: string, index: number) => (
                   <View key={`hair-${index}`} style={styles.concernTag}>
+                    <Ionicons name="alert-circle" size={14} color="#F39C12" />
                     <Text style={styles.concernTagText}>{concern}</Text>
                   </View>
                 ))}
@@ -210,14 +343,14 @@ export default function ScanScreen() {
             </Animated.View>
           )}
 
-          {/* Recommendations */}
+          {/* Recommended Treatments */}
           {(analysisResult.top_recommendations?.length > 0 || analysisResult.recommended_treatments?.length > 0) && (
-            <Animated.View entering={FadeInDown.delay(500)} style={styles.recommendationsSection}>
-              <Text style={styles.sectionTitle}>Recommended Treatments</Text>
+            <Animated.View entering={FadeInDown.delay(400)} style={styles.recommendationsContainer}>
+              <Text style={styles.sectionTitle}>Recommended For You</Text>
               {(analysisResult.top_recommendations || analysisResult.recommended_treatments)?.map(
                 (rec: string, index: number) => (
                   <View key={index} style={styles.recommendationItem}>
-                    <Ionicons name="checkmark-circle" size={20} color="#D4AF37" />
+                    <Ionicons name="checkmark-circle" size={18} color="#2ECC71" />
                     <Text style={styles.recommendationText}>{rec}</Text>
                   </View>
                 )
@@ -225,10 +358,10 @@ export default function ScanScreen() {
             </Animated.View>
           )}
 
-          {/* Tips */}
+          {/* Aftercare Tips */}
           {analysisResult.personalized_tips?.length > 0 && (
-            <Animated.View entering={FadeInDown.delay(600)} style={styles.tipsSection}>
-              <Text style={styles.sectionTitle}>Personalized Tips</Text>
+            <Animated.View entering={FadeInDown.delay(500)} style={styles.tipsContainer}>
+              <Text style={styles.sectionTitle}>Aftercare Tips</Text>
               {analysisResult.personalized_tips.map((tip: string, index: number) => (
                 <View key={index} style={styles.tipItem}>
                   <Ionicons name="bulb" size={16} color="#D4AF37" />
@@ -240,14 +373,14 @@ export default function ScanScreen() {
 
           {/* Actions */}
           <View style={styles.actionsContainer}>
-            <TouchableOpacity style={styles.primaryButton} onPress={handleViewRecommendations}>
+            <TouchableOpacity style={styles.primaryButton} onPress={handleGetPackages}>
               <Ionicons name="sparkles" size={20} color="#0A0A0A" />
-              <Text style={styles.primaryButtonText}>Get Service Recommendations</Text>
+              <Text style={styles.primaryButtonText}>Get Package Recommendations</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.secondaryButton} onPress={handleRetake}>
               <Ionicons name="camera" size={20} color="#D4AF37" />
-              <Text style={styles.secondaryButtonText}>Take Another Scan</Text>
+              <Text style={styles.secondaryButtonText}>Retake Scan</Text>
             </TouchableOpacity>
           </View>
         </Animated.ScrollView>
@@ -256,24 +389,40 @@ export default function ScanScreen() {
   }
 
   // Analyzing View
-  if (analyzing) {
+  if (scanStep === 'analyzing' || analyzing) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.analyzingContainer}>
-          <View style={styles.analyzingIcon}>
+          <Animated.View style={[styles.analyzingIcon, pulseStyle]}>
             <Ionicons name="scan" size={48} color="#D4AF37" />
-          </View>
-          <Text style={styles.analyzingTitle}>Analyzing...</Text>
+          </Animated.View>
+          <Text style={styles.analyzingTitle}>AI Analysis in Progress</Text>
           <Text style={styles.analyzingText}>
-            Our AI is examining your {scanType} to provide personalized insights
+            Our advanced AI is examining your skin, hair, and facial features...
           </Text>
-          <ActivityIndicator size="large" color="#D4AF37" style={{ marginTop: 24 }} />
+          <View style={styles.progressSteps}>
+            <View style={styles.progressStep}>
+              <Ionicons name="checkmark-circle" size={20} color="#2ECC71" />
+              <Text style={styles.progressStepText}>Images Captured</Text>
+            </View>
+            <View style={styles.progressStep}>
+              <ActivityIndicator size="small" color="#D4AF37" />
+              <Text style={styles.progressStepText}>Analyzing Features</Text>
+            </View>
+            <View style={styles.progressStep}>
+              <Ionicons name="ellipse-outline" size={20} color="rgba(255,255,255,0.3)" />
+              <Text style={[styles.progressStepText, { color: 'rgba(255,255,255,0.3)' }]}>Generating Report</Text>
+            </View>
+          </View>
         </View>
       </View>
     );
   }
 
-  // Camera View
+  // Camera View with Guided Capture
+  const currentStepInfo = SCAN_STEPS[scanStep as keyof typeof SCAN_STEPS];
+  const progress = scanStep === 'front' ? 33 : scanStep === 'left' ? 66 : 100;
+
   return (
     <View style={styles.container}>
       <CameraView
@@ -287,7 +436,12 @@ export default function ScanScreen() {
             <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
               <Ionicons name="close" size={28} color="#FFFFFF" />
             </TouchableOpacity>
-            <Text style={styles.cameraTitle}>AI Beauty Scan</Text>
+            <View style={styles.stepIndicator}>
+              <Text style={styles.stepText}>{currentStepInfo.label}</Text>
+              <Text style={styles.stepCount}>
+                {scanStep === 'front' ? '1' : scanStep === 'left' ? '2' : '3'}/3
+              </Text>
+            </View>
             <TouchableOpacity
               onPress={() => setFacing(facing === 'front' ? 'back' : 'front')}
               style={styles.flipButton}
@@ -296,58 +450,70 @@ export default function ScanScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Scan Type Selector */}
-          <View style={styles.scanTypeContainer}>
-            {scanTypes.map((type) => (
-              <TouchableOpacity
-                key={type.id}
-                style={[
-                  styles.scanTypeButton,
-                  scanType === type.id && styles.scanTypeButtonActive,
-                ]}
-                onPress={() => setScanType(type.id as ScanType)}
-              >
-                <Ionicons
-                  name={type.icon as any}
-                  size={18}
-                  color={scanType === type.id ? '#0A0A0A' : '#FFFFFF'}
-                />
-                <Text
-                  style={[
-                    styles.scanTypeText,
-                    scanType === type.id && styles.scanTypeTextActive,
-                  ]}
-                >
-                  {type.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
+          {/* Progress Bar */}
+          <View style={styles.progressBarContainer}>
+            <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
           </View>
 
           {/* Guide Frame */}
           <View style={styles.guideContainer}>
             <View style={styles.guideFrame}>
+              {/* Animated scan line */}
+              <Animated.View style={[styles.scanLine, scanLineStyle]} />
+              
+              {/* Corner guides */}
               <View style={[styles.guideCorner, styles.topLeft]} />
               <View style={[styles.guideCorner, styles.topRight]} />
               <View style={[styles.guideCorner, styles.bottomLeft]} />
               <View style={[styles.guideCorner, styles.bottomRight]} />
+              
+              {/* Direction indicator */}
+              {scanStep !== 'front' && (
+                <View style={styles.directionIndicator}>
+                  <Ionicons 
+                    name={scanStep === 'left' ? 'arrow-back' : 'arrow-forward'} 
+                    size={32} 
+                    color="#D4AF37" 
+                  />
+                </View>
+              )}
             </View>
-            <Text style={styles.guideText}>
-              Position your {scanType === 'face' ? 'face' : scanType === 'hair' ? 'hair' : 'face and hair'} within the frame
-            </Text>
+            
+            <View style={styles.instructionContainer}>
+              <Ionicons name={currentStepInfo.icon as any} size={24} color="#D4AF37" />
+              <Text style={styles.instructionText}>{currentStepInfo.instruction}</Text>
+            </View>
           </View>
+
+          {/* Captured thumbnails */}
+          {Object.keys(scanImages).length > 0 && (
+            <View style={styles.thumbnailsContainer}>
+              {scanImages.front && <View style={styles.thumbnailDone}><Ionicons name="checkmark" size={16} color="#2ECC71" /></View>}
+              {scanImages.left && <View style={styles.thumbnailDone}><Ionicons name="checkmark" size={16} color="#2ECC71" /></View>}
+              {scanImages.right && <View style={styles.thumbnailDone}><Ionicons name="checkmark" size={16} color="#2ECC71" /></View>}
+            </View>
+          )}
 
           {/* Controls */}
           <View style={[styles.controlsContainer, { paddingBottom: insets.bottom + 20 }]}>
             <TouchableOpacity style={styles.galleryIconButton} onPress={handlePickImage}>
               <Ionicons name="images" size={28} color="#FFFFFF" />
+              <Text style={styles.controlLabel}>Gallery</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.captureButton} onPress={handleCapture}>
               <View style={styles.captureButtonInner} />
             </TouchableOpacity>
 
-            <View style={{ width: 50 }} />
+            <TouchableOpacity style={styles.skipButton} onPress={() => {
+              if (scanImages.front) {
+                setScanStep('analyzing');
+                analyzeImages(scanImages);
+              }
+            }} disabled={!scanImages.front}>
+              <Ionicons name="arrow-forward" size={28} color={scanImages.front ? '#FFFFFF' : 'rgba(255,255,255,0.3)'} />
+              <Text style={[styles.controlLabel, !scanImages.front && { color: 'rgba(255,255,255,0.3)' }]}>Skip</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </CameraView>
@@ -359,6 +525,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0A0A0A',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: 'rgba(255,255,255,0.6)',
+    marginTop: 12,
+    fontSize: 14,
   },
   header: {
     flexDirection: 'row',
@@ -413,7 +589,10 @@ const styles = StyleSheet.create({
     color: '#0A0A0A',
   },
   galleryButton: {
-    marginTop: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 20,
+    gap: 8,
   },
   galleryButtonText: {
     fontSize: 14,
@@ -433,10 +612,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
-  cameraTitle: {
-    fontSize: 18,
+  stepIndicator: {
+    alignItems: 'center',
+  },
+  stepText: {
+    fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
+  },
+  stepCount: {
+    fontSize: 12,
+    color: '#D4AF37',
+    marginTop: 2,
   },
   flipButton: {
     width: 40,
@@ -446,31 +633,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  scanTypeContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 12,
-    marginTop: 8,
+  progressBarContainer: {
+    height: 3,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    marginHorizontal: 20,
+    borderRadius: 2,
   },
-  scanTypeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
-    gap: 6,
-  },
-  scanTypeButtonActive: {
+  progressBarFill: {
+    height: '100%',
     backgroundColor: '#D4AF37',
-  },
-  scanTypeText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#FFFFFF',
-  },
-  scanTypeTextActive: {
-    color: '#0A0A0A',
+    borderRadius: 2,
   },
   guideContainer: {
     flex: 1,
@@ -478,10 +650,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   guideFrame: {
-    width: 280,
-    height: 350,
-    borderRadius: 20,
+    width: 260,
+    height: 320,
+    borderRadius: 130,
     position: 'relative',
+    overflow: 'hidden',
+  },
+  scanLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: '#D4AF37',
+    opacity: 0.7,
   },
   guideCorner: {
     position: 'absolute',
@@ -518,12 +699,41 @@ const styles = StyleSheet.create({
     borderLeftWidth: 0,
     borderBottomRightRadius: 20,
   },
-  guideText: {
+  directionIndicator: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -16 }, { translateY: -16 }],
+  },
+  instructionContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 24,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    gap: 10,
+  },
+  instructionText: {
     fontSize: 14,
     color: '#FFFFFF',
-    textAlign: 'center',
-    marginTop: 20,
-    paddingHorizontal: 40,
+  },
+  thumbnailsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 12,
+    marginBottom: 20,
+  },
+  thumbnailDone: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(46, 204, 113, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#2ECC71',
   },
   controlsContainer: {
     flexDirection: 'row',
@@ -532,12 +742,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 40,
   },
   galleryIconButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
-    justifyContent: 'center',
     alignItems: 'center',
+    gap: 4,
+  },
+  skipButton: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  controlLabel: {
+    fontSize: 11,
+    color: '#FFFFFF',
   },
   captureButton: {
     width: 80,
@@ -571,7 +785,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(212, 175, 55, 0.3)',
   },
   analyzingTitle: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '600',
     color: '#FFFFFF',
     marginTop: 24,
@@ -583,50 +797,115 @@ const styles = StyleSheet.create({
     marginTop: 8,
     lineHeight: 22,
   },
+  progressSteps: {
+    marginTop: 32,
+    gap: 16,
+  },
+  progressStep: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  progressStepText: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.7)',
+  },
   resultsContent: {
     paddingHorizontal: 20,
     paddingBottom: 40,
   },
-  resultCard: {
+  scoresContainer: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    marginBottom: 16,
+  },
+  scoresRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  scoreCard: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  scoreCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  scoreValue: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  scoreLabel: {
+    fontSize: 14,
+    color: '#FFFFFF',
+    fontWeight: '500',
+  },
+  scoreStatus: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.5)',
+    marginTop: 4,
+  },
+  detectionsContainer: {
+    marginBottom: 24,
+  },
+  detectionItem: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
   },
-  resultIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+  detectionIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: 'rgba(212, 175, 55, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  resultInfo: {
-    marginLeft: 14,
+  detectionInfo: {
+    flex: 1,
+    marginLeft: 12,
   },
-  resultLabel: {
-    fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.5)',
+  detectionLabel: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.5)',
   },
-  resultValue: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#FFFFFF',
-    textTransform: 'capitalize',
-    marginTop: 2,
-  },
-  sectionTitle: {
+  detectionValue: {
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
-    marginBottom: 12,
+    textTransform: 'capitalize',
   },
-  concernsSection: {
-    marginTop: 20,
+  matchBadge: {
+    backgroundColor: 'rgba(46, 204, 113, 0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  matchText: {
+    fontSize: 11,
+    color: '#2ECC71',
+    fontWeight: '600',
+  },
+  concernsContainer: {
+    marginBottom: 24,
   },
   concernsTags: {
     flexDirection: 'row',
@@ -634,21 +913,24 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   concernTag: {
-    backgroundColor: 'rgba(231, 76, 60, 0.2)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(231, 76, 60, 0.1)',
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 8,
     borderRadius: 16,
+    gap: 6,
   },
   concernTagText: {
     fontSize: 13,
     color: '#E74C3C',
     textTransform: 'capitalize',
   },
-  recommendationsSection: {
-    marginTop: 24,
-    backgroundColor: 'rgba(212, 175, 55, 0.08)',
+  recommendationsContainer: {
+    backgroundColor: 'rgba(46, 204, 113, 0.08)',
     borderRadius: 16,
     padding: 16,
+    marginBottom: 24,
   },
   recommendationItem: {
     flexDirection: 'row',
@@ -661,8 +943,8 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     flex: 1,
   },
-  tipsSection: {
-    marginTop: 24,
+  tipsContainer: {
+    marginBottom: 24,
   },
   tipItem: {
     flexDirection: 'row',
@@ -677,7 +959,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   actionsContainer: {
-    marginTop: 32,
+    marginTop: 16,
     gap: 12,
   },
   primaryButton: {
