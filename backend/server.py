@@ -301,33 +301,6 @@ SALON_SERVICES = [
         "value_deal": False
     }
 ]
-        "category": "Hair",
-        "description": "Hand-painted balayage highlights for natural dimension",
-        "price_range": "$200-400",
-        "duration_minutes": 180,
-        "suitable_for": ["all hair types"],
-        "benefits": ["Natural look", "Low maintenance", "Dimensional color"]
-    },
-    {
-        "id": "8",
-        "name": "Express Party Makeup",
-        "category": "Makeup",
-        "description": "Quick glamorous makeup for parties and events",
-        "price_range": "$60-100",
-        "duration_minutes": 45,
-        "suitable_for": ["all skin types"],
-        "benefits": ["Quick transformation", "Glamorous look", "Event-ready"]
-    },
-    {
-        "id": "9",
-        "name": "Deep Cleansing Facial",
-        "category": "Skin",
-        "description": "Thorough cleansing facial for oily and acne-prone skin",
-        "price_range": "$100-160",
-        "duration_minutes": 60,
-        "suitable_for": ["oily", "combination"],
-        "benefits": ["Clear pores", "Reduced breakouts", "Matte finish"]
-    },
     {
         "id": "10",
         "name": "Hair Spa & Repair",
