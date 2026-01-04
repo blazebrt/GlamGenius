@@ -28,11 +28,29 @@ const FEATURED_SERVICES = [
 
 const BEAUTY_TIPS = [
   "Drink 8 glasses of water daily for glowing skin",
-  "Apply sunscreen even on cloudy days",
-  "Use a silk pillowcase to prevent hair breakage",
-  "Massage your scalp for 5 minutes before washing",
-  "Remove makeup before sleeping for clear skin",
+  "Apply sunscreen even on cloudy days - UV rays penetrate clouds",
+  "Use a silk pillowcase to prevent hair breakage and frizz",
+  "Massage your scalp for 5 minutes before washing to boost growth",
+  "Remove makeup before sleeping for clear, healthy skin",
   "Trim hair every 6-8 weeks to prevent split ends",
+  "Apply hair oil 30 minutes before washing for deep nourishment",
+  "Use lukewarm water, not hot, when washing your face",
+  "Always pat dry your face - never rub with a towel",
+  "Include omega-3 fatty acids in your diet for shiny hair",
+  "Don't skip moisturizer even if you have oily skin",
+  "Apply serum while skin is slightly damp for better absorption",
+  "Sleep 7-8 hours for natural skin repair and regeneration",
+  "Use a wide-tooth comb on wet hair to prevent breakage",
+  "Exfoliate your scalp once a week for healthier hair growth",
+  "Green tea is excellent for reducing puffiness and dark circles",
+  "Apply conditioner only to hair ends, not roots",
+  "Vitamin C serums work best when applied in the morning",
+  "Never skip the neck when applying skincare products",
+  "Use retinol at night - it makes skin sensitive to sunlight",
+  "Coconut oil makes an excellent natural makeup remover",
+  "Let hair air dry when possible to minimize heat damage",
+  "Hyaluronic acid helps lock in moisture for plump skin",
+  "Eat foods rich in biotin for stronger hair and nails",
 ];
 
 export default function HomeScreen() {
