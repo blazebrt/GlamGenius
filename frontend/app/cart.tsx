@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,18 +13,10 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useCartStore } from '../src/store/cartStore';
 
-const PAYMENT_METHODS = [
-  { id: 'upi', label: 'UPI (GPay, PhonePe, Paytm)', icon: 'phone-portrait-outline' },
-  { id: 'card', label: 'Credit/Debit Card', icon: 'card-outline' },
-  { id: 'netbanking', label: 'Net Banking', icon: 'globe-outline' },
-  { id: 'cod', label: 'Pay at Salon', icon: 'cash-outline' },
-];
-
 export default function CartScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { items, removeItem, updateQuantity, getTotal, clearCart, loadCart } = useCartStore();
-  const [selectedPayment, setSelectedPayment] = useState('');
 
   useEffect(() => {
     loadCart();
