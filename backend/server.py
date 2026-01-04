@@ -415,7 +415,7 @@ async def generate_ai_recommendations(user_data: Dict, occasion: str, budget: st
         
         services_info = "\n".join([f"- {s['name']} ({s['category']}): {s['description']} - {s['price_range']}" for s in SALON_SERVICES])
         
-        prompt = f"""Based on this client profile:
+        prompt_text = f"""Based on this client profile:
 - Age: {user_data.get('age', 'Not specified')}
 - Skin Type: {user_data.get('skin_type', 'Not specified')}
 - Hair Type: {user_data.get('hair_type', 'Not specified')}
@@ -448,7 +448,9 @@ Provide personalized recommendations in this JSON format:
     "appointment_duration": "total estimated time"
 }}"""
         
-        response = await chat.send_message(prompt)
+        # Create UserMessage for text-only request
+        user_message = UserMessage(text=prompt_text)
+        response = await chat.send_message(user_message)
         
         # Parse JSON from response
         import json
