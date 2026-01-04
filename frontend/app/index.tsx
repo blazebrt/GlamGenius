@@ -147,7 +147,7 @@ function FeatureItem({ icon, title, description }: { icon: string; title: string
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0A0A0A',
+    backgroundColor: COLORS.background,
     paddingHorizontal: 24,
   },
   loadingContainer: {
@@ -162,7 +162,7 @@ const styles = StyleSheet.create({
     width: 300,
     height: 300,
     borderRadius: 150,
-    backgroundColor: 'rgba(212, 175, 55, 0.05)',
+    backgroundColor: COLORS.primaryLight,
   },
   decorCircle2: {
     position: 'absolute',
@@ -171,7 +171,7 @@ const styles = StyleSheet.create({
     width: 250,
     height: 250,
     borderRadius: 125,
-    backgroundColor: 'rgba(212, 175, 55, 0.03)',
+    backgroundColor: COLORS.backgroundSecondary,
   },
   headerContainer: {
     alignItems: 'center',
@@ -181,22 +181,22 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: 'rgba(212, 175, 55, 0.1)',
+    backgroundColor: COLORS.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.3)',
+    borderColor: COLORS.border,
   },
   logoText: {
     fontSize: 36,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: COLORS.textPrimary,
     letterSpacing: 1,
   },
   tagline: {
     fontSize: 16,
-    color: '#D4AF37',
+    color: COLORS.primary,
     marginTop: 8,
     letterSpacing: 2,
     textTransform: 'uppercase',
@@ -208,17 +208,17 @@ const styles = StyleSheet.create({
   featureItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    backgroundColor: COLORS.card,
     padding: 16,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+    borderColor: COLORS.border,
   },
   featureIconContainer: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: 'rgba(212, 175, 55, 0.1)',
+    backgroundColor: COLORS.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -229,12 +229,12 @@ const styles = StyleSheet.create({
   featureTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: COLORS.textPrimary,
     marginBottom: 4,
   },
   featureDescription: {
     fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.6)',
+    color: COLORS.textSecondary,
   },
   ctaContainer: {
     position: 'absolute',
@@ -247,7 +247,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#D4AF37',
+    backgroundColor: COLORS.primary,
     paddingVertical: 16,
     paddingHorizontal: 32,
     borderRadius: 30,
@@ -257,11 +257,11 @@ const styles = StyleSheet.create({
   ctaText: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#0A0A0A',
+    color: COLORS.white,
   },
   disclaimer: {
     fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.4)',
+    color: COLORS.textMuted,
     marginTop: 16,
     textAlign: 'center',
   },
