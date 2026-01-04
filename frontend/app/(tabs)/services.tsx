@@ -13,7 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { api } from '../../src/services/api';
 
-const CATEGORIES = ['All', 'Hair', 'Skin', 'Makeup', 'Nails'];
+const CATEGORIES = ['All', 'Hair', 'Skin', 'Makeup', 'Nails', 'Grooming'];
 
 interface Service {
   id: string;
