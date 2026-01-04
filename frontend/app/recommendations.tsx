@@ -139,27 +139,34 @@ export default function RecommendationsScreen() {
                 <Text style={styles.sectionTitle}>Recommended Services</Text>
               </View>
             </View>
-            {recommendations.services.map((service: any, index: number) => (
-              <View key={index} style={styles.serviceCard}>
-                <View style={styles.serviceInfo}>
-                  <Text style={styles.serviceName}>{service.name}</Text>
-                  {service.reason && (
-                    <Text style={styles.serviceReason}>{service.reason}</Text>
-                  )}
-                  {service.expected_result && (
-                    <Text style={styles.serviceResult}>
-                      Expected: {service.expected_result}
-                    </Text>
-                  )}
+            {recommendations.services.map((service: any, index: number) => {
+              const inCart = isServiceInCart(service.name);
+              return (
+                <View key={index} style={styles.serviceCard}>
+                  <View style={styles.serviceInfo}>
+                    <Text style={styles.serviceName}>{service.name}</Text>
+                    {service.reason && (
+                      <Text style={styles.serviceReason}>{service.reason}</Text>
+                    )}
+                    {service.expected_result && (
+                      <Text style={styles.serviceResult}>
+                        Expected: {service.expected_result}
+                      </Text>
+                    )}
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.addButton, inCart && styles.addButtonActive]}
+                    onPress={() => handleToggleServiceCart(service)}
+                  >
+                    <Ionicons 
+                      name={inCart ? "checkmark" : "add"} 
+                      size={20} 
+                      color={inCart ? "#FFFFFF" : "#0A0A0A"} 
+                    />
+                  </TouchableOpacity>
                 </View>
-                <TouchableOpacity
-                  style={styles.addButton}
-                  onPress={() => handleAddServiceToCart(service)}
-                >
-                  <Ionicons name="add" size={20} color="#0A0A0A" />
-                </TouchableOpacity>
-              </View>
-            ))}
+              );
+            })}
           </Animated.View>
         )}
 
