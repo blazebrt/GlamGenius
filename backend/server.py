@@ -301,37 +301,6 @@ SALON_SERVICES = [
         "value_deal": False
     }
 ]
-    {
-        "id": "10",
-        "name": "Hair Spa & Repair",
-        "category": "Hair",
-        "description": "Intensive hair repair treatment with premium masks",
-        "price_range": "$80-130",
-        "duration_minutes": 60,
-        "suitable_for": ["damaged", "all hair types"],
-        "benefits": ["Deep repair", "Shine restoration", "Strength"]
-    },
-    {
-        "id": "11",
-        "name": "Professional Blowout",
-        "category": "Hair",
-        "description": "Salon-quality blowout for any occasion",
-        "price_range": "$45-75",
-        "duration_minutes": 45,
-        "suitable_for": ["all hair types"],
-        "benefits": ["Volume", "Shine", "Long-lasting style"]
-    },
-    {
-        "id": "12",
-        "name": "Luxury Manicure & Pedicure",
-        "category": "Nails",
-        "description": "Premium nail care with massage and polish",
-        "price_range": "$80-120",
-        "duration_minutes": 90,
-        "suitable_for": ["all"],
-        "benefits": ["Groomed nails", "Relaxation", "Long-lasting polish"]
-    }
-]
 
 # ============== QUIZ QUESTIONS ==============
 
