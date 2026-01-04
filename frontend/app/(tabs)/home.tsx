@@ -94,14 +94,14 @@ export default function HomeScreen() {
             style={styles.profileButton}
             onPress={() => router.push('/(tabs)/profile')}
           >
-            <Ionicons name="person" size={22} color="#0EA5E9" />
+            <Ionicons name="person" size={22} color={COLORS.black} />
           </TouchableOpacity>
         </Animated.View>
 
         {/* Tip of the Hour */}
         <Animated.View entering={FadeInDown.delay(100)} style={styles.tipCard}>
           <View style={styles.tipHeader}>
-            <Ionicons name="bulb" size={18} color="#F59E0B" />
+            <Ionicons name="bulb-outline" size={20} color={COLORS.black} />
             <Text style={styles.tipLabel}>Tip of the Hour</Text>
           </View>
           <Text style={styles.tipText}>{BEAUTY_TIPS[tipIndex]}</Text>
@@ -117,8 +117,8 @@ export default function HomeScreen() {
                 style={styles.actionCard}
                 onPress={() => router.push(action.route as any)}
               >
-                <View style={[styles.actionIcon, { backgroundColor: `${action.color}15` }]}>
-                  <Ionicons name={action.icon as any} size={24} color={action.color} />
+                <View style={styles.actionIcon}>
+                  <Ionicons name={action.icon as any} size={26} color={COLORS.black} />
                 </View>
                 <Text style={styles.actionLabel}>{action.label}</Text>
               </TouchableOpacity>
@@ -138,7 +138,7 @@ export default function HomeScreen() {
             {FEATURED_SERVICES.map((service) => (
               <TouchableOpacity key={service.id} style={styles.serviceCard}>
                 <View style={styles.serviceIcon}>
-                  <Ionicons name={service.icon as any} size={24} color="#0EA5E9" />
+                  <Ionicons name={service.icon as any} size={24} color={COLORS.black} />
                 </View>
                 <Text style={styles.serviceName}>{service.name}</Text>
                 <View style={styles.serviceMeta}>
@@ -160,7 +160,7 @@ export default function HomeScreen() {
               onPress={() => router.push('/get-advice')}
             >
               <Text style={styles.ctaButtonText}>Start Now</Text>
-              <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
+              <Ionicons name="arrow-forward" size={18} color={COLORS.white} />
             </TouchableOpacity>
           </View>
         </Animated.View>
@@ -174,7 +174,7 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: COLORS.background,
   },
   header: {
     flexDirection: 'row',
@@ -184,49 +184,55 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
   },
   greeting: {
-    fontSize: 14,
-    color: '#64748B',
+    fontSize: FONTS.sizes.base,
+    fontFamily: FONTS.family.regular,
+    color: COLORS.textSecondary,
   },
   userName: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#1E293B',
+    fontSize: FONTS.sizes['2xl'],
+    fontFamily: FONTS.family.bold,
+    color: COLORS.black,
     marginTop: 2,
   },
   profileButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#E0F2FE',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: COLORS.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   tipCard: {
     marginHorizontal: 20,
-    backgroundColor: '#FFFBEB',
-    borderRadius: 16,
-    padding: 16,
+    backgroundColor: COLORS.backgroundSecondary,
+    borderRadius: 12,
+    padding: 18,
     borderWidth: 1,
-    borderColor: '#FEF3C7',
+    borderColor: COLORS.border,
   },
   tipHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 8,
+    marginBottom: 10,
   },
   tipLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#B45309',
+    fontSize: FONTS.sizes.sm,
+    fontFamily: FONTS.family.semibold,
+    color: COLORS.black,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
   },
   tipText: {
-    fontSize: 14,
-    color: '#92400E',
-    lineHeight: 20,
+    fontSize: FONTS.sizes.base,
+    fontFamily: FONTS.family.regular,
+    color: COLORS.textPrimary,
+    lineHeight: 24,
   },
   section: {
-    marginTop: 24,
+    marginTop: 28,
     paddingHorizontal: 20,
   },
   sectionHeader: {
@@ -236,15 +242,16 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1E293B',
+    fontSize: FONTS.sizes.xl,
+    fontFamily: FONTS.family.bold,
+    color: COLORS.black,
     marginBottom: 16,
   },
   seeAll: {
-    fontSize: 14,
-    color: '#0EA5E9',
-    fontWeight: '500',
+    fontSize: FONTS.sizes.base,
+    fontFamily: FONTS.family.medium,
+    color: COLORS.textSecondary,
+    textDecorationLine: 'underline',
   },
   actionsGrid: {
     flexDirection: 'row',
@@ -253,96 +260,101 @@ const styles = StyleSheet.create({
   },
   actionCard: {
     width: '47%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
+    backgroundColor: COLORS.white,
+    borderRadius: 12,
+    padding: 18,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: COLORS.border,
   },
   actionIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: COLORS.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 12,
   },
   actionLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#1E293B',
+    fontSize: FONTS.sizes.base,
+    fontFamily: FONTS.family.semibold,
+    color: COLORS.textPrimary,
   },
   serviceCard: {
-    width: 160,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
+    width: 170,
+    backgroundColor: COLORS.white,
+    borderRadius: 12,
+    padding: 18,
     marginRight: 12,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: COLORS.border,
   },
   serviceIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#E0F2FE',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: COLORS.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 14,
   },
   serviceName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1E293B',
-    marginBottom: 8,
+    fontSize: FONTS.sizes.base,
+    fontFamily: FONTS.family.semibold,
+    color: COLORS.textPrimary,
+    marginBottom: 10,
   },
   serviceMeta: {
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
   servicePrice: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0EA5E9',
+    fontSize: FONTS.sizes.base,
+    fontFamily: FONTS.family.bold,
+    color: COLORS.black,
   },
   serviceDuration: {
-    fontSize: 12,
-    color: '#64748B',
+    fontSize: FONTS.sizes.sm,
+    fontFamily: FONTS.family.regular,
+    color: COLORS.textMuted,
   },
   ctaBanner: {
     marginHorizontal: 20,
-    marginTop: 24,
-    backgroundColor: '#0EA5E9',
-    borderRadius: 20,
+    marginTop: 28,
+    backgroundColor: COLORS.black,
+    borderRadius: 16,
     padding: 24,
   },
   ctaContent: {
     alignItems: 'flex-start',
   },
   ctaTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#FFFFFF',
+    fontSize: FONTS.sizes.xl,
+    fontFamily: FONTS.family.bold,
+    color: COLORS.white,
   },
   ctaSubtitle: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.8)',
-    marginTop: 4,
-    marginBottom: 16,
+    fontSize: FONTS.sizes.base,
+    fontFamily: FONTS.family.regular,
+    color: 'rgba(255,255,255,0.7)',
+    marginTop: 6,
+    marginBottom: 18,
   },
   ctaButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    paddingHorizontal: 22,
+    paddingVertical: 14,
     borderRadius: 24,
     gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
   },
   ctaButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#FFFFFF',
+    fontSize: FONTS.sizes.base,
+    fontFamily: FONTS.family.semibold,
+    color: COLORS.white,
   },
 });
