@@ -127,38 +127,6 @@ export default function CartScreen() {
               </View>
             </View>
 
-            {/* Payment Methods */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Payment Method</Text>
-              {PAYMENT_METHODS.map((method) => (
-                <TouchableOpacity
-                  key={method.id}
-                  style={[
-                    styles.paymentOption,
-                    selectedPayment === method.id && styles.paymentOptionSelected,
-                  ]}
-                  onPress={() => setSelectedPayment(method.id)}
-                >
-                  <Ionicons
-                    name={method.icon as any}
-                    size={22}
-                    color={selectedPayment === method.id ? '#D4AF37' : 'rgba(255,255,255,0.6)'}
-                  />
-                  <Text
-                    style={[
-                      styles.paymentLabel,
-                      selectedPayment === method.id && styles.paymentLabelSelected,
-                    ]}
-                  >
-                    {method.label}
-                  </Text>
-                  {selectedPayment === method.id && (
-                    <Ionicons name="checkmark-circle" size={22} color="#D4AF37" />
-                  )}
-                </TouchableOpacity>
-              ))}
-            </View>
-
             {/* Offers */}
             <View style={styles.offerCard}>
               <Ionicons name="gift" size={20} color="#2ECC71" />
