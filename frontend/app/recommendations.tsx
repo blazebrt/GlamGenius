@@ -197,19 +197,22 @@ export default function RecommendationsScreen() {
             </View>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {ADDON_SERVICES.map((addon) => (
-              <TouchableOpacity
-                key={addon.id}
-                style={styles.addonCard}
-                onPress={() => handleAddToCart(addon)}
-              >
-                <Text style={styles.addonName}>{addon.name}</Text>
-                <Text style={styles.addonPrice}>+₹{addon.price}</Text>
-                <View style={styles.addonAddBtn}>
-                  <Ionicons name="add" size={16} color="#D4AF37" />
-                </View>
-              </TouchableOpacity>
-            ))}
+            {ADDON_SERVICES.map((addon) => {
+              const inCart = isInCart(addon.id);
+              return (
+                <TouchableOpacity
+                  key={addon.id}
+                  style={[styles.addonCard, inCart && styles.addonCardActive]}
+                  onPress={() => handleToggleCartItem(addon)}
+                >
+                  <Text style={[styles.addonName, inCart && styles.addonNameActive]}>{addon.name}</Text>
+                  <Text style={[styles.addonPrice, inCart && styles.addonPriceActive]}>+₹{addon.price}</Text>
+                  <View style={[styles.addonAddBtn, inCart && styles.addonAddBtnActive]}>
+                    <Ionicons name={inCart ? "checkmark" : "add"} size={16} color={inCart ? "#FFFFFF" : "#D4AF37"} />
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
         </Animated.View>
 
