@@ -13,7 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useUserStore } from '../src/store/userStore';
-import { COLORS } from '../src/theme/colors';
+import { COLORS, FONTS } from '../src/theme/colors';
 
 const { width, height } = Dimensions.get('window');
 
@@ -32,7 +32,6 @@ export default function WelcomeScreen() {
       const storedUserId = await AsyncStorage.getItem('glamgenius_user_id');
       if (storedUserId) {
         setUserId(storedUserId);
-        // Auto-navigate to home if user exists
         setTimeout(() => {
           router.replace('/(tabs)/home');
         }, 1500);
@@ -73,17 +72,17 @@ export default function WelcomeScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      {/* Background Decoration */}
-      <View style={styles.decorCircle1} />
-      <View style={styles.decorCircle2} />
+      {/* Subtle Background Lines */}
+      <View style={styles.decorLine1} />
+      <View style={styles.decorLine2} />
 
       {/* Logo and Header */}
       <Animated.View entering={FadeIn.delay(200)} style={styles.headerContainer}>
         <View style={styles.logoContainer}>
-          <Ionicons name="sparkles" size={40} color={COLORS.primary} />
+          <Ionicons name="sparkles" size={36} color={COLORS.black} />
         </View>
         <Text style={styles.logoText}>GlamGenius</Text>
-        <Text style={styles.tagline}>Premium Salon Advisor</Text>
+        <Text style={styles.tagline}>MEDICAL BEAUTY • SALON</Text>
       </Animated.View>
 
       {/* Features */}
@@ -91,7 +90,7 @@ export default function WelcomeScreen() {
         <FeatureItem
           icon="scan-outline"
           title="AI Skin & Hair Analysis"
-          description="Advanced scanning for personalized insights"
+          description="Clinical-grade scanning for personalized insights"
         />
         <FeatureItem
           icon="sparkles-outline"
@@ -118,7 +117,7 @@ export default function WelcomeScreen() {
           ) : (
             <>
               <Text style={styles.ctaText}>Get Started</Text>
-              <Ionicons name="arrow-forward" size={20} color={COLORS.white} />
+              <Ionicons name="arrow-forward" size={22} color={COLORS.white} />
             </>
           )}
         </TouchableOpacity>
@@ -134,7 +133,7 @@ function FeatureItem({ icon, title, description }: { icon: string; title: string
   return (
     <View style={styles.featureItem}>
       <View style={styles.featureIconContainer}>
-        <Ionicons name={icon as any} size={24} color={COLORS.primary} />
+        <Ionicons name={icon as any} size={26} color={COLORS.black} />
       </View>
       <View style={styles.featureTextContainer}>
         <Text style={styles.featureTitle}>{title}</Text>
@@ -155,27 +154,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  decorCircle1: {
+  decorLine1: {
     position: 'absolute',
-    top: -100,
-    right: -100,
-    width: 300,
-    height: 300,
-    borderRadius: 150,
-    backgroundColor: COLORS.primaryLight,
+    top: 120,
+    right: -50,
+    width: 200,
+    height: 1,
+    backgroundColor: COLORS.border,
+    transform: [{ rotate: '-45deg' }],
   },
-  decorCircle2: {
+  decorLine2: {
     position: 'absolute',
-    bottom: -50,
-    left: -100,
-    width: 250,
-    height: 250,
-    borderRadius: 125,
-    backgroundColor: COLORS.backgroundSecondary,
+    bottom: 200,
+    left: -50,
+    width: 180,
+    height: 1,
+    backgroundColor: COLORS.border,
+    transform: [{ rotate: '45deg' }],
   },
   headerContainer: {
     alignItems: 'center',
-    marginTop: height * 0.08,
+    marginTop: height * 0.1,
   },
   logoContainer: {
     width: 80,
@@ -184,40 +183,40 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    marginBottom: 20,
+    borderWidth: 2,
+    borderColor: COLORS.black,
   },
   logoText: {
-    fontSize: 36,
-    fontWeight: '700',
-    color: COLORS.textPrimary,
-    letterSpacing: 1,
+    fontSize: FONTS.sizes['4xl'],
+    fontFamily: FONTS.family.bold,
+    color: COLORS.black,
+    letterSpacing: -1,
   },
   tagline: {
-    fontSize: 16,
-    color: COLORS.primary,
+    fontSize: FONTS.sizes.sm,
+    fontFamily: FONTS.family.medium,
+    color: COLORS.textSecondary,
     marginTop: 8,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
+    letterSpacing: 3,
   },
   featuresContainer: {
-    marginTop: height * 0.08,
-    gap: 20,
+    marginTop: height * 0.07,
+    gap: 16,
   },
   featureItem: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.card,
-    padding: 16,
-    borderRadius: 16,
+    padding: 18,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
   featureIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: COLORS.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
@@ -227,13 +226,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   featureTitle: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: FONTS.sizes.lg,
+    fontFamily: FONTS.family.semibold,
     color: COLORS.textPrimary,
     marginBottom: 4,
   },
   featureDescription: {
-    fontSize: 13,
+    fontSize: FONTS.sizes.sm,
+    fontFamily: FONTS.family.regular,
     color: COLORS.textSecondary,
   },
   ctaContainer: {
@@ -247,20 +247,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: COLORS.primary,
-    paddingVertical: 16,
+    backgroundColor: COLORS.black,
+    paddingVertical: 18,
     paddingHorizontal: 32,
     borderRadius: 30,
     width: '100%',
-    gap: 8,
+    gap: 10,
   },
   ctaText: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: FONTS.sizes.lg,
+    fontFamily: FONTS.family.semibold,
     color: COLORS.white,
   },
   disclaimer: {
-    fontSize: 12,
+    fontSize: FONTS.sizes.sm,
+    fontFamily: FONTS.family.regular,
     color: COLORS.textMuted,
     marginTop: 16,
     textAlign: 'center',
