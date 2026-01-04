@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,7 @@ import {
   Alert,
   TextInput,
 } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
@@ -28,7 +28,6 @@ type CheckoutStep = 'details' | 'payment' | 'processing' | 'success';
 
 export default function CheckoutScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams();
   const insets = useSafeAreaInsets();
   const { items, getTotal, clearCart } = useCartStore();
   const { userId, user } = useUserStore();
