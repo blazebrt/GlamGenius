@@ -523,7 +523,7 @@ Provide personalized recommendations in this JSON format:
             "aftercare_tips": ["Use sulfate-free shampoo", "Apply moisturizer daily", "Drink plenty of water"],
             "maintenance_tips": ["Schedule touch-up in 4-6 weeks", "Use recommended products"],
             "upsell_suggestions": ["Keratin Treatment", "Anti-Aging Facial"],
-            "total_estimated_cost": "$150-250",
+            "total_estimated_cost": "₹1,500-2,500",
             "appointment_duration": "2-2.5 hours"
         }
 
