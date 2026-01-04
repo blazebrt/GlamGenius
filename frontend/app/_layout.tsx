@@ -18,7 +18,9 @@ export default function RootLayout() {
         >
           <Stack.Screen name="index" />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="scan" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal' }} />
+          <Stack.Screen name="style-quiz" />
+          <Stack.Screen name="get-advice" />
           <Stack.Screen name="quiz" />
           <Stack.Screen name="recommendations" />
           <Stack.Screen name="service-details" />
