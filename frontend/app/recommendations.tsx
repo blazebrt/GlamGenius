@@ -256,22 +256,27 @@ export default function RecommendationsScreen() {
             </View>
           </View>
           <View style={styles.productsGrid}>
-            {ADDON_PRODUCTS.map((product) => (
-              <TouchableOpacity
-                key={product.id}
-                style={styles.productCard}
-                onPress={() => handleAddToCart(product)}
-              >
-                <View style={styles.productIcon}>
-                  <Ionicons name="bag-outline" size={24} color="#D4AF37" />
-                </View>
-                <Text style={styles.productName} numberOfLines={2}>{product.name}</Text>
-                <Text style={styles.productPrice}>₹{product.price}</Text>
-                <TouchableOpacity style={styles.productAddBtn} onPress={() => handleAddToCart(product)}>
-                  <Text style={styles.productAddText}>Add to Cart</Text>
+            {ADDON_PRODUCTS.map((product) => {
+              const inCart = isInCart(product.id);
+              return (
+                <TouchableOpacity
+                  key={product.id}
+                  style={[styles.productCard, inCart && styles.productCardActive]}
+                  onPress={() => handleToggleCartItem(product)}
+                >
+                  <View style={styles.productIcon}>
+                    <Ionicons name={inCart ? "checkmark-circle" : "bag-outline"} size={24} color={inCart ? "#2ECC71" : "#D4AF37"} />
+                  </View>
+                  <Text style={styles.productName} numberOfLines={2}>{product.name}</Text>
+                  <Text style={styles.productPrice}>₹{product.price}</Text>
+                  <View style={[styles.productAddBtn, inCart && styles.productAddBtnActive]}>
+                    <Text style={[styles.productAddText, inCart && styles.productAddTextActive]}>
+                      {inCart ? "Added ✓" : "Add to Cart"}
+                    </Text>
+                  </View>
                 </TouchableOpacity>
-              </TouchableOpacity>
-            ))}
+              );
+            })}
           </View>
         </Animated.View>
 
