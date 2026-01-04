@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, FadeInDown, Layout } from 'react-native-reanimated';
 import { api } from '../../src/services/api';
 import { useCartStore } from '../../src/store/cartStore';
+import { COLORS, FONTS } from '../../src/theme/colors';
 
 const CATEGORIES = [
   { id: 'All', icon: 'grid-outline', label: 'All' },
