@@ -25,6 +25,7 @@ export default function RootLayout() {
           <Stack.Screen name="recommendations" />
           <Stack.Screen name="service-details" />
           <Stack.Screen name="cart" />
+          <Stack.Screen name="checkout" />
         </Stack>
       </SafeAreaProvider>
     </GestureHandlerRootView>
