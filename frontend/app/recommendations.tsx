@@ -34,28 +34,47 @@ export default function RecommendationsScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const insets = useSafeAreaInsets();
-  const { addItem, getItemCount } = useCartStore();
+  const { addItem, getItemCount, items, removeItem } = useCartStore();
 
   const recommendations = params.recommendations
     ? JSON.parse(params.recommendations as string)
     : null;
 
-  const handleAddToCart = (item: any) => {
-    addItem(item);
+  // Check if item is in cart
+  const isInCart = (itemId: string) => {
+    return items.some(item => item.id === itemId);
   };
 
-  const handleAddServiceToCart = (service: any) => {
-    // Extract price from service (take minimum price)
-    const priceMatch = service.name?.match(/\d+/) || ['999'];
-    const price = parseInt(priceMatch[0]) || 999;
-    
-    addItem({
-      id: `service-${Date.now()}`,
-      type: 'service',
-      name: service.name,
-      price: price,
-      duration: 45,
-    });
+  // Check if service is in cart by name
+  const isServiceInCart = (serviceName: string) => {
+    return items.some(item => item.name === serviceName);
+  };
+
+  const handleToggleCartItem = (item: any) => {
+    if (isInCart(item.id)) {
+      removeItem(item.id);
+    } else {
+      addItem(item);
+    }
+  };
+
+  const handleToggleServiceCart = (service: any) => {
+    const existingItem = items.find(item => item.name === service.name);
+    if (existingItem) {
+      removeItem(existingItem.id);
+    } else {
+      // Extract price from service (take minimum price)
+      const priceMatch = service.name?.match(/\d+/) || ['999'];
+      const price = parseInt(priceMatch[0]) || 999;
+      
+      addItem({
+        id: `service-${Date.now()}`,
+        type: 'service',
+        name: service.name,
+        price: price,
+        duration: 45,
+      });
+    }
   };
 
   const goToCart = () => {
