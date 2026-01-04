@@ -16,11 +16,11 @@ import { useUserStore } from '../../src/store/userStore';
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, loadUser, logout } = useUserStore();
+  const { user, fetchUser } = useUserStore();
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadUser().finally(() => setLoading(false));
+    fetchUser().finally(() => setLoading(false));
   }, []);
 
   if (loading) {
@@ -94,7 +94,7 @@ export default function ProfileScreen() {
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(300)} style={styles.section}>
-          <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
+          <TouchableOpacity style={styles.logoutBtn} onPress={() => router.replace('/')}>
             <Ionicons name="log-out-outline" size={22} color="#EF4444" />
             <Text style={styles.logoutText}>Log Out</Text>
           </TouchableOpacity>
