@@ -1,7 +1,7 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Platform, StyleSheet, View } from 'react-native';
+import { View, StyleSheet, Platform } from 'react-native';
 
 export default function TabLayout() {
   return (
@@ -9,10 +9,9 @@ export default function TabLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: styles.tabBar,
-        tabBarActiveTintColor: '#D4AF37',
-        tabBarInactiveTintColor: 'rgba(255, 255, 255, 0.4)',
+        tabBarActiveTintColor: '#0EA5E9',
+        tabBarInactiveTintColor: '#94A3B8',
         tabBarLabelStyle: styles.tabBarLabel,
-        tabBarShowLabel: true,
       }}
     >
       <Tabs.Screen
@@ -39,9 +38,10 @@ export default function TabLayout() {
           title: 'Scan',
           tabBarIcon: ({ color, size }) => (
             <View style={styles.scanButton}>
-              <Ionicons name="scan" size={28} color="#0A0A0A" />
+              <Ionicons name="scan" size={24} color="#FFFFFF" />
             </View>
           ),
+          tabBarLabel: () => null,
         }}
       />
       <Tabs.Screen
@@ -68,10 +68,10 @@ export default function TabLayout() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    backgroundColor: '#121212',
+    backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.1)',
-    height: Platform.OS === 'ios' ? 88 : 68,
+    borderTopColor: '#E2E8F0',
+    height: Platform.OS === 'ios' ? 88 : 64,
     paddingBottom: Platform.OS === 'ios' ? 28 : 8,
     paddingTop: 8,
   },
@@ -83,11 +83,11 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#D4AF37',
+    backgroundColor: '#0EA5E9',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 20,
-    shadowColor: '#D4AF37',
+    shadowColor: '#0EA5E9',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
