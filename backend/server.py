@@ -469,7 +469,7 @@ async def generate_ai_recommendations(user_data: Dict, occasion: str, budget: st
 - Hair Concerns: {user_data.get('hair_concerns', [])}
 
 Occasion: {occasion}
-Budget Level: {budget} (low=$50-100, medium=$100-200, high=$200-400, premium=$400+)
+Budget Level: {budget} (budget=₹500-1500, standard=₹1500-3000, premium=₹3000-6000, luxury=₹6000+)
 
 Available Services:
 {services_info}
