@@ -132,72 +132,175 @@ class VisitCreate(BaseModel):
     services: List[str]
     notes: Optional[str] = None
 
-# ============== SALON SERVICES DATA ==============
+# ============== SALON SERVICES DATA (Indian Market - INR) ==============
 
 SALON_SERVICES = [
     {
         "id": "1",
-        "name": "Luxury Hair Cut & Style",
+        "name": "Haircut & Styling",
         "category": "Hair",
-        "description": "Premium haircut with expert styling, includes consultation and blow-dry",
-        "price_range": "$80-150",
-        "duration_minutes": 60,
+        "description": "Professional haircut with styling, includes wash and blow-dry",
+        "price_range": "₹499-899",
+        "duration_minutes": 45,
         "suitable_for": ["all hair types"],
-        "benefits": ["Fresh look", "Professional styling", "Personalized cut"]
+        "benefits": ["Fresh look", "Professional styling", "Personalized cut"],
+        "value_deal": True
     },
     {
         "id": "2",
-        "name": "Hydrating Facial Treatment",
+        "name": "Gold Facial",
         "category": "Skin",
-        "description": "Deep hydration facial with premium serums and massage",
-        "price_range": "$120-200",
-        "duration_minutes": 75,
-        "suitable_for": ["dry", "combination", "normal"],
-        "benefits": ["Deep hydration", "Glowing skin", "Reduced fine lines"]
+        "description": "Luxurious gold facial for instant glow and radiance",
+        "price_range": "₹799-1299",
+        "duration_minutes": 60,
+        "suitable_for": ["all skin types"],
+        "benefits": ["Instant glow", "Anti-aging", "Deep nourishment"],
+        "value_deal": True
     },
     {
         "id": "3",
-        "name": "Scalp Rejuvenation Therapy",
+        "name": "Head Massage & Oil Treatment",
         "category": "Hair",
-        "description": "Intensive scalp treatment with massage and nourishing oils",
-        "price_range": "$90-140",
-        "duration_minutes": 45,
+        "description": "Relaxing champi with warm oil therapy for scalp health",
+        "price_range": "₹399-699",
+        "duration_minutes": 30,
         "suitable_for": ["all hair types"],
-        "benefits": ["Healthier scalp", "Improved hair growth", "Relaxation"]
+        "benefits": ["Stress relief", "Hair growth", "Scalp nourishment"],
+        "value_deal": True
     },
     {
         "id": "4",
         "name": "Bridal Makeup Package",
         "category": "Makeup",
-        "description": "Complete bridal makeup with trial session included",
-        "price_range": "$300-500",
-        "duration_minutes": 120,
+        "description": "Complete dulhan makeup with HD finish, includes trial",
+        "price_range": "₹8000-25000",
+        "duration_minutes": 150,
         "suitable_for": ["all skin types"],
-        "benefits": ["Long-lasting", "Photo-ready", "Includes trial"]
+        "benefits": ["Long-lasting 12hrs", "Photo-ready", "Includes trial session"],
+        "value_deal": False
     },
     {
         "id": "5",
-        "name": "Keratin Hair Treatment",
+        "name": "Keratin Treatment",
         "category": "Hair",
-        "description": "Smoothing keratin treatment for frizz-free, silky hair",
-        "price_range": "$200-350",
+        "description": "Brazilian keratin smoothing for frizz-free silky hair",
+        "price_range": "₹3500-7000",
         "duration_minutes": 180,
-        "suitable_for": ["wavy", "curly", "coily"],
-        "benefits": ["Frizz control", "Shine", "Easier styling"]
+        "suitable_for": ["wavy", "curly", "frizzy"],
+        "benefits": ["Frizz control 3-4 months", "Shine", "Easy management"],
+        "value_deal": False
     },
     {
         "id": "6",
-        "name": "Anti-Aging Facial",
+        "name": "Anti-Tan Facial",
         "category": "Skin",
-        "description": "Advanced anti-aging treatment with collagen boost",
-        "price_range": "$180-280",
-        "duration_minutes": 90,
+        "description": "De-tan treatment to remove sun damage and brighten skin",
+        "price_range": "₹699-1199",
+        "duration_minutes": 50,
         "suitable_for": ["all skin types"],
-        "benefits": ["Firmer skin", "Reduced wrinkles", "Youthful glow"]
+        "benefits": ["Tan removal", "Brightening", "Even skin tone"],
+        "value_deal": True
     },
     {
         "id": "7",
-        "name": "Balayage Color",
+        "name": "Hair Color/Highlights",
+        "category": "Hair",
+        "description": "Global color or highlights with premium ammonia-free products",
+        "price_range": "₹1500-4500",
+        "duration_minutes": 120,
+        "suitable_for": ["all hair types"],
+        "benefits": ["Vibrant color", "Low damage", "Long lasting"],
+        "value_deal": False
+    },
+    {
+        "id": "8",
+        "name": "Party Makeup",
+        "category": "Makeup",
+        "description": "Glamorous makeup for parties, sangeet and events",
+        "price_range": "₹1500-3000",
+        "duration_minutes": 60,
+        "suitable_for": ["all skin types"],
+        "benefits": ["Glamorous look", "Photo-ready", "Long lasting"],
+        "value_deal": True
+    },
+    {
+        "id": "9",
+        "name": "Cleanup Facial",
+        "category": "Skin",
+        "description": "Basic cleanup with extraction and glow pack",
+        "price_range": "₹399-599",
+        "duration_minutes": 30,
+        "suitable_for": ["all skin types"],
+        "benefits": ["Deep cleansing", "Blackhead removal", "Fresh skin"],
+        "value_deal": True
+    },
+    {
+        "id": "10",
+        "name": "Hair Spa & Treatment",
+        "category": "Hair",
+        "description": "Deep conditioning spa with steam for damaged hair repair",
+        "price_range": "₹799-1499",
+        "duration_minutes": 45,
+        "suitable_for": ["damaged", "dry", "all hair types"],
+        "benefits": ["Deep repair", "Shine restoration", "Frizz control"],
+        "value_deal": True
+    },
+    {
+        "id": "11",
+        "name": "Blow Dry & Styling",
+        "category": "Hair",
+        "description": "Professional blow dry with curls or straight styling",
+        "price_range": "₹299-599",
+        "duration_minutes": 30,
+        "suitable_for": ["all hair types"],
+        "benefits": ["Volume", "Shine", "Event-ready"],
+        "value_deal": True
+    },
+    {
+        "id": "12",
+        "name": "Manicure & Pedicure Combo",
+        "category": "Nails",
+        "description": "Spa mani-pedi with scrub, massage and polish",
+        "price_range": "₹699-1299",
+        "duration_minutes": 75,
+        "suitable_for": ["all"],
+        "benefits": ["Soft hands & feet", "Relaxation", "Groomed nails"],
+        "value_deal": True
+    },
+    {
+        "id": "13",
+        "name": "Threading & Waxing Combo",
+        "category": "Grooming",
+        "description": "Full face threading with arms/legs wax",
+        "price_range": "₹499-899",
+        "duration_minutes": 45,
+        "suitable_for": ["all"],
+        "benefits": ["Smooth skin", "Clean look", "Long lasting"],
+        "value_deal": True
+    },
+    {
+        "id": "14",
+        "name": "Fruit Facial",
+        "category": "Skin",
+        "description": "Natural fruit facial with vitamin boost for glowing skin",
+        "price_range": "₹599-999",
+        "duration_minutes": 45,
+        "suitable_for": ["all skin types"],
+        "benefits": ["Natural glow", "Vitamin boost", "Gentle on skin"],
+        "value_deal": True
+    },
+    {
+        "id": "15",
+        "name": "Smoothening Treatment",
+        "category": "Hair",
+        "description": "Hair smoothening for straight, manageable hair",
+        "price_range": "₹2500-5000",
+        "duration_minutes": 150,
+        "suitable_for": ["wavy", "curly", "frizzy"],
+        "benefits": ["Straight hair", "Low maintenance", "6-8 months lasting"],
+        "value_deal": False
+    }
+]
         "category": "Hair",
         "description": "Hand-painted balayage highlights for natural dimension",
         "price_range": "$200-400",
