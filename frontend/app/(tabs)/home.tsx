@@ -5,19 +5,19 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useUserStore } from '../../src/store/userStore';
+import { COLORS, FONTS } from '../../src/theme/colors';
 
 const QUICK_ACTIONS = [
-  { id: 'advice', icon: 'sparkles', label: 'Get Advice', route: '/get-advice', color: '#0EA5E9' },
-  { id: 'scan', icon: 'scan', label: 'AI Scan', route: '/(tabs)/scan-tab', color: '#10B981' },
-  { id: 'quiz', icon: 'clipboard', label: 'Style Quiz', route: '/style-quiz', color: '#8B5CF6' },
-  { id: 'history', icon: 'time', label: 'History', route: '/(tabs)/history', color: '#F59E0B' },
+  { id: 'advice', icon: 'sparkles', label: 'Get Advice', route: '/get-advice' },
+  { id: 'scan', icon: 'scan', label: 'AI Scan', route: '/(tabs)/scan-tab' },
+  { id: 'quiz', icon: 'clipboard', label: 'Style Quiz', route: '/style-quiz' },
+  { id: 'history', icon: 'time', label: 'History', route: '/(tabs)/history' },
 ];
 
 const FEATURED_SERVICES = [
