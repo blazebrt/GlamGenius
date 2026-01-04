@@ -21,10 +21,10 @@ interface Question {
 }
 
 const BUDGET_OPTIONS = [
-  { id: 'low', label: '$50-100', icon: 'wallet-outline' },
-  { id: 'medium', label: '$100-200', icon: 'card-outline' },
-  { id: 'high', label: '$200-400', icon: 'diamond-outline' },
-  { id: 'premium', label: '$400+', icon: 'sparkles' },
+  { id: 'budget', label: '₹500-1,500', icon: 'wallet-outline' },
+  { id: 'standard', label: '₹1,500-3,000', icon: 'card-outline' },
+  { id: 'premium', label: '₹3,000-6,000', icon: 'diamond-outline' },
+  { id: 'luxury', label: '₹6,000+', icon: 'sparkles' },
 ];
 
 const OCCASION_OPTIONS = [
