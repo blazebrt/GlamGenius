@@ -35,36 +35,8 @@ export default function CartScreen() {
       Alert.alert('Cart Empty', 'Please add services or products to your cart.');
       return;
     }
-    if (!selectedPayment) {
-      Alert.alert('Select Payment', 'Please select a payment method.');
-      return;
-    }
-
-    Alert.alert(
-      'Confirm Booking',
-      `Total: ₹${getTotal().toLocaleString('en-IN')}\n\nProceed with ${selectedPayment === 'cod' ? 'Pay at Salon' : 'online payment'}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          onPress: () => {
-            Alert.alert(
-              'Booking Confirmed! 🎉',
-              'Your appointment has been booked successfully. You will receive a confirmation SMS shortly.',
-              [
-                {
-                  text: 'OK',
-                  onPress: () => {
-                    clearCart();
-                    router.replace('/(tabs)/home');
-                  },
-                },
-              ]
-            );
-          },
-        },
-      ]
-    );
+    // Navigate to checkout screen
+    router.push('/checkout');
   };
 
   const getTotalDuration = () => {
