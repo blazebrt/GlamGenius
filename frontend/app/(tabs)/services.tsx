@@ -129,7 +129,7 @@ export default function ServicesScreen() {
         </View>
         {cartCount > 0 && (
           <TouchableOpacity style={styles.cartButton} onPress={() => router.push('/cart')}>
-            <Ionicons name="cart-outline" size={22} color="#0EA5E9" />
+            <Ionicons name="cart-outline" size={22} color={COLORS.black} />
             <View style={styles.cartBadge}>
               <Text style={styles.cartBadgeText}>{cartCount}</Text>
             </View>
@@ -139,17 +139,17 @@ export default function ServicesScreen() {
 
       {/* Search Bar */}
       <Animated.View entering={FadeIn.delay(100)} style={styles.searchContainer}>
-        <Ionicons name="search" size={20} color="#94A3B8" />
+        <Ionicons name="search" size={20} color={COLORS.textMuted} />
         <TextInput
           style={styles.searchInput}
           placeholder="Search services..."
-          placeholderTextColor="#94A3B8"
+          placeholderTextColor={COLORS.textMuted}
           value={searchQuery}
           onChangeText={setSearchQuery}
         />
         {searchQuery.length > 0 && (
           <TouchableOpacity onPress={() => setSearchQuery('')}>
-            <Ionicons name="close-circle" size={20} color="#94A3B8" />
+            <Ionicons name="close-circle" size={20} color={COLORS.textMuted} />
           </TouchableOpacity>
         )}
       </Animated.View>
@@ -166,7 +166,7 @@ export default function ServicesScreen() {
               <Ionicons
                 name={category.icon as any}
                 size={16}
-                color={selectedCategory === category.id ? '#FFFFFF' : '#64748B'}
+                color={selectedCategory === category.id ? COLORS.white : COLORS.textSecondary}
               />
               <Text style={[styles.categoryChipText, selectedCategory === category.id && styles.categoryChipTextActive]}>
                 {category.label}
@@ -184,17 +184,17 @@ export default function ServicesScreen() {
       {/* Services List */}
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#0EA5E9" />
+          <ActivityIndicator size="large" color={COLORS.black} />
         </View>
       ) : (
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.servicesContent}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#0EA5E9" />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.black} />}
         >
           {filteredServices.length === 0 ? (
             <View style={styles.emptyContainer}>
-              <Ionicons name="search" size={48} color="#E2E8F0" />
+              <Ionicons name="search" size={48} color={COLORS.border} />
               <Text style={styles.emptyText}>No services found</Text>
             </View>
           ) : (
@@ -207,14 +207,14 @@ export default function ServicesScreen() {
                     onPress={() => router.push({ pathname: '/service-details', params: { serviceId: service.id } })}
                   >
                     <View style={styles.serviceIconContainer}>
-                      <Ionicons name={getCategoryIcon(service.category) as any} size={22} color="#0EA5E9" />
+                      <Ionicons name={getCategoryIcon(service.category) as any} size={22} color={COLORS.black} />
                     </View>
                     <View style={styles.serviceInfo}>
                       <Text style={styles.serviceName}>{service.name}</Text>
                       <Text style={styles.serviceDescription} numberOfLines={2}>{service.description}</Text>
                       <View style={styles.serviceMeta}>
                         <View style={styles.serviceMetaItem}>
-                          <Ionicons name="time-outline" size={14} color="#64748B" />
+                          <Ionicons name="time-outline" size={14} color={COLORS.textMuted} />
                           <Text style={styles.serviceMetaText}>{service.duration_minutes} min</Text>
                         </View>
                         <Text style={styles.servicePrice}>{service.price_range}</Text>
@@ -224,7 +224,7 @@ export default function ServicesScreen() {
                       style={[styles.addButton, inCart && styles.addButtonActive]}
                       onPress={(e) => { e.stopPropagation(); handleAddToCart(service); }}
                     >
-                      <Ionicons name={inCart ? 'checkmark' : 'add'} size={20} color="#FFFFFF" />
+                      <Ionicons name={inCart ? 'checkmark' : 'add'} size={20} color={COLORS.white} />
                     </TouchableOpacity>
                   </TouchableOpacity>
                 </Animated.View>
@@ -239,7 +239,7 @@ export default function ServicesScreen() {
         <Animated.View entering={FadeInDown} style={[styles.floatingCart, { bottom: insets.bottom + 80 }]}>
           <TouchableOpacity style={styles.floatingCartButton} onPress={() => router.push('/cart')}>
             <View style={styles.floatingCartLeft}>
-              <Ionicons name="cart" size={20} color="#FFFFFF" />
+              <Ionicons name="cart" size={20} color={COLORS.white} />
               <Text style={styles.floatingCartText}>{cartCount} items</Text>
             </View>
             <Text style={styles.floatingCartAction}>View Cart →</Text>
