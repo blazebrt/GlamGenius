@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useUserStore } from '../src/store/userStore';
+import { COLORS } from '../src/theme/colors';
 
 const { width, height } = Dimensions.get('window');
 
@@ -64,7 +65,7 @@ export default function WelcomeScreen() {
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.loadingContainer}>
           <Text style={styles.logoText}>GlamGenius</Text>
-          <ActivityIndicator size="large" color="#D4AF37" style={{ marginTop: 20 }} />
+          <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 20 }} />
         </View>
       </View>
     );
@@ -79,7 +80,7 @@ export default function WelcomeScreen() {
       {/* Logo and Header */}
       <Animated.View entering={FadeIn.delay(200)} style={styles.headerContainer}>
         <View style={styles.logoContainer}>
-          <Ionicons name="sparkles" size={40} color="#D4AF37" />
+          <Ionicons name="sparkles" size={40} color={COLORS.primary} />
         </View>
         <Text style={styles.logoText}>GlamGenius</Text>
         <Text style={styles.tagline}>Premium Salon Advisor</Text>
@@ -113,11 +114,11 @@ export default function WelcomeScreen() {
           activeOpacity={0.8}
         >
           {loading ? (
-            <ActivityIndicator color="#0A0A0A" />
+            <ActivityIndicator color={COLORS.white} />
           ) : (
             <>
               <Text style={styles.ctaText}>Get Started</Text>
-              <Ionicons name="arrow-forward" size={20} color="#0A0A0A" />
+              <Ionicons name="arrow-forward" size={20} color={COLORS.white} />
             </>
           )}
         </TouchableOpacity>
@@ -133,7 +134,7 @@ function FeatureItem({ icon, title, description }: { icon: string; title: string
   return (
     <View style={styles.featureItem}>
       <View style={styles.featureIconContainer}>
-        <Ionicons name={icon as any} size={24} color="#D4AF37" />
+        <Ionicons name={icon as any} size={24} color={COLORS.primary} />
       </View>
       <View style={styles.featureTextContainer}>
         <Text style={styles.featureTitle}>{title}</Text>
