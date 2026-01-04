@@ -664,4 +664,33 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#0A0A0A',
   },
+  // Active state styles for items in cart
+  addButtonActive: {
+    backgroundColor: '#2ECC71',
+  },
+  addonCardActive: {
+    backgroundColor: 'rgba(46, 204, 113, 0.15)',
+    borderWidth: 1,
+    borderColor: '#2ECC71',
+  },
+  addonNameActive: {
+    color: '#2ECC71',
+  },
+  addonPriceActive: {
+    color: '#2ECC71',
+  },
+  addonAddBtnActive: {
+    backgroundColor: '#2ECC71',
+  },
+  productCardActive: {
+    backgroundColor: 'rgba(46, 204, 113, 0.1)',
+    borderWidth: 1,
+    borderColor: '#2ECC71',
+  },
+  productAddBtnActive: {
+    backgroundColor: '#2ECC71',
+  },
+  productAddTextActive: {
+    color: '#FFFFFF',
+  },
 });
