@@ -811,6 +811,85 @@ async def add_visit_feedback(visit_id: str, rating: int, feedback: str):
         raise HTTPException(status_code=404, detail="Visit not found")
     return {"status": "success"}
 
+# ============== PAYMENT ROUTES (MOCK - Replace with Razorpay later) ==============
+
+@api_router.post("/payments/create-order")
+async def create_payment_order(request: PaymentOrderRequest):
+    """Create a payment order (Mock - simulates Razorpay order creation)"""
+    order = Order(
+        user_id=request.user_id,
+        amount=request.amount,
+        currency=request.currency,
+        items=request.items,
+        status="created"
+    )
+    
+    await db.orders.insert_one(order.dict())
+    
+    # Return Razorpay-like response structure
+    return {
+        "id": order.id,
+        "amount": order.amount,
+        "currency": order.currency,
+        "status": order.status,
+        "created_at": order.created_at.isoformat(),
+        # Mock key for frontend (would be real RAZORPAY_KEY_ID in production)
+        "key": "rzp_mock_glamgenius"
+    }
+
+@api_router.post("/payments/verify")
+async def verify_payment(request: PaymentVerifyRequest):
+    """Verify payment (Mock - simulates Razorpay payment verification)"""
+    # Find the order
+    order = await db.orders.find_one({"id": request.order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    # Simulate payment verification (always succeeds in mock mode)
+    # In production, this would verify with Razorpay API
+    payment_id = f"pay_{uuid.uuid4().hex[:16]}"
+    
+    # Update order status
+    await db.orders.update_one(
+        {"id": request.order_id},
+        {"$set": {
+            "status": "paid",
+            "payment_id": payment_id,
+            "payment_method": request.payment_method,
+            "updated_at": datetime.utcnow()
+        }}
+    )
+    
+    # Create a visit record for the booking
+    visit = Visit(
+        user_id=order["user_id"],
+        services=[item.get("name", "Service") for item in order.get("items", [])],
+        notes=f"Booked via app. Payment: {request.payment_method.upper()}"
+    )
+    await db.visits.insert_one(visit.dict())
+    
+    return {
+        "success": True,
+        "payment_id": payment_id,
+        "order_id": request.order_id,
+        "booking_id": visit.id,
+        "message": "Payment successful! Your appointment has been booked."
+    }
+
+@api_router.get("/payments/order/{order_id}")
+async def get_order(order_id: str):
+    """Get order details"""
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return Order(**order)
+
+@api_router.get("/payments/history/{user_id}")
+async def get_payment_history(user_id: str):
+    """Get payment history for a user"""
+    orders = await db.orders.find({"user_id": user_id}).sort("created_at", -1).to_list(50)
+    return [Order(**o) for o in orders]
+
 # Include the router in the main app
 app.include_router(api_router)
 
