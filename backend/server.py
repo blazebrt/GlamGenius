@@ -132,6 +132,31 @@ class VisitCreate(BaseModel):
     services: List[str]
     notes: Optional[str] = None
 
+# ============== PAYMENT MODELS ==============
+
+class PaymentOrderRequest(BaseModel):
+    user_id: str
+    amount: int  # Amount in paise (multiply INR by 100)
+    currency: str = "INR"
+    items: List[Dict[str, Any]] = []
+    
+class PaymentVerifyRequest(BaseModel):
+    order_id: str
+    payment_id: str
+    payment_method: str  # 'upi', 'card', 'netbanking', 'cod'
+    
+class Order(BaseModel):
+    id: str = Field(default_factory=lambda: f"order_{uuid.uuid4().hex[:16]}")
+    user_id: str
+    amount: int
+    currency: str = "INR"
+    status: str = "created"  # created, paid, failed
+    items: List[Dict[str, Any]] = []
+    payment_id: Optional[str] = None
+    payment_method: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
 # ============== SALON SERVICES DATA (Indian Market - INR) ==============
 
 SALON_SERVICES = [
