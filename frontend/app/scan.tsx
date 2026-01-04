@@ -174,16 +174,50 @@ export default function ScanScreen() {
   const getHealthScore = (type: string) => {
     if (!analysisResult) return 0;
     
-    // Calculate health scores based on analysis
+    // Try to get scores from the new detailed health_scores object first
+    if (analysisResult.health_scores) {
+      if (type === 'skin' && analysisResult.health_scores.overall_skin_health) {
+        return analysisResult.health_scores.overall_skin_health;
+      }
+      if (type === 'hair' && analysisResult.health_scores.overall_hair_health) {
+        return analysisResult.health_scores.overall_hair_health;
+      }
+      if (type === 'skin' && analysisResult.health_scores.skin_health) {
+        return analysisResult.health_scores.skin_health;
+      }
+      if (type === 'hair' && analysisResult.health_scores.hair_health) {
+        return analysisResult.health_scores.hair_health;
+      }
+    }
+    
+    // Check overall_health_scores for full analysis
+    if (analysisResult.overall_health_scores) {
+      if (type === 'skin' && analysisResult.overall_health_scores.skin_health) {
+        return analysisResult.overall_health_scores.skin_health;
+      }
+      if (type === 'hair' && analysisResult.overall_health_scores.hair_health) {
+        return analysisResult.overall_health_scores.hair_health;
+      }
+    }
+    
+    // Fallback: Calculate health scores based on concerns
     const concerns = type === 'skin' 
       ? (analysisResult.skin_concerns?.length || 0)
       : type === 'hair'
       ? (analysisResult.hair_concerns?.length || 0)
       : 0;
     
-    const baseScore = 85;
-    const deduction = concerns * 10;
-    return Math.max(50, baseScore - deduction);
+    const baseScore = 75; // More conservative base
+    const deduction = concerns * 8;
+    return Math.max(45, Math.min(95, baseScore - deduction));
+  };
+
+  // Get confidence score from analysis
+  const getConfidencePercent = () => {
+    if (analysisResult?.confidence_score) {
+      return Math.round(analysisResult.confidence_score * 100);
+    }
+    return 85; // Default confidence
   };
 
   // Permission not yet checked
