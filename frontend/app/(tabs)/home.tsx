@@ -12,7 +12,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useUserStore } from '../../src/store/userStore';
-import { api } from '../../src/services/api';
 
 const QUICK_ACTIONS = [
   { id: 'advice', icon: 'sparkles', label: 'Get Advice', route: '/get-advice', color: '#0EA5E9' },
@@ -39,14 +38,22 @@ const BEAUTY_TIPS = [
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, loadUser } = useUserStore();
+  const { user, fetchUser } = useUserStore();
   const [tipIndex, setTipIndex] = useState(0);
 
   useEffect(() => {
-    loadUser();
-    // Change tip every hour
+    fetchUser();
+    // Set initial tip based on hour
     const hour = new Date().getHours();
     setTipIndex(hour % BEAUTY_TIPS.length);
+    
+    // Update tip every hour (3600000ms = 1 hour)
+    const tipInterval = setInterval(() => {
+      const currentHour = new Date().getHours();
+      setTipIndex(currentHour % BEAUTY_TIPS.length);
+    }, 3600000);
+    
+    return () => clearInterval(tipInterval);
   }, []);
 
   const getGreeting = () => {
