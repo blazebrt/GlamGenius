@@ -22,4 +22,18 @@ config.cacheStores = [
 // Reduce the number of workers to decrease resource usage
 config.maxWorkers = 2;
 
+// Server configuration to allow tunnel connections
+config.server = {
+  ...config.server,
+  enhanceMiddleware: (middleware) => {
+    return (req, res, next) => {
+      // Allow all origins for development
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', '*');
+      return middleware(req, res, next);
+    };
+  },
+};
+
 module.exports = config;
