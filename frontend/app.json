@@ -33,6 +33,19 @@
           "resizeMode": "contain",
           "backgroundColor": "#000"
         }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow GlamGenius to access your camera for AI beauty scans",
+          "microphonePermission": "Allow GlamGenius to access your microphone"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow GlamGenius to access your photos for AI beauty analysis"
+        }
       ]
     ],
     "experiments": {
