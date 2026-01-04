@@ -299,7 +299,7 @@ async def analyze_image_with_gemini(image_base64: str, scan_type: str) -> Dict[s
             Analyze the provided image and provide detailed, professional analysis.
             Be specific, helpful, and provide actionable insights.
             Always respond in valid JSON format."""
-        ).with_model("gemini", "gemini-2.5-flash-preview-05-20")
+        ).with_model("gemini", "gemini-2.0-flash")
         
         # Create temp file for image
         import tempfile
@@ -411,7 +411,7 @@ async def generate_ai_recommendations(user_data: Dict, occasion: str, budget: st
             Based on the user's profile, budget, and occasion, recommend the best salon service bundle.
             Optimize for visible results, value for money, and client retention.
             Always respond in valid JSON format."""
-        ).with_model("gemini", "gemini-2.5-flash-preview-05-20")
+        ).with_model("gemini", "gemini-2.0-flash")
         
         services_info = "\n".join([f"- {s['name']} ({s['category']}): {s['description']} - {s['price_range']}" for s in SALON_SERVICES])
         
