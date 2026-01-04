@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -14,216 +14,133 @@ import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { api } from '../src/services/api';
 import { useUserStore } from '../src/store/userStore';
 
-// Style Quiz for building beauty profile
-const PROFILE_QUESTIONS = [
-  {
-    id: 'hair_type',
-    question: 'What is your hair type?',
-    options: [
-      { id: 'straight', label: 'Straight', icon: 'remove-outline' },
-      { id: 'wavy', label: 'Wavy', icon: 'water-outline' },
-      { id: 'curly', label: 'Curly', icon: 'sync-outline' },
-      { id: 'coily', label: 'Coily/Kinky', icon: 'infinite-outline' },
-    ],
-  },
-  {
-    id: 'skin_type',
-    question: 'How would you describe your skin?',
-    options: [
-      { id: 'oily', label: 'Oily (Shiny, prone to acne)', icon: 'water' },
-      { id: 'dry', label: 'Dry (Tight, flaky)', icon: 'sunny-outline' },
-      { id: 'combination', label: 'Combination (Oily T-zone)', icon: 'contrast-outline' },
-      { id: 'normal', label: 'Normal (Balanced)', icon: 'checkmark-circle-outline' },
-      { id: 'sensitive', label: 'Sensitive (Easily irritated)', icon: 'alert-circle-outline' },
-    ],
-  },
-  {
-    id: 'hair_concern',
-    question: "What's your main hair concern?",
-    options: [
-      { id: 'frizz', label: 'Frizz & Dryness', icon: 'cloudy-outline' },
-      { id: 'hairfall', label: 'Hair Fall', icon: 'trending-down-outline' },
-      { id: 'dandruff', label: 'Dandruff/Itchy Scalp', icon: 'snow-outline' },
-      { id: 'damage', label: 'Damage & Breakage', icon: 'flash-outline' },
-      { id: 'grey', label: 'Grey Hair', icon: 'contrast-outline' },
-      { id: 'none', label: 'No major concerns', icon: 'checkmark-outline' },
-    ],
-  },
-  {
-    id: 'skin_concern',
-    question: "What's your main skin concern?",
-    options: [
-      { id: 'acne', label: 'Acne & Pimples', icon: 'ellipse-outline' },
-      { id: 'pigmentation', label: 'Pigmentation/Dark Spots', icon: 'contrast' },
-      { id: 'aging', label: 'Aging & Wrinkles', icon: 'time-outline' },
-      { id: 'dullness', label: 'Dullness/Tired Skin', icon: 'moon-outline' },
-      { id: 'tan', label: 'Tan/Uneven Tone', icon: 'sunny' },
-      { id: 'none', label: 'No major concerns', icon: 'checkmark-outline' },
-    ],
-  },
-  {
-    id: 'visit_frequency',
-    question: 'How often do you visit a salon?',
-    options: [
-      { id: 'weekly', label: 'Weekly', icon: 'calendar-outline' },
-      { id: 'biweekly', label: 'Every 2 weeks', icon: 'calendar-outline' },
-      { id: 'monthly', label: 'Monthly', icon: 'calendar-outline' },
-      { id: 'quarterly', label: 'Every 2-3 months', icon: 'calendar-outline' },
-      { id: 'rarely', label: 'Rarely/Special occasions', icon: 'calendar-outline' },
-    ],
-  },
-];
-
 export default function StyleQuizScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { userId, updateUser } = useUserStore();
+  const { userId, updateUserProfile } = useUserStore();
 
-  const [currentStep, setCurrentStep] = useState(0);
+  const [questions, setQuestions] = useState<any[]>([]);
+  const [currentQuestion, setCurrentQuestion] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  const currentQuestion = PROFILE_QUESTIONS[currentStep];
-  const progress = ((currentStep + 1) / PROFILE_QUESTIONS.length) * 100;
-  const isLastStep = currentStep === PROFILE_QUESTIONS.length - 1;
+  useEffect(() => {
+    loadQuestions();
+  }, []);
 
-  const handleSelect = (optionId: string) => {
-    setAnswers({ ...answers, [currentQuestion.id]: optionId });
-  };
-
-  const handleNext = () => {
-    if (currentStep < PROFILE_QUESTIONS.length - 1) {
-      setCurrentStep(currentStep + 1);
+  const loadQuestions = async () => {
+    try {
+      const response = await api.get('/quiz/questions');
+      setQuestions(response.data);
+    } catch (error) {
+      console.error('Error loading questions:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleBack = () => {
-    if (currentStep > 0) {
-      setCurrentStep(currentStep - 1);
-    } else {
-      router.back();
+  const handleAnswer = (questionId: string, answer: string) => {
+    setAnswers({ ...answers, [questionId]: answer });
+    if (currentQuestion < questions.length - 1) {
+      setTimeout(() => setCurrentQuestion(currentQuestion + 1), 300);
     }
   };
 
   const handleSubmit = async () => {
     setSubmitting(true);
     try {
-      // Update user profile with answers
-      await updateUser({
-        hair_type: answers.hair_type,
-        skin_type: answers.skin_type,
-        hair_concerns: answers.hair_concern !== 'none' ? [answers.hair_concern] : [],
-        skin_concerns: answers.skin_concern !== 'none' ? [answers.skin_concern] : [],
-        preferences: { visit_frequency: answers.visit_frequency },
-      });
-
-      // Navigate to home with success
+      await api.post('/quiz/submit', { user_id: userId, answers });
+      await updateUserProfile();
       router.replace('/(tabs)/home');
     } catch (error) {
-      console.error('Error saving profile:', error);
+      console.error('Error submitting quiz:', error);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const canProceed = answers[currentQuestion.id];
+  const progress = questions.length > 0 ? ((currentQuestion + 1) / questions.length) * 100 : 0;
+  const canSubmit = Object.keys(answers).length === questions.length;
+
+  if (loading) {
+    return (
+      <View style={[styles.container, { paddingTop: insets.top }]}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#0EA5E9" />
+          <Text style={styles.loadingText}>Loading quiz...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  const question = questions[currentQuestion];
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={handleBack} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+        <TouchableOpacity onPress={() => currentQuestion > 0 ? setCurrentQuestion(currentQuestion - 1) : router.back()} style={styles.headerBtn}>
+          <Ionicons name="arrow-back" size={24} color="#1E293B" />
         </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>Build Your Profile</Text>
-          <Text style={styles.headerSubtitle}>For personalized packages</Text>
+        <View style={styles.progressContainer}>
+          <View style={styles.progressBar}>
+            <View style={[styles.progressFill, { width: `${progress}%` }]} />
+          </View>
+          <Text style={styles.progressText}>{currentQuestion + 1} of {questions.length}</Text>
         </View>
         <View style={{ width: 40 }} />
       </View>
 
-      {/* Progress Bar */}
-      <View style={styles.progressContainer}>
-        <View style={styles.progressBar}>
-          <View style={[styles.progressFill, { width: `${progress}%` }]} />
-        </View>
-        <Text style={styles.progressText}>
-          {currentStep + 1} of {PROFILE_QUESTIONS.length}
-        </Text>
-      </View>
-
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-      >
-        <Animated.View entering={FadeIn} key={currentStep}>
-          <Text style={styles.questionText}>{currentQuestion.question}</Text>
-          
-          <View style={styles.optionsContainer}>
-            {currentQuestion.options.map((option, index) => (
-              <Animated.View
-                key={option.id}
-                entering={FadeInDown.delay(index * 50)}
-              >
-                <TouchableOpacity
-                  style={[
-                    styles.optionCard,
-                    answers[currentQuestion.id] === option.id && styles.optionCardSelected,
-                  ]}
-                  onPress={() => handleSelect(option.id)}
-                >
-                  <View style={[
-                    styles.optionIcon,
-                    answers[currentQuestion.id] === option.id && styles.optionIconSelected,
-                  ]}>
-                    <Ionicons
-                      name={option.icon as any}
-                      size={24}
-                      color={answers[currentQuestion.id] === option.id ? '#0A0A0A' : '#D4AF37'}
-                    />
-                  </View>
-                  <Text style={[
-                    styles.optionLabel,
-                    answers[currentQuestion.id] === option.id && styles.optionLabelSelected,
-                  ]}>
-                    {option.label}
-                  </Text>
-                  {answers[currentQuestion.id] === option.id && (
-                    <Ionicons name="checkmark-circle" size={24} color="#D4AF37" />
-                  )}
-                </TouchableOpacity>
-              </Animated.View>
-            ))}
-          </View>
-        </Animated.View>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+        {question && (
+          <Animated.View key={question.id} entering={FadeIn}>
+            <Text style={styles.questionText}>{question.question}</Text>
+            <View style={styles.optionsContainer}>
+              {question.options?.map((option: string, index: number) => {
+                const isSelected = answers[question.id] === option;
+                return (
+                  <Animated.View key={index} entering={FadeInDown.delay(index * 50)}>
+                    <TouchableOpacity
+                      style={[styles.optionCard, isSelected && styles.optionCardActive]}
+                      onPress={() => handleAnswer(question.id, option)}
+                    >
+                      <Text style={[styles.optionText, isSelected && styles.optionTextActive]}>{option}</Text>
+                      <View style={[styles.radioOuter, isSelected && styles.radioOuterActive]}>
+                        {isSelected && <View style={styles.radioInner} />}
+                      </View>
+                    </TouchableOpacity>
+                  </Animated.View>
+                );
+              })}
+            </View>
+          </Animated.View>
+        )}
       </ScrollView>
 
-      {/* Footer */}
-      <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
-        {isLastStep ? (
-          <TouchableOpacity
-            style={[styles.primaryButton, !canProceed && styles.buttonDisabled]}
-            onPress={handleSubmit}
-            disabled={!canProceed || submitting}
-          >
+      {/* Bottom Action */}
+      <View style={[styles.bottomContainer, { paddingBottom: insets.bottom + 16 }]}>
+        {currentQuestion === questions.length - 1 && canSubmit ? (
+          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={submitting}>
             {submitting ? (
-              <ActivityIndicator color="#0A0A0A" />
+              <ActivityIndicator color="#FFFFFF" />
             ) : (
               <>
-                <Ionicons name="checkmark-circle" size={20} color="#0A0A0A" />
-                <Text style={styles.primaryButtonText}>Save Profile</Text>
+                <Text style={styles.submitBtnText}>Complete Profile</Text>
+                <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
               </>
             )}
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity
-            style={[styles.primaryButton, !canProceed && styles.buttonDisabled]}
-            onPress={handleNext}
-            disabled={!canProceed}
-          >
-            <Text style={styles.primaryButtonText}>Continue</Text>
-            <Ionicons name="arrow-forward" size={20} color="#0A0A0A" />
-          </TouchableOpacity>
+          <View style={styles.navigationDots}>
+            {questions.map((_, index) => (
+              <TouchableOpacity
+                key={index}
+                style={[styles.dot, index === currentQuestion && styles.dotActive, index < currentQuestion && styles.dotCompleted]}
+                onPress={() => setCurrentQuestion(index)}
+              />
+            ))}
+          </View>
         )}
       </View>
     </View>
@@ -231,128 +148,30 @@ export default function StyleQuizScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0A0A0A',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerCenter: {
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.5)',
-    marginTop: 2,
-  },
-  progressContainer: {
-    paddingHorizontal: 20,
-    marginTop: 8,
-  },
-  progressBar: {
-    height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#D4AF37',
-    borderRadius: 2,
-  },
-  progressText: {
-    fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.5)',
-    marginTop: 8,
-    textAlign: 'center',
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 32,
-    paddingBottom: 100,
-  },
-  questionText: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    textAlign: 'center',
-    marginBottom: 32,
-  },
-  optionsContainer: {
-    gap: 12,
-  },
-  optionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  optionCardSelected: {
-    backgroundColor: 'rgba(212, 175, 55, 0.1)',
-    borderColor: '#D4AF37',
-  },
-  optionIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(212, 175, 55, 0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  optionIconSelected: {
-    backgroundColor: '#D4AF37',
-  },
-  optionLabel: {
-    flex: 1,
-    fontSize: 15,
-    color: '#FFFFFF',
-    marginLeft: 14,
-  },
-  optionLabelSelected: {
-    fontWeight: '600',
-  },
-  footer: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  primaryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#D4AF37',
-    paddingVertical: 16,
-    borderRadius: 28,
-    gap: 8,
-  },
-  primaryButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#0A0A0A',
-  },
-  buttonDisabled: {
-    opacity: 0.5,
-  },
+  container: { flex: 1, backgroundColor: '#F8FAFC' },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
+  loadingText: { fontSize: 14, color: '#64748B' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 },
+  headerBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
+  progressContainer: { flex: 1, marginHorizontal: 16 },
+  progressBar: { height: 6, backgroundColor: '#E2E8F0', borderRadius: 3 },
+  progressFill: { height: '100%', backgroundColor: '#0EA5E9', borderRadius: 3 },
+  progressText: { fontSize: 12, color: '#64748B', textAlign: 'center', marginTop: 6 },
+  content: { padding: 20, paddingBottom: 120 },
+  questionText: { fontSize: 22, fontWeight: '600', color: '#1E293B', marginBottom: 24, lineHeight: 30 },
+  optionsContainer: { gap: 12 },
+  optionCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFFFFF', borderRadius: 14, padding: 18, borderWidth: 2, borderColor: '#E2E8F0' },
+  optionCardActive: { borderColor: '#0EA5E9', backgroundColor: '#E0F2FE' },
+  optionText: { flex: 1, fontSize: 16, color: '#1E293B' },
+  optionTextActive: { fontWeight: '500', color: '#0284C7' },
+  radioOuter: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#E2E8F0', justifyContent: 'center', alignItems: 'center' },
+  radioOuterActive: { borderColor: '#0EA5E9' },
+  radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#0EA5E9' },
+  bottomContainer: { paddingHorizontal: 20, paddingTop: 16, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#E2E8F0' },
+  submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#0EA5E9', paddingVertical: 16, borderRadius: 28, gap: 10 },
+  submitBtnText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
+  navigationDots: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
+  dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#E2E8F0' },
+  dotActive: { backgroundColor: '#0EA5E9', width: 24 },
+  dotCompleted: { backgroundColor: '#10B981' },
 });

@@ -5,1025 +5,285 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  ScrollView,
   Alert,
-  Platform,
-  Dimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
+import Animated, { FadeIn, FadeInDown, useSharedValue, useAnimatedStyle, withRepeat, withTiming, Easing } from 'react-native-reanimated';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
-import Animated, { 
-  FadeIn, 
-  FadeInDown, 
-  useSharedValue, 
-  useAnimatedStyle, 
-  withRepeat, 
-  withTiming,
-  withSequence,
-} from 'react-native-reanimated';
 import { api } from '../src/services/api';
-import { useUserStore } from '../src/store/userStore';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-
-type ScanStep = 'front' | 'left' | 'right' | 'analyzing' | 'results';
-
-interface ScanImages {
-  front?: string;
-  left?: string;
-  right?: string;
-}
+type ScanStep = 'intro' | 'scanning' | 'analyzing' | 'results';
+type ScanType = 'face' | 'hair' | 'scalp' | 'full';
 
 export default function ScanScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { userId, fetchUser } = useUserStore();
   const [permission, requestPermission] = useCameraPermissions();
-  const [facing, setFacing] = useState<CameraType>('front');
-  const [scanStep, setScanStep] = useState<ScanStep>('front');
-  const [scanImages, setScanImages] = useState<ScanImages>({});
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<any>(null);
   const cameraRef = useRef<CameraView>(null);
 
-  // Animation for scanning effect
-  const scanLinePosition = useSharedValue(0);
+  const [step, setStep] = useState<ScanStep>('intro');
+  const [scanType, setScanType] = useState<ScanType>('face');
+  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<any>(null);
+
   const pulseScale = useSharedValue(1);
 
   useEffect(() => {
-    // Scan line animation
-    scanLinePosition.value = withRepeat(
-      withTiming(300, { duration: 2000 }),
-      -1,
-      true
-    );
-    // Pulse animation
-    pulseScale.value = withRepeat(
-      withSequence(
-        withTiming(1.1, { duration: 1000 }),
-        withTiming(1, { duration: 1000 })
-      ),
-      -1,
-      false
-    );
+    pulseScale.value = withRepeat(withTiming(1.1, { duration: 1000, easing: Easing.ease }), -1, true);
   }, []);
 
-  const scanLineStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: scanLinePosition.value }],
-  }));
+  const pulseStyle = useAnimatedStyle(() => ({ transform: [{ scale: pulseScale.value }] }));
 
-  const pulseStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: pulseScale.value }],
-  }));
-
-  const SCAN_STEPS = {
-    front: { label: 'Front Face', instruction: 'Look straight at the camera', icon: 'happy-outline' },
-    left: { label: 'Left Profile', instruction: 'Turn your head slightly left', icon: 'arrow-back-outline' },
-    right: { label: 'Right Profile', instruction: 'Turn your head slightly right', icon: 'arrow-forward-outline' },
-  };
-
-  const handleCapture = async () => {
-    if (!cameraRef.current) return;
-
-    try {
-      const photo = await cameraRef.current.takePictureAsync({
-        base64: true,
-        quality: 0.7,
-      });
-
-      if (photo?.base64) {
-        const newImages = { ...scanImages, [scanStep]: photo.base64 };
-        setScanImages(newImages);
-
-        // Move to next step
-        if (scanStep === 'front') {
-          setScanStep('left');
-        } else if (scanStep === 'left') {
-          setScanStep('right');
-        } else if (scanStep === 'right') {
-          // All images captured, start analysis
-          setScanStep('analyzing');
-          analyzeImages(newImages);
+  const handleTakePhoto = async () => {
+    if (cameraRef.current) {
+      try {
+        const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.7 });
+        if (photo?.base64) {
+          setCapturedImage(photo.base64);
+          setStep('analyzing');
+          analyzeImage(photo.base64);
         }
+      } catch (error) {
+        Alert.alert('Error', 'Failed to take photo');
       }
-    } catch (error) {
-      console.error('Error capturing photo:', error);
-      Alert.alert('Error', 'Failed to capture photo. Please try again.');
     }
   };
 
   const handlePickImage = async () => {
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.7,
-        base64: true,
-      });
-
-      if (!result.canceled && result.assets[0].base64) {
-        setScanStep('analyzing');
-        analyzeImages({ front: result.assets[0].base64 });
-      }
-    } catch (error) {
-      console.error('Error picking image:', error);
-      Alert.alert('Error', 'Failed to pick image. Please try again.');
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, base64: true, quality: 0.7 });
+    if (!result.canceled && result.assets[0]?.base64) {
+      setCapturedImage(result.assets[0].base64);
+      setStep('analyzing');
+      analyzeImage(result.assets[0].base64);
     }
   };
 
-  const analyzeImages = async (images: ScanImages) => {
-    setAnalyzing(true);
+  const analyzeImage = async (base64: string) => {
     try {
-      // Use the front image for analysis (primary)
-      const primaryImage = images.front || images.left || images.right;
-      if (!primaryImage) {
-        throw new Error('No image available');
-      }
-
-      const response = await api.post('/scan/analyze', {
-        user_id: userId,
-        image_base64: primaryImage,
-        scan_type: 'full',
-      });
-
-      setAnalysisResult(response.data.analysis);
-      setScanStep('results');
-      await fetchUser();
+      const response = await api.post('/scan/analyze', { image_base64: base64, scan_type: scanType });
+      setAnalysisResult(response.data);
+      setStep('results');
     } catch (error) {
-      console.error('Error analyzing image:', error);
-      Alert.alert('Error', 'Failed to analyze image. Please try again.');
-      setScanStep('front');
-    } finally {
-      setAnalyzing(false);
+      Alert.alert('Error', 'Analysis failed. Please try again.');
+      setStep('intro');
     }
   };
 
-  const handleRetake = () => {
-    setScanImages({});
+  const resetScan = () => {
+    setStep('intro');
+    setCapturedImage(null);
     setAnalysisResult(null);
-    setScanStep('front');
-  };
-
-  const handleGetPackages = () => {
-    router.push('/get-advice');
   };
 
   const getHealthScore = (type: string) => {
     if (!analysisResult) return 0;
-    
-    // Try to get scores from the new detailed health_scores object first
     if (analysisResult.health_scores) {
-      if (type === 'skin' && analysisResult.health_scores.overall_skin_health) {
-        return analysisResult.health_scores.overall_skin_health;
-      }
-      if (type === 'hair' && analysisResult.health_scores.overall_hair_health) {
-        return analysisResult.health_scores.overall_hair_health;
-      }
-      if (type === 'skin' && analysisResult.health_scores.skin_health) {
-        return analysisResult.health_scores.skin_health;
-      }
-      if (type === 'hair' && analysisResult.health_scores.hair_health) {
-        return analysisResult.health_scores.hair_health;
-      }
+      if (type === 'skin' && analysisResult.health_scores.overall_skin_health) return analysisResult.health_scores.overall_skin_health;
+      if (type === 'hair' && analysisResult.health_scores.overall_hair_health) return analysisResult.health_scores.overall_hair_health;
     }
-    
-    // Check overall_health_scores for full analysis
-    if (analysisResult.overall_health_scores) {
-      if (type === 'skin' && analysisResult.overall_health_scores.skin_health) {
-        return analysisResult.overall_health_scores.skin_health;
-      }
-      if (type === 'hair' && analysisResult.overall_health_scores.hair_health) {
-        return analysisResult.overall_health_scores.hair_health;
-      }
-    }
-    
-    // Fallback: Calculate health scores based on concerns
-    const concerns = type === 'skin' 
-      ? (analysisResult.skin_concerns?.length || 0)
-      : type === 'hair'
-      ? (analysisResult.hair_concerns?.length || 0)
-      : 0;
-    
-    const baseScore = 75; // More conservative base
-    const deduction = concerns * 8;
-    return Math.max(45, Math.min(95, baseScore - deduction));
+    return 75;
   };
 
-  // Get confidence score from analysis
-  const getConfidencePercent = () => {
-    if (analysisResult?.confidence_score) {
-      return Math.round(analysisResult.confidence_score * 100);
-    }
-    return 85; // Default confidence
-  };
-
-  // Permission not yet checked
+  // Permission loading
   if (!permission) {
-    return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#D4AF37" />
-          <Text style={styles.loadingText}>Checking camera access...</Text>
-        </View>
-      </View>
-    );
+    return <View style={[styles.container, { paddingTop: insets.top }]}><ActivityIndicator size="large" color="#0EA5E9" /></View>;
   }
 
   // Permission denied
   if (!permission.granted) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>AI Beauty Scan</Text>
-          <View style={{ width: 40 }} />
-        </View>
         <View style={styles.permissionContainer}>
-          <Ionicons name="camera-outline" size={64} color="#D4AF37" />
-          <Text style={styles.permissionTitle}>Camera Access Required</Text>
-          <Text style={styles.permissionText}>
-            We need camera access to analyze your face, hair, and skin for personalized recommendations.
-          </Text>
-          <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
-            <Text style={styles.permissionButtonText}>Grant Permission</Text>
+          <Ionicons name="camera-outline" size={64} color="#E2E8F0" />
+          <Text style={styles.permissionTitle}>Camera Access Needed</Text>
+          <Text style={styles.permissionText}>Allow camera access to use AI Beauty Scan</Text>
+          <TouchableOpacity style={styles.permissionBtn} onPress={requestPermission}>
+            <Text style={styles.permissionBtnText}>Allow Camera</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.galleryButton} onPress={handlePickImage}>
-            <Ionicons name="images" size={20} color="#D4AF37" />
-            <Text style={styles.galleryButtonText}>Choose from Gallery</Text>
+          <TouchableOpacity style={styles.galleryBtn} onPress={handlePickImage}>
+            <Ionicons name="images" size={20} color="#0EA5E9" />
+            <Text style={styles.galleryBtnText}>Choose from Gallery</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   }
 
-  // Results View
-  if (scanStep === 'results' && analysisResult) {
-    const skinScore = getHealthScore('skin');
-    const hairScore = getHealthScore('hair');
+  return (
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => step === 'intro' ? router.back() : resetScan()} style={styles.headerBtn}>
+          <Ionicons name={step === 'intro' ? 'arrow-back' : 'close'} size={24} color="#1E293B" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>AI Beauty Scan</Text>
+        <View style={{ width: 40 }} />
+      </View>
 
-    return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Analysis Results</Text>
-          <View style={{ width: 40 }} />
+      {/* Intro */}
+      {step === 'intro' && (
+        <ScrollView contentContainerStyle={styles.introContent}>
+          <Animated.View entering={FadeIn} style={styles.scanTypeSection}>
+            <Text style={styles.sectionTitle}>What would you like to analyze?</Text>
+            <View style={styles.scanTypes}>
+              {[{ id: 'face', label: 'Face', icon: 'happy' }, { id: 'hair', label: 'Hair', icon: 'leaf' }, { id: 'scalp', label: 'Scalp', icon: 'ellipse' }, { id: 'full', label: 'Full Analysis', icon: 'body' }].map(type => (
+                <TouchableOpacity key={type.id} style={[styles.scanTypeCard, scanType === type.id && styles.scanTypeCardActive]} onPress={() => setScanType(type.id as ScanType)}>
+                  <Ionicons name={type.icon as any} size={24} color={scanType === type.id ? '#FFFFFF' : '#0EA5E9'} />
+                  <Text style={[styles.scanTypeLabel, scanType === type.id && styles.scanTypeLabelActive]}>{type.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </Animated.View>
+
+          <Animated.View entering={FadeInDown.delay(100)} style={styles.cameraPreview}>
+            <CameraView ref={cameraRef} style={styles.camera} facing="front">
+              <View style={styles.cameraOverlay}>
+                <Animated.View style={[styles.scanFrame, pulseStyle]} />
+              </View>
+            </CameraView>
+          </Animated.View>
+
+          <Animated.View entering={FadeInDown.delay(200)} style={styles.actionButtons}>
+            <TouchableOpacity style={styles.captureBtn} onPress={handleTakePhoto}>
+              <View style={styles.captureBtnInner} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.galleryBtn} onPress={handlePickImage}>
+              <Ionicons name="images" size={20} color="#0EA5E9" />
+              <Text style={styles.galleryBtnText}>Gallery</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </ScrollView>
+      )}
+
+      {/* Analyzing */}
+      {step === 'analyzing' && (
+        <View style={styles.analyzingContainer}>
+          <ActivityIndicator size="large" color="#0EA5E9" />
+          <Text style={styles.analyzingTitle}>Analyzing...</Text>
+          <Text style={styles.analyzingText}>Our AI is examining your {scanType}</Text>
         </View>
+      )}
 
-        <Animated.ScrollView
-          entering={FadeIn}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.resultsContent}
-        >
-          {/* Health Scores */}
-          <Animated.View entering={FadeInDown.delay(100)} style={styles.scoresContainer}>
+      {/* Results */}
+      {step === 'results' && analysisResult && (
+        <ScrollView contentContainerStyle={styles.resultsContent}>
+          <Animated.View entering={FadeIn} style={styles.scoresSection}>
             <Text style={styles.sectionTitle}>Health Scores</Text>
-            <View style={styles.scoresRow}>
+            <View style={styles.scoresGrid}>
               <View style={styles.scoreCard}>
-                <View style={[styles.scoreCircle, { borderColor: skinScore > 70 ? '#2ECC71' : '#F39C12' }]}>
-                  <Text style={styles.scoreValue}>{skinScore}%</Text>
-                </View>
+                <Text style={styles.scoreValue}>{getHealthScore('skin')}%</Text>
                 <Text style={styles.scoreLabel}>Skin Health</Text>
-                <Text style={styles.scoreStatus}>
-                  {skinScore > 80 ? 'Excellent' : skinScore > 60 ? 'Good' : 'Needs Care'}
-                </Text>
               </View>
               <View style={styles.scoreCard}>
-                <View style={[styles.scoreCircle, { borderColor: hairScore > 70 ? '#2ECC71' : '#F39C12' }]}>
-                  <Text style={styles.scoreValue}>{hairScore}%</Text>
-                </View>
+                <Text style={styles.scoreValue}>{getHealthScore('hair')}%</Text>
                 <Text style={styles.scoreLabel}>Hair Health</Text>
-                <Text style={styles.scoreStatus}>
-                  {hairScore > 80 ? 'Excellent' : hairScore > 60 ? 'Good' : 'Needs Care'}
-                </Text>
               </View>
             </View>
           </Animated.View>
 
-          {/* Detection Results */}
-          <Animated.View entering={FadeInDown.delay(200)} style={styles.detectionsContainer}>
-            <Text style={styles.sectionTitle}>What We Found</Text>
-            
-            {analysisResult.face_shape && (
-              <View style={styles.detectionItem}>
-                <View style={styles.detectionIcon}>
-                  <Ionicons name="happy" size={20} color="#D4AF37" />
-                </View>
-                <View style={styles.detectionInfo}>
-                  <Text style={styles.detectionLabel}>Face Shape</Text>
-                  <Text style={styles.detectionValue}>{analysisResult.face_shape}</Text>
-                </View>
-                <View style={styles.matchBadge}>
-                  <Text style={styles.matchText}>{getConfidencePercent()}% Match</Text>
-                </View>
-              </View>
-            )}
-
-            {analysisResult.skin_type && (
-              <View style={styles.detectionItem}>
-                <View style={styles.detectionIcon}>
-                  <Ionicons name="water" size={20} color="#D4AF37" />
-                </View>
-                <View style={styles.detectionInfo}>
-                  <Text style={styles.detectionLabel}>Skin Type</Text>
-                  <Text style={styles.detectionValue}>{analysisResult.skin_type}</Text>
-                </View>
-                <View style={styles.matchBadge}>
-                  <Text style={styles.matchText}>{Math.max(getConfidencePercent() - 3, 75)}% Match</Text>
-                </View>
-              </View>
-            )}
-
-            {analysisResult.hair_type && (
-              <View style={styles.detectionItem}>
-                <View style={styles.detectionIcon}>
-                  <Ionicons name="leaf" size={20} color="#D4AF37" />
-                </View>
-                <View style={styles.detectionInfo}>
-                  <Text style={styles.detectionLabel}>Hair Type</Text>
-                  <Text style={styles.detectionValue}>{analysisResult.hair_type}</Text>
-                </View>
-                <View style={styles.matchBadge}>
-                  <Text style={styles.matchText}>{Math.max(getConfidencePercent() - 5, 70)}% Match</Text>
-                </View>
-              </View>
-            )}
-          </Animated.View>
-
-          {/* Concerns */}
-          {(analysisResult.skin_concerns?.length > 0 || analysisResult.hair_concerns?.length > 0) && (
-            <Animated.View entering={FadeInDown.delay(300)} style={styles.concernsContainer}>
-              <Text style={styles.sectionTitle}>Areas to Focus</Text>
-              <View style={styles.concernsTags}>
-                {analysisResult.skin_concerns?.map((concern: string, index: number) => (
-                  <View key={`skin-${index}`} style={styles.concernTag}>
-                    <Ionicons name="alert-circle" size={14} color="#E74C3C" />
-                    <Text style={styles.concernTagText}>{concern}</Text>
-                  </View>
-                ))}
-                {analysisResult.hair_concerns?.map((concern: string, index: number) => (
-                  <View key={`hair-${index}`} style={styles.concernTag}>
-                    <Ionicons name="alert-circle" size={14} color="#F39C12" />
-                    <Text style={styles.concernTagText}>{concern}</Text>
-                  </View>
-                ))}
+          {analysisResult.skin_type && (
+            <Animated.View entering={FadeInDown.delay(100)} style={styles.infoCard}>
+              <Ionicons name="water" size={20} color="#0EA5E9" />
+              <View style={styles.infoContent}>
+                <Text style={styles.infoLabel}>Skin Type</Text>
+                <Text style={styles.infoValue}>{analysisResult.skin_type}</Text>
               </View>
             </Animated.View>
           )}
 
-          {/* Recommended Treatments */}
-          {(analysisResult.top_recommendations?.length > 0 || analysisResult.recommended_treatments?.length > 0) && (
-            <Animated.View entering={FadeInDown.delay(400)} style={styles.recommendationsContainer}>
-              <Text style={styles.sectionTitle}>Recommended For You</Text>
-              {(analysisResult.top_recommendations || analysisResult.recommended_treatments)?.map(
-                (rec: string, index: number) => (
-                  <View key={index} style={styles.recommendationItem}>
-                    <Ionicons name="checkmark-circle" size={18} color="#2ECC71" />
-                    <Text style={styles.recommendationText}>{rec}</Text>
-                  </View>
-                )
-              )}
-            </Animated.View>
-          )}
-
-          {/* Aftercare Tips */}
-          {analysisResult.personalized_tips?.length > 0 && (
-            <Animated.View entering={FadeInDown.delay(500)} style={styles.tipsContainer}>
-              <Text style={styles.sectionTitle}>Aftercare Tips</Text>
-              {analysisResult.personalized_tips.map((tip: string, index: number) => (
-                <View key={index} style={styles.tipItem}>
-                  <Ionicons name="bulb" size={16} color="#D4AF37" />
-                  <Text style={styles.tipText}>{tip}</Text>
+          {analysisResult.skin_concerns?.length > 0 && (
+            <Animated.View entering={FadeInDown.delay(200)} style={styles.concernsCard}>
+              <Text style={styles.concernsTitle}>Concerns Detected</Text>
+              {analysisResult.skin_concerns.map((concern: any, i: number) => (
+                <View key={i} style={styles.concernItem}>
+                  <View style={styles.concernDot} />
+                  <Text style={styles.concernText}>{typeof concern === 'string' ? concern : concern.concern}</Text>
                 </View>
               ))}
             </Animated.View>
           )}
 
-          {/* Actions */}
-          <View style={styles.actionsContainer}>
-            <TouchableOpacity style={styles.primaryButton} onPress={handleGetPackages}>
-              <Ionicons name="sparkles" size={20} color="#0A0A0A" />
-              <Text style={styles.primaryButtonText}>Get Package Recommendations</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.secondaryButton} onPress={handleRetake}>
-              <Ionicons name="camera" size={20} color="#D4AF37" />
-              <Text style={styles.secondaryButtonText}>Retake Scan</Text>
-            </TouchableOpacity>
-          </View>
-        </Animated.ScrollView>
-      </View>
-    );
-  }
-
-  // Analyzing View
-  if (scanStep === 'analyzing' || analyzing) {
-    return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        <View style={styles.analyzingContainer}>
-          <Animated.View style={[styles.analyzingIcon, pulseStyle]}>
-            <Ionicons name="scan" size={48} color="#D4AF37" />
-          </Animated.View>
-          <Text style={styles.analyzingTitle}>AI Analysis in Progress</Text>
-          <Text style={styles.analyzingText}>
-            Our advanced AI is examining your skin, hair, and facial features...
-          </Text>
-          <View style={styles.progressSteps}>
-            <View style={styles.progressStep}>
-              <Ionicons name="checkmark-circle" size={20} color="#2ECC71" />
-              <Text style={styles.progressStepText}>Images Captured</Text>
-            </View>
-            <View style={styles.progressStep}>
-              <ActivityIndicator size="small" color="#D4AF37" />
-              <Text style={styles.progressStepText}>Analyzing Features</Text>
-            </View>
-            <View style={styles.progressStep}>
-              <Ionicons name="ellipse-outline" size={20} color="rgba(255,255,255,0.3)" />
-              <Text style={[styles.progressStepText, { color: 'rgba(255,255,255,0.3)' }]}>Generating Report</Text>
-            </View>
-          </View>
-        </View>
-      </View>
-    );
-  }
-
-  // Camera View with Guided Capture
-  const currentStepInfo = SCAN_STEPS[scanStep as keyof typeof SCAN_STEPS];
-  const progress = scanStep === 'front' ? 33 : scanStep === 'left' ? 66 : 100;
-
-  return (
-    <View style={styles.container}>
-      <CameraView
-        ref={cameraRef}
-        style={styles.camera}
-        facing={facing}
-      >
-        <View style={[styles.cameraOverlay, { paddingTop: insets.top }]}>
-          {/* Header */}
-          <View style={styles.cameraHeader}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-              <Ionicons name="close" size={28} color="#FFFFFF" />
-            </TouchableOpacity>
-            <View style={styles.stepIndicator}>
-              <Text style={styles.stepText}>{currentStepInfo.label}</Text>
-              <Text style={styles.stepCount}>
-                {scanStep === 'front' ? '1' : scanStep === 'left' ? '2' : '3'}/3
-              </Text>
-            </View>
-            <TouchableOpacity
-              onPress={() => setFacing(facing === 'front' ? 'back' : 'front')}
-              style={styles.flipButton}
-            >
-              <Ionicons name="camera-reverse" size={24} color="#FFFFFF" />
-            </TouchableOpacity>
-          </View>
-
-          {/* Progress Bar */}
-          <View style={styles.progressBarContainer}>
-            <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
-          </View>
-
-          {/* Guide Frame */}
-          <View style={styles.guideContainer}>
-            <View style={styles.guideFrame}>
-              {/* Animated scan line */}
-              <Animated.View style={[styles.scanLine, scanLineStyle]} />
-              
-              {/* Corner guides */}
-              <View style={[styles.guideCorner, styles.topLeft]} />
-              <View style={[styles.guideCorner, styles.topRight]} />
-              <View style={[styles.guideCorner, styles.bottomLeft]} />
-              <View style={[styles.guideCorner, styles.bottomRight]} />
-              
-              {/* Direction indicator */}
-              {scanStep !== 'front' && (
-                <View style={styles.directionIndicator}>
-                  <Ionicons 
-                    name={scanStep === 'left' ? 'arrow-back' : 'arrow-forward'} 
-                    size={32} 
-                    color="#D4AF37" 
-                  />
+          {analysisResult.recommended_treatments?.length > 0 && (
+            <Animated.View entering={FadeInDown.delay(300)} style={styles.treatmentsCard}>
+              <Text style={styles.sectionTitle}>Recommended Treatments</Text>
+              {analysisResult.recommended_treatments.slice(0, 3).map((treatment: any, i: number) => (
+                <View key={i} style={styles.treatmentItem}>
+                  <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                  <Text style={styles.treatmentText}>{typeof treatment === 'string' ? treatment : treatment.treatment}</Text>
                 </View>
-              )}
-            </View>
-            
-            <View style={styles.instructionContainer}>
-              <Ionicons name={currentStepInfo.icon as any} size={24} color="#D4AF37" />
-              <Text style={styles.instructionText}>{currentStepInfo.instruction}</Text>
-            </View>
-          </View>
-
-          {/* Captured thumbnails */}
-          {Object.keys(scanImages).length > 0 && (
-            <View style={styles.thumbnailsContainer}>
-              {scanImages.front && <View style={styles.thumbnailDone}><Ionicons name="checkmark" size={16} color="#2ECC71" /></View>}
-              {scanImages.left && <View style={styles.thumbnailDone}><Ionicons name="checkmark" size={16} color="#2ECC71" /></View>}
-              {scanImages.right && <View style={styles.thumbnailDone}><Ionicons name="checkmark" size={16} color="#2ECC71" /></View>}
-            </View>
+              ))}
+            </Animated.View>
           )}
 
-          {/* Controls */}
-          <View style={[styles.controlsContainer, { paddingBottom: insets.bottom + 20 }]}>
-            <TouchableOpacity style={styles.galleryIconButton} onPress={handlePickImage}>
-              <Ionicons name="images" size={28} color="#FFFFFF" />
-              <Text style={styles.controlLabel}>Gallery</Text>
+          <View style={styles.resultActions}>
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push('/get-advice')}>
+              <Text style={styles.primaryBtnText}>Get Personalized Package</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity style={styles.captureButton} onPress={handleCapture}>
-              <View style={styles.captureButtonInner} />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.skipButton} onPress={() => {
-              if (scanImages.front) {
-                setScanStep('analyzing');
-                analyzeImages(scanImages);
-              }
-            }} disabled={!scanImages.front}>
-              <Ionicons name="arrow-forward" size={28} color={scanImages.front ? '#FFFFFF' : 'rgba(255,255,255,0.3)'} />
-              <Text style={[styles.controlLabel, !scanImages.front && { color: 'rgba(255,255,255,0.3)' }]}>Skip</Text>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={resetScan}>
+              <Text style={styles.secondaryBtnText}>Scan Again</Text>
             </TouchableOpacity>
           </View>
-        </View>
-      </CameraView>
+        </ScrollView>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0A0A0A',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    color: 'rgba(255,255,255,0.6)',
-    marginTop: 12,
-    fontSize: 14,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  permissionContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-  },
-  permissionTitle: {
-    fontSize: 22,
-    fontWeight: '600',
-    color: '#FFFFFF',
-    marginTop: 20,
-    textAlign: 'center',
-  },
-  permissionText: {
-    fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.6)',
-    textAlign: 'center',
-    marginTop: 12,
-    lineHeight: 22,
-  },
-  permissionButton: {
-    backgroundColor: '#D4AF37',
-    paddingVertical: 14,
-    paddingHorizontal: 32,
-    borderRadius: 25,
-    marginTop: 32,
-  },
-  permissionButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#0A0A0A',
-  },
-  galleryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 20,
-    gap: 8,
-  },
-  galleryButtonText: {
-    fontSize: 14,
-    color: '#D4AF37',
-  },
-  camera: {
-    flex: 1,
-  },
-  cameraOverlay: {
-    flex: 1,
-    backgroundColor: 'transparent',
-  },
-  cameraHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  stepIndicator: {
-    alignItems: 'center',
-  },
-  stepText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  stepCount: {
-    fontSize: 12,
-    color: '#D4AF37',
-    marginTop: 2,
-  },
-  flipButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  progressBarContainer: {
-    height: 3,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    marginHorizontal: 20,
-    borderRadius: 2,
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: '#D4AF37',
-    borderRadius: 2,
-  },
-  guideContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  guideFrame: {
-    width: 260,
-    height: 320,
-    borderRadius: 130,
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  scanLine: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 2,
-    backgroundColor: '#D4AF37',
-    opacity: 0.7,
-  },
-  guideCorner: {
-    position: 'absolute',
-    width: 40,
-    height: 40,
-    borderColor: '#D4AF37',
-    borderWidth: 3,
-  },
-  topLeft: {
-    top: 0,
-    left: 0,
-    borderBottomWidth: 0,
-    borderRightWidth: 0,
-    borderTopLeftRadius: 20,
-  },
-  topRight: {
-    top: 0,
-    right: 0,
-    borderBottomWidth: 0,
-    borderLeftWidth: 0,
-    borderTopRightRadius: 20,
-  },
-  bottomLeft: {
-    bottom: 0,
-    left: 0,
-    borderTopWidth: 0,
-    borderRightWidth: 0,
-    borderBottomLeftRadius: 20,
-  },
-  bottomRight: {
-    bottom: 0,
-    right: 0,
-    borderTopWidth: 0,
-    borderLeftWidth: 0,
-    borderBottomRightRadius: 20,
-  },
-  directionIndicator: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: [{ translateX: -16 }, { translateY: -16 }],
-  },
-  instructionContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 24,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 25,
-    gap: 10,
-  },
-  instructionText: {
-    fontSize: 14,
-    color: '#FFFFFF',
-  },
-  thumbnailsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 12,
-    marginBottom: 20,
-  },
-  thumbnailDone: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(46, 204, 113, 0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#2ECC71',
-  },
-  controlsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-  },
-  galleryIconButton: {
-    alignItems: 'center',
-    gap: 4,
-  },
-  skipButton: {
-    alignItems: 'center',
-    gap: 4,
-  },
-  controlLabel: {
-    fontSize: 11,
-    color: '#FFFFFF',
-  },
-  captureButton: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    borderWidth: 4,
-    borderColor: '#D4AF37',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  captureButtonInner: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#D4AF37',
-  },
-  analyzingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-  },
-  analyzingIcon: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: 'rgba(212, 175, 55, 0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: 'rgba(212, 175, 55, 0.3)',
-  },
-  analyzingTitle: {
-    fontSize: 22,
-    fontWeight: '600',
-    color: '#FFFFFF',
-    marginTop: 24,
-  },
-  analyzingText: {
-    fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.6)',
-    textAlign: 'center',
-    marginTop: 8,
-    lineHeight: 22,
-  },
-  progressSteps: {
-    marginTop: 32,
-    gap: 16,
-  },
-  progressStep: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  progressStepText: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.7)',
-  },
-  resultsContent: {
-    paddingHorizontal: 20,
-    paddingBottom: 40,
-  },
-  scoresContainer: {
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#FFFFFF',
-    marginBottom: 16,
-  },
-  scoresRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  scoreCard: {
-    flex: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 16,
-    padding: 20,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  scoreCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    borderWidth: 4,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  scoreValue: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  scoreLabel: {
-    fontSize: 14,
-    color: '#FFFFFF',
-    fontWeight: '500',
-  },
-  scoreStatus: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.5)',
-    marginTop: 4,
-  },
-  detectionsContainer: {
-    marginBottom: 24,
-  },
-  detectionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
-  },
-  detectionIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(212, 175, 55, 0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  detectionInfo: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  detectionLabel: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.5)',
-  },
-  detectionValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#FFFFFF',
-    textTransform: 'capitalize',
-  },
-  matchBadge: {
-    backgroundColor: 'rgba(46, 204, 113, 0.2)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 10,
-  },
-  matchText: {
-    fontSize: 11,
-    color: '#2ECC71',
-    fontWeight: '600',
-  },
-  concernsContainer: {
-    marginBottom: 24,
-  },
-  concernsTags: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  concernTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(231, 76, 60, 0.1)',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 16,
-    gap: 6,
-  },
-  concernTagText: {
-    fontSize: 13,
-    color: '#E74C3C',
-    textTransform: 'capitalize',
-  },
-  recommendationsContainer: {
-    backgroundColor: 'rgba(46, 204, 113, 0.08)',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 24,
-  },
-  recommendationItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-    gap: 10,
-  },
-  recommendationText: {
-    fontSize: 14,
-    color: '#FFFFFF',
-    flex: 1,
-  },
-  tipsContainer: {
-    marginBottom: 24,
-  },
-  tipItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 10,
-    gap: 10,
-  },
-  tipText: {
-    fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.7)',
-    flex: 1,
-    lineHeight: 20,
-  },
-  actionsContainer: {
-    marginTop: 16,
-    gap: 12,
-  },
-  primaryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#D4AF37',
-    paddingVertical: 16,
-    borderRadius: 28,
-    gap: 8,
-  },
-  primaryButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#0A0A0A',
-  },
-  secondaryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(212, 175, 55, 0.1)',
-    paddingVertical: 16,
-    borderRadius: 28,
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.3)',
-    gap: 8,
-  },
-  secondaryButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#D4AF37',
-  },
+  container: { flex: 1, backgroundColor: '#F8FAFC' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 },
+  headerBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
+  headerTitle: { fontSize: 18, fontWeight: '600', color: '#1E293B' },
+  permissionContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
+  permissionTitle: { fontSize: 20, fontWeight: '600', color: '#1E293B', marginTop: 16 },
+  permissionText: { fontSize: 14, color: '#64748B', marginTop: 8, textAlign: 'center' },
+  permissionBtn: { backgroundColor: '#0EA5E9', paddingVertical: 14, paddingHorizontal: 32, borderRadius: 24, marginTop: 24 },
+  permissionBtnText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
+  introContent: { padding: 20, paddingBottom: 40 },
+  sectionTitle: { fontSize: 16, fontWeight: '600', color: '#1E293B', marginBottom: 14 },
+  scanTypeSection: { marginBottom: 20 },
+  scanTypes: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  scanTypeCard: { width: '47%', backgroundColor: '#FFFFFF', borderRadius: 14, padding: 16, alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
+  scanTypeCardActive: { backgroundColor: '#0EA5E9', borderColor: '#0EA5E9' },
+  scanTypeLabel: { fontSize: 14, fontWeight: '500', color: '#1E293B', marginTop: 8 },
+  scanTypeLabelActive: { color: '#FFFFFF' },
+  cameraPreview: { borderRadius: 20, overflow: 'hidden', marginBottom: 20 },
+  camera: { height: 350, backgroundColor: '#000' },
+  cameraOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  scanFrame: { width: 220, height: 280, borderWidth: 3, borderColor: '#0EA5E9', borderRadius: 20 },
+  actionButtons: { alignItems: 'center', gap: 16 },
+  captureBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', borderWidth: 4, borderColor: '#0EA5E9' },
+  captureBtnInner: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#0EA5E9' },
+  galleryBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12, paddingHorizontal: 20 },
+  galleryBtnText: { fontSize: 14, fontWeight: '500', color: '#0EA5E9' },
+  analyzingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16 },
+  analyzingTitle: { fontSize: 20, fontWeight: '600', color: '#1E293B' },
+  analyzingText: { fontSize: 14, color: '#64748B' },
+  resultsContent: { padding: 20, paddingBottom: 40 },
+  scoresSection: { marginBottom: 20 },
+  scoresGrid: { flexDirection: 'row', gap: 12 },
+  scoreCard: { flex: 1, backgroundColor: '#E0F2FE', borderRadius: 16, padding: 20, alignItems: 'center' },
+  scoreValue: { fontSize: 32, fontWeight: '700', color: '#0EA5E9' },
+  scoreLabel: { fontSize: 13, color: '#0284C7', marginTop: 4 },
+  infoCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 14, padding: 16, marginBottom: 12, gap: 12, borderWidth: 1, borderColor: '#E2E8F0' },
+  infoContent: { flex: 1 },
+  infoLabel: { fontSize: 12, color: '#64748B' },
+  infoValue: { fontSize: 15, fontWeight: '600', color: '#1E293B' },
+  concernsCard: { backgroundColor: '#FEF2F2', borderRadius: 16, padding: 18, marginBottom: 12 },
+  concernsTitle: { fontSize: 14, fontWeight: '600', color: '#991B1B', marginBottom: 12 },
+  concernItem: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  concernDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#EF4444' },
+  concernText: { fontSize: 13, color: '#B91C1C' },
+  treatmentsCard: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 18, marginBottom: 20, borderWidth: 1, borderColor: '#E2E8F0' },
+  treatmentItem: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
+  treatmentText: { flex: 1, fontSize: 14, color: '#1E293B' },
+  resultActions: { gap: 12 },
+  primaryBtn: { backgroundColor: '#0EA5E9', paddingVertical: 16, borderRadius: 28, alignItems: 'center' },
+  primaryBtnText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
+  secondaryBtn: { backgroundColor: '#FFFFFF', paddingVertical: 14, borderRadius: 28, alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
+  secondaryBtnText: { fontSize: 14, fontWeight: '500', color: '#64748B' },
 });
