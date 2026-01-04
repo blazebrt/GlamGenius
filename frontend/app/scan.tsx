@@ -320,7 +320,7 @@ export default function ScanScreen() {
                   <Text style={styles.detectionValue}>{analysisResult.face_shape}</Text>
                 </View>
                 <View style={styles.matchBadge}>
-                  <Text style={styles.matchText}>95% Match</Text>
+                  <Text style={styles.matchText}>{getConfidencePercent()}% Match</Text>
                 </View>
               </View>
             )}
@@ -335,7 +335,7 @@ export default function ScanScreen() {
                   <Text style={styles.detectionValue}>{analysisResult.skin_type}</Text>
                 </View>
                 <View style={styles.matchBadge}>
-                  <Text style={styles.matchText}>92% Match</Text>
+                  <Text style={styles.matchText}>{Math.max(getConfidencePercent() - 3, 75)}% Match</Text>
                 </View>
               </View>
             )}
@@ -350,7 +350,7 @@ export default function ScanScreen() {
                   <Text style={styles.detectionValue}>{analysisResult.hair_type}</Text>
                 </View>
                 <View style={styles.matchBadge}>
-                  <Text style={styles.matchText}>88% Match</Text>
+                  <Text style={styles.matchText}>{Math.max(getConfidencePercent() - 5, 70)}% Match</Text>
                 </View>
               </View>
             )}
