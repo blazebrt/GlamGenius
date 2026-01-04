@@ -360,15 +360,25 @@ QUIZ_QUESTIONS = [
 # ============== HELPER FUNCTIONS ==============
 
 async def analyze_image_with_gemini(image_base64: str, scan_type: str) -> Dict[str, Any]:
-    """Analyze image using Gemini Vision API"""
+    """Analyze image using Gemini Vision API with medical-grade accuracy"""
     try:
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=f"scan-{uuid.uuid4()}",
-            system_message="""You are an expert beauty and salon advisor AI with extensive knowledge in dermatology, trichology, and cosmetology. 
-            Analyze the provided image and provide detailed, professional analysis.
-            Be specific, helpful, and provide actionable insights.
-            Always respond in valid JSON format."""
+            system_message="""You are a highly trained dermatologist and trichologist AI assistant with expertise in:
+- Clinical skin analysis and dermatological assessment
+- Hair and scalp health evaluation (trichology)
+- Indian skin tones and common concerns specific to South Asian skin
+- Evidence-based skincare and haircare recommendations
+
+CRITICAL INSTRUCTIONS:
+1. Analyze the image with CLINICAL PRECISION - identify specific conditions, not generic descriptions
+2. Use proper medical terminology alongside layman explanations
+3. Provide SPECIFIC percentage scores (0-100) for each health metric
+4. Consider factors like: Fitzpatrick skin type, TEWL indicators, sebum levels, melasma patterns, follicular health
+5. Be CONSERVATIVE with scores - most people have some concerns; perfect skin/hair is rare
+6. Identify SPECIFIC problem areas with location references (e.g., "T-zone", "hairline", "crown area")
+7. Always respond in valid JSON format with detailed nested objects"""
         ).with_model("gemini", "gemini-2.0-flash")
         
         # Create temp file for image
@@ -381,49 +391,258 @@ async def analyze_image_with_gemini(image_base64: str, scan_type: str) -> Dict[s
         
         prompt = ""
         if scan_type == "face":
-            prompt = """Analyze this face image and provide a detailed assessment in JSON format:
-            {
-                "face_shape": "oval/round/square/heart/oblong",
-                "skin_type": "oily/dry/combination/normal/sensitive",
-                "skin_tone": "fair/light/medium/olive/tan/deep",
-                "skin_concerns": ["list of visible concerns like acne, wrinkles, dark circles, etc."],
-                "recommended_treatments": ["list of 3-4 recommended salon treatments"],
-                "makeup_suggestions": ["list of makeup recommendations based on face shape"],
-                "confidence_score": 0.0-1.0
-            }"""
+            prompt = """Perform a DETAILED CLINICAL SKIN ANALYSIS of this face image. 
+
+Evaluate with medical precision and provide scores out of 100 for each metric.
+Consider Indian skin tones (Fitzpatrick III-V) and common concerns like hyperpigmentation, melasma, and uneven tone.
+
+Respond in this EXACT JSON format:
+{
+    "face_shape": "oval/round/square/heart/oblong/diamond",
+    "fitzpatrick_type": "Type III/IV/V/VI",
+    "skin_type": "oily/dry/combination/normal/sensitive",
+    "skin_tone": "fair/wheatish/medium/dusky/deep",
+    
+    "health_scores": {
+        "overall_skin_health": 0-100,
+        "hydration_level": 0-100,
+        "elasticity_score": 0-100,
+        "pore_health": 0-100,
+        "pigmentation_evenness": 0-100,
+        "texture_smoothness": 0-100,
+        "radiance_score": 0-100
+    },
+    
+    "skin_concerns": [
+        {
+            "concern": "specific condition name (e.g., mild acne, PIH, periorbital darkening)",
+            "severity": "mild/moderate/severe",
+            "location": "specific area (e.g., forehead, T-zone, under-eyes, cheeks)",
+            "clinical_note": "brief medical explanation"
+        }
+    ],
+    
+    "detailed_analysis": {
+        "forehead": "condition description",
+        "t_zone": "condition description",
+        "cheeks": "condition description",
+        "under_eyes": "condition description",
+        "chin_area": "condition description",
+        "jawline": "condition description"
+    },
+    
+    "recommended_treatments": [
+        {
+            "treatment": "specific salon treatment name",
+            "reason": "why this helps",
+            "frequency": "how often recommended",
+            "expected_results": "what to expect",
+            "price_range_inr": "₹XXX - ₹XXX"
+        }
+    ],
+    
+    "home_care_routine": {
+        "morning": ["step 1", "step 2", "step 3"],
+        "evening": ["step 1", "step 2", "step 3"],
+        "weekly": ["treatment 1", "treatment 2"]
+    },
+    
+    "ingredients_to_look_for": ["ingredient 1 with benefit", "ingredient 2 with benefit"],
+    "ingredients_to_avoid": ["ingredient 1 with reason", "ingredient 2 with reason"],
+    
+    "makeup_suggestions": {
+        "foundation_type": "recommendation",
+        "concealer_focus_areas": ["area 1", "area 2"],
+        "color_palette": "warm/cool/neutral undertone recommendations"
+    },
+    
+    "red_flags": ["any concerns that need dermatologist attention"],
+    "confidence_score": 0.0-1.0
+}"""
         elif scan_type == "hair":
-            prompt = """Analyze this hair image and provide a detailed assessment in JSON format:
-            {
-                "hair_type": "straight/wavy/curly/coily",
-                "hair_texture": "fine/medium/thick",
-                "hair_condition": "healthy/slightly damaged/damaged/very damaged",
-                "hair_concerns": ["list of visible concerns like frizz, split ends, dryness, etc."],
-                "recommended_treatments": ["list of 3-4 recommended salon treatments"],
-                "styling_suggestions": ["list of styling recommendations"],
-                "confidence_score": 0.0-1.0
-            }"""
+            prompt = """Perform a DETAILED TRICHOLOGICAL ANALYSIS of this hair image.
+
+Evaluate hair shaft health, cuticle condition, and overall hair wellness with clinical precision.
+Consider common issues in Indian hair like heat damage, hard water effects, and pollution damage.
+
+Respond in this EXACT JSON format:
+{
+    "hair_type": "1A-4C classification (e.g., 2B wavy, 3A curly)",
+    "hair_texture": "fine/medium/coarse",
+    "hair_density": "low/medium/high",
+    "hair_porosity": "low/medium/high",
+    "hair_condition": "healthy/slightly damaged/moderately damaged/severely damaged",
+    
+    "health_scores": {
+        "overall_hair_health": 0-100,
+        "shine_level": 0-100,
+        "moisture_retention": 0-100,
+        "strength_elasticity": 0-100,
+        "cuticle_health": 0-100,
+        "root_health": 0-100
+    },
+    
+    "hair_concerns": [
+        {
+            "concern": "specific issue (e.g., mid-shaft splits, cuticle lifting, hygral fatigue)",
+            "severity": "mild/moderate/severe",
+            "location": "roots/mid-length/ends",
+            "clinical_note": "brief explanation"
+        }
+    ],
+    
+    "detailed_analysis": {
+        "root_area": "condition at roots",
+        "mid_shaft": "condition at middle",
+        "ends": "condition at ends",
+        "overall_pattern": "growth pattern observations"
+    },
+    
+    "recommended_treatments": [
+        {
+            "treatment": "specific salon treatment",
+            "reason": "why recommended",
+            "duration": "treatment time",
+            "frequency": "how often",
+            "expected_results": "what to expect",
+            "price_range_inr": "₹XXX - ₹XXX"
+        }
+    ],
+    
+    "styling_suggestions": {
+        "safe_heat_settings": "temperature recommendations",
+        "best_hairstyles": ["style 1", "style 2"],
+        "avoid_styles": ["harmful style 1", "harmful style 2"]
+    },
+    
+    "product_recommendations": {
+        "shampoo_type": "recommendation with reason",
+        "conditioner_focus": "what to look for",
+        "leave_in_products": ["product type 1", "product type 2"],
+        "weekly_treatments": ["treatment 1", "treatment 2"]
+    },
+    
+    "red_flags": ["any concerns needing trichologist attention"],
+    "confidence_score": 0.0-1.0
+}"""
         elif scan_type == "scalp":
-            prompt = """Analyze this scalp image and provide a detailed assessment in JSON format:
-            {
-                "scalp_condition": "healthy/dry/oily/flaky/irritated",
-                "concerns": ["list of visible concerns like dandruff, thinning, etc."],
-                "recommended_treatments": ["list of 3-4 recommended scalp treatments"],
-                "hair_care_tips": ["list of scalp care recommendations"],
-                "confidence_score": 0.0-1.0
-            }"""
+            prompt = """Perform a DETAILED SCALP HEALTH ANALYSIS of this scalp image.
+
+Evaluate follicular health, sebum production, and scalp ecosystem with clinical precision.
+Consider Indian climate factors like humidity, hard water, and pollution effects.
+
+Respond in this EXACT JSON format:
+{
+    "scalp_type": "oily/dry/balanced/combination",
+    "scalp_condition": "healthy/mildly compromised/moderately compromised/severely compromised",
+    
+    "health_scores": {
+        "overall_scalp_health": 0-100,
+        "follicle_density": 0-100,
+        "sebum_balance": 0-100,
+        "hydration_level": 0-100,
+        "circulation_health": 0-100,
+        "microbiome_balance": 0-100
+    },
+    
+    "scalp_concerns": [
+        {
+            "concern": "specific issue (e.g., seborrheic dermatitis, follicular inflammation)",
+            "severity": "mild/moderate/severe",
+            "affected_area": "location on scalp",
+            "clinical_note": "explanation"
+        }
+    ],
+    
+    "hair_loss_assessment": {
+        "visible_thinning": true/false,
+        "pattern_type": "diffuse/patterned/localized",
+        "severity_stage": "Stage 1-7 (if applicable)",
+        "likely_cause": "possible reason"
+    },
+    
+    "recommended_treatments": [
+        {
+            "treatment": "specific scalp treatment",
+            "mechanism": "how it helps",
+            "frequency": "how often",
+            "duration": "treatment time",
+            "price_range_inr": "₹XXX - ₹XXX"
+        }
+    ],
+    
+    "scalp_care_routine": {
+        "washing_frequency": "recommendation",
+        "massage_technique": "specific method",
+        "ingredients_needed": ["ingredient 1", "ingredient 2"],
+        "ingredients_to_avoid": ["ingredient 1", "ingredient 2"]
+    },
+    
+    "red_flags": ["any concerns needing dermatologist/trichologist attention"],
+    "confidence_score": 0.0-1.0
+}"""
         else:  # full analysis
-            prompt = """Analyze this image comprehensively for a beauty salon consultation. Provide assessment in JSON format:
-            {
-                "face_shape": "oval/round/square/heart/oblong (if face visible)",
-                "skin_type": "oily/dry/combination/normal/sensitive",
-                "skin_concerns": ["list of visible concerns"],
-                "hair_type": "straight/wavy/curly/coily (if hair visible)",
-                "hair_concerns": ["list of hair concerns if visible"],
-                "overall_assessment": "brief overall beauty assessment",
-                "top_recommendations": ["list of top 5 recommended salon services"],
-                "personalized_tips": ["list of personalized beauty tips"],
-                "confidence_score": 0.0-1.0
-            }"""
+            prompt = """Perform a COMPREHENSIVE BEAUTY ANALYSIS of this image.
+
+Provide a complete assessment covering skin, hair, and overall wellness with clinical precision.
+Consider Indian skin/hair characteristics and lifestyle factors.
+
+Respond in this EXACT JSON format:
+{
+    "face_shape": "oval/round/square/heart/oblong/diamond",
+    "skin_type": "oily/dry/combination/normal/sensitive",
+    "skin_tone": "fair/wheatish/medium/dusky/deep",
+    
+    "overall_health_scores": {
+        "skin_health": 0-100,
+        "hair_health": 0-100,
+        "overall_wellness_indicator": 0-100
+    },
+    
+    "skin_analysis": {
+        "concerns": ["specific concern 1", "specific concern 2"],
+        "strengths": ["positive aspect 1", "positive aspect 2"],
+        "priority_area": "most important area to address"
+    },
+    
+    "hair_analysis": {
+        "hair_type": "type classification",
+        "concerns": ["concern 1", "concern 2"],
+        "condition_summary": "brief assessment"
+    },
+    
+    "skin_concerns": ["detailed list of skin concerns"],
+    "hair_concerns": ["detailed list of hair concerns"],
+    
+    "overall_assessment": "comprehensive 2-3 sentence assessment",
+    
+    "top_recommendations": [
+        {
+            "service": "salon service name",
+            "priority": "high/medium/low",
+            "reason": "why recommended",
+            "price_range_inr": "₹XXX - ₹XXX"
+        }
+    ],
+    
+    "personalized_tips": [
+        {
+            "tip": "specific actionable advice",
+            "benefit": "expected benefit",
+            "timeline": "when to see results"
+        }
+    ],
+    
+    "lifestyle_recommendations": {
+        "diet": ["food suggestion 1", "food suggestion 2"],
+        "hydration": "water intake recommendation",
+        "sleep": "sleep recommendation",
+        "stress_management": "stress tip"
+    },
+    
+    "red_flags": ["any medical concerns to address"],
+    "confidence_score": 0.0-1.0
+}"""
         
         file_content = FileContentWithMimeType(
             file_path=temp_path,
