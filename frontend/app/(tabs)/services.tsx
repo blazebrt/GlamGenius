@@ -19,8 +19,8 @@ import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../../src/theme/colors'
 
 const CATEGORIES = [
   { id: 'All', label: 'All', icon: 'apps-outline' },
-  { id: 'Hair', label: 'Hair', icon: 'leaf-outline' },
-  { id: 'Skin', label: 'Skin', icon: 'water-outline' },
+  { id: 'Hair', label: 'Hair', icon: 'cut-outline' },
+  { id: 'Skin', label: 'Skin', icon: 'sparkles-outline' },
   { id: 'Scalp', label: 'Scalp', icon: 'scan-outline' },
   { id: 'Body', label: 'Body', icon: 'body-outline' },
 ];
