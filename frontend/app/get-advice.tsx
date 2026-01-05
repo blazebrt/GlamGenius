@@ -22,6 +22,7 @@ const MOODS = [
   { id: 'relax', label: 'Pamper & Relax', icon: 'leaf-outline', emoji: '🧖' },
   { id: 'quick', label: 'Quick Makeover', icon: 'flash-outline', emoji: '⚡' },
   { id: 'special', label: 'Special Occasion', icon: 'heart-outline', emoji: '🎉' },
+  { id: 'custom', label: 'Something Else...', icon: 'create-outline', emoji: '✏️' },
 ];
 
 const OCCASIONS = [
@@ -32,6 +33,7 @@ const OCCASIONS = [
   { id: 'festival', label: 'Festival/Pooja', icon: 'flower-outline' },
   { id: 'date', label: 'Date Night', icon: 'moon-outline' },
   { id: 'selfcare', label: 'Self-Care Sunday', icon: 'sparkles-outline' },
+  { id: 'custom', label: 'Other Occasion...', icon: 'create-outline' },
 ];
 
 const BUDGETS = [
