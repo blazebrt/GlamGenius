@@ -210,9 +210,9 @@ export default function ServicesScreen() {
                     </View>
                     <TouchableOpacity
                       style={[styles.addButton, inCart && styles.addButtonActive]}
-                      onPress={(e) => { e.stopPropagation(); handleAddToCart(service); }}
+                      onPress={(e) => { e.stopPropagation(); handleToggleCart(service); }}
                     >
-                      <Ionicons name={inCart ? 'checkmark' : 'add'} size={20} color={COLORS.white} />
+                      <Ionicons name={inCart ? 'checkmark' : 'add'} size={20} color={inCart ? COLORS.white : COLORS.black} />
                     </TouchableOpacity>
                   </TouchableOpacity>
                 </Animated.View>
