@@ -427,12 +427,15 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: COLORS.primary,
+    backgroundColor: COLORS.white,
+    borderWidth: 2,
+    borderColor: COLORS.black,
     justifyContent: 'center',
     alignItems: 'center',
   },
   addButtonActive: {
-    backgroundColor: COLORS.success,
+    backgroundColor: COLORS.black,
+    borderColor: COLORS.black,
   },
   floatingCart: {
     position: 'absolute',
