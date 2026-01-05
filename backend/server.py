@@ -74,7 +74,7 @@ class ScanResult(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class ScanAnalysisRequest(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None
     image_base64: str
     scan_type: str = "full"  # "face", "hair", "scalp", "full"
 
