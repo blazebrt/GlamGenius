@@ -39,6 +39,28 @@ export const useUserStore = create<UserStore>((set, get) => ({
 
   setUser: (user: UserProfile | null) => set({ user }),
 
+  // Initialize user from AsyncStorage on app start
+  initializeUser: async () => {
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const storedUserId = await AsyncStorage.getItem('glamgenius_user_id');
+      if (storedUserId) {
+        set({ userId: storedUserId });
+        // Also fetch the user data
+        try {
+          const response = await api.get(`/users/${storedUserId}`);
+          set({ user: response.data });
+        } catch (error) {
+          console.log('User not found in DB, clearing stored ID');
+          await AsyncStorage.removeItem('glamgenius_user_id');
+          set({ userId: '' });
+        }
+      }
+    } catch (error) {
+      console.error('Error initializing user:', error);
+    }
+  },
+
   fetchUser: async () => {
     const { userId } = get();
     if (!userId) return;
