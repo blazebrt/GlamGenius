@@ -31,9 +31,9 @@ const QUICK_ACTIONS = [
 ];
 
 const FEATURED_SERVICES = [
-  { id: '1', name: 'Scalp Treatment', price: '₹1,499', duration: '60 min', icon: 'leaf-outline', tag: 'Popular' },
-  { id: '2', name: 'HydraFacial', price: '₹2,999', duration: '75 min', icon: 'water-outline', tag: 'Premium' },
-  { id: '3', name: 'Hair Spa', price: '₹999', duration: '45 min', icon: 'flower-outline', tag: null },
+  { id: '1', name: 'Scalp Treatment', price: '₹1,499', duration: '60 min', icon: 'fitness-outline', tag: 'Popular' },
+  { id: '2', name: 'HydraFacial', price: '₹2,999', duration: '75 min', icon: 'diamond-outline', tag: 'Premium' },
+  { id: '3', name: 'Hair Spa', price: '₹999', duration: '45 min', icon: 'cut-outline', tag: null },
 ];
 
 const BEAUTY_TIPS = [
