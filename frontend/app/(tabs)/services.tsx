@@ -28,7 +28,7 @@ const CATEGORIES = [
 export default function ServicesScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { addItem, items: cartItems } = useCartStore();
+  const { addItem, items: cartItems, removeItem } = useCartStore();
   
   const [services, setServices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
