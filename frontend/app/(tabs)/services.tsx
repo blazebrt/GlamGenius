@@ -66,14 +66,22 @@ export default function ServicesScreen() {
     return matchesSearch && matchesCategory;
   });
 
-  const handleAddToCart = (service: any) => {
-    addItem({
-      id: service.id,
-      name: service.name,
-      price: service.base_price || 999,
-      type: 'service',
-      image: null,
-    });
+  const handleToggleCart = (service: any) => {
+    const existing = cartItems.find(item => item.id === service.id);
+    if (existing) {
+      // Remove from cart if already added
+      const { removeItem } = useCartStore.getState();
+      removeItem(service.id);
+    } else {
+      // Add to cart
+      addItem({
+        id: service.id,
+        name: service.name,
+        price: service.base_price || 999,
+        type: 'service',
+        duration: service.duration_minutes || 30,
+      });
+    }
   };
 
   const isInCart = (serviceId: string) => cartItems.some(item => item.id === serviceId);
