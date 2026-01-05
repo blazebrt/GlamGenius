@@ -719,16 +719,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   captureBtnReady: {
-    borderColor: COLORS.success,
+    borderColor: COLORS.white,
   },
   captureBtnInner: {
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: 'rgba(255,255,255,0.8)',
+    backgroundColor: COLORS.white,
   },
   captureBtnInnerReady: {
-    backgroundColor: COLORS.success,
+    backgroundColor: COLORS.white,
   },
   flipBtn: {
     width: 50,
