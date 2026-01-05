@@ -229,17 +229,24 @@ export default function ScanScreen() {
     try {
       const response = await api.post('/scan/analyze', { 
         image_base64: base64, 
-        scan_type: scanType 
+        scan_type: scanType,
+        user_id: userId || 'anonymous'
       });
+      
+      // Parse the response - analysis is nested inside
+      const result = response.data.analysis || response.data;
       
       // Wait for processing animation to complete
       setTimeout(() => {
-        setAnalysisResult(response.data);
+        setAnalysisResult(result);
         setPhase('results');
       }, 2000);
     } catch (error) {
+      console.log('Analysis error:', error);
       Alert.alert('Analysis Failed', 'Please try again with better lighting.');
       setPhase('camera');
+      setIsReady(false);
+      setGuidanceText(instructions.initial);
     }
   };
 
