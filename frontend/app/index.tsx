@@ -82,7 +82,7 @@ export default function WelcomeScreen() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Decorative Elements */}
       <View style={styles.decorCircle1} />
       <View style={styles.decorCircle2} />
@@ -125,8 +125,8 @@ export default function WelcomeScreen() {
         />
       </Animated.View>
 
-      {/* CTA */}
-      <Animated.View entering={FadeInUp.delay(800)} style={styles.ctaSection}>
+      {/* Fixed CTA at bottom */}
+      <Animated.View entering={FadeInUp.delay(800)} style={[styles.ctaSection, { paddingBottom: insets.bottom + 20 }]}>
         <TouchableOpacity
           style={styles.ctaButton}
           onPress={handleGetStarted}
