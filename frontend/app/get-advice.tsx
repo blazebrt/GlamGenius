@@ -70,7 +70,7 @@ export default function GetAdviceScreen() {
         user_id: userId,
         mood: selectedMood,
         occasion: selectedOccasion,
-        budget_range: budget.value,
+        budget: budget.value,
       });
       
       router.push({
@@ -83,6 +83,7 @@ export default function GetAdviceScreen() {
       });
     } catch (error) {
       console.error('Error getting advice:', error);
+      Alert.alert('Error', 'Could not get recommendations. Please try again.');
     } finally {
       setLoading(false);
     }
