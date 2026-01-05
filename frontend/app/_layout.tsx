@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -17,8 +17,11 @@ import {
   Inter_700Bold,
 } from '@expo-google-fonts/inter';
 import { COLORS, FONTS } from '../src/theme/colors';
+import { useUserStore } from '../src/store/userStore';
 
 export default function RootLayout() {
+  const { initializeUser } = useUserStore();
+  
   const [fontsLoaded] = useFonts({
     // Premium Editorial Serif for Headings
     PlayfairDisplay_400Regular,
@@ -30,6 +33,11 @@ export default function RootLayout() {
     Inter_600SemiBold,
     Inter_700Bold,
   });
+
+  // Initialize user from AsyncStorage on app start
+  useEffect(() => {
+    initializeUser();
+  }, []);
 
   if (!fontsLoaded) {
     return (
