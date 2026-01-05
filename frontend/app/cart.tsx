@@ -16,6 +16,7 @@ import Animated, { FadeInDown, FadeIn, FadeInUp } from 'react-native-reanimated'
 import { useCartStore } from '../src/store/cartStore';
 import { useUserStore } from '../src/store/userStore';
 import { api } from '../src/services/api';
+import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 
 const PAYMENT_METHODS = [
   { id: 'upi', label: 'UPI (GPay, PhonePe, Paytm)', icon: 'phone-portrait-outline', popular: true },
@@ -86,13 +87,24 @@ export default function CartScreen() {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <Animated.View entering={FadeIn} style={styles.successContainer}>
-          <View style={styles.successIcon}><Ionicons name="checkmark-circle" size={80} color="#10B981" /></View>
-          <Text style={styles.successTitle}>Booking Confirmed! 🎉</Text>
-          <Text style={styles.successText}>Your appointment has been booked. You'll receive a confirmation SMS shortly.</Text>
+          <View style={styles.successIcon}>
+            <Ionicons name="checkmark-circle" size={80} color={COLORS.black} />
+          </View>
+          <Text style={styles.successTitle}>Booking Confirmed!</Text>
+          <Text style={styles.successText}>Your appointment has been booked successfully. You'll receive a confirmation SMS shortly.</Text>
           <View style={styles.bookingDetails}>
-            <View style={styles.bookingRow}><Text style={styles.bookingLabel}>Booking ID</Text><Text style={styles.bookingValue}>{bookingId.slice(0, 12)}...</Text></View>
-            <View style={styles.bookingRow}><Text style={styles.bookingLabel}>Amount Paid</Text><Text style={styles.bookingValue}>₹{totalWithTax.toLocaleString('en-IN')}</Text></View>
-            <View style={styles.bookingRow}><Text style={styles.bookingLabel}>Payment</Text><Text style={styles.bookingValue}>{selectedPayment.toUpperCase()}</Text></View>
+            <View style={styles.bookingRow}>
+              <Text style={styles.bookingLabel}>Booking ID</Text>
+              <Text style={styles.bookingValue}>{bookingId.slice(0, 12)}...</Text>
+            </View>
+            <View style={styles.bookingRow}>
+              <Text style={styles.bookingLabel}>Amount Paid</Text>
+              <Text style={styles.bookingValue}>₹{totalWithTax.toLocaleString('en-IN')}</Text>
+            </View>
+            <View style={styles.bookingRow}>
+              <Text style={styles.bookingLabel}>Payment</Text>
+              <Text style={styles.bookingValue}>{selectedPayment.toUpperCase()}</Text>
+            </View>
           </View>
           <TouchableOpacity style={styles.primaryButton} onPress={() => router.replace('/(tabs)/home')}>
             <Text style={styles.primaryButtonText}>Go to Home</Text>
@@ -106,9 +118,9 @@ export default function CartScreen() {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.processingContainer}>
-          <ActivityIndicator size="large" color="#0EA5E9" />
+          <ActivityIndicator size="large" color={COLORS.black} />
           <Text style={styles.processingTitle}>Processing Payment</Text>
-          <Text style={styles.processingText}>Please wait...</Text>
+          <Text style={styles.processingText}>Please wait while we confirm your payment...</Text>
         </View>
       </View>
     );
@@ -116,18 +128,26 @@ export default function CartScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={handleBack} style={styles.backButton}><Ionicons name="arrow-back" size={24} color="#1E293B" /></TouchableOpacity>
-        <Text style={styles.headerTitle}>{step === 'cart' ? 'Your Cart' : step === 'details' ? 'Checkout' : 'Payment'}</Text>
+        <TouchableOpacity onPress={handleBack} style={styles.backButton}>
+          <Ionicons name="arrow-back" size={24} color={COLORS.textPrimary} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>
+          {step === 'cart' ? 'Your Cart' : step === 'details' ? 'Checkout' : 'Payment'}
+        </Text>
         {step === 'cart' && items.length > 0 ? (
-          <TouchableOpacity onPress={clearCart}><Text style={styles.clearText}>Clear</Text></TouchableOpacity>
+          <TouchableOpacity onPress={clearCart}>
+            <Text style={styles.clearText}>Clear</Text>
+          </TouchableOpacity>
         ) : <View style={{ width: 40 }} />}
       </View>
 
       {step === 'cart' && items.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Ionicons name="cart-outline" size={64} color="#E2E8F0" />
+          <Ionicons name="cart-outline" size={64} color={COLORS.border} />
           <Text style={styles.emptyTitle}>Your cart is empty</Text>
+          <Text style={styles.emptySubtitle}>Add services or products to get started</Text>
           <TouchableOpacity style={styles.browseButton} onPress={() => router.push('/(tabs)/services')}>
             <Text style={styles.browseButtonText}>Browse Services</Text>
           </TouchableOpacity>
@@ -135,6 +155,7 @@ export default function CartScreen() {
       ) : (
         <>
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+            {/* Cart Items */}
             {step === 'cart' && items.map((item, index) => (
               <Animated.View key={item.id} entering={FadeInDown.delay(index * 50)} style={styles.cartItem}>
                 <View style={styles.itemInfo}>
@@ -144,35 +165,65 @@ export default function CartScreen() {
                 </View>
                 <View style={styles.itemActions}>
                   <View style={styles.quantityControl}>
-                    <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item.id, item.quantity - 1)}><Ionicons name="remove" size={16} color="#0EA5E9" /></TouchableOpacity>
+                    <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item.id, item.quantity - 1)}>
+                      <Ionicons name="remove" size={16} color={COLORS.black} />
+                    </TouchableOpacity>
                     <Text style={styles.quantityText}>{item.quantity}</Text>
-                    <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item.id, item.quantity + 1)}><Ionicons name="add" size={16} color="#0EA5E9" /></TouchableOpacity>
+                    <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item.id, item.quantity + 1)}>
+                      <Ionicons name="add" size={16} color={COLORS.black} />
+                    </TouchableOpacity>
                   </View>
                   <Text style={styles.itemPrice}>₹{(item.price * item.quantity).toLocaleString('en-IN')}</Text>
                 </View>
               </Animated.View>
             ))}
 
+            {/* Cart Summary */}
             {step === 'cart' && (
               <View style={styles.summaryCard}>
-                <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Subtotal</Text><Text style={styles.summaryValue}>₹{total.toLocaleString('en-IN')}</Text></View>
-                <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Duration</Text><Text style={styles.summaryValue}>{getTotalDuration()} min</Text></View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Subtotal</Text>
+                  <Text style={styles.summaryValue}>₹{total.toLocaleString('en-IN')}</Text>
+                </View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Duration</Text>
+                  <Text style={styles.summaryValue}>{getTotalDuration()} min</Text>
+                </View>
                 <View style={styles.divider} />
-                <View style={styles.summaryRow}><Text style={styles.totalLabel}>Total</Text><Text style={styles.totalValue}>₹{total.toLocaleString('en-IN')}</Text></View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.totalLabel}>Total</Text>
+                  <Text style={styles.totalValue}>₹{total.toLocaleString('en-IN')}</Text>
+                </View>
               </View>
             )}
 
+            {/* Details Step */}
             {step === 'details' && (
               <Animated.View entering={FadeIn}>
                 <Text style={styles.sectionTitle}>Your Details</Text>
                 <View style={styles.inputContainer}>
-                  <Ionicons name="person-outline" size={20} color="#94A3B8" />
-                  <TextInput style={styles.input} placeholder="Full Name *" placeholderTextColor="#94A3B8" value={customerName} onChangeText={setCustomerName} />
+                  <Ionicons name="person-outline" size={20} color={COLORS.textMuted} />
+                  <TextInput 
+                    style={styles.input} 
+                    placeholder="Full Name *" 
+                    placeholderTextColor={COLORS.textMuted} 
+                    value={customerName} 
+                    onChangeText={setCustomerName} 
+                  />
                 </View>
                 <View style={styles.inputContainer}>
-                  <Ionicons name="call-outline" size={20} color="#94A3B8" />
-                  <TextInput style={styles.input} placeholder="Phone Number *" placeholderTextColor="#94A3B8" value={customerPhone} onChangeText={setCustomerPhone} keyboardType="phone-pad" maxLength={10} />
+                  <Ionicons name="call-outline" size={20} color={COLORS.textMuted} />
+                  <TextInput 
+                    style={styles.input} 
+                    placeholder="Phone Number *" 
+                    placeholderTextColor={COLORS.textMuted} 
+                    value={customerPhone} 
+                    onChangeText={setCustomerPhone} 
+                    keyboardType="phone-pad" 
+                    maxLength={10} 
+                  />
                 </View>
+
                 <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Order Summary</Text>
                 {items.map(item => (
                   <View key={item.id} style={styles.orderItem}>
@@ -181,56 +232,85 @@ export default function CartScreen() {
                   </View>
                 ))}
                 <View style={styles.divider} />
-                <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Subtotal</Text><Text style={styles.summaryValue}>₹{total.toLocaleString('en-IN')}</Text></View>
-                <View style={styles.summaryRow}><Text style={styles.summaryLabel}>GST (18%)</Text><Text style={styles.summaryValue}>₹{Math.round(total * 0.18).toLocaleString('en-IN')}</Text></View>
-                <View style={styles.summaryRow}><Text style={styles.totalLabel}>Total</Text><Text style={styles.totalValue}>₹{totalWithTax.toLocaleString('en-IN')}</Text></View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Subtotal</Text>
+                  <Text style={styles.summaryValue}>₹{total.toLocaleString('en-IN')}</Text>
+                </View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>GST (18%)</Text>
+                  <Text style={styles.summaryValue}>₹{Math.round(total * 0.18).toLocaleString('en-IN')}</Text>
+                </View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.totalLabel}>Total</Text>
+                  <Text style={styles.totalValue}>₹{totalWithTax.toLocaleString('en-IN')}</Text>
+                </View>
               </Animated.View>
             )}
 
+            {/* Payment Step */}
             {step === 'payment' && (
               <Animated.View entering={FadeIn}>
                 <View style={styles.amountCard}>
-                  <Text style={styles.amountLabel}>Amount to Pay</Text>
+                  <Text style={styles.amountLabel}>AMOUNT TO PAY</Text>
                   <Text style={styles.amountValue}>₹{totalWithTax.toLocaleString('en-IN')}</Text>
                 </View>
+
                 <Text style={styles.sectionTitle}>Payment Method</Text>
                 {PAYMENT_METHODS.map(method => (
-                  <TouchableOpacity key={method.id} style={[styles.paymentOption, selectedPayment === method.id && styles.paymentOptionActive]} onPress={() => setSelectedPayment(method.id)}>
-                    <Ionicons name={method.icon as any} size={22} color={selectedPayment === method.id ? '#0EA5E9' : '#64748B'} />
+                  <TouchableOpacity 
+                    key={method.id} 
+                    style={[styles.paymentOption, selectedPayment === method.id && styles.paymentOptionActive]} 
+                    onPress={() => setSelectedPayment(method.id)}
+                  >
+                    <Ionicons 
+                      name={method.icon as any} 
+                      size={22} 
+                      color={selectedPayment === method.id ? COLORS.black : COLORS.textSecondary} 
+                    />
                     <View style={styles.paymentInfo}>
-                      <Text style={[styles.paymentLabel, selectedPayment === method.id && styles.paymentLabelActive]}>{method.label}</Text>
-                      {method.popular && <View style={styles.popularBadge}><Text style={styles.popularText}>Popular</Text></View>}
+                      <Text style={[styles.paymentLabel, selectedPayment === method.id && styles.paymentLabelActive]}>
+                        {method.label}
+                      </Text>
+                      {method.popular && (
+                        <View style={styles.popularBadge}>
+                          <Text style={styles.popularText}>Popular</Text>
+                        </View>
+                      )}
                     </View>
                     <View style={[styles.radioOuter, selectedPayment === method.id && styles.radioOuterActive]}>
                       {selectedPayment === method.id && <View style={styles.radioInner} />}
                     </View>
                   </TouchableOpacity>
                 ))}
+
                 <View style={styles.securityNote}>
-                  <Ionicons name="shield-checkmark" size={18} color="#10B981" />
+                  <Ionicons name="shield-checkmark" size={18} color={COLORS.black} />
                   <Text style={styles.securityText}>Your payment is 100% secure</Text>
                 </View>
               </Animated.View>
             )}
+
+            <View style={{ height: 120 }} />
           </ScrollView>
 
-          <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 16 }]}>
+          {/* Bottom CTA */}
+          <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 20 }]}>
             {step === 'cart' && (
               <TouchableOpacity style={styles.primaryButton} onPress={handleCheckout}>
                 <Text style={styles.primaryButtonText}>Proceed to Checkout</Text>
-                <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
+                <Ionicons name="arrow-forward" size={20} color={COLORS.white} />
               </TouchableOpacity>
             )}
             {step === 'details' && (
               <TouchableOpacity style={styles.primaryButton} onPress={handleProceedToPayment}>
                 <Text style={styles.primaryButtonText}>Proceed to Payment</Text>
-                <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
+                <Ionicons name="arrow-forward" size={20} color={COLORS.white} />
               </TouchableOpacity>
             )}
             {step === 'payment' && (
               <TouchableOpacity style={styles.primaryButton} onPress={handlePayment}>
                 <Text style={styles.primaryButtonText}>Pay ₹{totalWithTax.toLocaleString('en-IN')}</Text>
-                <Ionicons name="lock-closed" size={20} color="#FFFFFF" />
+                <Ionicons name="lock-closed" size={20} color={COLORS.white} />
               </TouchableOpacity>
             )}
           </View>
@@ -241,66 +321,388 @@ export default function CartScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8FAFC' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 },
-  backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
-  headerTitle: { fontSize: 18, fontWeight: '600', color: '#1E293B' },
-  clearText: { fontSize: 14, color: '#EF4444', fontWeight: '500' },
-  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
-  emptyTitle: { fontSize: 18, fontWeight: '600', color: '#64748B' },
-  browseButton: { backgroundColor: '#0EA5E9', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 24, marginTop: 12 },
-  browseButtonText: { fontSize: 14, fontWeight: '600', color: '#FFFFFF' },
-  scrollContent: { padding: 20, paddingBottom: 120 },
-  cartItem: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#FFFFFF', borderRadius: 14, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: '#E2E8F0' },
-  itemInfo: { flex: 1 },
-  itemType: { fontSize: 11, color: '#0EA5E9', fontWeight: '600', textTransform: 'uppercase', marginBottom: 4 },
-  itemName: { fontSize: 15, fontWeight: '600', color: '#1E293B' },
-  itemDuration: { fontSize: 13, color: '#64748B', marginTop: 4 },
-  itemActions: { alignItems: 'flex-end', gap: 8 },
-  quantityControl: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F1F5F9', borderRadius: 20, paddingHorizontal: 4 },
-  quantityBtn: { width: 28, height: 28, justifyContent: 'center', alignItems: 'center' },
-  quantityText: { fontSize: 14, fontWeight: '600', color: '#1E293B', marginHorizontal: 8 },
-  itemPrice: { fontSize: 15, fontWeight: '600', color: '#0EA5E9' },
-  summaryCard: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 18, marginTop: 8, borderWidth: 1, borderColor: '#E2E8F0' },
-  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
-  summaryLabel: { fontSize: 14, color: '#64748B' },
-  summaryValue: { fontSize: 14, color: '#1E293B' },
-  divider: { height: 1, backgroundColor: '#E2E8F0', marginVertical: 12 },
-  totalLabel: { fontSize: 16, fontWeight: '600', color: '#1E293B' },
-  totalValue: { fontSize: 18, fontWeight: '700', color: '#0EA5E9' },
-  sectionTitle: { fontSize: 16, fontWeight: '600', color: '#1E293B', marginBottom: 14 },
-  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 12, paddingHorizontal: 16, marginBottom: 12, borderWidth: 1, borderColor: '#E2E8F0' },
-  input: { flex: 1, paddingVertical: 14, marginLeft: 12, fontSize: 16, color: '#1E293B' },
-  orderItem: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8 },
-  orderItemName: { fontSize: 14, color: '#1E293B' },
-  orderItemPrice: { fontSize: 14, fontWeight: '500', color: '#0EA5E9' },
-  amountCard: { backgroundColor: '#E0F2FE', borderRadius: 16, padding: 20, alignItems: 'center', marginBottom: 24 },
-  amountLabel: { fontSize: 14, color: '#0284C7' },
-  amountValue: { fontSize: 32, fontWeight: '700', color: '#0EA5E9', marginTop: 4 },
-  paymentOption: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 14, padding: 16, marginBottom: 10, borderWidth: 1, borderColor: '#E2E8F0' },
-  paymentOptionActive: { borderColor: '#0EA5E9', backgroundColor: '#E0F2FE' },
-  paymentInfo: { flex: 1, marginLeft: 14 },
-  paymentLabel: { fontSize: 15, color: '#1E293B' },
-  paymentLabelActive: { fontWeight: '500', color: '#0284C7' },
-  popularBadge: { backgroundColor: '#D1FAE5', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, marginTop: 4, alignSelf: 'flex-start' },
-  popularText: { fontSize: 10, color: '#059669', fontWeight: '600' },
-  radioOuter: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#E2E8F0', justifyContent: 'center', alignItems: 'center' },
-  radioOuterActive: { borderColor: '#0EA5E9' },
-  radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#0EA5E9' },
-  securityNote: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#D1FAE5', borderRadius: 12, padding: 14, marginTop: 16, gap: 10 },
-  securityText: { fontSize: 13, color: '#059669' },
-  bottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 20, paddingTop: 16, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#E2E8F0' },
-  primaryButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#0EA5E9', paddingVertical: 16, borderRadius: 28, gap: 10 },
-  primaryButtonText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  processingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
-  processingTitle: { fontSize: 20, fontWeight: '600', color: '#1E293B' },
-  processingText: { fontSize: 14, color: '#64748B' },
-  successContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 30 },
-  successIcon: { marginBottom: 20 },
-  successTitle: { fontSize: 24, fontWeight: '700', color: '#1E293B' },
-  successText: { fontSize: 14, color: '#64748B', textAlign: 'center', marginTop: 8, lineHeight: 22 },
-  bookingDetails: { backgroundColor: '#F8FAFC', borderRadius: 16, padding: 20, marginTop: 24, width: '100%' },
-  bookingRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
-  bookingLabel: { fontSize: 13, color: '#64748B' },
-  bookingValue: { fontSize: 14, fontWeight: '600', color: '#1E293B' },
+  container: { 
+    flex: 1, 
+    backgroundColor: COLORS.background,
+  },
+  header: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between', 
+    paddingHorizontal: SPACING.md, 
+    paddingVertical: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  backButton: { 
+    width: 44, 
+    height: 44, 
+    borderRadius: 22, 
+    backgroundColor: COLORS.backgroundSecondary, 
+    justifyContent: 'center', 
+    alignItems: 'center',
+  },
+  headerTitle: { 
+    fontSize: FONTS.sizes.h3, 
+    fontFamily: FONTS.family.heading, 
+    color: COLORS.textPrimary,
+  },
+  clearText: { 
+    fontSize: FONTS.sizes.body, 
+    fontFamily: FONTS.family.bodyMedium,
+    color: COLORS.textSecondary,
+  },
+  emptyContainer: { 
+    flex: 1, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    paddingHorizontal: SPACING.xl,
+  },
+  emptyTitle: { 
+    fontSize: FONTS.sizes.h3, 
+    fontFamily: FONTS.family.heading, 
+    color: COLORS.textPrimary,
+    marginTop: SPACING.md,
+  },
+  emptySubtitle: {
+    fontSize: FONTS.sizes.body,
+    fontFamily: FONTS.family.body,
+    color: COLORS.textSecondary,
+    marginTop: SPACING.xs,
+  },
+  browseButton: { 
+    backgroundColor: COLORS.black, 
+    paddingVertical: 14, 
+    paddingHorizontal: 28, 
+    borderRadius: RADIUS.full, 
+    marginTop: SPACING.lg,
+  },
+  browseButtonText: { 
+    fontSize: FONTS.sizes.body, 
+    fontFamily: FONTS.family.bodySemibold, 
+    color: COLORS.white,
+  },
+  scrollContent: { 
+    padding: SPACING.lg, 
+    paddingBottom: 140,
+  },
+  cartItem: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    backgroundColor: COLORS.card, 
+    borderRadius: RADIUS.md, 
+    padding: SPACING.md, 
+    marginBottom: SPACING.sm, 
+    borderWidth: 1, 
+    borderColor: COLORS.border,
+  },
+  itemInfo: { 
+    flex: 1,
+  },
+  itemType: { 
+    fontSize: FONTS.sizes.micro, 
+    fontFamily: FONTS.family.bodySemibold,
+    color: COLORS.textSecondary, 
+    textTransform: 'uppercase', 
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  itemName: { 
+    fontSize: FONTS.sizes.bodyLg, 
+    fontFamily: FONTS.family.bodySemibold, 
+    color: COLORS.textPrimary,
+  },
+  itemDuration: { 
+    fontSize: FONTS.sizes.bodySm, 
+    fontFamily: FONTS.family.body,
+    color: COLORS.textMuted, 
+    marginTop: 4,
+  },
+  itemActions: { 
+    alignItems: 'flex-end', 
+    gap: SPACING.sm,
+  },
+  quantityControl: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: COLORS.backgroundSecondary, 
+    borderRadius: RADIUS.full, 
+    paddingHorizontal: 4,
+  },
+  quantityBtn: { 
+    width: 32, 
+    height: 32, 
+    justifyContent: 'center', 
+    alignItems: 'center',
+  },
+  quantityText: { 
+    fontSize: FONTS.sizes.body, 
+    fontFamily: FONTS.family.bodySemibold, 
+    color: COLORS.textPrimary, 
+    marginHorizontal: SPACING.sm,
+  },
+  itemPrice: { 
+    fontSize: FONTS.sizes.bodyLg, 
+    fontFamily: FONTS.family.bodyBold, 
+    color: COLORS.black,
+  },
+  summaryCard: { 
+    backgroundColor: COLORS.card, 
+    borderRadius: RADIUS.lg, 
+    padding: SPACING.lg, 
+    marginTop: SPACING.sm, 
+    borderWidth: 1, 
+    borderColor: COLORS.border,
+  },
+  summaryRow: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    marginBottom: SPACING.sm,
+  },
+  summaryLabel: { 
+    fontSize: FONTS.sizes.body, 
+    fontFamily: FONTS.family.body,
+    color: COLORS.textSecondary,
+  },
+  summaryValue: { 
+    fontSize: FONTS.sizes.body, 
+    fontFamily: FONTS.family.bodyMedium,
+    color: COLORS.textPrimary,
+  },
+  divider: { 
+    height: 1, 
+    backgroundColor: COLORS.border, 
+    marginVertical: SPACING.md,
+  },
+  totalLabel: { 
+    fontSize: FONTS.sizes.bodyLg, 
+    fontFamily: FONTS.family.bodySemibold, 
+    color: COLORS.textPrimary,
+  },
+  totalValue: { 
+    fontSize: FONTS.sizes.h3, 
+    fontFamily: FONTS.family.heading, 
+    color: COLORS.black,
+  },
+  sectionTitle: { 
+    fontSize: FONTS.sizes.h4, 
+    fontFamily: FONTS.family.heading, 
+    color: COLORS.textPrimary, 
+    marginBottom: SPACING.md,
+  },
+  inputContainer: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: COLORS.card, 
+    borderRadius: RADIUS.md, 
+    paddingHorizontal: SPACING.md, 
+    marginBottom: SPACING.sm, 
+    borderWidth: 1, 
+    borderColor: COLORS.border,
+  },
+  input: { 
+    flex: 1, 
+    paddingVertical: 16, 
+    marginLeft: SPACING.sm, 
+    fontSize: FONTS.sizes.body, 
+    fontFamily: FONTS.family.body,
+    color: COLORS.textPrimary,
+  },
+  orderItem: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    paddingVertical: SPACING.sm,
+  },
+  orderItemName: { 
+    fontSize: FONTS.sizes.body, 
+    fontFamily: FONTS.family.body,
+    color: COLORS.textPrimary,
+  },
+  orderItemPrice: { 
+    fontSize: FONTS.sizes.body, 
+    fontFamily: FONTS.family.bodyMedium, 
+    color: COLORS.black,
+  },
+  amountCard: { 
+    backgroundColor: COLORS.backgroundSecondary, 
+    borderRadius: RADIUS.lg, 
+    padding: SPACING.xl, 
+    alignItems: 'center', 
+    marginBottom: SPACING.lg,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  amountLabel: { 
+    fontSize: FONTS.sizes.caption, 
+    fontFamily: FONTS.family.bodySemibold,
+    color: COLORS.textSecondary,
+    letterSpacing: 1,
+  },
+  amountValue: { 
+    fontSize: FONTS.sizes.display, 
+    fontFamily: FONTS.family.heading, 
+    color: COLORS.black, 
+    marginTop: 4,
+  },
+  paymentOption: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: COLORS.card, 
+    borderRadius: RADIUS.md, 
+    padding: SPACING.md, 
+    marginBottom: SPACING.sm, 
+    borderWidth: 1, 
+    borderColor: COLORS.border,
+  },
+  paymentOptionActive: { 
+    borderColor: COLORS.black, 
+    backgroundColor: COLORS.backgroundSecondary,
+  },
+  paymentInfo: { 
+    flex: 1, 
+    marginLeft: SPACING.md,
+  },
+  paymentLabel: { 
+    fontSize: FONTS.sizes.body, 
+    fontFamily: FONTS.family.body,
+    color: COLORS.textPrimary,
+  },
+  paymentLabelActive: { 
+    fontFamily: FONTS.family.bodySemibold, 
+    color: COLORS.black,
+  },
+  popularBadge: { 
+    backgroundColor: COLORS.primaryLight, 
+    paddingHorizontal: 8, 
+    paddingVertical: 3, 
+    borderRadius: RADIUS.sm, 
+    marginTop: 4, 
+    alignSelf: 'flex-start',
+  },
+  popularText: { 
+    fontSize: FONTS.sizes.micro, 
+    fontFamily: FONTS.family.bodySemibold,
+    color: COLORS.textSecondary,
+  },
+  radioOuter: { 
+    width: 22, 
+    height: 22, 
+    borderRadius: 11, 
+    borderWidth: 2, 
+    borderColor: COLORS.border, 
+    justifyContent: 'center', 
+    alignItems: 'center',
+  },
+  radioOuterActive: { 
+    borderColor: COLORS.black,
+  },
+  radioInner: { 
+    width: 12, 
+    height: 12, 
+    borderRadius: 6, 
+    backgroundColor: COLORS.black,
+  },
+  securityNote: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: COLORS.backgroundSecondary, 
+    borderRadius: RADIUS.md, 
+    padding: SPACING.md, 
+    marginTop: SPACING.md, 
+    gap: SPACING.sm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  securityText: { 
+    fontSize: FONTS.sizes.bodySm, 
+    fontFamily: FONTS.family.body,
+    color: COLORS.textSecondary,
+  },
+  bottomBar: { 
+    position: 'absolute', 
+    bottom: 0, 
+    left: 0, 
+    right: 0, 
+    paddingHorizontal: SPACING.lg, 
+    paddingTop: SPACING.md, 
+    backgroundColor: COLORS.background, 
+    borderTopWidth: 1, 
+    borderTopColor: COLORS.border,
+  },
+  primaryButton: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    backgroundColor: COLORS.black, 
+    paddingVertical: 18, 
+    borderRadius: RADIUS.full, 
+    gap: SPACING.sm,
+  },
+  primaryButtonText: { 
+    fontSize: FONTS.sizes.bodyLg, 
+    fontFamily: FONTS.family.bodySemibold, 
+    color: COLORS.white,
+  },
+  processingContainer: { 
+    flex: 1, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    gap: SPACING.md,
+  },
+  processingTitle: { 
+    fontSize: FONTS.sizes.h2, 
+    fontFamily: FONTS.family.heading, 
+    color: COLORS.textPrimary,
+  },
+  processingText: { 
+    fontSize: FONTS.sizes.body, 
+    fontFamily: FONTS.family.body,
+    color: COLORS.textSecondary,
+  },
+  successContainer: { 
+    flex: 1, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    padding: SPACING.xl,
+  },
+  successIcon: { 
+    marginBottom: SPACING.lg,
+  },
+  successTitle: { 
+    fontSize: FONTS.sizes.h1, 
+    fontFamily: FONTS.family.heading, 
+    color: COLORS.textPrimary,
+  },
+  successText: { 
+    fontSize: FONTS.sizes.body, 
+    fontFamily: FONTS.family.body,
+    color: COLORS.textSecondary, 
+    textAlign: 'center', 
+    marginTop: SPACING.sm, 
+    lineHeight: 24,
+  },
+  bookingDetails: { 
+    backgroundColor: COLORS.backgroundSecondary, 
+    borderRadius: RADIUS.lg, 
+    padding: SPACING.lg, 
+    marginTop: SPACING.xl, 
+    width: '100%',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  bookingRow: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    marginBottom: SPACING.sm,
+  },
+  bookingLabel: { 
+    fontSize: FONTS.sizes.bodySm, 
+    fontFamily: FONTS.family.body,
+    color: COLORS.textMuted,
+  },
+  bookingValue: { 
+    fontSize: FONTS.sizes.body, 
+    fontFamily: FONTS.family.bodySemibold, 
+    color: COLORS.textPrimary,
+  },
 });
