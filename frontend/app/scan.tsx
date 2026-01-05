@@ -213,15 +213,20 @@ export default function ScanScreen() {
   };
 
   const handlePickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({ 
-      mediaTypes: ImagePicker.MediaTypeOptions.Images, 
-      base64: true, 
-      quality: 0.7 
-    });
-    
-    if (!result.canceled && result.assets[0]?.base64) {
-      setPhase('processing');
-      analyzeImage(result.assets[0].base64);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({ 
+        mediaTypes: ImagePicker.MediaTypeOptions.Images, 
+        base64: true, 
+        quality: 0.8 
+      });
+      
+      if (!result.canceled && result.assets[0]?.base64) {
+        setPhase('processing');
+        await analyzeImage(result.assets[0].base64);
+      }
+    } catch (error) {
+      console.log('Gallery picker error:', error);
+      Alert.alert('Error', 'Could not open gallery. Please try again.');
     }
   };
 
