@@ -113,6 +113,21 @@ export default function ScanScreen() {
   const [isReady, setIsReady] = useState(false);
   const [currentProcessingStep, setCurrentProcessingStep] = useState(0);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+
+  // Get user ID on mount
+  useEffect(() => {
+    const getUserId = async () => {
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        const storedUserId = await AsyncStorage.getItem('glamgenius_user_id');
+        setUserId(storedUserId);
+      } catch (error) {
+        console.log('Could not get user ID:', error);
+      }
+    };
+    getUserId();
+  }, []);
 
   // Animation values
   const ringProgress = useSharedValue(0);
