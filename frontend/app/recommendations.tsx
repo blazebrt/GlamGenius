@@ -131,6 +131,45 @@ export default function RecommendationsScreen() {
           })}
         </Animated.View>
 
+        {/* Expected Outcome */}
+        <Animated.View entering={FadeInDown.delay(150)} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="trophy-outline" size={20} color={COLORS.black} />
+            <Text style={styles.sectionTitle}>Expected Outcome</Text>
+          </View>
+          <View style={styles.outcomeCard}>
+            <View style={styles.outcomeItem}>
+              <View style={styles.outcomeIcon}>
+                <Ionicons name="sparkles" size={18} color={COLORS.black} />
+              </View>
+              <View style={styles.outcomeContent}>
+                <Text style={styles.outcomeLabel}>Instant Results</Text>
+                <Text style={styles.outcomeText}>Visibly refreshed and revitalized appearance immediately after treatment</Text>
+              </View>
+            </View>
+            <View style={styles.outcomeDivider} />
+            <View style={styles.outcomeItem}>
+              <View style={styles.outcomeIcon}>
+                <Ionicons name="calendar" size={18} color={COLORS.black} />
+              </View>
+              <View style={styles.outcomeContent}>
+                <Text style={styles.outcomeLabel}>Long-term Benefits</Text>
+                <Text style={styles.outcomeText}>Improved skin/hair health with regular treatments over 4-6 weeks</Text>
+              </View>
+            </View>
+            <View style={styles.outcomeDivider} />
+            <View style={styles.outcomeItem}>
+              <View style={styles.outcomeIcon}>
+                <Ionicons name="shield-checkmark" size={18} color={COLORS.black} />
+              </View>
+              <View style={styles.outcomeContent}>
+                <Text style={styles.outcomeLabel}>Safety Assured</Text>
+                <Text style={styles.outcomeText}>All treatments performed by certified professionals using premium products</Text>
+              </View>
+            </View>
+          </View>
+        </Animated.View>
+
         {/* Add-on Services */}
         <Animated.View entering={FadeInDown.delay(200)} style={styles.section}>
           <View style={styles.sectionHeader}>
