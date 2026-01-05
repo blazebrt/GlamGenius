@@ -6,6 +6,9 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -25,6 +28,8 @@ export default function StyleQuizScreen() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [showCustomInput, setShowCustomInput] = useState(false);
+  const [customValue, setCustomValue] = useState('');
 
   useEffect(() => {
     loadQuestions();
@@ -42,9 +47,26 @@ export default function StyleQuizScreen() {
   };
 
   const handleAnswer = (questionId: string, answer: string) => {
+    if (answer === 'Other (specify)') {
+      setShowCustomInput(true);
+      return;
+    }
+    setShowCustomInput(false);
+    setCustomValue('');
     setAnswers({ ...answers, [questionId]: answer });
     if (currentQuestion < questions.length - 1) {
       setTimeout(() => setCurrentQuestion(currentQuestion + 1), 300);
+    }
+  };
+
+  const handleCustomSubmit = (questionId: string) => {
+    if (customValue.trim()) {
+      setAnswers({ ...answers, [questionId]: customValue.trim() });
+      setShowCustomInput(false);
+      setCustomValue('');
+      if (currentQuestion < questions.length - 1) {
+        setTimeout(() => setCurrentQuestion(currentQuestion + 1), 300);
+      }
     }
   };
 
