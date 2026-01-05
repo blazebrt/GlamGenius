@@ -30,7 +30,7 @@ const OCCASIONS = [
   { id: 'work', label: 'Office/Work', icon: 'briefcase-outline' },
   { id: 'party', label: 'Party/Night Out', icon: 'musical-notes-outline' },
   { id: 'wedding', label: 'Shaadi/Wedding', icon: 'heart-outline' },
-  { id: 'festival', label: 'Festival/Pooja', icon: 'flower-outline' },
+  { id: 'festival', label: 'Festival/Pooja', icon: 'star-outline' },
   { id: 'date', label: 'Date Night', icon: 'moon-outline' },
   { id: 'selfcare', label: 'Self-Care Sunday', icon: 'sparkles-outline' },
   { id: 'custom', label: 'Other Occasion...', icon: 'create-outline' },
