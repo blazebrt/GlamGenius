@@ -18,7 +18,7 @@ import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 export default function StyleQuizScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { userId, updateUserProfile } = useUserStore();
+  const { userId, updateUserProfile, createUser, fetchUser } = useUserStore();
 
   const [questions, setQuestions] = useState<any[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState(0);
