@@ -70,7 +70,6 @@ export default function ServicesScreen() {
     const existing = cartItems.find(item => item.id === service.id);
     if (existing) {
       // Remove from cart if already added
-      const { removeItem } = useCartStore.getState();
       removeItem(service.id);
     } else {
       // Add to cart
