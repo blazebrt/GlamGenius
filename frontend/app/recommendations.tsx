@@ -20,7 +20,7 @@ const ADDON_PRODUCTS = [
 ];
 
 const ADDON_SERVICES = [
-  { id: 'a1', name: 'Head Massage (15 min)', price: 199, duration: 15, type: 'addon' as const },
+  { id: 'a1', name: 'Head Massage', price: 199, duration: 15, type: 'addon' as const },
   { id: 'a2', name: 'Hand Massage', price: 149, duration: 10, type: 'addon' as const },
   { id: 'a3', name: 'Deep Conditioning', price: 299, duration: 20, type: 'addon' as const },
 ];
