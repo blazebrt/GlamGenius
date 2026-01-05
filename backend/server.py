@@ -66,11 +66,11 @@ class UserProfileUpdate(BaseModel):
 
 class ScanResult(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    user_id: str
+    user_id: Optional[str] = None
     scan_type: str  # "face", "hair", "scalp", "full"
     image_base64: Optional[str] = None
     analysis: Dict[str, Any] = {}
-    recommendations: List[str] = []
+    recommendations: List[Any] = []  # Can be strings or dicts
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class ScanAnalysisRequest(BaseModel):
