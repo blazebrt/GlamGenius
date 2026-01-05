@@ -290,9 +290,12 @@ const styles = StyleSheet.create({
   },
   ctaSection: {
     position: 'absolute',
-    bottom: 40,
-    left: SPACING.lg,
-    right: SPACING.lg,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.lg,
+    backgroundColor: COLORS.background,
     alignItems: 'center',
   },
   ctaButton: {
