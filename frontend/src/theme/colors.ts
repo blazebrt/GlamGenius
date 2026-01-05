@@ -1,158 +1,127 @@
 /**
- * MED-TECH BEAUTY DESIGN SYSTEM
- * =============================
+ * PREMIUM BLACK & WHITE DESIGN SYSTEM
+ * ====================================
  * 
- * FONT PAIRING RATIONALE:
+ * AESTHETIC: High-end luxury salon meets clinical precision
+ * INSPIRATION: Chanel, Aesop, high-end dermatology clinics
  * 
- * 1. HEADINGS: Playfair Display (Serif)
- *    - WHY: Evokes luxury fashion magazines like Vogue & Harper's Bazaar
- *    - EFFECT: Creates immediate perception of premium, editorial quality
- *    - USE: Headlines, feature titles, price tags (for luxury positioning)
- *    - PSYCHOLOGY: Serif fonts signal tradition, trust, and expertise—essential 
- *      for medical credibility while maintaining salon elegance
- * 
- * 2. BODY TEXT: Inter (Geometric Sans-Serif)
- *    - WHY: Designed for screen legibility, used in medical/tech interfaces
- *    - EFFECT: Clean, precise, data-friendly—like clinical reports
- *    - USE: Descriptions, data, buttons, navigation
- *    - PSYCHOLOGY: Sans-serif signals modernity and precision—perfect for
- *      communicating medical accuracy and scientific credibility
- * 
- * WHY THIS PAIRING WORKS FOR MEDICAL-SALON:
- * - The contrast creates visual hierarchy: "luxury experience" (Playfair) 
- *   meets "scientific precision" (Inter)
- * - Playfair says "you're at a high-end salon" while Inter says "backed by science"
- * - This duality addresses the customer's dual desire: pampering + results
- * 
- * COLOR PALETTE RATIONALE:
- * - Soft medical blue: Clinical trust, calming, reduces anxiety
- * - Platinum/Silver: Premium, modern technology, metallic luxury
- * - White space: Clinical cleanliness, focus, breathing room
- * - Teal accents: Health, vitality, positive outcomes
+ * FONT PAIRING:
+ * - Playfair Display (Headings): Editorial elegance, fashion magazine feel
+ * - Inter (Body): Clean, precise, medical-grade readability
  */
 
 // ============================================
-// COLOR PALETTE - CLINICAL LUXURY
+// COLOR PALETTE - PREMIUM BLACK & WHITE
 // ============================================
 export const COLORS = {
-  // Backgrounds - Clean Clinical White
+  // Backgrounds
   background: '#FFFFFF',
-  backgroundSecondary: '#F8FAFC',
-  backgroundTertiary: '#F1F5F9',
+  backgroundSecondary: '#FAFAFA',
+  backgroundTertiary: '#F5F5F5',
   
-  // Cards - Glassmorphism Ready
+  // Cards
   card: '#FFFFFF',
-  cardElevated: 'rgba(255, 255, 255, 0.85)',
-  cardGlass: 'rgba(255, 255, 255, 0.7)',
+  cardElevated: '#FFFFFF',
+  cardDark: '#1A1A1A',
   
-  // Primary - Medical Blue (Trust & Calm)
-  primary: '#3B82F6',
-  primaryLight: '#EFF6FF',
-  primaryMuted: '#BFDBFE',
-  primaryDark: '#1D4ED8',
+  // Primary - Pure Black (Premium)
+  primary: '#000000',
+  primaryLight: '#F5F5F5',
+  primaryMuted: '#E5E5E5',
+  primaryDark: '#000000',
   
-  // Accent - Platinum/Silver (Premium Tech)
-  accent: '#64748B',
-  accentLight: '#F1F5F9',
-  accentMuted: '#CBD5E1',
-  accentDark: '#475569',
+  // Accent - Charcoal tones
+  accent: '#2D2D2D',
+  accentLight: '#F0F0F0',
+  accentMuted: '#D4D4D4',
+  accentDark: '#171717',
   
-  // Text - High Contrast for Medical Readability
-  textPrimary: '#0F172A',
-  textSecondary: '#475569',
-  textMuted: '#94A3B8',
+  // Text - High Contrast
+  textPrimary: '#0A0A0A',
+  textSecondary: '#525252',
+  textMuted: '#A3A3A3',
   textInverse: '#FFFFFF',
   
-  // Status - Soft Medical Tones
-  success: '#0D9488',
-  successLight: '#CCFBF1',
-  successMuted: '#5EEAD4',
+  // Status - Monochrome versions
+  success: '#171717',
+  successLight: '#F5F5F5',
+  successMuted: '#E5E5E5',
   
-  warning: '#D97706',
-  warningLight: '#FEF3C7',
-  warningMuted: '#FCD34D',
+  warning: '#404040',
+  warningLight: '#FAFAFA',
+  warningMuted: '#E5E5E5',
   
-  error: '#DC2626',
-  errorLight: '#FEE2E2',
-  errorMuted: '#FCA5A5',
+  error: '#1A1A1A',
+  errorLight: '#F5F5F5',
+  errorMuted: '#E5E5E5',
   
-  info: '#0EA5E9',
-  infoLight: '#E0F2FE',
-  infoMuted: '#7DD3FC',
+  info: '#262626',
+  infoLight: '#FAFAFA',
+  infoMuted: '#E5E5E5',
   
-  // Health Score Gradient
-  healthExcellent: '#10B981',
-  healthGood: '#34D399',
-  healthFair: '#FBBF24',
-  healthPoor: '#F97316',
-  healthCritical: '#EF4444',
+  // Health Score - Grayscale gradient
+  healthExcellent: '#000000',
+  healthGood: '#262626',
+  healthFair: '#525252',
+  healthPoor: '#737373',
+  healthCritical: '#A3A3A3',
   
-  // Borders - Subtle Definition
-  border: '#E2E8F0',
-  borderLight: '#F1F5F9',
-  borderFocus: '#3B82F6',
+  // Borders - Subtle definition
+  border: '#E5E5E5',
+  borderLight: '#F5F5F5',
+  borderDark: '#D4D4D4',
+  borderFocus: '#000000',
   
   // Utility
   white: '#FFFFFF',
-  black: '#0F172A',
-  overlay: 'rgba(15, 23, 42, 0.6)',
-  overlayLight: 'rgba(15, 23, 42, 0.3)',
+  black: '#000000',
+  overlay: 'rgba(0, 0, 0, 0.6)',
+  overlayLight: 'rgba(0, 0, 0, 0.3)',
   
-  // Scan Interface Colors
-  scanRing: '#3B82F6',
-  scanSuccess: '#10B981',
-  scanProcessing: '#8B5CF6',
-  scanBackground: 'rgba(0, 0, 0, 0.85)',
+  // Scan Interface
+  scanRing: '#FFFFFF',
+  scanSuccess: '#FFFFFF',
+  scanProcessing: '#FFFFFF',
+  scanBackground: '#000000',
 };
 
 // ============================================
-// TYPOGRAPHY SCALE - MEDICAL PRECISION
+// TYPOGRAPHY - PREMIUM SCALE
 // ============================================
 export const FONTS = {
-  // Font Families
   family: {
-    // Premium Editorial Serif - Headings
+    // Premium Editorial Serif
     heading: 'PlayfairDisplay_700Bold',
     headingMedium: 'PlayfairDisplay_500Medium',
     headingRegular: 'PlayfairDisplay_400Regular',
     
-    // Geometric Sans - Body & Data
+    // Clean Geometric Sans
     body: 'Inter_400Regular',
     bodyMedium: 'Inter_500Medium',
     bodySemibold: 'Inter_600SemiBold',
     bodyBold: 'Inter_700Bold',
   },
   
-  // Size Scale - Larger for Readability
   sizes: {
-    // Display - Hero Headlines
     display: 42,
     displaySm: 36,
-    
-    // Headings
     h1: 32,
     h2: 26,
     h3: 22,
     h4: 18,
-    
-    // Body
     bodyLg: 17,
     body: 15,
     bodySm: 13,
-    
-    // Micro
     caption: 12,
     micro: 10,
   },
   
-  // Line Heights
   lineHeights: {
     tight: 1.2,
     normal: 1.5,
     relaxed: 1.7,
   },
   
-  // Letter Spacing
   letterSpacing: {
     tight: -0.5,
     normal: 0,
@@ -163,7 +132,7 @@ export const FONTS = {
 };
 
 // ============================================
-// SPACING SYSTEM - 8pt Grid
+// SPACING - 8pt Grid
 // ============================================
 export const SPACING = {
   xs: 4,
@@ -176,7 +145,7 @@ export const SPACING = {
 };
 
 // ============================================
-// BORDER RADIUS - Soft Clinical
+// BORDER RADIUS - Refined
 // ============================================
 export const RADIUS = {
   sm: 8,
@@ -188,27 +157,27 @@ export const RADIUS = {
 };
 
 // ============================================
-// SHADOWS - Subtle Elevation
+// SHADOWS - Subtle & Elegant
 // ============================================
 export const SHADOWS = {
   sm: {
-    shadowColor: '#0F172A',
+    shadowColor: '#000000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
     elevation: 1,
   },
   md: {
-    shadowColor: '#0F172A',
+    shadowColor: '#000000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
+    shadowOpacity: 0.06,
     shadowRadius: 8,
     elevation: 3,
   },
   lg: {
-    shadowColor: '#0F172A',
+    shadowColor: '#000000',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
+    shadowOpacity: 0.08,
     shadowRadius: 16,
     elevation: 6,
   },
