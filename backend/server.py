@@ -692,19 +692,21 @@ Respond in this EXACT JSON format:
             "confidence_score": 0.7
         }
 
-async def generate_ai_recommendations(user_data: Dict, occasion: str, budget: str) -> Dict[str, Any]:
+async def generate_ai_recommendations(user_data: Dict, occasion: str, budget: str, mood: str = None) -> Dict[str, Any]:
     """Generate personalized recommendations using Gemini"""
     try:
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=f"recommend-{uuid.uuid4()}",
             system_message="""You are GlamGenius, a premium salon beauty advisor AI.
-            Based on the user's profile, budget, and occasion, recommend the best salon service bundle.
+            Based on the user's profile, budget, occasion, and mood, recommend the best salon service bundle.
             Optimize for visible results, value for money, and client retention.
             Always respond in valid JSON format."""
         ).with_model("gemini", "gemini-2.0-flash")
         
         services_info = "\n".join([f"- {s['name']} ({s['category']}): {s['description']} - {s['price_range']}" for s in SALON_SERVICES])
+        
+        mood_text = f"Desired Mood/Feeling: {mood}" if mood else ""
         
         prompt_text = f"""Based on this client profile:
 - Age: {user_data.get('age', 'Not specified')}
@@ -715,6 +717,7 @@ async def generate_ai_recommendations(user_data: Dict, occasion: str, budget: st
 - Hair Concerns: {user_data.get('hair_concerns', [])}
 
 Occasion: {occasion}
+{mood_text}
 Budget Level: {budget} (budget=₹500-1500, standard=₹1500-3000, premium=₹3000-6000, luxury=₹6000+)
 
 Available Services:
@@ -726,7 +729,8 @@ Provide personalized recommendations in this JSON format:
         {{
             "name": "service name",
             "reason": "why this is recommended",
-            "expected_result": "what to expect"
+            "expected_result": "what to expect",
+            "price": estimated_price_number
         }}
     ],
     "stylist_level": "Junior/Senior/Master Stylist recommendation",
@@ -735,8 +739,9 @@ Provide personalized recommendations in this JSON format:
     "aftercare_tips": ["list of aftercare recommendations"],
     "maintenance_tips": ["list of maintenance tips for lasting results"],
     "upsell_suggestions": ["future services to consider"],
-    "total_estimated_cost": "estimated price range",
-    "appointment_duration": "total estimated time"
+    "total_estimated_cost": estimated_total_number,
+    "total_duration": estimated_minutes_number,
+    "appointment_duration": "total estimated time in text"
 }}"""
         
         # Create UserMessage for text-only request
