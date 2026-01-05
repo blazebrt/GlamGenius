@@ -124,10 +124,17 @@ export default function StyleQuizScreen() {
   const question = questions[currentQuestion];
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <KeyboardAvoidingView 
+      style={[styles.container, { paddingTop: insets.top }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.headerBtn} onPress={() => currentQuestion > 0 ? setCurrentQuestion(currentQuestion - 1) : router.back()}>
+        <TouchableOpacity style={styles.headerBtn} onPress={() => { 
+          if (showCustomInput) { setShowCustomInput(false); setCustomValue(''); }
+          else if (currentQuestion > 0) { setCurrentQuestion(currentQuestion - 1); }
+          else { router.back(); }
+        }}>
           <Ionicons name="arrow-back" size={22} color={COLORS.textPrimary} />
         </TouchableOpacity>
         <View style={styles.progressContainer}>
@@ -160,6 +167,46 @@ export default function StyleQuizScreen() {
                 </TouchableOpacity>
               </Animated.View>
             ))}
+            
+            {/* Custom "Other" Option */}
+            <Animated.View entering={FadeInDown.delay((question?.options?.length || 0) * 50)}>
+              <TouchableOpacity
+                style={[styles.optionCard, showCustomInput && styles.optionCardActive]}
+                onPress={() => handleAnswer(question?.id, 'Other (specify)')}
+              >
+                <View style={styles.otherOptionContent}>
+                  <Ionicons name="create-outline" size={20} color={showCustomInput ? COLORS.black : COLORS.textMuted} />
+                  <Text style={[styles.optionText, showCustomInput && styles.optionTextActive]}>
+                    Other (specify)
+                  </Text>
+                </View>
+                <View style={[styles.radioOuter, showCustomInput && styles.radioOuterActive]}>
+                  {showCustomInput && <View style={styles.radioInner} />}
+                </View>
+              </TouchableOpacity>
+            </Animated.View>
+            
+            {/* Custom Input Field */}
+            {showCustomInput && (
+              <Animated.View entering={FadeInDown} style={styles.customInputContainer}>
+                <TextInput
+                  style={styles.customInput}
+                  placeholder="Type your answer..."
+                  placeholderTextColor={COLORS.textMuted}
+                  value={customValue}
+                  onChangeText={setCustomValue}
+                  autoFocus
+                />
+                <TouchableOpacity 
+                  style={[styles.customSubmitBtn, !customValue.trim() && styles.customSubmitBtnDisabled]}
+                  onPress={() => handleCustomSubmit(question?.id)}
+                  disabled={!customValue.trim()}
+                >
+                  <Text style={styles.customSubmitBtnText}>Continue</Text>
+                  <Ionicons name="arrow-forward" size={18} color={COLORS.white} />
+                </TouchableOpacity>
+              </Animated.View>
+            )}
           </View>
         </Animated.View>
       </ScrollView>
