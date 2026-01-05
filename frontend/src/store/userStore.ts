@@ -82,4 +82,12 @@ export const useUserStore = create<UserStore>((set, get) => ({
       set({ loading: false });
     }
   },
+
+  // Direct profile update without API call (for immediate state updates)
+  updateUserProfile: (data: Partial<UserProfile>) => {
+    const { user } = get();
+    if (user) {
+      set({ user: { ...user, ...data } as UserProfile });
+    }
+  },
 }));
