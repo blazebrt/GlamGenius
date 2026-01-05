@@ -236,7 +236,7 @@ export default function StyleQuizScreen() {
           </View>
         )}
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
