@@ -23,6 +23,7 @@ interface UserStore {
   loading: boolean;
   setUserId: (id: string) => void;
   setUser: (user: UserProfile | null) => void;
+  initializeUser: () => Promise<void>;
   fetchUser: () => Promise<void>;
   createUser: (name: string, email?: string) => Promise<UserProfile | null>;
   updateUser: (data: Partial<UserProfile>) => Promise<void>;
