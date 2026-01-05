@@ -124,7 +124,7 @@ export default function RecommendationsScreen() {
                   <Text style={styles.serviceReason}>{service.reason || service.why_recommended}</Text>
                 </View>
                 <View style={[styles.addBtn, inCart && styles.addBtnActive]}>
-                  <Ionicons name={inCart ? 'checkmark' : 'add'} size={20} color={COLORS.white} />
+                  <Ionicons name={inCart ? 'checkmark' : 'add'} size={20} color={inCart ? COLORS.white : COLORS.black} />
                 </View>
               </TouchableOpacity>
             );
