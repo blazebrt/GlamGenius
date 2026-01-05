@@ -3,31 +3,42 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { View, ActivityIndicator, Text } from 'react-native';
+import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
 import {
   useFonts,
-  NunitoSans_400Regular,
-  NunitoSans_500Medium,
-  NunitoSans_600SemiBold,
-  NunitoSans_700Bold,
-  NunitoSans_800ExtraBold,
-} from '@expo-google-fonts/nunito-sans';
-import { COLORS } from '../src/theme/colors';
+  PlayfairDisplay_400Regular,
+  PlayfairDisplay_500Medium,
+  PlayfairDisplay_700Bold,
+} from '@expo-google-fonts/playfair-display';
+import {
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+} from '@expo-google-fonts/inter';
+import { COLORS, FONTS } from '../src/theme/colors';
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
-    NunitoSans_400Regular,
-    NunitoSans_500Medium,
-    NunitoSans_600SemiBold,
-    NunitoSans_700Bold,
-    NunitoSans_800ExtraBold,
+    // Premium Editorial Serif for Headings
+    PlayfairDisplay_400Regular,
+    PlayfairDisplay_500Medium,
+    PlayfairDisplay_700Bold,
+    // Geometric Sans for Body & Data
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
   });
 
   if (!fontsLoaded) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.background }}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
-        <Text style={{ marginTop: 16, color: COLORS.textSecondary, fontSize: 16 }}>Loading...</Text>
+      <View style={styles.loadingContainer}>
+        <View style={styles.loadingContent}>
+          <Text style={styles.loadingLogo}>GlamGenius</Text>
+          <Text style={styles.loadingTagline}>MEDICAL BEAUTY</Text>
+          <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 24 }} />
+        </View>
       </View>
     );
   }
@@ -58,3 +69,27 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: COLORS.background,
+  },
+  loadingContent: {
+    alignItems: 'center',
+  },
+  loadingLogo: {
+    fontSize: 36,
+    fontWeight: '700',
+    color: COLORS.textPrimary,
+    letterSpacing: -0.5,
+  },
+  loadingTagline: {
+    fontSize: 12,
+    color: COLORS.primary,
+    letterSpacing: 3,
+    marginTop: 8,
+  },
+});
