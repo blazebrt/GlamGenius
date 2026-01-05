@@ -11,11 +11,21 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { useUserStore } from '../src/store/userStore';
-import { COLORS, FONTS } from '../src/theme/colors';
+import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 
 const { width, height } = Dimensions.get('window');
+
+/**
+ * WELCOME SCREEN - First Impression
+ * 
+ * Design Philosophy:
+ * - Clean, clinical white space
+ * - Premium typography (Playfair headings, Inter body)
+ * - Soft medical blue accents
+ * - Trust signals through professional copy
+ */
 
 export default function WelcomeScreen() {
   const router = useRouter();
@@ -34,7 +44,7 @@ export default function WelcomeScreen() {
         setUserId(storedUserId);
         setTimeout(() => {
           router.replace('/(tabs)/home');
-        }, 1500);
+        }, 1200);
       } else {
         setLoading(false);
       }
@@ -63,8 +73,9 @@ export default function WelcomeScreen() {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.loadingContainer}>
-          <Text style={styles.logoText}>GlamGenius</Text>
-          <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 20 }} />
+          <Text style={styles.loadingLogo}>GlamGenius</Text>
+          <Text style={styles.loadingTagline}>MEDICAL BEAUTY</Text>
+          <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 24 }} />
         </View>
       </View>
     );
@@ -72,40 +83,50 @@ export default function WelcomeScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      {/* Subtle Background Lines */}
-      <View style={styles.decorLine1} />
-      <View style={styles.decorLine2} />
+      {/* Decorative Elements */}
+      <View style={styles.decorCircle1} />
+      <View style={styles.decorCircle2} />
 
-      {/* Logo and Header */}
-      <Animated.View entering={FadeIn.delay(200)} style={styles.headerContainer}>
-        <View style={styles.logoContainer}>
-          <Ionicons name="sparkles" size={36} color={COLORS.black} />
+      {/* Header */}
+      <Animated.View entering={FadeIn.delay(200)} style={styles.header}>
+        <View style={styles.logoMark}>
+          <Ionicons name="sparkles" size={32} color={COLORS.primary} />
         </View>
-        <Text style={styles.logoText}>GlamGenius</Text>
-        <Text style={styles.tagline}>MEDICAL BEAUTY • SALON</Text>
+        <Text style={styles.brandName}>GlamGenius</Text>
+        <Text style={styles.brandTagline}>MEDICAL BEAUTY</Text>
+      </Animated.View>
+
+      {/* Value Proposition */}
+      <Animated.View entering={FadeInDown.delay(400)} style={styles.heroSection}>
+        <Text style={styles.heroTitle}>
+          Clinical-Grade{'\n'}Beauty Analysis
+        </Text>
+        <Text style={styles.heroSubtitle}>
+          AI-powered skin & scalp diagnostics with personalized treatment recommendations
+        </Text>
       </Animated.View>
 
       {/* Features */}
-      <Animated.View entering={FadeInDown.delay(400)} style={styles.featuresContainer}>
-        <FeatureItem
-          icon="scan-outline"
-          title="AI Skin & Hair Analysis"
-          description="Clinical-grade scanning for personalized insights"
+      <Animated.View entering={FadeInDown.delay(600)} style={styles.features}>
+        <FeatureItem 
+          icon="scan-outline" 
+          title="AI Diagnostics"
+          description="50+ health markers analyzed"
         />
-        <FeatureItem
-          icon="sparkles-outline"
-          title="Smart Recommendations"
-          description="Budget & occasion-based service bundles"
+        <FeatureItem 
+          icon="medical-outline" 
+          title="Medical Accuracy"
+          description="Dermatologist-grade insights"
         />
-        <FeatureItem
-          icon="calendar-outline"
-          title="Track Your Journey"
-          description="Progress tracking & visit history"
+        <FeatureItem 
+          icon="sparkles-outline" 
+          title="Smart Treatments"
+          description="Personalized recommendations"
         />
       </Animated.View>
 
-      {/* CTA Button */}
-      <Animated.View entering={FadeInDown.delay(600)} style={styles.ctaContainer}>
+      {/* CTA */}
+      <Animated.View entering={FadeInUp.delay(800)} style={styles.ctaSection}>
         <TouchableOpacity
           style={styles.ctaButton}
           onPress={handleGetStarted}
@@ -116,13 +137,14 @@ export default function WelcomeScreen() {
             <ActivityIndicator color={COLORS.white} />
           ) : (
             <>
-              <Text style={styles.ctaText}>Get Started</Text>
-              <Ionicons name="arrow-forward" size={22} color={COLORS.white} />
+              <Text style={styles.ctaText}>Begin Your Analysis</Text>
+              <Ionicons name="arrow-forward" size={20} color={COLORS.white} />
             </>
           )}
         </TouchableOpacity>
+        
         <Text style={styles.disclaimer}>
-          Your personalized beauty journey begins here
+          Your data is processed securely and never shared
         </Text>
       </Animated.View>
     </View>
@@ -132,10 +154,10 @@ export default function WelcomeScreen() {
 function FeatureItem({ icon, title, description }: { icon: string; title: string; description: string }) {
   return (
     <View style={styles.featureItem}>
-      <View style={styles.featureIconContainer}>
-        <Ionicons name={icon as any} size={26} color={COLORS.black} />
+      <View style={styles.featureIcon}>
+        <Ionicons name={icon as any} size={22} color={COLORS.primary} />
       </View>
-      <View style={styles.featureTextContainer}>
+      <View style={styles.featureContent}>
         <Text style={styles.featureTitle}>{title}</Text>
         <Text style={styles.featureDescription}>{description}</Text>
       </View>
@@ -147,123 +169,153 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
-    paddingHorizontal: 24,
+    paddingHorizontal: SPACING.lg,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  decorLine1: {
+  loadingLogo: {
+    fontSize: FONTS.sizes.h1,
+    fontFamily: FONTS.family.heading,
+    color: COLORS.textPrimary,
+  },
+  loadingTagline: {
+    fontSize: FONTS.sizes.caption,
+    fontFamily: FONTS.family.bodySemibold,
+    color: COLORS.primary,
+    letterSpacing: 3,
+    marginTop: 8,
+  },
+  decorCircle1: {
     position: 'absolute',
-    top: 120,
-    right: -50,
+    top: -80,
+    right: -80,
     width: 200,
-    height: 1,
-    backgroundColor: COLORS.border,
-    transform: [{ rotate: '-45deg' }],
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: COLORS.primaryLight,
   },
-  decorLine2: {
+  decorCircle2: {
     position: 'absolute',
-    bottom: 200,
-    left: -50,
-    width: 180,
-    height: 1,
-    backgroundColor: COLORS.border,
-    transform: [{ rotate: '45deg' }],
+    bottom: 100,
+    left: -60,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: COLORS.backgroundSecondary,
   },
-  headerContainer: {
+  header: {
     alignItems: 'center',
-    marginTop: height * 0.1,
+    marginTop: height * 0.08,
   },
-  logoContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+  logoMark: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     backgroundColor: COLORS.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 20,
-    borderWidth: 2,
-    borderColor: COLORS.black,
+    marginBottom: SPACING.md,
   },
-  logoText: {
-    fontSize: FONTS.sizes['4xl'],
-    fontFamily: FONTS.family.bold,
-    color: COLORS.black,
-    letterSpacing: -1,
+  brandName: {
+    fontSize: FONTS.sizes.displaySm,
+    fontFamily: FONTS.family.heading,
+    color: COLORS.textPrimary,
+    letterSpacing: -0.5,
   },
-  tagline: {
-    fontSize: FONTS.sizes.sm,
-    fontFamily: FONTS.family.medium,
-    color: COLORS.textSecondary,
-    marginTop: 8,
+  brandTagline: {
+    fontSize: FONTS.sizes.caption,
+    fontFamily: FONTS.family.bodySemibold,
+    color: COLORS.primary,
     letterSpacing: 3,
+    marginTop: 4,
   },
-  featuresContainer: {
-    marginTop: height * 0.07,
-    gap: 16,
+  heroSection: {
+    marginTop: height * 0.06,
+    alignItems: 'center',
+  },
+  heroTitle: {
+    fontSize: FONTS.sizes.h1,
+    fontFamily: FONTS.family.heading,
+    color: COLORS.textPrimary,
+    textAlign: 'center',
+    lineHeight: 40,
+  },
+  heroSubtitle: {
+    fontSize: FONTS.sizes.body,
+    fontFamily: FONTS.family.body,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginTop: SPACING.md,
+    lineHeight: 24,
+    paddingHorizontal: SPACING.md,
+  },
+  features: {
+    marginTop: height * 0.05,
+    gap: SPACING.md,
   },
   featureItem: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.card,
-    padding: 18,
-    borderRadius: 12,
+    padding: SPACING.md,
+    borderRadius: RADIUS.md,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  featureIconContainer: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+  featureIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: COLORS.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  featureTextContainer: {
-    marginLeft: 16,
+  featureContent: {
+    marginLeft: SPACING.md,
     flex: 1,
   },
   featureTitle: {
-    fontSize: FONTS.sizes.lg,
-    fontFamily: FONTS.family.semibold,
+    fontSize: FONTS.sizes.bodyLg,
+    fontFamily: FONTS.family.bodySemibold,
     color: COLORS.textPrimary,
-    marginBottom: 4,
   },
   featureDescription: {
-    fontSize: FONTS.sizes.sm,
-    fontFamily: FONTS.family.regular,
+    fontSize: FONTS.sizes.bodySm,
+    fontFamily: FONTS.family.body,
     color: COLORS.textSecondary,
+    marginTop: 2,
   },
-  ctaContainer: {
+  ctaSection: {
     position: 'absolute',
-    bottom: 50,
-    left: 24,
-    right: 24,
+    bottom: 40,
+    left: SPACING.lg,
+    right: SPACING.lg,
     alignItems: 'center',
   },
   ctaButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: COLORS.black,
+    backgroundColor: COLORS.primary,
     paddingVertical: 18,
     paddingHorizontal: 32,
-    borderRadius: 30,
+    borderRadius: RADIUS.xl,
     width: '100%',
     gap: 10,
   },
   ctaText: {
-    fontSize: FONTS.sizes.lg,
-    fontFamily: FONTS.family.semibold,
+    fontSize: FONTS.sizes.bodyLg,
+    fontFamily: FONTS.family.bodySemibold,
     color: COLORS.white,
   },
   disclaimer: {
-    fontSize: FONTS.sizes.sm,
-    fontFamily: FONTS.family.regular,
+    fontSize: FONTS.sizes.caption,
+    fontFamily: FONTS.family.body,
     color: COLORS.textMuted,
-    marginTop: 16,
+    marginTop: SPACING.md,
     textAlign: 'center',
   },
 });
