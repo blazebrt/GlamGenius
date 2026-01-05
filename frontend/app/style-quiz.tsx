@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { api } from '../src/services/api';
 import { useUserStore } from '../src/store/userStore';
+import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 
 export default function StyleQuizScreen() {
   const router = useRouter();
@@ -50,9 +51,21 @@ export default function StyleQuizScreen() {
   const handleSubmit = async () => {
     setSubmitting(true);
     try {
-      await api.post('/quiz/submit', { user_id: userId, answers });
-      await updateUserProfile();
-      router.replace('/(tabs)/home');
+      const quizData = {
+        user_id: userId,
+        answers: Object.entries(answers).map(([questionId, answer]) => ({
+          question_id: questionId,
+          answer,
+        })),
+      };
+      
+      const response = await api.post('/quiz/submit', quizData);
+      
+      if (response.data.profile) {
+        updateUserProfile(response.data.profile);
+      }
+      
+      router.replace('/(tabs)/profile');
     } catch (error) {
       console.error('Error submitting quiz:', error);
     } finally {
@@ -67,7 +80,7 @@ export default function StyleQuizScreen() {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#0EA5E9" />
+          <ActivityIndicator size="large" color={COLORS.black} />
           <Text style={styles.loadingText}>Loading quiz...</Text>
         </View>
       </View>
@@ -80,8 +93,8 @@ export default function StyleQuizScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => currentQuestion > 0 ? setCurrentQuestion(currentQuestion - 1) : router.back()} style={styles.headerBtn}>
-          <Ionicons name="arrow-back" size={24} color="#1E293B" />
+        <TouchableOpacity style={styles.headerBtn} onPress={() => currentQuestion > 0 ? setCurrentQuestion(currentQuestion - 1) : router.back()}>
+          <Ionicons name="arrow-back" size={22} color={COLORS.textPrimary} />
         </TouchableOpacity>
         <View style={styles.progressContainer}>
           <View style={styles.progressBar}>
@@ -92,30 +105,29 @@ export default function StyleQuizScreen() {
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        {question && (
-          <Animated.View key={question.id} entering={FadeIn}>
-            <Text style={styles.questionText}>{question.question}</Text>
-            <View style={styles.optionsContainer}>
-              {question.options?.map((option: string, index: number) => {
-                const isSelected = answers[question.id] === option;
-                return (
-                  <Animated.View key={index} entering={FadeInDown.delay(index * 50)}>
-                    <TouchableOpacity
-                      style={[styles.optionCard, isSelected && styles.optionCardActive]}
-                      onPress={() => handleAnswer(question.id, option)}
-                    >
-                      <Text style={[styles.optionText, isSelected && styles.optionTextActive]}>{option}</Text>
-                      <View style={[styles.radioOuter, isSelected && styles.radioOuterActive]}>
-                        {isSelected && <View style={styles.radioInner} />}
-                      </View>
-                    </TouchableOpacity>
-                  </Animated.View>
-                );
-              })}
-            </View>
-          </Animated.View>
-        )}
+      {/* Question Content */}
+      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        <Animated.View entering={FadeIn} key={question?.id}>
+          <Text style={styles.questionText}>{question?.question}</Text>
+          
+          <View style={styles.optionsContainer}>
+            {question?.options?.map((option: string, index: number) => (
+              <Animated.View key={option} entering={FadeInDown.delay(index * 50)}>
+                <TouchableOpacity
+                  style={[styles.optionCard, answers[question.id] === option && styles.optionCardActive]}
+                  onPress={() => handleAnswer(question.id, option)}
+                >
+                  <Text style={[styles.optionText, answers[question.id] === option && styles.optionTextActive]}>
+                    {option}
+                  </Text>
+                  <View style={[styles.radioOuter, answers[question.id] === option && styles.radioOuterActive]}>
+                    {answers[question.id] === option && <View style={styles.radioInner} />}
+                  </View>
+                </TouchableOpacity>
+              </Animated.View>
+            ))}
+          </View>
+        </Animated.View>
       </ScrollView>
 
       {/* Bottom Action */}
@@ -123,11 +135,11 @@ export default function StyleQuizScreen() {
         {currentQuestion === questions.length - 1 && canSubmit ? (
           <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={submitting}>
             {submitting ? (
-              <ActivityIndicator color="#FFFFFF" />
+              <ActivityIndicator color={COLORS.white} />
             ) : (
               <>
                 <Text style={styles.submitBtnText}>Complete Profile</Text>
-                <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
+                <Ionicons name="checkmark-circle" size={20} color={COLORS.white} />
               </>
             )}
           </TouchableOpacity>
@@ -148,30 +160,30 @@ export default function StyleQuizScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8FAFC' },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
-  loadingText: { fontSize: 14, color: '#64748B' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 },
-  headerBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
-  progressContainer: { flex: 1, marginHorizontal: 16 },
-  progressBar: { height: 6, backgroundColor: '#E2E8F0', borderRadius: 3 },
-  progressFill: { height: '100%', backgroundColor: '#0EA5E9', borderRadius: 3 },
-  progressText: { fontSize: 12, color: '#64748B', textAlign: 'center', marginTop: 6 },
-  content: { padding: 20, paddingBottom: 120 },
-  questionText: { fontSize: 22, fontWeight: '600', color: '#1E293B', marginBottom: 24, lineHeight: 30 },
-  optionsContainer: { gap: 12 },
-  optionCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFFFFF', borderRadius: 14, padding: 18, borderWidth: 2, borderColor: '#E2E8F0' },
-  optionCardActive: { borderColor: '#0EA5E9', backgroundColor: '#E0F2FE' },
-  optionText: { flex: 1, fontSize: 16, color: '#1E293B' },
-  optionTextActive: { fontWeight: '500', color: '#0284C7' },
-  radioOuter: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#E2E8F0', justifyContent: 'center', alignItems: 'center' },
-  radioOuterActive: { borderColor: '#0EA5E9' },
-  radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#0EA5E9' },
-  bottomContainer: { paddingHorizontal: 20, paddingTop: 16, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#E2E8F0' },
-  submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#0EA5E9', paddingVertical: 16, borderRadius: 28, gap: 10 },
-  submitBtnText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  navigationDots: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
-  dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#E2E8F0' },
-  dotActive: { backgroundColor: '#0EA5E9', width: 24 },
-  dotCompleted: { backgroundColor: '#10B981' },
+  container: { flex: 1, backgroundColor: COLORS.background },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: SPACING.sm },
+  loadingText: { fontSize: FONTS.sizes.body, fontFamily: FONTS.family.body, color: COLORS.textSecondary },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm },
+  headerBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.backgroundSecondary, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
+  progressContainer: { flex: 1, marginHorizontal: SPACING.md },
+  progressBar: { height: 6, backgroundColor: COLORS.border, borderRadius: 3 },
+  progressFill: { height: '100%', backgroundColor: COLORS.black, borderRadius: 3 },
+  progressText: { fontSize: FONTS.sizes.caption, fontFamily: FONTS.family.body, color: COLORS.textMuted, textAlign: 'center', marginTop: 6 },
+  content: { padding: SPACING.lg, paddingBottom: 120 },
+  questionText: { fontSize: FONTS.sizes.h2, fontFamily: FONTS.family.heading, color: COLORS.textPrimary, marginBottom: SPACING.lg, lineHeight: 32 },
+  optionsContainer: { gap: SPACING.sm },
+  optionCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.md, borderWidth: 2, borderColor: COLORS.border },
+  optionCardActive: { borderColor: COLORS.black, backgroundColor: COLORS.backgroundSecondary },
+  optionText: { flex: 1, fontSize: FONTS.sizes.bodyLg, fontFamily: FONTS.family.body, color: COLORS.textPrimary },
+  optionTextActive: { fontFamily: FONTS.family.bodySemibold, color: COLORS.black },
+  radioOuter: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: COLORS.border, justifyContent: 'center', alignItems: 'center' },
+  radioOuterActive: { borderColor: COLORS.black },
+  radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: COLORS.black },
+  bottomContainer: { paddingHorizontal: SPACING.lg, paddingTop: SPACING.md, backgroundColor: COLORS.background, borderTopWidth: 1, borderTopColor: COLORS.border },
+  submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.black, paddingVertical: 18, borderRadius: RADIUS.full, gap: SPACING.sm },
+  submitBtnText: { fontSize: FONTS.sizes.bodyLg, fontFamily: FONTS.family.bodySemibold, color: COLORS.white },
+  navigationDots: { flexDirection: 'row', justifyContent: 'center', gap: SPACING.sm },
+  dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.border },
+  dotActive: { backgroundColor: COLORS.black, width: 24 },
+  dotCompleted: { backgroundColor: COLORS.accent },
 });
