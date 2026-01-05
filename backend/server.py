@@ -950,6 +950,25 @@ async def submit_quiz(submission: QuizSubmission):
     }
 
 # Recommendations Routes
+@api_router.post("/recommendations/advice")
+async def get_advice(request: RecommendationRequest):
+    """Get AI advice based on mood, occasion and budget"""
+    user = await db.users.find_one({"id": request.user_id}) if request.user_id else {}
+    user_data = user if user else {}
+    
+    recommendations = await generate_ai_recommendations(
+        user_data,
+        request.occasion,
+        request.budget,
+        request.mood if hasattr(request, 'mood') else None
+    )
+    
+    return {
+        "recommendations": recommendations,
+        "estimated_total_cost": recommendations.get("total_estimated_cost", 2000),
+        "estimated_duration": recommendations.get("total_duration", 90)
+    }
+
 @api_router.post("/recommendations/generate")
 async def generate_recommendations(request: RecommendationRequest):
     """Generate personalized recommendations"""
