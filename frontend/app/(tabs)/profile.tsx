@@ -71,8 +71,8 @@ export default function ProfileScreen() {
           <View style={styles.profileCard}>
             {user?.skin_type ? (
               <>
-                <ProfileItem icon="water-outline" label="Skin Type" value={user.skin_type} />
-                {user?.hair_type && <ProfileItem icon="leaf-outline" label="Hair Type" value={user.hair_type} />}
+                <ProfileItem icon="sparkles-outline" label="Skin Type" value={user.skin_type} />
+                {user?.hair_type && <ProfileItem icon="cut-outline" label="Hair Type" value={user.hair_type} />}
               </>
             ) : (
               <View style={styles.emptyProfile}>
