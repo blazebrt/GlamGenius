@@ -51,8 +51,21 @@ export default function StyleQuizScreen() {
   const handleSubmit = async () => {
     setSubmitting(true);
     try {
+      let currentUserId = userId;
+      
+      // If no user exists, create one first
+      if (!currentUserId) {
+        const newUser = await createUser('Beauty Enthusiast');
+        if (newUser) {
+          currentUserId = newUser.id;
+          // Store in AsyncStorage for persistence
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          await AsyncStorage.setItem('glamgenius_user_id', currentUserId);
+        }
+      }
+      
       const quizData = {
-        user_id: userId,
+        user_id: currentUserId,
         answers: Object.entries(answers).map(([questionId, answer]) => ({
           question_id: questionId,
           answer,
@@ -61,9 +74,8 @@ export default function StyleQuizScreen() {
       
       const response = await api.post('/quiz/submit', quizData);
       
-      if (response.data.profile) {
-        updateUserProfile(response.data.profile);
-      }
+      // Fetch updated user profile
+      await fetchUser();
       
       router.replace('/(tabs)/profile');
     } catch (error) {
