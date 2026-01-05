@@ -103,10 +103,12 @@ class Recommendation(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class RecommendationRequest(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None
     occasion: str
     budget: str
+    mood: Optional[str] = None
     specific_needs: Optional[str] = None
+    budget_range: Optional[str] = None  # Alias for budget
 
 class SalonService(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
