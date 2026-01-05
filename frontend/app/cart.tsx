@@ -85,7 +85,7 @@ export default function CartScreen() {
 
   if (step === 'success') {
     return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
+      <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
         <Animated.View entering={FadeIn} style={styles.successContainer}>
           <View style={styles.successIcon}>
             <Ionicons name="checkmark-circle" size={80} color={COLORS.black} />
@@ -106,10 +106,13 @@ export default function CartScreen() {
               <Text style={styles.bookingValue}>{selectedPayment.toUpperCase()}</Text>
             </View>
           </View>
+        </Animated.View>
+        <View style={styles.successBottomBar}>
           <TouchableOpacity style={styles.primaryButton} onPress={() => router.replace('/(tabs)/home')}>
             <Text style={styles.primaryButtonText}>Go to Home</Text>
+            <Ionicons name="home" size={20} color={COLORS.white} />
           </TouchableOpacity>
-        </Animated.View>
+        </View>
       </View>
     );
   }
