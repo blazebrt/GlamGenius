@@ -147,6 +147,7 @@ export default function RecommendationsScreen() {
                   onPress={() => handleToggleCartItem({ ...addon, quantity: 1 })}
                 >
                   <Text style={styles.addonName}>{addon.name}</Text>
+                  <Text style={styles.addonDuration}>{addon.duration} min</Text>
                   <Text style={styles.addonPrice}>₹{addon.price}</Text>
                   <View style={[styles.addonCheck, inCart && styles.addonCheckActive]}>
                     <Ionicons name={inCart ? 'checkmark' : 'add'} size={14} color={inCart ? COLORS.white : COLORS.black} />
