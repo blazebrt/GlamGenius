@@ -41,6 +41,7 @@ const BUDGETS = [
   { id: 'standard', label: '₹1,500 - ₹3,000', range: 'Standard', value: '1500-3000' },
   { id: 'premium', label: '₹3,000 - ₹5,000', range: 'Premium', value: '3000-5000' },
   { id: 'luxury', label: '₹5,000+', range: 'Luxury', value: '5000+' },
+  { id: 'custom', label: 'Custom Budget', range: 'Enter your range', value: 'custom' },
 ];
 
 export default function GetAdviceScreen() {
