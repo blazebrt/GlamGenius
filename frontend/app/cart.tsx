@@ -675,6 +675,7 @@ const styles = StyleSheet.create({
     fontSize: FONTS.sizes.h1, 
     fontFamily: FONTS.family.heading, 
     color: COLORS.textPrimary,
+    textAlign: 'center',
   },
   successText: { 
     fontSize: FONTS.sizes.body, 
@@ -683,6 +684,13 @@ const styles = StyleSheet.create({
     textAlign: 'center', 
     marginTop: SPACING.sm, 
     lineHeight: 24,
+  },
+  successBottomBar: {
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    backgroundColor: COLORS.background,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
   },
   bookingDetails: { 
     backgroundColor: COLORS.backgroundSecondary, 
