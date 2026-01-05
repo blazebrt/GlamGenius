@@ -19,7 +19,7 @@ import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 const MOODS = [
   { id: 'fresh', label: 'Feel Fresh & Light', icon: 'sunny-outline', emoji: '✨' },
   { id: 'glam', label: 'Glamorous Look', icon: 'sparkles-outline', emoji: '💅' },
-  { id: 'relax', label: 'Pamper & Relax', icon: 'leaf-outline', emoji: '🧖' },
+  { id: 'relax', label: 'Pamper & Relax', icon: 'happy-outline', emoji: '🧖' },
   { id: 'quick', label: 'Quick Makeover', icon: 'flash-outline', emoji: '⚡' },
   { id: 'special', label: 'Special Occasion', icon: 'heart-outline', emoji: '🎉' },
   { id: 'custom', label: 'Something Else...', icon: 'create-outline', emoji: '✏️' },
