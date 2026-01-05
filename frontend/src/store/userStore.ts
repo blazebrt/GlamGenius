@@ -26,6 +26,7 @@ interface UserStore {
   fetchUser: () => Promise<void>;
   createUser: (name: string, email?: string) => Promise<UserProfile | null>;
   updateUser: (data: Partial<UserProfile>) => Promise<void>;
+  updateUserProfile: (data: Partial<UserProfile>) => void;
 }
 
 export const useUserStore = create<UserStore>((set, get) => ({
