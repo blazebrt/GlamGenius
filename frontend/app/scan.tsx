@@ -232,8 +232,18 @@ export default function ScanScreen() {
 
   const analyzeImage = async (base64: string) => {
     try {
+      // Fix base64 padding if needed
+      let cleanBase64 = base64;
+      if (cleanBase64.includes(',')) {
+        cleanBase64 = cleanBase64.split(',')[1];
+      }
+      // Ensure proper padding
+      while (cleanBase64.length % 4 !== 0) {
+        cleanBase64 += '=';
+      }
+      
       const response = await api.post('/scan/analyze', { 
-        image_base64: base64, 
+        image_base64: cleanBase64, 
         scan_type: scanType,
         user_id: userId || 'anonymous'
       });
@@ -245,10 +255,10 @@ export default function ScanScreen() {
       setTimeout(() => {
         setAnalysisResult(result);
         setPhase('results');
-      }, 2000);
-    } catch (error) {
-      console.log('Analysis error:', error);
-      Alert.alert('Analysis Failed', 'Please try again with better lighting.');
+      }, 2500);
+    } catch (error: any) {
+      console.log('Analysis error:', error?.response?.data || error);
+      Alert.alert('Analysis Failed', 'Please try again with better lighting and a clearer image.');
       setPhase('camera');
       setIsReady(false);
       setGuidanceText(instructions.initial);
