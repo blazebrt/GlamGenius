@@ -958,11 +958,14 @@ async def get_advice(request: RecommendationRequest):
     user = await db.users.find_one({"id": request.user_id}) if request.user_id else {}
     user_data = user if user else {}
     
+    # Use budget_range if budget not provided
+    budget = request.budget or request.budget_range or "1500-3000"
+    
     recommendations = await generate_ai_recommendations(
         user_data,
         request.occasion,
-        request.budget,
-        request.mood if hasattr(request, 'mood') else None
+        budget,
+        request.mood
     )
     
     return {
