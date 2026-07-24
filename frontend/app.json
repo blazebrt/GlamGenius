@@ -10,7 +10,8 @@
     "newArchEnabled": false,
     "jsEngine": "jsc",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.emergent.salonadvisorbeta.mwtak5"
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +19,8 @@
         "backgroundColor": "#000"
       },
       "edgeToEdgeEnabled": true,
-      "jsEngine": "jsc"
+      "jsEngine": "jsc",
+      "package": "com.emergent.salonadvisorbeta.mwtak5"
     },
     "web": {
       "bundler": "metro",
@@ -48,7 +50,9 @@
         {
           "photosPermission": "Allow GlamGenius to access your photos for AI beauty analysis"
         }
-      ]
+      ],
+      "expo-font",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

@@ -122,6 +122,12 @@ export default function RecommendationsScreen() {
                 <View style={styles.serviceInfo}>
                   <Text style={styles.serviceName}>{service.name || service.service}</Text>
                   <Text style={styles.serviceReason}>{service.reason || service.why_recommended}</Text>
+                  {(service.expected_result || service.expected_results) ? (
+                    <View style={styles.serviceOutcomeRow}>
+                      <Ionicons name="trending-up" size={13} color={COLORS.textSecondary} />
+                      <Text style={styles.serviceOutcomeText}>{service.expected_result || service.expected_results}</Text>
+                    </View>
+                  ) : null}
                 </View>
                 <View style={[styles.addBtn, inCart && styles.addBtnActive]}>
                   <Ionicons name={inCart ? 'checkmark' : 'add'} size={20} color={inCart ? COLORS.white : COLORS.black} />
@@ -138,6 +144,11 @@ export default function RecommendationsScreen() {
             <Text style={styles.sectionTitle}>Expected Outcome</Text>
           </View>
           <View style={styles.outcomeCard}>
+            {recommendations.expected_outcome ? (
+              <View style={styles.outcomeHeadline}>
+                <Text style={styles.outcomeHeadlineText}>{recommendations.expected_outcome}</Text>
+              </View>
+            ) : null}
             <View style={styles.outcomeItem}>
               <View style={styles.outcomeIcon}>
                 <Ionicons name="sparkles" size={18} color={COLORS.black} />
@@ -154,7 +165,10 @@ export default function RecommendationsScreen() {
               </View>
               <View style={styles.outcomeContent}>
                 <Text style={styles.outcomeLabel}>Long-term Benefits</Text>
-                <Text style={styles.outcomeText}>Improved skin/hair health with regular treatments over 4-6 weeks</Text>
+                <Text style={styles.outcomeText}>
+                  {(recommendations.maintenance_tips && recommendations.maintenance_tips[0])
+                    || 'Improved skin/hair health with regular treatments over 4-6 weeks'}
+                </Text>
               </View>
             </View>
             <View style={styles.outcomeDivider} />
@@ -289,9 +303,13 @@ const styles = StyleSheet.create({
   serviceInfo: { flex: 1, marginRight: SPACING.sm },
   serviceName: { fontSize: FONTS.sizes.body, fontFamily: FONTS.family.bodySemibold, color: COLORS.textPrimary },
   serviceReason: { fontSize: FONTS.sizes.bodySm, fontFamily: FONTS.family.body, color: COLORS.textSecondary, marginTop: 4 },
+  serviceOutcomeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  serviceOutcomeText: { flex: 1, fontSize: FONTS.sizes.caption, fontFamily: FONTS.family.bodyMedium, color: COLORS.textSecondary },
   addBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: COLORS.white, borderWidth: 2, borderColor: COLORS.black, justifyContent: 'center', alignItems: 'center' },
   addBtnActive: { backgroundColor: COLORS.black, borderColor: COLORS.black },
   outcomeCard: { backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border },
+  outcomeHeadline: { backgroundColor: COLORS.backgroundSecondary, borderRadius: RADIUS.md, padding: SPACING.md, marginBottom: SPACING.md },
+  outcomeHeadlineText: { fontSize: FONTS.sizes.bodySm, fontFamily: FONTS.family.body, color: COLORS.textPrimary, lineHeight: 20, fontStyle: 'italic' },
   outcomeItem: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACING.md },
   outcomeIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: COLORS.backgroundSecondary, justifyContent: 'center', alignItems: 'center' },
   outcomeContent: { flex: 1 },

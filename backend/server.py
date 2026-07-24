@@ -380,8 +380,10 @@ CRITICAL INSTRUCTIONS:
 4. Consider factors like: Fitzpatrick skin type, TEWL indicators, sebum levels, melasma patterns, follicular health
 5. Be CONSERVATIVE with scores - most people have some concerns; perfect skin/hair is rare
 6. Identify SPECIFIC problem areas with location references (e.g., "T-zone", "hairline", "crown area")
-7. Always respond in valid JSON format with detailed nested objects"""
-        ).with_model("gemini", "gemini-2.0-flash")
+7. ACCURACY RULE: Base every observation strictly on what is VISIBLE in the image. Do NOT invent conditions. If the image is unclear, low-light, or a body part is not visible, lower the confidence_score and say so in clinical_note.
+8. Provide REALISTIC, EVIDENCE-BASED outcomes - state expected improvement percentages and realistic timeframes (e.g., "15-20% reduction in 4 weeks").
+9. Always respond in valid JSON format with detailed nested objects"""
+        ).with_model("gemini", "gemini-2.5-flash")
         
         # Create temp file for image
         import tempfile
@@ -404,6 +406,7 @@ Respond in this EXACT JSON format:
     "fitzpatrick_type": "Type III/IV/V/VI",
     "skin_type": "oily/dry/combination/normal/sensitive",
     "skin_tone": "fair/wheatish/medium/dusky/deep",
+    "overall_score": 0-100,
     
     "health_scores": {
         "overall_skin_health": 0-100,
@@ -458,6 +461,12 @@ Respond in this EXACT JSON format:
         "color_palette": "warm/cool/neutral undertone recommendations"
     },
     
+    "expected_outcomes": [
+        {"timeframe": "After 1st session", "improvement": "specific visible change to expect"},
+        {"timeframe": "2-4 weeks", "improvement": "specific measurable improvement with % if possible"},
+        {"timeframe": "2-3 months", "improvement": "long-term transformation expected"}
+    ],
+    
     "red_flags": ["any concerns that need dermatologist attention"],
     "confidence_score": 0.0-1.0
 }"""
@@ -474,9 +483,12 @@ Respond in this EXACT JSON format:
     "hair_density": "low/medium/high",
     "hair_porosity": "low/medium/high",
     "hair_condition": "healthy/slightly damaged/moderately damaged/severely damaged",
+    "scalp_condition": "healthy/oily/dry/flaky/sensitive",
+    "overall_score": 0-100,
     
     "health_scores": {
         "overall_hair_health": 0-100,
+        "scalp_health": 0-100,
         "shine_level": 0-100,
         "moisture_retention": 0-100,
         "strength_elasticity": 0-100,
@@ -523,6 +535,12 @@ Respond in this EXACT JSON format:
         "leave_in_products": ["product type 1", "product type 2"],
         "weekly_treatments": ["treatment 1", "treatment 2"]
     },
+    
+    "expected_outcomes": [
+        {"timeframe": "After 1st session", "improvement": "specific visible change to expect"},
+        {"timeframe": "2-4 weeks", "improvement": "specific measurable improvement with % if possible"},
+        {"timeframe": "2-3 months", "improvement": "long-term hair transformation expected"}
+    ],
     
     "red_flags": ["any concerns needing trichologist attention"],
     "confidence_score": 0.0-1.0
@@ -788,6 +806,34 @@ async def root():
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
+def sanitize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Coerce legacy/malformed fields so UserProfile validation never 500s."""
+    if not doc:
+        return doc
+
+    def _coerce_str_list(value):
+        out = []
+        if isinstance(value, list):
+            for v in value:
+                if isinstance(v, dict):
+                    out.append(str(v.get("concern") or v.get("name") or v.get("issue") or "").strip())
+                elif v is not None:
+                    out.append(str(v))
+        elif isinstance(value, str):
+            out = [value]
+        return [o for o in out if o]
+
+    for key in ("skin_concerns", "hair_concerns"):
+        if key in doc:
+            doc[key] = _coerce_str_list(doc[key])
+
+    # Coerce simple string fields that may have been stored as dicts/lists
+    for key in ("skin_type", "hair_type", "face_shape", "budget_range"):
+        if key in doc and doc[key] is not None and not isinstance(doc[key], str):
+            doc[key] = str(doc[key])
+
+    return doc
+
 # User Profile Routes
 @api_router.post("/users", response_model=UserProfile)
 async def create_user(user: UserProfileCreate):
@@ -801,7 +847,7 @@ async def get_user(user_id: str):
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return UserProfile(**user)
+    return UserProfile(**sanitize_user_doc(user))
 
 @api_router.put("/users/{user_id}", response_model=UserProfile)
 async def update_user(user_id: str, update: UserProfileUpdate):
@@ -817,7 +863,7 @@ async def update_user(user_id: str, update: UserProfileUpdate):
         raise HTTPException(status_code=404, detail="User not found")
     
     user = await db.users.find_one({"id": user_id})
-    return UserProfile(**user)
+    return UserProfile(**sanitize_user_doc(user))
 
 # Scan Analysis Routes
 @api_router.post("/scan/analyze")
@@ -837,17 +883,28 @@ async def analyze_scan(request: ScanAnalysisRequest):
     await db.scans.insert_one(scan_result.dict())
     
     # Update user profile with scan results if applicable
+    def _to_str_list(value):
+        """Coerce concern entries (which may be dicts) into plain strings."""
+        result = []
+        if isinstance(value, list):
+            for v in value:
+                if isinstance(v, dict):
+                    result.append(str(v.get("concern") or v.get("name") or v.get("issue") or "").strip())
+                elif v:
+                    result.append(str(v))
+        return [r for r in result if r]
+
     update_data = {}
-    if "face_shape" in analysis and analysis["face_shape"]:
+    if "face_shape" in analysis and isinstance(analysis["face_shape"], str):
         update_data["face_shape"] = analysis["face_shape"]
-    if "skin_type" in analysis and analysis["skin_type"]:
+    if "skin_type" in analysis and isinstance(analysis["skin_type"], str):
         update_data["skin_type"] = analysis["skin_type"]
-    if "hair_type" in analysis and analysis["hair_type"]:
+    if "hair_type" in analysis and isinstance(analysis["hair_type"], str):
         update_data["hair_type"] = analysis["hair_type"]
     if "skin_concerns" in analysis:
-        update_data["skin_concerns"] = analysis["skin_concerns"]
+        update_data["skin_concerns"] = _to_str_list(analysis["skin_concerns"])
     if "hair_concerns" in analysis:
-        update_data["hair_concerns"] = analysis["hair_concerns"]
+        update_data["hair_concerns"] = _to_str_list(analysis["hair_concerns"])
     
     if update_data and request.user_id:
         update_data["updated_at"] = datetime.utcnow()

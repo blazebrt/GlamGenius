@@ -35,12 +35,12 @@ const SCAN_OPTIONS = [
     bgColor: COLORS.primaryLight,
   },
   {
-    id: 'scalp',
-    title: 'Scalp Scan',
+    id: 'hair',
+    title: 'Hair & Scalp Scan',
     subtitle: 'Hair & Scalp Health',
-    icon: 'scan-outline',
-    description: 'Check hair density, scalp condition, and follicle health',
-    features: ['Hair Density', 'Scalp Condition', 'Oil Balance', 'Follicle Health'],
+    icon: 'cut-outline',
+    description: 'Check hair texture, strength, scalp condition, and follicle health',
+    features: ['Hair Texture', 'Moisture & Shine', 'Scalp Condition', 'Follicle Health'],
     color: COLORS.success,
     bgColor: COLORS.successLight,
   },
@@ -160,7 +160,7 @@ export default function ScanTabScreen() {
         >
           <Ionicons name="camera" size={22} color={COLORS.white} />
           <Text style={styles.ctaButtonText}>
-            {selectedScan ? `Start ${selectedScan === 'face' ? 'Face' : 'Scalp'} Scan` : 'Select Scan Type'}
+            {selectedScan ? `Start ${selectedScan === 'face' ? 'Skin' : 'Hair & Scalp'} Scan` : 'Select Scan Type'}
           </Text>
         </TouchableOpacity>
       </Animated.View>

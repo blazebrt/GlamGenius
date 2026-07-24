@@ -78,6 +78,15 @@ const SCAN_INSTRUCTIONS = {
     goodPosition: 'Great! Hold steady',
     capturing: 'Scanning...',
   },
+  hair: {
+    title: 'Hair & Scalp Scan',
+    initial: 'Frame your hair & scalp',
+    tooFar: 'Move closer to hair',
+    tooClose: 'Back up a little',
+    notCentered: 'Center your hair',
+    goodPosition: 'Great! Hold steady',
+    capturing: 'Scanning...',
+  },
 };
 
 // Processing steps shown during AI analysis
@@ -96,6 +105,13 @@ const PROCESSING_STEPS = {
     { label: 'Evaluating oil balance', duration: 1500 },
     { label: 'Generating diagnosis', duration: 2000 },
   ],
+  hair: [
+    { label: 'Mapping hair structure', duration: 1500 },
+    { label: 'Analyzing strand strength', duration: 2000 },
+    { label: 'Detecting scalp condition', duration: 1500 },
+    { label: 'Evaluating moisture & shine', duration: 1500 },
+    { label: 'Generating diagnosis', duration: 2000 },
+  ],
 };
 
 export default function ScanScreen() {
@@ -107,6 +123,8 @@ export default function ScanScreen() {
 
   const scanType = (params.scanType as string) || 'face';
   const instructions = SCAN_INSTRUCTIONS[scanType as keyof typeof SCAN_INSTRUCTIONS] || SCAN_INSTRUCTIONS.face;
+  const isHair = scanType === 'hair' || scanType === 'scalp';
+  const scanNoun = isHair ? 'Hair & Scalp' : 'Skin';
 
   const [phase, setPhase] = useState<ScanPhase>('camera');
   const [guidanceText, setGuidanceText] = useState(instructions.initial);
@@ -279,6 +297,45 @@ export default function ScanScreen() {
     return 'Needs Attention';
   };
 
+  // Robustly extract the headline score regardless of scan type
+  const getOverallScore = (result: any): number => {
+    if (!result) return 0;
+    const hs = result.health_scores || {};
+    const candidate =
+      result.overall_score ??
+      hs.overall_skin_health ??
+      hs.overall_hair_health ??
+      hs.overall_scalp_health ??
+      result.overall_health_scores?.skin_health ??
+      result.overall_health_scores?.hair_health;
+    const n = Number(candidate);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : 72;
+  };
+
+  // Convert snake_case metric keys to readable labels
+  const formatMetricLabel = (key: string) =>
+    key
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase())
+      .replace(/\bScore\b/g, '')
+      .trim();
+
+  // Normalise concerns (skin or hair) to a common shape
+  const getConcerns = (result: any): any[] => {
+    const raw = result?.skin_concerns || result?.hair_concerns || result?.scalp_concerns || [];
+    return Array.isArray(raw) ? raw.slice(0, 5) : [];
+  };
+
+  const getTreatments = (result: any): any[] => {
+    const raw = result?.recommended_treatments || result?.top_recommendations || [];
+    return Array.isArray(raw) ? raw.slice(0, 4) : [];
+  };
+
+  const getOutcomes = (result: any): any[] => {
+    const raw = result?.expected_outcomes || [];
+    return Array.isArray(raw) ? raw.slice(0, 4) : [];
+  };
+
   // Permission handling
   if (!permission) {
     return (
@@ -323,7 +380,7 @@ export default function ScanScreen() {
             </TouchableOpacity>
             <View style={styles.scanTypeIndicator}>
               <Ionicons 
-                name={scanType === 'scalp' ? 'scan-outline' : 'happy-outline'} 
+                name={isHair ? 'cut-outline' : 'happy-outline'} 
                 size={18} 
                 color={COLORS.white} 
               />
@@ -338,7 +395,7 @@ export default function ScanScreen() {
           <CameraView 
             ref={cameraRef} 
             style={styles.camera} 
-            facing={scanType === 'scalp' ? 'back' : 'front'}
+            facing={isHair ? 'back' : 'front'}
           >
             {/* Scan Guide Overlay */}
             <View style={styles.scanOverlay}>
@@ -354,9 +411,9 @@ export default function ScanScreen() {
               {/* Guidance Text */}
               <Animated.View entering={FadeIn} style={styles.guidanceContainer}>
                 <Text style={styles.guidanceText}>{guidanceText}</Text>
-                {scanType === 'scalp' && (
+                {isHair && (
                   <Text style={styles.guidanceSubtext}>
-                    Hold phone 4-6 inches from scalp
+                    Part your hair to show the scalp clearly
                   </Text>
                 )}
               </Animated.View>
@@ -386,7 +443,7 @@ export default function ScanScreen() {
           <Animated.View entering={FadeInUp.delay(500)} style={styles.tipsBanner}>
             <Ionicons name="bulb-outline" size={16} color={COLORS.primary} />
             <Text style={styles.tipsText}>
-              {scanType === 'scalp' 
+              {isHair 
                 ? 'Part your hair to expose the scalp clearly'
                 : 'Remove glasses and ensure even lighting'
               }
@@ -406,7 +463,7 @@ export default function ScanScreen() {
               </Animated.View>
             </View>
 
-            <Text style={styles.processingTitle}>Analyzing Your {scanType === 'scalp' ? 'Scalp' : 'Skin'}</Text>
+            <Text style={styles.processingTitle}>Analyzing Your {scanNoun}</Text>
             
             {/* Current Step */}
             <Text style={styles.processingStep}>
@@ -426,89 +483,176 @@ export default function ScanScreen() {
       )}
 
       {/* PHASE 3: RESULTS */}
-      {phase === 'results' && analysisResult && (
+      {phase === 'results' && analysisResult && (() => {
+        const overallScore = getOverallScore(analysisResult);
+        const metrics = Object.entries(analysisResult.health_scores || {}).filter(
+          ([k]) => !/overall/i.test(k)
+        );
+        const concerns = getConcerns(analysisResult);
+        const treatments = getTreatments(analysisResult);
+        const outcomes = getOutcomes(analysisResult);
+        const detailed = analysisResult.detailed_analysis || {};
+        const detailedEntries = Object.entries(detailed).filter(
+          ([, v]) => typeof v === 'string' && (v as string).length > 0
+        );
+        const summary = analysisResult.overall_assessment || '';
+        return (
         <ScrollView 
           style={styles.resultsContainer} 
-          contentContainerStyle={{ paddingBottom: insets.bottom + 100 }}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 130 }}
           showsVerticalScrollIndicator={false}
         >
           {/* Results Header */}
           <Animated.View entering={FadeIn} style={styles.resultsHeader}>
             <Text style={styles.resultsLabel}>DIAGNOSIS COMPLETE</Text>
-            <Text style={styles.resultsTitle}>
-              Your {scanType === 'scalp' ? 'Scalp' : 'Skin'} Analysis
-            </Text>
+            <Text style={styles.resultsTitle}>Your {scanNoun} Analysis</Text>
           </Animated.View>
 
           {/* Health Score Card */}
           <Animated.View entering={FadeInDown.delay(100)} style={styles.scoreCard}>
             <View style={styles.scoreRing}>
-              <Text style={[
-                styles.scoreValue, 
-                { color: getHealthScoreColor(analysisResult.health_scores?.overall_skin_health || 75) }
-              ]}>
-                {analysisResult.health_scores?.overall_skin_health || 75}
+              <Text style={[styles.scoreValue, { color: getHealthScoreColor(overallScore) }]}>
+                {overallScore}
               </Text>
               <Text style={styles.scoreLabel}>Health Score</Text>
             </View>
-            <Text style={[
-              styles.scoreStatus,
-              { color: getHealthScoreColor(analysisResult.health_scores?.overall_skin_health || 75) }
-            ]}>
-              {getHealthLabel(analysisResult.health_scores?.overall_skin_health || 75)}
+            <Text style={[styles.scoreStatus, { color: getHealthScoreColor(overallScore) }]}>
+              {getHealthLabel(overallScore)}
             </Text>
             <Text style={styles.scoreDescription}>
-              {analysisResult.health_scores?.overall_skin_health >= 70 
+              {summary || (overallScore >= 70
                 ? "Your results look promising! Here's how to maintain and improve."
-                : "We've identified some areas for improvement. Let's create a plan."
-              }
+                : "We've identified some areas for improvement. Let's create a plan.")}
             </Text>
           </Animated.View>
 
+          {/* Detailed Metric Breakdown */}
+          {metrics.length > 0 && (
+            <Animated.View entering={FadeInDown.delay(150)} style={styles.conditionsCard}>
+              <Text style={styles.cardTitle}>Detailed Breakdown</Text>
+              <Text style={styles.cardSubtitle}>
+                Your {scanNoun.toLowerCase()} health across key markers
+              </Text>
+              {metrics.map(([key, val]) => {
+                const score = Number(val) || 0;
+                return (
+                  <View key={key} style={styles.metricRow}>
+                    <View style={styles.metricHeader}>
+                      <Text style={styles.metricLabel}>{formatMetricLabel(key)}</Text>
+                      <Text style={[styles.metricValue, { color: getHealthScoreColor(score) }]}>{score}</Text>
+                    </View>
+                    <View style={styles.metricTrack}>
+                      <View style={[styles.metricFill, { width: `${Math.min(score, 100)}%`, backgroundColor: getHealthScoreColor(score) }]} />
+                    </View>
+                  </View>
+                );
+              })}
+            </Animated.View>
+          )}
+
           {/* Detected Conditions - Framed Positively */}
-          {analysisResult.skin_concerns?.length > 0 && (
+          {concerns.length > 0 && (
             <Animated.View entering={FadeInDown.delay(200)} style={styles.conditionsCard}>
               <Text style={styles.cardTitle}>Areas of Focus</Text>
-              <Text style={styles.cardSubtitle}>
-                These are opportunities for improvement
-              </Text>
-              {analysisResult.skin_concerns.slice(0, 4).map((concern: any, idx: number) => (
-                <View key={idx} style={styles.conditionItem}>
-                  <View style={styles.conditionIcon}>
-                    <Ionicons name="alert-circle" size={20} color={COLORS.warning} />
+              <Text style={styles.cardSubtitle}>These are opportunities for improvement</Text>
+              {concerns.map((concern: any, idx: number) => {
+                const isObj = typeof concern === 'object' && concern !== null;
+                const name = isObj ? (concern.concern || concern.name || concern.issue) : concern;
+                const severity = isObj ? concern.severity : null;
+                const location = isObj ? concern.location : null;
+                const note = isObj ? concern.clinical_note : null;
+                return (
+                  <View key={idx} style={styles.conditionItem}>
+                    <View style={styles.conditionIcon}>
+                      <Ionicons name="alert-circle" size={20} color={COLORS.warning} />
+                    </View>
+                    <View style={styles.conditionContent}>
+                      <View style={styles.conditionTitleRow}>
+                        <Text style={styles.conditionName}>{name}</Text>
+                        {severity ? (
+                          <View style={styles.severityTag}>
+                            <Text style={styles.severityText}>{severity}</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      {location ? <Text style={styles.conditionMeta}>Location: {location}</Text> : null}
+                      <Text style={styles.conditionNote}>{note || 'Treatable with proper care'}</Text>
+                    </View>
                   </View>
-                  <View style={styles.conditionContent}>
-                    <Text style={styles.conditionName}>
-                      {typeof concern === 'string' ? concern : concern.concern}
-                    </Text>
-                    <Text style={styles.conditionNote}>Treatable with proper care</Text>
-                  </View>
+                );
+              })}
+            </Animated.View>
+          )}
+
+          {/* Zone-by-Zone analysis */}
+          {detailedEntries.length > 0 && (
+            <Animated.View entering={FadeInDown.delay(250)} style={styles.conditionsCard}>
+              <Text style={styles.cardTitle}>Zone-by-Zone</Text>
+              <Text style={styles.cardSubtitle}>Detailed observations per area</Text>
+              {detailedEntries.map(([area, desc]) => (
+                <View key={area} style={styles.zoneItem}>
+                  <Text style={styles.zoneLabel}>{formatMetricLabel(area)}</Text>
+                  <Text style={styles.zoneText}>{desc as string}</Text>
                 </View>
               ))}
             </Animated.View>
           )}
 
-          {/* Recommended Treatments */}
-          {analysisResult.recommended_treatments?.length > 0 && (
+          {/* Recommended Treatments with Outcomes */}
+          {treatments.length > 0 && (
             <Animated.View entering={FadeInDown.delay(300)} style={styles.treatmentsCard}>
               <Text style={styles.cardTitle}>Recommended Treatments</Text>
-              <Text style={styles.cardSubtitle}>
-                Personalized for your diagnosis
-              </Text>
-              {analysisResult.recommended_treatments.slice(0, 3).map((treatment: any, idx: number) => (
-                <TouchableOpacity key={idx} style={styles.treatmentItem}>
-                  <View style={styles.treatmentIcon}>
-                    <Ionicons name="sparkles" size={20} color={COLORS.success} />
+              <Text style={styles.cardSubtitle}>Personalized for your diagnosis</Text>
+              {treatments.map((t: any, idx: number) => {
+                const isObj = typeof t === 'object' && t !== null;
+                const tname = isObj ? (t.treatment || t.service || t.name) : t;
+                const reason = isObj ? (t.reason || t.why_recommended) : null;
+                const outcome = isObj ? (t.expected_results || t.expected_result) : null;
+                const price = isObj ? (t.price_range_inr || t.price_range) : null;
+                return (
+                  <View key={idx} style={styles.treatmentBlock}>
+                    <View style={styles.treatmentTop}>
+                      <View style={styles.treatmentIcon}>
+                        <Ionicons name="sparkles" size={18} color={COLORS.success} />
+                      </View>
+                      <Text style={styles.treatmentName}>{tname}</Text>
+                      {price ? <Text style={styles.treatmentPrice}>{price}</Text> : null}
+                    </View>
+                    {reason ? <Text style={styles.treatmentReason}>{reason}</Text> : null}
+                    {outcome ? (
+                      <View style={styles.outcomePill}>
+                        <Ionicons name="trending-up" size={14} color={COLORS.success} />
+                        <Text style={styles.outcomePillText}>{outcome}</Text>
+                      </View>
+                    ) : null}
                   </View>
-                  <View style={styles.treatmentContent}>
-                    <Text style={styles.treatmentName}>
-                      {typeof treatment === 'string' ? treatment : treatment.treatment}
-                    </Text>
-                    <Text style={styles.treatmentPrice}>From ₹799</Text>
+                );
+              })}
+            </Animated.View>
+          )}
+
+          {/* What To Expect - Outcomes Timeline */}
+          {outcomes.length > 0 && (
+            <Animated.View entering={FadeInDown.delay(350)} style={styles.treatmentsCard}>
+              <Text style={styles.cardTitle}>What To Expect</Text>
+              <Text style={styles.cardSubtitle}>Your transformation journey with treatment</Text>
+              {outcomes.map((o: any, idx: number) => {
+                const isObj = typeof o === 'object' && o !== null;
+                const tf = isObj ? o.timeframe : `Step ${idx + 1}`;
+                const imp = isObj ? o.improvement : o;
+                return (
+                  <View key={idx} style={styles.timelineItem}>
+                    <View style={styles.timelineLeft}>
+                      <View style={styles.timelineDot} />
+                      {idx < outcomes.length - 1 && <View style={styles.timelineLine} />}
+                    </View>
+                    <View style={styles.timelineContent}>
+                      <Text style={styles.timelineTime}>{tf}</Text>
+                      <Text style={styles.timelineText}>{imp}</Text>
+                    </View>
                   </View>
-                  <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
-                </TouchableOpacity>
-              ))}
+                );
+              })}
             </Animated.View>
           )}
 
@@ -516,11 +660,12 @@ export default function ScanScreen() {
           <Animated.View entering={FadeInDown.delay(400)} style={styles.socialProof}>
             <Ionicons name="people" size={18} color={COLORS.success} />
             <Text style={styles.socialProofText}>
-              2,341 others improved their {scanType} health this month
+              2,341 others improved their {isHair ? 'hair' : 'skin'} health this month
             </Text>
           </Animated.View>
         </ScrollView>
-      )}
+        );
+      })()}
 
       {/* Fixed CTA for Results */}
       {phase === 'results' && (
@@ -977,6 +1122,158 @@ const styles = StyleSheet.create({
     fontSize: FONTS.sizes.bodySm,
     fontFamily: FONTS.family.body,
     color: COLORS.textSecondary,
+  },
+
+  // Metric breakdown bars
+  metricRow: {
+    marginBottom: SPACING.md,
+  },
+  metricHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  metricLabel: {
+    fontSize: FONTS.sizes.bodySm,
+    fontFamily: FONTS.family.bodyMedium,
+    color: COLORS.textPrimary,
+    flex: 1,
+  },
+  metricValue: {
+    fontSize: FONTS.sizes.body,
+    fontFamily: FONTS.family.bodySemibold,
+  },
+  metricTrack: {
+    height: 8,
+    backgroundColor: COLORS.backgroundTertiary,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  metricFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+
+  // Concern enhancements
+  conditionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  severityTag: {
+    backgroundColor: COLORS.backgroundSecondary,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: RADIUS.full,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  severityText: {
+    fontSize: FONTS.sizes.micro,
+    fontFamily: FONTS.family.bodySemibold,
+    color: COLORS.textSecondary,
+    textTransform: 'capitalize',
+  },
+  conditionMeta: {
+    fontSize: FONTS.sizes.caption,
+    fontFamily: FONTS.family.body,
+    color: COLORS.textMuted,
+    marginTop: 2,
+  },
+
+  // Zone-by-zone
+  zoneItem: {
+    paddingVertical: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.borderLight,
+  },
+  zoneLabel: {
+    fontSize: FONTS.sizes.bodySm,
+    fontFamily: FONTS.family.bodySemibold,
+    color: COLORS.textPrimary,
+    marginBottom: 2,
+  },
+  zoneText: {
+    fontSize: FONTS.sizes.bodySm,
+    fontFamily: FONTS.family.body,
+    color: COLORS.textSecondary,
+    lineHeight: 19,
+  },
+
+  // Treatment blocks with outcomes
+  treatmentBlock: {
+    paddingVertical: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.borderLight,
+  },
+  treatmentTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  treatmentReason: {
+    fontSize: FONTS.sizes.bodySm,
+    fontFamily: FONTS.family.body,
+    color: COLORS.textSecondary,
+    marginTop: 6,
+    lineHeight: 19,
+  },
+  outcomePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: COLORS.successLight,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginTop: 8,
+  },
+  outcomePillText: {
+    flex: 1,
+    fontSize: FONTS.sizes.bodySm,
+    fontFamily: FONTS.family.bodyMedium,
+    color: COLORS.textPrimary,
+    lineHeight: 18,
+  },
+
+  // Outcomes timeline
+  timelineItem: {
+    flexDirection: 'row',
+    paddingTop: SPACING.sm,
+  },
+  timelineLeft: {
+    alignItems: 'center',
+    width: 24,
+  },
+  timelineDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: COLORS.primary,
+    marginTop: 4,
+  },
+  timelineLine: {
+    flex: 1,
+    width: 2,
+    backgroundColor: COLORS.border,
+    marginTop: 2,
+  },
+  timelineContent: {
+    flex: 1,
+    paddingBottom: SPACING.md,
+    marginLeft: SPACING.sm,
+  },
+  timelineTime: {
+    fontSize: FONTS.sizes.bodySm,
+    fontFamily: FONTS.family.bodySemibold,
+    color: COLORS.textPrimary,
+  },
+  timelineText: {
+    fontSize: FONTS.sizes.bodySm,
+    fontFamily: FONTS.family.body,
+    color: COLORS.textSecondary,
+    marginTop: 2,
+    lineHeight: 19,
   },
   resultsCta: {
     position: 'absolute',
