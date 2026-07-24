@@ -720,7 +720,7 @@ async def generate_ai_recommendations(user_data: Dict, occasion: str, budget: st
             Based on the user's profile, budget, occasion, and mood, recommend the best salon service bundle.
             Optimize for visible results, value for money, and client retention.
             Always respond in valid JSON format."""
-        ).with_model("gemini", "gemini-2.0-flash")
+        ).with_model("gemini", "gemini-2.5-flash")
         
         services_info = "\n".join([f"- {s['name']} ({s['category']}): {s['description']} - {s['price_range']}" for s in SALON_SERVICES])
         
