@@ -15,15 +15,26 @@ from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timedelta
 import base64
+import asyncio
 
 try:
+    from google import genai as google_genai
+    from google.genai import types as google_genai_types
+    HAS_GOOGLE_GENAI = True
+except ImportError:
+    google_genai = None  # type: ignore
+    google_genai_types = None  # type: ignore
+    HAS_GOOGLE_GENAI = False
+
+# Optional legacy Emergent wrapper (not required when GEMINI_API_KEY is set)
+try:
     from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
-    HAS_LLM = True
+    HAS_EMERGENT = True
 except ImportError:
     LlmChat = None  # type: ignore
     UserMessage = None  # type: ignore
     FileContentWithMimeType = None  # type: ignore
-    HAS_LLM = False
+    HAS_EMERGENT = False
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -33,11 +44,38 @@ db_name = os.environ.get("DB_NAME", "glamgenius")
 client = AsyncIOMotorClient(mongo_url)
 db = client[db_name]
 
+# Secrets — never log or return these values
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 FREE_SCANS_PER_MONTH = int(os.environ.get("FREE_SCANS_PER_MONTH", "2"))
 PLUS_PRICE_INR = int(os.environ.get("PLUS_PRICE_INR", "249"))
 PLUS_YEARLY_INR = int(os.environ.get("PLUS_YEARLY_INR", "1999"))
 JWT_SECRET = os.environ.get("JWT_SECRET", "glamgenius-dev-secret-change-me")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.environ.get(
+        "GEMINI_FALLBACK_MODELS",
+        "gemini-2.0-flash,gemini-1.5-flash,gemini-2.5-flash,gemini-1.5-flash-8b",
+    ).split(",")
+    if m.strip()
+]
+
+_gemini_client = None
+
+
+def _get_gemini_client():
+    """Lazy Gemini client. Key stays in process memory from env only."""
+    global _gemini_client
+    if not GEMINI_API_KEY or not HAS_GOOGLE_GENAI:
+        return None
+    if _gemini_client is None:
+        _gemini_client = google_genai.Client(api_key=GEMINI_API_KEY)
+    return _gemini_client
+
+
+def _llm_configured() -> bool:
+    return bool(GEMINI_API_KEY and HAS_GOOGLE_GENAI) or bool(EMERGENT_LLM_KEY and HAS_EMERGENT)
 
 app = FastAPI(title="GlamGenius — Personal Stylist & Wellness Coach", version="2.0.0")
 api_router = APIRouter(prefix="/api")
@@ -648,36 +686,82 @@ def _fallback_coach(scan_type: str) -> Dict[str, Any]:
     }
 
 
+async def _gemini_generate_text(prompt: str, system: str, image_base64: Optional[str] = None) -> str:
+    """Call Gemini securely on the server. Never expose the API key to clients."""
+    client = _get_gemini_client()
+    if client is None:
+        raise RuntimeError("Gemini client not configured")
+
+    parts: List[Any] = []
+    if image_base64:
+        raw = image_base64
+        if "," in raw and raw.strip().startswith("data:"):
+            raw = raw.split(",", 1)[1]
+        image_bytes = base64.b64decode(raw)
+        mime = "image/jpeg"
+        if image_bytes.startswith(b"\x89PNG"):
+            mime = "image/png"
+        elif image_bytes.startswith(b"RIFF"):
+            mime = "image/webp"
+        parts.append(google_genai_types.Part.from_bytes(data=image_bytes, mime_type=mime))
+    parts.append(prompt)
+
+    models_to_try = []
+    for m in [GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]:
+        if m and m not in models_to_try:
+            models_to_try.append(m)
+
+    last_err: Optional[Exception] = None
+    for model_name in models_to_try:
+        def _run(model=model_name):
+            return client.models.generate_content(
+                model=model,
+                contents=parts,
+                config=google_genai_types.GenerateContentConfig(
+                    system_instruction=system,
+                    temperature=0.4,
+                    response_mime_type="application/json",
+                ),
+            )
+
+        try:
+            response = await asyncio.to_thread(_run)
+            text = getattr(response, "text", None) or ""
+            if not text and getattr(response, "candidates", None):
+                try:
+                    text = response.candidates[0].content.parts[0].text
+                except Exception:
+                    text = ""
+            if text:
+                return text
+        except Exception as e:
+            last_err = e
+            msg = str(e)
+            # Try next model on quota / not-found; otherwise fail fast
+            if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "404" in msg or "NOT_FOUND" in msg:
+                logger.warning(f"Gemini model unavailable ({model_name}): {type(e).__name__}")
+                continue
+            raise
+
+    if last_err:
+        raise last_err
+    raise RuntimeError("Gemini returned empty response")
+
+
 async def analyze_image_with_gemini(
     image_base64: str,
     scan_type: str,
     context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     context = context or {}
-    try:
-        if not EMERGENT_LLM_KEY or not HAS_LLM:
-            return _fallback_coach(scan_type)
+    focus_note = {
+        "face": "Focus on face skin, tone, undertone, and visible texture. Still give basic hair style tips if hair is visible.",
+        "hair": "Focus on hair and scalp-visible areas, shine, dryness, ends. Still estimate skin tone if face is visible for colour advice.",
+        "hands": "Focus on hands, nails, and hand skin. Still give general style colour tips if face tone is unknown — say unclear.",
+        "full": "Cover face skin, hair if visible, tone, and full coach plan.",
+    }.get(scan_type, "Cover what is clearly visible.")
 
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=f"scan-{uuid.uuid4()}",
-            system_message=COACH_SYSTEM,
-        ).with_model("gemini", "gemini-2.5-flash")
-
-        import aiofiles
-
-        temp_path = f"/tmp/scan_{uuid.uuid4()}.jpg"
-        async with aiofiles.open(temp_path, "wb") as f:
-            await f.write(base64.b64decode(image_base64))
-
-        focus_note = {
-            "face": "Focus on face skin, tone, undertone, and visible texture. Still give basic hair style tips if hair is visible.",
-            "hair": "Focus on hair and scalp-visible areas, shine, dryness, ends. Still estimate skin tone if face is visible for colour advice.",
-            "hands": "Focus on hands, nails, and hand skin. Still give general style colour tips if face tone is unknown — say unclear.",
-            "full": "Cover face skin, hair if visible, tone, and full coach plan.",
-        }.get(scan_type, "Cover what is clearly visible.")
-
-        prompt = f"""Analyse this photo as a personal stylist + skin & hair wellness coach for an Indian customer.
+    prompt = f"""Analyse this photo as a personal stylist + skin & hair wellness coach for an Indian customer.
 Scan focus: {scan_type}
 {focus_note}
 
@@ -693,49 +777,73 @@ Set meta.scan_focus to "{scan_type}". Prefer common Indian foods (dal, palak, am
 For oily look / pimples prefer salicylic acid among skin ingredients when appropriate.
 No prices. No booking. No disease diagnosis."""
 
-        file_content = FileContentWithMimeType(file_path=temp_path, mime_type="image/jpeg")
-        user_message = UserMessage(text=prompt, file_contents=[file_content])
-        response = await chat.send_message(user_message)
+    try:
+        # Prefer direct Gemini API key (server-side only)
+        if GEMINI_API_KEY and HAS_GOOGLE_GENAI:
+            response_text = await _gemini_generate_text(prompt, COACH_SYSTEM, image_base64=image_base64)
+            data = _parse_llm_json(response_text)
+            if "meta" not in data:
+                data["meta"] = {}
+            data["meta"].setdefault(
+                "disclaimer",
+                "General wellness and style guidance from a photo — not medical advice.",
+            )
+            data["meta"]["scan_focus"] = scan_type
+            data["meta"]["provider"] = "gemini"
+            return data
 
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        # Optional Emergent fallback
+        if EMERGENT_LLM_KEY and HAS_EMERGENT:
+            chat = LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=f"scan-{uuid.uuid4()}",
+                system_message=COACH_SYSTEM,
+            ).with_model("gemini", "gemini-2.5-flash")
 
-        data = _parse_llm_json(response)
-        if "meta" not in data:
-            data["meta"] = {}
-        data["meta"].setdefault(
-            "disclaimer",
-            "General wellness and style guidance from a photo — not medical advice.",
-        )
-        data["meta"]["scan_focus"] = scan_type
-        return data
+            import aiofiles
+
+            temp_path = f"/tmp/scan_{uuid.uuid4()}.jpg"
+            async with aiofiles.open(temp_path, "wb") as f:
+                await f.write(base64.b64decode(image_base64))
+
+            file_content = FileContentWithMimeType(file_path=temp_path, mime_type="image/jpeg")
+            user_message = UserMessage(text=prompt, file_contents=[file_content])
+            response = await chat.send_message(user_message)
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+            data = _parse_llm_json(response)
+            if "meta" not in data:
+                data["meta"] = {}
+            data["meta"].setdefault(
+                "disclaimer",
+                "General wellness and style guidance from a photo — not medical advice.",
+            )
+            data["meta"]["scan_focus"] = scan_type
+            return data
+
+        return _fallback_coach(scan_type)
     except Exception as e:
-        logger.error(f"Coach analysis error: {e}")
+        # Never log secrets; only error class/message
+        logger.error(f"Coach analysis error: {type(e).__name__}: {e}")
         return _fallback_coach(scan_type)
 
 
 async def generate_style_plan(user_data: Dict, occasion: str, mood: str = None, budget: str = "mid") -> Dict[str, Any]:
-    try:
-        if not EMERGENT_LLM_KEY or not HAS_LLM:
-            fb = _fallback_coach("full")
-            return {
-                "headline": fb["coach_summary"]["headline"],
-                "style": fb["style"],
-                "daily_care": fb["daily_care"],
-                "care_ingredients": fb["care_ingredients"],
-                "nutrition": fb["nutrition"],
-                "salon_suggestions": fb["salon_suggestions"],
-                "top_3_actions_this_week": fb["coach_summary"]["top_3_actions_this_week"],
-                "disclaimer": fb["meta"]["disclaimer"],
-            }
+    def _fb():
+        fb = _fallback_coach("full")
+        return {
+            "headline": fb["coach_summary"]["headline"],
+            "style": fb["style"],
+            "daily_care": fb["daily_care"],
+            "care_ingredients": fb["care_ingredients"],
+            "nutrition": fb["nutrition"],
+            "salon_suggestions": fb["salon_suggestions"],
+            "top_3_actions_this_week": fb["coach_summary"]["top_3_actions_this_week"],
+            "disclaimer": fb["meta"]["disclaimer"],
+        }
 
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=f"plan-{uuid.uuid4()}",
-            system_message=COACH_SYSTEM,
-        ).with_model("gemini", "gemini-2.5-flash")
-
-        prompt = f"""Create a personal style + wellness plan for an Indian customer (no photo).
+    prompt = f"""Create a personal style + wellness plan for an Indian customer (no photo).
 Profile: age={user_data.get('age')}, skin_type={user_data.get('skin_type')}, hair_type={user_data.get('hair_type')},
 face_shape={user_data.get('face_shape')}, skin_tone={user_data.get('skin_tone')}, undertone={user_data.get('undertone')},
 skin_concerns={user_data.get('skin_concerns')}, hair_concerns={user_data.get('hair_concerns')},
@@ -756,21 +864,24 @@ Return JSON:
 }}
 No prices. No booking. No diagnosis."""
 
-        response = await chat.send_message(UserMessage(text=prompt))
-        return _parse_llm_json(response)
+    try:
+        if GEMINI_API_KEY and HAS_GOOGLE_GENAI:
+            response_text = await _gemini_generate_text(prompt, COACH_SYSTEM)
+            return _parse_llm_json(response_text)
+
+        if EMERGENT_LLM_KEY and HAS_EMERGENT:
+            chat = LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=f"plan-{uuid.uuid4()}",
+                system_message=COACH_SYSTEM,
+            ).with_model("gemini", "gemini-2.5-flash")
+            response = await chat.send_message(UserMessage(text=prompt))
+            return _parse_llm_json(response)
+
+        return _fb()
     except Exception as e:
-        logger.error(f"Style plan error: {e}")
-        fb = _fallback_coach("full")
-        return {
-            "headline": fb["coach_summary"]["headline"],
-            "style": fb["style"],
-            "daily_care": fb["daily_care"],
-            "care_ingredients": fb["care_ingredients"],
-            "nutrition": fb["nutrition"],
-            "salon_suggestions": fb["salon_suggestions"],
-            "top_3_actions_this_week": fb["coach_summary"]["top_3_actions_this_week"],
-            "disclaimer": fb["meta"]["disclaimer"],
-        }
+        logger.error(f"Style plan error: {type(e).__name__}: {e}")
+        return _fb()
 
 
 async def _ensure_scan_quota(user: Dict[str, Any]) -> Dict[str, Any]:
@@ -826,7 +937,13 @@ async def root():
 
 @api_router.get("/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "llm_configured": _llm_configured(),
+        # Never return key material — boolean only
+        "gemini_ready": bool(GEMINI_API_KEY and HAS_GOOGLE_GENAI),
+    }
 
 
 @api_router.get("/config/public")
