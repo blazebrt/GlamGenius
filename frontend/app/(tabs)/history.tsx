@@ -27,6 +27,11 @@ export default function HistoryScreen() {
   }, []);
 
   const loadHistory = async () => {
+    if (!userId) {
+      setVisits([]);
+      setLoading(false);
+      return;
+    }
     try {
       const response = await api.get(`/visits/${userId}`);
       setVisits(response.data);

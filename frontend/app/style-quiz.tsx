@@ -21,7 +21,7 @@ import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 export default function StyleQuizScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { userId, updateUserProfile, createUser, fetchUser } = useUserStore();
+  const { userId, createUser, fetchUser } = useUserStore();
 
   const [questions, setQuestions] = useState<any[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState(0);
@@ -80,9 +80,6 @@ export default function StyleQuizScreen() {
         const newUser = await createUser('Beauty Enthusiast');
         if (newUser) {
           currentUserId = newUser.id;
-          // Store in AsyncStorage for persistence
-          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-          await AsyncStorage.setItem('glamgenius_user_id', currentUserId);
         }
       }
       

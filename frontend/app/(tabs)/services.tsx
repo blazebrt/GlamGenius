@@ -28,7 +28,7 @@ const CATEGORIES = [
 export default function ServicesScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { addItem, items: cartItems, removeItem } = useCartStore();
+  const { addItem, items: cartItems, removeItem, getItemCount } = useCartStore();
   
   const [services, setServices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,7 +36,7 @@ export default function ServicesScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
 
-  const cartCount = cartItems.length;
+  const cartCount = getItemCount();
 
   const fetchServices = async () => {
     try {
@@ -210,7 +210,7 @@ export default function ServicesScreen() {
                     </View>
                     <TouchableOpacity
                       style={[styles.addButton, inCart && styles.addButtonActive]}
-                      onPress={(e) => { e.stopPropagation(); handleToggleCart(service); }}
+                      onPress={() => handleToggleCart(service)}
                     >
                       <Ionicons name={inCart ? 'checkmark' : 'add'} size={20} color={inCart ? COLORS.white : COLORS.black} />
                     </TouchableOpacity>

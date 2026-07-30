@@ -291,12 +291,15 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.0"
-  test_sequence: 2
+  version: "1.1"
+  test_sequence: 3
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Services catalog API"
+    - "Recommendations advice API"
+    - "User profile CRUD"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -308,3 +311,6 @@ agent_communication:
     message: "Enhanced AI Beauty Scan (skin + hair with outcomes) and fixed a 500 bug on GET /api/users. Please run backend tests focusing on: (1) POST /api/scan/analyze for scan_type 'face' and 'hair' returns 200 with overall_score, health_scores, recommended_treatments[].expected_results, and expected_outcomes[]. (2) GET & PUT /api/users no longer 500 even when a user has legacy dict-shaped concerns. Also do a regression pass on /api/recommendations/advice and /api/quiz/submit. Do NOT test frontend."
   - agent: "testing"
     message: "✅ ALL BACKEND TESTS PASSED (6/6). Verified: (1) AI Beauty Scan - Face & Hair analysis with gemini-2.5-flash working correctly with all required fields (overall_score, health_scores, recommended_treatments with expected_results, expected_outcomes). (2) User Profile CRUD - 500 bug fix confirmed working; previously failing user c0624af4-fcd6-4615-9e0d-167dcd0da9b5 now returns 200 with concerns as list of strings. (3) Regression tests - recommendations/advice, quiz/submit, and services endpoints all working. No major issues found. Backend is production-ready."
+  - agent: "main"
+    message: "BUGFIX PASS: Fixed cart pricing (base_price), recommendation cost/duration aliases, scan/recommend fallbacks, payment verify idempotency, paid-amount after clearCart, user session persist/logout, cart load on startup, splash asset, and removed orphan screens."
+

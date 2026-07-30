@@ -17,12 +17,17 @@ import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../../src/theme/colors'
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, fetchUser } = useUserStore();
+  const { user, fetchUser, logout } = useUserStore();
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchUser().finally(() => setLoading(false));
   }, []);
+
+  const handleLogout = async () => {
+    await logout();
+    router.replace('/');
+  };
 
   if (loading) {
     return (
@@ -99,7 +104,7 @@ export default function ProfileScreen() {
 
         {/* Logout */}
         <Animated.View entering={FadeInDown.delay(250)} style={styles.section}>
-          <TouchableOpacity style={styles.logoutBtn} onPress={() => router.replace('/')}>
+          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
             <Ionicons name="log-out-outline" size={22} color={COLORS.error} />
             <Text style={styles.logoutText}>Log Out</Text>
           </TouchableOpacity>

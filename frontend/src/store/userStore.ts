@@ -1,5 +1,8 @@
 import { create } from 'zustand';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from '../services/api';
+
+const USER_ID_KEY = 'glamgenius_user_id';
 
 interface UserProfile {
   id: string;
@@ -21,6 +24,7 @@ interface UserStore {
   userId: string;
   user: UserProfile | null;
   loading: boolean;
+  initialized: boolean;
   setUserId: (id: string) => void;
   setUser: (user: UserProfile | null) => void;
   initializeUser: () => Promise<void>;
@@ -28,36 +32,37 @@ interface UserStore {
   createUser: (name: string, email?: string) => Promise<UserProfile | null>;
   updateUser: (data: Partial<UserProfile>) => Promise<void>;
   updateUserProfile: (data: Partial<UserProfile>) => void;
+  logout: () => Promise<void>;
 }
 
 export const useUserStore = create<UserStore>((set, get) => ({
   userId: '',
   user: null,
   loading: false,
+  initialized: false,
 
   setUserId: (id: string) => set({ userId: id }),
 
   setUser: (user: UserProfile | null) => set({ user }),
 
-  // Initialize user from AsyncStorage on app start
   initializeUser: async () => {
     try {
-      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-      const storedUserId = await AsyncStorage.getItem('glamgenius_user_id');
+      const storedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       if (storedUserId) {
         set({ userId: storedUserId });
-        // Also fetch the user data
         try {
           const response = await api.get(`/users/${storedUserId}`);
           set({ user: response.data });
         } catch (error) {
           console.log('User not found in DB, clearing stored ID');
-          await AsyncStorage.removeItem('glamgenius_user_id');
-          set({ userId: '' });
+          await AsyncStorage.removeItem(USER_ID_KEY);
+          set({ userId: '', user: null });
         }
       }
     } catch (error) {
       console.error('Error initializing user:', error);
+    } finally {
+      set({ initialized: true });
     }
   },
 
@@ -82,6 +87,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
       const response = await api.post('/users', { name, email: email || '' });
       const user = response.data;
       set({ user, userId: user.id });
+      await AsyncStorage.setItem(USER_ID_KEY, user.id);
       return user;
     } catch (error) {
       console.error('Error creating user:', error);
@@ -106,11 +112,19 @@ export const useUserStore = create<UserStore>((set, get) => ({
     }
   },
 
-  // Direct profile update without API call (for immediate state updates)
   updateUserProfile: (data: Partial<UserProfile>) => {
     const { user } = get();
     if (user) {
       set({ user: { ...user, ...data } as UserProfile });
     }
+  },
+
+  logout: async () => {
+    try {
+      await AsyncStorage.multiRemove([USER_ID_KEY, 'glamgenius_cart']);
+    } catch (error) {
+      console.error('Error clearing session:', error);
+    }
+    set({ userId: '', user: null });
   },
 }));

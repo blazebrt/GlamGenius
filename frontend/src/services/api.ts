@@ -2,8 +2,14 @@ import axios from 'axios';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
+if (!BACKEND_URL) {
+  console.warn(
+    'EXPO_PUBLIC_BACKEND_URL is not set. API requests will fail until the backend URL is configured.'
+  );
+}
+
 export const api = axios.create({
-  baseURL: `${BACKEND_URL}/api`,
+  baseURL: BACKEND_URL ? `${BACKEND_URL.replace(/\/$/, '')}/api` : undefined,
   timeout: 60000, // 60 seconds for AI requests
   headers: {
     'Content-Type': 'application/json',

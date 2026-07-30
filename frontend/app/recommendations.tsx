@@ -31,7 +31,15 @@ export default function RecommendationsScreen() {
   const insets = useSafeAreaInsets();
   const { addItem, getItemCount, items, removeItem } = useCartStore();
 
-  const recommendations = params.recommendations ? JSON.parse(params.recommendations as string) : null;
+  const recommendations = React.useMemo(() => {
+    if (!params.recommendations) return null;
+    try {
+      return JSON.parse(params.recommendations as string);
+    } catch (error) {
+      console.error('Failed to parse recommendations:', error);
+      return null;
+    }
+  }, [params.recommendations]);
 
   const isInCart = (itemId: string) => items.some(item => item.id === itemId);
   const isServiceInCart = (serviceName: string) => items.some(item => item.name === serviceName);
@@ -45,8 +53,16 @@ export default function RecommendationsScreen() {
     const existingItem = items.find(item => item.name === service.name);
     if (existingItem) removeItem(existingItem.id);
     else {
-      const priceMatch = service.name?.match(/\d+/) || ['999'];
-      addItem({ id: `service-${Date.now()}`, type: 'service', name: service.name, price: parseInt(priceMatch[0]) || 999, duration: 45 });
+      const price = typeof service.price === 'number'
+        ? service.price
+        : parseInt(String(service.price || '').replace(/[^\d]/g, ''), 10) || 999;
+      addItem({
+        id: `service-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        type: 'service',
+        name: service.name,
+        price,
+        duration: service.duration || 45,
+      });
     }
   };
 
@@ -68,7 +84,18 @@ export default function RecommendationsScreen() {
 
   const services = recommendations.services || recommendations.top_recommendations || [];
   const aftercare = recommendations.aftercare_tips || [];
-  const totalCost = recommendations.estimated_total_cost || services.reduce((acc: number, s: any) => acc + (s.price || 0), 0);
+  const rawCost =
+    recommendations.estimated_total_cost ??
+    recommendations.total_estimated_cost ??
+    (params.estimated_total_cost ? Number(params.estimated_total_cost) : null) ??
+    services.reduce((acc: number, s: any) => acc + (Number(s.price) || 0), 0);
+  const totalCost = typeof rawCost === 'number' ? rawCost : Number(String(rawCost).replace(/[^\d.]/g, '')) || 0;
+  const rawDuration =
+    recommendations.estimated_duration ??
+    recommendations.total_duration ??
+    (params.estimated_duration ? Number(params.estimated_duration) : null) ??
+    90;
+  const totalDuration = typeof rawDuration === 'number' ? rawDuration : Number(String(rawDuration).replace(/[^\d]/g, '')) || 90;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -96,7 +123,7 @@ export default function RecommendationsScreen() {
           <View style={styles.summaryMeta}>
             <View style={styles.summaryMetaItem}>
               <Ionicons name="time-outline" size={16} color={COLORS.textMuted} />
-              <Text style={styles.summaryMetaText}>~{recommendations.estimated_duration || 90} min</Text>
+              <Text style={styles.summaryMetaText}>~{totalDuration} min</Text>
             </View>
             <View style={styles.summaryMetaItem}>
               <Ionicons name="sparkles-outline" size={16} color={COLORS.textMuted} />
@@ -117,7 +144,11 @@ export default function RecommendationsScreen() {
               <TouchableOpacity
                 key={index}
                 style={[styles.serviceCard, inCart && styles.serviceCardActive]}
-                onPress={() => handleToggleServiceCart({ name: service.name || service.service })}
+                onPress={() => handleToggleServiceCart({
+                  name: service.name || service.service,
+                  price: service.price,
+                  duration: service.duration,
+                })}
               >
                 <View style={styles.serviceInfo}>
                   <Text style={styles.serviceName}>{service.name || service.service}</Text>

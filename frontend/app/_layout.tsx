@@ -18,9 +18,11 @@ import {
 } from '@expo-google-fonts/inter';
 import { COLORS, FONTS } from '../src/theme/colors';
 import { useUserStore } from '../src/store/userStore';
+import { useCartStore } from '../src/store/cartStore';
 
 export default function RootLayout() {
   const { initializeUser } = useUserStore();
+  const { loadCart } = useCartStore();
   
   const [fontsLoaded] = useFonts({
     // Premium Editorial Serif for Headings
@@ -34,9 +36,10 @@ export default function RootLayout() {
     Inter_700Bold,
   });
 
-  // Initialize user from AsyncStorage on app start
+  // Initialize user + cart from AsyncStorage on app start
   useEffect(() => {
     initializeUser();
+    loadCart();
   }, []);
 
   if (!fontsLoaded) {
@@ -67,11 +70,9 @@ export default function RootLayout() {
           <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal' }} />
           <Stack.Screen name="style-quiz" />
           <Stack.Screen name="get-advice" />
-          <Stack.Screen name="quiz" />
           <Stack.Screen name="recommendations" />
           <Stack.Screen name="service-details" />
           <Stack.Screen name="cart" />
-          <Stack.Screen name="checkout" />
         </Stack>
       </SafeAreaProvider>
     </GestureHandlerRootView>
