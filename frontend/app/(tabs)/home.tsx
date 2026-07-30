@@ -107,7 +107,7 @@ export default function HomeScreen() {
         <Animated.View entering={FadeInDown.delay(240)} style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Salon ideas</Text>
-            <TouchableOpacity onPress={() => router.push('/(tabs)/services')}>
+            <TouchableOpacity onPress={() => router.push('/services')}>
               <Text style={styles.seeAll}>Browse</Text>
             </TouchableOpacity>
           </View>

@@ -3,7 +3,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, Text, StyleSheet, Platform } from 'react-native';
 import {
   useFonts,
   PlayfairDisplay_400Regular,
@@ -18,6 +18,7 @@ import {
 } from '@expo-google-fonts/inter';
 import { COLORS } from '../src/theme/colors';
 import { useUserStore } from '../src/store/userStore';
+import { ErrorBoundary } from '../src/components/ErrorBoundary';
 
 export default function RootLayout() {
   const { initializeUser } = useUserStore();
@@ -33,7 +34,7 @@ export default function RootLayout() {
   });
 
   useEffect(() => {
-    initializeUser();
+    initializeUser().catch((err) => console.warn('init user failed', err));
   }, []);
 
   if (!fontsLoaded) {
@@ -50,23 +51,31 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <StatusBar style="dark" />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: COLORS.background },
-            animation: 'slide_from_right',
+        <ErrorBoundary
+          onReset={() => {
+            if (Platform.OS === 'web' && typeof window !== 'undefined') {
+              window.location.href = '/';
+            }
           }}
         >
-          <Stack.Screen name="index" />
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="(auth)/welcome" />
-          <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal' }} />
-          <Stack.Screen name="style-quiz" />
-          <Stack.Screen name="get-advice" />
-          <Stack.Screen name="recommendations" />
-          <Stack.Screen name="service-details" />
-          <Stack.Screen name="subscription" />
-        </Stack>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: COLORS.background },
+              animation: Platform.OS === 'web' ? 'none' : 'slide_from_right',
+            }}
+          >
+            <Stack.Screen name="index" />
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="(auth)" />
+            <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal' }} />
+            <Stack.Screen name="style-quiz" />
+            <Stack.Screen name="get-advice" />
+            <Stack.Screen name="recommendations" />
+            <Stack.Screen name="service-details" />
+            <Stack.Screen name="subscription" />
+          </Stack>
+        </ErrorBoundary>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

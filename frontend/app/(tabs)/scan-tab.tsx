@@ -39,6 +39,13 @@ const SCAN_OPTIONS = [
   },
 ];
 
+// Prefer icons that exist across Ionicons sets; fall back safely in UI
+const SAFE_ICONS: Record<string, any> = {
+  face: 'happy-outline',
+  hair: 'cut-outline',
+  hands: 'fitness-outline',
+};
+
 export default function ScanTabScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -66,7 +73,7 @@ export default function ScanTabScreen() {
             >
               <View style={styles.scanCardHeader}>
                 <View style={styles.scanIconContainer}>
-                  <Ionicons name={option.icon as any} size={26} color={COLORS.primary} />
+                  <Ionicons name={(SAFE_ICONS[option.id] || option.icon) as any} size={26} color={COLORS.primary} />
                 </View>
                 <View style={styles.scanCardTitles}>
                   <Text style={styles.scanCardTitle}>{option.title}</Text>

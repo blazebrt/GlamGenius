@@ -1,8 +1,7 @@
 /**
- * GlamGenius Design System
- * Personal stylist + skin & hair wellness coach (India)
- * Warm earth + deep teal — calm, non-clinical, non-glam marketing
+ * GlamGenius Design System — web-safe shadows (no deprecated shadow* props)
  */
+import { Platform, type ViewStyle } from 'react-native';
 
 export const COLORS = {
   background: '#F7F3EC',
@@ -122,26 +121,19 @@ export const RADIUS = {
   full: 9999,
 };
 
+const webShadow = (y: number, blur: number, alpha: number): ViewStyle =>
+  Platform.OS === 'web'
+    ? ({ boxShadow: `0 ${y}px ${blur}px rgba(28, 25, 23, ${alpha})` } as ViewStyle)
+    : {
+        shadowColor: '#1C1917',
+        shadowOffset: { width: 0, height: y },
+        shadowOpacity: alpha,
+        shadowRadius: blur / 2,
+        elevation: Math.max(1, Math.round(y)),
+      };
+
 export const SHADOWS = {
-  sm: {
-    shadowColor: '#1C1917',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 1,
-  },
-  md: {
-    shadowColor: '#1C1917',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.07,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  lg: {
-    shadowColor: '#1C1917',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.09,
-    shadowRadius: 18,
-    elevation: 6,
-  },
+  sm: webShadow(1, 3, 0.05),
+  md: webShadow(4, 10, 0.07),
+  lg: webShadow(8, 18, 0.09),
 };

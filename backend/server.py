@@ -51,12 +51,12 @@ FREE_SCANS_PER_MONTH = int(os.environ.get("FREE_SCANS_PER_MONTH", "2"))
 PLUS_PRICE_INR = int(os.environ.get("PLUS_PRICE_INR", "249"))
 PLUS_YEARLY_INR = int(os.environ.get("PLUS_YEARLY_INR", "1999"))
 JWT_SECRET = os.environ.get("JWT_SECRET", "glamgenius-dev-secret-change-me")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_FALLBACK_MODELS = [
     m.strip()
     for m in os.environ.get(
         "GEMINI_FALLBACK_MODELS",
-        "gemini-2.0-flash,gemini-1.5-flash,gemini-2.5-flash,gemini-1.5-flash-8b",
+        "gemini-2.5-flash,gemini-2.5-pro",
     ).split(",")
     if m.strip()
 ]

@@ -13,12 +13,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../src/services/api';
 import { useUserStore } from '../src/store/userStore';
+import { usePlanStore } from '../src/store/planStore';
 import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 
 export default function StyleQuizScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { userId } = useUserStore();
+  const setLatestPlan = usePlanStore((s) => s.setLatestPlan);
   const [questions, setQuestions] = useState<any[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [index, setIndex] = useState(0);
@@ -61,11 +63,10 @@ export default function StyleQuizScreen() {
         budget: 'mid',
       };
       const res = await api.post('/quiz/submit', payload);
-      router.push({
-        pathname: '/recommendations',
-        params: { plan: JSON.stringify(res.data.plan) },
-      });
-    } catch {
+      setLatestPlan(res.data.plan);
+      router.push('/recommendations');
+    } catch (err) {
+      console.error('quiz submit failed', err);
       Alert.alert('Quiz error', 'Could not save your quiz. Try again.');
     } finally {
       setSubmitting(false);

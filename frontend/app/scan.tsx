@@ -8,6 +8,7 @@ import {
   ScrollView,
   Alert,
   Dimensions,
+  Platform,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,10 +18,12 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { api } from '../src/services/api';
 import { useUserStore } from '../src/store/userStore';
+import { usePlanStore } from '../src/store/planStore';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../src/theme/colors';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 type ScanPhase = 'camera' | 'processing' | 'results';
+const IS_WEB = Platform.OS === 'web';
 
 const PROCESSING_STEPS = [
   'Reading light & framing',
@@ -30,6 +33,23 @@ const PROCESSING_STEPS = [
   'Preparing your coach plan',
 ];
 
+function notify(title: string, message: string, buttons?: { text: string; onPress?: () => void; style?: string }[]) {
+  if (IS_WEB) {
+    // Alert.alert is unreliable on web; avoid uncaught issues
+    if (buttons?.length) {
+      const go = window.confirm(`${title}\n\n${message}`);
+      if (go) {
+        const action = buttons.find((b) => b.style !== 'cancel') || buttons[0];
+        action?.onPress?.();
+      }
+    } else {
+      window.alert(`${title}\n\n${message}`);
+    }
+    return;
+  }
+  Alert.alert(title, message, buttons as any);
+}
+
 export default function ScanScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -38,11 +58,13 @@ export default function ScanScreen() {
   const cameraRef = useRef<CameraView>(null);
   const scanType = (params.scanType as string) || 'face';
   const { userId, user, refreshSubscription } = useUserStore();
+  const setLatestScan = usePlanStore((s) => s.setLatestScan);
 
   const [phase, setPhase] = useState<ScanPhase>('camera');
   const [step, setStep] = useState(0);
   const [analysis, setAnalysis] = useState<any>(null);
   const [errorLimit, setErrorLimit] = useState(false);
+  const [cameraError, setCameraError] = useState(false);
 
   useEffect(() => {
     if (phase !== 'processing') return;
@@ -67,6 +89,7 @@ export default function ScanScreen() {
         budget_range: user?.budget_range,
       });
       setAnalysis(res.data.analysis);
+      setLatestScan(res.data.analysis);
       await refreshSubscription();
       setPhase('results');
     } catch (err: any) {
@@ -74,7 +97,7 @@ export default function ScanScreen() {
       if (err?.response?.status === 402 || detail?.code === 'SCAN_LIMIT') {
         setErrorLimit(true);
         setPhase('camera');
-        Alert.alert(
+        notify(
           'Free checks used',
           detail?.message || 'Upgrade to Plus for unlimited checks.',
           [
@@ -84,35 +107,47 @@ export default function ScanScreen() {
         );
         return;
       }
-      Alert.alert('Check failed', 'Could not complete analysis. Please try again.');
+      console.error('scan failed', err);
+      notify('Check failed', 'Could not complete analysis. Please try again.');
       setPhase('camera');
     }
   };
 
   const takePhoto = async () => {
     try {
+      if (IS_WEB || cameraError) {
+        await pickImage();
+        return;
+      }
       if (!permission?.granted) {
         const r = await requestPermission();
         if (!r.granted) {
-          Alert.alert('Camera needed', 'Allow camera access or upload a photo instead.');
+          notify('Camera needed', 'Allow camera access or upload a photo instead.');
           return;
         }
       }
       const photo = await cameraRef.current?.takePictureAsync({ base64: true, quality: 0.7 });
       if (photo?.base64) await runAnalysis(photo.base64);
-    } catch {
-      Alert.alert('Camera error', 'Try uploading a photo instead.');
+    } catch (err) {
+      console.warn('camera capture failed', err);
+      setCameraError(true);
+      notify('Camera error', 'Try uploading a photo instead.');
     }
   };
 
   const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      base64: true,
-      quality: 0.7,
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-    });
-    if (!result.canceled && result.assets[0]?.base64) {
-      await runAnalysis(result.assets[0].base64);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        base64: true,
+        quality: 0.7,
+        mediaTypes: ['images'],
+      });
+      if (!result.canceled && result.assets[0]?.base64) {
+        await runAnalysis(result.assets[0].base64);
+      }
+    } catch (err) {
+      console.error('image pick failed', err);
+      notify('Upload failed', 'Could not open your photo library. Try another image.');
     }
   };
 
@@ -128,13 +163,39 @@ export default function ScanScreen() {
   }
 
   if (phase === 'results' && analysis) {
-    return <ResultsView analysis={analysis} insets={insets} onClose={() => router.back()} onPlan={() => router.push('/get-advice')} />;
+    return (
+      <ResultsView
+        analysis={analysis}
+        insets={insets}
+        onClose={() => {
+          try {
+            if (router.canGoBack()) router.back();
+            else router.replace('/(tabs)/home');
+          } catch {
+            router.replace('/(tabs)/home');
+          }
+        }}
+        onPlan={() => router.push('/get-advice')}
+      />
+    );
   }
+
+  const showCamera = !IS_WEB && !cameraError && !!permission?.granted;
 
   return (
     <View style={[styles.container, { backgroundColor: COLORS.scanBackground }]}>
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn}>
+        <TouchableOpacity
+          onPress={() => {
+            try {
+              if (router.canGoBack()) router.back();
+              else router.replace('/(tabs)/scan-tab');
+            } catch {
+              router.replace('/(tabs)/home');
+            }
+          }}
+          style={styles.iconBtn}
+        >
           <Ionicons name="close" size={24} color={COLORS.white} />
         </TouchableOpacity>
         <Text style={styles.topTitle}>
@@ -143,15 +204,39 @@ export default function ScanScreen() {
         <View style={{ width: 40 }} />
       </View>
 
-      {permission?.granted ? (
-        <CameraView ref={cameraRef} style={styles.camera} facing="front">
+      {showCamera ? (
+        <CameraView
+          ref={cameraRef}
+          style={styles.camera}
+          facing="front"
+          onMountError={() => setCameraError(true)}
+        >
           <View style={styles.guideRing} />
         </CameraView>
       ) : (
         <View style={[styles.camera, styles.center]}>
-          <Text style={styles.permText}>Camera permission needed, or upload a photo.</Text>
-          <TouchableOpacity style={styles.secondaryBtn} onPress={requestPermission}>
-            <Text style={styles.secondaryBtnText}>Allow camera</Text>
+          <Ionicons name="cloud-upload-outline" size={42} color={COLORS.white} />
+          <Text style={styles.permText}>
+            {IS_WEB
+              ? 'On web, upload a clear face/hair photo to run your check.'
+              : 'Camera unavailable — upload a photo instead.'}
+          </Text>
+          {!IS_WEB && (
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={async () => {
+                try {
+                  await requestPermission();
+                } catch {
+                  setCameraError(true);
+                }
+              }}
+            >
+              <Text style={styles.secondaryBtnText}>Allow camera</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={[styles.secondaryBtn, { marginTop: 10 }]} onPress={pickImage}>
+            <Text style={styles.secondaryBtnText}>Upload photo</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -160,7 +245,9 @@ export default function ScanScreen() {
         {errorLimit && (
           <Text style={styles.limitText}>Free monthly checks used — upgrade for more.</Text>
         )}
-        <Text style={styles.hint}>Centre yourself in good light, then capture or upload.</Text>
+        <Text style={styles.hint}>
+          {IS_WEB ? 'Upload a well-lit photo to continue.' : 'Centre yourself in good light, then capture or upload.'}
+        </Text>
         <View style={styles.actions}>
           <TouchableOpacity style={styles.uploadBtn} onPress={pickImage}>
             <Ionicons name="images-outline" size={22} color={COLORS.white} />

@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../src/services/api';
 import { useUserStore } from '../src/store/userStore';
+import { usePlanStore } from '../src/store/planStore';
 import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 
 const MOODS = ['Fresh & calm', 'Festive glow', 'Polished office', 'Weekend easy', 'Wedding guest'];
@@ -27,6 +28,7 @@ export default function GetAdviceScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { userId, user } = useUserStore();
+  const setLatestPlan = usePlanStore((s) => s.setLatestPlan);
   const [mood, setMood] = useState(MOODS[0]);
   const [occasion, setOccasion] = useState('everyday');
   const [budget, setBudget] = useState('mid');
@@ -43,11 +45,10 @@ export default function GetAdviceScreen() {
         diet: user?.diet,
         city: user?.city,
       });
-      router.push({
-        pathname: '/recommendations',
-        params: { plan: JSON.stringify(res.data.plan) },
-      });
-    } catch {
+      setLatestPlan(res.data.plan);
+      router.push('/recommendations');
+    } catch (err) {
+      console.error('style plan failed', err);
       Alert.alert('Could not build plan', 'Please try again in a moment.');
     } finally {
       setLoading(false);
