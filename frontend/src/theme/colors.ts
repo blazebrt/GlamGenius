@@ -1,107 +1,81 @@
 /**
- * PREMIUM BLACK & WHITE DESIGN SYSTEM
- * ====================================
- * 
- * AESTHETIC: High-end luxury salon meets clinical precision
- * INSPIRATION: Chanel, Aesop, high-end dermatology clinics
- * 
- * FONT PAIRING:
- * - Playfair Display (Headings): Editorial elegance, fashion magazine feel
- * - Inter (Body): Clean, precise, medical-grade readability
+ * GlamGenius Design System
+ * Personal stylist + skin & hair wellness coach (India)
+ * Warm earth + deep teal — calm, non-clinical, non-glam marketing
  */
 
-// ============================================
-// COLOR PALETTE - PREMIUM BLACK & WHITE
-// ============================================
 export const COLORS = {
-  // Backgrounds
-  background: '#FFFFFF',
-  backgroundSecondary: '#FAFAFA',
-  backgroundTertiary: '#F5F5F5',
-  
-  // Cards
-  card: '#FFFFFF',
+  background: '#F7F3EC',
+  backgroundSecondary: '#EFE8DC',
+  backgroundTertiary: '#E5DCCE',
+
+  card: '#FFFCF7',
   cardElevated: '#FFFFFF',
-  cardDark: '#1A1A1A',
-  
-  // Primary - Pure Black (Premium)
-  primary: '#000000',
-  primaryLight: '#F5F5F5',
-  primaryMuted: '#E5E5E5',
-  primaryDark: '#000000',
-  
-  // Accent - Charcoal tones
-  accent: '#2D2D2D',
-  accentLight: '#F0F0F0',
-  accentMuted: '#D4D4D4',
-  accentDark: '#171717',
-  
-  // Text - High Contrast
-  textPrimary: '#0A0A0A',
-  textSecondary: '#525252',
-  textMuted: '#A3A3A3',
-  textInverse: '#FFFFFF',
-  
-  // Status - Monochrome versions
-  success: '#171717',
-  successLight: '#F5F5F5',
-  successMuted: '#E5E5E5',
-  
-  warning: '#404040',
-  warningLight: '#FAFAFA',
-  warningMuted: '#E5E5E5',
-  
-  error: '#1A1A1A',
-  errorLight: '#F5F5F5',
-  errorMuted: '#E5E5E5',
-  
-  info: '#262626',
-  infoLight: '#FAFAFA',
-  infoMuted: '#E5E5E5',
-  
-  // Health Score - Grayscale gradient
-  healthExcellent: '#000000',
-  healthGood: '#262626',
-  healthFair: '#525252',
-  healthPoor: '#737373',
-  healthCritical: '#A3A3A3',
-  
-  // Borders - Subtle definition
-  border: '#E5E5E5',
-  borderLight: '#F5F5F5',
-  borderDark: '#D4D4D4',
-  borderFocus: '#000000',
-  
-  // Utility
+  cardDark: '#1C1917',
+
+  primary: '#0F5C4C',
+  primaryLight: '#E4F0EC',
+  primaryMuted: '#B7D4CB',
+  primaryDark: '#0A3D34',
+
+  accent: '#C45C26',
+  accentLight: '#F8E8DE',
+  accentMuted: '#E8C4AE',
+  accentDark: '#8A3A12',
+
+  textPrimary: '#1C1917',
+  textSecondary: '#57534E',
+  textMuted: '#A8A29E',
+  textInverse: '#FFFCF7',
+
+  success: '#0F5C4C',
+  successLight: '#E4F0EC',
+  successMuted: '#B7D4CB',
+
+  warning: '#B45309',
+  warningLight: '#FEF3C7',
+  warningMuted: '#FDE68A',
+
+  error: '#B91C1C',
+  errorLight: '#FEE2E2',
+  errorMuted: '#FECACA',
+
+  info: '#1E3A5F',
+  infoLight: '#E8EEF5',
+  infoMuted: '#C5D0DE',
+
+  healthExcellent: '#0F5C4C',
+  healthGood: '#3D7A6C',
+  healthFair: '#B45309',
+  healthPoor: '#C45C26',
+  healthCritical: '#B91C1C',
+
+  border: '#E7DFD3',
+  borderLight: '#F0EAE0',
+  borderDark: '#D6CBB8',
+  borderFocus: '#0F5C4C',
+
   white: '#FFFFFF',
-  black: '#000000',
-  overlay: 'rgba(0, 0, 0, 0.6)',
-  overlayLight: 'rgba(0, 0, 0, 0.3)',
-  
-  // Scan Interface
+  black: '#1C1917',
+  overlay: 'rgba(28, 25, 23, 0.55)',
+  overlayLight: 'rgba(28, 25, 23, 0.28)',
+
   scanRing: '#FFFFFF',
   scanSuccess: '#FFFFFF',
   scanProcessing: '#FFFFFF',
-  scanBackground: '#000000',
+  scanBackground: '#1C1917',
 };
 
-// ============================================
-// TYPOGRAPHY - PREMIUM SCALE
-// ============================================
 export const FONTS = {
   family: {
-    // Premium Editorial Serif
     heading: 'PlayfairDisplay_700Bold',
     headingMedium: 'PlayfairDisplay_500Medium',
     headingRegular: 'PlayfairDisplay_400Regular',
-    
-    // Clean Geometric Sans
     body: 'Inter_400Regular',
     bodyMedium: 'Inter_500Medium',
     bodySemibold: 'Inter_600SemiBold',
     bodyBold: 'Inter_700Bold',
   },
-  
   sizes: {
     display: 42,
     displaySm: 36,
@@ -115,13 +89,11 @@ export const FONTS = {
     caption: 12,
     micro: 10,
   },
-  
   lineHeights: {
     tight: 1.2,
     normal: 1.5,
     relaxed: 1.7,
   },
-  
   letterSpacing: {
     tight: -0.5,
     normal: 0,
@@ -131,9 +103,6 @@ export const FONTS = {
   },
 };
 
-// ============================================
-// SPACING - 8pt Grid
-// ============================================
 export const SPACING = {
   xs: 4,
   sm: 8,
@@ -144,9 +113,6 @@ export const SPACING = {
   '3xl': 64,
 };
 
-// ============================================
-// BORDER RADIUS - Refined
-// ============================================
 export const RADIUS = {
   sm: 8,
   md: 12,
@@ -156,29 +122,26 @@ export const RADIUS = {
   full: 9999,
 };
 
-// ============================================
-// SHADOWS - Subtle & Elegant
-// ============================================
 export const SHADOWS = {
   sm: {
-    shadowColor: '#000000',
+    shadowColor: '#1C1917',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
+    shadowOpacity: 0.05,
     shadowRadius: 3,
     elevation: 1,
   },
   md: {
-    shadowColor: '#000000',
+    shadowColor: '#1C1917',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
+    shadowOpacity: 0.07,
+    shadowRadius: 10,
     elevation: 3,
   },
   lg: {
-    shadowColor: '#000000',
+    shadowColor: '#1C1917',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
+    shadowOpacity: 0.09,
+    shadowRadius: 18,
     elevation: 6,
   },
 };

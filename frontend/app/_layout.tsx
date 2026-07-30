@@ -16,25 +16,22 @@ import {
   Inter_600SemiBold,
   Inter_700Bold,
 } from '@expo-google-fonts/inter';
-import { COLORS, FONTS } from '../src/theme/colors';
+import { COLORS } from '../src/theme/colors';
 import { useUserStore } from '../src/store/userStore';
 
 export default function RootLayout() {
   const { initializeUser } = useUserStore();
-  
+
   const [fontsLoaded] = useFonts({
-    // Premium Editorial Serif for Headings
     PlayfairDisplay_400Regular,
     PlayfairDisplay_500Medium,
     PlayfairDisplay_700Bold,
-    // Geometric Sans for Body & Data
     Inter_400Regular,
     Inter_500Medium,
     Inter_600SemiBold,
     Inter_700Bold,
   });
 
-  // Initialize user from AsyncStorage on app start
   useEffect(() => {
     initializeUser();
   }, []);
@@ -42,11 +39,9 @@ export default function RootLayout() {
   if (!fontsLoaded) {
     return (
       <View style={styles.loadingContainer}>
-        <View style={styles.loadingContent}>
-          <Text style={styles.loadingLogo}>GlamGenius</Text>
-          <Text style={styles.loadingTagline}>MEDICAL BEAUTY</Text>
-          <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 24 }} />
-        </View>
+        <Text style={styles.loadingLogo}>GlamGenius</Text>
+        <Text style={styles.loadingTagline}>SKIN · HAIR · STYLE</Text>
+        <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 24 }} />
       </View>
     );
   }
@@ -63,15 +58,14 @@ export default function RootLayout() {
           }}
         >
           <Stack.Screen name="index" />
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="(auth)/welcome" />
           <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal' }} />
           <Stack.Screen name="style-quiz" />
           <Stack.Screen name="get-advice" />
-          <Stack.Screen name="quiz" />
           <Stack.Screen name="recommendations" />
           <Stack.Screen name="service-details" />
-          <Stack.Screen name="cart" />
-          <Stack.Screen name="checkout" />
+          <Stack.Screen name="subscription" />
         </Stack>
       </SafeAreaProvider>
     </GestureHandlerRootView>
@@ -85,14 +79,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: COLORS.background,
   },
-  loadingContent: {
-    alignItems: 'center',
-  },
   loadingLogo: {
     fontSize: 36,
     fontWeight: '700',
     color: COLORS.textPrimary,
-    letterSpacing: -0.5,
   },
   loadingTagline: {
     fontSize: 12,

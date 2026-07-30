@@ -2,7 +2,7 @@
   "expo": {
     "name": "GlamGenius",
     "slug": "glamgenius",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "glamgenius",
@@ -11,16 +11,16 @@
     "jsEngine": "jsc",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.salonadvisorbeta.mwtak5"
+      "bundleIdentifier": "com.glamgenius.coach"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000"
+        "backgroundColor": "#0F5C4C"
       },
       "edgeToEdgeEnabled": true,
       "jsEngine": "jsc",
-      "package": "com.emergent.salonadvisorbeta.mwtak5"
+      "package": "com.glamgenius.coach"
     },
     "web": {
       "bundler": "metro",
@@ -35,20 +35,20 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#000"
+          "backgroundColor": "#F7F3EC"
         }
       ],
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow GlamGenius to access your camera for AI beauty scans",
+          "cameraPermission": "Allow GlamGenius to access your camera for skin and hair checks",
           "microphonePermission": "Allow GlamGenius to access your microphone"
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow GlamGenius to access your photos for AI beauty analysis"
+          "photosPermission": "Allow GlamGenius to access your photos for skin and hair checks"
         }
       ],
       "expo-font",

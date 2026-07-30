@@ -1,317 +1,155 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  ActivityIndicator,
+  TextInput,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useUserStore } from '../../src/store/userStore';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../../src/theme/colors';
 
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, fetchUser } = useUserStore();
-  const [loading, setLoading] = useState(true);
+  const { user, fetchUser, updateUser, refreshSubscription } = useUserStore();
+  const [name, setName] = React.useState(user?.name || '');
+  const [city, setCity] = React.useState(user?.city || '');
+  const [diet, setDiet] = React.useState(user?.diet || 'veg');
 
   useEffect(() => {
-    fetchUser().finally(() => setLoading(false));
+    fetchUser();
+    refreshSubscription();
   }, []);
 
-  if (loading) {
-    return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-        </View>
-      </View>
-    );
-  }
+  useEffect(() => {
+    setName(user?.name || '');
+    setCity(user?.city || '');
+    setDiet(user?.diet || 'veg');
+  }, [user?.id]);
+
+  const save = async () => {
+    await updateUser({ name, city, diet });
+    Alert.alert('Saved', 'Your profile was updated.');
+  };
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <Animated.View entering={FadeIn} style={styles.header}>
-          <View style={styles.avatar}>
-            <Ionicons name="person" size={40} color={COLORS.primary} />
-          </View>
-          <Text style={styles.name}>{user?.name || 'Guest User'}</Text>
-          <Text style={styles.email}>{user?.email || 'No email set'}</Text>
-        </Animated.View>
+      <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: 120 }}>
+        <Text style={styles.label}>PROFILE</Text>
+        <Text style={styles.title}>Your style profile</Text>
 
-        {/* Health Score Card */}
-        <Animated.View entering={FadeInDown.delay(100)} style={styles.healthCard}>
-          <View style={styles.healthHeader}>
-            <Text style={styles.healthTitle}>Your Health Score</Text>
-            <Ionicons name="trending-up" size={20} color={COLORS.success} />
-          </View>
-          <View style={styles.healthScoreRing}>
-            <Text style={styles.healthScoreValue}>--</Text>
-            <Text style={styles.healthScoreLabel}>Complete a scan</Text>
-          </View>
-          <TouchableOpacity 
-            style={styles.scanButton}
-            onPress={() => router.push('/(tabs)/scan-tab')}
-          >
-            <Ionicons name="scan-outline" size={18} color={COLORS.white} />
-            <Text style={styles.scanButtonText}>Get Your Score</Text>
-          </TouchableOpacity>
-        </Animated.View>
+        <View style={styles.planCard}>
+          <Text style={styles.planTitle}>{user?.plan === 'plus' ? 'Plus member' : 'Free plan'}</Text>
+          <Text style={styles.planSub}>
+            {user?.plan === 'plus'
+              ? `Unlimited checks · renews/expires ${user?.plan_expires_at ? new Date(user.plan_expires_at).toLocaleDateString('en-IN') : ''}`
+              : `${user?.scans_remaining_free ?? 0} of ${user?.free_scans_per_month ?? 2} checks left this month`}
+          </Text>
+          {user?.plan !== 'plus' && (
+            <TouchableOpacity style={styles.upgradeBtn} onPress={() => router.push('/subscription')}>
+              <Text style={styles.upgradeText}>Upgrade to Plus</Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
-        {/* Beauty Profile */}
-        <Animated.View entering={FadeInDown.delay(150)} style={styles.section}>
-          <Text style={styles.sectionTitle}>Beauty Profile</Text>
-          <View style={styles.profileCard}>
-            {user?.skin_type ? (
-              <>
-                <ProfileItem icon="sparkles-outline" label="Skin Type" value={user.skin_type} />
-                {user?.hair_type && <ProfileItem icon="cut-outline" label="Hair Type" value={user.hair_type} />}
-              </>
-            ) : (
-              <View style={styles.emptyProfile}>
-                <Ionicons name="clipboard-outline" size={32} color={COLORS.textMuted} />
-                <Text style={styles.emptyProfileText}>Complete the Style Quiz to build your profile</Text>
-                <TouchableOpacity style={styles.quizBtn} onPress={() => router.push('/style-quiz')}>
-                  <Text style={styles.quizBtnText}>Take Quiz</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-        </Animated.View>
+        <View style={styles.stats}>
+          <Stat label="Skin tone" value={user?.skin_tone || '—'} />
+          <Stat label="Undertone" value={user?.undertone || '—'} />
+          <Stat label="Skin type" value={user?.skin_type || '—'} />
+          <Stat label="Hair" value={user?.hair_type || '—'} />
+        </View>
 
-        {/* Settings */}
-        <Animated.View entering={FadeInDown.delay(200)} style={styles.section}>
-          <Text style={styles.sectionTitle}>Settings</Text>
-          <View style={styles.menuCard}>
-            <MenuItem icon="notifications-outline" label="Notifications" />
-            <MenuItem icon="shield-checkmark-outline" label="Privacy & Security" />
-            <MenuItem icon="help-circle-outline" label="Help & Support" />
-            <MenuItem icon="document-text-outline" label="Terms & Conditions" />
-          </View>
-        </Animated.View>
+        <Text style={styles.fieldLabel}>Name</Text>
+        <TextInput style={styles.input} value={name} onChangeText={setName} placeholderTextColor={COLORS.textMuted} />
 
-        {/* Logout */}
-        <Animated.View entering={FadeInDown.delay(250)} style={styles.section}>
-          <TouchableOpacity style={styles.logoutBtn} onPress={() => router.replace('/')}>
-            <Ionicons name="log-out-outline" size={22} color={COLORS.error} />
-            <Text style={styles.logoutText}>Log Out</Text>
-          </TouchableOpacity>
-        </Animated.View>
+        <Text style={styles.fieldLabel}>City (climate tip)</Text>
+        <TextInput style={styles.input} value={city} onChangeText={setCity} placeholder="e.g. Mumbai, Delhi, Bengaluru" placeholderTextColor={COLORS.textMuted} />
 
-        <View style={{ height: 120 }} />
+        <Text style={styles.fieldLabel}>Diet</Text>
+        <View style={styles.dietRow}>
+          {['veg', 'egg', 'non-veg'].map((d) => (
+            <TouchableOpacity key={d} style={[styles.dietChip, diet === d && styles.dietChipActive]} onPress={() => setDiet(d)}>
+              <Text style={[styles.dietText, diet === d && styles.dietTextActive]}>{d}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <TouchableOpacity style={styles.saveBtn} onPress={save}>
+          <Text style={styles.saveText}>Save profile</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(auth)/welcome')}>
+          <Ionicons name="log-in-outline" size={20} color={COLORS.primary} />
+          <Text style={styles.linkText}>Sign in / create account</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/style-quiz')}>
+          <Ionicons name="clipboard-outline" size={20} color={COLORS.primary} />
+          <Text style={styles.linkText}>Retake profile quiz</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.disclaimer}>
+          GlamGenius is a personal stylist and wellness coach. It does not diagnose medical conditions.
+        </Text>
       </ScrollView>
     </View>
   );
 }
 
-function ProfileItem({ icon, label, value }: { icon: string; label: string; value: string }) {
+function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <View style={styles.profileItem}>
-      <Ionicons name={icon as any} size={22} color={COLORS.primary} />
-      <Text style={styles.profileLabel}>{label}</Text>
-      <Text style={styles.profileValue}>{value}</Text>
+    <View style={styles.stat}>
+      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={styles.statValue}>{value}</Text>
     </View>
   );
 }
 
-function MenuItem({ icon, label }: { icon: string; label: string }) {
-  return (
-    <TouchableOpacity style={styles.menuItem}>
-      <Ionicons name={icon as any} size={22} color={COLORS.textSecondary} />
-      <Text style={styles.menuText}>{label}</Text>
-      <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
-    </TouchableOpacity>
-  );
-}
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.backgroundSecondary,
+  container: { flex: 1, backgroundColor: COLORS.backgroundSecondary },
+  label: { fontFamily: FONTS.family.bodySemibold, fontSize: 11, color: COLORS.primary, letterSpacing: 1.4 },
+  title: { fontFamily: FONTS.family.heading, fontSize: 28, color: COLORS.textPrimary, marginTop: 4, marginBottom: 16 },
+  planCard: {
+    backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, padding: 16, marginBottom: 16, ...SHADOWS.md,
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+  planTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 20, color: COLORS.white },
+  planSub: { fontFamily: FONTS.family.body, fontSize: 13, color: 'rgba(255,255,255,0.85)', marginTop: 6 },
+  upgradeBtn: {
+    marginTop: 12, alignSelf: 'flex-start', backgroundColor: COLORS.white,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: RADIUS.full,
   },
-  header: {
-    alignItems: 'center',
-    paddingVertical: SPACING.xl,
-    backgroundColor: COLORS.background,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+  upgradeText: { fontFamily: FONTS.family.bodySemibold, color: COLORS.primary, fontSize: 13 },
+  stats: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+  stat: {
+    width: '48%', backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: 12,
+    borderWidth: 1, borderColor: COLORS.border,
   },
-  avatar: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: COLORS.primaryLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: SPACING.md,
+  statLabel: { fontFamily: FONTS.family.body, fontSize: 11, color: COLORS.textMuted },
+  statValue: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.textPrimary, marginTop: 4, textTransform: 'capitalize' },
+  fieldLabel: { fontFamily: FONTS.family.bodySemibold, fontSize: 13, color: COLORS.textPrimary, marginBottom: 6, marginTop: 8 },
+  input: {
+    backgroundColor: COLORS.card, borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.md,
+    paddingHorizontal: 14, paddingVertical: 12, fontFamily: FONTS.family.body, fontSize: 15, color: COLORS.textPrimary,
   },
-  name: {
-    fontSize: FONTS.sizes.h2,
-    fontFamily: FONTS.family.heading,
-    color: COLORS.textPrimary,
+  dietRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  dietChip: {
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: RADIUS.full,
+    backgroundColor: COLORS.card, borderWidth: 1, borderColor: COLORS.border,
   },
-  email: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.body,
-    color: COLORS.textSecondary,
-    marginTop: 4,
+  dietChipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  dietText: { fontFamily: FONTS.family.bodyMedium, fontSize: 13, color: COLORS.textSecondary, textTransform: 'capitalize' },
+  dietTextActive: { color: COLORS.white },
+  saveBtn: {
+    marginTop: 20, backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, paddingVertical: 14, alignItems: 'center',
   },
-  healthCard: {
-    marginHorizontal: SPACING.lg,
-    marginTop: SPACING.lg,
-    backgroundColor: COLORS.background,
-    borderRadius: RADIUS.lg,
-    padding: SPACING.lg,
-    alignItems: 'center',
-    ...SHADOWS.md,
-  },
-  healthHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: SPACING.md,
-  },
-  healthTitle: {
-    fontSize: FONTS.sizes.bodyLg,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.textPrimary,
-  },
-  healthScoreRing: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: COLORS.backgroundSecondary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: SPACING.md,
-  },
-  healthScoreValue: {
-    fontSize: FONTS.sizes.h1,
-    fontFamily: FONTS.family.heading,
-    color: COLORS.textMuted,
-  },
-  healthScoreLabel: {
-    fontSize: FONTS.sizes.caption,
-    fontFamily: FONTS.family.body,
-    color: COLORS.textMuted,
-  },
-  scanButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.primary,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: RADIUS.full,
-    gap: 8,
-  },
-  scanButtonText: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.white,
-  },
-  section: {
-    paddingHorizontal: SPACING.lg,
-    marginTop: SPACING.xl,
-  },
-  sectionTitle: {
-    fontSize: FONTS.sizes.caption,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.textMuted,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    marginBottom: SPACING.sm,
-  },
-  profileCard: {
-    backgroundColor: COLORS.background,
-    borderRadius: RADIUS.lg,
-    padding: SPACING.md,
-    ...SHADOWS.sm,
-  },
-  profileItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: SPACING.md,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.borderLight,
-    gap: SPACING.md,
-  },
-  profileLabel: {
-    flex: 1,
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.body,
-    color: COLORS.textSecondary,
-  },
-  profileValue: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.textPrimary,
-  },
-  emptyProfile: {
-    alignItems: 'center',
-    paddingVertical: SPACING.lg,
-  },
-  emptyProfileText: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.body,
-    color: COLORS.textSecondary,
-    textAlign: 'center',
-    marginTop: SPACING.sm,
-    marginBottom: SPACING.md,
-  },
-  quizBtn: {
-    backgroundColor: COLORS.primary,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: RADIUS.full,
-  },
-  quizBtnText: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.white,
-  },
-  menuCard: {
-    backgroundColor: COLORS.background,
-    borderRadius: RADIUS.lg,
-    ...SHADOWS.sm,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: SPACING.md,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.borderLight,
-    gap: SPACING.md,
-  },
-  menuText: {
-    flex: 1,
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.bodyMedium,
-    color: COLORS.textPrimary,
-  },
-  logoutBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.errorLight,
-    padding: SPACING.md,
-    borderRadius: RADIUS.lg,
-    gap: 10,
-  },
-  logoutText: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.error,
-  },
+  saveText: { fontFamily: FONTS.family.bodySemibold, color: COLORS.white, fontSize: 15 },
+  linkRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18 },
+  linkText: { fontFamily: FONTS.family.bodyMedium, fontSize: 14, color: COLORS.primary },
+  disclaimer: { marginTop: 28, fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textMuted, lineHeight: 18 },
 });
