@@ -87,6 +87,10 @@ export default function ScanScreen() {
         city: user?.city,
         diet: user?.diet,
         budget_range: user?.budget_range,
+        height_cm: user?.height_cm,
+        weight_kg: user?.weight_kg,
+        body_type: user?.body_type,
+        style_vibe: user?.style_vibe,
       });
       setAnalysis(res.data.analysis);
       setLatestScan(res.data.analysis);
@@ -275,7 +279,8 @@ function ResultsView({
   onPlan: () => void;
 }) {
   const scores = analysis.wellness_scores || {};
-  const style = analysis.style || {};
+  const fashion = analysis.fashion || {};
+  const style = analysis.fashion || analysis.style || {};
   const care = analysis.care_ingredients || {};
   const nutrition = analysis.nutrition || {};
   const salon = analysis.salon_suggestions || [];
@@ -318,7 +323,7 @@ function ResultsView({
           ))}
         </Section>
 
-        <Section title="Colours that suit you">
+        <Section title="Your fashion stylist">
           <View style={styles.colorRow}>
             {(style.best_clothing_colors || []).map((c: any, i: number) => (
               <View key={i} style={styles.colorItem}>
@@ -328,11 +333,24 @@ function ResultsView({
               </View>
             ))}
           </View>
+          {(fashion.silhouettes_for_you || []).map((s: any, i: number) => (
+            <Text key={`sil${i}`} style={styles.obsText}>· {s.silhouette} — {s.why}</Text>
+          ))}
+          {(fashion.fits_and_proportions || []).map((t: string, i: number) => (
+            <Text key={`fp${i}`} style={styles.obsWhy}>· {t}</Text>
+          ))}
           {(style.wardrobe_ideas_india || []).map((w: any, i: number) => (
             <View key={i} style={styles.outfitCard}>
               <Text style={styles.outfitOcc}>{w.occasion}</Text>
               <Text style={styles.outfitIdea}>{w.outfit_idea}</Text>
               <Text style={styles.colorWhy}>{w.why_it_works}</Text>
+              {!!w.trend_note && <Text style={styles.colorWhy}>Trend: {w.trend_note}</Text>}
+            </View>
+          ))}
+          {(fashion.current_trends_to_try || []).map((t: any, i: number) => (
+            <View key={`tr${i}`} style={styles.outfitCard}>
+              <Text style={styles.outfitOcc}>{t.trend}</Text>
+              <Text style={styles.outfitIdea}>{t.how_to_wear_it_for_you}</Text>
             </View>
           ))}
           {!!style.metal_and_accessories && (

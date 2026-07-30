@@ -95,6 +95,10 @@ class UserProfile(BaseModel):
     city: Optional[str] = None
     diet: Optional[str] = None  # veg | egg | non-veg
     budget_range: Optional[str] = None  # budget | mid | comfortable
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    body_type: Optional[str] = None  # slim | average | athletic | curvy | plus | prefer_not
+    style_vibe: Optional[str] = None  # natural | polished | festive | classic | trendy
     hair_type: Optional[str] = None
     skin_type: Optional[str] = None
     face_shape: Optional[str] = None
@@ -119,6 +123,10 @@ class UserProfileCreate(BaseModel):
     age: Optional[int] = None
     city: Optional[str] = None
     diet: Optional[str] = None
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    body_type: Optional[str] = None
+    style_vibe: Optional[str] = None
 
 
 class UserLogin(BaseModel):
@@ -134,6 +142,10 @@ class UserProfileUpdate(BaseModel):
     city: Optional[str] = None
     diet: Optional[str] = None
     budget_range: Optional[str] = None
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    body_type: Optional[str] = None
+    style_vibe: Optional[str] = None
     hair_type: Optional[str] = None
     skin_type: Optional[str] = None
     face_shape: Optional[str] = None
@@ -161,6 +173,10 @@ class ScanAnalysisRequest(BaseModel):
     diet: Optional[str] = None
     budget_range: Optional[str] = None
     occasion: Optional[str] = None
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    body_type: Optional[str] = None
+    style_vibe: Optional[str] = None
 
 
 class QuizAnswer(BaseModel):
@@ -182,6 +198,11 @@ class StylePlanRequest(BaseModel):
     budget_range: Optional[str] = "mid"
     diet: Optional[str] = None
     city: Optional[str] = None
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    body_type: Optional[str] = None
+    style_vibe: Optional[str] = None
+    follow_trends: bool = True
 
 
 class StylePlan(BaseModel):
@@ -327,28 +348,38 @@ QUIZ_QUESTIONS = [
     },
     {
         "id": "q5",
-        "question": "Your everyday style preference?",
-        "options": ["Natural & easy", "Polished & neat", "Festive & bold", "Classic Indian wear", "Low maintenance"],
+        "question": "Your everyday style vibe?",
+        "options": ["Natural & easy", "Polished & neat", "Festive & bold", "Classic Indian wear", "Trend-led / experimental"],
+    },
+    {
+        "id": "q6",
+        "question": "How would you describe your body frame (for clothing fit ideas)?",
+        "options": ["Slim / petite", "Average", "Athletic", "Curvy", "Plus / fuller", "Prefer not to say"],
     },
 ]
 
-COACH_SYSTEM = """You are GlamGenius — an Indian personal stylist and skin & hair wellness coach.
-You help people who cannot afford celebrity stylists with practical guidance on:
-- healthier-looking skin and hair (visible observations only)
-- clothing colours for Indian skin tones and undertones
-- label ingredients to look for / go easy on
-- food ingredients mapped to common Indian foods
-- optional salon visit ideas (never prices, never booking)
+COACH_SYSTEM = """You are GlamGenius — the fashion stylist, wellness coach, and skin & hair advisor in someone's pocket for India.
+These roles are connected: skin/hair appearance informs colours and grooming; body profile + occasion + trends inform clothing; food and care habits support how skin and hair look.
+
+You help people who cannot afford celebrity stylists with practical, affordable guidance on:
+1) Fashion styling — colours, silhouettes, fits, fabrics, Indian + fusion outfits for occasions
+2) Skin & hair wellness — visible observations only (not medical diagnosis)
+3) Label ingredients + Indian foods that support healthier-looking skin/hair
+4) Optional salon ideas (never prices, never booking)
+
+Use profile fields when provided: skin tone/undertone, height_cm, weight_kg, body_type, style_vibe, city/climate, diet, budget, occasion, trends interest.
 
 STRICT RULES:
 1. You are NOT a doctor. Never diagnose disease. Never invent medical conditions.
-2. Use everyday language: "pimples", "dryness", "uneven tone", "rough ends" — not clinical disease names.
-3. Base every observation strictly on what is VISIBLE. If unclear, lower confidence and say so.
+2. Use everyday language — not clinical disease names.
+3. Base photo observations on what is VISIBLE. If unclear, lower confidence and say so.
 4. Never include prices, cart, payment, or "book now".
-5. India-first: fair→deep tones, warm/cool/olive, Indian occasions, desi foods, climate.
-6. Suggest 2–4 skin and 2–4 hair care ingredients max, each tied to a visible observation.
-7. Always respond in valid JSON only matching the schema requested.
-8. Include the disclaimer string in meta.disclaimer every time.
+5. India-first: fair→deep tones, warm/cool/olive, Indian occasions (office, festive, wedding guest, interview), desi foods, climate.
+6. Clothing advice must combine skin tone + body profile (height/weight/body_type when given) + occasion + current wearable trends in India (practical, not celebrity-only).
+7. Be kind and inclusive about body — suggest flattering fits/silhouettes, never body-shame.
+8. Suggest 2–4 skin and 2–4 hair care ingredients max when relevant.
+9. Always respond in valid JSON only matching the schema requested.
+10. Include meta.disclaimer every time.
 """
 
 COACH_JSON_SCHEMA = """
@@ -358,7 +389,7 @@ Respond in this EXACT JSON format:
     "scan_focus": "face|hair|hands|full",
     "confidence": 0.0,
     "image_quality_notes": "short note",
-    "disclaimer": "General wellness and style guidance from a photo — not medical advice."
+    "disclaimer": "General fashion, wellness and style guidance — not medical advice."
   },
   "profile": {
     "face_shape": "oval|round|square|heart|oblong|diamond|unclear",
@@ -367,11 +398,13 @@ Respond in this EXACT JSON format:
     "undertone": "warm|cool|olive|neutral|unclear",
     "hair_type_visible": "straight|wavy|curly|coily|unclear",
     "hair_texture": "fine|medium|coarse|unclear",
-    "hair_density_visible": "thin|medium|thick|unclear"
+    "hair_density_visible": "thin|medium|thick|unclear",
+    "estimated_build_note": "only if visible and helpful; else unclear — never invent exact height/weight from photo"
   },
   "wellness_scores": {
     "skin_score": 0,
     "hair_score": 0,
+    "style_readiness_score": 0,
     "overall_score": 0,
     "score_notes": "one short sentence"
   },
@@ -380,9 +413,36 @@ Respond in this EXACT JSON format:
       "area": "face|t_zone|cheeks|under_eyes|hair|scalp|ends|hands|nails",
       "what_i_see": "plain language",
       "level": "mild|moderate|noticeable",
-      "why_it_matters": "everyday impact"
+      "why_it_matters": "how it connects to style or everyday care"
     }
   ],
+  "fashion": {
+    "best_clothing_colors": [
+      { "color": "name", "hex_hint": "#RRGGBB", "why": "ties to skin tone/undertone" }
+    ],
+    "colors_to_go_easy_on": [
+      { "color": "name", "why": "reason" }
+    ],
+    "silhouettes_for_you": [
+      { "silhouette": "e.g. straight kurta, A-line dress, structured blazer", "why": "uses height/body_type/occasion" }
+    ],
+    "fits_and_proportions": [
+      "practical fit tip using height/weight/body_type when provided"
+    ],
+    "wardrobe_ideas_india": [
+      {
+        "occasion": "office|festive|wedding_guest|casual|interview|date|travel",
+        "outfit_idea": "specific outfit with colours + cut",
+        "why_it_works": "tone + body + occasion",
+        "trend_note": "how it nods to a current India-wearable trend without being costume-y"
+      }
+    ],
+    "current_trends_to_try": [
+      { "trend": "name", "how_to_wear_it_for_you": "personalised take", "skip_if": "optional caution" }
+    ],
+    "metal_and_accessories": "gold|silver|both — short reason",
+    "fabric_texture_tips": ["tip for climate + look"]
+  },
   "style": {
     "best_clothing_colors": [
       { "color": "name", "hex_hint": "#RRGGBB", "why": "reason" }
@@ -461,8 +521,8 @@ Respond in this EXACT JSON format:
     }
   ],
   "coach_summary": {
-    "headline": "one line",
-    "top_3_actions_this_week": ["a1", "a2", "a3"],
+    "headline": "one line connecting fashion + skin/hair wellness",
+    "top_3_actions_this_week": ["style action", "care action", "food or habit action"],
     "recheck_in_days": 14
   }
 }
@@ -508,7 +568,19 @@ def sanitize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         if key in doc:
             doc[key] = _coerce_str_list(doc[key])
 
-    for key in ("skin_type", "hair_type", "face_shape", "budget_range", "skin_tone", "undertone", "diet", "city", "plan"):
+    for key in (
+        "skin_type",
+        "hair_type",
+        "face_shape",
+        "budget_range",
+        "skin_tone",
+        "undertone",
+        "diet",
+        "city",
+        "plan",
+        "body_type",
+        "style_vibe",
+    ):
         if key in doc and doc[key] is not None and not isinstance(doc[key], str):
             doc[key] = str(doc[key])
 
@@ -546,17 +618,59 @@ def _fallback_coach(scan_type: str) -> Dict[str, Any]:
         "wellness_scores": {
             "skin_score": 72,
             "hair_score": 70,
-            "overall_score": 71,
-            "score_notes": "Starting point for everyday skin and hair care — recheck in good light for better accuracy.",
+            "style_readiness_score": 74,
+            "overall_score": 72,
+            "score_notes": "Starting point for everyday skin, hair, and outfit confidence — add height/weight in profile for sharper clothing fits.",
         },
         "observations": [
             {
                 "area": "face",
                 "what_i_see": "Mild uneven tone and everyday dullness are common; focus on gentle cleansing and SPF.",
                 "level": "mild",
-                "why_it_matters": "Simple habits improve how skin looks day to day.",
+                "why_it_matters": "Clearer-looking skin makes your clothing colours read better in photos and real life.",
             }
         ],
+        "fashion": {
+            "best_clothing_colors": [
+                {"color": "deep teal", "hex_hint": "#0F766E", "why": "Works well with warm wheatish tones"},
+                {"color": "mustard", "hex_hint": "#E1A95F", "why": "Adds warmth without washing you out"},
+                {"color": "maroon", "hex_hint": "#7F1D1D", "why": "Strong festive and office option"},
+            ],
+            "colors_to_go_easy_on": [
+                {"color": "icy pastels", "why": "Can look washed-out on warm medium tones"}
+            ],
+            "silhouettes_for_you": [
+                {"silhouette": "Straight or lightly tapered kurta with clean neckline", "why": "Elongates the frame and keeps focus on face colours"},
+                {"silhouette": "Mid-rise trousers or palazzo with defined waist", "why": "Balances proportions for everyday Indian + fusion wear"},
+            ],
+            "fits_and_proportions": [
+                "If you're on the shorter side, keep hemlines cleaner and avoid overwhelming volume on both top and bottom.",
+                "If taller, you can carry longer kurtas, long shirts, and vertical colour blocking more easily.",
+            ],
+            "wardrobe_ideas_india": [
+                {
+                    "occasion": "office",
+                    "outfit_idea": "Deep teal cotton kurta + cream trousers + simple gold studs",
+                    "why_it_works": "Tone-flattering colour with a neat professional silhouette",
+                    "trend_note": "Quiet-luxury neutrals with one rich accent colour — very wearable in Indian offices",
+                },
+                {
+                    "occasion": "festive",
+                    "outfit_idea": "Maroon kurta set or saree with gold jewellery and soft eyes",
+                    "why_it_works": "Classic festive pairing for warm undertones",
+                    "trend_note": "Jewel tones remain strong for weddings and festivals without chasing costume trends",
+                },
+            ],
+            "current_trends_to_try": [
+                {
+                    "trend": "Elevated basics + one statement colour",
+                    "how_to_wear_it_for_you": "Keep base in cream/beige and add teal or maroon in kurta, dupatta, or bag",
+                    "skip_if": "Skip ultra-micro trends that need constant replacement on a tight budget",
+                }
+            ],
+            "metal_and_accessories": "gold — suits warm undertones",
+            "fabric_texture_tips": ["Prefer breathable cotton or linen in humid weather", "Matte fabrics if skin looks oily in photos"],
+        },
         "style": {
             "best_clothing_colors": [
                 {"color": "deep teal", "hex_hint": "#0F766E", "why": "Works well with warm wheatish tones"},
@@ -675,11 +789,11 @@ def _fallback_coach(scan_type: str) -> Dict[str, Any]:
             },
         ],
         "coach_summary": {
-            "headline": "Simple daily care, colours that suit you, and Indian foods for skin & hair.",
+            "headline": "Your pocket stylist: colours for your tone, fits for your frame, and simple skin–hair habits.",
             "top_3_actions_this_week": [
-                "Wear SPF every morning",
-                "Add one amla or guava serving most days",
-                "Try one outfit in deep teal or mustard",
+                "Wear one outfit in deep teal or mustard",
+                "Add your height & weight in Profile for sharper fit tips",
+                "SPF every morning + one amla or guava serving most days",
             ],
             "recheck_in_days": 14,
         },
@@ -761,21 +875,26 @@ async def analyze_image_with_gemini(
         "full": "Cover face skin, hair if visible, tone, and full coach plan.",
     }.get(scan_type, "Cover what is clearly visible.")
 
-    prompt = f"""Analyse this photo as a personal stylist + skin & hair wellness coach for an Indian customer.
+    prompt = f"""Analyse this photo as a pocket fashion stylist + skin & hair wellness coach for an Indian customer.
 Scan focus: {scan_type}
 {focus_note}
 
-User context (may be empty):
+User context (may be empty — use what is provided; do not invent exact height/weight from the photo):
 - City/climate hint: {context.get('city') or 'not specified'}
 - Diet: {context.get('diet') or 'not specified'}
 - Budget comfort: {context.get('budget_range') or 'not specified'}
 - Occasion interest: {context.get('occasion') or 'everyday'}
+- Height (cm): {context.get('height_cm') or 'not specified'}
+- Weight (kg): {context.get('weight_kg') or 'not specified'}
+- Body type: {context.get('body_type') or 'not specified'}
+- Style vibe: {context.get('style_vibe') or 'not specified'}
 
 {COACH_JSON_SCHEMA}
 
+Fill BOTH "fashion" (primary stylist block with silhouettes, fits, trends) AND "style" (compat colours/outfits).
 Set meta.scan_focus to "{scan_type}". Prefer common Indian foods (dal, palak, amla, guava, curd, paneer, eggs if non-veg, flax/alsi, walnuts, coconut).
 For oily look / pimples prefer salicylic acid among skin ingredients when appropriate.
-No prices. No booking. No disease diagnosis."""
+No prices. No booking. No disease diagnosis. Be body-inclusive."""
 
     try:
         # Prefer direct Gemini API key (server-side only)
@@ -834,6 +953,7 @@ async def generate_style_plan(user_data: Dict, occasion: str, mood: str = None, 
         fb = _fallback_coach("full")
         return {
             "headline": fb["coach_summary"]["headline"],
+            "fashion": fb.get("fashion"),
             "style": fb["style"],
             "daily_care": fb["daily_care"],
             "care_ingredients": fb["care_ingredients"],
@@ -843,26 +963,29 @@ async def generate_style_plan(user_data: Dict, occasion: str, mood: str = None, 
             "disclaimer": fb["meta"]["disclaimer"],
         }
 
-    prompt = f"""Create a personal style + wellness plan for an Indian customer (no photo).
-Profile: age={user_data.get('age')}, skin_type={user_data.get('skin_type')}, hair_type={user_data.get('hair_type')},
-face_shape={user_data.get('face_shape')}, skin_tone={user_data.get('skin_tone')}, undertone={user_data.get('undertone')},
-skin_concerns={user_data.get('skin_concerns')}, hair_concerns={user_data.get('hair_concerns')},
-diet={user_data.get('diet')}, city={user_data.get('city')}, budget={budget}
+    prompt = f"""Create a pocket fashion stylist + wellness plan for an Indian customer (no photo).
+Profile:
+- age={user_data.get('age')}, skin_type={user_data.get('skin_type')}, hair_type={user_data.get('hair_type')}
+- face_shape={user_data.get('face_shape')}, skin_tone={user_data.get('skin_tone')}, undertone={user_data.get('undertone')}
+- height_cm={user_data.get('height_cm')}, weight_kg={user_data.get('weight_kg')}, body_type={user_data.get('body_type')}
+- style_vibe={user_data.get('style_vibe')}, skin_concerns={user_data.get('skin_concerns')}, hair_concerns={user_data.get('hair_concerns')}
+- diet={user_data.get('diet')}, city={user_data.get('city')}, budget={budget}, follow_trends={user_data.get('follow_trends', True)}
 Occasion: {occasion}
 Mood: {mood or 'fresh and confident'}
 
-Return JSON:
+Return JSON with:
 {{
-  "headline": "one line",
-  "style": {{ same shape as style block in coach schema }},
+  "headline": "one line connecting fashion + skin/hair",
+  "fashion": {{ same as fashion block in coach schema — colours, silhouettes, fits, outfits, trends }},
+  "style": {{ compat colours/outfits block }},
   "daily_care": {{ morning, evening, weekly, climate_note }},
   "care_ingredients": {{ for_skin, for_hair, ingredients_to_go_easy_on, simple_shopping_rule }},
   "nutrition": {{ goal, ingredients with indian_foods, simple_plate_ideas, hydration, diet_fit }},
   "salon_suggestions": [{{ service, for, why_suggest, how_often_idea, priority }}],
-  "top_3_actions_this_week": ["a","b","c"],
-  "disclaimer": "General wellness and style guidance — not medical advice."
+  "top_3_actions_this_week": ["style", "care", "food/habit"],
+  "disclaimer": "General fashion, wellness and style guidance — not medical advice."
 }}
-No prices. No booking. No diagnosis."""
+Combine skin tone + body profile + occasion + wearable India trends. No prices. No booking. No diagnosis. Be body-inclusive."""
 
     try:
         if GEMINI_API_KEY and HAS_GOOGLE_GENAI:
@@ -1046,6 +1169,10 @@ async def analyze_scan(request: ScanAnalysisRequest):
         "diet": request.diet or (user or {}).get("diet"),
         "budget_range": request.budget_range or (user or {}).get("budget_range"),
         "occasion": request.occasion,
+        "height_cm": request.height_cm if request.height_cm is not None else (user or {}).get("height_cm"),
+        "weight_kg": request.weight_kg if request.weight_kg is not None else (user or {}).get("weight_kg"),
+        "body_type": request.body_type or (user or {}).get("body_type"),
+        "style_vibe": request.style_vibe or (user or {}).get("style_vibe"),
     }
     analysis = await analyze_image_with_gemini(request.image_base64, request.scan_type, context)
 
@@ -1178,8 +1305,27 @@ async def submit_quiz(submission: QuizSubmission):
     if answer_map.get("q4") in diet_map:
         update_data["diet"] = diet_map[answer_map["q4"]]
 
-    if answer_map.get("q5"):
+    vibe_map = {
+        "Natural & easy": "natural",
+        "Polished & neat": "polished",
+        "Festive & bold": "festive",
+        "Classic Indian wear": "classic",
+        "Trend-led / experimental": "trendy",
+    }
+    if answer_map.get("q5") in vibe_map:
+        update_data["style_vibe"] = vibe_map[answer_map["q5"]]
         update_data["preferences"] = {"style_preference": answer_map["q5"]}
+
+    body_map = {
+        "Slim / petite": "slim",
+        "Average": "average",
+        "Athletic": "athletic",
+        "Curvy": "curvy",
+        "Plus / fuller": "plus",
+        "Prefer not to say": "prefer_not",
+    }
+    if answer_map.get("q6") in body_map:
+        update_data["body_type"] = body_map[answer_map["q6"]]
 
     if submission.user_id:
         await db.users.update_one({"id": submission.user_id}, {"$set": update_data}, upsert=True)
@@ -1207,6 +1353,26 @@ async def create_style_plan(request: StylePlanRequest):
         user["diet"] = request.diet
     if request.city:
         user["city"] = request.city
+    if request.height_cm is not None:
+        user["height_cm"] = request.height_cm
+    if request.weight_kg is not None:
+        user["weight_kg"] = request.weight_kg
+    if request.body_type:
+        user["body_type"] = request.body_type
+    if request.style_vibe:
+        user["style_vibe"] = request.style_vibe
+    user["follow_trends"] = request.follow_trends
+
+    # Persist body profile when provided with a user
+    if request.user_id:
+        persist = {
+            k: user[k]
+            for k in ("diet", "city", "height_cm", "weight_kg", "body_type", "style_vibe")
+            if k in user and user[k] is not None
+        }
+        if persist:
+            persist["updated_at"] = datetime.utcnow()
+            await db.users.update_one({"id": request.user_id}, {"$set": persist})
 
     plan = await generate_style_plan(
         user,

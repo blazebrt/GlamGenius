@@ -75,20 +75,20 @@ export default function WelcomeScreen() {
           <Ionicons name="leaf-outline" size={30} color={COLORS.primary} />
         </View>
         <Text style={styles.brandName}>GlamGenius</Text>
-        <Text style={styles.brandTagline}>SKIN · HAIR · STYLE</Text>
+        <Text style={styles.brandTagline}>STYLIST · WELLNESS · SKIN & HAIR</Text>
       </Animated.View>
 
       <Animated.View entering={FadeInDown.delay(400)} style={styles.heroSection}>
-        <Text style={styles.heroTitle}>Your personal{'\n'}stylist &{'\n'}wellness coach</Text>
+        <Text style={styles.heroTitle}>Your fashion{'\n'}stylist in{'\n'}your pocket</Text>
         <Text style={styles.heroSubtitle}>
-          Skin and hair checks, colours that suit you, label ingredients, and Indian foods — without celebrity budgets.
+          One coach for clothing that flatters your tone & frame, skin & hair habits, and occasion-ready looks — without celebrity budgets.
         </Text>
       </Animated.View>
 
       <Animated.View entering={FadeInDown.delay(600)} style={styles.features}>
-        <FeatureItem icon="scan-outline" title="Skin & hair check" description="Visible observations, not a diagnosis" />
-        <FeatureItem icon="color-palette-outline" title="Colours for your tone" description="Indian wardrobe ideas that flatter you" />
-        <FeatureItem icon="nutrition-outline" title="Food & ingredients" description="Desi plates + what to look for on labels" />
+        <FeatureItem icon="shirt-outline" title="Fashion stylist" description="Colours, fits, occasions & wearable trends" />
+        <FeatureItem icon="scan-outline" title="Skin & hair advisor" description="Visible checks that inform your style" />
+        <FeatureItem icon="nutrition-outline" title="Wellness coach" description="Ingredients, Indian foods & simple routines" />
       </Animated.View>
 
       <Animated.View entering={FadeInUp.delay(800)} style={[styles.ctaSection, { paddingBottom: insets.bottom + 20 }]}>

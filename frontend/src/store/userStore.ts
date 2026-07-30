@@ -11,6 +11,10 @@ export interface UserProfile {
   city?: string;
   diet?: string;
   budget_range?: string;
+  height_cm?: number;
+  weight_kg?: number;
+  body_type?: string;
+  style_vibe?: string;
   hair_type?: string;
   skin_type?: string;
   face_shape?: string;
@@ -94,6 +98,10 @@ export const useUserStore = create<UserStore>((set, get) => ({
         age: extra?.age,
         city: extra?.city,
         diet: extra?.diet,
+        height_cm: extra?.height_cm,
+        weight_kg: extra?.weight_kg,
+        body_type: extra?.body_type,
+        style_vibe: extra?.style_vibe,
       });
       const user = response.data;
       await AsyncStorage.setItem('glamgenius_user_id', user.id);

@@ -15,17 +15,17 @@ import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../../src/theme/colors'
 
 const QUICK_ACTIONS = [
   { id: 'scan', icon: 'scan-outline', label: 'Skin check', route: '/(tabs)/scan-tab', color: COLORS.primary },
-  { id: 'plan', icon: 'sparkles-outline', label: 'Style plan', route: '/get-advice', color: COLORS.accent },
-  { id: 'quiz', icon: 'clipboard-outline', label: 'Profile quiz', route: '/style-quiz', color: COLORS.info },
+  { id: 'plan', icon: 'shirt-outline', label: 'Outfit plan', route: '/get-advice', color: COLORS.accent },
+  { id: 'quiz', icon: 'clipboard-outline', label: 'Stylist quiz', route: '/style-quiz', color: COLORS.info },
   { id: 'plus', icon: 'diamond-outline', label: 'Go Plus', route: '/subscription', color: COLORS.warning },
 ];
 
 const TIPS = [
-  { tip: 'SPF every morning helps skin look more even over time — even on cloudy days.', source: 'Everyday care' },
-  { tip: 'A 5-minute scalp massage with light oil can feel calming before wash day.', source: 'Hair habit' },
+  { tip: 'Add height & weight in Profile — your stylist uses them with skin tone for better outfit fits.', source: 'Stylist tip' },
+  { tip: 'SPF every morning helps skin look more even — and your clothing colours photograph better.', source: 'Everyday care' },
   { tip: 'Amla, guava, and seasonal citrus are easy vitamin C options in Indian kitchens.', source: 'Food tip' },
   { tip: 'If skin looks oily, check labels for niacinamide or salicylic acid — start slow.', source: 'Label tip' },
-  { tip: 'Deep teal, mustard, and maroon often flatter warm wheatish to medium tones.', source: 'Style tip' },
+  { tip: 'Deep teal, mustard, and maroon often flatter warm wheatish to medium tones.', source: 'Colour tip' },
 ];
 
 const SALON_PREVIEWS = [

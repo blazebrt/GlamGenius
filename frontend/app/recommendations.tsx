@@ -30,11 +30,12 @@ export default function RecommendationsScreen() {
     return {};
   }, [latestPlan, planParam]);
 
-  const style = plan.style || {};
+  const style = plan.fashion || plan.style || {};
   const nutrition = plan.nutrition || {};
   const care = plan.care_ingredients || {};
   const salon = plan.salon_suggestions || [];
   const daily = plan.daily_care || {};
+  const fashion = plan.fashion || {};
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -63,11 +64,25 @@ export default function RecommendationsScreen() {
             {(style.best_clothing_colors || []).map((c: any, i: number) => (
               <Text key={i} style={styles.line}>• {c.color} — {c.why}</Text>
             ))}
-            {(style.wardrobe_ideas_india || []).map((w: any, i: number) => (
+            {(fashion.silhouettes_for_you || []).map((s: any, i: number) => (
+              <Text key={`sil${i}`} style={styles.line}>Fit · {s.silhouette} — {s.why}</Text>
+            ))}
+            {(fashion.fits_and_proportions || []).map((t: string, i: number) => (
+              <Text key={`fit${i}`} style={styles.muted}>· {t}</Text>
+            ))}
+            {(style.wardrobe_ideas_india || fashion.wardrobe_ideas_india || []).map((w: any, i: number) => (
               <View key={`w${i}`} style={styles.card}>
                 <Text style={styles.cardTitle}>{w.occasion}</Text>
                 <Text style={styles.line}>{w.outfit_idea}</Text>
                 <Text style={styles.muted}>{w.why_it_works}</Text>
+                {!!w.trend_note && <Text style={styles.muted}>Trend: {w.trend_note}</Text>}
+              </View>
+            ))}
+            {(fashion.current_trends_to_try || []).map((t: any, i: number) => (
+              <View key={`tr${i}`} style={styles.card}>
+                <Text style={styles.cardTitle}>{t.trend}</Text>
+                <Text style={styles.line}>{t.how_to_wear_it_for_you}</Text>
+                {!!t.skip_if && <Text style={styles.muted}>Skip if: {t.skip_if}</Text>}
               </View>
             ))}
 

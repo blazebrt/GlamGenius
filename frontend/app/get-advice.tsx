@@ -44,6 +44,11 @@ export default function GetAdviceScreen() {
         budget_range: budget,
         diet: user?.diet,
         city: user?.city,
+        height_cm: user?.height_cm,
+        weight_kg: user?.weight_kg,
+        body_type: user?.body_type,
+        style_vibe: user?.style_vibe,
+        follow_trends: true,
       });
       setLatestPlan(res.data.plan);
       router.push('/recommendations');
@@ -68,7 +73,7 @@ export default function GetAdviceScreen() {
       <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: 120 }}>
         <Text style={styles.title}>Occasion stylist</Text>
         <Text style={styles.subtitle}>
-          Colours, care, foods, and salon ideas for your day — no booking checkout.
+          Outfits from your skin tone, body profile, occasion and wearable trends — plus care tips. Add height & weight in Profile for sharper fits.
         </Text>
 
         <Text style={styles.label}>How do you want to feel?</Text>
