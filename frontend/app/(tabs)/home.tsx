@@ -31,9 +31,9 @@ const QUICK_ACTIONS = [
 ];
 
 const FEATURED_SERVICES = [
-  { id: '1', name: 'Scalp Treatment', price: '₹1,499', duration: '60 min', icon: 'fitness-outline', tag: 'Popular' },
-  { id: '2', name: 'HydraFacial', price: '₹2,999', duration: '75 min', icon: 'diamond-outline', tag: 'Premium' },
-  { id: '3', name: 'Hair Spa', price: '₹999', duration: '45 min', icon: 'cut-outline', tag: null },
+  { id: '2', name: 'Gold Facial', price: '₹799-1299', duration: '60 min', icon: 'diamond-outline', tag: 'Popular' },
+  { id: '10', name: 'Hair Spa & Treatment', price: '₹799-1499', duration: '45 min', icon: 'cut-outline', tag: 'Value' },
+  { id: '5', name: 'Keratin Treatment', price: '₹3500-7000', duration: '180 min', icon: 'fitness-outline', tag: 'Premium' },
 ];
 
 const BEAUTY_TIPS = [
@@ -124,7 +124,12 @@ export default function HomeScreen() {
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {FEATURED_SERVICES.map((service) => (
-              <TouchableOpacity key={service.id} style={styles.serviceCard} activeOpacity={0.7}>
+              <TouchableOpacity
+                key={service.id}
+                style={styles.serviceCard}
+                activeOpacity={0.7}
+                onPress={() => router.push({ pathname: '/service-details', params: { serviceId: service.id } })}
+              >
                 {service.tag && (
                   <View style={styles.serviceTag}>
                     <Text style={styles.serviceTagText}>{service.tag}</Text>

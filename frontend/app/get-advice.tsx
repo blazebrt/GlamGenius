@@ -81,6 +81,18 @@ export default function GetAdviceScreen() {
         pathname: '/recommendations',
         params: {
           recommendations: JSON.stringify(response.data.recommendations || response.data),
+          estimated_total_cost: String(
+            response.data.estimated_total_cost ??
+            response.data.recommendations?.estimated_total_cost ??
+            response.data.recommendations?.total_estimated_cost ??
+            ''
+          ),
+          estimated_duration: String(
+            response.data.estimated_duration ??
+            response.data.recommendations?.estimated_duration ??
+            response.data.recommendations?.total_duration ??
+            ''
+          ),
           budget: budget.value,
           occasion: selectedOccasion,
         },

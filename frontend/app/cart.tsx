@@ -12,7 +12,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { FadeInDown, FadeIn, FadeInUp } from 'react-native-reanimated';
+import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
 import { useCartStore } from '../src/store/cartStore';
 import { useUserStore } from '../src/store/userStore';
 import { api } from '../src/services/api';
@@ -39,6 +39,7 @@ export default function CartScreen() {
   const [customerPhone, setCustomerPhone] = useState('');
   const [bookingId, setBookingId] = useState('');
   const [processing, setProcessing] = useState(false);
+  const [paidAmount, setPaidAmount] = useState(0);
 
   useEffect(() => { loadCart(); }, []);
 
@@ -57,18 +58,29 @@ export default function CartScreen() {
   };
 
   const handlePayment = async () => {
+    if (!userId) {
+      Alert.alert('Sign In Required', 'Please restart the app and create a profile before booking.');
+      setStep('payment');
+      return;
+    }
     setStep('processing');
     setProcessing(true);
+    const amountDue = totalWithTax;
     try {
       const orderResponse = await api.post('/payments/create-order', {
-        user_id: userId, amount: totalWithTax * 100, currency: 'INR',
+        user_id: userId, amount: amountDue * 100, currency: 'INR',
         items: items.map(item => ({ id: item.id, name: item.name, price: item.price, quantity: item.quantity, type: item.type })),
       });
       await new Promise(resolve => setTimeout(resolve, 2000));
       const verifyResponse = await api.post('/payments/verify', {
         order_id: orderResponse.data.id, payment_id: `pay_mock_${Date.now()}`, payment_method: selectedPayment,
       });
-      if (verifyResponse.data.success) { setBookingId(verifyResponse.data.booking_id); setStep('success'); clearCart(); }
+      if (verifyResponse.data.success) {
+        setPaidAmount(amountDue);
+        setBookingId(verifyResponse.data.booking_id);
+        clearCart();
+        setStep('success');
+      }
       else throw new Error('Payment failed');
     } catch (error) {
       Alert.alert('Payment Failed', 'Please try again.', [{ text: 'OK', onPress: () => setStep('payment') }]);
@@ -99,7 +111,7 @@ export default function CartScreen() {
             </View>
             <View style={styles.bookingRow}>
               <Text style={styles.bookingLabel}>Amount Paid</Text>
-              <Text style={styles.bookingValue}>₹{totalWithTax.toLocaleString('en-IN')}</Text>
+              <Text style={styles.bookingValue}>₹{paidAmount.toLocaleString('en-IN')}</Text>
             </View>
             <View style={styles.bookingRow}>
               <Text style={styles.bookingLabel}>Payment</Text>

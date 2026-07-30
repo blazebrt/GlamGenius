@@ -15,7 +15,7 @@ import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated'
 import { useUserStore } from '../src/store/userStore';
 import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 
-const { width, height } = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
 /**
  * WELCOME SCREEN - First Impression
@@ -31,7 +31,8 @@ export default function WelcomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
-  const { userId, setUserId, createUser } = useUserStore();
+  const [checking, setChecking] = useState(true);
+  const { createUser } = useUserStore();
 
   useEffect(() => {
     checkExistingUser();
@@ -41,15 +42,16 @@ export default function WelcomeScreen() {
     try {
       const storedUserId = await AsyncStorage.getItem('glamgenius_user_id');
       if (storedUserId) {
-        setUserId(storedUserId);
         setTimeout(() => {
           router.replace('/(tabs)/home');
-        }, 1200);
+        }, 800);
       } else {
+        setChecking(false);
         setLoading(false);
       }
     } catch (error) {
       console.error('Error checking user:', error);
+      setChecking(false);
       setLoading(false);
     }
   };
@@ -59,7 +61,6 @@ export default function WelcomeScreen() {
     try {
       const newUser = await createUser('Guest User');
       if (newUser?.id) {
-        await AsyncStorage.setItem('glamgenius_user_id', newUser.id);
         router.replace('/(tabs)/home');
       }
     } catch (error) {
@@ -69,7 +70,7 @@ export default function WelcomeScreen() {
     }
   };
 
-  if (loading && userId) {
+  if (checking || (loading && checking)) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.loadingContainer}>
