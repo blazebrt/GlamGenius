@@ -40,7 +40,7 @@ function notify(title: string, message: string) {
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, fetchUser, updateUser, refreshSubscription } = useUserStore();
+  const { user, fetchUser, updateUser, refreshSubscription, logout } = useUserStore();
   const [name, setName] = React.useState(user?.name || '');
   const [city, setCity] = React.useState(user?.city || '');
   const [diet, setDiet] = React.useState(user?.diet || 'veg');
@@ -188,6 +188,17 @@ export default function ProfileScreen() {
         <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/style-quiz')}>
           <Ionicons name="clipboard-outline" size={20} color={COLORS.primary} />
           <Text style={styles.linkText}>Retake stylist quiz</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.linkRow}
+          onPress={async () => {
+            await logout();
+            router.replace('/(auth)/welcome');
+          }}
+        >
+          <Ionicons name="log-out-outline" size={20} color={COLORS.primary} />
+          <Text style={styles.linkText}>Sign out</Text>
         </TouchableOpacity>
 
         <Text style={styles.disclaimer}>

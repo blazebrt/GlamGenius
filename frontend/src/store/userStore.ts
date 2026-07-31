@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from '../services/api';
 
+const USER_ID_KEY = 'glamgenius_user_id';
+
 export interface UserProfile {
   id: string;
   name: string;
@@ -36,6 +38,7 @@ interface UserStore {
   userId: string;
   user: UserProfile | null;
   loading: boolean;
+  initialized: boolean;
   setUserId: (id: string) => void;
   setUser: (user: UserProfile | null) => void;
   initializeUser: () => Promise<void>;
@@ -45,31 +48,36 @@ interface UserStore {
   updateUser: (data: Partial<UserProfile>) => Promise<void>;
   updateUserProfile: (data: Partial<UserProfile>) => void;
   refreshSubscription: () => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 export const useUserStore = create<UserStore>((set, get) => ({
   userId: '',
   user: null,
   loading: false,
+  initialized: false,
 
   setUserId: (id: string) => set({ userId: id }),
   setUser: (user: UserProfile | null) => set({ user }),
 
   initializeUser: async () => {
     try {
-      const storedUserId = await AsyncStorage.getItem('glamgenius_user_id');
+      const storedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       if (storedUserId) {
         set({ userId: storedUserId });
         try {
           const response = await api.get(`/users/${storedUserId}`);
           set({ user: response.data });
         } catch {
-          await AsyncStorage.removeItem('glamgenius_user_id');
-          set({ userId: '' });
+          console.log('User not found in DB, clearing stored ID');
+          await AsyncStorage.removeItem(USER_ID_KEY);
+          set({ userId: '', user: null });
         }
       }
     } catch (error) {
       console.error('Error initializing user:', error);
+    } finally {
+      set({ initialized: true });
     }
   },
 
@@ -104,7 +112,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
         style_vibe: extra?.style_vibe,
       });
       const user = response.data;
-      await AsyncStorage.setItem('glamgenius_user_id', user.id);
+      await AsyncStorage.setItem(USER_ID_KEY, user.id);
       set({ user, userId: user.id });
       return user;
     } catch (error) {
@@ -120,7 +128,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
     try {
       const response = await api.post('/auth/login', { email, password });
       const user = response.data.user;
-      await AsyncStorage.setItem('glamgenius_user_id', user.id);
+      await AsyncStorage.setItem(USER_ID_KEY, user.id);
       set({ user, userId: user.id });
       return user;
     } catch (error) {
@@ -171,5 +179,14 @@ export const useUserStore = create<UserStore>((set, get) => ({
     } catch (error) {
       console.error('Subscription refresh error:', error);
     }
+  },
+
+  logout: async () => {
+    try {
+      await AsyncStorage.multiRemove([USER_ID_KEY, 'glamgenius_cart']);
+    } catch (error) {
+      console.error('Error clearing session:', error);
+    }
+    set({ userId: '', user: null });
   },
 }));
