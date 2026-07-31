@@ -37,6 +37,22 @@ export default function RecommendationsScreen() {
   const daily = plan.daily_care || {};
   const fashion = plan.fashion || {};
 
+  const colors =
+    fashion.best_clothing_colors ||
+    style.best_clothing_colors ||
+    [];
+  const outfits =
+    fashion.wardrobe_ideas_india ||
+    fashion.outfits ||
+    style.wardrobe_ideas_india ||
+    [];
+  const silhouettes = fashion.silhouettes_for_you || fashion.silhouettes || [];
+  const fits = fashion.fits_and_proportions || fashion.fits || [];
+  const trends = fashion.current_trends_to_try || fashion.trends || [];
+  const colorBlurb = typeof fashion.colours === 'string' ? fashion.colours : null;
+  const silBlurb = typeof silhouettes === 'string' ? silhouettes : null;
+  const fitBlurb = typeof fits === 'string' ? fits : null;
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.top}>
@@ -61,27 +77,30 @@ export default function RecommendationsScreen() {
             <Text style={styles.headline}>{plan.headline || 'Your personal style & wellness plan'}</Text>
 
             <Text style={styles.section}>Colours & outfits</Text>
-            {(style.best_clothing_colors || []).map((c: any, i: number) => (
-              <Text key={i} style={styles.line}>• {c.color} — {c.why}</Text>
+            {!!colorBlurb && <Text style={styles.line}>{colorBlurb}</Text>}
+            {(Array.isArray(colors) ? colors : []).map((c: any, i: number) => (
+              <Text key={i} style={styles.line}>• {c.color || c} — {c.why || ''}</Text>
             ))}
-            {(fashion.silhouettes_for_you || []).map((s: any, i: number) => (
-              <Text key={`sil${i}`} style={styles.line}>Fit · {s.silhouette} — {s.why}</Text>
+            {!!silBlurb && <Text style={styles.line}>Silhouettes: {silBlurb}</Text>}
+            {(Array.isArray(silhouettes) ? silhouettes : []).map((s: any, i: number) => (
+              <Text key={`sil${i}`} style={styles.line}>Fit · {s.silhouette || s} — {s.why || ''}</Text>
             ))}
-            {(fashion.fits_and_proportions || []).map((t: string, i: number) => (
-              <Text key={`fit${i}`} style={styles.muted}>· {t}</Text>
+            {!!fitBlurb && <Text style={styles.muted}>{fitBlurb}</Text>}
+            {(Array.isArray(fits) ? fits : []).map((t: any, i: number) => (
+              <Text key={`fit${i}`} style={styles.muted}>· {typeof t === 'string' ? t : t.tip || JSON.stringify(t)}</Text>
             ))}
-            {(style.wardrobe_ideas_india || fashion.wardrobe_ideas_india || []).map((w: any, i: number) => (
+            {(Array.isArray(outfits) ? outfits : []).map((w: any, i: number) => (
               <View key={`w${i}`} style={styles.card}>
-                <Text style={styles.cardTitle}>{w.occasion}</Text>
-                <Text style={styles.line}>{w.outfit_idea}</Text>
-                <Text style={styles.muted}>{w.why_it_works}</Text>
+                <Text style={styles.cardTitle}>{w.occasion || w.name || 'Look'}</Text>
+                <Text style={styles.line}>{w.outfit_idea || w.outfit || w.description || (typeof w === 'string' ? w : '')}</Text>
+                {!!w.why_it_works && <Text style={styles.muted}>{w.why_it_works}</Text>}
                 {!!w.trend_note && <Text style={styles.muted}>Trend: {w.trend_note}</Text>}
               </View>
             ))}
-            {(fashion.current_trends_to_try || []).map((t: any, i: number) => (
+            {(Array.isArray(trends) ? trends : []).map((t: any, i: number) => (
               <View key={`tr${i}`} style={styles.card}>
-                <Text style={styles.cardTitle}>{t.trend}</Text>
-                <Text style={styles.line}>{t.how_to_wear_it_for_you}</Text>
+                <Text style={styles.cardTitle}>{t.trend || t.name || 'Trend'}</Text>
+                <Text style={styles.line}>{t.how_to_wear_it_for_you || t.how || (typeof t === 'string' ? t : '')}</Text>
                 {!!t.skip_if && <Text style={styles.muted}>Skip if: {t.skip_if}</Text>}
               </View>
             ))}
