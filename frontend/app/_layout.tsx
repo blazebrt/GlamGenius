@@ -3,7 +3,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, Text, StyleSheet, Platform } from 'react-native';
 import {
   useFonts,
   PlayfairDisplay_400Regular,
@@ -16,40 +16,33 @@ import {
   Inter_600SemiBold,
   Inter_700Bold,
 } from '@expo-google-fonts/inter';
-import { COLORS, FONTS } from '../src/theme/colors';
+import { COLORS } from '../src/theme/colors';
 import { useUserStore } from '../src/store/userStore';
-import { useCartStore } from '../src/store/cartStore';
+import { ErrorBoundary } from '../src/components/ErrorBoundary';
 
 export default function RootLayout() {
   const { initializeUser } = useUserStore();
-  const { loadCart } = useCartStore();
-  
+
   const [fontsLoaded] = useFonts({
-    // Premium Editorial Serif for Headings
     PlayfairDisplay_400Regular,
     PlayfairDisplay_500Medium,
     PlayfairDisplay_700Bold,
-    // Geometric Sans for Body & Data
     Inter_400Regular,
     Inter_500Medium,
     Inter_600SemiBold,
     Inter_700Bold,
   });
 
-  // Initialize user + cart from AsyncStorage on app start
   useEffect(() => {
-    initializeUser();
-    loadCart();
+    initializeUser().catch((err) => console.warn('init user failed', err));
   }, []);
 
   if (!fontsLoaded) {
     return (
       <View style={styles.loadingContainer}>
-        <View style={styles.loadingContent}>
-          <Text style={styles.loadingLogo}>GlamGenius</Text>
-          <Text style={styles.loadingTagline}>MEDICAL BEAUTY</Text>
-          <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 24 }} />
-        </View>
+        <Text style={styles.loadingLogo}>GlamGenius</Text>
+        <Text style={styles.loadingTagline}>SKIN · HAIR · STYLE</Text>
+        <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 24 }} />
       </View>
     );
   }
@@ -58,22 +51,31 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <StatusBar style="dark" />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: COLORS.background },
-            animation: 'slide_from_right',
+        <ErrorBoundary
+          onReset={() => {
+            if (Platform.OS === 'web' && typeof window !== 'undefined') {
+              window.location.href = '/';
+            }
           }}
         >
-          <Stack.Screen name="index" />
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal' }} />
-          <Stack.Screen name="style-quiz" />
-          <Stack.Screen name="get-advice" />
-          <Stack.Screen name="recommendations" />
-          <Stack.Screen name="service-details" />
-          <Stack.Screen name="cart" />
-        </Stack>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: COLORS.background },
+              animation: Platform.OS === 'web' ? 'none' : 'slide_from_right',
+            }}
+          >
+            <Stack.Screen name="index" />
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="(auth)" />
+            <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal' }} />
+            <Stack.Screen name="style-quiz" />
+            <Stack.Screen name="get-advice" />
+            <Stack.Screen name="recommendations" />
+            <Stack.Screen name="service-details" />
+            <Stack.Screen name="subscription" />
+          </Stack>
+        </ErrorBoundary>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
@@ -86,14 +88,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: COLORS.background,
   },
-  loadingContent: {
-    alignItems: 'center',
-  },
   loadingLogo: {
     fontSize: 36,
     fontWeight: '700',
     color: COLORS.textPrimary,
-    letterSpacing: -0.5,
   },
   loadingTagline: {
     fontSize: 12,

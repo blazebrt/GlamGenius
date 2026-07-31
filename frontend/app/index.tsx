@@ -4,8 +4,8 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Dimensions,
   ActivityIndicator,
+  Dimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,24 +15,13 @@ import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated'
 import { useUserStore } from '../src/store/userStore';
 import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 
-const { height } = Dimensions.get('window');
-
-/**
- * WELCOME SCREEN - First Impression
- * 
- * Design Philosophy:
- * - Clean, clinical white space
- * - Premium typography (Playfair headings, Inter body)
- * - Soft medical blue accents
- * - Trust signals through professional copy
- */
+const { width } = Dimensions.get('window');
 
 export default function WelcomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
-  const [checking, setChecking] = useState(true);
-  const { createUser } = useUserStore();
+  const { userId, setUserId, createUser } = useUserStore();
 
   useEffect(() => {
     checkExistingUser();
@@ -42,16 +31,12 @@ export default function WelcomeScreen() {
     try {
       const storedUserId = await AsyncStorage.getItem('glamgenius_user_id');
       if (storedUserId) {
-        setTimeout(() => {
-          router.replace('/(tabs)/home');
-        }, 800);
+        setUserId(storedUserId);
+        setTimeout(() => router.replace('/(tabs)/home'), 900);
       } else {
-        setChecking(false);
         setLoading(false);
       }
-    } catch (error) {
-      console.error('Error checking user:', error);
-      setChecking(false);
+    } catch {
       setLoading(false);
     }
   };
@@ -59,23 +44,21 @@ export default function WelcomeScreen() {
   const handleGetStarted = async () => {
     setLoading(true);
     try {
-      const newUser = await createUser('Guest User');
+      const newUser = await createUser('Guest');
       if (newUser?.id) {
         router.replace('/(tabs)/home');
       }
-    } catch (error) {
-      console.error('Error creating user:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  if (checking || (loading && checking)) {
+  if (loading && userId) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingLogo}>GlamGenius</Text>
-          <Text style={styles.loadingTagline}>MEDICAL BEAUTY</Text>
+          <Text style={styles.loadingTagline}>SKIN · HAIR · STYLE</Text>
           <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 24 }} />
         </View>
       </View>
@@ -84,242 +67,101 @@ export default function WelcomeScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* Decorative Elements */}
       <View style={styles.decorCircle1} />
       <View style={styles.decorCircle2} />
 
-      {/* Header */}
       <Animated.View entering={FadeIn.delay(200)} style={styles.header}>
         <View style={styles.logoMark}>
-          <Ionicons name="sparkles" size={32} color={COLORS.primary} />
+          <Ionicons name="leaf-outline" size={30} color={COLORS.primary} />
         </View>
         <Text style={styles.brandName}>GlamGenius</Text>
-        <Text style={styles.brandTagline}>MEDICAL BEAUTY</Text>
+        <Text style={styles.brandTagline}>STYLIST · WELLNESS · SKIN & HAIR</Text>
       </Animated.View>
 
-      {/* Value Proposition */}
       <Animated.View entering={FadeInDown.delay(400)} style={styles.heroSection}>
-        <Text style={styles.heroTitle}>
-          Clinical-Grade{'\n'}Beauty Analysis
-        </Text>
+        <Text style={styles.heroTitle}>Your fashion{'\n'}stylist in{'\n'}your pocket</Text>
         <Text style={styles.heroSubtitle}>
-          AI-powered skin & scalp diagnostics with personalized treatment recommendations
+          One coach for clothing that flatters your tone & frame, skin & hair habits, and occasion-ready looks — without celebrity budgets.
         </Text>
       </Animated.View>
 
-      {/* Features */}
       <Animated.View entering={FadeInDown.delay(600)} style={styles.features}>
-        <FeatureItem 
-          icon="scan-outline" 
-          title="AI Diagnostics"
-          description="50+ health markers analyzed"
-        />
-        <FeatureItem 
-          icon="medical-outline" 
-          title="Medical Accuracy"
-          description="Dermatologist-grade insights"
-        />
-        <FeatureItem 
-          icon="sparkles-outline" 
-          title="Smart Treatments"
-          description="Personalized recommendations"
-        />
+        <FeatureItem icon="shirt-outline" title="Fashion stylist" description="Colours, fits, occasions & wearable trends" />
+        <FeatureItem icon="scan-outline" title="Skin & hair advisor" description="Visible checks that inform your style" />
+        <FeatureItem icon="nutrition-outline" title="Wellness coach" description="Ingredients, Indian foods & simple routines" />
       </Animated.View>
 
-      {/* Fixed CTA at bottom */}
       <Animated.View entering={FadeInUp.delay(800)} style={[styles.ctaSection, { paddingBottom: insets.bottom + 20 }]}>
-        <TouchableOpacity
-          style={styles.ctaButton}
-          onPress={handleGetStarted}
-          disabled={loading}
-          activeOpacity={0.8}
-        >
+        <TouchableOpacity style={styles.ctaButton} onPress={handleGetStarted} disabled={loading} activeOpacity={0.85}>
           {loading ? (
             <ActivityIndicator color={COLORS.white} />
           ) : (
             <>
-              <Text style={styles.ctaText}>Begin Your Analysis</Text>
+              <Text style={styles.ctaText}>Start your check</Text>
               <Ionicons name="arrow-forward" size={20} color={COLORS.white} />
             </>
           )}
         </TouchableOpacity>
-        
-        <Text style={styles.disclaimer}>
-          Your data is processed securely and never shared
-        </Text>
+        <TouchableOpacity onPress={() => router.push('/(auth)/welcome')} style={{ marginTop: 14 }}>
+          <Text style={styles.secondaryLink}>Already have an account? Sign in</Text>
+        </TouchableOpacity>
+        <Text style={styles.disclaimer}>General wellness & style guidance — not medical advice.</Text>
       </Animated.View>
     </View>
   );
 }
 
-function FeatureItem({ icon, title, description }: { icon: string; title: string; description: string }) {
+function FeatureItem({ icon, title, description }: { icon: any; title: string; description: string }) {
   return (
     <View style={styles.featureItem}>
       <View style={styles.featureIcon}>
-        <Ionicons name={icon as any} size={22} color={COLORS.primary} />
+        <Ionicons name={icon} size={20} color={COLORS.primary} />
       </View>
-      <View style={styles.featureContent}>
+      <View style={{ flex: 1 }}>
         <Text style={styles.featureTitle}>{title}</Text>
-        <Text style={styles.featureDescription}>{description}</Text>
+        <Text style={styles.featureDesc}>{description}</Text>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-    paddingHorizontal: SPACING.lg,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingLogo: {
-    fontSize: FONTS.sizes.h1,
-    fontFamily: FONTS.family.heading,
-    color: COLORS.textPrimary,
-  },
-  loadingTagline: {
-    fontSize: FONTS.sizes.caption,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.primary,
-    letterSpacing: 3,
-    marginTop: 8,
-  },
+  container: { flex: 1, backgroundColor: COLORS.background, paddingHorizontal: SPACING.lg },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingLogo: { fontFamily: FONTS.family.heading, fontSize: 36, color: COLORS.textPrimary },
+  loadingTagline: { fontFamily: FONTS.family.bodyMedium, fontSize: 12, color: COLORS.primary, letterSpacing: 3, marginTop: 8 },
   decorCircle1: {
-    position: 'absolute',
-    top: -80,
-    right: -80,
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: COLORS.primaryLight,
+    position: 'absolute', top: -80, right: -60, width: 220, height: 220, borderRadius: 110,
+    backgroundColor: COLORS.primaryLight, opacity: 0.7,
   },
   decorCircle2: {
-    position: 'absolute',
-    bottom: 100,
-    left: -60,
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: COLORS.backgroundSecondary,
+    position: 'absolute', bottom: 120, left: -80, width: 200, height: 200, borderRadius: 100,
+    backgroundColor: COLORS.accentLight, opacity: 0.55,
   },
-  header: {
-    alignItems: 'center',
-    marginTop: height * 0.08,
-  },
+  header: { marginTop: SPACING.xl, alignItems: 'flex-start' },
   logoMark: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: COLORS.primaryLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: SPACING.md,
+    width: 56, height: 56, borderRadius: 16, backgroundColor: COLORS.primaryLight,
+    alignItems: 'center', justifyContent: 'center', marginBottom: SPACING.sm,
   },
-  brandName: {
-    fontSize: FONTS.sizes.displaySm,
-    fontFamily: FONTS.family.heading,
-    color: COLORS.textPrimary,
-    letterSpacing: -0.5,
-  },
-  brandTagline: {
-    fontSize: FONTS.sizes.caption,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.primary,
-    letterSpacing: 3,
-    marginTop: 4,
-  },
-  heroSection: {
-    marginTop: height * 0.06,
-    alignItems: 'center',
-  },
-  heroTitle: {
-    fontSize: FONTS.sizes.h1,
-    fontFamily: FONTS.family.heading,
-    color: COLORS.textPrimary,
-    textAlign: 'center',
-    lineHeight: 40,
-  },
-  heroSubtitle: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.body,
-    color: COLORS.textSecondary,
-    textAlign: 'center',
-    marginTop: SPACING.md,
-    lineHeight: 24,
-    paddingHorizontal: SPACING.md,
-  },
-  features: {
-    marginTop: height * 0.05,
-    gap: SPACING.md,
-  },
-  featureItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.card,
-    padding: SPACING.md,
-    borderRadius: RADIUS.md,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
+  brandName: { fontFamily: FONTS.family.heading, fontSize: 34, color: COLORS.textPrimary },
+  brandTagline: { fontFamily: FONTS.family.bodyMedium, fontSize: 11, color: COLORS.primary, letterSpacing: 2.5, marginTop: 4 },
+  heroSection: { marginTop: SPACING.xl, maxWidth: width - 48 },
+  heroTitle: { fontFamily: FONTS.family.heading, fontSize: 36, lineHeight: 42, color: COLORS.textPrimary },
+  heroSubtitle: { fontFamily: FONTS.family.body, fontSize: 15, lineHeight: 22, color: COLORS.textSecondary, marginTop: SPACING.md },
+  features: { marginTop: SPACING.xl, gap: SPACING.md },
+  featureItem: { flexDirection: 'row', alignItems: 'center', gap: SPACING.md },
   featureIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: COLORS.primaryLight,
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: 40, height: 40, borderRadius: 12, backgroundColor: COLORS.card,
+    alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: COLORS.border,
   },
-  featureContent: {
-    marginLeft: SPACING.md,
-    flex: 1,
-  },
-  featureTitle: {
-    fontSize: FONTS.sizes.bodyLg,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.textPrimary,
-  },
-  featureDescription: {
-    fontSize: FONTS.sizes.bodySm,
-    fontFamily: FONTS.family.body,
-    color: COLORS.textSecondary,
-    marginTop: 2,
-  },
-  ctaSection: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    paddingHorizontal: SPACING.lg,
-    paddingTop: SPACING.lg,
-    backgroundColor: COLORS.background,
-    alignItems: 'center',
-  },
+  featureTitle: { fontFamily: FONTS.family.bodySemibold, fontSize: 15, color: COLORS.textPrimary },
+  featureDesc: { fontFamily: FONTS.family.body, fontSize: 13, color: COLORS.textSecondary, marginTop: 2 },
+  ctaSection: { marginTop: 'auto' },
   ctaButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.primary,
-    paddingVertical: 18,
-    paddingHorizontal: 32,
-    borderRadius: RADIUS.xl,
-    width: '100%',
-    gap: 10,
+    backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, paddingVertical: 16, paddingHorizontal: 20,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
   },
-  ctaText: {
-    fontSize: FONTS.sizes.bodyLg,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.white,
-  },
-  disclaimer: {
-    fontSize: FONTS.sizes.caption,
-    fontFamily: FONTS.family.body,
-    color: COLORS.textMuted,
-    marginTop: SPACING.md,
-    textAlign: 'center',
-  },
+  ctaText: { fontFamily: FONTS.family.bodySemibold, fontSize: 16, color: COLORS.white },
+  secondaryLink: { fontFamily: FONTS.family.bodyMedium, fontSize: 14, color: COLORS.primary, textAlign: 'center' },
+  disclaimer: { fontFamily: FONTS.family.body, fontSize: 11, color: COLORS.textMuted, textAlign: 'center', marginTop: 12 },
 });

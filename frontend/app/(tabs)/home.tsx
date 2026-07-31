@@ -13,100 +13,90 @@ import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useUserStore } from '../../src/store/userStore';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../../src/theme/colors';
 
-/**
- * HOME SCREEN - Dashboard for Medical Beauty
- * 
- * Design Philosophy:
- * - Clean medical aesthetic with warm touches
- * - Playfair Display for premium headlines
- * - Inter for clear data presentation
- * - Soft blue accents for clinical trust
- */
-
 const QUICK_ACTIONS = [
-  { id: 'scan', icon: 'scan-outline', label: 'AI Scan', route: '/(tabs)/scan-tab', color: COLORS.primary },
-  { id: 'advice', icon: 'sparkles-outline', label: 'Get Advice', route: '/get-advice', color: COLORS.success },
-  { id: 'quiz', icon: 'clipboard-outline', label: 'Style Quiz', route: '/style-quiz', color: COLORS.warning },
-  { id: 'history', icon: 'time-outline', label: 'History', route: '/(tabs)/history', color: COLORS.accent },
+  { id: 'scan', icon: 'scan-outline', label: 'Skin check', route: '/(tabs)/scan-tab', color: COLORS.primary },
+  { id: 'plan', icon: 'shirt-outline', label: 'Outfit plan', route: '/get-advice', color: COLORS.accent },
+  { id: 'quiz', icon: 'clipboard-outline', label: 'Stylist quiz', route: '/style-quiz', color: COLORS.info },
+  { id: 'plus', icon: 'diamond-outline', label: 'Go Plus', route: '/subscription', color: COLORS.warning },
 ];
 
-const FEATURED_SERVICES = [
-  { id: '2', name: 'Gold Facial', price: '₹799-1299', duration: '60 min', icon: 'diamond-outline', tag: 'Popular' },
-  { id: '10', name: 'Hair Spa & Treatment', price: '₹799-1499', duration: '45 min', icon: 'cut-outline', tag: 'Value' },
-  { id: '5', name: 'Keratin Treatment', price: '₹3500-7000', duration: '180 min', icon: 'fitness-outline', tag: 'Premium' },
+const TIPS = [
+  { tip: 'Add height & weight in Profile — your stylist uses them with skin tone for better outfit fits.', source: 'Stylist tip' },
+  { tip: 'SPF every morning helps skin look more even — and your clothing colours photograph better.', source: 'Everyday care' },
+  { tip: 'Amla, guava, and seasonal citrus are easy vitamin C options in Indian kitchens.', source: 'Food tip' },
+  { tip: 'If skin looks oily, check labels for niacinamide or salicylic acid — start slow.', source: 'Label tip' },
+  { tip: 'Deep teal, mustard, and maroon often flatter warm wheatish to medium tones.', source: 'Colour tip' },
 ];
 
-const BEAUTY_TIPS = [
-  { tip: "SPF 50 is essential even on cloudy days", source: "Dermatology Journal 2026" },
-  { tip: "Scalp massage for 5 mins boosts follicle health by 23%", source: "Trichology Research" },
-  { tip: "Hydration affects skin elasticity within 72 hours", source: "Clinical Skincare" },
-  { tip: "Retinol should only be used at night", source: "AAD Guidelines" },
-  { tip: "Silk pillowcases reduce hair breakage by 40%", source: "Hair Science Institute" },
-  { tip: "Double cleansing removes 90% more impurities", source: "Skin Health Weekly" },
-  { tip: "Vitamin C serums are most effective before 10AM", source: "Cosmetic Chemistry" },
-  { tip: "Cold water closes pores after cleansing", source: "Aesthetic Medicine" },
+const SALON_PREVIEWS = [
+  { id: '1', name: 'Hair spa', for: 'Healthier-looking shine' },
+  { id: '4', name: 'Manicure', for: 'Hand skin & nails' },
+  { id: '2', name: 'Cleanup facial', for: 'Fresher-looking face' },
 ];
 
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, fetchUser } = useUserStore();
-  const [currentTip, setCurrentTip] = useState(0);
+  const { user, fetchUser, refreshSubscription } = useUserStore();
+  const [tipIndex, setTipIndex] = useState(0);
 
   useEffect(() => {
     fetchUser();
-    // Rotate tips based on hour
-    const hour = new Date().getHours();
-    setCurrentTip(hour % BEAUTY_TIPS.length);
+    refreshSubscription();
+    setTipIndex(new Date().getHours() % TIPS.length);
   }, []);
 
-  const getGreeting = () => {
-    const hour = new Date().getHours();
-    if (hour < 12) return 'Good Morning';
-    if (hour < 17) return 'Good Afternoon';
-    return 'Good Evening';
+  const greeting = () => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
   };
+
+  const plan = user?.plan === 'plus' ? 'Plus' : 'Free';
+  const remaining = user?.plan === 'plus' ? 'Unlimited checks' : `${user?.scans_remaining_free ?? '—'} checks left this month`;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Header */}
         <Animated.View entering={FadeIn} style={styles.header}>
           <View>
-            <Text style={styles.greeting}>{getGreeting()}</Text>
-            <Text style={styles.userName}>{user?.name || 'Welcome!'}</Text>
+            <Text style={styles.greeting}>{greeting()}</Text>
+            <Text style={styles.userName}>{user?.name || 'Welcome'}</Text>
           </View>
-          <TouchableOpacity
-            style={styles.profileButton}
-            onPress={() => router.push('/(tabs)/profile')}
-          >
+          <TouchableOpacity style={styles.profileButton} onPress={() => router.push('/(tabs)/profile')}>
             <Ionicons name="person-outline" size={22} color={COLORS.primary} />
           </TouchableOpacity>
         </Animated.View>
 
-        {/* Medical Tip Card */}
-        <Animated.View entering={FadeInDown.delay(100)} style={styles.tipCard}>
-          <View style={styles.tipBadge}>
-            <Ionicons name="medical-outline" size={14} color={COLORS.primary} />
-            <Text style={styles.tipBadgeText}>CLINICAL TIP</Text>
-          </View>
-          <Text style={styles.tipText}>{BEAUTY_TIPS[currentTip].tip}</Text>
-          <Text style={styles.tipSource}>— {BEAUTY_TIPS[currentTip].source}</Text>
+        <Animated.View entering={FadeInDown.delay(80)} style={styles.planChip}>
+          <Ionicons name="leaf-outline" size={16} color={COLORS.primary} />
+          <Text style={styles.planChipText}>{plan} · {remaining}</Text>
+          {user?.plan !== 'plus' && (
+            <TouchableOpacity onPress={() => router.push('/subscription')}>
+              <Text style={styles.upgradeText}>Upgrade</Text>
+            </TouchableOpacity>
+          )}
         </Animated.View>
 
-        {/* Quick Actions */}
-        <Animated.View entering={FadeInDown.delay(200)} style={styles.section}>
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
+        <Animated.View entering={FadeInDown.delay(120)} style={styles.tipCard}>
+          <Text style={styles.tipBadge}>TODAY'S TIP</Text>
+          <Text style={styles.tipText}>{TIPS[tipIndex].tip}</Text>
+          <Text style={styles.tipSource}>— {TIPS[tipIndex].source}</Text>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(180)} style={styles.section}>
+          <Text style={styles.sectionTitle}>Quick actions</Text>
           <View style={styles.actionsGrid}>
             {QUICK_ACTIONS.map((action) => (
               <TouchableOpacity
                 key={action.id}
                 style={styles.actionCard}
                 onPress={() => router.push(action.route as any)}
-                activeOpacity={0.7}
+                activeOpacity={0.75}
               >
-                <View style={[styles.actionIcon, { backgroundColor: `${action.color}15` }]}>
-                  <Ionicons name={action.icon as any} size={24} color={action.color} />
+                <View style={[styles.actionIcon, { backgroundColor: `${action.color}18` }]}>
+                  <Ionicons name={action.icon as any} size={22} color={action.color} />
                 </View>
                 <Text style={styles.actionLabel}>{action.label}</Text>
               </TouchableOpacity>
@@ -114,55 +104,39 @@ export default function HomeScreen() {
           </View>
         </Animated.View>
 
-        {/* Featured Services */}
-        <Animated.View entering={FadeInDown.delay(300)} style={styles.section}>
+        <Animated.View entering={FadeInDown.delay(240)} style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Popular Treatments</Text>
-            <TouchableOpacity onPress={() => router.push('/(tabs)/services')}>
-              <Text style={styles.seeAllText}>View All</Text>
+            <Text style={styles.sectionTitle}>Salon ideas</Text>
+            <TouchableOpacity onPress={() => router.push('/services')}>
+              <Text style={styles.seeAll}>Browse</Text>
             </TouchableOpacity>
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {FEATURED_SERVICES.map((service) => (
-              <TouchableOpacity
-                key={service.id}
-                style={styles.serviceCard}
-                activeOpacity={0.7}
-                onPress={() => router.push({ pathname: '/service-details', params: { serviceId: service.id } })}
-              >
-                {service.tag && (
-                  <View style={styles.serviceTag}>
-                    <Text style={styles.serviceTagText}>{service.tag}</Text>
-                  </View>
-                )}
-                <View style={styles.serviceIcon}>
-                  <Ionicons name={service.icon as any} size={24} color={COLORS.primary} />
-                </View>
-                <Text style={styles.serviceName}>{service.name}</Text>
-                <View style={styles.serviceMeta}>
-                  <Text style={styles.servicePrice}>{service.price}</Text>
-                  <Text style={styles.serviceDuration}>{service.duration}</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          <Text style={styles.sectionSub}>Suggestions only — no booking or payment in the app.</Text>
+          {SALON_PREVIEWS.map((s) => (
+            <TouchableOpacity
+              key={s.id}
+              style={styles.ideaRow}
+              onPress={() => router.push({ pathname: '/service-details', params: { id: s.id } })}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.ideaName}>{s.name}</Text>
+                <Text style={styles.ideaFor}>{s.for}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+            </TouchableOpacity>
+          ))}
         </Animated.View>
 
-        {/* CTA Banner */}
-        <Animated.View entering={FadeInDown.delay(400)} style={styles.ctaBanner}>
+        <Animated.View entering={FadeInDown.delay(300)} style={styles.ctaBanner}>
           <View style={styles.ctaIcon}>
-            <Ionicons name="scan" size={28} color={COLORS.white} />
+            <Ionicons name="scan" size={26} color={COLORS.white} />
           </View>
-          <View style={styles.ctaContent}>
-            <Text style={styles.ctaTitle}>Get Your Diagnosis</Text>
-            <Text style={styles.ctaSubtitle}>AI-powered skin & scalp analysis</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.ctaTitle}>Start a skin or hair check</Text>
+            <Text style={styles.ctaSubtitle}>Colours, care ingredients, foods & salon ideas</Text>
           </View>
-          <TouchableOpacity
-            style={styles.ctaButton}
-            onPress={() => router.push('/(tabs)/scan-tab')}
-          >
-            <Text style={styles.ctaButtonText}>Start</Text>
-            <Ionicons name="arrow-forward" size={16} color={COLORS.primary} />
+          <TouchableOpacity style={styles.ctaButton} onPress={() => router.push('/(tabs)/scan-tab')}>
+            <Text style={styles.ctaButtonText}>Go</Text>
           </TouchableOpacity>
         </Animated.View>
 
@@ -173,215 +147,58 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.backgroundSecondary,
-  },
+  container: { flex: 1, backgroundColor: COLORS.backgroundSecondary },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.md,
-    backgroundColor: COLORS.background,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md,
   },
-  greeting: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.body,
-    color: COLORS.textSecondary,
-  },
-  userName: {
-    fontSize: FONTS.sizes.h2,
-    fontFamily: FONTS.family.heading,
-    color: COLORS.textPrimary,
-    marginTop: 2,
-  },
+  greeting: { fontFamily: FONTS.family.body, fontSize: 14, color: COLORS.textSecondary },
+  userName: { fontFamily: FONTS.family.heading, fontSize: 26, color: COLORS.textPrimary, marginTop: 2 },
   profileButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: COLORS.primaryLight,
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.card,
+    alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: COLORS.border, ...SHADOWS.sm,
   },
+  planChip: {
+    marginHorizontal: SPACING.lg, marginBottom: SPACING.md, paddingHorizontal: 14, paddingVertical: 10,
+    backgroundColor: COLORS.primaryLight, borderRadius: RADIUS.full, flexDirection: 'row', alignItems: 'center', gap: 8,
+  },
+  planChipText: { flex: 1, fontFamily: FONTS.family.bodyMedium, fontSize: 13, color: COLORS.primaryDark },
+  upgradeText: { fontFamily: FONTS.family.bodySemibold, fontSize: 13, color: COLORS.accent },
   tipCard: {
-    marginHorizontal: SPACING.lg,
-    marginTop: SPACING.md,
-    backgroundColor: COLORS.background,
-    borderRadius: RADIUS.lg,
-    padding: SPACING.lg,
-    borderLeftWidth: 4,
-    borderLeftColor: COLORS.primary,
-    ...SHADOWS.sm,
+    marginHorizontal: SPACING.lg, backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: SPACING.lg,
+    borderWidth: 1, borderColor: COLORS.border, ...SHADOWS.sm,
   },
-  tipBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: SPACING.sm,
-  },
-  tipBadgeText: {
-    fontSize: FONTS.sizes.micro,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.primary,
-    letterSpacing: 1,
-  },
-  tipText: {
-    fontSize: FONTS.sizes.bodyLg,
-    fontFamily: FONTS.family.bodyMedium,
-    color: COLORS.textPrimary,
-    lineHeight: 26,
-  },
-  tipSource: {
-    fontSize: FONTS.sizes.caption,
-    fontFamily: FONTS.family.body,
-    color: COLORS.textMuted,
-    marginTop: SPACING.sm,
-    fontStyle: 'italic',
-  },
-  section: {
-    marginTop: SPACING.xl,
-    paddingHorizontal: SPACING.lg,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: SPACING.md,
-  },
-  sectionTitle: {
-    fontSize: FONTS.sizes.h3,
-    fontFamily: FONTS.family.heading,
-    color: COLORS.textPrimary,
-    marginBottom: SPACING.md,
-  },
-  seeAllText: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.bodyMedium,
-    color: COLORS.primary,
-  },
-  actionsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: SPACING.md,
-  },
+  tipBadge: { fontFamily: FONTS.family.bodySemibold, fontSize: 11, color: COLORS.primary, letterSpacing: 1.2 },
+  tipText: { fontFamily: FONTS.family.body, fontSize: 15, color: COLORS.textPrimary, marginTop: 8, lineHeight: 22 },
+  tipSource: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textMuted, marginTop: 8 },
+  section: { marginTop: SPACING.xl, paddingHorizontal: SPACING.lg },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  sectionTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 20, color: COLORS.textPrimary },
+  sectionSub: { fontFamily: FONTS.family.body, fontSize: 13, color: COLORS.textSecondary, marginTop: 4, marginBottom: 12 },
+  seeAll: { fontFamily: FONTS.family.bodySemibold, fontSize: 13, color: COLORS.primary },
+  actionsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 12 },
   actionCard: {
-    width: '47%',
-    backgroundColor: COLORS.background,
-    borderRadius: RADIUS.lg,
-    padding: SPACING.lg,
-    alignItems: 'center',
-    ...SHADOWS.sm,
+    width: '47%', backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: 14,
+    borderWidth: 1, borderColor: COLORS.border, ...SHADOWS.sm,
   },
-  actionIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: SPACING.sm,
+  actionIcon: { width: 42, height: 42, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
+  actionLabel: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.textPrimary },
+  ideaRow: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: RADIUS.md,
+    padding: 14, marginBottom: 8, borderWidth: 1, borderColor: COLORS.border,
   },
-  actionLabel: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.textPrimary,
-  },
-  serviceCard: {
-    width: 160,
-    backgroundColor: COLORS.background,
-    borderRadius: RADIUS.lg,
-    padding: SPACING.md,
-    marginRight: SPACING.md,
-    ...SHADOWS.sm,
-  },
-  serviceTag: {
-    position: 'absolute',
-    top: SPACING.sm,
-    right: SPACING.sm,
-    backgroundColor: COLORS.primaryLight,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: RADIUS.sm,
-  },
-  serviceTagText: {
-    fontSize: FONTS.sizes.micro,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.primary,
-  },
-  serviceIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: COLORS.primaryLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: SPACING.sm,
-  },
-  serviceName: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.textPrimary,
-    marginBottom: SPACING.sm,
-  },
-  serviceMeta: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  servicePrice: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.bodyBold,
-    color: COLORS.primary,
-  },
-  serviceDuration: {
-    fontSize: FONTS.sizes.caption,
-    fontFamily: FONTS.family.body,
-    color: COLORS.textMuted,
-  },
+  ideaName: { fontFamily: FONTS.family.bodySemibold, fontSize: 15, color: COLORS.textPrimary },
+  ideaFor: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textSecondary, marginTop: 2 },
   ctaBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: SPACING.lg,
-    marginTop: SPACING.xl,
-    backgroundColor: COLORS.primary,
-    borderRadius: RADIUS.lg,
-    padding: SPACING.lg,
+    marginHorizontal: SPACING.lg, marginTop: SPACING.xl, backgroundColor: COLORS.primary, borderRadius: RADIUS.xl,
+    padding: SPACING.lg, flexDirection: 'row', alignItems: 'center', gap: 12,
   },
   ctaIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: 48, height: 48, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  ctaContent: {
-    flex: 1,
-    marginLeft: SPACING.md,
-  },
-  ctaTitle: {
-    fontSize: FONTS.sizes.bodyLg,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.white,
-  },
-  ctaSubtitle: {
-    fontSize: FONTS.sizes.bodySm,
-    fontFamily: FONTS.family.body,
-    color: 'rgba(255,255,255,0.8)',
-    marginTop: 2,
-  },
-  ctaButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.white,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: RADIUS.full,
-    gap: 6,
-  },
-  ctaButtonText: {
-    fontSize: FONTS.sizes.body,
-    fontFamily: FONTS.family.bodySemibold,
-    color: COLORS.primary,
-  },
+  ctaTitle: { fontFamily: FONTS.family.bodySemibold, fontSize: 15, color: COLORS.white },
+  ctaSubtitle: { fontFamily: FONTS.family.body, fontSize: 12, color: 'rgba(255,255,255,0.8)', marginTop: 2 },
+  ctaButton: { backgroundColor: COLORS.white, paddingHorizontal: 14, paddingVertical: 8, borderRadius: RADIUS.full },
+  ctaButtonText: { fontFamily: FONTS.family.bodySemibold, fontSize: 13, color: COLORS.primary },
 });

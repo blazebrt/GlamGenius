@@ -2,7 +2,7 @@ import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { View, StyleSheet, Platform } from 'react-native';
-import { COLORS, FONTS, RADIUS } from '../../src/theme/colors';
+import { COLORS, FONTS } from '../../src/theme/colors';
 
 export default function TabLayout() {
   return (
@@ -19,25 +19,21 @@ export default function TabLayout() {
         name="home"
         options={{
           title: 'Home',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home-outline" size={22} color={color} />
-          ),
+          tabBarIcon: ({ color }) => <Ionicons name="home-outline" size={22} color={color} />,
         }}
       />
       <Tabs.Screen
         name="services"
         options={{
-          title: 'Services',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="grid-outline" size={22} color={color} />
-          ),
+          title: 'Ideas',
+          tabBarIcon: ({ color }) => <Ionicons name="sparkles-outline" size={22} color={color} />,
         }}
       />
       <Tabs.Screen
         name="scan-tab"
         options={{
-          title: 'Scan',
-          tabBarIcon: ({ color, size }) => (
+          title: 'Check',
+          tabBarIcon: () => (
             <View style={styles.scanButton}>
               <Ionicons name="scan" size={24} color={COLORS.white} />
             </View>
@@ -49,18 +45,14 @@ export default function TabLayout() {
         name="history"
         options={{
           title: 'History',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="time-outline" size={22} color={color} />
-          ),
+          tabBarIcon: ({ color }) => <Ionicons name="time-outline" size={22} color={color} />,
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person-outline" size={22} color={color} />
-          ),
+          tabBarIcon: ({ color }) => <Ionicons name="person-outline" size={22} color={color} />,
         }}
       />
     </Tabs>
@@ -84,7 +76,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: COLORS.black,
+    backgroundColor: COLORS.primary,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 20,

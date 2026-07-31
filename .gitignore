@@ -114,3 +114,7 @@ android-sdk/ -e
 credentials.json
 *.key
 .credentials
+
+# Metro
+.metro-cache/
+frontend/.metro-cache/

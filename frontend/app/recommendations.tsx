@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,371 +6,174 @@ import {
   ScrollView,
   TouchableOpacity,
 } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
-import { useCartStore } from '../src/store/cartStore';
+import { usePlanStore } from '../src/store/planStore';
 import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 
-const ADDON_PRODUCTS = [
-  { id: 'p1', name: 'Hair Serum (50ml)', price: 299, type: 'product' as const },
-  { id: 'p2', name: 'Face Moisturizer', price: 399, type: 'product' as const },
-  { id: 'p3', name: 'Sunscreen SPF 50', price: 349, type: 'product' as const },
-];
-
-const ADDON_SERVICES = [
-  { id: 'a1', name: 'Head Massage', price: 199, duration: 15, type: 'addon' as const },
-  { id: 'a2', name: 'Hand Massage', price: 149, duration: 10, type: 'addon' as const },
-  { id: 'a3', name: 'Deep Conditioning', price: 299, duration: 20, type: 'addon' as const },
-];
-
 export default function RecommendationsScreen() {
+  const { plan: planParam } = useLocalSearchParams();
   const router = useRouter();
-  const params = useLocalSearchParams();
   const insets = useSafeAreaInsets();
-  const { addItem, getItemCount, items, removeItem } = useCartStore();
+  const latestPlan = usePlanStore((s) => s.latestPlan);
 
-  const recommendations = React.useMemo(() => {
-    if (!params.recommendations) return null;
+  const plan = useMemo(() => {
+    if (latestPlan && typeof latestPlan === 'object') return latestPlan;
     try {
-      return JSON.parse(params.recommendations as string);
-    } catch (error) {
-      console.error('Failed to parse recommendations:', error);
-      return null;
+      if (typeof planParam === 'string' && planParam.length < 50000) {
+        return JSON.parse(planParam);
+      }
+    } catch {
+      /* ignore bad legacy params */
     }
-  }, [params.recommendations]);
+    return {};
+  }, [latestPlan, planParam]);
 
-  const isInCart = (itemId: string) => items.some(item => item.id === itemId);
-  const isServiceInCart = (serviceName: string) => items.some(item => item.name === serviceName);
+  const style = plan.fashion || plan.style || {};
+  const nutrition = plan.nutrition || {};
+  const care = plan.care_ingredients || {};
+  const salon = plan.salon_suggestions || [];
+  const daily = plan.daily_care || {};
+  const fashion = plan.fashion || {};
 
-  const handleToggleCartItem = (item: any) => {
-    if (isInCart(item.id)) removeItem(item.id);
-    else addItem(item);
-  };
-
-  const handleToggleServiceCart = (service: any) => {
-    const existingItem = items.find(item => item.name === service.name);
-    if (existingItem) removeItem(existingItem.id);
-    else {
-      const price = typeof service.price === 'number'
-        ? service.price
-        : parseInt(String(service.price || '').replace(/[^\d]/g, ''), 10) || 999;
-      addItem({
-        id: `service-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        type: 'service',
-        name: service.name,
-        price,
-        duration: service.duration || 45,
-      });
-    }
-  };
-
-  const cartCount = getItemCount();
-
-  if (!recommendations) {
-    return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        <View style={styles.emptyContainer}>
-          <Ionicons name="alert-circle-outline" size={48} color={COLORS.border} />
-          <Text style={styles.emptyText}>No recommendations available</Text>
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-            <Text style={styles.backBtnText}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
-  const services = recommendations.services || recommendations.top_recommendations || [];
-  const aftercare = recommendations.aftercare_tips || [];
-  const rawCost =
-    recommendations.estimated_total_cost ??
-    recommendations.total_estimated_cost ??
-    (params.estimated_total_cost ? Number(params.estimated_total_cost) : null) ??
-    services.reduce((acc: number, s: any) => acc + (Number(s.price) || 0), 0);
-  const totalCost = typeof rawCost === 'number' ? rawCost : Number(String(rawCost).replace(/[^\d.]/g, '')) || 0;
-  const rawDuration =
-    recommendations.estimated_duration ??
-    recommendations.total_duration ??
-    (params.estimated_duration ? Number(params.estimated_duration) : null) ??
-    90;
-  const totalDuration = typeof rawDuration === 'number' ? rawDuration : Number(String(rawDuration).replace(/[^\d]/g, '')) || 90;
+  const colors =
+    fashion.best_clothing_colors ||
+    style.best_clothing_colors ||
+    [];
+  const outfits =
+    fashion.wardrobe_ideas_india ||
+    fashion.outfits ||
+    style.wardrobe_ideas_india ||
+    [];
+  const silhouettes = fashion.silhouettes_for_you || fashion.silhouettes || [];
+  const fits = fashion.fits_and_proportions || fashion.fits || [];
+  const trends = fashion.current_trends_to_try || fashion.trends || [];
+  const colorBlurb = typeof fashion.colours === 'string' ? fashion.colours : null;
+  const silBlurb = typeof silhouettes === 'string' ? silhouettes : null;
+  const fitBlurb = typeof fits === 'string' ? fits : null;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.headerBtn} onPress={() => router.back()}>
+      <View style={styles.top}>
+        <TouchableOpacity onPress={() => router.back()} accessibilityRole="button">
           <Ionicons name="arrow-back" size={22} color={COLORS.textPrimary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Your Package</Text>
-        <TouchableOpacity style={styles.headerBtn} onPress={() => router.push('/cart')}>
-          <Ionicons name="cart-outline" size={22} color={COLORS.textPrimary} />
-          {cartCount > 0 && (
-            <View style={styles.cartBadge}>
-              <Text style={styles.cartBadgeText}>{cartCount}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
+        <Text style={styles.topTitle}>Your plan</Text>
+        <View style={{ width: 22 }} />
       </View>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Summary Card */}
-        <Animated.View entering={FadeIn} style={styles.summaryCard}>
-          <Text style={styles.summaryLabel}>ESTIMATED COST</Text>
-          <Text style={styles.summaryValue}>₹{totalCost.toLocaleString('en-IN')}</Text>
-          <View style={styles.summaryMeta}>
-            <View style={styles.summaryMetaItem}>
-              <Ionicons name="time-outline" size={16} color={COLORS.textMuted} />
-              <Text style={styles.summaryMetaText}>~{totalDuration} min</Text>
-            </View>
-            <View style={styles.summaryMetaItem}>
-              <Ionicons name="sparkles-outline" size={16} color={COLORS.textMuted} />
-              <Text style={styles.summaryMetaText}>{services.length} services</Text>
-            </View>
+      <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: 100 }}>
+        {!plan?.headline && !style?.best_clothing_colors ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>No plan loaded</Text>
+            <Text style={styles.muted}>Build a style plan or finish a quiz first.</Text>
+            <TouchableOpacity style={styles.linkBtn} onPress={() => router.replace('/get-advice')}>
+              <Text style={styles.linkBtnText}>Create style plan</Text>
+            </TouchableOpacity>
           </View>
-        </Animated.View>
+        ) : (
+          <>
+            <Text style={styles.headline}>{plan.headline || 'Your personal style & wellness plan'}</Text>
 
-        {/* Recommended Services */}
-        <Animated.View entering={FadeInDown.delay(100)} style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="star-outline" size={20} color={COLORS.black} />
-            <Text style={styles.sectionTitle}>Recommended Services</Text>
-          </View>
-          {services.map((service: any, index: number) => {
-            const inCart = isServiceInCart(service.name || service.service);
-            return (
-              <TouchableOpacity
-                key={index}
-                style={[styles.serviceCard, inCart && styles.serviceCardActive]}
-                onPress={() => handleToggleServiceCart({
-                  name: service.name || service.service,
-                  price: service.price,
-                  duration: service.duration,
-                })}
-              >
-                <View style={styles.serviceInfo}>
-                  <Text style={styles.serviceName}>{service.name || service.service}</Text>
-                  <Text style={styles.serviceReason}>{service.reason || service.why_recommended}</Text>
-                  {(service.expected_result || service.expected_results) ? (
-                    <View style={styles.serviceOutcomeRow}>
-                      <Ionicons name="trending-up" size={13} color={COLORS.textSecondary} />
-                      <Text style={styles.serviceOutcomeText}>{service.expected_result || service.expected_results}</Text>
-                    </View>
-                  ) : null}
-                </View>
-                <View style={[styles.addBtn, inCart && styles.addBtnActive]}>
-                  <Ionicons name={inCart ? 'checkmark' : 'add'} size={20} color={inCart ? COLORS.white : COLORS.black} />
-                </View>
-              </TouchableOpacity>
-            );
-          })}
-        </Animated.View>
+            <Text style={styles.section}>Colours & outfits</Text>
+            {!!colorBlurb && <Text style={styles.line}>{colorBlurb}</Text>}
+            {(Array.isArray(colors) ? colors : []).map((c: any, i: number) => (
+              <Text key={i} style={styles.line}>• {c.color || c} — {c.why || ''}</Text>
+            ))}
+            {!!silBlurb && <Text style={styles.line}>Silhouettes: {silBlurb}</Text>}
+            {(Array.isArray(silhouettes) ? silhouettes : []).map((s: any, i: number) => (
+              <Text key={`sil${i}`} style={styles.line}>Fit · {s.silhouette || s} — {s.why || ''}</Text>
+            ))}
+            {!!fitBlurb && <Text style={styles.muted}>{fitBlurb}</Text>}
+            {(Array.isArray(fits) ? fits : []).map((t: any, i: number) => (
+              <Text key={`fit${i}`} style={styles.muted}>· {typeof t === 'string' ? t : t.tip || JSON.stringify(t)}</Text>
+            ))}
+            {(Array.isArray(outfits) ? outfits : []).map((w: any, i: number) => (
+              <View key={`w${i}`} style={styles.card}>
+                <Text style={styles.cardTitle}>{w.occasion || w.name || 'Look'}</Text>
+                <Text style={styles.line}>{w.outfit_idea || w.outfit || w.description || (typeof w === 'string' ? w : '')}</Text>
+                {!!w.why_it_works && <Text style={styles.muted}>{w.why_it_works}</Text>}
+                {!!w.trend_note && <Text style={styles.muted}>Trend: {w.trend_note}</Text>}
+              </View>
+            ))}
+            {(Array.isArray(trends) ? trends : []).map((t: any, i: number) => (
+              <View key={`tr${i}`} style={styles.card}>
+                <Text style={styles.cardTitle}>{t.trend || t.name || 'Trend'}</Text>
+                <Text style={styles.line}>{t.how_to_wear_it_for_you || t.how || (typeof t === 'string' ? t : '')}</Text>
+                {!!t.skip_if && <Text style={styles.muted}>Skip if: {t.skip_if}</Text>}
+              </View>
+            ))}
 
-        {/* Expected Outcome */}
-        <Animated.View entering={FadeInDown.delay(150)} style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="trophy-outline" size={20} color={COLORS.black} />
-            <Text style={styles.sectionTitle}>Expected Outcome</Text>
-          </View>
-          <View style={styles.outcomeCard}>
-            {recommendations.expected_outcome ? (
-              <View style={styles.outcomeHeadline}>
-                <Text style={styles.outcomeHeadlineText}>{recommendations.expected_outcome}</Text>
-              </View>
-            ) : null}
-            <View style={styles.outcomeItem}>
-              <View style={styles.outcomeIcon}>
-                <Ionicons name="sparkles" size={18} color={COLORS.black} />
-              </View>
-              <View style={styles.outcomeContent}>
-                <Text style={styles.outcomeLabel}>Instant Results</Text>
-                <Text style={styles.outcomeText}>Visibly refreshed and revitalized appearance immediately after treatment</Text>
-              </View>
-            </View>
-            <View style={styles.outcomeDivider} />
-            <View style={styles.outcomeItem}>
-              <View style={styles.outcomeIcon}>
-                <Ionicons name="calendar" size={18} color={COLORS.black} />
-              </View>
-              <View style={styles.outcomeContent}>
-                <Text style={styles.outcomeLabel}>Long-term Benefits</Text>
-                <Text style={styles.outcomeText}>
-                  {(recommendations.maintenance_tips && recommendations.maintenance_tips[0])
-                    || 'Improved skin/hair health with regular treatments over 4-6 weeks'}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.outcomeDivider} />
-            <View style={styles.outcomeItem}>
-              <View style={styles.outcomeIcon}>
-                <Ionicons name="shield-checkmark" size={18} color={COLORS.black} />
-              </View>
-              <View style={styles.outcomeContent}>
-                <Text style={styles.outcomeLabel}>Safety Assured</Text>
-                <Text style={styles.outcomeText}>All treatments performed by certified professionals using premium products</Text>
-              </View>
-            </View>
-          </View>
-        </Animated.View>
+            <Text style={styles.section}>Daily care</Text>
+            {(daily.morning || []).map((s: string, i: number) => (
+              <Text key={`m${i}`} style={styles.line}>AM · {s}</Text>
+            ))}
+            {(daily.evening || []).map((s: string, i: number) => (
+              <Text key={`e${i}`} style={styles.line}>PM · {s}</Text>
+            ))}
 
-        {/* Add-on Services */}
-        <Animated.View entering={FadeInDown.delay(200)} style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="add-circle-outline" size={20} color={COLORS.black} />
-            <Text style={styles.sectionTitle}>Enhance Your Experience</Text>
-          </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {ADDON_SERVICES.map((addon) => {
-              const inCart = isInCart(addon.id);
-              return (
-                <TouchableOpacity
-                  key={addon.id}
-                  style={[styles.addonCard, inCart && styles.addonCardActive]}
-                  onPress={() => handleToggleCartItem({ ...addon, quantity: 1 })}
-                >
-                  <Text style={styles.addonName}>{addon.name}</Text>
-                  <Text style={styles.addonDuration}>{addon.duration} min</Text>
-                  <Text style={styles.addonPrice}>₹{addon.price}</Text>
-                  <View style={[styles.addonCheck, inCart && styles.addonCheckActive]}>
-                    <Ionicons name={inCart ? 'checkmark' : 'add'} size={14} color={inCart ? COLORS.white : COLORS.black} />
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </Animated.View>
+            <Text style={styles.section}>Ingredients to look for</Text>
+            {(care.for_skin || []).map((ing: any, i: number) => (
+              <Text key={`s${i}`} style={styles.line}>Skin · {ing.ingredient} — {ing.why}</Text>
+            ))}
+            {(care.for_hair || []).map((ing: any, i: number) => (
+              <Text key={`h${i}`} style={styles.line}>Hair · {ing.ingredient} — {ing.why}</Text>
+            ))}
 
-        {/* Recommended Products */}
-        <Animated.View entering={FadeInDown.delay(300)} style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="bag-outline" size={20} color={COLORS.black} />
-            <Text style={styles.sectionTitle}>Recommended Products</Text>
-          </View>
-          <View style={styles.productsGrid}>
-            {ADDON_PRODUCTS.map((product) => {
-              const inCart = isInCart(product.id);
-              return (
-                <TouchableOpacity
-                  key={product.id}
-                  style={[styles.productCard, inCart && styles.productCardActive]}
-                  onPress={() => handleToggleCartItem({ ...product, quantity: 1 })}
-                >
-                  <View style={styles.productIcon}>
-                    <Ionicons name="gift-outline" size={20} color={COLORS.black} />
-                  </View>
-                  <Text style={styles.productName}>{product.name}</Text>
-                  <Text style={styles.productPrice}>₹{product.price}</Text>
-                  <View style={[styles.productBtn, inCart && styles.productBtnActive]}>
-                    <Text style={[styles.productBtnText, inCart && styles.productBtnTextActive]}>
-                      {inCart ? 'Added ✓' : 'Add'}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </Animated.View>
+            <Text style={styles.section}>Indian foods</Text>
+            {(nutrition.ingredients || []).map((n: any, i: number) => (
+              <View key={i} style={styles.card}>
+                <Text style={styles.cardTitle}>{n.ingredient}</Text>
+                <Text style={styles.muted}>{n.why_for_skin_or_hair}</Text>
+                {(n.indian_foods || []).map((f: any, j: number) => (
+                  <Text key={j} style={styles.line}>· {f.food} — {f.serving_idea}</Text>
+                ))}
+              </View>
+            ))}
 
-        {/* Aftercare Tips */}
-        {aftercare.length > 0 && (
-          <Animated.View entering={FadeInDown.delay(400)} style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Ionicons name="heart-outline" size={20} color={COLORS.black} />
-              <Text style={styles.sectionTitle}>Aftercare Tips</Text>
-            </View>
-            <View style={styles.tipsCard}>
-              {aftercare.slice(0, 3).map((tip: string, index: number) => (
-                <View key={index} style={styles.tipItem}>
-                  <View style={styles.tipDot} />
-                  <Text style={styles.tipText}>{tip}</Text>
-                </View>
-              ))}
-            </View>
-          </Animated.View>
+            <Text style={styles.section}>Salon ideas</Text>
+            <Text style={styles.muted}>Suggestions only — no pay or booking in-app.</Text>
+            {salon.map((s: any, i: number) => (
+              <Text key={i} style={styles.line}>• {s.service}: {s.for}</Text>
+            ))}
+
+            <Text style={styles.section}>This week</Text>
+            {(plan.top_3_actions_this_week || []).map((a: string, i: number) => (
+              <Text key={i} style={styles.line}>{i + 1}. {a}</Text>
+            ))}
+
+            <Text style={styles.disclaimer}>
+              {plan.disclaimer || 'General wellness and style guidance — not medical advice.'}
+            </Text>
+          </>
         )}
-
-        <View style={{ height: 140 }} />
       </ScrollView>
-
-      {/* Bottom Bar */}
-      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 20 }]}>
-        <View style={styles.bottomInfo}>
-          <Text style={styles.bottomItems}>{cartCount} items in cart</Text>
-        </View>
-        <TouchableOpacity style={styles.bottomBtn} onPress={() => router.push('/cart')}>
-          <Text style={styles.bottomBtnText}>View Cart</Text>
-          <Ionicons name="arrow-forward" size={18} color={COLORS.white} />
-        </TouchableOpacity>
-      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm, borderBottomWidth: 1, borderBottomColor: COLORS.border },
-  headerBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.backgroundSecondary, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: FONTS.sizes.h3, fontFamily: FONTS.family.heading, color: COLORS.textPrimary },
-  cartBadge: { position: 'absolute', top: -2, right: -2, backgroundColor: COLORS.black, width: 18, height: 18, borderRadius: 9, justifyContent: 'center', alignItems: 'center' },
-  cartBadgeText: { fontSize: 10, fontFamily: FONTS.family.bodyBold, color: COLORS.white },
-  content: { padding: SPACING.lg, paddingBottom: 140 },
-  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: SPACING.sm },
-  emptyText: { fontSize: FONTS.sizes.body, fontFamily: FONTS.family.body, color: COLORS.textSecondary },
-  backBtn: { backgroundColor: COLORS.black, paddingVertical: 12, paddingHorizontal: 24, borderRadius: RADIUS.full, marginTop: SPACING.sm },
-  backBtnText: { fontSize: FONTS.sizes.body, fontFamily: FONTS.family.bodySemibold, color: COLORS.white },
-  summaryCard: { backgroundColor: COLORS.backgroundSecondary, borderRadius: RADIUS.lg, padding: SPACING.xl, alignItems: 'center', marginBottom: SPACING.lg, borderWidth: 1, borderColor: COLORS.border },
-  summaryLabel: { fontSize: FONTS.sizes.caption, fontFamily: FONTS.family.bodySemibold, color: COLORS.textMuted, letterSpacing: 1 },
-  summaryValue: { fontSize: FONTS.sizes.display, fontFamily: FONTS.family.heading, color: COLORS.black, marginTop: 4 },
-  summaryMeta: { flexDirection: 'row', gap: SPACING.lg, marginTop: SPACING.md },
-  summaryMetaItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  summaryMetaText: { fontSize: FONTS.sizes.bodySm, fontFamily: FONTS.family.body, color: COLORS.textMuted },
-  section: { marginBottom: SPACING.lg },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.md },
-  sectionTitle: { fontSize: FONTS.sizes.h4, fontFamily: FONTS.family.heading, color: COLORS.textPrimary },
-  serviceCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.md, marginBottom: SPACING.sm, borderWidth: 1, borderColor: COLORS.border },
-  serviceCardActive: { borderColor: COLORS.black, backgroundColor: COLORS.backgroundSecondary },
-  serviceInfo: { flex: 1, marginRight: SPACING.sm },
-  serviceName: { fontSize: FONTS.sizes.body, fontFamily: FONTS.family.bodySemibold, color: COLORS.textPrimary },
-  serviceReason: { fontSize: FONTS.sizes.bodySm, fontFamily: FONTS.family.body, color: COLORS.textSecondary, marginTop: 4 },
-  serviceOutcomeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
-  serviceOutcomeText: { flex: 1, fontSize: FONTS.sizes.caption, fontFamily: FONTS.family.bodyMedium, color: COLORS.textSecondary },
-  addBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: COLORS.white, borderWidth: 2, borderColor: COLORS.black, justifyContent: 'center', alignItems: 'center' },
-  addBtnActive: { backgroundColor: COLORS.black, borderColor: COLORS.black },
-  outcomeCard: { backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border },
-  outcomeHeadline: { backgroundColor: COLORS.backgroundSecondary, borderRadius: RADIUS.md, padding: SPACING.md, marginBottom: SPACING.md },
-  outcomeHeadlineText: { fontSize: FONTS.sizes.bodySm, fontFamily: FONTS.family.body, color: COLORS.textPrimary, lineHeight: 20, fontStyle: 'italic' },
-  outcomeItem: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACING.md },
-  outcomeIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: COLORS.backgroundSecondary, justifyContent: 'center', alignItems: 'center' },
-  outcomeContent: { flex: 1 },
-  outcomeLabel: { fontSize: FONTS.sizes.body, fontFamily: FONTS.family.bodySemibold, color: COLORS.textPrimary },
-  outcomeText: { fontSize: FONTS.sizes.bodySm, fontFamily: FONTS.family.body, color: COLORS.textSecondary, marginTop: 4, lineHeight: 18 },
-  outcomeDivider: { height: 1, backgroundColor: COLORS.border, marginVertical: SPACING.md },
-  addonCard: { backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.md, marginRight: SPACING.sm, borderWidth: 1, borderColor: COLORS.border, minWidth: 140 },
-  addonCardActive: { borderColor: COLORS.black, backgroundColor: COLORS.backgroundSecondary },
-  addonName: { fontSize: FONTS.sizes.bodySm, fontFamily: FONTS.family.bodyMedium, color: COLORS.textPrimary },
-  addonDuration: { fontSize: FONTS.sizes.caption, fontFamily: FONTS.family.body, color: COLORS.textMuted, marginTop: 4 },
-  addonPrice: { fontSize: FONTS.sizes.body, fontFamily: FONTS.family.bodySemibold, color: COLORS.black, marginTop: 4 },
-  addonCheck: { width: 28, height: 28, borderRadius: 14, backgroundColor: COLORS.backgroundSecondary, justifyContent: 'center', alignItems: 'center', marginTop: SPACING.sm, borderWidth: 1, borderColor: COLORS.border },
-  addonCheckActive: { backgroundColor: COLORS.black, borderColor: COLORS.black },
-  productsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACING.sm },
-  productCard: { width: '48%', backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border },
-  productCardActive: { borderColor: COLORS.black, backgroundColor: COLORS.backgroundSecondary },
-  productIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.backgroundSecondary, justifyContent: 'center', alignItems: 'center', marginBottom: SPACING.sm },
-  productName: { fontSize: FONTS.sizes.bodySm, fontFamily: FONTS.family.bodyMedium, color: COLORS.textPrimary, height: 36 },
-  productPrice: { fontSize: FONTS.sizes.body, fontFamily: FONTS.family.bodySemibold, color: COLORS.black, marginTop: 6 },
-  productBtn: { backgroundColor: COLORS.backgroundSecondary, borderRadius: RADIUS.full, paddingVertical: 8, marginTop: SPACING.sm, borderWidth: 1, borderColor: COLORS.border },
-  productBtnActive: { backgroundColor: COLORS.black, borderColor: COLORS.black },
-  productBtnText: { fontSize: FONTS.sizes.bodySm, fontFamily: FONTS.family.bodySemibold, color: COLORS.textSecondary, textAlign: 'center' },
-  productBtnTextActive: { color: COLORS.white },
-  tipsCard: { backgroundColor: COLORS.backgroundSecondary, borderRadius: RADIUS.lg, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border },
-  tipItem: { flexDirection: 'row', alignItems: 'flex-start', marginTop: SPACING.sm, gap: SPACING.sm },
-  tipDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: COLORS.black, marginTop: 6 },
-  tipText: { flex: 1, fontSize: FONTS.sizes.bodySm, fontFamily: FONTS.family.body, color: COLORS.textSecondary, lineHeight: 20 },
-  bottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: COLORS.background, paddingHorizontal: SPACING.lg, paddingTop: SPACING.md, borderTopWidth: 1, borderTopColor: COLORS.border },
-  bottomInfo: { flex: 1 },
-  bottomItems: { fontSize: FONTS.sizes.body, fontFamily: FONTS.family.body, color: COLORS.textSecondary },
-  bottomBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.black, paddingVertical: 14, paddingHorizontal: 24, borderRadius: RADIUS.full, gap: SPACING.sm },
-  bottomBtnText: { fontSize: FONTS.sizes.body, fontFamily: FONTS.family.bodySemibold, color: COLORS.white },
+  top: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: SPACING.lg, paddingVertical: 12,
+  },
+  topTitle: { fontFamily: FONTS.family.bodySemibold, fontSize: 16, color: COLORS.textPrimary },
+  headline: { fontFamily: FONTS.family.heading, fontSize: 26, color: COLORS.textPrimary, marginBottom: 8 },
+  section: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary, marginTop: 22, marginBottom: 8 },
+  line: { fontFamily: FONTS.family.body, fontSize: 14, color: COLORS.textPrimary, marginBottom: 6, lineHeight: 20 },
+  muted: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textSecondary, marginBottom: 6 },
+  card: {
+    backgroundColor: COLORS.backgroundSecondary, borderRadius: RADIUS.md, padding: 12, marginBottom: 8,
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  cardTitle: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.primary, marginBottom: 4, textTransform: 'capitalize' },
+  disclaimer: { marginTop: 28, fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textMuted, lineHeight: 18 },
+  empty: { alignItems: 'center', paddingTop: 40 },
+  emptyTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 20, color: COLORS.textPrimary, marginBottom: 8 },
+  linkBtn: {
+    marginTop: 16, backgroundColor: COLORS.primary, paddingHorizontal: 16, paddingVertical: 12, borderRadius: RADIUS.md,
+  },
+  linkBtnText: { fontFamily: FONTS.family.bodySemibold, color: COLORS.white },
 });
