@@ -19,7 +19,7 @@ import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 export default function StyleQuizScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { userId, createUser } = useUserStore();
+  const { userId } = useUserStore();
   const setLatestPlan = usePlanStore((s) => s.setLatestPlan);
   const [questions, setQuestions] = useState<any[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -50,19 +50,17 @@ export default function StyleQuizScreen() {
   };
 
   const submit = async () => {
+    // Saving a quiz needs somewhere to save it, so sign-in comes first.
+    if (!userId) {
+      Alert.alert('Create a free account', 'Sign up to save your quiz and see your plan.', [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'Create account', onPress: () => router.push('/(auth)/welcome') },
+      ]);
+      return;
+    }
     setSubmitting(true);
     try {
-      let activeUserId = userId;
-      if (!activeUserId) {
-        const created = await createUser('Guest');
-        if (!created) {
-          Alert.alert('Profile error', 'Could not create a guest profile. Try again.');
-          return;
-        }
-        activeUserId = created.id;
-      }
       const payload = {
-        user_id: activeUserId,
         answers: Object.entries(answers).map(([question_id, answer]) => ({ question_id, answer })),
         occasion: 'everyday',
         budget: 'mid',

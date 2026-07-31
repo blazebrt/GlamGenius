@@ -21,7 +21,7 @@ export default function WelcomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
-  const { userId, setUserId, createUser } = useUserStore();
+  const { userId, setUserId } = useUserStore();
 
   useEffect(() => {
     checkExistingUser();
@@ -41,16 +41,10 @@ export default function WelcomeScreen() {
     }
   };
 
-  const handleGetStarted = async () => {
-    setLoading(true);
-    try {
-      const newUser = await createUser('Guest');
-      if (newUser?.id) {
-        router.replace('/(tabs)/home');
-      }
-    } finally {
-      setLoading(false);
-    }
+  // No account needed to try it. The scan screen gives a free preview and
+  // asks for a sign-up once there is something worth saving.
+  const handleGetStarted = () => {
+    router.push('/scan?scanType=face&preview=1');
   };
 
   if (loading && userId) {
@@ -97,11 +91,12 @@ export default function WelcomeScreen() {
             <ActivityIndicator color={COLORS.white} />
           ) : (
             <>
-              <Text style={styles.ctaText}>Start your check</Text>
+              <Text style={styles.ctaText}>Try a free check</Text>
               <Ionicons name="arrow-forward" size={20} color={COLORS.white} />
             </>
           )}
         </TouchableOpacity>
+        <Text style={styles.freeNote}>No account needed to see your colours</Text>
         <TouchableOpacity onPress={() => router.push('/(auth)/welcome')} style={{ marginTop: 14 }}>
           <Text style={styles.secondaryLink}>Already have an account? Sign in</Text>
         </TouchableOpacity>
@@ -162,6 +157,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
   },
   ctaText: { fontFamily: FONTS.family.bodySemibold, fontSize: 16, color: COLORS.white },
+  freeNote: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textMuted, textAlign: 'center', marginTop: 10 },
   secondaryLink: { fontFamily: FONTS.family.bodyMedium, fontSize: 14, color: COLORS.primary, textAlign: 'center' },
   disclaimer: { fontFamily: FONTS.family.body, fontSize: 11, color: COLORS.textMuted, textAlign: 'center', marginTop: 12 },
 });

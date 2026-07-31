@@ -49,7 +49,7 @@ interface UserStore {
   setUser: (user: UserProfile | null) => void;
   initializeUser: () => Promise<void>;
   fetchUser: () => Promise<void>;
-  createUser: (name: string, email?: string, extra?: Partial<UserProfile> & { password?: string }) => Promise<UserProfile | null>;
+  createUser: (name: string, email: string, extra: Partial<UserProfile> & { password: string }) => Promise<UserProfile | null>;
   login: (email: string, password: string) => Promise<UserProfile | null>;
   updateUser: (data: Partial<UserProfile>) => Promise<void>;
   updateUserProfile: (data: Partial<UserProfile>) => void;
@@ -112,11 +112,12 @@ export const useUserStore = create<UserStore>((set, get) => ({
   createUser: async (name, email, extra) => {
     set({ loading: true });
     try {
+      // An email and password are required — anonymous accounts no longer exist.
       const response = await api.post('/users', {
         name,
-        email: email || '',
+        email,
         phone: extra?.phone || '',
-        password: (extra as any)?.password || '',
+        password: extra.password,
         age: extra?.age,
         city: extra?.city,
         diet: extra?.diet,
@@ -201,7 +202,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
   logout: async () => {
     try {
       await clearAuthToken();
-      await AsyncStorage.multiRemove([USER_ID_KEY, 'glamgenius_cart']);
+      await AsyncStorage.multiRemove([USER_ID_KEY]);
     } catch (error) {
       console.error('Error clearing session:', error);
     }

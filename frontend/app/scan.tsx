@@ -63,8 +63,12 @@ export default function ScanScreen() {
   const [phase, setPhase] = useState<ScanPhase>('camera');
   const [step, setStep] = useState(0);
   const [analysis, setAnalysis] = useState<any>(null);
+  const [preview, setPreview] = useState<any>(null);
   const [errorLimit, setErrorLimit] = useState(false);
   const [cameraError, setCameraError] = useState(false);
+
+  // Signed-out visitors get a free teaser instead of the full check.
+  const isPreviewMode = !userId;
 
   useEffect(() => {
     if (phase !== 'processing') return;
@@ -76,7 +80,41 @@ export default function ScanScreen() {
     return () => clearInterval(t);
   }, [phase]);
 
+  const runPreview = async (base64: string) => {
+    setPhase('processing');
+    setErrorLimit(false);
+    try {
+      const res = await api.post('/scan/preview', {
+        image_base64: base64,
+        scan_type: scanType,
+      });
+      setPreview(res.data);
+      setPhase('results');
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      if (err?.response?.status === 429) {
+        notify(
+          'Free previews used',
+          detail?.message || 'Create a free account to keep going.',
+          [
+            { text: 'Not now', style: 'cancel' },
+            { text: 'Create account', onPress: () => router.push('/(auth)/welcome') },
+          ]
+        );
+        setPhase('camera');
+        return;
+      }
+      console.error('preview failed', err);
+      notify('Check failed', 'Could not complete the preview. Please try again.');
+      setPhase('camera');
+    }
+  };
+
   const runAnalysis = async (base64: string) => {
+    if (isPreviewMode) {
+      await runPreview(base64);
+      return;
+    }
     setPhase('processing');
     setErrorLimit(false);
     try {
@@ -163,6 +201,24 @@ export default function ScanScreen() {
         <Text style={styles.processingStep}>{PROCESSING_STEPS[step]}</Text>
         <Text style={styles.disclaimerMini}>Not a diagnosis — style & wellness guidance only.</Text>
       </View>
+    );
+  }
+
+  if (phase === 'results' && preview) {
+    return (
+      <PreviewView
+        preview={preview}
+        insets={insets}
+        onSignUp={() => router.push('/(auth)/welcome')}
+        onClose={() => {
+          try {
+            if (router.canGoBack()) router.back();
+            else router.replace('/');
+          } catch {
+            router.replace('/');
+          }
+        }}
+      />
     );
   }
 
@@ -262,6 +318,79 @@ export default function ScanScreen() {
           </TouchableOpacity>
           <View style={{ width: 72 }} />
         </View>
+      </View>
+    </View>
+  );
+}
+
+function PreviewView({
+  preview,
+  insets,
+  onSignUp,
+  onClose,
+}: {
+  preview: any;
+  insets: any;
+  onSignUp: () => void;
+  onClose: () => void;
+}) {
+  const profile = preview.profile || {};
+  const colors = preview.best_clothing_colors || [];
+  const locked = preview.locked || [];
+  const moreColors = Math.max(0, (preview.total_colors_found || 0) - colors.length);
+
+  return (
+    <View style={[styles.container, { backgroundColor: COLORS.backgroundSecondary, paddingTop: insets.top }]}>
+      <View style={styles.resultsHeader}>
+        <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color={COLORS.textPrimary} /></TouchableOpacity>
+        <Text style={styles.resultsTitle}>Your colours</Text>
+        <View style={{ width: 24 }} />
+      </View>
+
+      <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: 160 }}>
+        <Animated.View entering={FadeInDown} style={styles.previewCard}>
+          <Text style={styles.sectionTitle}>What we can see</Text>
+          <Text style={styles.previewTone}>
+            {profile.skin_tone ? `${profile.skin_tone} skin tone` : 'Skin tone read'}
+            {profile.undertone ? ` · ${profile.undertone} undertone` : ''}
+          </Text>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(100)} style={styles.previewCard}>
+          <Text style={styles.sectionTitle}>Colours that suit you</Text>
+          {colors.map((c: any, i: number) => (
+            <View key={i} style={styles.previewColorRow}>
+              <View style={[styles.previewSwatch, { backgroundColor: c.hex_hint || COLORS.primary }]} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.previewColorName}>{c.color}</Text>
+                {!!c.why && <Text style={styles.previewColorWhy}>{c.why}</Text>}
+              </View>
+            </View>
+          ))}
+          {moreColors > 0 && (
+            <Text style={styles.previewMore}>+{moreColors} more in your full result</Text>
+          )}
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(200)} style={[styles.previewCard, styles.previewLockedCard]}>
+          <View style={styles.previewLockRow}>
+            <Ionicons name="lock-closed" size={18} color={COLORS.primary} />
+            <Text style={styles.sectionTitle}>  Create a free account to unlock</Text>
+          </View>
+          {locked.map((item: string, i: number) => (
+            <Text key={i} style={styles.previewLockedItem}>• {item}</Text>
+          ))}
+        </Animated.View>
+
+        <Text style={styles.previewDisclaimer}>{preview.meta?.disclaimer}</Text>
+      </ScrollView>
+
+      <View style={[styles.previewCtaBar, { paddingBottom: insets.bottom + 16 }]}>
+        <TouchableOpacity style={styles.previewCtaButton} onPress={onSignUp} activeOpacity={0.85}>
+          <Text style={styles.previewCtaText}>Create free account</Text>
+          <Ionicons name="arrow-forward" size={18} color={COLORS.white} />
+        </TouchableOpacity>
+        <Text style={styles.previewCtaNote}>Free — saves your result and your history</Text>
       </View>
     </View>
   );
@@ -522,6 +651,41 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.lg, paddingVertical: 12,
   },
   resultsTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 20, color: COLORS.textPrimary },
+  previewCard: {
+    backgroundColor: COLORS.card, borderRadius: RADIUS.xl, padding: SPACING.lg, marginBottom: SPACING.md,
+    borderWidth: 1, borderColor: COLORS.border, ...SHADOWS.sm,
+  },
+  previewTone: {
+    fontFamily: FONTS.family.bodySemibold, fontSize: 16, color: COLORS.primary,
+    textTransform: 'capitalize',
+  },
+  previewColorRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+  previewSwatch: { width: 44, height: 44, borderRadius: 10, borderWidth: 1, borderColor: COLORS.border },
+  previewColorName: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.textPrimary },
+  previewColorWhy: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textSecondary, marginTop: 2, lineHeight: 17 },
+  previewMore: { fontFamily: FONTS.family.bodyMedium, fontSize: 13, color: COLORS.primary, marginTop: 4 },
+  previewLockedCard: { backgroundColor: COLORS.primaryLight, borderColor: COLORS.primary },
+  previewLockRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  previewLockedItem: {
+    fontFamily: FONTS.family.body, fontSize: 14, color: COLORS.textSecondary, lineHeight: 24,
+  },
+  previewDisclaimer: {
+    marginTop: SPACING.lg, fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textMuted,
+    lineHeight: 18, textAlign: 'center',
+  },
+  previewCtaBar: {
+    position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: SPACING.lg, paddingTop: 12,
+    backgroundColor: COLORS.backgroundSecondary, borderTopWidth: 1, borderTopColor: COLORS.border,
+  },
+  previewCtaButton: {
+    backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, paddingVertical: 16,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
+  previewCtaText: { fontFamily: FONTS.family.bodySemibold, fontSize: 16, color: COLORS.white },
+  previewCtaNote: {
+    fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textMuted,
+    textAlign: 'center', marginTop: 8,
+  },
   scoreCard: {
     backgroundColor: COLORS.card, borderRadius: RADIUS.xl, padding: SPACING.lg,
     borderWidth: 1, borderColor: COLORS.border, ...SHADOWS.sm,
