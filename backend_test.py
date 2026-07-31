@@ -5,6 +5,7 @@ Tests AI Beauty Scan, User Profile CRUD, and Regression endpoints
 """
 
 import os
+import uuid
 import requests
 import json
 import base64
@@ -16,26 +17,72 @@ import time
 # BACKEND_URL environment variable to point at a deployed environment.
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000/api").rstrip("/")
 
-# User ids created by the scan tests, reused by the profile tests below so the
-# post-scan profile checks run against a user that really was scanned.
+# User ids and tokens created by the scan tests, reused by the profile tests
+# below so the post-scan profile checks run against a user that really was
+# scanned.
 SCAN_USER_IDS = {}
+SCAN_TOKENS = {}
+
+# Every protected route needs one of these. Routes that touch user data now
+# take the caller's identity from the token, never from the URL or body.
+PROTECTED_ROUTES = [
+    ("GET", "/users/me", None),
+    ("PUT", "/users/me", {"city": "Mumbai"}),
+    ("POST", "/scan/analyze", {"image_base64": "x", "scan_type": "face"}),
+    ("GET", "/scan/history", None),
+    ("GET", "/scan/trends", None),
+    ("POST", "/quiz/submit", {"answers": []}),
+    ("POST", "/plans/style", {"occasion": "everyday"}),
+    ("POST", "/recommendations/advice", {"occasion": "everyday"}),
+    ("GET", "/recommendations/history", None),
+    ("POST", "/subscription/create-order", {"plan": "plus_monthly"}),
+    ("POST", "/subscription/confirm?order_id=sub_whatever", None),
+    ("GET", "/subscription/status", None),
+]
+
+def auth(token):
+    """Authorization header for a signed-in caller."""
+    return {"Authorization": f"Bearer {token}"}
+
+def unique_email(prefix):
+    return f"{prefix}.{uuid.uuid4().hex[:10]}@example.com"
+
+def register_user(name, email=None, password="TestPassw0rd!"):
+    """Register a user and return (user_id, token)."""
+    email = email or unique_email("tester")
+    response = requests.post(
+        f"{BACKEND_URL}/auth/register",
+        json={"name": name, "email": email, "password": password},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        print(f"❌ FAIL: Could not register user, got {response.status_code}: {response.text[:200]}")
+        return None, None
+    data = response.json()
+    return data["user"]["id"], data["token"]
 
 def create_scan_user(label, name, email):
-    """Create a real user for a scan test. /api/scan/analyze rejects unknown ids."""
+    """Create a real user for a scan test, and keep their token."""
     try:
         response = requests.post(
             f"{BACKEND_URL}/users", json={"name": name, "email": email}, timeout=30
         )
         if response.status_code == 200:
-            user_id = response.json().get("id")
+            body = response.json()
+            user_id = body.get("id")
+            token = body.get("token")
+            if not token:
+                print("❌ FAIL: User creation did not return a token")
+                return None, None
             SCAN_USER_IDS[label] = user_id
+            SCAN_TOKENS[label] = token
             print(f"✅ Test user created: {user_id}")
-            return user_id
+            return user_id, token
         print(f"❌ FAIL: Could not create test user, got {response.status_code}")
-        return None
+        return None, None
     except Exception as e:
         print(f"❌ FAIL: Exception creating test user - {str(e)}")
-        return None
+        return None, None
 
 def check_disclaimer(analysis):
     """meta.disclaimer must always be present — see CLAUDE.md."""
@@ -68,7 +115,7 @@ def test_scan_analyze_face():
     
     url = f"{BACKEND_URL}/scan/analyze"
 
-    user_id = create_scan_user("face", "Scan Face Tester", "scan.face@example.com")
+    user_id, token = create_scan_user("face", "Scan Face Tester", unique_email("scan.face"))
     if not user_id:
         return False
 
@@ -87,7 +134,7 @@ def test_scan_analyze_face():
 
     start_time = time.time()
     try:
-        response = requests.post(url, json=payload, timeout=120)
+        response = requests.post(url, json=payload, headers=auth(token), timeout=120)
         elapsed = time.time() - start_time
         
         print(f"\nResponse Time: {elapsed:.2f}s")
@@ -195,7 +242,7 @@ def test_scan_analyze_hair():
     
     url = f"{BACKEND_URL}/scan/analyze"
 
-    user_id = create_scan_user("hair", "Scan Hair Tester", "scan.hair@example.com")
+    user_id, token = create_scan_user("hair", "Scan Hair Tester", unique_email("scan.hair"))
     if not user_id:
         return False
 
@@ -214,7 +261,7 @@ def test_scan_analyze_hair():
 
     start_time = time.time()
     try:
-        response = requests.post(url, json=payload, timeout=120)
+        response = requests.post(url, json=payload, headers=auth(token), timeout=120)
         elapsed = time.time() - start_time
         
         print(f"\nResponse Time: {elapsed:.2f}s")
@@ -321,20 +368,25 @@ def test_user_profile_crud():
     url = f"{BACKEND_URL}/users"
     payload = {
         "name": "Priya Sharma",
-        "email": "priya.sharma@example.com"
+        "email": unique_email("priya.sharma")
     }
-    
+
     print(f"POST {url}")
     print(f"Payload: {json.dumps(payload)}")
-    
+
     try:
         response = requests.post(url, json=payload)
         print(f"Status Code: {response.status_code}")
-        
+
         if response.status_code == 200:
             user_data = response.json()
             user_id = user_data.get("id")
+            token = user_data.get("token")
+            if not token:
+                print("❌ FAIL: User creation did not return a token")
+                return False
             print(f"✅ User created with ID: {user_id}")
+            print(f"✅ Token issued ({len(token)} chars)")
             print(f"   Name: {user_data.get('name')}")
             print(f"   Email: {user_data.get('email')}")
         else:
@@ -350,11 +402,11 @@ def test_user_profile_crud():
     url = f"{BACKEND_URL}/users/{user_id}"
     
     print(f"GET {url}")
-    
+
     try:
-        response = requests.get(url)
+        response = requests.get(url, headers=auth(token))
         print(f"Status Code: {response.status_code}")
-        
+
         if response.status_code == 200:
             user_data = response.json()
             print(f"✅ User retrieved successfully")
@@ -367,7 +419,7 @@ def test_user_profile_crud():
     except Exception as e:
         print(f"❌ FAIL: Exception - {str(e)}")
         return False
-    
+
     # Test 3: Update user with skin_concerns
     print("\n--- 3.3: PUT /api/users/{id} (Update User with skin_concerns) ---")
     url = f"{BACKEND_URL}/users/{user_id}"
@@ -375,12 +427,12 @@ def test_user_profile_crud():
         "skin_type": "combination",
         "skin_concerns": ["acne", "dullness"]
     }
-    
+
     print(f"PUT {url}")
     print(f"Payload: {json.dumps(payload)}")
-    
+
     try:
-        response = requests.put(url, json=payload)
+        response = requests.put(url, json=payload, headers=auth(token))
         print(f"Status Code: {response.status_code}")
         
         if response.status_code == 200:
@@ -408,15 +460,17 @@ def test_user_profile_crud():
         print(f"❌ FAIL: Exception - {str(e)}")
         return False
     
-    # Test 4: Get user after scan (the user created by the face scan test)
+    # Test 4: Get user after scan (the user created by the face scan test,
+    # fetched with that user's own token)
     scan_user_id = SCAN_USER_IDS.get("face", "test-user-scan-1")
+    scan_token = SCAN_TOKENS.get("face", token)
     print(f"\n--- 3.4: GET /api/users/{scan_user_id} (User from scan test) ---")
     url = f"{BACKEND_URL}/users/{scan_user_id}"
 
     print(f"GET {url}")
-    
+
     try:
-        response = requests.get(url)
+        response = requests.get(url, headers=auth(scan_token))
         print(f"Status Code: {response.status_code}")
         
         if response.status_code == 200:
@@ -451,48 +505,44 @@ def test_user_profile_crud():
         print(f"❌ FAIL: Exception - {str(e)}")
         return False
     
-    # Test 5: Get previously failing user (c0624af4-fcd6-4615-9e0d-167dcd0da9b5)
-    print("\n--- 3.5: GET /api/users/c0624af4-fcd6-4615-9e0d-167dcd0da9b5 (Previously failing user) ---")
-    url = f"{BACKEND_URL}/users/c0624af4-fcd6-4615-9e0d-167dcd0da9b5"
-    
+    # Test 5: An id in the URL that is not ours must be refused, never served.
+    other_id = "c0624af4-fcd6-4615-9e0d-167dcd0da9b5"
+    print(f"\n--- 3.5: GET /api/users/{other_id} (someone else's id — must be refused) ---")
+    url = f"{BACKEND_URL}/users/{other_id}"
+
     print(f"GET {url}")
-    
+
     try:
-        response = requests.get(url)
+        response = requests.get(url, headers=auth(token))
         print(f"Status Code: {response.status_code}")
-        
+
         if response.status_code == 200:
-            user_data = response.json()
-            print(f"✅ User retrieved successfully (no 500 error)")
-            
-            # Verify concerns are lists of strings
-            skin_concerns = user_data.get('skin_concerns', [])
-            hair_concerns = user_data.get('hair_concerns', [])
-            
-            print(f"   skin_concerns: {skin_concerns}")
-            print(f"   hair_concerns: {hair_concerns}")
-            
-            if isinstance(skin_concerns, list) and all(isinstance(c, str) for c in skin_concerns):
-                print(f"✅ skin_concerns is a list of strings")
-            else:
-                print(f"❌ FAIL: skin_concerns is not a list of strings: {skin_concerns}")
-                return False
-            
-            if isinstance(hair_concerns, list) and all(isinstance(c, str) for c in hair_concerns):
-                print(f"✅ hair_concerns is a list of strings")
-            else:
-                print(f"❌ FAIL: hair_concerns is not a list of strings: {hair_concerns}")
-                return False
-        elif response.status_code == 404:
-            print(f"✅ User not found (404) - this is acceptable if user doesn't exist")
+            print(f"❌ FAIL: Served another user's profile — this is the bug we are fixing")
+            print(f"Response: {response.text[:300]}")
+            return False
+        if response.status_code in (401, 403, 404):
+            print(f"✅ Refused with {response.status_code} — cannot read another user's profile")
         else:
-            print(f"❌ FAIL: Expected 200 or 404, got {response.status_code}")
+            print(f"❌ FAIL: Expected 401/403/404, got {response.status_code}")
             print(f"Response: {response.text}")
             return False
     except Exception as e:
         print(f"❌ FAIL: Exception - {str(e)}")
         return False
-    
+
+    # Test 6: Profile routes must reject a caller with no token at all.
+    print("\n--- 3.6: GET /api/users/me with no token (must be refused) ---")
+    try:
+        response = requests.get(f"{BACKEND_URL}/users/me")
+        print(f"Status Code: {response.status_code}")
+        if response.status_code != 401:
+            print(f"❌ FAIL: Expected 401, got {response.status_code}")
+            return False
+        print("✅ Refused with 401 — profile is not readable without a token")
+    except Exception as e:
+        print(f"❌ FAIL: Exception - {str(e)}")
+        return False
+
     print("\n✅ PASS: User Profile CRUD tests completed successfully")
     return True
 
@@ -507,22 +557,23 @@ def test_recommendations_advice():
     url = f"{BACKEND_URL}/users"
     payload = {
         "name": "Ananya Reddy",
-        "email": "ananya.reddy@example.com"
+        "email": unique_email("ananya.reddy")
     }
-    
+
     try:
         response = requests.post(url, json=payload)
         if response.status_code == 200:
             user_data = response.json()
             user_id = user_data.get("id")
+            token = user_data.get("token")
             print(f"✅ User created with ID: {user_id}")
         else:
-            print(f"⚠️  Could not create user, using test ID")
-            user_id = "test-user-recommendations"
+            print(f"❌ FAIL: Could not create user, got {response.status_code}")
+            return False
     except Exception as e:
-        print(f"⚠️  Exception creating user: {str(e)}, using test ID")
-        user_id = "test-user-recommendations"
-    
+        print(f"❌ FAIL: Exception creating user - {str(e)}")
+        return False
+
     # Test recommendations/advice
     print("\n--- POST /api/recommendations/advice ---")
     url = f"{BACKEND_URL}/recommendations/advice"
@@ -537,7 +588,7 @@ def test_recommendations_advice():
     print(f"Payload: {json.dumps(payload)}")
     
     try:
-        response = requests.post(url, json=payload, timeout=120)
+        response = requests.post(url, json=payload, headers=auth(token), timeout=120)
         print(f"Status Code: {response.status_code}")
 
         if response.status_code == 200:
@@ -590,14 +641,15 @@ def test_quiz_submit():
         if response.status_code == 200:
             user_data = response.json()
             user_id = user_data.get("id")
+            token = user_data.get("token")
             print(f"✅ User created with ID: {user_id}")
         else:
-            print(f"⚠️  Could not create user, using test ID")
-            user_id = "test-user-quiz"
+            print(f"❌ FAIL: Could not create user, got {response.status_code}")
+            return False
     except Exception as e:
-        print(f"⚠️  Exception creating user: {str(e)}, using test ID")
-        user_id = "test-user-quiz"
-    
+        print(f"❌ FAIL: Exception creating user - {str(e)}")
+        return False
+
     # Test quiz submit
     print("\n--- POST /api/quiz/submit ---")
     url = f"{BACKEND_URL}/quiz/submit"
@@ -614,7 +666,7 @@ def test_quiz_submit():
     print(f"Payload: {json.dumps(payload)}")
     
     try:
-        response = requests.post(url, json=payload, timeout=120)
+        response = requests.post(url, json=payload, headers=auth(token), timeout=120)
         print(f"Status Code: {response.status_code}")
 
         if response.status_code == 200:
@@ -686,6 +738,163 @@ def test_services():
         print(f"❌ FAIL: Exception - {str(e)}")
         return False
 
+def _call(method, path, body=None, headers=None):
+    url = f"{BACKEND_URL}{path}"
+    if method == "GET":
+        return requests.get(url, headers=headers, timeout=60)
+    if method == "PUT":
+        return requests.put(url, json=body, headers=headers, timeout=60)
+    return requests.post(url, json=body, headers=headers, timeout=60)
+
+
+def test_auth_no_token_refused():
+    """Every route that touches user data must refuse a caller with no token."""
+    print("\n" + "="*80)
+    print("TEST 7: Security - no token is refused")
+    print("="*80)
+
+    ok = True
+    for method, path, body in PROTECTED_ROUTES:
+        try:
+            response = _call(method, path, body)
+        except Exception as e:
+            print(f"❌ FAIL: {method} {path} raised {str(e)}")
+            ok = False
+            continue
+
+        if response.status_code == 401:
+            print(f"✅ {method:4} {path:45} -> 401 refused")
+        else:
+            print(f"❌ FAIL: {method:4} {path:45} -> {response.status_code} (expected 401)")
+            print(f"         Response: {response.text[:200]}")
+            ok = False
+
+    # A token that is not a real signed token must also be refused.
+    for label, bad in [
+        ("garbage string", "not-a-real-token"),
+        ("a bare user id", str(uuid.uuid4())),
+        ("wrong signature", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhIn0.bogus"),
+    ]:
+        response = _call("GET", "/users/me", headers=auth(bad))
+        if response.status_code == 401:
+            print(f"✅ {label:20} -> 401 refused")
+        else:
+            print(f"❌ FAIL: {label} was accepted with {response.status_code}")
+            ok = False
+
+    if ok:
+        print("\n✅ PASS: All protected routes refuse callers without a valid token")
+    return ok
+
+
+def test_auth_valid_token_works():
+    """A freshly registered user's token must be accepted on protected routes."""
+    print("\n" + "="*80)
+    print("TEST 8: Security - valid token is accepted")
+    print("="*80)
+
+    user_id, token = register_user("Token Tester")
+    if not token:
+        return False
+    print(f"✅ Registered user {user_id} and received a token ({len(token)} chars)")
+
+    response = _call("GET", "/users/me", headers=auth(token))
+    print(f"GET /users/me -> {response.status_code}")
+    if response.status_code != 200:
+        print(f"❌ FAIL: Expected 200, got {response.status_code}: {response.text[:200]}")
+        return False
+
+    me = response.json()
+    if me.get("id") != user_id:
+        print(f"❌ FAIL: /users/me returned {me.get('id')}, expected {user_id}")
+        return False
+    print(f"✅ /users/me returned the token's own user: {me.get('id')}")
+
+    if "password_hash" in me:
+        print("❌ FAIL: password_hash leaked in the profile response")
+        return False
+    print("✅ No password_hash in the response")
+
+    # Logging in again must also produce a working token.
+    response = _call("GET", "/scan/history", headers=auth(token))
+    print(f"GET /scan/history -> {response.status_code}")
+    if response.status_code != 200:
+        print(f"❌ FAIL: Expected 200, got {response.status_code}")
+        return False
+    print("✅ Scan history readable with a valid token")
+
+    print("\n✅ PASS: A valid token is accepted on protected routes")
+    return True
+
+
+def test_auth_cross_user_denied():
+    """User A must not be able to read or change user B's data."""
+    print("\n" + "="*80)
+    print("TEST 9: Security - user A cannot reach user B's data")
+    print("="*80)
+
+    a_id, a_token = register_user("User A")
+    b_id, b_token = register_user("User B")
+    if not a_token or not b_token:
+        return False
+    print(f"✅ User A: {a_id}")
+    print(f"✅ User B: {b_id}")
+
+    # A puts something identifiable on their own profile.
+    _call("PUT", "/users/me", {"city": "Chennai"}, auth(a_token))
+    _call("PUT", "/users/me", {"city": "Jaipur"}, auth(b_token))
+
+    ok = True
+
+    # A asking for B's id in the URL must be refused.
+    response = _call("GET", f"/users/{b_id}", headers=auth(a_token))
+    print(f"A reads GET /users/{{B's id}} -> {response.status_code}")
+    if response.status_code == 200:
+        print("❌ FAIL: User A read user B's profile")
+        ok = False
+    else:
+        print(f"✅ Refused with {response.status_code}")
+
+    # A trying to change B's profile through the URL must be refused.
+    response = _call("PUT", f"/users/{b_id}", {"city": "Hacked"}, auth(a_token))
+    print(f"A writes PUT /users/{{B's id}} -> {response.status_code}")
+    if response.status_code == 200:
+        print("❌ FAIL: User A modified user B's profile")
+        ok = False
+    else:
+        print(f"✅ Refused with {response.status_code}")
+
+    # B's data must be untouched.
+    response = _call("GET", "/users/me", headers=auth(b_token))
+    if response.status_code == 200 and response.json().get("city") == "Jaipur":
+        print("✅ User B's profile is unchanged (city still 'Jaipur')")
+    else:
+        print(f"❌ FAIL: User B's profile was altered: {response.text[:200]}")
+        ok = False
+
+    # Sending B's id in the request body must not redirect the write to B.
+    response = _call("PUT", "/users/me", {"user_id": b_id, "city": "Kochi"}, auth(a_token))
+    check = _call("GET", "/users/me", headers=auth(b_token))
+    if check.status_code == 200 and check.json().get("city") == "Jaipur":
+        print("✅ A user_id in the request body is ignored — identity comes from the token")
+    else:
+        print(f"❌ FAIL: Body user_id was honoured: {check.text[:200]}")
+        ok = False
+
+    # /users/me must always resolve to the caller, never to the other user.
+    a_me = _call("GET", "/users/me", headers=auth(a_token)).json()
+    b_me = _call("GET", "/users/me", headers=auth(b_token)).json()
+    if a_me.get("id") == a_id and b_me.get("id") == b_id and a_id != b_id:
+        print("✅ /users/me resolves to the caller for both users")
+    else:
+        print("❌ FAIL: /users/me did not resolve to the caller")
+        ok = False
+
+    if ok:
+        print("\n✅ PASS: User A cannot read or change user B's data")
+    return ok
+
+
 def main():
     """Run all backend tests"""
     print("\n" + "="*80)
@@ -704,6 +913,9 @@ def main():
     results["Recommendations Advice"] = test_recommendations_advice()
     results["Quiz Submit"] = test_quiz_submit()
     results["Services Catalog"] = test_services()
+    results["Security: no token refused"] = test_auth_no_token_refused()
+    results["Security: valid token works"] = test_auth_valid_token_works()
+    results["Security: cross-user denied"] = test_auth_cross_user_denied()
     
     # Summary
     print("\n" + "="*80)
