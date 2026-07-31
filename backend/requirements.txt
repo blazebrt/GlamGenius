@@ -8,3 +8,5 @@ pydantic==2.12.5
 python-multipart==0.0.21
 httpx==0.28.1
 google-genai>=1.0.0
+pyjwt==2.13.0
+bcrypt==5.0.0

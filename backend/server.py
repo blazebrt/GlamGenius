@@ -1,7 +1,8 @@
 """
 GlamGenius API — Personal Stylist & Skin/Hair Wellness Coach (India)
 """
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -9,6 +10,9 @@ import os
 import logging
 import json
 import hashlib
+import hmac
+import bcrypt
+import jwt
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -60,6 +64,9 @@ GEMINI_FALLBACK_MODELS = [
     ).split(",")
     if m.strip()
 ]
+
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRY_DAYS = 30
 
 _gemini_client = None
 
@@ -166,6 +173,7 @@ class ScanResult(BaseModel):
 
 
 class ScanAnalysisRequest(BaseModel):
+    # Ignored — the caller's identity comes from their token.
     user_id: Optional[str] = None
     image_base64: str
     scan_type: str = "face"  # face | hair | hands | full
@@ -185,7 +193,8 @@ class QuizAnswer(BaseModel):
 
 
 class QuizSubmission(BaseModel):
-    user_id: str
+    # Ignored — the caller's identity comes from their token.
+    user_id: Optional[str] = None
     answers: List[QuizAnswer]
     occasion: Optional[str] = None
     budget: Optional[str] = None
@@ -215,7 +224,8 @@ class StylePlan(BaseModel):
 
 
 class SubscriptionOrderRequest(BaseModel):
-    user_id: str
+    # Ignored — the caller's identity comes from their token.
+    user_id: Optional[str] = None
     plan: str = "plus_monthly"  # plus_monthly | plus_yearly
     payment_method: str = "upi"  # mock: upi | card | netbanking
 
@@ -533,7 +543,92 @@ Respond in this EXACT JSON format:
 
 
 def _hash_password(password: str) -> str:
+    """Hash a password with bcrypt (salted, slow by design)."""
+    # bcrypt only reads the first 72 bytes; truncate explicitly so long
+    # passwords hash deterministically instead of raising.
+    raw = password.encode("utf-8")[:72]
+    return bcrypt.hashpw(raw, bcrypt.gensalt()).decode("utf-8")
+
+
+def _legacy_hash_password(password: str) -> str:
+    """The old unsalted SHA-256 scheme. Only used to verify pre-bcrypt users."""
     return hashlib.sha256(f"{JWT_SECRET}:{password}".encode()).hexdigest()
+
+
+def _verify_password(password: str, stored_hash: str) -> tuple[bool, bool]:
+    """Check a password against a stored hash.
+
+    Returns (is_valid, needs_rehash). needs_rehash is True when the password
+    was verified against the old SHA-256 scheme, so the caller can silently
+    upgrade the stored hash to bcrypt.
+    """
+    if not stored_hash:
+        return False, False
+
+    if stored_hash.startswith(("$2a$", "$2b$", "$2y$")):
+        try:
+            return bcrypt.checkpw(password.encode("utf-8")[:72], stored_hash.encode("utf-8")), False
+        except ValueError:
+            return False, False
+
+    # Pre-bcrypt user: fall back to the old scheme, and flag for upgrade.
+    if hmac.compare_digest(_legacy_hash_password(password), stored_hash):
+        return True, True
+    return False, False
+
+
+def _create_access_token(user_id: str) -> str:
+    """Signed token proving who the caller is. Valid for 30 days."""
+    now = datetime.utcnow()
+    payload = {
+        "sub": user_id,
+        "iat": now,
+        "exp": now + timedelta(days=JWT_EXPIRY_DAYS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+async def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+) -> Dict[str, Any]:
+    """Resolve the caller from their token. Rejects with 401 on any problem.
+
+    This is the single gate for every route that touches user data. Identity
+    always comes from the signed token — never from the URL or request body.
+    """
+    unauthorized = HTTPException(
+        status_code=401,
+        detail="Not authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    if credentials is None or not credentials.credentials:
+        raise unauthorized
+
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        # Never log the token itself.
+        raise unauthorized
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise unauthorized
+
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise unauthorized
+
+    return user
+
+
+def _require_same_user(user: Dict[str, Any], user_id: str) -> None:
+    """For routes that still carry an id in the URL: it must be the caller's own."""
+    if user_id != user["id"]:
+        raise HTTPException(status_code=403, detail="Not allowed to access another user's data")
 
 
 def _month_key(dt: Optional[datetime] = None) -> str:
@@ -1103,14 +1198,18 @@ async def create_user(user: UserProfileCreate):
     )
     doc = user_obj.dict()
     await db.users.insert_one(doc)
-    return _public_user(doc)
+    pub = _public_user(doc)
+    # Creating an account signs you in, so the caller gets a usable token.
+    pub["token"] = _create_access_token(doc["id"])
+    return pub
 
 
 @api_router.post("/auth/register")
 async def register(user: UserProfileCreate):
     if not user.email or not user.password:
         raise HTTPException(status_code=400, detail="Email and password required")
-    return await create_user(user)
+    created = await create_user(user)
+    return {"user": {k: v for k, v in created.items() if k != "token"}, "token": created["token"]}
 
 
 @api_router.post("/auth/login")
@@ -1118,22 +1217,23 @@ async def login(body: UserLogin):
     user = await db.users.find_one({"email": body.email.lower().strip()})
     if not user or not user.get("password_hash"):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    if user["password_hash"] != _hash_password(body.password):
+
+    valid, needs_rehash = _verify_password(body.password, user["password_hash"])
+    if not valid:
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    return {"user": _public_user(user), "token": user["id"]}
+
+    if needs_rehash:
+        # Pre-bcrypt account: upgrade the stored hash now, without bothering the user.
+        await db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {"password_hash": _hash_password(body.password), "updated_at": datetime.utcnow()}},
+        )
+
+    return {"user": _public_user(user), "token": _create_access_token(user["id"])}
 
 
-@api_router.get("/users/{user_id}")
-async def get_user(user_id: str):
-    user = await db.users.find_one({"id": user_id})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    # refresh plus expiry view
+def _user_view(user: Dict[str, Any]) -> Dict[str, Any]:
     pub = _public_user(user)
-    expires = user.get("plan_expires_at")
-    if user.get("plan") == "plus" and expires and expires < datetime.utcnow():
-        await db.users.update_one({"id": user_id}, {"$set": {"plan": "free"}})
-        pub["plan"] = "free"
     pub["scans_remaining_free"] = max(
         0, FREE_SCANS_PER_MONTH - int(user.get("scans_used_this_month") or 0)
     ) if pub.get("plan") != "plus" else None
@@ -1141,43 +1241,70 @@ async def get_user(user_id: str):
     return pub
 
 
-@api_router.put("/users/{user_id}")
-async def update_user(user_id: str, update: UserProfileUpdate):
+# NOTE: /users/me must be declared before /users/{user_id}, otherwise "me"
+# would be captured as a user id by the parameterised route.
+@api_router.get("/users/me")
+async def get_me(user: Dict[str, Any] = Depends(get_current_user)):
+    pub = _user_view(user)
+    expires = user.get("plan_expires_at")
+    if user.get("plan") == "plus" and expires and expires < datetime.utcnow():
+        await db.users.update_one({"id": user["id"]}, {"$set": {"plan": "free"}})
+        pub["plan"] = "free"
+    return pub
+
+
+@api_router.put("/users/me")
+async def update_me(
+    update: UserProfileUpdate, user: Dict[str, Any] = Depends(get_current_user)
+):
     update_data = {k: v for k, v in update.dict().items() if v is not None}
     update_data["updated_at"] = datetime.utcnow()
-    result = await db.users.update_one({"id": user_id}, {"$set": update_data})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    user = await db.users.find_one({"id": user_id})
-    return _public_user(user)
+    await db.users.update_one({"id": user["id"]}, {"$set": update_data})
+    updated = await db.users.find_one({"id": user["id"]})
+    return _public_user(updated)
+
+
+@api_router.get("/users/{user_id}")
+async def get_user(user_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    _require_same_user(user, user_id)
+    return await get_me(user)
+
+
+@api_router.put("/users/{user_id}")
+async def update_user(
+    user_id: str,
+    update: UserProfileUpdate,
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    _require_same_user(user, user_id)
+    return await update_me(update, user)
 
 
 # ---- Scan ----
 
 
 @api_router.post("/scan/analyze")
-async def analyze_scan(request: ScanAnalysisRequest):
-    user = None
-    if request.user_id:
-        user = await db.users.find_one({"id": request.user_id})
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        await _ensure_scan_quota(user)
+async def analyze_scan(
+    request: ScanAnalysisRequest, user: Dict[str, Any] = Depends(get_current_user)
+):
+    # Identity comes from the token. Any user_id in the body is ignored.
+    user_id = user["id"]
+    await _ensure_scan_quota(user)
 
     context = {
-        "city": request.city or (user or {}).get("city"),
-        "diet": request.diet or (user or {}).get("diet"),
-        "budget_range": request.budget_range or (user or {}).get("budget_range"),
+        "city": request.city or user.get("city"),
+        "diet": request.diet or user.get("diet"),
+        "budget_range": request.budget_range or user.get("budget_range"),
         "occasion": request.occasion,
-        "height_cm": request.height_cm if request.height_cm is not None else (user or {}).get("height_cm"),
-        "weight_kg": request.weight_kg if request.weight_kg is not None else (user or {}).get("weight_kg"),
-        "body_type": request.body_type or (user or {}).get("body_type"),
-        "style_vibe": request.style_vibe or (user or {}).get("style_vibe"),
+        "height_cm": request.height_cm if request.height_cm is not None else user.get("height_cm"),
+        "weight_kg": request.weight_kg if request.weight_kg is not None else user.get("weight_kg"),
+        "body_type": request.body_type or user.get("body_type"),
+        "style_vibe": request.style_vibe or user.get("style_vibe"),
     }
     analysis = await analyze_image_with_gemini(request.image_base64, request.scan_type, context)
 
     scan_result = ScanResult(
-        user_id=request.user_id,
+        user_id=user_id,
         scan_type=request.scan_type,
         image_base64=(request.image_base64[:80] + "...") if request.image_base64 else None,
         analysis=analysis,
@@ -1205,26 +1332,25 @@ async def analyze_scan(request: ScanAnalysisRequest):
     if hair_obs:
         update_data["hair_concerns"] = hair_obs[:5]
 
-    if request.user_id:
-        month = _month_key()
-        await db.users.update_one(
-            {"id": request.user_id},
-            {
-                "$set": {**update_data, "scan_month_key": month},
-                "$inc": {"scans_used_this_month": 1},
-            },
-        )
+    month = _month_key()
+    await db.users.update_one(
+        {"id": user_id},
+        {
+            "$set": {**update_data, "scan_month_key": month},
+            "$inc": {"scans_used_this_month": 1},
+        },
+    )
 
     return {
         "scan_id": scan_result.id,
         "analysis": analysis,
-        "profile_updated": bool(request.user_id),
+        "profile_updated": True,
     }
 
 
-@api_router.get("/scan/history/{user_id}")
-async def get_scan_history(user_id: str):
-    scans = await db.scans.find({"user_id": user_id}).sort("created_at", -1).to_list(50)
+@api_router.get("/scan/history")
+async def get_scan_history(user: Dict[str, Any] = Depends(get_current_user)):
+    scans = await db.scans.find({"user_id": user["id"]}).sort("created_at", -1).to_list(50)
     return [
         {
             "id": s["id"],
@@ -1237,9 +1363,9 @@ async def get_scan_history(user_id: str):
     ]
 
 
-@api_router.get("/scan/trends/{user_id}")
-async def get_scan_trends(user_id: str):
-    scans = await db.scans.find({"user_id": user_id}).sort("created_at", 1).to_list(30)
+@api_router.get("/scan/trends")
+async def get_scan_trends(user: Dict[str, Any] = Depends(get_current_user)):
+    scans = await db.scans.find({"user_id": user["id"]}).sort("created_at", 1).to_list(30)
     points = []
     for s in scans:
         scores = (s.get("analysis") or {}).get("wellness_scores") or {}
@@ -1264,7 +1390,11 @@ async def get_quiz_questions():
 
 
 @api_router.post("/quiz/submit")
-async def submit_quiz(submission: QuizSubmission):
+async def submit_quiz(
+    submission: QuizSubmission, user: Dict[str, Any] = Depends(get_current_user)
+):
+    # Identity comes from the token. Any user_id in the body is ignored.
+    user_id = user["id"]
     answer_map = {a.question_id: a.answer for a in submission.answers}
     update_data: Dict[str, Any] = {"updated_at": datetime.utcnow()}
 
@@ -1327,17 +1457,16 @@ async def submit_quiz(submission: QuizSubmission):
     if answer_map.get("q6") in body_map:
         update_data["body_type"] = body_map[answer_map["q6"]]
 
-    if submission.user_id:
-        await db.users.update_one({"id": submission.user_id}, {"$set": update_data}, upsert=True)
+    await db.users.update_one({"id": user_id}, {"$set": update_data})
 
-    user = await db.users.find_one({"id": submission.user_id}) or {}
+    user = await db.users.find_one({"id": user_id}) or {}
     plan = await generate_style_plan(
         user,
         submission.occasion or "everyday",
         None,
         submission.budget or user.get("budget_range") or "mid",
     )
-    rec = StylePlan(user_id=submission.user_id, occasion=submission.occasion, plan=plan)
+    rec = StylePlan(user_id=user_id, occasion=submission.occasion, plan=plan)
     await db.style_plans.insert_one(rec.dict())
     return {"plan_id": rec.id, "plan": plan, "profile_updated": True}
 
@@ -1346,9 +1475,12 @@ async def submit_quiz(submission: QuizSubmission):
 
 
 @api_router.post("/plans/style")
-async def create_style_plan(request: StylePlanRequest):
-    user = await db.users.find_one({"id": request.user_id}) if request.user_id else {}
-    user = user or {}
+async def create_style_plan(
+    request: StylePlanRequest, current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    # Identity comes from the token. Any user_id in the body is ignored.
+    user_id = current_user["id"]
+    user = dict(current_user)
     if request.diet:
         user["diet"] = request.diet
     if request.city:
@@ -1363,16 +1495,15 @@ async def create_style_plan(request: StylePlanRequest):
         user["style_vibe"] = request.style_vibe
     user["follow_trends"] = request.follow_trends
 
-    # Persist body profile when provided with a user
-    if request.user_id:
-        persist = {
-            k: user[k]
-            for k in ("diet", "city", "height_cm", "weight_kg", "body_type", "style_vibe")
-            if k in user and user[k] is not None
-        }
-        if persist:
-            persist["updated_at"] = datetime.utcnow()
-            await db.users.update_one({"id": request.user_id}, {"$set": persist})
+    # Persist body profile for the signed-in user
+    persist = {
+        k: user[k]
+        for k in ("diet", "city", "height_cm", "weight_kg", "body_type", "style_vibe")
+        if k in user and user[k] is not None
+    }
+    if persist:
+        persist["updated_at"] = datetime.utcnow()
+        await db.users.update_one({"id": user_id}, {"$set": persist})
 
     plan = await generate_style_plan(
         user,
@@ -1381,7 +1512,7 @@ async def create_style_plan(request: StylePlanRequest):
         request.budget_range or user.get("budget_range") or "mid",
     )
     rec = StylePlan(
-        user_id=request.user_id,
+        user_id=user_id,
         occasion=request.occasion,
         mood=request.mood,
         plan=plan,
@@ -1392,18 +1523,22 @@ async def create_style_plan(request: StylePlanRequest):
 
 # Back-compat aliases (no pricing fields)
 @api_router.post("/recommendations/advice")
-async def get_advice(request: StylePlanRequest):
-    return await create_style_plan(request)
+async def get_advice(
+    request: StylePlanRequest, current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    return await create_style_plan(request, current_user)
 
 
 @api_router.post("/recommendations/generate")
-async def generate_recommendations(request: StylePlanRequest):
-    return await create_style_plan(request)
+async def generate_recommendations(
+    request: StylePlanRequest, current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    return await create_style_plan(request, current_user)
 
 
-@api_router.get("/recommendations/history/{user_id}")
-async def get_recommendation_history(user_id: str):
-    recs = await db.style_plans.find({"user_id": user_id}).sort("created_at", -1).to_list(20)
+@api_router.get("/recommendations/history")
+async def get_recommendation_history(user: Dict[str, Any] = Depends(get_current_user)):
+    recs = await db.style_plans.find({"user_id": user["id"]}).sort("created_at", -1).to_list(20)
     return [
         {
             "id": r["id"],
@@ -1443,10 +1578,11 @@ async def get_salon_ideas(category: Optional[str] = None):
 
 
 @api_router.post("/subscription/create-order")
-async def create_subscription_order(request: SubscriptionOrderRequest):
-    user = await db.users.find_one({"id": request.user_id})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+async def create_subscription_order(
+    request: SubscriptionOrderRequest, user: Dict[str, Any] = Depends(get_current_user)
+):
+    # Identity comes from the token. Any user_id in the body is ignored.
+    user_id = user["id"]
 
     if request.plan == "plus_yearly":
         amount = PLUS_YEARLY_INR
@@ -1459,7 +1595,7 @@ async def create_subscription_order(request: SubscriptionOrderRequest):
 
     order = {
         "id": f"sub_{uuid.uuid4().hex[:16]}",
-        "user_id": request.user_id,
+        "user_id": user_id,
         "plan": request.plan,
         "amount_inr": amount,
         "currency": "INR",
@@ -1481,10 +1617,16 @@ async def create_subscription_order(request: SubscriptionOrderRequest):
 
 
 @api_router.post("/subscription/confirm")
-async def confirm_subscription(order_id: str, payment_method: str = "upi"):
+async def confirm_subscription(
+    order_id: str,
+    payment_method: str = "upi",
+    user: Dict[str, Any] = Depends(get_current_user),
+):
     order = await db.subscription_orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    # An order can only be confirmed by the user it belongs to.
+    _require_same_user(user, order.get("user_id") or "")
 
     expires = datetime.utcnow() + timedelta(days=int(order.get("days", 30)))
     await db.subscription_orders.update_one(
@@ -1515,11 +1657,8 @@ async def confirm_subscription(order_id: str, payment_method: str = "upi"):
     }
 
 
-@api_router.get("/subscription/status/{user_id}")
-async def subscription_status(user_id: str):
-    user = await db.users.find_one({"id": user_id})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+@api_router.get("/subscription/status")
+async def subscription_status(user: Dict[str, Any] = Depends(get_current_user)):
     plan = user.get("plan", "free")
     expires = user.get("plan_expires_at")
     active = plan == "plus" and (not expires or expires > datetime.utcnow())

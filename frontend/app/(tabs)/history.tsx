@@ -31,8 +31,8 @@ export default function HistoryScreen() {
     setLoading(true);
     try {
       const [h, t] = await Promise.all([
-        api.get(`/scan/history/${userId}`),
-        api.get(`/scan/trends/${userId}`),
+        api.get('/scan/history'),
+        api.get('/scan/trends'),
       ]);
       setScans(h.data || []);
       setTrends(t.data?.points || []);

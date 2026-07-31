@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { api } from '../services/api';
+import {
+  api,
+  setAuthToken,
+  loadAuthToken,
+  clearAuthToken,
+  setUnauthorizedHandler,
+} from '../services/api';
 
 const USER_ID_KEY = 'glamgenius_user_id';
 
@@ -62,17 +68,25 @@ export const useUserStore = create<UserStore>((set, get) => ({
 
   initializeUser: async () => {
     try {
+      // Session is only usable if we still hold a token.
+      const token = await loadAuthToken();
       const storedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-      if (storedUserId) {
-        set({ userId: storedUserId });
-        try {
-          const response = await api.get(`/users/${storedUserId}`);
-          set({ user: response.data });
-        } catch {
-          console.log('User not found in DB, clearing stored ID');
-          await AsyncStorage.removeItem(USER_ID_KEY);
-          set({ userId: '', user: null });
-        }
+
+      if (!token) {
+        if (storedUserId) await AsyncStorage.removeItem(USER_ID_KEY);
+        set({ userId: '', user: null });
+        return;
+      }
+
+      try {
+        const response = await api.get('/users/me');
+        set({ user: response.data, userId: response.data.id });
+        await AsyncStorage.setItem(USER_ID_KEY, response.data.id);
+      } catch {
+        // A 401 is already handled by the api interceptor.
+        console.log('Stored session is no longer valid, clearing it');
+        await AsyncStorage.removeItem(USER_ID_KEY);
+        set({ userId: '', user: null });
       }
     } catch (error) {
       console.error('Error initializing user:', error);
@@ -86,7 +100,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
     if (!userId) return;
     set({ loading: true });
     try {
-      const response = await api.get(`/users/${userId}`);
+      const response = await api.get('/users/me');
       set({ user: response.data });
     } catch (error) {
       console.error('Error fetching user:', error);
@@ -111,10 +125,11 @@ export const useUserStore = create<UserStore>((set, get) => ({
         body_type: extra?.body_type,
         style_vibe: extra?.style_vibe,
       });
-      const user = response.data;
+      const { token, ...user } = response.data;
+      if (token) await setAuthToken(token);
       await AsyncStorage.setItem(USER_ID_KEY, user.id);
-      set({ user, userId: user.id });
-      return user;
+      set({ user: user as UserProfile, userId: user.id });
+      return user as UserProfile;
     } catch (error) {
       console.error('Error creating user:', error);
       return null;
@@ -128,6 +143,8 @@ export const useUserStore = create<UserStore>((set, get) => ({
     try {
       const response = await api.post('/auth/login', { email, password });
       const user = response.data.user;
+      const token = response.data.token;
+      if (token) await setAuthToken(token);
       await AsyncStorage.setItem(USER_ID_KEY, user.id);
       set({ user, userId: user.id });
       return user;
@@ -144,7 +161,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
     if (!userId) return;
     set({ loading: true });
     try {
-      const response = await api.put(`/users/${userId}`, data);
+      const response = await api.put('/users/me', data);
       set({ user: response.data });
     } catch (error) {
       console.error('Error updating user:', error);
@@ -162,7 +179,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
     const { userId } = get();
     if (!userId) return;
     try {
-      const response = await api.get(`/subscription/status/${userId}`);
+      const response = await api.get('/subscription/status');
       const { user } = get();
       if (user) {
         set({
@@ -183,6 +200,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
 
   logout: async () => {
     try {
+      await clearAuthToken();
       await AsyncStorage.multiRemove([USER_ID_KEY, 'glamgenius_cart']);
     } catch (error) {
       console.error('Error clearing session:', error);
@@ -190,3 +208,10 @@ export const useUserStore = create<UserStore>((set, get) => ({
     set({ userId: '', user: null });
   },
 }));
+
+// When the server rejects our token, drop the in-app session too. The api
+// layer clears the token and navigates back to welcome.
+setUnauthorizedHandler(() => {
+  useUserStore.setState({ userId: '', user: null });
+  AsyncStorage.removeItem(USER_ID_KEY).catch(() => {});
+});

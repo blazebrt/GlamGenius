@@ -28,7 +28,7 @@ export default function SubscriptionScreen() {
       try {
         const [c, s] = await Promise.all([
           api.get('/config/public'),
-          userId ? api.get(`/subscription/status/${userId}`) : Promise.resolve({ data: null }),
+          userId ? api.get('/subscription/status') : Promise.resolve({ data: null }),
         ]);
         setConfig(c.data);
         setStatus(s.data);
