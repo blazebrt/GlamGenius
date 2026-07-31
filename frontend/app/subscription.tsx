@@ -33,7 +33,7 @@ export default function SubscriptionScreen() {
         setConfig(c.data);
         setStatus(s.data);
       } catch {
-        setConfig({ plus_price_inr: 249, plus_yearly_inr: 1999, free_scans_per_month: 2 });
+        setConfig({ plus_price_inr: 249, plus_yearly_inr: 1999, free_scans_per_month: 1 });
       }
     })();
   }, [userId]);
@@ -77,7 +77,7 @@ export default function SubscriptionScreen() {
       <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: 80 }}>
         <Text style={styles.title}>Celebrity-level coaching,{'\n'}everyday budget</Text>
         <Text style={styles.subtitle}>
-          Free includes {config?.free_scans_per_month ?? 2} checks / month. Plus unlocks unlimited checks, full history, and richer plans.
+          Free includes {config?.free_scans_per_month ?? 1} checks / month. Plus unlocks unlimited checks, full history, and richer plans.
         </Text>
 
         {status?.plan === 'plus' && (

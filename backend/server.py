@@ -1,7 +1,7 @@
 """
 GlamGenius API — Personal Stylist & Skin/Hair Wellness Coach (India)
 """
-from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -30,16 +30,6 @@ except ImportError:
     google_genai_types = None  # type: ignore
     HAS_GOOGLE_GENAI = False
 
-# Optional legacy Emergent wrapper (not required when GEMINI_API_KEY is set)
-try:
-    from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
-    HAS_EMERGENT = True
-except ImportError:
-    LlmChat = None  # type: ignore
-    UserMessage = None  # type: ignore
-    FileContentWithMimeType = None  # type: ignore
-    HAS_EMERGENT = False
-
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
@@ -50,8 +40,7 @@ db = client[db_name]
 
 # Secrets — never log or return these values
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
-FREE_SCANS_PER_MONTH = int(os.environ.get("FREE_SCANS_PER_MONTH", "2"))
+FREE_SCANS_PER_MONTH = int(os.environ.get("FREE_SCANS_PER_MONTH", "1"))
 PLUS_PRICE_INR = int(os.environ.get("PLUS_PRICE_INR", "249"))
 PLUS_YEARLY_INR = int(os.environ.get("PLUS_YEARLY_INR", "1999"))
 JWT_SECRET = os.environ.get("JWT_SECRET", "glamgenius-dev-secret-change-me")
@@ -68,6 +57,18 @@ GEMINI_FALLBACK_MODELS = [
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_DAYS = 30
 
+# Brute-force protection on login. Counted per email and per source address,
+# so one attacker cannot grind through passwords for an account, and one
+# address cannot grind through many accounts.
+MAX_LOGIN_ATTEMPTS = int(os.environ.get("MAX_LOGIN_ATTEMPTS", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", "15"))
+
+# The signed-out teaser calls Gemini, which costs money, so it is capped per
+# source address. How much of the result a signed-out person gets to see.
+MAX_PREVIEWS_PER_WINDOW = int(os.environ.get("MAX_PREVIEWS_PER_WINDOW", "3"))
+PREVIEW_WINDOW_MINUTES = int(os.environ.get("PREVIEW_WINDOW_MINUTES", "60"))
+PREVIEW_COLOR_COUNT = int(os.environ.get("PREVIEW_COLOR_COUNT", "3"))
+
 _gemini_client = None
 
 
@@ -82,7 +83,7 @@ def _get_gemini_client():
 
 
 def _llm_configured() -> bool:
-    return bool(GEMINI_API_KEY and HAS_GOOGLE_GENAI) or bool(EMERGENT_LLM_KEY and HAS_EMERGENT)
+    return bool(GEMINI_API_KEY and HAS_GOOGLE_GENAI)
 
 app = FastAPI(title="GlamGenius — Personal Stylist & Wellness Coach", version="2.0.0")
 api_router = APIRouter(prefix="/api")
@@ -170,6 +171,12 @@ class ScanResult(BaseModel):
     image_base64: Optional[str] = None
     analysis: Dict[str, Any] = {}
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ScanPreviewRequest(BaseModel):
+    """Signed-out teaser. No user fields — nothing about this is saved."""
+    image_base64: str
+    scan_type: str = "face"  # face | hair | hands | full
 
 
 class ScanAnalysisRequest(BaseModel):
@@ -625,6 +632,70 @@ async def get_current_user(
     return user
 
 
+def _login_keys(email: str, client_ip: str) -> List[str]:
+    """The two things we count failed logins against."""
+    return [f"email:{(email or '').lower().strip()}", f"ip:{client_ip or 'unknown'}"]
+
+
+async def _assert_not_locked_out(keys: List[str]) -> None:
+    """Refuse with 429 once too many recent failures are on record.
+
+    Each key is counted on its own limit. The address limit is deliberately
+    looser than the account limit: many genuine users share one address behind
+    a mobile network or office router, and one person fumbling their password
+    must not lock out everyone around them.
+    """
+    since = datetime.utcnow() - timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+    for key in keys:
+        limit = MAX_LOGIN_ATTEMPTS if key.startswith("email:") else MAX_LOGIN_ATTEMPTS * 4
+        count = await db.login_attempts.count_documents(
+            {"key": key, "created_at": {"$gte": since}}
+        )
+        if count >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Too many failed sign-in attempts. Please wait "
+                    f"{LOGIN_LOCKOUT_MINUTES} minutes and try again."
+                ),
+                headers={"Retry-After": str(LOGIN_LOCKOUT_MINUTES * 60)},
+            )
+
+
+async def _assert_preview_quota(client_ip: str) -> None:
+    """Cap free teasers per address so the signed-out route cannot be farmed."""
+    since = datetime.utcnow() - timedelta(minutes=PREVIEW_WINDOW_MINUTES)
+    count = await db.preview_attempts.count_documents(
+        {"key": f"ip:{client_ip}", "created_at": {"$gte": since}}
+    )
+    if count >= MAX_PREVIEWS_PER_WINDOW:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "PREVIEW_LIMIT",
+                "message": "You have used your free previews. Create a free account to keep going.",
+                "signup_required": True,
+            },
+            headers={"Retry-After": str(PREVIEW_WINDOW_MINUTES * 60)},
+        )
+
+
+async def _record_preview(client_ip: str) -> None:
+    await db.preview_attempts.insert_one(
+        {"key": f"ip:{client_ip}", "created_at": datetime.utcnow()}
+    )
+
+
+async def _record_failed_login(keys: List[str]) -> None:
+    """Never store the attempted password — only that an attempt failed."""
+    now = datetime.utcnow()
+    await db.login_attempts.insert_many([{"key": k, "created_at": now} for k in keys])
+
+
+async def _clear_failed_logins(keys: List[str]) -> None:
+    await db.login_attempts.delete_many({"key": {"$in": keys}})
+
+
 def _require_same_user(user: Dict[str, Any], user_id: str) -> None:
     """For routes that still carry an id in the URL: it must be the caller's own."""
     if user_id != user["id"]:
@@ -1006,36 +1077,6 @@ No prices. No booking. No disease diagnosis. Be body-inclusive."""
             data["meta"]["provider"] = "gemini"
             return data
 
-        # Optional Emergent fallback
-        if EMERGENT_LLM_KEY and HAS_EMERGENT:
-            chat = LlmChat(
-                api_key=EMERGENT_LLM_KEY,
-                session_id=f"scan-{uuid.uuid4()}",
-                system_message=COACH_SYSTEM,
-            ).with_model("gemini", "gemini-2.5-flash")
-
-            import aiofiles
-
-            temp_path = f"/tmp/scan_{uuid.uuid4()}.jpg"
-            async with aiofiles.open(temp_path, "wb") as f:
-                await f.write(base64.b64decode(image_base64))
-
-            file_content = FileContentWithMimeType(file_path=temp_path, mime_type="image/jpeg")
-            user_message = UserMessage(text=prompt, file_contents=[file_content])
-            response = await chat.send_message(user_message)
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-
-            data = _parse_llm_json(response)
-            if "meta" not in data:
-                data["meta"] = {}
-            data["meta"].setdefault(
-                "disclaimer",
-                "General wellness and style guidance from a photo — not medical advice.",
-            )
-            data["meta"]["scan_focus"] = scan_type
-            return data
-
         return _fallback_coach(scan_type)
     except Exception as e:
         # Never log secrets; only error class/message
@@ -1086,15 +1127,6 @@ Combine skin tone + body profile + occasion + wearable India trends. No prices. 
         if GEMINI_API_KEY and HAS_GOOGLE_GENAI:
             response_text = await _gemini_generate_text(prompt, COACH_SYSTEM)
             return _parse_llm_json(response_text)
-
-        if EMERGENT_LLM_KEY and HAS_EMERGENT:
-            chat = LlmChat(
-                api_key=EMERGENT_LLM_KEY,
-                session_id=f"plan-{uuid.uuid4()}",
-                system_message=COACH_SYSTEM,
-            ).with_model("gemini", "gemini-2.5-flash")
-            response = await chat.send_message(UserMessage(text=prompt))
-            return _parse_llm_json(response)
 
         return _fb()
     except Exception as e:
@@ -1181,10 +1213,15 @@ async def public_config():
 
 @api_router.post("/users")
 async def create_user(user: UserProfileCreate):
-    if user.email:
-        existing = await db.users.find_one({"email": user.email.lower().strip()})
-        if existing and user.password:
-            raise HTTPException(status_code=400, detail="Email already registered. Please log in.")
+    # Anonymous guest accounts are gone. An account with no password can never
+    # be proven to belong to anyone, and signed-out people get the teaser
+    # instead (POST /scan/preview).
+    if not user.email or not user.password:
+        raise HTTPException(status_code=400, detail="Email and password required")
+
+    existing = await db.users.find_one({"email": user.email.lower().strip()})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered. Please log in.")
 
     user_obj = UserProfile(
         name=user.name,
@@ -1193,7 +1230,7 @@ async def create_user(user: UserProfileCreate):
         age=user.age,
         city=user.city,
         diet=user.diet,
-        password_hash=_hash_password(user.password) if user.password else None,
+        password_hash=_hash_password(user.password),
         scan_month_key=_month_key(),
     )
     doc = user_obj.dict()
@@ -1213,14 +1250,25 @@ async def register(user: UserProfileCreate):
 
 
 @api_router.post("/auth/login")
-async def login(body: UserLogin):
+async def login(body: UserLogin, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    keys = _login_keys(body.email, client_ip)
+
+    # Stop password guessing before we check anything.
+    await _assert_not_locked_out(keys)
+
     user = await db.users.find_one({"email": body.email.lower().strip()})
     if not user or not user.get("password_hash"):
+        await _record_failed_login(keys)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     valid, needs_rehash = _verify_password(body.password, user["password_hash"])
     if not valid:
+        await _record_failed_login(keys)
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # A correct password wipes the slate so a locked-out genuine user recovers.
+    await _clear_failed_logins(keys)
 
     if needs_rehash:
         # Pre-bcrypt account: upgrade the stored hash now, without bothering the user.
@@ -1281,6 +1329,55 @@ async def update_user(
 
 
 # ---- Scan ----
+
+
+@api_router.post("/scan/preview")
+async def preview_scan(request: ScanPreviewRequest, http_request: Request):
+    """A free taste of the result for someone who has not signed up yet.
+
+    Deliberately public. It stores nothing at all — no user, no scan record,
+    no image — and returns only the top of the result. Everything else is
+    behind signing up, which is the point of the teaser.
+    """
+    client_ip = http_request.client.host if http_request.client else "unknown"
+    await _assert_preview_quota(client_ip)
+    await _record_preview(client_ip)
+
+    analysis = await analyze_image_with_gemini(request.image_base64, request.scan_type, {})
+
+    profile = analysis.get("profile") or {}
+    fashion = analysis.get("fashion") or {}
+    colors = fashion.get("best_clothing_colors") or []
+
+    return {
+        "preview": True,
+        "signup_required": True,
+        "profile": {
+            "skin_tone": profile.get("skin_tone"),
+            "undertone": profile.get("undertone"),
+            "face_shape": profile.get("face_shape"),
+        },
+        "best_clothing_colors": colors[:PREVIEW_COLOR_COUNT],
+        "total_colors_found": len(colors),
+        "locked": [
+            "Colours to go easy on",
+            "Silhouettes and fits for your body",
+            "Outfit ideas for Indian occasions",
+            "Skin and hair observations",
+            "Daily care routine",
+            "Ingredients to look for",
+            "Indian foods for your goals",
+            "Salon ideas",
+            "Saved history and progress",
+        ],
+        "meta": {
+            "disclaimer": (analysis.get("meta") or {}).get(
+                "disclaimer",
+                "General fashion, wellness and style guidance — not medical advice.",
+            ),
+            "scan_focus": request.scan_type,
+        },
+    }
 
 
 @api_router.post("/scan/analyze")
@@ -1697,6 +1794,15 @@ async def startup_db_client():
     await db.scans.create_index("user_id")
     await db.style_plans.create_index("user_id")
     await db.subscription_orders.create_index("user_id")
+    await db.login_attempts.create_index("key")
+    # Failed attempts clean themselves up once the lockout window has passed.
+    await db.login_attempts.create_index(
+        "created_at", expireAfterSeconds=LOGIN_LOCKOUT_MINUTES * 60
+    )
+    await db.preview_attempts.create_index("key")
+    await db.preview_attempts.create_index(
+        "created_at", expireAfterSeconds=PREVIEW_WINDOW_MINUTES * 60
+    )
 
 
 @app.on_event("shutdown")

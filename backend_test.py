@@ -65,7 +65,9 @@ def create_scan_user(label, name, email):
     """Create a real user for a scan test, and keep their token."""
     try:
         response = requests.post(
-            f"{BACKEND_URL}/users", json={"name": name, "email": email}, timeout=30
+            f"{BACKEND_URL}/users",
+            json={"name": name, "email": email, "password": "ScanTestPass1!"},
+            timeout=30,
         )
         if response.status_code == 200:
             body = response.json()
@@ -368,7 +370,8 @@ def test_user_profile_crud():
     url = f"{BACKEND_URL}/users"
     payload = {
         "name": "Priya Sharma",
-        "email": unique_email("priya.sharma")
+        "email": unique_email("priya.sharma"),
+        "password": "PriyaPass1!"
     }
 
     print(f"POST {url}")
@@ -557,7 +560,8 @@ def test_recommendations_advice():
     url = f"{BACKEND_URL}/users"
     payload = {
         "name": "Ananya Reddy",
-        "email": unique_email("ananya.reddy")
+        "email": unique_email("ananya.reddy"),
+        "password": "AnanyaPass1!"
     }
 
     try:
@@ -633,7 +637,8 @@ def test_quiz_submit():
     url = f"{BACKEND_URL}/users"
     payload = {
         "name": "Kavya Iyer",
-        "email": "kavya.iyer@example.com"
+        "email": unique_email("kavya.iyer"),
+        "password": "KavyaPass1!"
     }
     
     try:
@@ -895,6 +900,217 @@ def test_auth_cross_user_denied():
     return ok
 
 
+def test_login_brute_force_protection():
+    """Repeated wrong passwords must lock the account, and a correct one must clear it."""
+    print("\n" + "="*80)
+    print("TEST 10: Security - login brute force is blocked")
+    print("="*80)
+
+    password = "RealPassw0rd!"
+    email = unique_email("brute")
+    user_id, _ = register_user("Brute Target", email=email, password=password)
+    if not user_id:
+        return False
+    print(f"✅ Registered {email}")
+
+    # Guess wrong passwords until the door shuts.
+    locked_at = None
+    for attempt in range(1, 12):
+        response = requests.post(
+            f"{BACKEND_URL}/auth/login",
+            json={"email": email, "password": f"wrong-guess-{attempt}"},
+            timeout=30,
+        )
+        print(f"   wrong guess #{attempt} -> {response.status_code}")
+        if response.status_code == 429:
+            locked_at = attempt
+            break
+        if response.status_code != 401:
+            print(f"❌ FAIL: Expected 401 or 429, got {response.status_code}")
+            return False
+
+    if locked_at is None:
+        print("❌ FAIL: Never locked out — password guessing is unlimited")
+        return False
+    print(f"✅ Locked out after {locked_at - 1} failed attempts (429 Too Many Requests)")
+
+    # While locked out, even the right password is refused, so guessing cannot continue.
+    response = requests.post(
+        f"{BACKEND_URL}/auth/login", json={"email": email, "password": password}, timeout=30
+    )
+    if response.status_code != 429:
+        print(f"❌ FAIL: Lockout did not hold, got {response.status_code}")
+        return False
+    if not response.headers.get("Retry-After"):
+        print("❌ FAIL: No Retry-After header telling the user when to come back")
+        return False
+    print(f"✅ Lockout holds; Retry-After: {response.headers['Retry-After']} seconds")
+
+    # A genuine user who fumbles a few times then gets it right must not be locked out.
+    good_email = unique_email("fumble")
+    register_user("Forgetful User", email=good_email, password=password)
+    for attempt in range(1, 4):
+        requests.post(
+            f"{BACKEND_URL}/auth/login",
+            json={"email": good_email, "password": f"oops-{attempt}"},
+            timeout=30,
+        )
+    response = requests.post(
+        f"{BACKEND_URL}/auth/login", json={"email": good_email, "password": password}, timeout=30
+    )
+    if response.status_code != 200:
+        print(f"❌ FAIL: Genuine user blocked after a few fumbles, got {response.status_code}")
+        return False
+    print("✅ A genuine user who fumbles then remembers still gets in")
+
+    # And their slate is wiped, so they are not one mistake from a lockout.
+    for attempt in range(1, 4):
+        response = requests.post(
+            f"{BACKEND_URL}/auth/login",
+            json={"email": good_email, "password": f"again-{attempt}"},
+            timeout=30,
+        )
+        if response.status_code == 429:
+            print("❌ FAIL: Counter was not reset by the successful login")
+            return False
+    print("✅ Successful login reset their failed-attempt count")
+
+    print("\n✅ PASS: Login is protected against password guessing")
+    return True
+
+
+def test_signed_out_preview_teaser():
+    """A signed-out visitor gets a real taste, but not the whole thing."""
+    print("\n" + "="*80)
+    print("TEST 11: Teaser - signed-out preview")
+    print("="*80)
+
+    image_base64 = create_test_image()
+    response = requests.post(
+        f"{BACKEND_URL}/scan/preview",
+        json={"image_base64": image_base64, "scan_type": "face"},
+        timeout=180,
+    )
+    print(f"POST /scan/preview with no token -> {response.status_code}")
+    if response.status_code != 200:
+        print(f"❌ FAIL: Expected 200, got {response.status_code}: {response.text[:200]}")
+        return False
+    data = response.json()
+
+    if not data.get("preview") or not data.get("signup_required"):
+        print("❌ FAIL: Response is not flagged as a preview requiring signup")
+        return False
+    print("✅ Flagged as a preview requiring signup")
+
+    colors = data.get("best_clothing_colors")
+    if not isinstance(colors, list):
+        print("❌ FAIL: Missing 'best_clothing_colors'")
+        return False
+    print(f"✅ Shows {len(colors)} clothing colours")
+
+    if not isinstance(data.get("profile"), dict):
+        print("❌ FAIL: Missing 'profile' with the skin tone read")
+        return False
+    print(f"✅ Shows skin tone: {data['profile'].get('skin_tone')}")
+
+    if not data.get("locked"):
+        print("❌ FAIL: Nothing listed as locked — there is no reason to sign up")
+        return False
+    print(f"✅ Lists {len(data['locked'])} things locked behind signing up")
+
+    # The teaser must not leak the full paid result.
+    for withheld in ("observations", "wellness_scores", "daily_care", "nutrition",
+                     "care_ingredients", "salon_suggestions", "coach_summary"):
+        if withheld in data:
+            print(f"❌ FAIL: Preview leaked '{withheld}' — that belongs behind signup")
+            return False
+    print("✅ Full result (observations, scores, care, nutrition, salon) is withheld")
+
+    if not check_disclaimer(data):
+        return False
+
+    print("\n✅ PASS: Signed-out preview shows a teaser and asks for signup")
+    return True
+
+
+def test_anonymous_accounts_removed():
+    """Accounts without an email and password can no longer be created."""
+    print("\n" + "="*80)
+    print("TEST 12: Signup - anonymous guest accounts are gone")
+    print("="*80)
+
+    ok = True
+    for label, payload in [
+        ("no email, no password", {"name": "Guest"}),
+        ("email but no password", {"name": "Guest", "email": unique_email("guest")}),
+        ("password but no email", {"name": "Guest", "password": "Passw0rd!"}),
+    ]:
+        response = requests.post(f"{BACKEND_URL}/users", json=payload, timeout=30)
+        if response.status_code == 200:
+            print(f"❌ FAIL: '{label}' created an account that nobody can prove they own")
+            ok = False
+        else:
+            print(f"✅ '{label}' refused with {response.status_code}")
+
+    # A proper signup still works and still returns a usable token.
+    response = requests.post(
+        f"{BACKEND_URL}/users",
+        json={"name": "Real User", "email": unique_email("real"), "password": "Passw0rd!"},
+        timeout=30,
+    )
+    if response.status_code != 200 or not response.json().get("token"):
+        print(f"❌ FAIL: A proper signup was rejected: {response.status_code}")
+        return False
+    print("✅ A proper signup with email and password still works and returns a token")
+
+    if ok:
+        print("\n✅ PASS: Only real accounts can be created")
+    return ok
+
+
+def test_free_scan_limit_is_one():
+    """The free plan allows exactly one check, then asks for an upgrade."""
+    print("\n" + "="*80)
+    print("TEST 13: Quota - free plan is one check per month")
+    print("="*80)
+
+    response = requests.get(f"{BACKEND_URL}/config/public", timeout=30)
+    limit = response.json().get("free_scans_per_month")
+    print(f"config/public reports free_scans_per_month = {limit}")
+    if limit != 1:
+        print(f"❌ FAIL: Expected 1, got {limit}")
+        return False
+    print("✅ Public config advertises 1 free check")
+
+    user_id, token = register_user("Quota Tester")
+    if not token:
+        return False
+
+    image_base64 = create_test_image()
+    payload = {"image_base64": image_base64, "scan_type": "face"}
+
+    first = requests.post(
+        f"{BACKEND_URL}/scan/analyze", json=payload, headers=auth(token), timeout=180
+    )
+    print(f"first check  -> {first.status_code}")
+    if first.status_code != 200:
+        print(f"❌ FAIL: The one free check was refused: {first.text[:200]}")
+        return False
+    print("✅ First check allowed")
+
+    second = requests.post(
+        f"{BACKEND_URL}/scan/analyze", json=payload, headers=auth(token), timeout=180
+    )
+    print(f"second check -> {second.status_code}")
+    if second.status_code == 200:
+        print("❌ FAIL: A second free check was allowed — the limit is not enforced")
+        return False
+    print(f"✅ Second check refused with {second.status_code}")
+
+    print("\n✅ PASS: Free plan gives exactly one check per month")
+    return True
+
+
 def main():
     """Run all backend tests"""
     print("\n" + "="*80)
@@ -916,6 +1132,10 @@ def main():
     results["Security: no token refused"] = test_auth_no_token_refused()
     results["Security: valid token works"] = test_auth_valid_token_works()
     results["Security: cross-user denied"] = test_auth_cross_user_denied()
+    results["Security: brute force blocked"] = test_login_brute_force_protection()
+    results["Teaser: signed-out preview"] = test_signed_out_preview_teaser()
+    results["Signup: no anonymous accounts"] = test_anonymous_accounts_removed()
+    results["Quota: one free check"] = test_free_scan_limit_is_one()
     
     # Summary
     print("\n" + "="*80)

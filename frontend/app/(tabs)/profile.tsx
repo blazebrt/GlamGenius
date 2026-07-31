@@ -101,7 +101,7 @@ export default function ProfileScreen() {
           <Text style={styles.planSub}>
             {user?.plan === 'plus'
               ? `Unlimited checks · ${user?.plan_expires_at ? new Date(user.plan_expires_at).toLocaleDateString('en-IN') : ''}`
-              : `${user?.scans_remaining_free ?? 0} of ${user?.free_scans_per_month ?? 2} checks left this month`}
+              : `${user?.scans_remaining_free ?? 0} of ${user?.free_scans_per_month ?? 1} checks left this month`}
           </Text>
           {user?.plan !== 'plus' && (
             <TouchableOpacity style={styles.upgradeBtn} onPress={() => router.push('/subscription')}>
