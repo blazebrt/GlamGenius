@@ -16,6 +16,10 @@ Currently **invite-only**, in a private beta. Nothing is for sale.
 - Invite-only access with a monthly check allowance
 - Complete appearance inventory across wardrobe, shoes, accessories, beauty, hair,
   perfumes and supplements
+- **Style Me for an occasion** — up to three genuinely different looks built only from
+  items you have confirmed you own, across 16 occasions
+- **Should I buy this?** — Buy, Wait or Skip from a published Appearance ROI formula,
+  with the owned alternatives you already have shown alongside
 
 ### What happens when a check fails
 
@@ -128,7 +132,7 @@ autogenerate will not see it and the table will silently never be created.
 V2 modules are off unless switched on. Set `V2_FEATURES` in `.env` for the boot default:
 
 ```
-V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory
+V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions
 ```
 
 The `feature_flags` table overrides that at runtime with no redeploy. A route behind a
@@ -203,6 +207,47 @@ comes from the token, never from the URL or request body.
 | GET | /api/v2/inventory/low-use | 🔒 | Low-Use Products with a visible rule |
 | GET | /api/v2/inventory/value-to-recover | 🔒 | Transparent, explicitly estimated Value to Recover |
 | GET | /api/v2/inventory/summary | 🔒 | Category counts and attention summary |
+| GET | /api/v2/style/occasion-types | 🔒 | The 16 occasions and the questions each one needs |
+| POST/GET | /api/v2/occasions | 🔒 | Save or list the events you are dressing for |
+| GET/PATCH | /api/v2/occasions/{id} | 🔒 | Read or correct one saved occasion |
+| POST | /api/v2/style/occasion | 🔒 | Style me: up to three different looks from what you own |
+| GET | /api/v2/looks/{id} | 🔒 | One look with its pieces, reasoning and history |
+| POST | /api/v2/looks/{id}/revise | 🔒 | Rebuild a look away from what you pushed back on |
+| POST | /api/v2/looks/{id}/swap-item | 🔒 | Replace one slot with another item you own |
+| POST | /api/v2/looks/{id}/feedback | 🔒 | Loved, worn, saved or not for me |
+| GET | /api/v2/shopping/roi-model | 🔒 | The Appearance ROI formula and its weights |
+| POST | /api/v2/shopping/evaluate | 🔒 | Should I buy this: Buy, Wait or Skip |
+| GET | /api/v2/shopping/evaluations/{id} | 🔒 | One evaluation with the full calculation |
+| POST | /api/v2/shopping/evaluations/{id}/decision | 🔒 | Record what you actually did |
+
+## Style Me and Should I buy this?
+
+Two workflows, one rule: **we never invent something you own.**
+
+Every "owned" piece in a look is a row in your inventory that you confirmed. Photo-extracted
+drafts are not used until you confirm them, and anything a look needs that you do not own is
+labelled as an optional addition with no brand and no price attached.
+
+The looks themselves are chosen without an AI. Filtering, compatibility scoring, outfit
+assembly and ranking are deterministic functions of your confirmed inventory and profile. A
+language model is asked only to phrase the result, and its wording is discarded if it breaks
+the language rules. When the provider is unavailable the looks are identical and the
+explanation is written from your own recorded details — the response says which happened in
+`explanation_source`.
+
+### Appearance ROI
+
+`Should I buy this?` returns Buy, Wait or Skip from a published formula:
+
+```
+roi = sum(factor value x factor weight) / sum(weight of the factors that could be scored)
+```
+
+Buy at 0.65 and above, Wait from 0.45, Skip below. Two overrides the arithmetic cannot
+outvote: something closely matching what you already own can never be a Buy, and neither can
+something that creates no new outfit combinations. A factor with no data — a missing price —
+is dropped and the rest reweighted, so missing information lowers confidence rather than the
+score. `GET /api/v2/shopping/roi-model` returns every factor and weight.
 
 ## Errors
 

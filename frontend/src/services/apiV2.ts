@@ -513,3 +513,339 @@ export interface ValueToRecover {
 
 export const getValueToRecover = async (): Promise<ValueToRecover> =>
   (await api.get<ValueToRecover>(`${V2}/inventory/value-to-recover`)).data;
+
+// --- Phase 4: occasion styling ---------------------------------------------
+
+export const OCCASION_KEYS = [
+  'everyday', 'office', 'wedding', 'festival', 'interview', 'date', 'party',
+  'conference', 'business_meeting', 'vacation', 'travel', 'photoshoot',
+  'birthday', 'college', 'gym', 'home',
+] as const;
+export type OccasionKey = typeof OCCASION_KEYS[number];
+
+export type LookSlot = 'clothing' | 'shoes' | 'accessories' | 'perfume' | 'hair' | 'grooming';
+export type LookVariant = 'recommended' | 'comfortable' | 'expressive';
+export type Setting = 'indoor' | 'outdoor' | 'mixed';
+export type TimeOfDay = 'morning' | 'afternoon' | 'evening' | 'night';
+export type ComfortPreference = 'comfort_first' | 'balanced' | 'polish_first';
+export type WeatherCondition =
+  | 'hot' | 'warm' | 'mild' | 'cool' | 'cold' | 'humid' | 'rainy' | 'windy';
+
+/** Where a look's wording came from. `deterministic` is a first-class answer. */
+export type ExplanationSource = 'deterministic' | 'ai_validated';
+
+export interface OccasionQuestion {
+  key: string;
+  label: string;
+  options: string[];
+  required: boolean;
+}
+
+export interface OccasionDefinition {
+  key: OccasionKey;
+  label: string;
+  formality: number;
+  dress_codes: string[];
+  default_dress_code: string;
+  default_setting: Setting;
+  required_slots: LookSlot[];
+  optional_slots: LookSlot[];
+  questions: OccasionQuestion[];
+  notes: string;
+}
+
+export interface OccasionTypes {
+  occasions: OccasionDefinition[];
+  dress_codes: { key: string; formality: number }[];
+  note: string;
+}
+
+export interface OccasionInput {
+  occasion_key: OccasionKey;
+  title?: string;
+  event_date?: string;
+  time_of_day?: TimeOfDay;
+  location?: string;
+  setting?: Setting;
+  dress_code?: string;
+  weather?: WeatherCondition;
+  comfort_preference?: ComfortPreference;
+  optional_budget?: number;
+  preparation_time?: string;
+  notes?: string;
+}
+
+export interface OccasionRecord extends OccasionInput {
+  id: string;
+  status: string;
+  version: number;
+  currency: string;
+  definition: OccasionDefinition;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/**
+ * One piece of a look.
+ *
+ * `owned` is the field the UI must branch on. When it is true there is always
+ * an `inventory_item_id`; when it is false there never is.
+ */
+export interface LookPiece {
+  id: string;
+  slot: LookSlot;
+  ownership: 'owned' | 'optional_addition';
+  inventory_item_id: string | null;
+  display_name: string;
+  brand: string | null;
+  category: InventoryCategory | null;
+  subcategory: string | null;
+  role_note: string;
+  score: number;
+  owned: boolean;
+  label: string;
+}
+
+export interface LookShare {
+  title: string;
+  text: string;
+  includes_personal_data: false;
+  note: string;
+}
+
+export interface Look {
+  id: string;
+  run_id: string;
+  variant: LookVariant;
+  title: string;
+  rank: number;
+  score: number;
+  confidence: number;
+  why_it_works: string;
+  weather_note: string;
+  dress_code_note: string;
+  preparation_steps: string[];
+  missing_information: string[];
+  factor_scores: Record<string, any>;
+  explanation_source: ExplanationSource;
+  status: string;
+  saved: boolean;
+  version: number;
+  slots: Record<LookSlot, LookPiece[]>;
+  owned_items: LookPiece[];
+  optional_additions: LookPiece[];
+  owned_item_count: number;
+  optional_addition_count: number;
+  unavailable_items: string[];
+  share: LookShare;
+  created_at: string | null;
+  adjustments?: {
+    id: string; adjustment_type: string; slot: string | null;
+    from_item_id: string | null; to_item_id: string | null;
+    reason: string | null; actor: string; created_at: string | null;
+  }[];
+  feedback?: { rating: string; reason: string | null; note: string | null; worn_on: string | null } | null;
+}
+
+export interface Entitlement {
+  feature: string;
+  period: string;
+  included: number;
+  used: number;
+  remaining: number;
+  source: string;
+}
+
+/**
+ * `not_enough_inventory` is a real, expected outcome, not an error. It means
+ * we refused to invent clothes rather than failing to think of any.
+ */
+export interface StyleResult {
+  status: 'ready' | 'not_enough_inventory';
+  run_id: string;
+  style_request_id?: string;
+  occasion: OccasionRecord;
+  looks: Look[];
+  explanation_source?: ExplanationSource;
+  engine_version?: string;
+  candidates_considered?: number;
+  confirmed_item_count: number;
+  unconfirmed_draft_count: number;
+  missing_information: string[];
+  entitlement: Entitlement;
+  message?: string;
+  guidance?: string[];
+  disclaimer?: string;
+}
+
+export const getOccasionTypes = async (): Promise<OccasionTypes> =>
+  (await api.get<OccasionTypes>(`${V2}/style/occasion-types`)).data;
+
+export const createOccasion = async (body: OccasionInput): Promise<OccasionRecord> =>
+  (await api.post<OccasionRecord>(`${V2}/occasions`, body)).data;
+
+export const getOccasions = async (): Promise<OccasionRecord[]> =>
+  (await api.get<{ occasions: OccasionRecord[] }>(`${V2}/occasions`)).data.occasions;
+
+export const getOccasion = async (id: string): Promise<OccasionRecord> =>
+  (await api.get<OccasionRecord>(`${V2}/occasions/${id}`)).data;
+
+export const patchOccasion = async (id: string, body: Partial<OccasionInput>): Promise<OccasionRecord> =>
+  (await api.patch<OccasionRecord>(`${V2}/occasions/${id}`, body)).data;
+
+export const styleForOccasion = async (
+  occasion: OccasionInput, preferred_item_ids: string[] = []
+): Promise<StyleResult> =>
+  (await api.post<StyleResult>(`${V2}/style/occasion`, { occasion, preferred_item_ids })).data;
+
+export const styleForSavedOccasion = async (
+  occasion_id: string, preferred_item_ids: string[] = []
+): Promise<StyleResult> =>
+  (await api.post<StyleResult>(`${V2}/style/occasion`, { occasion_id, preferred_item_ids })).data;
+
+export const getLook = async (id: string): Promise<Look> =>
+  (await api.get<Look>(`${V2}/looks/${id}`)).data;
+
+export type ReviseReason =
+  | 'too_formal' | 'too_casual' | 'too_warm' | 'too_cold'
+  | 'not_my_style' | 'want_bolder' | 'want_simpler';
+
+export const reviseLook = async (
+  id: string, reason?: ReviseReason, avoid_item_ids: string[] = []
+): Promise<Look & { revision: { widened_search: boolean; note: string } }> =>
+  (await api.post(`${V2}/looks/${id}/revise`, { reason, avoid_item_ids })).data;
+
+export const swapLookItem = async (
+  id: string, slot: LookSlot, to_item_id: string | null, from_item_id?: string
+): Promise<Look> =>
+  (await api.post<Look>(`${V2}/looks/${id}/swap-item`, { slot, to_item_id, from_item_id })).data;
+
+export type LookRating = 'loved' | 'worn' | 'saved' | 'not_for_me';
+
+export const sendLookFeedback = async (
+  id: string, rating: LookRating, reason?: string, note?: string
+): Promise<Look> =>
+  (await api.post<Look>(`${V2}/looks/${id}/feedback`, { rating, reason, note })).data;
+
+// --- Phase 4: should I buy this? -------------------------------------------
+
+export type Verdict = 'buy' | 'wait' | 'skip';
+
+export interface ROIFactor {
+  key: string;
+  label: string;
+  value: number;
+  weight: number;
+  contribution: number;
+  explanation: string;
+}
+
+export interface AppearanceROI {
+  score: number;
+  version: string;
+  formula: string;
+  thresholds: { buy: number; wait: number };
+  factors: ROIFactor[];
+}
+
+export interface ShoppingCandidate {
+  id: string;
+  source: string;
+  category: InventoryCategory;
+  subcategory: string | null;
+  display_name: string;
+  brand: string | null;
+  colour: string | null;
+  size: string | null;
+  fabric: string | null;
+  fit: string | null;
+  formality: string | null;
+  occasion_tags: string[];
+  season_tags: string[];
+  price: number | null;
+  currency: string;
+  product_url: string | null;
+  extraction_confidence: number | null;
+  uncertain_fields: string[];
+  verification_state: string;
+  media_asset_id: string | null;
+  /** Always false. A thing you are considering is not a thing you own. */
+  in_inventory: false;
+  note: string;
+  created_at: string | null;
+}
+
+export interface OwnedReference {
+  inventory_item_id: string;
+  display_name: string;
+  brand: string | null;
+  category: InventoryCategory;
+}
+
+export interface PurchaseEvaluation {
+  id: string;
+  run_id: string;
+  candidate: ShoppingCandidate | null;
+  verdict: Verdict;
+  headline: string;
+  appearance_roi: AppearanceROI;
+  confidence: number;
+  new_combinations: number;
+  summary: string;
+  explanation_source: ExplanationSource;
+  similar_owned_products: OwnedReference[];
+  existing_alternatives: OwnedReference[];
+  fit_risks: string[];
+  colour_risks: string[];
+  climate_notes: string[];
+  missing_information: string[];
+  decision: { decision: string; note: string | null; followed_recommendation: boolean; created_at: string | null } | null;
+  entitlement?: Entitlement;
+  disclaimer?: string;
+  created_at: string | null;
+}
+
+export interface ShoppingItemInput {
+  category: InventoryCategory;
+  display_name: string;
+  brand?: string;
+  subcategory?: string;
+  colour?: string;
+  size?: string;
+  fabric?: string;
+  fit?: string;
+  formality?: string;
+  occasion_tags?: string[];
+  season_tags?: string[];
+  price?: number;
+  currency?: string;
+  product_url?: string;
+}
+
+export const getROIModel = async (): Promise<{
+  version: string; formula: string; note: string;
+  thresholds: { buy: number; wait: number }; overrides: string[];
+  factors: { key: string; label: string; weight: number }[];
+}> => (await api.get(`${V2}/shopping/roi-model`)).data;
+
+export const evaluateScreenshot = async (
+  media_asset_id: string, occasion_key?: OccasionKey, price?: number
+): Promise<PurchaseEvaluation> =>
+  (await api.post<PurchaseEvaluation>(`${V2}/shopping/evaluate`, {
+    media_asset_id, source: 'screenshot', occasion_key, price,
+  })).data;
+
+export const evaluateItemDetails = async (
+  item: ShoppingItemInput, occasion_key?: OccasionKey, price?: number
+): Promise<PurchaseEvaluation> =>
+  (await api.post<PurchaseEvaluation>(`${V2}/shopping/evaluate`, {
+    item, source: 'manual', occasion_key, price,
+  })).data;
+
+export const getEvaluation = async (id: string): Promise<PurchaseEvaluation> =>
+  (await api.get<PurchaseEvaluation>(`${V2}/shopping/evaluations/${id}`)).data;
+
+export const recordPurchaseDecision = async (
+  id: string, decision: 'bought' | 'waiting' | 'skipped', note?: string
+): Promise<PurchaseEvaluation> =>
+  (await api.post<PurchaseEvaluation>(`${V2}/shopping/evaluations/${id}/decision`, { decision, note })).data;

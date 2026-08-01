@@ -32,6 +32,8 @@ KNOWN_FLAGS: Dict[str, str] = {
     "v2_profile": "Appearance digital twin and progressive onboarding",
     "v2_inventory": "Complete appearance inventory",
     "v2_inventory_batch": "Experimental multi-item inventory capture",
+    "v2_recommendations": "Occasion styling: style me for an occasion",
+    "v2_shopping_decisions": "Shopping decisions: should I buy this?",
 }
 
 

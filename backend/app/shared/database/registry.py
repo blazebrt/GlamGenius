@@ -28,6 +28,7 @@ from app.domains.profile.models import (
     StylePreference,
     UserConstraint,
 )
+from app.domains.recommendation import models as recommendation_models
 from app.shared.database.base import Base
 from app.shared.events.models import OutboxEvent
 from app.shared.flags.models import FeatureFlag
@@ -55,4 +56,5 @@ __all__ = [
     "OnboardingSession",
     "ProfileChangeEvent",
     "inventory_models",
+    "recommendation_models",
 ]
