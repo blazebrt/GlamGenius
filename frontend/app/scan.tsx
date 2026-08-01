@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
-  Alert,
   Dimensions,
   Platform,
 } from 'react-native';
@@ -16,7 +15,8 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
-import { api } from '../src/services/api';
+import { api, errorMessage, isRateLimited } from '../src/services/api';
+import { notify } from '../src/services/notify';
 import { useUserStore } from '../src/store/userStore';
 import { usePlanStore } from '../src/store/planStore';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../src/theme/colors';
@@ -32,23 +32,6 @@ const PROCESSING_STEPS = [
   'Mapping Indian food tips',
   'Preparing your coach plan',
 ];
-
-function notify(title: string, message: string, buttons?: { text: string; onPress?: () => void; style?: string }[]) {
-  if (IS_WEB) {
-    // Alert.alert is unreliable on web; avoid uncaught issues
-    if (buttons?.length) {
-      const go = window.confirm(`${title}\n\n${message}`);
-      if (go) {
-        const action = buttons.find((b) => b.style !== 'cancel') || buttons[0];
-        action?.onPress?.();
-      }
-    } else {
-      window.alert(`${title}\n\n${message}`);
-    }
-    return;
-  }
-  Alert.alert(title, message, buttons as any);
-}
 
 export default function ScanScreen() {
   const router = useRouter();
@@ -118,8 +101,8 @@ export default function ScanScreen() {
     setPhase('processing');
     setErrorLimit(false);
     try {
+      // No user_id — the server identifies us from the login token.
       const res = await api.post('/scan/analyze', {
-        user_id: userId || undefined,
         image_base64: base64,
         scan_type: scanType,
         city: user?.city,
@@ -136,6 +119,13 @@ export default function ScanScreen() {
       setPhase('results');
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
+      if (isRateLimited(err)) {
+        // A short-term speed limit, not the monthly allowance. Upgrading
+        // would not help, so don't offer it.
+        setPhase('camera');
+        notify('Slow down a moment', errorMessage(err, 'Please try again in a little while.'));
+        return;
+      }
       if (err?.response?.status === 402 || detail?.code === 'SCAN_LIMIT') {
         setErrorLimit(true);
         setPhase('camera');

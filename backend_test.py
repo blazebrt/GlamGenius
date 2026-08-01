@@ -1111,6 +1111,274 @@ def test_free_scan_limit_is_one():
     return True
 
 
+def test_no_anonymous_scanning():
+    """Scanning always needs a login, and the monthly limit always applies."""
+    print("\n" + "="*80)
+    print("TEST 19: Cost - there is no anonymous scanning")
+    print("="*80)
+
+    image_base64 = create_test_image()
+
+    # No token at all.
+    response = requests.post(
+        f"{BACKEND_URL}/scan/analyze",
+        json={"image_base64": image_base64, "scan_type": "face"},
+        timeout=60,
+    )
+    print(f"scan with no login -> {response.status_code}")
+    if response.status_code != 401:
+        print(f"❌ FAIL: Expected 401, got {response.status_code}")
+        return False
+    print("✅ Refused with 401")
+
+    # The old trick: leave the user id out of the body and hope the limit is
+    # skipped. The field no longer exists, and the limit comes from the token.
+    user_id, token = register_user("Quota Dodger")
+    if not token:
+        return False
+
+    first = requests.post(
+        f"{BACKEND_URL}/scan/analyze",
+        json={"image_base64": image_base64, "scan_type": "face"},
+        headers=auth(token),
+        timeout=180,
+    )
+    print(f"first scan (no user_id in body) -> {first.status_code}")
+    if first.status_code != 200:
+        print(f"❌ FAIL: A genuine first scan was refused: {first.text[:200]}")
+        return False
+    print("✅ Allowed, and counted against the free limit")
+
+    second = requests.post(
+        f"{BACKEND_URL}/scan/analyze",
+        json={"image_base64": image_base64, "scan_type": "face"},
+        headers=auth(token),
+        timeout=180,
+    )
+    print(f"second scan (no user_id in body) -> {second.status_code}")
+    if second.status_code == 200:
+        print("❌ FAIL: Omitting the user id skipped the free limit")
+        return False
+    print(f"✅ Refused with {second.status_code} — the limit applied anyway")
+
+    # Sending someone else's id must not borrow their allowance either.
+    other_id, other_token = register_user("Someone Else")
+    forged = requests.post(
+        f"{BACKEND_URL}/scan/analyze",
+        json={"image_base64": image_base64, "scan_type": "face", "user_id": other_id},
+        headers=auth(token),
+        timeout=180,
+    )
+    print(f"scan with someone else's user_id in the body -> {forged.status_code}")
+    if forged.status_code == 200:
+        print("❌ FAIL: A user_id in the body was honoured")
+        return False
+    print(f"✅ Refused with {forged.status_code} — the body is ignored")
+
+    print("\n✅ PASS: Scanning always requires a login and always costs an allowance")
+    return True
+
+
+def test_ai_rate_limit():
+    """The AI routes must stop a single account burning money in a burst."""
+    print("\n" + "="*80)
+    print("TEST 20: Cost - AI routes are rate limited")
+    print("="*80)
+
+    limit = int(os.environ.get("AI_REQUESTS_PER_HOUR", "10"))
+    print(f"Configured limit: {limit} AI calls per hour per user")
+
+    user_id, token = register_user("Rate Limit Tester")
+    if not token:
+        return False
+
+    # Style plans are the cheapest AI route to exercise repeatedly.
+    payload = {"occasion": "everyday", "budget_range": "mid"}
+    blocked_at = None
+    for attempt in range(1, limit + 3):
+        response = requests.post(
+            f"{BACKEND_URL}/plans/style", json=payload, headers=auth(token), timeout=180
+        )
+        if response.status_code == 429:
+            blocked_at = attempt
+            print(f"   request #{attempt} -> 429 (limit reached)")
+            break
+        if response.status_code != 200:
+            print(f"❌ FAIL: request #{attempt} returned {response.status_code}: {response.text[:200]}")
+            return False
+        print(f"   request #{attempt} -> 200")
+
+    if blocked_at is None:
+        print(f"❌ FAIL: Never rate limited after {limit + 2} requests")
+        return False
+    if blocked_at != limit + 1:
+        print(f"❌ FAIL: Blocked at request {blocked_at}, expected {limit + 1}")
+        return False
+    print(f"✅ Allowed exactly {limit}, refused number {blocked_at}")
+
+    detail = response.json().get("detail", {})
+    message = detail.get("message", "") if isinstance(detail, dict) else str(detail)
+    print(f"   message: {message}")
+    if not message:
+        print("❌ FAIL: No message for the user to read")
+        return False
+    if detail.get("code") != "AI_RATE_LIMIT":
+        print(f"❌ FAIL: Missing the AI_RATE_LIMIT code, got {detail.get('code')}")
+        return False
+    if not response.headers.get("Retry-After"):
+        print("❌ FAIL: No Retry-After header")
+        return False
+    print(f"✅ Friendly message, code and Retry-After: {response.headers['Retry-After']}s")
+
+    # A paying subscriber must get a higher ceiling than a free user, since
+    # Plus is sold as unlimited checks.
+    me = requests.get(f"{BACKEND_URL}/users/me", headers=auth(token), timeout=30).json()
+    print(f"   free user's advertised ceiling: {me.get('ai_calls_per_hour')}")
+    if me.get("ai_calls_per_hour") != limit:
+        print(f"❌ FAIL: /users/me reports {me.get('ai_calls_per_hour')}, expected {limit}")
+        return False
+    if me.get("ai_calls_remaining_this_hour") != 0:
+        print(f"❌ FAIL: Expected 0 remaining, got {me.get('ai_calls_remaining_this_hour')}")
+        return False
+    print("✅ /users/me reports the ceiling and 0 remaining, so the app can warn early")
+
+    # The limit is per user, so a different account is unaffected.
+    other_id, other_token = register_user("Unaffected User")
+    response = requests.post(
+        f"{BACKEND_URL}/plans/style", json=payload, headers=auth(other_token), timeout=180
+    )
+    print(f"a different user's first request -> {response.status_code}")
+    if response.status_code != 200:
+        print(f"❌ FAIL: One user's limit blocked another user")
+        return False
+    print("✅ The limit is per user, not global")
+
+    # The other AI routes share the same allowance.
+    for route in ("/recommendations/advice", "/recommendations/generate", "/scan/analyze"):
+        body = payload if "recommend" in route else {
+            "image_base64": create_test_image(), "scan_type": "face"
+        }
+        response = requests.post(
+            f"{BACKEND_URL}{route}", json=body, headers=auth(token), timeout=180
+        )
+        if response.status_code != 429:
+            print(f"❌ FAIL: {route} was not covered by the limit ({response.status_code})")
+            return False
+        print(f"✅ {route} is covered by the same limit")
+
+    print("\n✅ PASS: AI routes are rate limited per user with a clear message")
+    return True
+
+
+def test_plus_gets_a_higher_ai_ceiling():
+    """Paying subscribers must not hit the same hourly wall as free users."""
+    print("\n" + "="*80)
+    print("TEST 22: Cost - Plus subscribers get a higher hourly ceiling")
+    print("="*80)
+
+    free_limit = int(os.environ.get("AI_REQUESTS_PER_HOUR", "10"))
+    plus_limit = int(os.environ.get("AI_REQUESTS_PER_HOUR_PLUS", "60"))
+    print(f"free ceiling: {free_limit}   Plus ceiling: {plus_limit}")
+    if plus_limit <= free_limit:
+        print("❌ FAIL: Plus is not given a higher ceiling than free")
+        return False
+
+    user_id, token = register_user("Free Ceiling")
+    if not token:
+        return False
+    me = requests.get(f"{BACKEND_URL}/users/me", headers=auth(token), timeout=30).json()
+    print(f"free user reports ceiling: {me.get('ai_calls_per_hour')}")
+    if me.get("ai_calls_per_hour") != free_limit:
+        print(f"❌ FAIL: Expected {free_limit}, got {me.get('ai_calls_per_hour')}")
+        return False
+    print("✅ A free user is on the free ceiling")
+
+    # Grant Plus the same way a real payment would, then re-check.
+    plus_id, plus_token = register_user("Plus Ceiling")
+    if not plus_token:
+        return False
+    granted = requests.put(
+        f"{BACKEND_URL}/users/me", json={"city": "Mumbai"}, headers=auth(plus_token), timeout=30
+    )
+    if granted.status_code != 200:
+        print(f"❌ FAIL: Could not set up the Plus test user: {granted.status_code}")
+        return False
+
+    # Upgrade through the database, since payment is not wired up in this test.
+    import subprocess
+    subprocess.run(
+        ["docker", "exec", "glamgenius-mongo", "mongosh", "glamgenius", "--quiet", "--eval",
+         f'db.users.updateOne({{id:"{plus_id}"}},{{$set:{{plan:"plus",'
+         f'plan_expires_at:new Date(Date.now()+30*24*3600*1000)}}}})'],
+        capture_output=True, timeout=60,
+    )
+
+    me_plus = requests.get(f"{BACKEND_URL}/users/me", headers=auth(plus_token), timeout=30).json()
+    print(f"Plus user reports ceiling: {me_plus.get('ai_calls_per_hour')}")
+    if me_plus.get("plan") != "plus":
+        print(f"❌ FAIL: Could not put the test user on Plus (plan={me_plus.get('plan')})")
+        return False
+    if me_plus.get("ai_calls_per_hour") != plus_limit:
+        print(f"❌ FAIL: Plus user got ceiling {me_plus.get('ai_calls_per_hour')}, expected {plus_limit}")
+        return False
+    print("✅ A Plus user is on the higher ceiling")
+
+    # And the higher ceiling is really applied, not just advertised.
+    payload = {"occasion": "everyday", "budget_range": "mid"}
+    for attempt in range(1, free_limit + 2):
+        response = requests.post(
+            f"{BACKEND_URL}/plans/style", json=payload, headers=auth(plus_token), timeout=180
+        )
+        if response.status_code == 429:
+            print(f"❌ FAIL: The Plus user was blocked at request {attempt}, "
+                  f"which is the free ceiling — the higher limit is not being applied")
+            return False
+    print(f"✅ The Plus user made {free_limit + 1} calls without being blocked")
+
+    print("\n✅ PASS: Plus subscribers get a genuinely higher hourly ceiling")
+    return True
+
+
+def test_cors_is_restricted():
+    """The API must not accept browser calls from any website."""
+    print("\n" + "="*80)
+    print("TEST 21: Cost - CORS is restricted to an allowlist")
+    print("="*80)
+
+    response = requests.options(
+        f"{BACKEND_URL}/config/public",
+        headers={
+            "Origin": "https://not-your-site.example",
+            "Access-Control-Request-Method": "GET",
+        },
+        timeout=30,
+    )
+    allowed = response.headers.get("access-control-allow-origin")
+    print(f"preflight from https://not-your-site.example -> allow-origin: {allowed}")
+    if allowed in ("*", "https://not-your-site.example"):
+        print("❌ FAIL: A stranger's website is allowed to call the API")
+        return False
+    print("✅ A stranger's website is not allowed")
+
+    response = requests.options(
+        f"{BACKEND_URL}/config/public",
+        headers={
+            "Origin": "http://localhost:8081",
+            "Access-Control-Request-Method": "GET",
+        },
+        timeout=30,
+    )
+    allowed = response.headers.get("access-control-allow-origin")
+    print(f"preflight from http://localhost:8081 -> allow-origin: {allowed}")
+    if allowed != "http://localhost:8081":
+        print(f"❌ FAIL: The allowed development origin was rejected")
+        return False
+    print("✅ The configured origin is allowed")
+
+    print("\n✅ PASS: Only listed websites may call the API from a browser")
+    return True
+
+
 def main():
     """Run all backend tests"""
     print("\n" + "="*80)
@@ -1136,6 +1404,10 @@ def main():
     results["Teaser: signed-out preview"] = test_signed_out_preview_teaser()
     results["Signup: no anonymous accounts"] = test_anonymous_accounts_removed()
     results["Quota: one free check"] = test_free_scan_limit_is_one()
+    results["Cost: no anonymous scanning"] = test_no_anonymous_scanning()
+    results["Cost: AI routes rate limited"] = test_ai_rate_limit()
+    results["Cost: Plus gets a higher ceiling"] = test_plus_gets_a_higher_ai_ceiling()
+    results["Cost: CORS restricted"] = test_cors_is_restricted()
     
     # Summary
     print("\n" + "="*80)

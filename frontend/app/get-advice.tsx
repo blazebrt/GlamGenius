@@ -6,12 +6,12 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { api } from '../src/services/api';
+import { api, errorMessage, isRateLimited } from '../src/services/api';
+import { notify } from '../src/services/notify';
 import { useUserStore } from '../src/store/userStore';
 import { usePlanStore } from '../src/store/planStore';
 import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
@@ -52,9 +52,14 @@ export default function GetAdviceScreen() {
       });
       setLatestPlan(res.data.plan);
       router.push('/recommendations');
-    } catch (err) {
-      console.error('style plan failed', err);
-      Alert.alert('Could not build plan', 'Please try again in a moment.');
+    } catch (err: any) {
+      console.error('style plan failed', err?.response?.status);
+      // Show what the server actually said — it explains the hourly limit in
+      // plain words. Replacing it with a generic message hides the reason.
+      notify(
+        isRateLimited(err) ? 'Slow down a moment' : 'Could not build plan',
+        errorMessage(err, 'Please try again in a moment.')
+      );
     } finally {
       setLoading(false);
     }
