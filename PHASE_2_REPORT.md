@@ -164,12 +164,12 @@ MongoDB and all V1 routes remain untouched.
 | Relevant provider-independent tests | ✅ | 104 backend and 49 frontend tests; production export and cold start pass |
 | Live Gemini end-to-end acceptance | ⚠️ | Pending a real credential; not claimed as passed |
 | Report exists | ✅ | This file |
-| Phase committed | ⏳ | Filled below after commit |
+| Phase committed | ✅ | Implementation commit recorded below |
 
 ## Commit
 
 ```text
-PENDING  feat(v2): add appearance digital twin and progressive onboarding
+d46af80  feat(v2): add appearance digital twin and progressive onboarding
 ```
 
 Phase 3 was not started.
