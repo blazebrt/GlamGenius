@@ -49,6 +49,25 @@ export const clearAuthToken = async () => {
 
 export const getAuthToken = () => authToken;
 
+/**
+ * Pull a message worth showing out of a failed request.
+ *
+ * The server writes its refusals for a person to read — the hourly limit, the
+ * monthly free-check limit, and so on. Screens should show that text rather
+ * than replacing it with a generic apology, so use this in every catch block.
+ */
+export const errorMessage = (err: any, fallback: string): string => {
+  const detail = err?.response?.data?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (detail?.message) return detail.message;
+  return fallback;
+};
+
+/** True when the caller has run into the hourly AI limit. */
+export const isRateLimited = (err: any): boolean =>
+  err?.response?.status === 429 ||
+  err?.response?.data?.detail?.code === 'AI_RATE_LIMIT';
+
 // Attach the token to every request automatically.
 api.interceptors.request.use(async (config) => {
   const token = authToken ?? (await loadAuthToken());

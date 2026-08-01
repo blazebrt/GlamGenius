@@ -6,12 +6,12 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { api } from '../src/services/api';
+import { api, errorMessage, isRateLimited } from '../src/services/api';
+import { notify } from '../src/services/notify';
 import { useUserStore } from '../src/store/userStore';
 import { usePlanStore } from '../src/store/planStore';
 import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
@@ -52,7 +52,7 @@ export default function StyleQuizScreen() {
   const submit = async () => {
     // Saving a quiz needs somewhere to save it, so sign-in comes first.
     if (!userId) {
-      Alert.alert('Create a free account', 'Sign up to save your quiz and see your plan.', [
+      notify('Create a free account', 'Sign up to save your quiz and see your plan.', [
         { text: 'Not now', style: 'cancel' },
         { text: 'Create account', onPress: () => router.push('/(auth)/welcome') },
       ]);
@@ -68,9 +68,13 @@ export default function StyleQuizScreen() {
       const res = await api.post('/quiz/submit', payload);
       setLatestPlan(res.data.plan);
       router.push('/recommendations');
-    } catch (err) {
-      console.error('quiz submit failed', err);
-      Alert.alert('Quiz error', 'Could not save your quiz. Try again.');
+    } catch (err: any) {
+      console.error('quiz submit failed', err?.response?.status);
+      // The server explains the hourly limit in plain words — show that.
+      notify(
+        isRateLimited(err) ? 'Slow down a moment' : 'Quiz error',
+        errorMessage(err, 'Could not save your quiz. Try again.')
+      );
     } finally {
       setSubmitting(false);
     }

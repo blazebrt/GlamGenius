@@ -69,6 +69,24 @@ MAX_PREVIEWS_PER_WINDOW = int(os.environ.get("MAX_PREVIEWS_PER_WINDOW", "3"))
 PREVIEW_WINDOW_MINUTES = int(os.environ.get("PREVIEW_WINDOW_MINUTES", "60"))
 PREVIEW_COLOR_COUNT = int(os.environ.get("PREVIEW_COLOR_COUNT", "3"))
 
+# Every route that calls Google's AI costs money per request. This is a speed
+# limit against runaway or automated use — separate from the monthly free-scan
+# allowance, and it applies to paying users too.
+AI_REQUESTS_PER_HOUR = int(os.environ.get("AI_REQUESTS_PER_HOUR", "10"))
+# Plus is sold as "unlimited checks". That means no monthly cap, not no burst
+# protection — but a paying user should not hit the same ceiling as a free one.
+AI_REQUESTS_PER_HOUR_PLUS = int(os.environ.get("AI_REQUESTS_PER_HOUR_PLUS", "60"))
+AI_RATE_WINDOW_MINUTES = int(os.environ.get("AI_RATE_WINDOW_MINUTES", "60"))
+
+# Which websites may call this API from a browser. Defaults to local
+# development only, so a fresh deployment is closed until it is told otherwise.
+DEV_ORIGINS = "http://localhost:8081,http://localhost:19006,http://127.0.0.1:8081"
+_allowed_origins_raw = os.environ.get("ALLOWED_ORIGINS", DEV_ORIGINS)
+ALLOWED_ORIGINS = [o.strip().rstrip("/") for o in _allowed_origins_raw.split(",") if o.strip()]
+# True when nobody has configured this, which is fine locally and a problem
+# once deployed — a live website would silently fail to load any data.
+ALLOWED_ORIGINS_IS_DEFAULT = "ALLOWED_ORIGINS" not in os.environ
+
 _gemini_client = None
 
 
@@ -180,8 +198,8 @@ class ScanPreviewRequest(BaseModel):
 
 
 class ScanAnalysisRequest(BaseModel):
-    # Ignored — the caller's identity comes from their token.
-    user_id: Optional[str] = None
+    # No user_id. Scanning always requires a login token, and the caller's
+    # identity comes from that token, so there is nothing to send here.
     image_base64: str
     scan_type: str = "face"  # face | hair | hands | full
     city: Optional[str] = None
@@ -660,6 +678,54 @@ async def _assert_not_locked_out(keys: List[str]) -> None:
                 ),
                 headers={"Retry-After": str(LOGIN_LOCKOUT_MINUTES * 60)},
             )
+
+
+def _ai_limit_for(user: Dict[str, Any]) -> int:
+    """Paying subscribers get a higher hourly ceiling than free users."""
+    expires = user.get("plan_expires_at")
+    is_plus = user.get("plan") == "plus" and (not expires or expires > datetime.utcnow())
+    return AI_REQUESTS_PER_HOUR_PLUS if is_plus else AI_REQUESTS_PER_HOUR
+
+
+async def _ai_calls_remaining(user: Dict[str, Any]) -> int:
+    """How many AI calls are left in the current window, for showing a warning."""
+    since = datetime.utcnow() - timedelta(minutes=AI_RATE_WINDOW_MINUTES)
+    used = await db.ai_usage.count_documents(
+        {"user_id": user["id"], "created_at": {"$gte": since}}
+    )
+    return max(0, _ai_limit_for(user) - used)
+
+
+async def _assert_ai_quota(user: Dict[str, Any]) -> None:
+    """Speed limit on the routes that call Google's AI.
+
+    Counted per user over a rolling window. This is deliberately separate from
+    the monthly free-scan allowance: that one decides how much someone gets for
+    free, this one stops any single account — free or paying — running up an
+    unbounded bill in a short burst.
+    """
+    limit = _ai_limit_for(user)
+    since = datetime.utcnow() - timedelta(minutes=AI_RATE_WINDOW_MINUTES)
+    used = await db.ai_usage.count_documents(
+        {"user_id": user["id"], "created_at": {"$gte": since}}
+    )
+    if used >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "AI_RATE_LIMIT",
+                "message": (
+                    f"You've used {limit} style checks in the last hour. "
+                    "Take a short break and try again in a little while — everything "
+                    "you've already saved is still here."
+                ),
+                "retry_after_minutes": AI_RATE_WINDOW_MINUTES,
+            },
+            headers={"Retry-After": str(AI_RATE_WINDOW_MINUTES * 60)},
+        )
+    await db.ai_usage.insert_one(
+        {"user_id": user["id"], "created_at": datetime.utcnow()}
+    )
 
 
 async def _assert_preview_quota(client_ip: str) -> None:
@@ -1294,6 +1360,10 @@ def _user_view(user: Dict[str, Any]) -> Dict[str, Any]:
 @api_router.get("/users/me")
 async def get_me(user: Dict[str, Any] = Depends(get_current_user)):
     pub = _user_view(user)
+    # So the app can warn before someone hits the hourly wall, rather than
+    # only telling them once they have.
+    pub["ai_calls_remaining_this_hour"] = await _ai_calls_remaining(user)
+    pub["ai_calls_per_hour"] = _ai_limit_for(user)
     expires = user.get("plan_expires_at")
     if user.get("plan") == "plus" and expires and expires < datetime.utcnow():
         await db.users.update_one({"id": user["id"]}, {"$set": {"plan": "free"}})
@@ -1384,8 +1454,10 @@ async def preview_scan(request: ScanPreviewRequest, http_request: Request):
 async def analyze_scan(
     request: ScanAnalysisRequest, user: Dict[str, Any] = Depends(get_current_user)
 ):
-    # Identity comes from the token. Any user_id in the body is ignored.
+    # Identity comes from the token. There is no anonymous scanning, and the
+    # monthly free limit is always enforced.
     user_id = user["id"]
+    await _assert_ai_quota(user)
     await _ensure_scan_quota(user)
 
     context = {
@@ -1492,6 +1564,8 @@ async def submit_quiz(
 ):
     # Identity comes from the token. Any user_id in the body is ignored.
     user_id = user["id"]
+    # This route builds a plan with Gemini too, so it shares the same limit.
+    await _assert_ai_quota(user)
     answer_map = {a.question_id: a.answer for a in submission.answers}
     update_data: Dict[str, Any] = {"updated_at": datetime.utcnow()}
 
@@ -1577,6 +1651,10 @@ async def create_style_plan(
 ):
     # Identity comes from the token. Any user_id in the body is ignored.
     user_id = current_user["id"]
+    # Counted here rather than on each route, because /recommendations/advice
+    # and /recommendations/generate both run through this function — so every
+    # AI call is counted exactly once, whichever route was used.
+    await _assert_ai_quota(current_user)
     user = dict(current_user)
     if request.diet:
         user["diet"] = request.diet
@@ -1777,8 +1855,11 @@ app.include_router(api_router)
 
 app.add_middleware(
     CORSMiddleware,
+    # Only these websites may call the API from a browser. Set ALLOWED_ORIGINS
+    # to your real site before going live. This does not affect the phone app,
+    # which is not a browser and sends no Origin header.
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1803,6 +1884,32 @@ async def startup_db_client():
     await db.preview_attempts.create_index(
         "created_at", expireAfterSeconds=PREVIEW_WINDOW_MINUTES * 60
     )
+    await db.ai_usage.create_index("user_id")
+    # Usage records clean themselves up once the window has passed.
+    await db.ai_usage.create_index(
+        "created_at", expireAfterSeconds=AI_RATE_WINDOW_MINUTES * 60
+    )
+    logger.info(
+        "CORS allowed origins: %s | AI rate limit: %s/hour free, %s/hour Plus",
+        ALLOWED_ORIGINS, AI_REQUESTS_PER_HOUR, AI_REQUESTS_PER_HOUR_PLUS,
+    )
+    if ALLOWED_ORIGINS_IS_DEFAULT:
+        # Loud on purpose. Without this, a deployed website fails to load any
+        # data with no server-side error, which looks like a website bug.
+        logger.warning(
+            "ALLOWED_ORIGINS is not set, so only local development addresses can "
+            "call this API from a browser. That is correct on your own machine. "
+            "If this server is deployed, your website will load but show no data "
+            "until you set ALLOWED_ORIGINS to your site address "
+            "(for example https://yoursite.com,https://www.yoursite.com). "
+            "The phone app is not affected."
+        )
+    for origin in ALLOWED_ORIGINS:
+        if not origin.startswith(("http://", "https://")):
+            logger.warning(
+                "ALLOWED_ORIGINS entry %r has no http:// or https:// prefix and will "
+                "never match. Browsers compare the full address.", origin,
+            )
 
 
 @app.on_event("shutdown")
