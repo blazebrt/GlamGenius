@@ -56,6 +56,19 @@ async def confirm_subscription(
     payment_method: str = "upi",
     user: Dict[str, Any] = Depends(get_current_user),
 ):
+    # Private test is invite-only — no request may grant a paid plan this way.
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": "SUBSCRIPTIONS_UNAVAILABLE",
+            "message": (
+                "Subscriptions are not available yet. "
+                "GlamGenius is invite-only for a private test group — "
+                "use your invite code to sign up for full access."
+            ),
+        },
+    )
+    # Kept below for a later paid launch; unreachable while invite-only.
     order = await db.subscription_orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -99,12 +112,17 @@ async def subscription_status(user: Dict[str, Any] = Depends(get_current_user)):
     used = int(user.get("scans_used_this_month") or 0)
     if user.get("scan_month_key") != _month_key():
         used = 0
+    from settings import INVITE_SCANS_PER_MONTH
+    limit = INVITE_SCANS_PER_MONTH if active else FREE_SCANS_PER_MONTH
     return {
         "plan": "plus" if active else "free",
         "expires_at": expires,
-        "free_scans_per_month": FREE_SCANS_PER_MONTH,
+        "free_scans_per_month": limit,
+        "invite_scans_per_month": INVITE_SCANS_PER_MONTH,
         "scans_used_this_month": used,
-        "scans_remaining": None if active else max(0, FREE_SCANS_PER_MONTH - used),
+        "scans_remaining": max(0, limit - used),
         "plus_price_inr": PLUS_PRICE_INR,
         "plus_yearly_inr": PLUS_YEARLY_INR,
+        "subscriptions_available": False,
+        "invite_only": True,
     }

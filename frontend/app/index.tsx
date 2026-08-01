@@ -41,8 +41,7 @@ export default function WelcomeScreen() {
     }
   };
 
-  // No account needed to try it. The scan screen gives a free preview and
-  // asks for a sign-up once there is something worth saving.
+  // Invite-only: the scan screen asks for an invite code before the teaser runs.
   const handleGetStarted = () => {
     router.push('/scan?scanType=face&preview=1');
   };

@@ -20,6 +20,7 @@ from security import (
     _user_view,
 )
 from ai import _ai_calls_remaining, _ai_limit_for
+from invites import consume_invite
 
 router = APIRouter()
 
@@ -35,6 +36,10 @@ async def create_user(user: UserProfileCreate):
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered. Please log in.")
 
+    # Private test group: every signup spends one use of a valid invite code.
+    invite = await consume_invite(user.invite_code)
+
+    # Invitees get full (Plus-level) access — no billing during the private test.
     user_obj = UserProfile(
         name=user.name,
         email=(user.email or "").lower().strip(),
@@ -43,6 +48,8 @@ async def create_user(user: UserProfileCreate):
         city=user.city,
         diet=user.diet,
         password_hash=_hash_password(user.password),
+        plan="plus",
+        invite_code=invite["code"],
         scan_month_key=_month_key(),
     )
     doc = user_obj.dict()

@@ -8,6 +8,7 @@ import {
   ScrollView,
   Dimensions,
   Platform,
+  TextInput,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -49,6 +50,7 @@ export default function ScanScreen() {
   const [preview, setPreview] = useState<any>(null);
   const [errorLimit, setErrorLimit] = useState(false);
   const [cameraError, setCameraError] = useState(false);
+  const [previewInvite, setPreviewInvite] = useState('');
 
   // Signed-out visitors get a free teaser instead of the full check.
   const isPreviewMode = !userId;
@@ -64,12 +66,21 @@ export default function ScanScreen() {
   }, [phase]);
 
   const runPreview = async (base64: string) => {
+    if (!previewInvite.trim()) {
+      notify(
+        'Invite required',
+        'GlamGenius is invite-only. Enter your invite code to try a preview.',
+      );
+      setPhase('camera');
+      return;
+    }
     setPhase('processing');
     setErrorLimit(false);
     try {
       const res = await api.post('/scan/preview', {
         image_base64: base64,
         scan_type: scanType,
+        invite_code: previewInvite.trim(),
       });
       setPreview(res.data);
       setPhase('results');
@@ -78,11 +89,16 @@ export default function ScanScreen() {
       if (err?.response?.status === 429) {
         notify(
           'Free previews used',
-          detail?.message || 'Create a free account to keep going.',
-          [
-            { text: 'Not now', style: 'cancel' },
-            { text: 'Create account', onPress: () => router.push('/(auth)/welcome') },
-          ]
+          typeof detail === 'object' ? detail?.message : 'Please create an account to continue.',
+        );
+        setErrorLimit(true);
+        setPhase('camera');
+        return;
+      }
+      if (err?.response?.status === 400) {
+        notify(
+          'Invite needed',
+          typeof detail === 'object' ? (detail?.message || 'Check your invite code.') : String(detail || 'Check your invite code.'),
         );
         setPhase('camera');
         return;
@@ -294,6 +310,22 @@ export default function ScanScreen() {
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 20 }]}>
         {errorLimit && (
           <Text style={styles.limitText}>Free monthly checks used — upgrade for more.</Text>
+        )}
+        {isPreviewMode && (
+          <>
+            <Text style={styles.hint}>
+              Invite-only private test — enter your invite code to try a preview.
+            </Text>
+            <TextInput
+              style={styles.inviteInput}
+              placeholder="Invite code"
+              placeholderTextColor="rgba(255,255,255,0.5)"
+              autoCapitalize="characters"
+              autoCorrect={false}
+              value={previewInvite}
+              onChangeText={setPreviewInvite}
+            />
+          </>
         )}
         <Text style={styles.hint}>
           {IS_WEB ? 'Upload a well-lit photo to continue.' : 'Centre yourself in good light, then capture or upload.'}
@@ -621,6 +653,20 @@ const styles = StyleSheet.create({
   },
   bottomBar: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 20 },
   hint: { color: 'rgba(255,255,255,0.85)', textAlign: 'center', marginBottom: 16, fontFamily: FONTS.family.body, fontSize: 13 },
+  inviteInput: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 12,
+    color: COLORS.white,
+    fontFamily: FONTS.family.body,
+    fontSize: 15,
+    textAlign: 'center',
+    letterSpacing: 1,
+  },
   limitText: { color: '#FECACA', textAlign: 'center', marginBottom: 8, fontFamily: FONTS.family.bodyMedium, fontSize: 13 },
   actions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   uploadBtn: { width: 72, alignItems: 'center', gap: 4 },

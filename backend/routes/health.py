@@ -2,7 +2,7 @@
 from fastapi import APIRouter
 from datetime import datetime
 
-from settings import FREE_SCANS_PER_MONTH, PLUS_PRICE_INR, PLUS_YEARLY_INR, GEMINI_API_KEY
+from settings import FREE_SCANS_PER_MONTH, PLUS_PRICE_INR, PLUS_YEARLY_INR, GEMINI_API_KEY, INVITE_SCANS_PER_MONTH, INVITE_ONLY
 from ai import _llm_configured, HAS_GOOGLE_GENAI
 
 router = APIRouter()
@@ -31,6 +31,8 @@ async def health_check():
 async def public_config():
     return {
         "free_scans_per_month": FREE_SCANS_PER_MONTH,
+        "invite_scans_per_month": INVITE_SCANS_PER_MONTH,
+        "invite_only": INVITE_ONLY,
         "plus_price_inr": PLUS_PRICE_INR,
         "plus_yearly_inr": PLUS_YEARLY_INR,
         "currency": "INR",

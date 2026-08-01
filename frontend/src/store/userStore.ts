@@ -118,6 +118,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
         email,
         phone: extra?.phone || '',
         password: extra.password,
+        invite_code: (extra as any)?.invite_code || '',
         age: extra?.age,
         city: extra?.city,
         diet: extra?.diet,
