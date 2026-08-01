@@ -18,10 +18,11 @@ from settings import PREVIEW_COLOR_COUNT
 from invites import assert_invite_usable
 
 from app.config import MAX_IMAGE_BASE64_CHARS
+from app.domains.consent import service as consent_service
 from app.domains.ai_gateway.schemas import profile_value
 from app.domains.entitlements import service as entitlements
 from app.domains.entitlements.models import FEATURE_SCAN_ANALYZE
-from app.shared.errors.exceptions import ValidationFailedError
+from app.shared.errors.exceptions import ConsentRequiredError, ValidationFailedError
 
 router = APIRouter()
 
@@ -58,6 +59,8 @@ async def preview_scan(request: ScanPreviewRequest, http_request: Request):
     # Validate without consuming — signup is what spends a use.
     await assert_invite_usable(request.invite_code)
     _assert_image_within_limit(request.image_base64)
+    if not request.photo_analysis_consent:
+        raise ConsentRequiredError()
 
     client_ip = http_request.client.host if http_request.client else "unknown"
     await _assert_preview_quota(client_ip)
@@ -110,6 +113,7 @@ async def analyze_scan(
     # monthly free limit is always enforced.
     user_id = user["id"]
     _assert_image_within_limit(request.image_base64)
+    await consent_service.require_analysis_consent_for_v1_user(user_id)
     await _assert_ai_quota(user)
     await _ensure_scan_quota(user)
 

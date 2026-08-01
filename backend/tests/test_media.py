@@ -104,6 +104,17 @@ async def test_unknown_purpose_is_rejected(app_client, make_user, media_root):
     assert response.json()["detail"]["code"] == "VALIDATION_FAILED"
 
 
+async def test_analysis_photos_cannot_enter_media_storage(
+    app_client, make_user, media_root
+):
+    _, token = await make_user()
+    response = await _upload(app_client, token, purpose="photo_analysis")
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "VALIDATION_FAILED"
+    assert list(media_root.rglob("*.*")) == []
+
+
 # --- Authorization ----------------------------------------------------------
 
 

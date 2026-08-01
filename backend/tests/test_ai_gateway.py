@@ -21,6 +21,13 @@ import base64
 IMAGE_B64 = base64.b64encode(png_bytes()).decode()
 
 
+def test_prompt_does_not_request_unversioned_appearance_scores():
+    from ai import COACH_JSON_SCHEMA
+
+    assert "wellness_scores" not in COACH_JSON_SCHEMA
+    assert "overall_score" not in COACH_JSON_SCHEMA
+
+
 async def _scans_used(user_id: str) -> int:
     from database import db
 

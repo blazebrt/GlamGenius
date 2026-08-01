@@ -60,19 +60,24 @@ async def test_unknown_consent_type_is_rejected(app_client, make_user):
     assert response.status_code == 422
 
 
-async def test_analysis_upload_requires_consent_when_enforcement_is_on(
-    app_client, make_user, media_root, monkeypatch
+async def test_scan_analysis_requires_consent_when_enforcement_is_on(
+    app_client, make_user, fake_provider, monkeypatch
 ):
-    """Enforcement ships off; this proves the switch works when turned on."""
+    """The real analysis route, not media storage, owns the consent boundary."""
+    import base64
+    import json
+
     import app.domains.consent.service as consent_service
+    from tests.conftest import valid_analysis_payload
 
     monkeypatch.setattr(consent_service, "REQUIRE_ANALYSIS_CONSENT", True)
     _, token = await make_user()
+    image = base64.b64encode(png_bytes()).decode()
+    fake_provider.text = json.dumps(valid_analysis_payload())
 
     refused = await app_client.post(
-        "/api/v2/media/upload",
-        files={"file": ("face.png", png_bytes(), "image/png")},
-        data={"purpose": "photo_analysis"},
+        "/api/scan/analyze",
+        json={"image_base64": image, "scan_type": "face"},
         headers=auth(token),
     )
     assert refused.status_code == 403
@@ -85,10 +90,35 @@ async def test_analysis_upload_requires_consent_when_enforcement_is_on(
     )
 
     allowed = await app_client.post(
-        "/api/v2/media/upload",
-        files={"file": ("face.png", png_bytes(), "image/png")},
-        data={"purpose": "photo_analysis"},
+        "/api/scan/analyze",
+        json={"image_base64": image, "scan_type": "face"},
         headers=auth(token),
+    )
+    assert allowed.status_code == 200
+
+
+async def test_signed_out_preview_requires_explicit_consent(app_client, fake_provider):
+    import base64
+    import json
+
+    from tests.conftest import create_invite, valid_analysis_payload
+
+    invite = await create_invite()
+    image = base64.b64encode(png_bytes()).decode()
+    fake_provider.text = json.dumps(valid_analysis_payload())
+    payload = {
+        "image_base64": image,
+        "scan_type": "face",
+        "invite_code": invite,
+    }
+
+    refused = await app_client.post("/api/scan/preview", json=payload)
+    assert refused.status_code == 403
+    assert refused.json()["detail"]["code"] == "CONSENT_REQUIRED"
+
+    allowed = await app_client.post(
+        "/api/scan/preview",
+        json={**payload, "photo_analysis_consent": True},
     )
     assert allowed.status_code == 200
 

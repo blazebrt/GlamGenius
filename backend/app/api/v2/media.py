@@ -15,9 +15,8 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import MEDIA_MAX_BYTES
-from app.domains.consent import service as consent_service
 from app.domains.media import service as media_service
-from app.domains.media.models import MEDIA_PURPOSE_ANALYSIS, MEDIA_PURPOSE_INVENTORY
+from app.domains.media.models import MEDIA_PURPOSE_INVENTORY
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import MediaTooLargeError, ValidationFailedError
 from app.shared.security.deps import (
@@ -29,7 +28,10 @@ from app.shared.security.deps import (
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_media"))])
 
-ALLOWED_PURPOSES = {MEDIA_PURPOSE_ANALYSIS, MEDIA_PURPOSE_INVENTORY}
+# The media domain stores user-owned product/inventory images. Photos supplied
+# for face, hair, hands, or full-person analysis are transient request data and
+# must never enter object storage.
+ALLOWED_PURPOSES = {MEDIA_PURPOSE_INVENTORY}
 
 # Refuse a stream that overruns the limit rather than buffering it all first.
 # Reading an unbounded upload into memory is a denial-of-service in one line.
@@ -65,11 +67,6 @@ async def upload_media(
         raise ValidationFailedError(
             "That is not a purpose we accept for an upload.", field="purpose"
         )
-
-    # Analysing a photo of a person needs agreement first; a photo of a lipstick
-    # does not.
-    if purpose == MEDIA_PURPOSE_ANALYSIS:
-        await consent_service.require_analysis_consent(session, current.account_id)
 
     data = await _read_capped(file)
 

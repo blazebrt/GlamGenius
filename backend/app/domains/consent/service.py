@@ -11,7 +11,9 @@ from app.config import CONSENT_VERSION, REQUIRE_ANALYSIS_CONSENT
 from app.domains.audit import service as audit
 from app.domains.audit.models import ACTION_CONSENT_GRANTED, ACTION_CONSENT_REVOKED
 from app.domains.consent.models import CONSENT_PHOTO_ANALYSIS, Consent
+from app.domains.identity import service as identity
 from app.shared.database.base import utcnow
+from app.shared.database.sql import get_sessionmaker
 from app.shared.errors.exceptions import ConsentRequiredError
 
 
@@ -77,9 +79,9 @@ async def require_analysis_consent(
 ) -> None:
     """Raise unless the user has agreed to photo analysis.
 
-    Gated by ``REQUIRE_ANALYSIS_CONSENT``, which ships **off**. Turning it on
-    before the app has collected answers would lock out every existing account,
-    so enforcement is switched on separately once the answers exist.
+    The flag exists as an emergency rollback switch, but ships on. The frontend
+    collects the answer before sending the image and this server-side check
+    prevents callers from bypassing that trust boundary.
     """
     if not REQUIRE_ANALYSIS_CONSENT:
         return
@@ -88,6 +90,23 @@ async def require_analysis_consent(
     raise ConsentRequiredError(
         consent_type=CONSENT_PHOTO_ANALYSIS, consent_version=CONSENT_VERSION
     )
+
+
+async def require_analysis_consent_for_v1_user(v1_user_id: str) -> None:
+    """Enforce V2 consent on the existing authenticated V1 scan route.
+
+    The old route authenticates through MongoDB and does not have a SQLAlchemy
+    request session. Resolve its stable user id through ``account_links`` only
+    when enforcement is enabled, keeping the V1 identity source authoritative.
+    """
+    if not REQUIRE_ANALYSIS_CONSENT:
+        return
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        account = await identity.get_or_create_account(session, str(v1_user_id))
+        await session.commit()
+        await require_analysis_consent(session, account.id)
 
 
 async def summary(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, object]:

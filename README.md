@@ -155,7 +155,7 @@ comes from the token, never from the URL or request body.
 | PUT | /api/users/me | 🔒 | Update own profile |
 | POST | /api/scan/analyze | 🔒 | Full coach analysis (quota enforced) |
 | GET | /api/scan/history | 🔒 | Own scan history |
-| GET | /api/scan/trends | 🔒 | Own score trends |
+| GET | /api/scan/trends | 🔒 | Legacy historical scan data (not shown in the Phase 1 UI) |
 | POST | /api/quiz/submit | 🔒 | Submit stylist quiz |
 | POST | /api/plans/style | 🔒 | Occasion style plan |
 | GET | /api/recommendations/history | 🔒 | Own past plans |
@@ -172,7 +172,7 @@ comes from the token, never from the URL or request body.
 | GET | /api/v2/me | 🔒 | Profile, account status, consent, usage |
 | GET | /api/v2/consent | 🔒 | Current consent state |
 | POST | /api/v2/consent | 🔒 | Grant or withdraw consent |
-| POST | /api/v2/media/upload | 🔒 | Upload a photo (validated, owned) |
+| POST | /api/v2/media/upload | 🔒 | Upload an inventory photo (validated, owned) |
 | GET | /api/v2/media/{id} | 🔒 | Asset metadata |
 | GET | /api/v2/media/{id}/content | 🔒 | Asset bytes |
 | DELETE | /api/v2/media/{id} | 🔒 | Erase the bytes and mark deleted |
@@ -207,8 +207,12 @@ screenshot is enough to find the request in the logs.
 
 ## Privacy
 
-- **Face photos are never stored.** `scan/analyze` truncates the image to 83 characters
-  before saving. This is enforced in code and covered by a test.
+- **Explicit consent comes first.** Signed-in users record consent through
+  `/api/v2/consent`; a signed-out preview includes a per-request consent answer. Both scan
+  routes refuse the image before provider or allowance work when consent is missing.
+- **Face photos are never stored.** Scan images are transient provider input only;
+  `scan/analyze` truncates the image to 83 characters before saving a scan record. The
+  media API rejects analysis photos entirely. Both boundaries are covered by tests.
 - Photos uploaded to your own collection are stored until you delete them.
 - `GET /api/v2/privacy/export` returns everything from both databases as JSON.
 - `DELETE /api/v2/account` erases stored photos immediately and marks the account for

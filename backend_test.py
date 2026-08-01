@@ -52,6 +52,22 @@ def unique_email(prefix):
 def admin_headers():
     return {"X-Admin-Secret": ADMIN_SECRET}
 
+def grant_photo_analysis_consent(token):
+    """Give the explicit consent required before a test sends a person photo."""
+    response = requests.post(
+        f"{BACKEND_URL}/v2/consent",
+        headers=auth(token),
+        json={"consent_type": "photo_analysis", "granted": True},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        print(
+            "FAIL: Could not grant photo-analysis consent, "
+            f"got {response.status_code}: {response.text[:200]}"
+        )
+        return False
+    return True
+
 def ensure_suite_invite():
     """Create (or reuse) a high-capacity invite code for registration in tests."""
     if _SUITE_INVITE["code"]:
@@ -104,6 +120,8 @@ def register_user(name, email=None, password="TestPassw0rd!", invite_code=None):
         print(f"❌ FAIL: Could not register user, got {response.status_code}: {response.text[:200]}")
         return None, None
     data = response.json()
+    if not grant_photo_analysis_consent(data["token"]):
+        return None, None
     return data["user"]["id"], data["token"]
 
 def create_scan_user(label, name, email):
@@ -125,6 +143,8 @@ def create_scan_user(label, name, email):
             token = body.get("token")
             if not token:
                 print("❌ FAIL: User creation did not return a token")
+                return None, None
+            if not grant_photo_analysis_consent(token):
                 return None, None
             SCAN_USER_IDS[label] = user_id
             SCAN_TOKENS[label] = token
@@ -1057,6 +1077,7 @@ def test_signed_out_preview_teaser():
             "image_base64": image_base64,
             "scan_type": "face",
             "invite_code": invite["code"],
+            "photo_analysis_consent": True,
         },
         timeout=180,
     )

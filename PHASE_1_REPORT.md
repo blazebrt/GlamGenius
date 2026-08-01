@@ -2,7 +2,7 @@
 
 **Phase:** 1 of the V2 plan
 **Baseline:** `e4bed57` (main)
-**Branch:** `v2/phase-1-foundation` (local only — not pushed)
+**Branch:** `v2/phase-1-foundation` (pulled from GitHub; final corrections remain local)
 **Date:** 2026-08-01
 
 ---
@@ -157,6 +157,11 @@ result. Three different failures get three different screens: a photo we could n
 says plainly that it is our problem, not their photo), and everything else. Retry re-sends
 the same photo rather than making the user take a new one.
 
+Before a photo leaves the app, the scan screen now shows an explicit consent control that
+says the photo is sent for this analysis and is not stored. Signed-in consent is persisted;
+signed-out previews carry a per-request answer. The backend independently enforces both.
+Composite appearance scores and score-trend cards are no longer requested or shown.
+
 **New: eight reusable trust states** in `src/components/TrustStates.tsx` — uploading,
 processing, retrying, low-quality image, provider unavailable, analysis failed, deletion
 confirmation, beta feature unavailable. Built on the existing design system.
@@ -223,14 +228,14 @@ docker compose -f docker-compose.test.yml run --rm backend-tests
 ```
 INFO  [alembic.runtime.migration] Running upgrade  -> 0001_v2_foundation, V2 foundation tables
 No new upgrade operations detected.
-90 passed, 157 warnings in 16.45s
+93 passed, 161 warnings in 22.19s
 ```
 
-**90 passed, 0 failed.** Coverage by file: `test_v1_regression.py` 25 (including a 15-case
-parametrised authorization table), `test_ai_gateway.py` 16, `test_media.py` 16,
-`test_config_flags_and_billing.py` 15, `test_privacy.py` 13, `test_database.py` 5.
+**93 passed, 0 failed.** Coverage by file: `test_v1_regression.py` 25 (including a 15-case
+parametrised authorization table), `test_ai_gateway.py` 17, `test_media.py` 17,
+`test_config_flags_and_billing.py` 15, `test_privacy.py` 14, `test_database.py` 5.
 
-The 157 warnings are pre-existing Pydantic v1 `.dict()` deprecations in V1 routes and a
+The 161 warnings are pre-existing Pydantic v1 `.dict()` deprecations in V1 routes and a
 JWT key-length notice from the short test secret. None are errors and none come from new
 code.
 
@@ -241,18 +246,16 @@ docker compose -f docker-compose.test.yml run --rm frontend-tests
 ```
 
 ```
-✖ 7 problems (0 errors, 7 warnings)
+✖ 6 problems (0 errors, 6 warnings)
 Test Suites: 4 passed, 4 total
-Tests:       40 passed, 40 total
+Tests:       42 passed, 42 total
 ```
 
-**40 passed, 0 failed** — `failure.test.ts` 14, `TrustStates.test.tsx` 14,
+**42 passed, 0 failed** — `failure.test.ts` 14, `TrustStates.test.tsx` 16,
 `subscriptionScreen.test.tsx` 7, `configStore.test.ts` 5.
-`tsc --noEmit` clean. `expo lint` 0 errors; the 7 remaining
+`tsc --noEmit` clean. `expo lint` 0 errors; the 6 remaining
 warnings are pre-existing `react-hooks/exhaustive-deps` notices on mount-only effects, a
-pattern already used throughout the codebase, plus one unused import in a file this phase
-did not touch. One pre-existing lint **error** (an unescaped apostrophe in `home.tsx`) was
-fixed.
+pattern already used throughout the codebase, plus one unused import in an untouched file.
 
 ### Live stack
 
@@ -262,58 +265,63 @@ docker compose up -d --build
 
 ```
 backend-1  | INFO  [alembic.runtime.migration] Running upgrade  -> 0001_v2_foundation
-backend-1  | server: V2: postgres=up storage=local features=(none enabled)
+backend-1  | server: V2: postgres=up storage=local features=v2_media,v2_privacy,v2_consent,v2_ai_gateway
 backend-1  | INFO:     Application startup complete.
 worker-1   | outbox_relay_started poll=2.0s
 ```
 
+The stack was cold-started against a fresh PostgreSQL volume. The worker waits for the
+migrated API healthcheck, eliminating the initial outbox-table race found during smoke
+testing.
+
 Endpoints verified by request, not assumption:
 
-- `GET /api/health` → `{"status":"healthy","llm_configured":true,"gemini_ready":true}`
+- `GET /api/health` → `{"status":"healthy","llm_configured":false,"gemini_ready":false}`
 - `GET /api/v2/health` → `{"status":"healthy","postgres":"up",...}`
-- `GET /api/v2/config` → `subscriptions_available: false`, `face_photos_stored: false`
+- `GET /api/v2/config` → `consent_required: true`, `subscriptions_available: false`,
+  `face_photos_stored: false`
 - `GET /api/config/public` → `subscriptions_available: false`
+
+`npx expo export --platform web` also completed successfully and statically rendered all
+21 routes.
 
 ### What was not tested
 
 No test calls the real Gemini API — the provider is faked at the transport boundary in
-every test. The real integration is exercised only by the pre-existing `backend_test.py`,
-which needs a live key and is not part of the containerised run. There is no automated
-end-to-end test driving the actual app UI; the frontend tests are component and store level.
+every container test. The separate `backend_test.py` end-to-end suite was updated to grant
+explicit test consent but could not be executed because this machine has no Gemini key.
+That live-provider acceptance check remains pending; it is not represented as a pass.
+There is no automated end-to-end test driving the actual app UI; the frontend tests are
+component and store level, supplemented by the production web export.
 
 ---
 
 ## 9. Known limitations
 
-1. **`overall_score` still exists.** The AI still produces `wellness_scores` including a
-   single composite appearance score with no formula, no version and no explanation. This
-   is contrary to the product direction and is scheduled for the metrics phase, which is
-   where the deterministic replacements get built. Removing it now — before anything
-   replaces it — would break the History and Trends screens for no gain.
-2. **Account deletion is a request, not a purge.** Stored photos are erased immediately
+1. **Account deletion is a request, not a purge.** Stored photos are erased immediately
    and irreversibly, consent is withdrawn, and the account is marked. The V1 user document
    and scan history are **not** destroyed. A single unconfirmed API call should not be able
    to permanently erase an account; that needs a confirmation flow and an operator-side
    purge with a grace period. The API response says exactly what happened and what is
    pending, rather than implying more than it did.
-3. **Consent is not enforced by default.** `REQUIRE_ANALYSIS_CONSENT=false`. Built, wired,
-   tested both ways; needs the app to have collected answers before it can be turned on.
-4. **The V1 hourly rate limit still counts a failed call.** A failure does not consume the
+2. **The V1 hourly rate limit still counts a failed call.** A failure does not consume the
    monthly *allowance* — that is the acceptance criterion and it is tested — but it does
    consume one slot in the hourly burst limiter. That limiter exists to cap spend, and a
    provider error can still have cost tokens, so this is defensible; it is noted rather
    than hidden.
-5. **S3 storage is untested against a real bucket.** The adapter is complete and its
+3. **S3 storage is untested against a real bucket.** The adapter is complete and its
    configuration errors are tested, but `boto3` is not installed and no live S3-compatible
    service has been exercised.
-6. **The outbox has no handlers.** Events are written and the relay runs; an event with no
+4. **The outbox has no handlers.** Events are written and the relay runs; an event with no
    handler is marked dispatched and dropped. Correct for now — nothing is waiting on one.
-7. **Token revocation still absent.** A stolen token is valid for 30 days. Pre-existing,
+5. **Token revocation still absent.** A stolen token is valid for 30 days. Pre-existing,
    out of Phase 1 scope, noted in the audit as F14.
-8. **`JWT_SECRET` cannot be rotated** without locking out accounts that still have
+6. **`JWT_SECRET` cannot be rotated** without locking out accounts that still have
    pre-bcrypt password hashes, because the legacy verifier uses it. Pre-existing (F15).
-9. **`backend_test.py` assertions are not yet ported** into pytest. It is kept intact and
-   unweakened; porting happens incrementally as each area is touched.
+7. **The live Gemini end-to-end check is pending.** `backend_test.py` remains intact and
+   has been brought forward for the new consent contract, but a real key is required to
+   execute its success-path assertions. The container suite covers provider success,
+   timeout, invalid output and failure accounting with a deterministic fake transport.
 
 ---
 
@@ -440,7 +448,7 @@ docker compose -f docker-compose.test.yml run --rm backend-tests
 docker compose -f docker-compose.test.yml run --rm frontend-tests
 ```
 
-You should see `90 passed` and `40 passed`.
+You should see `93 passed` and `42 passed`.
 
 ---
 
@@ -456,17 +464,19 @@ You should see `90 passed` and `40 passed`.
 | 6 | Users cannot access another user's media | ✅ | `test_another_user_cannot_read_your_media`, `test_another_user_cannot_delete_your_media` — both 404, not 403 |
 | 7 | A user can delete an uploaded media asset | ✅ | `test_owner_can_delete_and_the_bytes_are_really_gone` asserts the file is gone from disk |
 | 8 | Subscription buttons hidden/disabled when billing unavailable | ✅ | 7 tests in `subscriptionScreen.test.tsx`; backend refuses at first step (`test_creating_an_order_is_refused_at_the_first_step`) |
-| 9 | The frontend gives a useful retry path after failure | ✅ | `TrustStates.test.tsx` (14 tests); retry re-sends the same photo; server guidance is displayed |
-| 10 | All relevant tests pass | ✅ | 90 backend + 40 frontend, 0 failures; tsc clean; lint 0 errors |
+| 9 | The frontend gives a useful retry path after failure | ✅ | `TrustStates.test.tsx` (16 tests); retry re-sends the same photo; server guidance and explicit consent are displayed |
+| 10 | All relevant tests pass | ⚠️ | 93 backend + 42 frontend, 0 failures; tsc clean; lint 0 errors; production web export passed. Live-provider `backend_test.py` awaits a Gemini key |
 | 11 | README and env.example updated | ✅ | Both rewritten with V2 sections, test commands, error contract, privacy statement |
 | 12 | PHASE_1_REPORT.md exists | ✅ | This document |
 | 13 | The phase is committed | ✅ | Hash in §15 |
 
-Additional Phase 1 requirements, all met: repository audit at
+Additional Phase 1 implementation requirements met: repository audit at
 [docs/v2/PHASE_1_AUDIT.md](docs/v2/PHASE_1_AUDIT.md) (37 findings); modular V2 structure
 with no duplicate entrypoint; all ten requested tables; media abstraction with local and
 S3 adapters; AI gateway recording all twelve required fields; privacy controls with
-consent, export, deletion and audit; eight frontend trust states; the full Step 9 test list.
+consent, export, deletion and audit; eight frontend trust states; the full Step 9
+provider-independent test list. The credential-gated live Gemini run is the only pending
+acceptance evidence.
 
 ---
 
@@ -474,11 +484,13 @@ consent, export, deletion and audit; eight frontend trust states; the full Step 
 
 ```
 da713c6  feat(v2): establish production foundation and trusted AI pipeline
+PENDING  feat(v2): enforce Phase 1 trust boundaries
 ```
 
 The report's own commit-hash line is filled in by a follow-up commit, since a commit
 cannot contain its own hash.
 
-Branch `v2/phase-1-foundation`, local only. Nothing pushed to GitHub.
+Branch `v2/phase-1-foundation`. The original Phase 1 commits were pulled from GitHub;
+the final trust-boundary correction is local and has not been pushed.
 
 **Stopping here.** Phase 2 does not begin without your approval.

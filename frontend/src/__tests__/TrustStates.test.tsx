@@ -9,11 +9,27 @@ import {
   BetaFeatureUnavailableState,
   DeletionConfirmState,
   LowQualityImageState,
+  PhotoAnalysisConsentControl,
   ProcessingState,
   ProviderUnavailableState,
   RetryingState,
   UploadingState,
 } from '../components/TrustStates';
+
+describe('photo analysis consent', () => {
+  it('states that the photo is analysed but not stored', () => {
+    render(<PhotoAnalysisConsentControl checked={false} onChange={jest.fn()} />);
+    expect(screen.getByText(/not stored/i)).toBeTruthy();
+    expect(screen.getByTestId('photo-consent-toggle').props.accessibilityState.checked).toBe(false);
+  });
+
+  it('requires an explicit toggle', () => {
+    const onChange = jest.fn();
+    render(<PhotoAnalysisConsentControl checked={false} onChange={onChange} />);
+    fireEvent.press(screen.getByTestId('photo-consent-toggle'));
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
+});
 
 describe('progress states', () => {
   it('renders uploading, with progress when known', () => {

@@ -87,10 +87,10 @@ S3_ACCESS_KEY_ID = _env_str("S3_ACCESS_KEY_ID")
 S3_SECRET_ACCESS_KEY = _env_str("S3_SECRET_ACCESS_KEY")
 
 # --- Consent -----------------------------------------------------------------
-# Off by default so existing accounts are not locked out the moment this ships.
-# The app collects consent from this phase onward; flipping this to true is a
-# one-line change once enough accounts have a recorded answer.
-REQUIRE_ANALYSIS_CONSENT = _env_bool("REQUIRE_ANALYSIS_CONSENT", False)
+# Consent is a trust boundary, not an optional rollout experiment. The frontend
+# asks before sending a photo, and the backend enforces the answer even if a
+# caller bypasses the app.
+REQUIRE_ANALYSIS_CONSENT = _env_bool("REQUIRE_ANALYSIS_CONSENT", True)
 CONSENT_VERSION = _env_str("CONSENT_VERSION", "2026-08-01")
 
 # --- Billing -----------------------------------------------------------------

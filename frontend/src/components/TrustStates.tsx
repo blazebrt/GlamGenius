@@ -341,6 +341,38 @@ export function BetaFeatureUnavailableState({
   );
 }
 
+/** Explicit permission before any face, hair, hands, or full-person photo leaves the device. */
+export function PhotoAnalysisConsentControl({
+  checked,
+  busy = false,
+  onChange,
+}: {
+  checked: boolean;
+  busy?: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <TouchableOpacity
+      testID="photo-consent-toggle"
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked, disabled: busy }}
+      accessibilityLabel="Allow this photo to be analysed"
+      disabled={busy}
+      onPress={() => onChange(!checked)}
+      style={[styles.consentRow, busy && styles.actionDisabled]}
+    >
+      <Ionicons
+        name={checked ? 'checkbox' : 'square-outline'}
+        size={22}
+        color={checked ? COLORS.primary : COLORS.white}
+      />
+      <Text style={styles.consentText}>
+        I agree to send this photo for AI analysis. It is used for this check and is not stored.
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
 /** Deleting is irreversible, so it is stated in those words before it happens. */
 export function DeletionConfirmState({
   title = 'Delete this photo?',
@@ -448,6 +480,23 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.family.bodyMedium,
     fontSize: FONTS.sizes.bodySm,
     color: COLORS.primaryDark,
+  },
+  consentRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACING.sm,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    marginBottom: SPACING.sm,
+  },
+  consentText: {
+    flex: 1,
+    color: COLORS.white,
+    fontFamily: FONTS.family.body,
+    fontSize: FONTS.sizes.bodySm,
+    lineHeight: FONTS.sizes.bodySm * FONTS.lineHeights.normal,
   },
   action: {
     alignSelf: 'stretch',

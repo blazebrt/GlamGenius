@@ -339,5 +339,9 @@ without a redeploy. **Finding F35** — Phase 1 introduces a real flag store.
 8. **Frontend trust states** replace the single generic failure toast. *(F4)*
 9. **A real test suite** runs in Docker with no host toolchain. *(F27, F30)*
 
-Deliberately **not** in Phase 1: removing `overall_score` *(F25)*, token revocation *(F14)*,
-`JWT_SECRET` rotation *(F15)*, inventory, Today engine, shopping engine.
+The original scope assessment placed removal of `overall_score` *(F25)* after Phase 1.
+The final trust review superseded that decision: new prompts no longer request composite
+scores and the Phase 1 UI no longer displays them. The legacy response field and history
+route remain readable only for compatibility with historical records. Token revocation
+*(F14)*, `JWT_SECRET` rotation *(F15)*, inventory, Today engine and the shopping engine
+remain outside Phase 1.

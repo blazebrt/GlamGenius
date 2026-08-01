@@ -48,6 +48,9 @@ services:
       # unconfigured-provider path is itself something worth testing.
       GEMINI_API_KEY: ""
       SUBSCRIPTIONS_AVAILABLE: "false"
+      # Most tests exercise AI failure behaviour rather than the consent gate.
+      # Dedicated tests turn enforcement on and prove the real scan routes.
+      REQUIRE_ANALYSIS_CONSENT: "false"
       V2_FEATURES: "v2_media,v2_privacy,v2_consent,v2_ai_gateway"
       PYTHONPATH: /app
     depends_on:

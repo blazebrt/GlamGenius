@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the wording of a prompt changes. Recorded on every ai_runs row, so
 # a change in result quality can be traced to the prompt that caused it.
-PROMPT_VERSION_COACH = "coach.v1"
+PROMPT_VERSION_COACH = "coach.v2"
 PROMPT_VERSION_STYLE_PLAN = "style_plan.v1"
 
 # Re-exported so health.py and anything else importing from `ai` keeps working.
@@ -91,13 +91,6 @@ Respond in this EXACT JSON format:
     "hair_texture": "fine|medium|coarse|unclear",
     "hair_density_visible": "thin|medium|thick|unclear",
     "estimated_build_note": "only if visible and helpful; else unclear — never invent exact height/weight from photo"
-  },
-  "wellness_scores": {
-    "skin_score": 0,
-    "hair_score": 0,
-    "style_readiness_score": 0,
-    "overall_score": 0,
-    "score_notes": "one short sentence"
   },
   "observations": [
     {

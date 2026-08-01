@@ -149,7 +149,8 @@ export const setConsent = async (granted: boolean): Promise<ConsentSummary> => {
 
 // --- Media ------------------------------------------------------------------
 
-export type MediaPurpose = 'photo_analysis' | 'inventory_item';
+// Face/person analysis photos are transient request data and never enter media storage.
+export type MediaPurpose = 'inventory_item';
 
 export interface MediaAsset {
   id: string;
