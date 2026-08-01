@@ -16,15 +16,6 @@ import { useUserStore } from '../../src/store/userStore';
 import { useConfigStore } from '../../src/store/configStore';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../../src/theme/colors';
 
-const BODY_TYPES = [
-  { id: 'slim', label: 'Slim / petite' },
-  { id: 'average', label: 'Average' },
-  { id: 'athletic', label: 'Athletic' },
-  { id: 'curvy', label: 'Curvy' },
-  { id: 'plus', label: 'Plus / fuller' },
-  { id: 'prefer_not', label: 'Prefer not' },
-];
-
 const VIBES = [
   { id: 'natural', label: 'Natural' },
   { id: 'polished', label: 'Polished' },
@@ -47,34 +38,25 @@ export default function ProfileScreen() {
   const [city, setCity] = React.useState(user?.city || '');
   const [diet, setDiet] = React.useState(user?.diet || 'veg');
   const [height, setHeight] = React.useState(user?.height_cm ? String(user.height_cm) : '');
-  const [weight, setWeight] = React.useState(user?.weight_kg ? String(user.weight_kg) : '');
-  const [bodyType, setBodyType] = React.useState(user?.body_type || 'average');
   const [styleVibe, setStyleVibe] = React.useState(user?.style_vibe || 'natural');
 
   useEffect(() => {
-    fetchUser();
-    refreshSubscription();
-  }, []);
+    void fetchUser();
+    void refreshSubscription();
+  }, [fetchUser, refreshSubscription]);
 
   useEffect(() => {
     setName(user?.name || '');
     setCity(user?.city || '');
     setDiet(user?.diet || 'veg');
     setHeight(user?.height_cm ? String(user.height_cm) : '');
-    setWeight(user?.weight_kg ? String(user.weight_kg) : '');
-    setBodyType(user?.body_type || 'average');
     setStyleVibe(user?.style_vibe || 'natural');
-  }, [user?.id, user?.updated_at]);
+  }, [user?.id, user?.updated_at, user?.name, user?.city, user?.diet, user?.height_cm, user?.style_vibe]);
 
   const save = async () => {
     const height_cm = height ? Number(height) : undefined;
-    const weight_kg = weight ? Number(weight) : undefined;
     if (height && (Number.isNaN(height_cm!) || height_cm! < 100 || height_cm! > 230)) {
       notify('Check height', 'Enter height in cm between 100 and 230.');
-      return;
-    }
-    if (weight && (Number.isNaN(weight_kg!) || weight_kg! < 30 || weight_kg! > 250)) {
-      notify('Check weight', 'Enter weight in kg between 30 and 250.');
       return;
     }
     await updateUser({
@@ -82,8 +64,6 @@ export default function ProfileScreen() {
       city,
       diet,
       height_cm,
-      weight_kg,
-      body_type: bodyType,
       style_vibe: styleVibe,
     });
     notify('Saved', 'Your stylist profile was updated.');
@@ -95,7 +75,7 @@ export default function ProfileScreen() {
         <Text style={styles.label}>IN YOUR POCKET</Text>
         <Text style={styles.title}>Stylist profile</Text>
         <Text style={styles.subtitle}>
-          Skin tone from checks + height, weight, body frame, and vibe help your coach pick colours, fits, and outfits.
+          Keep account basics here. My Appearance holds your confirmed style, fit, goals, and reviewable observations.
         </Text>
 
         <View style={styles.planCard}>
@@ -128,7 +108,7 @@ export default function ProfileScreen() {
         <View style={styles.stats}>
           <Stat label="Skin tone" value={user?.skin_tone || '—'} />
           <Stat label="Undertone" value={user?.undertone || '—'} />
-          <Stat label="Body" value={user?.body_type || '—'} />
+          <Stat label="City" value={user?.city || '—'} />
           <Stat label="Vibe" value={user?.style_vibe || '—'} />
         </View>
 
@@ -138,40 +118,15 @@ export default function ProfileScreen() {
         <Text style={styles.fieldLabel}>City (climate tip)</Text>
         <TextInput style={styles.input} value={city} onChangeText={setCity} placeholder="e.g. Mumbai, Delhi, Bengaluru" placeholderTextColor={COLORS.textMuted} />
 
-        <View style={styles.row2}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.fieldLabel}>Height (cm)</Text>
-            <TextInput
-              style={styles.input}
-              value={height}
-              onChangeText={setHeight}
-              keyboardType="numeric"
-              placeholder="165"
-              placeholderTextColor={COLORS.textMuted}
-            />
-          </View>
-          <View style={{ width: 12 }} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.fieldLabel}>Weight (kg)</Text>
-            <TextInput
-              style={styles.input}
-              value={weight}
-              onChangeText={setWeight}
-              keyboardType="numeric"
-              placeholder="60"
-              placeholderTextColor={COLORS.textMuted}
-            />
-          </View>
-        </View>
-
-        <Text style={styles.fieldLabel}>Body frame (for clothing fit)</Text>
-        <View style={styles.dietRow}>
-          {BODY_TYPES.map((d) => (
-            <TouchableOpacity key={d.id} style={[styles.dietChip, bodyType === d.id && styles.dietChipActive]} onPress={() => setBodyType(d.id)}>
-              <Text style={[styles.dietText, bodyType === d.id && styles.dietTextActive]}>{d.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        <Text style={styles.fieldLabel}>Height (cm, optional)</Text>
+        <TextInput
+          style={styles.input}
+          value={height}
+          onChangeText={setHeight}
+          keyboardType="numeric"
+          placeholder="165"
+          placeholderTextColor={COLORS.textMuted}
+        />
 
         <Text style={styles.fieldLabel}>Style vibe</Text>
         <View style={styles.dietRow}>
@@ -193,6 +148,12 @@ export default function ProfileScreen() {
 
         <TouchableOpacity style={styles.saveBtn} onPress={save}>
           <Text style={styles.saveText}>Save stylist profile</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open My Appearance" style={styles.appearanceCard} onPress={() => router.push('/my-appearance')}>
+          <Ionicons name="person-circle-outline" size={28} color={COLORS.primary} />
+          <View style={{ flex: 1 }}><Text style={styles.appearanceTitle}>My Appearance</Text><Text style={styles.appearanceText}>Verified attributes, suggestions, fit preferences, goals, and readiness</Text></View>
+          <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(auth)/welcome')}>
@@ -260,7 +221,6 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.card, borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.md,
     paddingHorizontal: 14, paddingVertical: 12, fontFamily: FONTS.family.body, fontSize: 15, color: COLORS.textPrimary,
   },
-  row2: { flexDirection: 'row' },
   dietRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
   dietChip: {
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: RADIUS.full,
@@ -273,6 +233,9 @@ const styles = StyleSheet.create({
     marginTop: 20, backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, paddingVertical: 14, alignItems: 'center',
   },
   saveText: { fontFamily: FONTS.family.bodySemibold, color: COLORS.white, fontSize: 15 },
+  appearanceCard: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 18, padding: 14, backgroundColor: COLORS.card, borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.lg },
+  appearanceTitle: { fontFamily: FONTS.family.bodySemibold, color: COLORS.textPrimary, fontSize: 15 },
+  appearanceText: { fontFamily: FONTS.family.body, color: COLORS.textSecondary, fontSize: 11, lineHeight: 16, marginTop: 3 },
   linkRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18 },
   linkText: { fontFamily: FONTS.family.bodyMedium, fontSize: 14, color: COLORS.primary },
   disclaimer: { marginTop: 28, fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textMuted, lineHeight: 18 },

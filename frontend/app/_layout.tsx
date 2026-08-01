@@ -80,6 +80,8 @@ export default function RootLayout() {
             <Stack.Screen name="recommendations" />
             <Stack.Screen name="service-details" />
             <Stack.Screen name="subscription" />
+            <Stack.Screen name="onboarding" />
+            <Stack.Screen name="my-appearance" />
           </Stack>
         </ErrorBoundary>
       </SafeAreaProvider>

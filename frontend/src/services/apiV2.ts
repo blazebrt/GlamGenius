@@ -240,3 +240,112 @@ export const requestAccountDeletion = async (): Promise<AccountDeletion> => {
   const response = await api.delete<AccountDeletion>(`${V2}/account`);
   return response.data;
 };
+
+// --- Appearance digital twin ------------------------------------------------
+
+export type AttributeSource =
+  | 'user_declared' | 'photo_observed' | 'inventory_inferred'
+  | 'behavior_inferred' | 'integration' | 'stylist_verified';
+
+export interface ProfileAttribute {
+  id: string;
+  key: string;
+  label: string;
+  section: string;
+  value: string | number | string[];
+  source: AttributeSource;
+  confidence: number;
+  verification_state: 'unverified' | 'confirmed' | 'rejected' | 'not_sure' | 'superseded';
+  created_at: string | null;
+  updated_at: string | null;
+  last_reviewed_at: string | null;
+  review_due_at: string | null;
+  expires_at: string | null;
+  source_ai_run_id: string | null;
+}
+
+export interface ProfileObservation {
+  id: string;
+  key: string;
+  label: string;
+  value: string | string[];
+  source: AttributeSource;
+  confidence: number;
+  why: string;
+  verification_state: 'unverified' | 'confirmed' | 'rejected' | 'not_sure';
+  source_ai_run_id: string | null;
+  created_at: string | null;
+  reviewed_at: string | null;
+}
+
+export interface ReadinessItem { area: string; ready: boolean; message: string }
+
+export interface AppearanceProfile {
+  id: string;
+  version: number;
+  baseline_status: string;
+  attributes: ProfileAttribute[];
+  readiness: ReadinessItem[];
+  weight_required: false;
+  change_history?: Record<string, any>[];
+}
+
+export const getAppearanceProfile = async (): Promise<AppearanceProfile> =>
+  (await api.get<AppearanceProfile>(`${V2}/profile`)).data;
+
+export const patchAppearanceProfile = async (
+  attributes: { key: string; value: string | number | string[] }[]
+): Promise<AppearanceProfile> =>
+  (await api.patch<AppearanceProfile>(`${V2}/profile`, { attributes })).data;
+
+export const getProfileObservations = async (): Promise<ProfileObservation[]> =>
+  (await api.get<{ observations: ProfileObservation[] }>(`${V2}/profile/observations`)).data.observations;
+
+export const confirmProfileObservation = async (id: string): Promise<ProfileObservation> =>
+  (await api.post<ProfileObservation>(`${V2}/profile/observations/${id}/confirm`)).data;
+
+export const rejectProfileObservation = async (id: string): Promise<ProfileObservation> =>
+  (await api.post<ProfileObservation>(`${V2}/profile/observations/${id}/reject`)).data;
+
+export const editProfileObservation = async (
+  id: string, value: string | string[], verification_state?: 'unverified' | 'not_sure'
+): Promise<ProfileObservation> =>
+  (await api.patch<ProfileObservation>(`${V2}/profile/observations/${id}`, { value, verification_state })).data;
+
+export interface BaselineResult {
+  status: 'observations_ready' | 'low_quality';
+  image_quality: string;
+  message: string;
+  guidance?: string[];
+  observations: ProfileObservation[];
+  colour_palette: { name: string; hex?: string; why: string }[];
+  photo_stored: false;
+}
+
+export const runBaselineAnalysis = async (image_base64: string): Promise<BaselineResult> =>
+  (await api.post<BaselineResult>(`${V2}/profile/baseline-analysis`, { image_base64 })).data;
+
+export interface OnboardingStatus {
+  id: string;
+  status: 'in_progress' | 'completed';
+  current_step: string;
+  steps: string[];
+  completed_steps: string[];
+  skipped_steps: string[];
+  answers: Record<string, Record<string, any>>;
+  recommendation_preview: Record<string, string> | null;
+  minimum_complete: boolean;
+  weight_required: false;
+  first_result?: Record<string, string>;
+}
+
+export const getOnboardingStatus = async (): Promise<OnboardingStatus> =>
+  (await api.get<OnboardingStatus>(`${V2}/onboarding/status`)).data;
+
+export const saveOnboardingStep = async (
+  step: string, data: Record<string, any> = {}, skipped = false
+): Promise<OnboardingStatus> =>
+  (await api.post<OnboardingStatus>(`${V2}/onboarding/step`, { step, data, skipped })).data;
+
+export const completeOnboarding = async (): Promise<OnboardingStatus> =>
+  (await api.post<OnboardingStatus>(`${V2}/onboarding/complete`)).data;

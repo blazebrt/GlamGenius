@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import {
-  View,
   Text,
   StyleSheet,
   TextInput,
@@ -63,7 +62,7 @@ export default function AuthWelcome() {
           password,
           invite_code: inviteCode.trim(),
         } as any);
-        if (user) goHome();
+        if (user) router.replace('/onboarding');
         else notify('Could not register', 'Check your invite code and email, then try again.');
       }
     } catch (err) {
