@@ -30,6 +30,7 @@ export default function AuthWelcome() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
 
   const goHome = () => {
     try {
@@ -54,9 +55,16 @@ export default function AuthWelcome() {
           notify('Missing name', 'Please enter your name.');
           return;
         }
-        const user = await createUser(name.trim(), email.trim(), { password } as any);
+        if (!inviteCode.trim()) {
+          notify('Invite required', 'GlamGenius is invite-only. Enter the code you were given.');
+          return;
+        }
+        const user = await createUser(name.trim(), email.trim(), {
+          password,
+          invite_code: inviteCode.trim(),
+        } as any);
         if (user) goHome();
-        else notify('Could not register', 'Try a different email or try again.');
+        else notify('Could not register', 'Check your invite code and email, then try again.');
       }
     } catch (err) {
       console.error('auth failed', err);
@@ -85,16 +93,31 @@ export default function AuthWelcome() {
         </TouchableOpacity>
 
         <Text style={styles.title}>{mode === 'login' ? 'Welcome back' : 'Create account'}</Text>
-        <Text style={styles.subtitle}>Save your checks, colours, and progress across devices.</Text>
+        <Text style={styles.subtitle}>
+          {mode === 'login'
+            ? 'Save your checks, colours, and progress across devices.'
+            : 'GlamGenius is currently invite-only for a private test group. Enter the invite code you were given to create your account.'}
+        </Text>
 
         {mode === 'register' && (
-          <TextInput
-            style={styles.input}
-            placeholder="Your name"
-            placeholderTextColor={COLORS.textMuted}
-            value={name}
-            onChangeText={setName}
-          />
+          <>
+            <TextInput
+              style={styles.input}
+              placeholder="Your name"
+              placeholderTextColor={COLORS.textMuted}
+              value={name}
+              onChangeText={setName}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Invite code"
+              placeholderTextColor={COLORS.textMuted}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              value={inviteCode}
+              onChangeText={setInviteCode}
+            />
+          </>
         )}
         <TextInput
           style={styles.input}

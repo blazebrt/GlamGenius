@@ -28,6 +28,7 @@ class UserProfile(BaseModel):
     preferences: Dict[str, Any] = {}
     plan: str = "free"  # free | plus
     plan_expires_at: Optional[datetime] = None
+    invite_code: Optional[str] = None  # which invite was used at signup
     scans_used_this_month: int = 0
     scan_month_key: str = ""  # YYYY-MM
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -39,6 +40,7 @@ class UserProfileCreate(BaseModel):
     email: str = ""
     phone: str = ""
     password: str = ""
+    invite_code: str = ""
     age: Optional[int] = None
     city: Optional[str] = None
     diet: Optional[str] = None
@@ -88,6 +90,15 @@ class ScanPreviewRequest(BaseModel):
     """Signed-out teaser. No user fields — nothing about this is saved."""
     image_base64: str
     scan_type: str = "face"  # face | hair | hands | full
+    # Required while invite-only — stops open internet from burning Gemini spend.
+    invite_code: str = ""
+
+
+class InviteCreateRequest(BaseModel):
+    code: Optional[str] = None  # auto-generated when omitted
+    label: str = ""
+    max_uses: int = 1
+    active: bool = True
 
 
 class ScanAnalysisRequest(BaseModel):

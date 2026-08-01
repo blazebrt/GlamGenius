@@ -18,6 +18,7 @@ from settings import (
     MAX_PREVIEWS_PER_WINDOW,
     PREVIEW_WINDOW_MINUTES,
     FREE_SCANS_PER_MONTH,
+    INVITE_SCANS_PER_MONTH,
 )
 
 def _hash_password(password: str) -> str:
@@ -224,7 +225,11 @@ def sanitize_user_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
     return doc
 
 async def _ensure_scan_quota(user: Dict[str, Any]) -> Dict[str, Any]:
-    """Reset monthly counter; raise if free limit hit. Plus users unlimited while active."""
+    """Reset monthly counter; raise if the caller's monthly allowance is used up.
+
+    Invitees (plan=plus during the private test) get INVITE_SCANS_PER_MONTH.
+    Legacy free accounts still use FREE_SCANS_PER_MONTH.
+    """
     month = _month_key()
     updates = {}
     if user.get("scan_month_key") != month:
@@ -243,28 +248,37 @@ async def _ensure_scan_quota(user: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             plus_active = plan == "plus"
 
-    if not plus_active:
-        used = int(user.get("scans_used_this_month") or 0)
-        if used >= FREE_SCANS_PER_MONTH:
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "code": "SCAN_LIMIT",
-                    "message": f"Free plan includes {FREE_SCANS_PER_MONTH} checks per month. Upgrade to Plus for unlimited checks.",
-                    "free_limit": FREE_SCANS_PER_MONTH,
-                    "used": used,
-                },
-            )
+    used = int(user.get("scans_used_this_month") or 0)
+    # Invite-only Plus: generous monthly cap from env (not billed, not unlimited).
+    limit = INVITE_SCANS_PER_MONTH if plus_active else FREE_SCANS_PER_MONTH
+    if used >= limit:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "SCAN_LIMIT",
+                "message": (
+                    f"You've used your {limit} checks for this month. "
+                    "Your allowance resets next month."
+                ),
+                "free_limit": limit,
+                "used": used,
+            },
+        )
 
     if updates and user.get("id"):
         await db.users.update_one({"id": user["id"]}, {"$set": updates})
 
-    return {"plus_active": plus_active, "month": month}
+    return {"plus_active": plus_active, "month": month, "limit": limit}
+
 
 def _user_view(user: Dict[str, Any]) -> Dict[str, Any]:
     pub = _public_user(user)
-    pub["scans_remaining_free"] = max(
-        0, FREE_SCANS_PER_MONTH - int(user.get("scans_used_this_month") or 0)
-    ) if pub.get("plan") != "plus" else None
-    pub["free_scans_per_month"] = FREE_SCANS_PER_MONTH
+    plan = pub.get("plan") or "free"
+    expires = user.get("plan_expires_at")
+    plus_active = plan == "plus" and (not expires or expires > datetime.utcnow())
+    limit = INVITE_SCANS_PER_MONTH if plus_active else FREE_SCANS_PER_MONTH
+    used = int(user.get("scans_used_this_month") or 0)
+    pub["scans_remaining_free"] = max(0, limit - used)
+    pub["free_scans_per_month"] = limit
+    pub["invite_scans_per_month"] = INVITE_SCANS_PER_MONTH
     return pub

@@ -16,12 +16,14 @@ import time
 # Backend URL. Defaults to a locally running server; override with the
 # BACKEND_URL environment variable to point at a deployed environment.
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000/api").rstrip("/")
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "dev-admin-secret-for-local-tests")
 
 # User ids and tokens created by the scan tests, reused by the profile tests
 # below so the post-scan profile checks run against a user that really was
 # scanned.
 SCAN_USER_IDS = {}
 SCAN_TOKENS = {}
+_SUITE_INVITE = {"code": None}
 
 # Every protected route needs one of these. Routes that touch user data now
 # take the caller's identity from the token, never from the URL or body.
@@ -47,12 +49,55 @@ def auth(token):
 def unique_email(prefix):
     return f"{prefix}.{uuid.uuid4().hex[:10]}@example.com"
 
-def register_user(name, email=None, password="TestPassw0rd!"):
+def admin_headers():
+    return {"X-Admin-Secret": ADMIN_SECRET}
+
+def ensure_suite_invite():
+    """Create (or reuse) a high-capacity invite code for registration in tests."""
+    if _SUITE_INVITE["code"]:
+        return _SUITE_INVITE["code"]
+    code = f"TEST-{uuid.uuid4().hex[:8].upper()}"
+    response = requests.post(
+        f"{BACKEND_URL}/admin/invites",
+        headers=admin_headers(),
+        json={"code": code, "label": "backend_test suite", "max_uses": 10000, "active": True},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        listed = requests.get(f"{BACKEND_URL}/admin/invites", headers=admin_headers(), timeout=30)
+        if listed.status_code == 200:
+            for row in listed.json():
+                if row.get("label") == "backend_test suite" and row.get("active"):
+                    _SUITE_INVITE["code"] = row["code"]
+                    return _SUITE_INVITE["code"]
+        raise RuntimeError(
+            f"Cannot create suite invite: {response.status_code} {response.text[:200]}"
+        )
+    _SUITE_INVITE["code"] = response.json()["code"]
+    return _SUITE_INVITE["code"]
+
+def create_invite(label="one-shot", max_uses=1, code=None, active=True):
+    payload = {"label": label, "max_uses": max_uses, "active": active}
+    if code:
+        payload["code"] = code
+    response = requests.post(
+        f"{BACKEND_URL}/admin/invites",
+        headers=admin_headers(),
+        json=payload,
+        timeout=30,
+    )
+    if response.status_code != 200:
+        print(f"❌ FAIL: Could not create invite: {response.status_code} {response.text[:200]}")
+        return None
+    return response.json()
+
+def register_user(name, email=None, password="TestPassw0rd!", invite_code=None):
     """Register a user and return (user_id, token)."""
     email = email or unique_email("tester")
+    invite_code = invite_code or ensure_suite_invite()
     response = requests.post(
         f"{BACKEND_URL}/auth/register",
-        json={"name": name, "email": email, "password": password},
+        json={"name": name, "email": email, "password": password, "invite_code": invite_code},
         timeout=30,
     )
     if response.status_code != 200:
@@ -66,7 +111,12 @@ def create_scan_user(label, name, email):
     try:
         response = requests.post(
             f"{BACKEND_URL}/users",
-            json={"name": name, "email": email, "password": "ScanTestPass1!"},
+            json={
+                "name": name,
+                "email": email,
+                "password": "ScanTestPass1!",
+                "invite_code": ensure_suite_invite(),
+            },
             timeout=30,
         )
         if response.status_code == 200:
@@ -86,6 +136,15 @@ def create_scan_user(label, name, email):
         print(f"❌ FAIL: Exception creating test user - {str(e)}")
         return None, None
 
+def demote_to_free(user_id):
+    """Force a user onto the legacy free plan (for quota / rate-limit tests)."""
+    import subprocess
+    subprocess.run(
+        ["docker", "exec", "glamgenius-mongo", "mongosh", "glamgenius", "--quiet", "--eval",
+         f'db.users.updateOne({{id:"{user_id}"}},{{$set:{{plan:"free",plan_expires_at:null,'
+         f'scans_used_this_month:0}}}})'],
+        capture_output=True, timeout=60,
+    )
 def check_disclaimer(analysis):
     """meta.disclaimer must always be present — see CLAUDE.md."""
     meta = analysis.get("meta")
@@ -371,7 +430,8 @@ def test_user_profile_crud():
     payload = {
         "name": "Priya Sharma",
         "email": unique_email("priya.sharma"),
-        "password": "PriyaPass1!"
+        "password": "PriyaPass1!",
+        "invite_code": ensure_suite_invite(),
     }
 
     print(f"POST {url}")
@@ -561,7 +621,8 @@ def test_recommendations_advice():
     payload = {
         "name": "Ananya Reddy",
         "email": unique_email("ananya.reddy"),
-        "password": "AnanyaPass1!"
+        "password": "AnanyaPass1!",
+        "invite_code": ensure_suite_invite(),
     }
 
     try:
@@ -638,7 +699,8 @@ def test_quiz_submit():
     payload = {
         "name": "Kavya Iyer",
         "email": unique_email("kavya.iyer"),
-        "password": "KavyaPass1!"
+        "password": "KavyaPass1!",
+        "invite_code": ensure_suite_invite(),
     }
     
     try:
@@ -986,9 +1048,16 @@ def test_signed_out_preview_teaser():
     print("="*80)
 
     image_base64 = create_test_image()
+    invite = create_invite(label="preview-teaser", max_uses=10)
+    if not invite:
+        return False
     response = requests.post(
         f"{BACKEND_URL}/scan/preview",
-        json={"image_base64": image_base64, "scan_type": "face"},
+        json={
+            "image_base64": image_base64,
+            "scan_type": "face",
+            "invite_code": invite["code"],
+        },
         timeout=180,
     )
     print(f"POST /scan/preview with no token -> {response.status_code}")
@@ -1055,36 +1124,163 @@ def test_anonymous_accounts_removed():
     # A proper signup still works and still returns a usable token.
     response = requests.post(
         f"{BACKEND_URL}/users",
-        json={"name": "Real User", "email": unique_email("real"), "password": "Passw0rd!"},
+        json={
+            "name": "Real User",
+            "email": unique_email("real"),
+            "password": "Passw0rd!",
+            "invite_code": ensure_suite_invite(),
+        },
         timeout=30,
     )
     if response.status_code != 200 or not response.json().get("token"):
         print(f"❌ FAIL: A proper signup was rejected: {response.status_code}")
         return False
-    print("✅ A proper signup with email and password still works and returns a token")
+    print("✅ A proper signup with email, password and invite still works and returns a token")
 
     if ok:
         print("\n✅ PASS: Only real accounts can be created")
     return ok
 
 
+def test_invite_codes_gate_signup():
+    """Signup is refused without a usable invite, and a valid code is recorded."""
+    print("\n" + "="*80)
+    print("TEST: Invite - signup requires a usable invite code")
+    print("="*80)
+
+    # 1. No code
+    response = requests.post(
+        f"{BACKEND_URL}/auth/register",
+        json={"name": "No Code", "email": unique_email("nocode"), "password": "Passw0rd!"},
+        timeout=30,
+    )
+    print(f"signup with no code -> {response.status_code}")
+    if response.status_code == 200:
+        print("❌ FAIL: Signup without an invite code was accepted")
+        return False
+    detail = response.json().get("detail")
+    msg = detail.get("message") if isinstance(detail, dict) else str(detail)
+    print(f"   message: {msg}")
+    if "invite" not in (msg or "").lower():
+        print("❌ FAIL: Error message should mention invite")
+        return False
+    print("✅ Signup with no code is refused")
+
+    # 2. Invalid code
+    response = requests.post(
+        f"{BACKEND_URL}/auth/register",
+        json={
+            "name": "Bad Code",
+            "email": unique_email("badcode"),
+            "password": "Passw0rd!",
+            "invite_code": "NOT-A-REAL-CODE",
+        },
+        timeout=30,
+    )
+    print(f"signup with invalid code -> {response.status_code}")
+    if response.status_code == 200:
+        print("❌ FAIL: Signup with an invalid invite was accepted")
+        return False
+    print("✅ Signup with an invalid code is refused")
+
+    # 3. Exhausted code
+    limited = create_invite(label="single-use", max_uses=1)
+    if not limited:
+        return False
+    first_id, first_token = register_user("First User", invite_code=limited["code"])
+    if not first_token:
+        return False
+    print(f"✅ First use of single-use code worked ({first_id})")
+    response = requests.post(
+        f"{BACKEND_URL}/auth/register",
+        json={
+            "name": "Second User",
+            "email": unique_email("second"),
+            "password": "Passw0rd!",
+            "invite_code": limited["code"],
+        },
+        timeout=30,
+    )
+    print(f"signup with exhausted code -> {response.status_code}")
+    if response.status_code == 200:
+        print("❌ FAIL: Exhausted invite code was accepted again")
+        return False
+    print("✅ A code that has hit its usage limit is refused")
+
+    # 4. Valid code works and is recorded
+    fresh = create_invite(label="recorded-against-user", max_uses=3)
+    if not fresh:
+        return False
+    response = requests.post(
+        f"{BACKEND_URL}/auth/register",
+        json={
+            "name": "Invitee",
+            "email": unique_email("invitee"),
+            "password": "Passw0rd!",
+            "invite_code": fresh["code"],
+        },
+        timeout=30,
+    )
+    print(f"signup with valid code -> {response.status_code}")
+    if response.status_code != 200:
+        print(f"❌ FAIL: Valid invite was refused: {response.text[:200]}")
+        return False
+    data = response.json()
+    user = data.get("user") or {}
+    if user.get("invite_code") != fresh["code"]:
+        # invite_code may only be on the flat create response; check /users/me
+        me = requests.get(
+            f"{BACKEND_URL}/users/me", headers=auth(data["token"]), timeout=30
+        ).json()
+        if me.get("invite_code") != fresh["code"]:
+            print(f"❌ FAIL: Invite code not recorded on user (got {me.get('invite_code')})")
+            return False
+        user = me
+    print(f"✅ Valid code works and is recorded against the user ({user.get('invite_code')})")
+    if user.get("plan") != "plus":
+        print(f"❌ FAIL: Invitee should get full access (plus), got plan={user.get('plan')}")
+        return False
+    print("✅ Invitee received full (plus) access")
+
+    # Admin list shows the use count
+    listed = requests.get(f"{BACKEND_URL}/admin/invites", headers=admin_headers(), timeout=30)
+    if listed.status_code != 200:
+        print(f"❌ FAIL: Admin list failed: {listed.status_code}")
+        return False
+    row = next((r for r in listed.json() if r.get("code") == fresh["code"]), None)
+    if not row or int(row.get("uses") or 0) < 1:
+        print(f"❌ FAIL: Admin list did not show the use: {row}")
+        return False
+    print(f"✅ Admin list shows uses={row['uses']} for that code")
+
+    print("\n✅ PASS: Invite codes correctly gate signup")
+    return True
+
+
 def test_free_scan_limit_is_one():
-    """The free plan allows exactly one check, then asks for an upgrade."""
+    """Legacy free plan allows exactly one check; invitees use the invite allowance."""
     print("\n" + "="*80)
     print("TEST 13: Quota - free plan is one check per month")
     print("="*80)
 
     response = requests.get(f"{BACKEND_URL}/config/public", timeout=30)
-    limit = response.json().get("free_scans_per_month")
+    cfg = response.json()
+    limit = cfg.get("free_scans_per_month")
     print(f"config/public reports free_scans_per_month = {limit}")
     if limit != 1:
         print(f"❌ FAIL: Expected 1, got {limit}")
         return False
     print("✅ Public config advertises 1 free check")
+    if not cfg.get("invite_only"):
+        print("❌ FAIL: Public config should advertise invite_only")
+        return False
+    print(f"✅ invite_only=true, invite_scans_per_month={cfg.get('invite_scans_per_month')}")
 
     user_id, token = register_user("Quota Tester")
     if not token:
         return False
+    # Demote to free so this legacy quota check still applies.
+    demote_to_free(user_id)
 
     image_base64 = create_test_image()
     payload = {"image_base64": image_base64, "scan_type": "face"}
@@ -1136,6 +1332,7 @@ def test_no_anonymous_scanning():
     user_id, token = register_user("Quota Dodger")
     if not token:
         return False
+    demote_to_free(user_id)
 
     first = requests.post(
         f"{BACKEND_URL}/scan/analyze",
@@ -1191,6 +1388,8 @@ def test_ai_rate_limit():
     user_id, token = register_user("Rate Limit Tester")
     if not token:
         return False
+    # Invitees are Plus; demote so this test exercises the free hourly ceiling.
+    demote_to_free(user_id)
 
     # Style plans are the cheapest AI route to exercise repeatedly.
     payload = {"occasion": "everyday", "budget_range": "mid"}
@@ -1286,6 +1485,7 @@ def test_plus_gets_a_higher_ai_ceiling():
     user_id, token = register_user("Free Ceiling")
     if not token:
         return False
+    demote_to_free(user_id)
     me = requests.get(f"{BACKEND_URL}/users/me", headers=auth(token), timeout=30).json()
     print(f"free user reports ceiling: {me.get('ai_calls_per_hour')}")
     if me.get("ai_calls_per_hour") != free_limit:
@@ -1293,25 +1493,10 @@ def test_plus_gets_a_higher_ai_ceiling():
         return False
     print("✅ A free user is on the free ceiling")
 
-    # Grant Plus the same way a real payment would, then re-check.
+    # Invite signup already grants Plus-level access.
     plus_id, plus_token = register_user("Plus Ceiling")
     if not plus_token:
         return False
-    granted = requests.put(
-        f"{BACKEND_URL}/users/me", json={"city": "Mumbai"}, headers=auth(plus_token), timeout=30
-    )
-    if granted.status_code != 200:
-        print(f"❌ FAIL: Could not set up the Plus test user: {granted.status_code}")
-        return False
-
-    # Upgrade through the database, since payment is not wired up in this test.
-    import subprocess
-    subprocess.run(
-        ["docker", "exec", "glamgenius-mongo", "mongosh", "glamgenius", "--quiet", "--eval",
-         f'db.users.updateOne({{id:"{plus_id}"}},{{$set:{{plan:"plus",'
-         f'plan_expires_at:new Date(Date.now()+30*24*3600*1000)}}}})'],
-        capture_output=True, timeout=60,
-    )
 
     me_plus = requests.get(f"{BACKEND_URL}/users/me", headers=auth(plus_token), timeout=30).json()
     print(f"Plus user reports ceiling: {me_plus.get('ai_calls_per_hour')}")
@@ -1403,6 +1588,7 @@ def main():
     results["Security: brute force blocked"] = test_login_brute_force_protection()
     results["Teaser: signed-out preview"] = test_signed_out_preview_teaser()
     results["Signup: no anonymous accounts"] = test_anonymous_accounts_removed()
+    results["Invite: signup gated by code"] = test_invite_codes_gate_signup()
     results["Quota: one free check"] = test_free_scan_limit_is_one()
     results["Cost: no anonymous scanning"] = test_no_anonymous_scanning()
     results["Cost: AI routes rate limited"] = test_ai_rate_limit()

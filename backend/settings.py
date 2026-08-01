@@ -15,6 +15,12 @@ FREE_SCANS_PER_MONTH = int(os.environ.get("FREE_SCANS_PER_MONTH", "1"))
 PLUS_PRICE_INR = int(os.environ.get("PLUS_PRICE_INR", "249"))
 PLUS_YEARLY_INR = int(os.environ.get("PLUS_YEARLY_INR", "1999"))
 JWT_SECRET = os.environ.get("JWT_SECRET", "glamgenius-dev-secret-change-me")
+
+# Invite-only private test. Sign-up requires a code; invitees get Plus-level
+# access with this monthly scan allowance (not billed).
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
+INVITE_SCANS_PER_MONTH = int(os.environ.get("INVITE_SCANS_PER_MONTH", "50"))
+INVITE_ONLY = os.environ.get("INVITE_ONLY", "true").lower() in ("1", "true", "yes")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_FALLBACK_MODELS = [
     m.strip()

@@ -15,7 +15,7 @@ from settings import (
     PREVIEW_WINDOW_MINUTES,
 )
 from database import client, db
-from routes import health, users, scan, quiz, plans, recommendations, services, subscription
+from routes import health, users, scan, quiz, plans, recommendations, services, subscription, admin
 
 app = FastAPI(title="GlamGenius — Personal Stylist & Wellness Coach", version="2.0.0")
 api_router = APIRouter(prefix="/api")
@@ -28,6 +28,7 @@ api_router.include_router(plans.router)
 api_router.include_router(recommendations.router)
 api_router.include_router(services.router)
 api_router.include_router(subscription.router)
+api_router.include_router(admin.router)
 
 app.include_router(api_router)
 
@@ -54,6 +55,8 @@ async def startup_db_client():
     await db.scans.create_index("user_id")
     await db.style_plans.create_index("user_id")
     await db.subscription_orders.create_index("user_id")
+    await db.invite_codes.create_index("code", unique=True)
+    await db.invite_codes.create_index("active")
     await db.login_attempts.create_index("key")
     # Failed attempts clean themselves up once the lockout window has passed.
     await db.login_attempts.create_index(

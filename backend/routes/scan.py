@@ -14,6 +14,7 @@ from security import (
 )
 from ai import analyze_image_with_gemini, _assert_ai_quota
 from settings import PREVIEW_COLOR_COUNT
+from invites import assert_invite_usable
 
 router = APIRouter()
 
@@ -21,10 +22,13 @@ router = APIRouter()
 async def preview_scan(request: ScanPreviewRequest, http_request: Request):
     """A free taste of the result for someone who has not signed up yet.
 
-    Deliberately public. It stores nothing at all — no user, no scan record,
-    no image — and returns only the top of the result. Everything else is
-    behind signing up, which is the point of the teaser.
+    Deliberately stores nothing — no user, no scan record, no image — and
+    returns only the top of the result. While invite-only, a valid invite
+    code is required so open internet traffic cannot burn Gemini spend.
     """
+    # Validate without consuming — signup is what spends a use.
+    await assert_invite_usable(request.invite_code)
+
     client_ip = http_request.client.host if http_request.client else "unknown"
     await _assert_preview_quota(client_ip)
     await _record_preview(client_ip)
