@@ -23,19 +23,24 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="services"
-        options={{
-          title: 'Ideas',
-          tabBarIcon: ({ color }) => <Ionicons name="sparkles-outline" size={22} color={color} />,
-        }}
-      />
-      <Tabs.Screen
         name="scan-tab"
         options={{
           title: 'Check',
+          tabBarIcon: ({ color }) => <Ionicons name="scan-outline" size={22} color={color} />,
+        }}
+      />
+      {/*
+        Style Me is the centre action. It is the thing people open the app to
+        do, so it gets the raised button that the skin check used to have; the
+        check keeps its own tab beside it.
+      */}
+      <Tabs.Screen
+        name="style-me-tab"
+        options={{
+          title: 'Style Me',
           tabBarIcon: () => (
             <View style={styles.scanButton}>
-              <Ionicons name="scan" size={24} color={COLORS.white} />
+              <Ionicons name="sparkles" size={24} color={COLORS.white} />
             </View>
           ),
           tabBarLabel: () => null,
@@ -43,6 +48,12 @@ export default function TabLayout() {
       />
       <Tabs.Screen
         name="history"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="services"
         options={{
           href: null,
         }}
