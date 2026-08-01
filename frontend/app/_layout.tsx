@@ -82,6 +82,9 @@ export default function RootLayout() {
             <Stack.Screen name="subscription" />
             <Stack.Screen name="onboarding" />
             <Stack.Screen name="my-appearance" />
+            <Stack.Screen name="inventory-add" />
+            <Stack.Screen name="inventory-item" />
+            <Stack.Screen name="inventory-insights" />
           </Stack>
         </ErrorBoundary>
       </SafeAreaProvider>

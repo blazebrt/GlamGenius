@@ -11,6 +11,8 @@ from app.domains.audit.models import ACTION_PRIVACY_EXPORTED, AuditEvent
 from app.domains.consent.models import Consent
 from app.domains.entitlements import service as entitlements
 from app.domains.media import service as media_service
+from app.domains.inventory import service as inventory_service
+from app.domains.inventory.models import InventoryItem
 from app.domains.profile import observations as profile_observations
 from app.domains.profile import onboarding as profile_onboarding
 from app.domains.profile import service as profile_service
@@ -124,6 +126,18 @@ async def export_data(
         digital_twin["onboarding"] = (
             profile_onboarding.serialize(onboarding_row) if onboarding_row else None
         )
+    inventory_rows = (
+        await session.execute(
+            select(InventoryItem)
+            .where(InventoryItem.account_id == account_id)
+            .order_by(InventoryItem.created_at.desc())
+            .limit(5000)
+        )
+    ).scalars().all()
+    inventory = [
+        await inventory_service.serialize_item(session, item, include_history=True)
+        for item in inventory_rows
+    ]
 
     export = {
         "generated_at": utcnow().isoformat(),
@@ -134,6 +148,7 @@ async def export_data(
         },
         "profile": _public_user(dict(current.user)),
         "appearance_digital_twin": digital_twin,
+        "appearance_inventory": inventory,
         "scans": [
             {
                 "id": s.get("id"),

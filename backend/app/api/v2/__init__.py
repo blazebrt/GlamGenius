@@ -5,7 +5,7 @@ and keeps working exactly as before.
 """
 from fastapi import APIRouter
 
-from app.api.v2 import account, config, consent, jobs, me, media, onboarding, privacy, profile
+from app.api.v2 import account, config, consent, inventory, jobs, me, media, onboarding, privacy, profile
 
 router = APIRouter(prefix="/api/v2")
 
@@ -18,5 +18,6 @@ router.include_router(privacy.router, tags=["v2-privacy"])
 router.include_router(account.router, tags=["v2-account"])
 router.include_router(profile.router, tags=["v2-profile"])
 router.include_router(onboarding.router, tags=["v2-onboarding"])
+router.include_router(inventory.router, tags=["v2-inventory"])
 
 __all__ = ["router"]

@@ -29,6 +29,9 @@ KNOWN_FLAGS: Dict[str, str] = {
     "v2_privacy": "Data export and account deletion requests",
     "v2_consent": "Record and enforce photo-analysis consent",
     "v2_ai_gateway": "Route AI calls through the recorded gateway",
+    "v2_profile": "Appearance digital twin and progressive onboarding",
+    "v2_inventory": "Complete appearance inventory",
+    "v2_inventory_batch": "Experimental multi-item inventory capture",
 }
 
 

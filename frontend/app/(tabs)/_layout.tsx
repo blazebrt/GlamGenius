@@ -44,8 +44,14 @@ export default function TabLayout() {
       <Tabs.Screen
         name="history"
         options={{
-          title: 'History',
-          tabBarIcon: ({ color }) => <Ionicons name="time-outline" size={22} color={color} />,
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="inventory"
+        options={{
+          title: 'Inventory',
+          tabBarIcon: ({ color }) => <Ionicons name="archive-outline" size={22} color={color} />,
         }}
       />
       <Tabs.Screen
