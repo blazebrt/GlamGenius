@@ -245,12 +245,12 @@ MongoDB, V1 routes and the Phase 2 digital twin remain unchanged.
 | Relevant Phase 3 tests pass | ✅ | 118 backend and 56 frontend tests plus production export |
 | Repository-wide live provider suite | ⚠️ | External 429 quota and stale legacy assertion; not claimed as passed |
 | Report exists | ✅ | This file |
-| Phase committed | ⏳ | Filled below after commit |
+| Phase committed | ✅ | Implementation commit `126ac1a` |
 
 ## Commit
 
 ```text
-PENDING  feat(v2): build complete appearance inventory system
+126ac1a  feat(v2): build complete appearance inventory system
 ```
 
 Phase 4 was not started.
