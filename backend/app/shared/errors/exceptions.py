@@ -180,3 +180,12 @@ class ValidationFailedError(AppError):
 
     def __init__(self, message: str, *, field: Optional[str] = None) -> None:
         super().__init__(message, extra={"field": field} if field else None)
+
+
+class ConflictError(AppError):
+    status_code = 409
+    code = ErrorCode.CONFLICT
+    retryable = True
+
+    def __init__(self, message: str, *, current_version: int) -> None:
+        super().__init__(message, extra={"current_version": current_version})

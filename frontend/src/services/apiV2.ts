@@ -22,6 +22,7 @@ export type ErrorCode =
   | 'SUBSCRIPTIONS_UNAVAILABLE'
   | 'FEATURE_UNAVAILABLE'
   | 'VALIDATION_FAILED'
+  | 'CONFLICT'
   | 'NOT_FOUND'
   | 'INTERNAL_ERROR';
 
@@ -349,3 +350,166 @@ export const saveOnboardingStep = async (
 
 export const completeOnboarding = async (): Promise<OnboardingStatus> =>
   (await api.post<OnboardingStatus>(`${V2}/onboarding/complete`)).data;
+
+// --- Complete appearance inventory ----------------------------------------
+
+export const INVENTORY_CATEGORIES = [
+  'wardrobe', 'shoes', 'accessories', 'beauty', 'hair', 'perfumes', 'supplements',
+] as const;
+export type InventoryCategory = typeof INVENTORY_CATEGORIES[number];
+
+export interface InventoryAttribute {
+  key: string;
+  value: string | number | string[];
+  source: 'user_declared' | 'photo_extracted';
+  confidence: number;
+  verification_state: 'draft' | 'confirmed' | 'rejected';
+  model_version?: string | null;
+  prompt_version?: string | null;
+  schema_version?: string | null;
+  source_ai_run_id?: string | null;
+}
+
+export interface InventoryItem {
+  id: string;
+  category: InventoryCategory;
+  subcategory: string | null;
+  display_name: string;
+  brand: string | null;
+  source: 'user_declared' | 'photo_extracted';
+  verification_state: 'draft' | 'confirmed' | 'rejected';
+  confidence: number;
+  status: string;
+  purchase_date: string | null;
+  purchase_price: number | null;
+  currency: string;
+  usage_count: number;
+  last_used_at: string | null;
+  condition: string;
+  replacement_priority: string;
+  version: number;
+  details: Record<string, any>;
+  effective_expiry: string | null;
+  low_use: boolean;
+  image_ids: string[];
+  attributes: InventoryAttribute[];
+  created_at: string | null;
+  updated_at: string | null;
+  history?: { event_type: string; actor: string; payload: Record<string, any>; created_at: string | null }[];
+}
+
+export interface InventoryList {
+  items: InventoryItem[];
+  pagination: { page: number; page_size: number; total: number; pages: number };
+}
+
+export interface InventorySummary {
+  total_items: number;
+  categories: Record<InventoryCategory, number>;
+  low_use_products: number;
+  products_expiring_soon: number;
+  products_needing_attention: number;
+  duplicate_candidates: number;
+  at_risk_value: number;
+  currency: string;
+  inventory_balance: { metric_version: string; visible_inputs: Record<string, number>; explanation: string };
+  purchase_efficiency: { metric_version: string; items_used: number; items_with_price: number; explanation: string };
+}
+
+export interface InventoryItemInput {
+  category: InventoryCategory;
+  display_name: string;
+  brand?: string;
+  subcategory?: string;
+  purchase_price?: number;
+  currency?: string;
+  condition?: string;
+  details?: Record<string, any>;
+  attributes?: { key: string; value: string | number | string[] }[];
+  image_ids?: string[];
+  client_mutation_id?: string;
+}
+
+export interface InventoryFilters {
+  q?: string; category?: InventoryCategory; brand?: string; colour?: string;
+  ingredient?: string; occasion?: string; season?: string; condition?: string;
+  expiry_status?: 'missing' | 'expired' | 'expiring_soon' | 'current';
+  usage_level?: 'unused' | 'low' | 'regular'; verification_state?: 'draft' | 'confirmed';
+  sort?: 'newest' | 'oldest' | 'name' | 'most_used' | 'least_used' | 'recently_used';
+  page?: number; page_size?: number;
+}
+
+export const getInventorySummary = async (): Promise<InventorySummary> =>
+  (await api.get<InventorySummary>(`${V2}/inventory/summary`)).data;
+
+export const getInventoryItems = async (filters: InventoryFilters = {}): Promise<InventoryList> =>
+  (await api.get<InventoryList>(`${V2}/inventory/items`, { params: filters })).data;
+
+export const searchInventory = async (filters: InventoryFilters = {}): Promise<InventoryList> =>
+  (await api.get<InventoryList>(`${V2}/inventory/search`, { params: filters })).data;
+
+export const getInventoryItem = async (id: string): Promise<InventoryItem> =>
+  (await api.get<InventoryItem>(`${V2}/inventory/items/${id}`)).data;
+
+export const createInventoryItem = async (body: InventoryItemInput): Promise<InventoryItem> =>
+  (await api.post<InventoryItem>(`${V2}/inventory/items`, body)).data;
+
+export const patchInventoryItem = async (
+  id: string, body: Partial<InventoryItemInput> & { expected_version?: number }
+): Promise<InventoryItem> =>
+  (await api.patch<InventoryItem>(`${V2}/inventory/items/${id}`, body)).data;
+
+export const deleteInventoryItem = async (id: string): Promise<{ id: string; status: string; message: string }> =>
+  (await api.delete(`${V2}/inventory/items/${id}`)).data;
+
+export const confirmInventoryItem = async (id: string): Promise<InventoryItem> =>
+  (await api.post<InventoryItem>(`${V2}/inventory/items/${id}/confirm`)).data;
+
+export const logInventoryUsage = async (id: string, used_on: string): Promise<InventoryItem> =>
+  (await api.post<InventoryItem>(`${V2}/inventory/items/${id}/usage`, { used_on, quantity: 1 })).data;
+
+export const setInventoryCondition = async (id: string, condition: string): Promise<InventoryItem> =>
+  (await api.post<InventoryItem>(`${V2}/inventory/items/${id}/condition`, { condition })).data;
+
+export interface InventoryExtraction {
+  job_id: string;
+  status: string;
+  capture_type: string;
+  batch_accuracy_claimed: false;
+  item: InventoryItem;
+  uncertain_fields: string[];
+  photo_quality_notes: string;
+  message: string;
+}
+
+export const extractInventoryItem = async (
+  media_asset_id: string, category_hint?: InventoryCategory, capture_type: 'item_photo' | 'screenshot' = 'item_photo'
+): Promise<InventoryExtraction> =>
+  (await api.post<InventoryExtraction>(`${V2}/inventory/extract`, { media_asset_id, category_hint, capture_type })).data;
+
+export interface DuplicateCandidate {
+  id: string; confidence: number; reason: string; status: string;
+  item_a: InventoryItem; item_b: InventoryItem;
+}
+
+export const getInventoryDuplicates = async (): Promise<DuplicateCandidate[]> =>
+  (await api.get<{ candidates: DuplicateCandidate[] }>(`${V2}/inventory/duplicates`)).data.candidates;
+
+export const resolveInventoryDuplicate = async (
+  id: string, resolution: 'keep_both' | 'not_duplicate' | 'merge', canonical_item_id?: string
+): Promise<void> => { await api.post(`${V2}/inventory/duplicates/${id}/resolve`, { resolution, canonical_item_id }); };
+
+export const getExpiringInventory = async (): Promise<InventoryItem[]> =>
+  (await api.get<{ items: InventoryItem[] }>(`${V2}/inventory/expiring`)).data.items;
+
+export const getLowUseInventory = async (): Promise<InventoryItem[]> =>
+  (await api.get<{ items: InventoryItem[] }>(`${V2}/inventory/low-use`)).data.items;
+
+export interface ValueToRecover {
+  label: 'Value to Recover'; estimated_total: number; currency: string; is_estimate: true;
+  metric_version: string; explanation: string;
+  items: { item_id: string; display_name: string; estimated_value: number | null; missing_inputs: string[]; explanation: string }[];
+}
+
+export const getValueToRecover = async (): Promise<ValueToRecover> =>
+  (await api.get<ValueToRecover>(`${V2}/inventory/value-to-recover`)).data;

@@ -14,6 +14,7 @@ from app.domains.audit.models import AuditEvent
 from app.domains.consent.models import Consent
 from app.domains.entitlements.models import UsageLedgerEntry
 from app.domains.identity.models import AccountLink
+from app.domains.inventory import models as inventory_models
 from app.domains.media.models import MediaAsset
 from app.domains.profile.models import (
     AppearanceGoal,
@@ -53,4 +54,5 @@ __all__ = [
     "AttributeObservation",
     "OnboardingSession",
     "ProfileChangeEvent",
+    "inventory_models",
 ]

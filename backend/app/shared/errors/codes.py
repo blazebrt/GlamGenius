@@ -25,6 +25,7 @@ class ErrorCode(str, Enum):
 
     # --- Input ---
     VALIDATION_FAILED = "VALIDATION_FAILED"
+    CONFLICT = "CONFLICT"
 
     # --- Catch-all ---
     INTERNAL_ERROR = "INTERNAL_ERROR"

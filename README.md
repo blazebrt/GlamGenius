@@ -14,6 +14,8 @@ Currently **invite-only**, in a private beta. Nothing is for sale.
 - Salon ideas without prices or booking
 - Free preview without an account: skin tone + top clothing colours
 - Invite-only access with a monthly check allowance
+- Complete appearance inventory across wardrobe, shoes, accessories, beauty, hair,
+  perfumes and supplements
 
 ### What happens when a check fails
 
@@ -95,7 +97,7 @@ Two, on purpose, during the V2 transition.
 
 | | MongoDB | PostgreSQL |
 |---|---|---|
-| Owns | users, auth, scans, style plans, invites, rate limits | media, consent, AI runs, appearance digital twin, onboarding, audit, usage ledger, flags, outbox |
+| Owns | users, auth, scans, style plans, invites, rate limits | media, consent, AI runs, appearance digital twin, onboarding, complete appearance inventory, audit, usage ledger, flags, outbox |
 | Used by | V1 (`/api`) | V2 (`/api/v2`) |
 | Migrations | none | Alembic |
 
@@ -126,7 +128,7 @@ autogenerate will not see it and the table will silently never be created.
 V2 modules are off unless switched on. Set `V2_FEATURES` in `.env` for the boot default:
 
 ```
-V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile
+V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory
 ```
 
 The `feature_flags` table overrides that at runtime with no redeploy. A route behind a
@@ -189,6 +191,18 @@ comes from the token, never from the URL or request body.
 | GET | /api/v2/onboarding/status | 🔒 | Resume progressive onboarding |
 | POST | /api/v2/onboarding/step | 🔒 | Save or skip one onboarding step |
 | POST | /api/v2/onboarding/complete | 🔒 | Finish and return the first useful result |
+| POST | /api/v2/inventory/extract | 🔒 | Create an unverified draft from one owned inventory image |
+| POST/GET | /api/v2/inventory/items | 🔒 | Create or browse owned inventory with pagination and filters |
+| GET/PATCH/DELETE | /api/v2/inventory/items/{id} | 🔒 | Read, correct or archive one owned item |
+| POST | /api/v2/inventory/items/{id}/confirm | 🔒 | Explicitly confirm an extracted draft |
+| POST | /api/v2/inventory/items/{id}/usage | 🔒 | Log deterministic usage history |
+| POST | /api/v2/inventory/items/{id}/condition | 🔒 | Record a condition change |
+| GET | /api/v2/inventory/search | 🔒 | Search by category, brand, colour, ingredient, occasion and more |
+| GET/POST | /api/v2/inventory/duplicates | 🔒 | Review duplicate candidates (`/{id}/resolve` resolves one) |
+| GET | /api/v2/inventory/expiring | 🔒 | Deterministic expiry and period-after-opening results |
+| GET | /api/v2/inventory/low-use | 🔒 | Low-Use Products with a visible rule |
+| GET | /api/v2/inventory/value-to-recover | 🔒 | Transparent, explicitly estimated Value to Recover |
+| GET | /api/v2/inventory/summary | 🔒 | Category counts and attention summary |
 
 ## Errors
 
@@ -238,6 +252,8 @@ screenshot is enough to find the request in the logs.
 - [docs/V2_ARCHITECTURE_AND_PHASE_PLAN.md](docs/V2_ARCHITECTURE_AND_PHASE_PLAN.md)
 - [docs/v2/PHASE_1_AUDIT.md](docs/v2/PHASE_1_AUDIT.md)
 - [PHASE_1_REPORT.md](PHASE_1_REPORT.md)
+- [PHASE_2_REPORT.md](PHASE_2_REPORT.md)
+- [PHASE_3_REPORT.md](PHASE_3_REPORT.md)
 
 ## Disclaimer
 
@@ -255,3 +271,16 @@ Onboarding starts with “What are you preparing for?” and can be completed wi
 goal; style, fit, lifestyle and photo steps are optional and resumable. Weight is neither
 requested nor required. “My Appearance” shows decision readiness instead of a generic
 completion percentage.
+
+## Complete appearance inventory
+
+Phase 3 adds a structured inventory for wardrobe, shoes, accessories, beauty products,
+hair products, perfumes and supplements. Manual entries are confirmed user facts; AI
+photo extraction creates a draft that must be reviewed. Every item is owned, versioned,
+searchable and linked only to media belonging to the same account.
+
+Expiry and period-after-opening dates, low-use rules, duplicate candidates and Value to
+Recover are deterministic and explain their inputs. Missing prices remain missing rather
+than being guessed. Supplement entries are inventory records only and never produce dosage
+advice. Multi-item shelf, wardrobe and video capture remains behind the disabled
+`v2_inventory_batch` flag until quality is proven.
