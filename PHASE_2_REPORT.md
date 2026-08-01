@@ -131,12 +131,19 @@ navigation recovery, confidence wording and accessible observation actions.
 - Expo production export succeeded for all 23 static routes, including `/onboarding` and
   `/my-appearance`.
 
-## Known limitation
+## Live Gemini verification
 
-`backend_test.py` still requires a real Gemini credential for its live-provider success
-paths. No key is available in this environment, so that external check was not run and is
-not represented as passing. The AI transport is faked in the container suite; schema,
-failure, low-quality, provenance and no-overwrite behaviour are covered deterministically.
+A real Gemini credential was configured in the ignored local `.env`; it was not committed
+or written to this report. Both health endpoints reported the provider ready, and the first
+live face-analysis request reached `gemini-2.5-flash` and returned HTTP 200. Subsequent
+requests received HTTP 429 from Google for both configured models, so the external suite
+could not complete successfully and is not represented as passing.
+
+The live runner completed 9 of 18 checks. Its first assertion also still expects the legacy
+`wellness_scores` object, while the current safety contract intentionally excludes
+unversioned appearance scores. The deterministic container suite remains the authoritative
+Phase 2 contract check for schema, failure, low-quality, provenance and no-overwrite
+behaviour until the live runner is updated and sufficient provider quota is available.
 
 ## Rollback
 
@@ -162,7 +169,7 @@ MongoDB and all V1 routes remain untouched.
 | Useful first result | ✅ | Deterministic preview returned by completion endpoint |
 | Source and confidence | ✅ | Required relational columns and API response fields |
 | Relevant provider-independent tests | ✅ | 104 backend and 49 frontend tests; production export and cold start pass |
-| Live Gemini end-to-end acceptance | ⚠️ | Pending a real credential; not claimed as passed |
+| Live Gemini end-to-end acceptance | ⚠️ | Provider configured and one call succeeded; full runner blocked by Google 429 quota and a stale legacy score assertion |
 | Report exists | ✅ | This file |
 | Phase committed | ✅ | Implementation commit recorded below |
 
