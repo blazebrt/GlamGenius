@@ -1,5 +1,8 @@
 """
 GlamGenius API — Personal Stylist & Skin/Hair Wellness Coach (India)
+
+One FastAPI application. V1 lives at /api and is unchanged. V2 mounts at
+/api/v2 alongside it — there is deliberately no second entrypoint.
 """
 from fastapi import FastAPI, APIRouter
 from starlette.middleware.cors import CORSMiddleware
@@ -13,9 +16,17 @@ from settings import (
     AI_RATE_WINDOW_MINUTES,
     LOGIN_LOCKOUT_MINUTES,
     PREVIEW_WINDOW_MINUTES,
+    JWT_SECRET,
 )
 from database import client, db
 from routes import health, users, scan, quiz, plans, recommendations, services, subscription, admin
+
+from app.api.v2 import router as v2_router
+from app.config import MEDIA_STORAGE_BACKEND, V2_FEATURES
+from app.shared.database import sql
+from app.shared.errors.handlers import register_error_handlers
+from app.shared.observability.logging import configure_logging
+from app.shared.observability.request_id import RequestIdMiddleware
 
 app = FastAPI(title="GlamGenius — Personal Stylist & Wellness Coach", version="2.0.0")
 api_router = APIRouter(prefix="/api")
@@ -31,6 +42,10 @@ api_router.include_router(subscription.router)
 api_router.include_router(admin.router)
 
 app.include_router(api_router)
+app.include_router(v2_router)
+
+# Structured, logged, correlated failures for both V1 and V2 routes.
+register_error_handlers(app)
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,10 +56,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # So a client can read the correlation id off any response, including errors.
+    expose_headers=["X-Request-Id"],
 )
+app.add_middleware(RequestIdMiddleware)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+configure_logging(logging.INFO)
 logger = logging.getLogger(__name__)
+
+INSECURE_JWT_DEFAULT = "glamgenius-dev-secret-change-me"
 
 
 @app.on_event("startup")
@@ -75,6 +95,17 @@ async def startup_db_client():
         "CORS allowed origins: %s | AI rate limit: %s/hour free, %s/hour Plus",
         ALLOWED_ORIGINS, AI_REQUESTS_PER_HOUR, AI_REQUESTS_PER_HOUR_PLUS,
     )
+
+    if JWT_SECRET == INSECURE_JWT_DEFAULT:
+        # Every deployment that forgets this shares one publicly known signing
+        # key, which means anyone can mint a token for any account.
+        logger.error(
+            "JWT_SECRET is not set, so the API is signing tokens with a default "
+            "value that is published in this repository. Anyone could forge a "
+            "login. Set JWT_SECRET to a long random string before letting real "
+            "users near this server."
+        )
+
     if ALLOWED_ORIGINS_IS_DEFAULT:
         # Loud on purpose. Without this, a deployed website fails to load any
         # data with no server-side error, which looks like a website bug.
@@ -93,7 +124,23 @@ async def startup_db_client():
                 "never match. Browsers compare the full address.", origin,
             )
 
+    # V2 does not block startup. A missing PostgreSQL must degrade the new
+    # endpoints, not take the working V1 app down with it.
+    postgres_ok = await sql.ping()
+    logger.info(
+        "V2: postgres=%s storage=%s features=%s",
+        "up" if postgres_ok else "DOWN",
+        MEDIA_STORAGE_BACKEND,
+        ",".join(V2_FEATURES) or "(none enabled)",
+    )
+    if not postgres_ok:
+        logger.warning(
+            "PostgreSQL is not reachable, so /api/v2 routes will fail. V1 is "
+            "unaffected. Check POSTGRES_URL and that the postgres service is up."
+        )
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+    await sql.dispose_engine()

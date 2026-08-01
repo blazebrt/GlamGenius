@@ -13,41 +13,35 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../../src/services/api';
 import { useUserStore } from '../../src/store/userStore';
-import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../../src/theme/colors';
+import { COLORS, FONTS, SPACING, RADIUS } from '../../src/theme/colors';
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { userId } = useUserStore();
   const [scans, setScans] = useState<any[]>([]);
-  const [trends, setTrends] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!userId) {
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      const [h, t] = await Promise.all([
-        api.get('/scan/history'),
-        api.get('/scan/trends'),
-      ]);
+      const h = await api.get('/scan/history');
       setScans(h.data || []);
-      setTrends(t.data?.points || []);
     } catch {
       setScans([]);
-      setTrends([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [userId]);
 
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [userId])
+      void load();
+    }, [load])
   );
 
   return (
@@ -55,7 +49,7 @@ export default function HistoryScreen() {
       <View style={styles.header}>
         <Text style={styles.label}>PROGRESS</Text>
         <Text style={styles.title}>Your checks</Text>
-        <Text style={styles.subtitle}>Track skin & hair scores over time. Recheck every 1–2 weeks.</Text>
+        <Text style={styles.subtitle}>Review your saved observations and coach plans over time.</Text>
       </View>
 
       {loading ? (
@@ -65,21 +59,6 @@ export default function HistoryScreen() {
           contentContainerStyle={{ padding: SPACING.lg, paddingBottom: 120 }}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
         >
-          {trends.length > 1 && (
-            <View style={styles.trendCard}>
-              <Text style={styles.trendTitle}>Score trend</Text>
-              {trends.slice(-6).map((p, i) => (
-                <View key={i} style={styles.trendRow}>
-                  <Text style={styles.trendDate}>
-                    {p.date ? new Date(p.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—'}
-                  </Text>
-                  <Text style={styles.trendScore}>Skin {p.skin_score ?? '—'}</Text>
-                  <Text style={styles.trendScore}>Hair {p.hair_score ?? '—'}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-
           {!scans.length && (
             <View style={styles.empty}>
               <Ionicons name="time-outline" size={36} color={COLORS.textMuted} />
@@ -92,7 +71,6 @@ export default function HistoryScreen() {
           )}
 
           {scans.map((s) => {
-            const scores = s.scores || s.analysis?.wellness_scores || {};
             const headline = s.analysis?.coach_summary?.headline;
             return (
               <View key={s.id} style={styles.card}>
@@ -105,11 +83,6 @@ export default function HistoryScreen() {
                 <Text style={styles.headline} numberOfLines={2}>
                   {headline || 'Coach plan saved'}
                 </Text>
-                <View style={styles.scoreRow}>
-                  <Text style={styles.miniScore}>Skin {scores.skin_score ?? '—'}</Text>
-                  <Text style={styles.miniScore}>Hair {scores.hair_score ?? '—'}</Text>
-                  <Text style={styles.miniScore}>Overall {scores.overall_score ?? '—'}</Text>
-                </View>
               </View>
             );
           })}
@@ -125,14 +98,6 @@ const styles = StyleSheet.create({
   label: { fontFamily: FONTS.family.bodySemibold, fontSize: 11, color: COLORS.primary, letterSpacing: 1.4 },
   title: { fontFamily: FONTS.family.heading, fontSize: 28, color: COLORS.textPrimary, marginTop: 4 },
   subtitle: { fontFamily: FONTS.family.body, fontSize: 13, color: COLORS.textSecondary, marginTop: 6 },
-  trendCard: {
-    backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: 16, marginBottom: 16,
-    borderWidth: 1, borderColor: COLORS.border, ...SHADOWS.sm,
-  },
-  trendTitle: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.textPrimary, marginBottom: 10 },
-  trendRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  trendDate: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textMuted, width: 70 },
-  trendScore: { fontFamily: FONTS.family.bodyMedium, fontSize: 12, color: COLORS.textPrimary },
   card: {
     backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: 16, marginBottom: 10,
     borderWidth: 1, borderColor: COLORS.border,
@@ -141,8 +106,6 @@ const styles = StyleSheet.create({
   scanType: { fontFamily: FONTS.family.bodySemibold, fontSize: 11, color: COLORS.primary },
   date: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textMuted },
   headline: { fontFamily: FONTS.family.headingMedium, fontSize: 16, color: COLORS.textPrimary, marginTop: 8 },
-  scoreRow: { flexDirection: 'row', gap: 12, marginTop: 10 },
-  miniScore: { fontFamily: FONTS.family.bodyMedium, fontSize: 12, color: COLORS.textSecondary },
   empty: { alignItems: 'center', paddingVertical: 48 },
   emptyTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary, marginTop: 12 },
   emptyText: { fontFamily: FONTS.family.body, fontSize: 13, color: COLORS.textSecondary, marginTop: 6 },

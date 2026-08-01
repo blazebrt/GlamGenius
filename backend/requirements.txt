@@ -10,3 +10,15 @@ httpx==0.28.1
 google-genai>=1.0.0
 pyjwt==2.13.0
 bcrypt==5.0.0
+
+# --- V2: PostgreSQL ---
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+
+# --- Tests (installed in the image so the test container needs no extra step) ---
+pytest==8.3.4
+# 0.26 is the first release with asyncio_default_test_loop_scope, which is what
+# lets the whole suite share one event loop. Motor binds its client to the loop
+# that first uses it, so a per-test loop makes every later test fail.
+pytest-asyncio==0.26.0

@@ -98,7 +98,7 @@ export default function ScanTabScreen() {
         <Animated.View entering={FadeInDown.delay(200)} style={styles.howItWorks}>
           <Text style={styles.sectionTitle}>How it works</Text>
           <StepItem number="1" title="Take or upload a photo" description="Good daylight helps the coach see tone and texture." />
-          <StepItem number="2" title="Get your coach plan" description="Scores, colours, ingredients, Indian foods, salon ideas." />
+          <StepItem number="2" title="Get your coach plan" description="Visible observations, colours, ingredients, Indian foods, and salon ideas." />
           <StepItem number="3" title="Act on this week’s 3 steps" description="Recheck in about 2 weeks to track progress." />
         </Animated.View>
 

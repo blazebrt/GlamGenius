@@ -20,10 +20,23 @@ import { api, errorMessage, isRateLimited } from '../src/services/api';
 import { notify } from '../src/services/notify';
 import { useUserStore } from '../src/store/userStore';
 import { usePlanStore } from '../src/store/planStore';
+import { useConfigStore } from '../src/store/configStore';
+import { classifyFailure, Failure } from '../src/services/failure';
+import { getConsent, setConsent } from '../src/services/apiV2';
+import {
+  AnalysisFailedState,
+  BetaFeatureUnavailableState,
+  LowQualityImageState,
+  PhotoAnalysisConsentControl,
+  ProviderUnavailableState,
+} from '../src/components/TrustStates';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../src/theme/colors';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-type ScanPhase = 'camera' | 'processing' | 'results';
+// 'failed' is a first-class phase. A failure renders its own screen rather than
+// a toast over a half-built result — the app must never show a personalised
+// result after a failure.
+type ScanPhase = 'camera' | 'processing' | 'results' | 'failed';
 const IS_WEB = Platform.OS === 'web';
 
 const PROCESSING_STEPS = [
@@ -51,9 +64,32 @@ export default function ScanScreen() {
   const [errorLimit, setErrorLimit] = useState(false);
   const [cameraError, setCameraError] = useState(false);
   const [previewInvite, setPreviewInvite] = useState('');
+  const [failure, setFailure] = useState<Failure | null>(null);
+  const [photoConsent, setPhotoConsentState] = useState(false);
+  const [consentSaving, setConsentSaving] = useState(false);
+  // Kept so "Try again" re-sends the same photo instead of making the user
+  // take a new one after a failure that was never their fault.
+  const [lastImage, setLastImage] = useState<string | null>(null);
+  const billingAvailable = useConfigStore((s) => s.billingAvailable);
+  const betaMessage = useConfigStore((s) => s.betaMessage);
 
   // Signed-out visitors get a free teaser instead of the full check.
   const isPreviewMode = !userId;
+
+  useEffect(() => {
+    if (!userId) return;
+    let active = true;
+    getConsent()
+      .then((summary) => {
+        if (active) setPhotoConsentState(summary.photo_analysis.granted);
+      })
+      .catch(() => {
+        if (active) setPhotoConsentState(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [userId]);
 
   useEffect(() => {
     if (phase !== 'processing') return;
@@ -66,6 +102,11 @@ export default function ScanScreen() {
   }, [phase]);
 
   const runPreview = async (base64: string) => {
+    if (!photoConsent) {
+      notify('Consent needed', 'Please agree before sending a photo for analysis.');
+      setPhase('camera');
+      return;
+    }
     if (!previewInvite.trim()) {
       notify(
         'Invite required',
@@ -76,11 +117,14 @@ export default function ScanScreen() {
     }
     setPhase('processing');
     setErrorLimit(false);
+    setFailure(null);
+    setLastImage(base64);
     try {
       const res = await api.post('/scan/preview', {
         image_base64: base64,
         scan_type: scanType,
         invite_code: previewInvite.trim(),
+        photo_analysis_consent: true,
       });
       setPreview(res.data);
       setPhase('results');
@@ -103,9 +147,10 @@ export default function ScanScreen() {
         setPhase('camera');
         return;
       }
-      console.error('preview failed', err);
-      notify('Check failed', 'Could not complete the preview. Please try again.');
-      setPhase('camera');
+      // Anything else — including the analysis genuinely failing — gets the
+      // full explanation, not a one-line toast.
+      setFailure(classifyFailure(err));
+      setPhase('failed');
     }
   };
 
@@ -114,8 +159,15 @@ export default function ScanScreen() {
       await runPreview(base64);
       return;
     }
+    if (!photoConsent) {
+      notify('Consent needed', 'Please agree before sending a photo for analysis.');
+      setPhase('camera');
+      return;
+    }
     setPhase('processing');
     setErrorLimit(false);
+    setFailure(null);
+    setLastImage(base64);
     try {
       // No user_id — the server identifies us from the login token.
       const res = await api.post('/scan/analyze', {
@@ -145,19 +197,55 @@ export default function ScanScreen() {
       if (err?.response?.status === 402 || detail?.code === 'SCAN_LIMIT') {
         setErrorLimit(true);
         setPhase('camera');
+        // No upgrade offer while billing is off — the old "Go Plus" button led
+        // to a paywall that could only ever refuse the payment.
         notify(
-          'Free checks used',
-          detail?.message || 'Upgrade to Plus for unlimited checks.',
-          [
-            { text: 'Maybe later', style: 'cancel' },
-            { text: 'Go Plus', onPress: () => router.push('/subscription') },
-          ]
+          'Monthly checks used',
+          detail?.message || 'Your allowance resets next month.',
         );
         return;
       }
-      console.error('scan failed', err);
-      notify('Check failed', 'Could not complete analysis. Please try again.');
+      const classified = classifyFailure(err);
+      if (classified.kind === 'consent_required') {
+        setPhotoConsentState(false);
+        setPhase('camera');
+        notify('Consent needed', classified.message);
+        return;
+      }
+      setFailure(classified);
+      setPhase('failed');
+    }
+  };
+
+  const retryLastAnalysis = () => {
+    setFailure(null);
+    if (lastImage) {
+      void runAnalysis(lastImage);
+    } else {
       setPhase('camera');
+    }
+  };
+
+  const dismissFailure = () => {
+    setFailure(null);
+    setPhase('camera');
+  };
+
+  const updatePhotoConsent = async (next: boolean) => {
+    if (isPreviewMode) {
+      setPhotoConsentState(next);
+      return;
+    }
+
+    setConsentSaving(true);
+    try {
+      const summary = await setConsent(next);
+      setPhotoConsentState(summary.photo_analysis.granted);
+    } catch (err) {
+      console.warn('consent update failed', err);
+      notify('Could not save consent', 'Please check your connection and try again.');
+    } finally {
+      setConsentSaving(false);
     }
   };
 
@@ -206,6 +294,43 @@ export default function ScanScreen() {
         <Text style={styles.processingTitle}>Building your coach plan</Text>
         <Text style={styles.processingStep}>{PROCESSING_STEPS[step]}</Text>
         <Text style={styles.disclaimerMini}>Not a diagnosis — style & wellness guidance only.</Text>
+      </View>
+    );
+  }
+
+  if (phase === 'failed' && failure) {
+    return (
+      <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
+        {failure.kind === 'low_quality' ? (
+          <LowQualityImageState
+            guidance={failure.guidance}
+            onRetake={() => {
+              setFailure(null);
+              setPhase('camera');
+            }}
+            onChooseAnother={IS_WEB ? undefined : pickImage}
+          />
+        ) : failure.kind === 'provider_unavailable' ? (
+          <ProviderUnavailableState
+            retryable={failure.retryable}
+            onRetry={retryLastAnalysis}
+            onDismiss={dismissFailure}
+          />
+        ) : failure.kind === 'allowance_exhausted' && !billingAvailable() ? (
+          <BetaFeatureUnavailableState
+            message={`${failure.message} ${betaMessage()}`}
+            onDismiss={dismissFailure}
+          />
+        ) : (
+          <AnalysisFailedState
+            message={failure.message}
+            guidance={failure.guidance}
+            allowancePreserved={failure.allowancePreserved}
+            retryable={failure.retryable}
+            onRetry={retryLastAnalysis}
+            onDismiss={dismissFailure}
+          />
+        )}
       </View>
     );
   }
@@ -309,7 +434,7 @@ export default function ScanScreen() {
 
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 20 }]}>
         {errorLimit && (
-          <Text style={styles.limitText}>Free monthly checks used — upgrade for more.</Text>
+          <Text style={styles.limitText}>Monthly checks used. Your allowance resets next month.</Text>
         )}
         {isPreviewMode && (
           <>
@@ -327,6 +452,11 @@ export default function ScanScreen() {
             />
           </>
         )}
+        <PhotoAnalysisConsentControl
+          checked={photoConsent}
+          busy={consentSaving}
+          onChange={(next) => void updatePhotoConsent(next)}
+        />
         <Text style={styles.hint}>
           {IS_WEB ? 'Upload a well-lit photo to continue.' : 'Centre yourself in good light, then capture or upload.'}
         </Text>
@@ -429,7 +559,6 @@ function ResultsView({
   onClose: () => void;
   onPlan: () => void;
 }) {
-  const scores = analysis.wellness_scores || {};
   const fashion = analysis.fashion || {};
   const style = analysis.fashion || analysis.style || {};
   const care = analysis.care_ingredients || {};
@@ -451,12 +580,6 @@ function ResultsView({
       <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: 140 }}>
         <Animated.View entering={FadeIn} style={styles.scoreCard}>
           <Text style={styles.headline}>{summary.headline || 'Your personalised plan'}</Text>
-          <View style={styles.scoreRow}>
-            <ScorePill label="Skin" value={scores.skin_score} />
-            <ScorePill label="Hair" value={scores.hair_score} />
-            <ScorePill label="Overall" value={scores.overall_score} />
-          </View>
-          <Text style={styles.scoreNotes}>{scores.score_notes}</Text>
           <Text style={styles.profileLine}>
             {[profile.skin_tone, profile.undertone && `${profile.undertone} undertone`, profile.skin_type_visible]
               .filter(Boolean)
@@ -590,15 +713,6 @@ function ResultsView({
   );
 }
 
-function ScorePill({ label, value }: { label: string; value?: number }) {
-  return (
-    <View style={styles.scorePill}>
-      <Text style={styles.scoreValue}>{value ?? '—'}</Text>
-      <Text style={styles.scoreLabel}>{label}</Text>
-    </View>
-  );
-}
-
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Animated.View entering={FadeInDown} style={{ marginTop: SPACING.lg }}>
@@ -645,7 +759,7 @@ const styles = StyleSheet.create({
   },
   iconBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   topTitle: { fontFamily: FONTS.family.bodySemibold, color: COLORS.white, fontSize: 16 },
-  camera: { flex: 1, marginTop: 80, marginBottom: 160, marginHorizontal: 16, borderRadius: 24, overflow: 'hidden' },
+  camera: { flex: 1, marginTop: 80, marginBottom: 235, marginHorizontal: 16, borderRadius: 24, overflow: 'hidden' },
   guideRing: {
     position: 'absolute', alignSelf: 'center', top: '22%',
     width: SCREEN_WIDTH * 0.62, height: SCREEN_WIDTH * 0.72, borderRadius: SCREEN_WIDTH * 0.31,
@@ -727,13 +841,6 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: COLORS.border, ...SHADOWS.sm,
   },
   headline: { fontFamily: FONTS.family.heading, fontSize: 22, color: COLORS.textPrimary, marginBottom: 16 },
-  scoreRow: { flexDirection: 'row', gap: 10 },
-  scorePill: {
-    flex: 1, backgroundColor: COLORS.primaryLight, borderRadius: RADIUS.md, paddingVertical: 12, alignItems: 'center',
-  },
-  scoreValue: { fontFamily: FONTS.family.bodyBold, fontSize: 22, color: COLORS.primary },
-  scoreLabel: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textSecondary, marginTop: 2 },
-  scoreNotes: { marginTop: 12, fontFamily: FONTS.family.body, fontSize: 13, color: COLORS.textSecondary, lineHeight: 19 },
   profileLine: { marginTop: 8, fontFamily: FONTS.family.bodyMedium, fontSize: 12, color: COLORS.primary },
   sectionTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary, marginBottom: 10 },
   sectionNote: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textSecondary, marginBottom: 8 },

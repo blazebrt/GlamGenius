@@ -4,6 +4,7 @@ from datetime import datetime
 
 from settings import FREE_SCANS_PER_MONTH, PLUS_PRICE_INR, PLUS_YEARLY_INR, GEMINI_API_KEY, INVITE_SCANS_PER_MONTH, INVITE_ONLY
 from ai import _llm_configured, HAS_GOOGLE_GENAI
+from app.config import SUBSCRIPTIONS_AVAILABLE
 
 router = APIRouter()
 
@@ -35,6 +36,10 @@ async def public_config():
         "invite_only": INVITE_ONLY,
         "plus_price_inr": PLUS_PRICE_INR,
         "plus_yearly_inr": PLUS_YEARLY_INR,
+        # The audit found the app selling subscriptions the backend refuses.
+        # This flag is now on the public config too, so a signed-out screen can
+        # tell before it offers anyone a price.
+        "subscriptions_available": SUBSCRIPTIONS_AVAILABLE,
         "currency": "INR",
         "tagline": "Skin · Hair · Style",
         "disclaimer": "General wellness and style guidance — not medical advice.",

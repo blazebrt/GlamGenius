@@ -45,11 +45,14 @@ async def create_style_plan(
         persist["updated_at"] = datetime.utcnow()
         await db.users.update_one({"id": user_id}, {"$set": persist})
 
+    # Raises AnalysisUnavailableError when a trustworthy plan cannot be built.
+    # Nothing below runs in that case, so no empty plan is ever saved.
     plan = await generate_style_plan(
         user,
         request.occasion,
         request.mood,
         request.budget_range or user.get("budget_range") or "mid",
+        v1_user_id=user_id,
     )
     rec = StylePlan(
         user_id=user_id,

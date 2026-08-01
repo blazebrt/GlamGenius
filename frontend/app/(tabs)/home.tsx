@@ -11,14 +11,33 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useUserStore } from '../../src/store/userStore';
+import { useConfigStore } from '../../src/store/configStore';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../../src/theme/colors';
 
+// "Go Plus" used to sit here and lead to a paywall that could only refuse the
+// payment. The membership entry stays — people should be able to see what they
+// have — but it no longer sells anything while billing is off.
 const QUICK_ACTIONS = [
   { id: 'scan', icon: 'scan-outline', label: 'Skin check', route: '/(tabs)/scan-tab', color: COLORS.primary },
   { id: 'plan', icon: 'shirt-outline', label: 'Outfit plan', route: '/get-advice', color: COLORS.accent },
   { id: 'quiz', icon: 'clipboard-outline', label: 'Stylist quiz', route: '/style-quiz', color: COLORS.info },
-  { id: 'plus', icon: 'diamond-outline', label: 'Go Plus', route: '/subscription', color: COLORS.warning },
 ];
+
+const MEMBERSHIP_ACTION = {
+  id: 'membership',
+  icon: 'sparkles-outline',
+  label: 'Membership',
+  route: '/subscription',
+  color: COLORS.warning,
+};
+
+const UPGRADE_ACTION = {
+  id: 'plus',
+  icon: 'diamond-outline',
+  label: 'Go Plus',
+  route: '/subscription',
+  color: COLORS.warning,
+};
 
 const TIPS = [
   { tip: 'Add height & weight in Profile — your stylist uses them with skin tone for better outfit fits.', source: 'Stylist tip' },
@@ -39,12 +58,21 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { user, fetchUser, refreshSubscription } = useUserStore();
   const [tipIndex, setTipIndex] = useState(0);
+  const billingAvailable = useConfigStore((s) => s.billingAvailable);
+  const loadConfig = useConfigStore((s) => s.load);
+  const configLoaded = useConfigStore((s) => s.loaded);
 
   useEffect(() => {
     fetchUser();
     refreshSubscription();
+    if (!configLoaded) void loadConfig();
     setTipIndex(new Date().getHours() % TIPS.length);
   }, []);
+
+  const quickActions = [
+    ...QUICK_ACTIONS,
+    billingAvailable() ? UPGRADE_ACTION : MEMBERSHIP_ACTION,
+  ];
 
   const greeting = () => {
     const h = new Date().getHours();
@@ -53,8 +81,13 @@ export default function HomeScreen() {
     return 'Good evening';
   };
 
-  const plan = user?.plan === 'plus' ? 'Plus' : 'Free';
-  const remaining = user?.plan === 'plus' ? 'Unlimited checks' : `${user?.scans_remaining_free ?? '—'} checks left this month`;
+  // "Unlimited checks" was never true — invited members have a monthly
+  // allowance like everyone else, it is just a larger one. Show the real number.
+  const plan = billingAvailable() && user?.plan === 'plus' ? 'Plus' : 'Private beta';
+  const remaining =
+    typeof user?.scans_remaining_free === 'number'
+      ? `${user.scans_remaining_free} checks left this month`
+      : 'Checks included';
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -72,7 +105,7 @@ export default function HomeScreen() {
         <Animated.View entering={FadeInDown.delay(80)} style={styles.planChip}>
           <Ionicons name="leaf-outline" size={16} color={COLORS.primary} />
           <Text style={styles.planChipText}>{plan} · {remaining}</Text>
-          {user?.plan !== 'plus' && (
+          {billingAvailable() && user?.plan !== 'plus' && (
             <TouchableOpacity onPress={() => router.push('/subscription')}>
               <Text style={styles.upgradeText}>Upgrade</Text>
             </TouchableOpacity>
@@ -80,7 +113,7 @@ export default function HomeScreen() {
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(120)} style={styles.tipCard}>
-          <Text style={styles.tipBadge}>TODAY'S TIP</Text>
+          <Text style={styles.tipBadge}>TODAY&apos;S TIP</Text>
           <Text style={styles.tipText}>{TIPS[tipIndex].tip}</Text>
           <Text style={styles.tipSource}>— {TIPS[tipIndex].source}</Text>
         </Animated.View>
@@ -88,7 +121,7 @@ export default function HomeScreen() {
         <Animated.View entering={FadeInDown.delay(180)} style={styles.section}>
           <Text style={styles.sectionTitle}>Quick actions</Text>
           <View style={styles.actionsGrid}>
-            {QUICK_ACTIONS.map((action) => (
+            {quickActions.map((action) => (
               <TouchableOpacity
                 key={action.id}
                 style={styles.actionCard}

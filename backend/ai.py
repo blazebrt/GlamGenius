@@ -1,48 +1,52 @@
-"""Gemini client, coach prompts, analysis, and AI rate limits."""
+"""Coach prompts, analysis entry points, and AI rate limits.
+
+The Gemini transport used to live here. It now lives in
+``app/domains/ai_gateway/providers/gemini.py``, behind a gateway that records
+every call and validates every response. This module keeps the prompts — a
+prompt belongs with the feature that owns it — and the V1-facing function names,
+so no route had to be rewired.
+"""
 from fastapi import HTTPException
 import logging
-import json
-import base64
-import asyncio
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 
 from database import db
 from settings import (
-    GEMINI_API_KEY,
-    GEMINI_MODEL,
-    GEMINI_FALLBACK_MODELS,
     AI_REQUESTS_PER_HOUR,
     AI_REQUESTS_PER_HOUR_PLUS,
     AI_RATE_WINDOW_MINUTES,
 )
 
-try:
-    from google import genai as google_genai
-    from google.genai import types as google_genai_types
-    HAS_GOOGLE_GENAI = True
-except ImportError:
-    google_genai = None  # type: ignore
-    google_genai_types = None  # type: ignore
-    HAS_GOOGLE_GENAI = False
+from app.domains.ai_gateway import gateway
+from app.domains.ai_gateway.providers import gemini as _gemini
+from app.domains.ai_gateway.schemas import (
+    DISCLAIMER,
+    SCHEMA_VERSION_COACH,
+    SCHEMA_VERSION_STYLE_PLAN,
+    CoachAnalysis,
+    StylePlan,
+)
+from app.domains.entitlements.models import FEATURE_SCAN_ANALYZE, FEATURE_STYLE_PLAN
 
 logger = logging.getLogger(__name__)
 
-_gemini_client = None
+# Bump when the wording of a prompt changes. Recorded on every ai_runs row, so
+# a change in result quality can be traced to the prompt that caused it.
+PROMPT_VERSION_COACH = "coach.v2"
+PROMPT_VERSION_STYLE_PLAN = "style_plan.v1"
+
+# Re-exported so health.py and anything else importing from `ai` keeps working.
+HAS_GOOGLE_GENAI = _gemini.HAS_GOOGLE_GENAI
 
 
 def _get_gemini_client():
-    """Lazy Gemini client. Key stays in process memory from env only."""
-    global _gemini_client
-    if not GEMINI_API_KEY or not HAS_GOOGLE_GENAI:
-        return None
-    if _gemini_client is None:
-        _gemini_client = google_genai.Client(api_key=GEMINI_API_KEY)
-    return _gemini_client
+    """Deprecated. The gateway owns the provider client now."""
+    return _gemini.get_client()
 
 
 def _llm_configured() -> bool:
-    return bool(GEMINI_API_KEY and HAS_GOOGLE_GENAI)
+    return _gemini.is_configured()
 
 
 COACH_SYSTEM = """You are GlamGenius — the fashion stylist, wellness coach, and skin & hair advisor in someone's pocket for India.
@@ -87,13 +91,6 @@ Respond in this EXACT JSON format:
     "hair_texture": "fine|medium|coarse|unclear",
     "hair_density_visible": "thin|medium|thick|unclear",
     "estimated_build_note": "only if visible and helpful; else unclear — never invent exact height/weight from photo"
-  },
-  "wellness_scores": {
-    "skin_score": 0,
-    "hair_score": 0,
-    "style_readiness_score": 0,
-    "overall_score": 0,
-    "score_notes": "one short sentence"
   },
   "observations": [
     {
@@ -263,291 +260,38 @@ async def _assert_ai_quota(user: Dict[str, Any]) -> None:
     )
 
 
-def _parse_llm_json(response: str) -> Dict[str, Any]:
-    clean = (response or "").strip()
-    if clean.startswith("```json"):
-        clean = clean[7:]
-    if clean.startswith("```"):
-        clean = clean[3:]
-    if clean.endswith("```"):
-        clean = clean[:-3]
-    return json.loads(clean.strip())
-
-
-def _fallback_coach(scan_type: str) -> Dict[str, Any]:
-    return {
-        "meta": {
-            "scan_focus": scan_type,
-            "confidence": 0.55,
-            "image_quality_notes": "Used a gentle default plan because AI analysis was unavailable.",
-            "disclaimer": "General wellness and style guidance from a photo — not medical advice.",
-        },
-        "profile": {
-            "face_shape": "unclear",
-            "skin_type_visible": "combination",
-            "skin_tone": "wheatish",
-            "undertone": "warm",
-            "hair_type_visible": "wavy",
-            "hair_texture": "medium",
-            "hair_density_visible": "medium",
-        },
-        "wellness_scores": {
-            "skin_score": 72,
-            "hair_score": 70,
-            "style_readiness_score": 74,
-            "overall_score": 72,
-            "score_notes": "Starting point for everyday skin, hair, and outfit confidence — add height/weight in profile for sharper clothing fits.",
-        },
-        "observations": [
-            {
-                "area": "face",
-                "what_i_see": "Mild uneven tone and everyday dullness are common; focus on gentle cleansing and SPF.",
-                "level": "mild",
-                "why_it_matters": "Clearer-looking skin makes your clothing colours read better in photos and real life.",
-            }
-        ],
-        "fashion": {
-            "best_clothing_colors": [
-                {"color": "deep teal", "hex_hint": "#0F766E", "why": "Works well with warm wheatish tones"},
-                {"color": "mustard", "hex_hint": "#E1A95F", "why": "Adds warmth without washing you out"},
-                {"color": "maroon", "hex_hint": "#7F1D1D", "why": "Strong festive and office option"},
-            ],
-            "colors_to_go_easy_on": [
-                {"color": "icy pastels", "why": "Can look washed-out on warm medium tones"}
-            ],
-            "silhouettes_for_you": [
-                {"silhouette": "Straight or lightly tapered kurta with clean neckline", "why": "Elongates the frame and keeps focus on face colours"},
-                {"silhouette": "Mid-rise trousers or palazzo with defined waist", "why": "Balances proportions for everyday Indian + fusion wear"},
-            ],
-            "fits_and_proportions": [
-                "If you're on the shorter side, keep hemlines cleaner and avoid overwhelming volume on both top and bottom.",
-                "If taller, you can carry longer kurtas, long shirts, and vertical colour blocking more easily.",
-            ],
-            "wardrobe_ideas_india": [
-                {
-                    "occasion": "office",
-                    "outfit_idea": "Deep teal cotton kurta + cream trousers + simple gold studs",
-                    "why_it_works": "Tone-flattering colour with a neat professional silhouette",
-                    "trend_note": "Quiet-luxury neutrals with one rich accent colour — very wearable in Indian offices",
-                },
-                {
-                    "occasion": "festive",
-                    "outfit_idea": "Maroon kurta set or saree with gold jewellery and soft eyes",
-                    "why_it_works": "Classic festive pairing for warm undertones",
-                    "trend_note": "Jewel tones remain strong for weddings and festivals without chasing costume trends",
-                },
-            ],
-            "current_trends_to_try": [
-                {
-                    "trend": "Elevated basics + one statement colour",
-                    "how_to_wear_it_for_you": "Keep base in cream/beige and add teal or maroon in kurta, dupatta, or bag",
-                    "skip_if": "Skip ultra-micro trends that need constant replacement on a tight budget",
-                }
-            ],
-            "metal_and_accessories": "gold — suits warm undertones",
-            "fabric_texture_tips": ["Prefer breathable cotton or linen in humid weather", "Matte fabrics if skin looks oily in photos"],
-        },
-        "style": {
-            "best_clothing_colors": [
-                {"color": "deep teal", "hex_hint": "#0F766E", "why": "Works well with warm wheatish tones"},
-                {"color": "mustard", "hex_hint": "#E1A95F", "why": "Adds warmth without washing you out"},
-                {"color": "maroon", "hex_hint": "#7F1D1D", "why": "Strong festive and office option"},
-            ],
-            "colors_to_go_easy_on": [
-                {"color": "icy pastels", "why": "Can look washed-out on warm medium tones"}
-            ],
-            "wardrobe_ideas_india": [
-                {
-                    "occasion": "office",
-                    "outfit_idea": "Cotton kurta in deep teal with cream bottom",
-                    "why_it_works": "Clean contrast that flatters warm undertones",
-                },
-                {
-                    "occasion": "festive",
-                    "outfit_idea": "Maroon saree or suit with gold jewellery",
-                    "why_it_works": "Classic Indian festive pairing for warm tones",
-                },
-            ],
-            "metal_and_accessories": "gold — suits warm undertones",
-            "fabric_texture_tips": ["Prefer breathable cotton or linen in humid weather"],
-        },
-        "daily_care": {
-            "morning": ["Gentle cleanse", "Light moisturiser", "SPF 30+"],
-            "evening": ["Cleanse", "Simple leave-on suited to your skin feel", "Moisturise"],
-            "weekly": ["Hair mask once", "Lip and hand balm daily"],
-            "climate_note": "In humid cities keep routines light; in dry winters add richer cream.",
-        },
-        "care_ingredients": {
-            "for_skin": [
-                {
-                    "ingredient": "niacinamide",
-                    "why": "Supports more even-looking tone and oil balance",
-                    "best_when_you_see": ["uneven tone", "oiliness"],
-                    "where_to_use": "serum after cleanse",
-                    "how_often_start": "daily",
-                    "india_label_names": ["niacinamide", "vitamin B3"],
-                    "pairing_tips": "Works under moisturiser and SPF",
-                    "caution": "Start low % if skin feels sensitive",
-                },
-                {
-                    "ingredient": "salicylic acid (BHA)",
-                    "why": "Helps with oiliness and clogged-looking pores / pimples",
-                    "best_when_you_see": ["oily T-zone", "pimples"],
-                    "where_to_use": "cleanser or leave-on on oily areas",
-                    "how_often_start": "2–3 nights/week",
-                    "india_label_names": ["salicylic acid", "BHA"],
-                    "pairing_tips": "Moisturise after; SPF in the morning",
-                    "caution": "Can dry — skip on broken skin; patch test",
-                },
-            ],
-            "for_hair": [
-                {
-                    "ingredient": "glycerin / aloe",
-                    "why": "Supports softer-looking hair when dry or frizzy",
-                    "best_when_you_see": ["frizz", "dry lengths"],
-                    "where_to_use": "conditioner or leave-in",
-                    "how_often_start": "most washes",
-                    "india_label_names": ["glycerin", "aloe vera"],
-                    "pairing_tips": "Focus on mid-lengths to ends",
-                    "caution": "In very humid weather use lightly",
-                }
-            ],
-            "ingredients_to_go_easy_on": [
-                {
-                    "ingredient": "heavy face oils if skin looks oily",
-                    "why": "May feel heavier on already shiny skin",
-                    "best_when_you_see": ["oily shine", "pimples"],
-                }
-            ],
-            "simple_shopping_rule": "On the label, prefer 1–2 hero ingredients that match your check.",
-        },
-        "nutrition": {
-            "goal": "support healthier-looking skin and hair",
-            "ingredients": [
-                {
-                    "ingredient": "vitamin C",
-                    "why_for_skin_or_hair": "Supports brighter-looking skin tone over time",
-                    "indian_foods": [
-                        {"food": "amla", "how_often": "3–4×/week", "serving_idea": "1 fresh or as murabba/pickle side"},
-                        {"food": "guava", "how_often": "few times/week", "serving_idea": "1 medium fruit"},
-                    ],
-                },
-                {
-                    "ingredient": "protein",
-                    "why_for_skin_or_hair": "Supports hair strength from the inside",
-                    "indian_foods": [
-                        {"food": "dal", "how_often": "daily", "serving_idea": "1–2 katori"},
-                        {"food": "paneer / eggs / curd", "how_often": "as per diet", "serving_idea": "1 serving with meals"},
-                    ],
-                },
-            ],
-            "simple_plate_ideas": [
-                "Breakfast: vegetable poha + curd",
-                "Lunch: dal + roti + seasonal sabzi + salad",
-            ],
-            "hydration": "Aim for about 8 glasses of water across the day",
-            "diet_fit": "Adapt proteins to veg / egg / non-veg preference",
-        },
-        "salon_suggestions": [
-            {
-                "service": "cleanup / basic facial",
-                "for": "fresher-looking face skin",
-                "why_suggest": "Helpful when skin looks dull from city dust and routine stress",
-                "how_often_idea": "every 3–4 weeks",
-                "priority": "medium",
-            },
-            {
-                "service": "hair spa",
-                "for": "healthier-looking hair shine",
-                "why_suggest": "Useful if lengths feel dry",
-                "how_often_idea": "every 4–6 weeks",
-                "priority": "medium",
-            },
-        ],
-        "coach_summary": {
-            "headline": "Your pocket stylist: colours for your tone, fits for your frame, and simple skin–hair habits.",
-            "top_3_actions_this_week": [
-                "Wear one outfit in deep teal or mustard",
-                "Add your height & weight in Profile for sharper fit tips",
-                "SPF every morning + one amla or guava serving most days",
-            ],
-            "recheck_in_days": 14,
-        },
-    }
-
-
-async def _gemini_generate_text(prompt: str, system: str, image_base64: Optional[str] = None) -> str:
-    """Call Gemini securely on the server. Never expose the API key to clients."""
-    client = _get_gemini_client()
-    if client is None:
-        raise RuntimeError("Gemini client not configured")
-
-    parts: List[Any] = []
-    if image_base64:
-        raw = image_base64
-        if "," in raw and raw.strip().startswith("data:"):
-            raw = raw.split(",", 1)[1]
-        image_bytes = base64.b64decode(raw)
-        mime = "image/jpeg"
-        if image_bytes.startswith(b"\x89PNG"):
-            mime = "image/png"
-        elif image_bytes.startswith(b"RIFF"):
-            mime = "image/webp"
-        parts.append(google_genai_types.Part.from_bytes(data=image_bytes, mime_type=mime))
-    parts.append(prompt)
-
-    models_to_try = []
-    for m in [GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]:
-        if m and m not in models_to_try:
-            models_to_try.append(m)
-
-    last_err: Optional[Exception] = None
-    for model_name in models_to_try:
-        def _run(model=model_name):
-            return client.models.generate_content(
-                model=model,
-                contents=parts,
-                config=google_genai_types.GenerateContentConfig(
-                    system_instruction=system,
-                    temperature=0.4,
-                    response_mime_type="application/json",
-                ),
-            )
-
-        try:
-            response = await asyncio.to_thread(_run)
-            text = getattr(response, "text", None) or ""
-            if not text and getattr(response, "candidates", None):
-                try:
-                    text = response.candidates[0].content.parts[0].text
-                except Exception:
-                    text = ""
-            if text:
-                return text
-        except Exception as e:
-            last_err = e
-            msg = str(e)
-            # Try next model on quota / not-found; otherwise fail fast
-            if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "404" in msg or "NOT_FOUND" in msg:
-                logger.warning(f"Gemini model unavailable ({model_name}): {type(e).__name__}")
-                continue
-            raise
-
-    if last_err:
-        raise last_err
-    raise RuntimeError("Gemini returned empty response")
+# ---------------------------------------------------------------------------
+# Analysis entry points
+#
+# These used to fall back to a hardcoded plan whenever Gemini was missing or
+# threw an error: the user saw invented facts about their own face, was charged
+# a check for it, and those invented facts were written into their profile.
+#
+# The fallback is deleted. These now raise AnalysisUnavailableError, and a
+# failed analysis never touches the caller's allowance.
+# ---------------------------------------------------------------------------
 
 
 async def analyze_image_with_gemini(
     image_base64: str,
     scan_type: str,
     context: Optional[Dict[str, Any]] = None,
+    v1_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """Analyse a photo, or raise.
+
+    Returns the validated analysis with a ``meta.provenance`` block recording
+    which model, prompt and schema produced it.
+
+    Raises:
+        AnalysisUnavailableError: provider unavailable, timed out, returned
+            unparseable JSON, or returned something that failed validation.
+    """
     context = context or {}
     focus_note = {
         "face": "Focus on face skin, tone, undertone, and visible texture. Still give basic hair style tips if hair is visible.",
         "hair": "Focus on hair and scalp-visible areas, shine, dryness, ends. Still estimate skin tone if face is visible for colour advice.",
-        "hands": "Focus on hands, nails, and hand skin. Still give general style colour tips if face tone is unknown — say unclear.",
+        "hands": "Focus on hands, nails, and hand skin. Still give general style colour tips if face tone is unknown - say unclear.",
         "full": "Cover face skin, hair if visible, tone, and full coach plan.",
     }.get(scan_type, "Cover what is clearly visible.")
 
@@ -555,7 +299,7 @@ async def analyze_image_with_gemini(
 Scan focus: {scan_type}
 {focus_note}
 
-User context (may be empty — use what is provided; do not invent exact height/weight from the photo):
+User context (may be empty - use what is provided; do not invent exact height/weight from the photo):
 - City/climate hint: {context.get('city') or 'not specified'}
 - Diet: {context.get('diet') or 'not specified'}
 - Budget comfort: {context.get('budget_range') or 'not specified'}
@@ -572,43 +316,40 @@ Set meta.scan_focus to "{scan_type}". Prefer common Indian foods (dal, palak, am
 For oily look / pimples prefer salicylic acid among skin ingredients when appropriate.
 No prices. No booking. No disease diagnosis. Be body-inclusive."""
 
-    try:
-        # Prefer direct Gemini API key (server-side only)
-        if GEMINI_API_KEY and HAS_GOOGLE_GENAI:
-            response_text = await _gemini_generate_text(prompt, COACH_SYSTEM, image_base64=image_base64)
-            data = _parse_llm_json(response_text)
-            if "meta" not in data:
-                data["meta"] = {}
-            data["meta"].setdefault(
-                "disclaimer",
-                "General wellness and style guidance from a photo — not medical advice.",
-            )
-            data["meta"]["scan_focus"] = scan_type
-            data["meta"]["provider"] = "gemini"
-            return data
+    result = await gateway.run_structured(
+        feature=FEATURE_SCAN_ANALYZE,
+        prompt=prompt,
+        system=COACH_SYSTEM,
+        schema=CoachAnalysis,
+        prompt_version=PROMPT_VERSION_COACH,
+        schema_version=SCHEMA_VERSION_COACH,
+        v1_user_id=v1_user_id,
+        image_base64=image_base64,
+    )
 
-        return _fallback_coach(scan_type)
-    except Exception as e:
-        # Never log secrets; only error class/message
-        logger.error(f"Coach analysis error: {type(e).__name__}: {e}")
-        return _fallback_coach(scan_type)
+    analysis = result.data.model_dump(mode="json", exclude_none=False)
+    meta = analysis.setdefault("meta", {})
+    meta["scan_focus"] = scan_type
+    meta["provider"] = result.provider
+    meta.setdefault("disclaimer", DISCLAIMER)
+    # Provenance travels with the result so the app can show where a claim came
+    # from, and let the user confirm or reject it.
+    meta["provenance"] = result.provenance()
+    return analysis
 
 
-async def generate_style_plan(user_data: Dict, occasion: str, mood: str = None, budget: str = "mid") -> Dict[str, Any]:
-    def _fb():
-        fb = _fallback_coach("full")
-        return {
-            "headline": fb["coach_summary"]["headline"],
-            "fashion": fb.get("fashion"),
-            "style": fb["style"],
-            "daily_care": fb["daily_care"],
-            "care_ingredients": fb["care_ingredients"],
-            "nutrition": fb["nutrition"],
-            "salon_suggestions": fb["salon_suggestions"],
-            "top_3_actions_this_week": fb["coach_summary"]["top_3_actions_this_week"],
-            "disclaimer": fb["meta"]["disclaimer"],
-        }
+async def generate_style_plan(
+    user_data: Dict,
+    occasion: str,
+    mood: str = None,
+    budget: str = "mid",
+    v1_user_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build a style plan from the stored profile, or raise.
 
+    Raises:
+        AnalysisUnavailableError: same conditions as analyze_image_with_gemini.
+    """
     prompt = f"""Create a pocket fashion stylist + wellness plan for an Indian customer (no photo).
 Profile:
 - age={user_data.get('age')}, skin_type={user_data.get('skin_type')}, hair_type={user_data.get('hair_type')}
@@ -622,24 +363,27 @@ Mood: {mood or 'fresh and confident'}
 Return JSON with:
 {{
   "headline": "one line connecting fashion + skin/hair",
-  "fashion": {{ same as fashion block in coach schema — colours, silhouettes, fits, outfits, trends }},
+  "fashion": {{ same as fashion block in coach schema - colours, silhouettes, fits, outfits, trends }},
   "style": {{ compat colours/outfits block }},
   "daily_care": {{ morning, evening, weekly, climate_note }},
   "care_ingredients": {{ for_skin, for_hair, ingredients_to_go_easy_on, simple_shopping_rule }},
   "nutrition": {{ goal, ingredients with indian_foods, simple_plate_ideas, hydration, diet_fit }},
   "salon_suggestions": [{{ service, for, why_suggest, how_often_idea, priority }}],
   "top_3_actions_this_week": ["style", "care", "food/habit"],
-  "disclaimer": "General fashion, wellness and style guidance — not medical advice."
+  "disclaimer": "General fashion, wellness and style guidance - not medical advice."
 }}
 Combine skin tone + body profile + occasion + wearable India trends. No prices. No booking. No diagnosis. Be body-inclusive."""
 
-    try:
-        if GEMINI_API_KEY and HAS_GOOGLE_GENAI:
-            response_text = await _gemini_generate_text(prompt, COACH_SYSTEM)
-            return _parse_llm_json(response_text)
+    result = await gateway.run_structured(
+        feature=FEATURE_STYLE_PLAN,
+        prompt=prompt,
+        system=COACH_SYSTEM,
+        schema=StylePlan,
+        prompt_version=PROMPT_VERSION_STYLE_PLAN,
+        schema_version=SCHEMA_VERSION_STYLE_PLAN,
+        v1_user_id=v1_user_id,
+    )
 
-        return _fb()
-    except Exception as e:
-        logger.error(f"Style plan error: {type(e).__name__}: {e}")
-        return _fb()
-
+    plan = result.data.model_dump(mode="json", exclude_none=False)
+    plan["provenance"] = result.provenance()
+    return plan

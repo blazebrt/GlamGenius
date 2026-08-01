@@ -92,6 +92,9 @@ class ScanPreviewRequest(BaseModel):
     scan_type: str = "face"  # face | hair | hands | full
     # Required while invite-only — stops open internet from burning Gemini spend.
     invite_code: str = ""
+    # A signed-out visitor has no account to attach a consent record to, so the
+    # preview requires an explicit answer on every request.
+    photo_analysis_consent: bool = False
 
 
 class InviteCreateRequest(BaseModel):

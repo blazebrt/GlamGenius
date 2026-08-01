@@ -18,10 +18,12 @@ import {
 } from '@expo-google-fonts/inter';
 import { COLORS } from '../src/theme/colors';
 import { useUserStore } from '../src/store/userStore';
+import { useConfigStore } from '../src/store/configStore';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 
 export default function RootLayout() {
   const { initializeUser } = useUserStore();
+  const loadConfig = useConfigStore((s) => s.load);
 
   const [fontsLoaded] = useFonts({
     PlayfairDisplay_400Regular,
@@ -35,6 +37,10 @@ export default function RootLayout() {
 
   useEffect(() => {
     initializeUser().catch((err) => console.warn('init user failed', err));
+    // Loaded once, before any screen can decide whether to offer a payment.
+    // The store fails closed, so a failure here hides paid actions rather than
+    // showing them.
+    loadConfig().catch((err) => console.warn('load config failed', err));
   }, []);
 
   if (!fontsLoaded) {

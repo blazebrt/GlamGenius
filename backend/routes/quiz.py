@@ -94,6 +94,7 @@ async def submit_quiz(
         submission.occasion or "everyday",
         None,
         submission.budget or user.get("budget_range") or "mid",
+        v1_user_id=user_id,
     )
     rec = StylePlan(user_id=user_id, occasion=submission.occasion, plan=plan)
     await db.style_plans.insert_one(rec.dict())
