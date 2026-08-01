@@ -3,6 +3,7 @@
 Personal stylist + skin & hair wellness coach for India.
 
 Not a diagnosis app. No salon cart or checkout — salon visits are suggestions only.
+Currently **invite-only**, in a private beta. Nothing is for sale.
 
 ## Features
 
@@ -12,7 +13,17 @@ Not a diagnosis app. No salon cart or checkout — salon visits are suggestions 
 - Nutrition: ingredient → common Indian foods
 - Salon ideas without prices or booking
 - Free preview without an account: skin tone + top clothing colours
-- Freemium: 1 free check / month once signed up, Plus subscription unlocks unlimited
+- Invite-only access with a monthly check allowance
+
+### What happens when a check fails
+
+Analysis either produces a real, schema-validated result or it fails openly. There is
+no fallback that invents a skin tone, a hair type or a set of colours. A failed check:
+
+- returns `ANALYSIS_UNAVAILABLE` with a reason and specific guidance
+- **does not** use one of your monthly checks
+- **does not** write anything to your profile
+- can be retried with the same photo
 
 ## Quick start (Docker)
 
@@ -22,16 +33,21 @@ cp env.example .env
 docker compose up --build
 ```
 
-API: http://localhost:8000/api/health
+Starts MongoDB, PostgreSQL, the API and the outbox worker. Database migrations run
+automatically on start.
+
+- API: http://localhost:8000/api/health
+- V2 health (includes PostgreSQL): http://localhost:8000/api/v2/health
 
 ## Backend (local)
 
 ```bash
-# start MongoDB locally, then:
 cd backend
 cp ../env.example .env
 # edit MONGO_URL=mongodb://localhost:27017
+# edit POSTGRES_URL=postgresql+asyncpg://glamgenius:glamgenius@localhost:5432/glamgenius_v2
 pip install -r requirements.txt
+alembic upgrade head
 uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -46,21 +62,93 @@ npx expo start --web
 
 For a physical phone, set `EXPO_PUBLIC_BACKEND_URL` to your machine LAN IP.
 
+## Tests
+
+Everything runs in containers — no Python or Node needed on your machine.
+
+```bash
+docker compose -f docker-compose.test.yml run --rm backend-tests
+```
+
+```bash
+docker compose -f docker-compose.test.yml run --rm frontend-tests
+```
+
+```bash
+docker compose -f docker-compose.test.yml down -v
+```
+
+`backend-tests` runs `alembic upgrade head`, then `alembic check` (which fails if a model
+has drifted from the migrations), then pytest against the ASGI app in-process. The AI
+provider is faked — tests never spend money.
+
+`frontend-tests` runs `tsc --noEmit`, `expo lint` and Jest with React Native Testing
+Library.
+
+`backend_test.py` at the repository root is a separate end-to-end suite that needs a
+running server, a live database and a real Gemini key. It is not part of the containerised
+run.
+
+## Databases
+
+Two, on purpose, during the V2 transition.
+
+| | MongoDB | PostgreSQL |
+|---|---|---|
+| Owns | users, auth, scans, style plans, invites, rate limits | media, consent, AI runs, audit, usage ledger, flags, outbox |
+| Used by | V1 (`/api`) | V2 (`/api/v2`) |
+| Migrations | none | Alembic |
+
+V2 stores no user attributes. `account_links` holds one row per user containing the V1
+user id and nothing else identifying; every V2 table hangs off that. Authentication is
+entirely V1. The link is created on a user's first V2 request, so there is no migration
+and no backfill.
+
+### Migrations
+
+```bash
+docker compose exec backend alembic upgrade head
+```
+
+```bash
+docker compose exec backend alembic downgrade -1
+```
+
+```bash
+docker compose exec backend alembic revision --autogenerate -m "what changed"
+```
+
+Add every new model module to `backend/app/shared/database/registry.py`, or
+autogenerate will not see it and the table will silently never be created.
+
+## Feature flags
+
+V2 modules are off unless switched on. Set `V2_FEATURES` in `.env` for the boot default:
+
+```
+V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway
+```
+
+The `feature_flags` table overrides that at runtime with no redeploy. A route behind a
+disabled flag returns 404 — a switched-off feature should look absent, not forbidden.
+
 ## API overview
 
 Routes marked 🔒 require an `Authorization: Bearer <token>` header. The token
 comes from register or login and is valid 30 days. The caller's identity always
 comes from the token, never from the URL or request body.
 
+### V1 — `/api`
+
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | GET | /api/health | — | Health |
-| GET | /api/config/public | — | Prices & free limit |
+| GET | /api/config/public | — | Prices, free limit, billing availability |
 | GET | /api/services | — | Salon ideas |
 | GET | /api/salon-ideas | — | Salon suggestions (no pay) |
 | GET | /api/quiz/questions | — | Stylist quiz questions |
 | POST | /api/scan/preview | — | Free teaser: tone + top colours, saves nothing |
-| POST | /api/users | — | Create account (email + password required) |
+| POST | /api/users | — | Create account (email + password + invite required) |
 | POST | /api/auth/register | — | Register, returns token |
 | POST | /api/auth/login | — | Login, returns token (rate limited) |
 | GET | /api/users/me | 🔒 | Own profile |
@@ -71,9 +159,68 @@ comes from the token, never from the URL or request body.
 | POST | /api/quiz/submit | 🔒 | Submit stylist quiz |
 | POST | /api/plans/style | 🔒 | Occasion style plan |
 | GET | /api/recommendations/history | 🔒 | Own past plans |
-| POST | /api/subscription/create-order | 🔒 | Plus order (mock) |
-| POST | /api/subscription/confirm | 🔒 | Activate Plus (mock) |
+| POST | /api/subscription/create-order | 🔒 | Refused while billing is unavailable |
+| POST | /api/subscription/confirm | 🔒 | Refused while billing is unavailable |
 | GET | /api/subscription/status | 🔒 | Own plan status |
+
+### V2 — `/api/v2`
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | /api/v2/health | — | Health including PostgreSQL |
+| GET | /api/v2/config | — | Billing availability, media rules, feature flags |
+| GET | /api/v2/me | 🔒 | Profile, account status, consent, usage |
+| GET | /api/v2/consent | 🔒 | Current consent state |
+| POST | /api/v2/consent | 🔒 | Grant or withdraw consent |
+| POST | /api/v2/media/upload | 🔒 | Upload a photo (validated, owned) |
+| GET | /api/v2/media/{id} | 🔒 | Asset metadata |
+| GET | /api/v2/media/{id}/content | 🔒 | Asset bytes |
+| DELETE | /api/v2/media/{id} | 🔒 | Erase the bytes and mark deleted |
+| GET | /api/v2/jobs/{id} | 🔒 | Status of a long-running run |
+| GET | /api/v2/privacy/export | 🔒 | Everything we hold about you, as JSON |
+| DELETE | /api/v2/account | 🔒 | Erase stored photos, request closure |
+
+## Errors
+
+Every error returns the same shape, which the app already understands:
+
+```json
+{
+  "detail": {
+    "code": "ANALYSIS_UNAVAILABLE",
+    "message": "We could not analyse this image reliably.",
+    "retryable": true,
+    "request_id": "8f2c...",
+    "allowance_consumed": false,
+    "guidance": ["Face a window or other soft light — avoid a bright light behind you"]
+  }
+}
+```
+
+Codes: `ANALYSIS_UNAVAILABLE`, `CONSENT_REQUIRED`, `UNSUPPORTED_MEDIA_TYPE`,
+`MEDIA_TOO_LARGE`, `SUBSCRIPTIONS_UNAVAILABLE`, `FEATURE_UNAVAILABLE`,
+`VALIDATION_FAILED`, `NOT_FOUND`, `INTERNAL_ERROR`, plus the existing V1 codes
+`SCAN_LIMIT`, `AI_RATE_LIMIT`, `PREVIEW_LIMIT` and the `INVITE_*` family.
+
+Every response carries an `X-Request-Id` header, echoed in the error body, so a user's
+screenshot is enough to find the request in the logs.
+
+## Privacy
+
+- **Face photos are never stored.** `scan/analyze` truncates the image to 83 characters
+  before saving. This is enforced in code and covered by a test.
+- Photos uploaded to your own collection are stored until you delete them.
+- `GET /api/v2/privacy/export` returns everything from both databases as JSON.
+- `DELETE /api/v2/account` erases stored photos immediately and marks the account for
+  closure. Profile and history removal follows within 30 days.
+- Deletions and exports are recorded in `audit_events` with a hashed source address —
+  enough to investigate, not a location log.
+
+## Documentation
+
+- [docs/V2_ARCHITECTURE_AND_PHASE_PLAN.md](docs/V2_ARCHITECTURE_AND_PHASE_PLAN.md)
+- [docs/v2/PHASE_1_AUDIT.md](docs/v2/PHASE_1_AUDIT.md)
+- [PHASE_1_REPORT.md](PHASE_1_REPORT.md)
 
 ## Disclaimer
 

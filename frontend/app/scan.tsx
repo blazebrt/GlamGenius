@@ -20,10 +20,21 @@ import { api, errorMessage, isRateLimited } from '../src/services/api';
 import { notify } from '../src/services/notify';
 import { useUserStore } from '../src/store/userStore';
 import { usePlanStore } from '../src/store/planStore';
+import { useConfigStore } from '../src/store/configStore';
+import { classifyFailure, Failure } from '../src/services/failure';
+import {
+  AnalysisFailedState,
+  BetaFeatureUnavailableState,
+  LowQualityImageState,
+  ProviderUnavailableState,
+} from '../src/components/TrustStates';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../src/theme/colors';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-type ScanPhase = 'camera' | 'processing' | 'results';
+// 'failed' is a first-class phase. A failure renders its own screen rather than
+// a toast over a half-built result — the app must never show a personalised
+// result after a failure.
+type ScanPhase = 'camera' | 'processing' | 'results' | 'failed';
 const IS_WEB = Platform.OS === 'web';
 
 const PROCESSING_STEPS = [
@@ -51,6 +62,12 @@ export default function ScanScreen() {
   const [errorLimit, setErrorLimit] = useState(false);
   const [cameraError, setCameraError] = useState(false);
   const [previewInvite, setPreviewInvite] = useState('');
+  const [failure, setFailure] = useState<Failure | null>(null);
+  // Kept so "Try again" re-sends the same photo instead of making the user
+  // take a new one after a failure that was never their fault.
+  const [lastImage, setLastImage] = useState<string | null>(null);
+  const billingAvailable = useConfigStore((s) => s.billingAvailable);
+  const betaMessage = useConfigStore((s) => s.betaMessage);
 
   // Signed-out visitors get a free teaser instead of the full check.
   const isPreviewMode = !userId;
@@ -76,6 +93,8 @@ export default function ScanScreen() {
     }
     setPhase('processing');
     setErrorLimit(false);
+    setFailure(null);
+    setLastImage(base64);
     try {
       const res = await api.post('/scan/preview', {
         image_base64: base64,
@@ -103,9 +122,10 @@ export default function ScanScreen() {
         setPhase('camera');
         return;
       }
-      console.error('preview failed', err);
-      notify('Check failed', 'Could not complete the preview. Please try again.');
-      setPhase('camera');
+      // Anything else — including the analysis genuinely failing — gets the
+      // full explanation, not a one-line toast.
+      setFailure(classifyFailure(err));
+      setPhase('failed');
     }
   };
 
@@ -116,6 +136,8 @@ export default function ScanScreen() {
     }
     setPhase('processing');
     setErrorLimit(false);
+    setFailure(null);
+    setLastImage(base64);
     try {
       // No user_id — the server identifies us from the login token.
       const res = await api.post('/scan/analyze', {
@@ -145,20 +167,31 @@ export default function ScanScreen() {
       if (err?.response?.status === 402 || detail?.code === 'SCAN_LIMIT') {
         setErrorLimit(true);
         setPhase('camera');
+        // No upgrade offer while billing is off — the old "Go Plus" button led
+        // to a paywall that could only ever refuse the payment.
         notify(
-          'Free checks used',
-          detail?.message || 'Upgrade to Plus for unlimited checks.',
-          [
-            { text: 'Maybe later', style: 'cancel' },
-            { text: 'Go Plus', onPress: () => router.push('/subscription') },
-          ]
+          'Monthly checks used',
+          detail?.message || 'Your allowance resets next month.',
         );
         return;
       }
-      console.error('scan failed', err);
-      notify('Check failed', 'Could not complete analysis. Please try again.');
+      setFailure(classifyFailure(err));
+      setPhase('failed');
+    }
+  };
+
+  const retryLastAnalysis = () => {
+    setFailure(null);
+    if (lastImage) {
+      void runAnalysis(lastImage);
+    } else {
       setPhase('camera');
     }
+  };
+
+  const dismissFailure = () => {
+    setFailure(null);
+    setPhase('camera');
   };
 
   const takePhoto = async () => {
@@ -206,6 +239,43 @@ export default function ScanScreen() {
         <Text style={styles.processingTitle}>Building your coach plan</Text>
         <Text style={styles.processingStep}>{PROCESSING_STEPS[step]}</Text>
         <Text style={styles.disclaimerMini}>Not a diagnosis — style & wellness guidance only.</Text>
+      </View>
+    );
+  }
+
+  if (phase === 'failed' && failure) {
+    return (
+      <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
+        {failure.kind === 'low_quality' ? (
+          <LowQualityImageState
+            guidance={failure.guidance}
+            onRetake={() => {
+              setFailure(null);
+              setPhase('camera');
+            }}
+            onChooseAnother={IS_WEB ? undefined : pickImage}
+          />
+        ) : failure.kind === 'provider_unavailable' ? (
+          <ProviderUnavailableState
+            retryable={failure.retryable}
+            onRetry={retryLastAnalysis}
+            onDismiss={dismissFailure}
+          />
+        ) : failure.kind === 'allowance_exhausted' && !billingAvailable() ? (
+          <BetaFeatureUnavailableState
+            message={`${failure.message} ${betaMessage()}`}
+            onDismiss={dismissFailure}
+          />
+        ) : (
+          <AnalysisFailedState
+            message={failure.message}
+            guidance={failure.guidance}
+            allowancePreserved={failure.allowancePreserved}
+            retryable={failure.retryable}
+            onRetry={retryLastAnalysis}
+            onDismiss={dismissFailure}
+          />
+        )}
       </View>
     );
   }

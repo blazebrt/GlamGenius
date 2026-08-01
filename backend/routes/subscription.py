@@ -8,6 +8,8 @@ from database import db
 from models import SubscriptionOrderRequest
 from security import get_current_user, _require_same_user, _month_key
 from settings import FREE_SCANS_PER_MONTH, PLUS_PRICE_INR, PLUS_YEARLY_INR
+from app.config import SUBSCRIPTIONS_AVAILABLE
+from app.shared.errors.exceptions import SubscriptionsUnavailableError
 
 router = APIRouter()
 
@@ -15,6 +17,12 @@ router = APIRouter()
 async def create_subscription_order(
     request: SubscriptionOrderRequest, user: Dict[str, Any] = Depends(get_current_user)
 ):
+    # Refused at the *first* step, not the second. Previously an order was
+    # created here and only rejected at confirm, which is what produced the
+    # "Payment failed" message after inviting someone to pay.
+    if not SUBSCRIPTIONS_AVAILABLE:
+        raise SubscriptionsUnavailableError()
+
     # Identity comes from the token. Any user_id in the body is ignored.
     user_id = user["id"]
 
@@ -56,19 +64,12 @@ async def confirm_subscription(
     payment_method: str = "upi",
     user: Dict[str, Any] = Depends(get_current_user),
 ):
-    # Private test is invite-only — no request may grant a paid plan this way.
-    raise HTTPException(
-        status_code=403,
-        detail={
-            "code": "SUBSCRIPTIONS_UNAVAILABLE",
-            "message": (
-                "Subscriptions are not available yet. "
-                "GlamGenius is invite-only for a private test group — "
-                "use your invite code to sign up for full access."
-            ),
-        },
-    )
-    # Kept below for a later paid launch; unreachable while invite-only.
+    # Driven by configuration rather than hardcoded, so turning billing on later
+    # is an environment change and not a code change. The billing code below is
+    # kept intact and becomes reachable the moment SUBSCRIPTIONS_AVAILABLE=true.
+    if not SUBSCRIPTIONS_AVAILABLE:
+        raise SubscriptionsUnavailableError()
+
     order = await db.subscription_orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -123,6 +124,6 @@ async def subscription_status(user: Dict[str, Any] = Depends(get_current_user)):
         "scans_remaining": max(0, limit - used),
         "plus_price_inr": PLUS_PRICE_INR,
         "plus_yearly_inr": PLUS_YEARLY_INR,
-        "subscriptions_available": False,
+        "subscriptions_available": SUBSCRIPTIONS_AVAILABLE,
         "invite_only": True,
     }
