@@ -484,7 +484,7 @@ acceptance evidence.
 
 ```
 da713c6  feat(v2): establish production foundation and trusted AI pipeline
-PENDING  feat(v2): enforce Phase 1 trust boundaries
+34c712e  feat(v2): enforce Phase 1 trust boundaries
 ```
 
 The report's own commit-hash line is filled in by a follow-up commit, since a commit
