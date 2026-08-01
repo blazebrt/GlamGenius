@@ -95,7 +95,7 @@ Two, on purpose, during the V2 transition.
 
 | | MongoDB | PostgreSQL |
 |---|---|---|
-| Owns | users, auth, scans, style plans, invites, rate limits | media, consent, AI runs, audit, usage ledger, flags, outbox |
+| Owns | users, auth, scans, style plans, invites, rate limits | media, consent, AI runs, appearance digital twin, onboarding, audit, usage ledger, flags, outbox |
 | Used by | V1 (`/api`) | V2 (`/api/v2`) |
 | Migrations | none | Alembic |
 
@@ -126,7 +126,7 @@ autogenerate will not see it and the table will silently never be created.
 V2 modules are off unless switched on. Set `V2_FEATURES` in `.env` for the boot default:
 
 ```
-V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway
+V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile
 ```
 
 The `feature_flags` table overrides that at runtime with no redeploy. A route behind a
@@ -179,6 +179,16 @@ comes from the token, never from the URL or request body.
 | GET | /api/v2/jobs/{id} | 🔒 | Status of a long-running run |
 | GET | /api/v2/privacy/export | 🔒 | Everything we hold about you, as JSON |
 | DELETE | /api/v2/account | 🔒 | Erase stored photos, request closure |
+| GET/PATCH | /api/v2/profile | 🔒 | Read or explicitly update the appearance digital twin |
+| POST | /api/v2/profile/baseline-analysis | 🔒 | Optional transient-photo baseline; creates observations only |
+| GET | /api/v2/profile/attributes | 🔒 | Attributes with source, confidence and verification |
+| GET | /api/v2/profile/observations | 🔒 | Reviewable inferred values |
+| POST | /api/v2/profile/observations/{id}/confirm | 🔒 | Confirm an observation |
+| POST | /api/v2/profile/observations/{id}/reject | 🔒 | Reject and retain observation history |
+| PATCH | /api/v2/profile/observations/{id} | 🔒 | Edit or mark an observation not sure |
+| GET | /api/v2/onboarding/status | 🔒 | Resume progressive onboarding |
+| POST | /api/v2/onboarding/step | 🔒 | Save or skip one onboarding step |
+| POST | /api/v2/onboarding/complete | 🔒 | Finish and return the first useful result |
 
 ## Errors
 
@@ -214,6 +224,9 @@ screenshot is enough to find the request in the logs.
   `scan/analyze` truncates the image to 83 characters before saving a scan record. The
   media API rejects analysis photos entirely. Both boundaries are covered by tests.
 - Photos uploaded to your own collection are stored until you delete them.
+- Optional onboarding photos follow the same transient rule: only structured,
+  reviewable observations are retained. The image itself is never added to profile or
+  onboarding state.
 - `GET /api/v2/privacy/export` returns everything from both databases as JSON.
 - `DELETE /api/v2/account` erases stored photos immediately and marks the account for
   closure. Profile and history removal follows within 30 days.
@@ -229,3 +242,16 @@ screenshot is enough to find the request in the logs.
 ## Disclaimer
 
 Guidance is for general wellness and personal style from photos — not medical advice.
+
+## Appearance digital twin
+
+Phase 2 adds a structured profile that separates what you entered from what a photo or
+future integration suggested. Every value carries its source, confidence, verification
+state, timestamps and—where applicable—the AI run that produced it. AI suggestions enter
+an observation inbox and cannot overwrite a confirmed value. Rejected observations stay
+in history and only new evidence may create a new suggestion.
+
+Onboarding starts with “What are you preparing for?” and can be completed with that one
+goal; style, fit, lifestyle and photo steps are optional and resumable. Weight is neither
+requested nor required. “My Appearance” shows decision readiness instead of a generic
+completion percentage.

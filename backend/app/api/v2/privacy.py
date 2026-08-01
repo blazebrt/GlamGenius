@@ -11,6 +11,10 @@ from app.domains.audit.models import ACTION_PRIVACY_EXPORTED, AuditEvent
 from app.domains.consent.models import Consent
 from app.domains.entitlements import service as entitlements
 from app.domains.media import service as media_service
+from app.domains.profile import observations as profile_observations
+from app.domains.profile import onboarding as profile_onboarding
+from app.domains.profile import service as profile_service
+from app.domains.profile.models import AppearanceProfile, OnboardingSession
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_session
 from app.shared.security.deps import (
@@ -92,6 +96,34 @@ async def export_data(
         session, account_id, include_deleted=True
     )
     ledger = await entitlements.entries_for_account(session, account_id)
+    appearance_profile = (
+        await session.execute(
+            select(AppearanceProfile).where(AppearanceProfile.account_id == account_id)
+        )
+    ).scalar_one_or_none()
+    digital_twin = None
+    if appearance_profile is not None:
+        onboarding_row = (
+            await session.execute(
+                select(OnboardingSession)
+                .where(OnboardingSession.profile_id == appearance_profile.id)
+                .order_by(OnboardingSession.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        digital_twin = await profile_service.serialize_profile(session, appearance_profile)
+        digital_twin["observations"] = [
+            profile_observations.serialize(row)
+            for row in await profile_observations.list_for_profile(
+                session, appearance_profile.id
+            )
+        ]
+        digital_twin["change_history"] = await profile_service.change_history(
+            session, appearance_profile.id
+        )
+        digital_twin["onboarding"] = (
+            profile_onboarding.serialize(onboarding_row) if onboarding_row else None
+        )
 
     export = {
         "generated_at": utcnow().isoformat(),
@@ -101,6 +133,7 @@ async def export_data(
             "status": current.account.status,
         },
         "profile": _public_user(dict(current.user)),
+        "appearance_digital_twin": digital_twin,
         "scans": [
             {
                 "id": s.get("id"),

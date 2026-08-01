@@ -15,6 +15,18 @@ from app.domains.consent.models import Consent
 from app.domains.entitlements.models import UsageLedgerEntry
 from app.domains.identity.models import AccountLink
 from app.domains.media.models import MediaAsset
+from app.domains.profile.models import (
+    AppearanceGoal,
+    AppearanceProfile,
+    AttributeObservation,
+    FitPreference,
+    LifestyleContext,
+    OnboardingSession,
+    ProfileAttribute,
+    ProfileChangeEvent,
+    StylePreference,
+    UserConstraint,
+)
 from app.shared.database.base import Base
 from app.shared.events.models import OutboxEvent
 from app.shared.flags.models import FeatureFlag
@@ -31,4 +43,14 @@ __all__ = [
     "UsageLedgerEntry",
     "OutboxEvent",
     "AppEvent",
+    "AppearanceProfile",
+    "ProfileAttribute",
+    "StylePreference",
+    "FitPreference",
+    "LifestyleContext",
+    "AppearanceGoal",
+    "UserConstraint",
+    "AttributeObservation",
+    "OnboardingSession",
+    "ProfileChangeEvent",
 ]

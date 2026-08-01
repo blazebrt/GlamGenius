@@ -17,6 +17,16 @@ EXPECTED_TABLES = {
     "usage_ledger",
     "domain_outbox",
     "app_events",
+    "appearance_profiles",
+    "profile_attributes",
+    "style_preferences",
+    "fit_preferences",
+    "lifestyle_context",
+    "appearance_goals",
+    "user_constraints",
+    "attribute_observations",
+    "onboarding_sessions",
+    "profile_change_events",
 }
 
 
