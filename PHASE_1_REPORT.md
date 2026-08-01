@@ -473,8 +473,11 @@ consent, export, deletion and audit; eight frontend trust states; the full Step 
 ## 15. Commit
 
 ```
-COMMIT_HASH_PLACEHOLDER
+da713c6  feat(v2): establish production foundation and trusted AI pipeline
 ```
+
+The report's own commit-hash line is filled in by a follow-up commit, since a commit
+cannot contain its own hash.
 
 Branch `v2/phase-1-foundation`, local only. Nothing pushed to GitHub.
 
