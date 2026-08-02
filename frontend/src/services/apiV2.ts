@@ -1310,3 +1310,226 @@ export const recordObservation = async (
   note: string, area: 'skin' | 'hair' | 'scalp' | 'nails' | 'general' = 'general'
 ): Promise<{ id: string; note: string; boundary: { boundary: boolean; message: string } | null; message: string }> =>
   (await api.post(`${V2}/routines/observations`, { note, area })).data;
+
+// --- Phase 7: progress, goals, memory and milestones -----------------------
+// Every metric carries its own formula and formula version. There is no
+// overall score in this API, and the registry is built so one cannot be added.
+
+export type MetricUnit = 'ratio' | 'count' | 'currency' | 'days' | 'scale_1_5';
+export type MetricDirection = 'higher_is_better' | 'lower_is_better' | 'neutral';
+export type MetricStatus = 'ok' | 'partial' | 'unavailable';
+export type MemoryVerification = 'unverified' | 'confirmed' | 'corrected' | 'rejected';
+export type GoalKind = 'no_buy' | 'use_up' | 'routine' | 'wardrobe' | 'custom';
+
+export interface Metric {
+  key: string;
+  label: string;
+  value: number | null;
+  unit: MetricUnit;
+  direction: MetricDirection;
+  status: MetricStatus;
+  /** Always present. A number without one of these is not shown. */
+  formula: string;
+  formula_version: string;
+  explanation: string;
+  /** The misreading this metric most needs to head off. */
+  not_a_measure_of: string;
+  update_frequency: string;
+  inputs: Record<string, unknown>;
+  missing_inputs: string[];
+  note: string;
+}
+
+export interface Goal {
+  id: string;
+  kind: GoalKind;
+  title: string;
+  metric_key: string | null;
+  metric_status: MetricStatus | null;
+  starting_value: number | null;
+  current_value: number | null;
+  target_value: number | null;
+  progress: number | null;
+  starts_on: string;
+  target_date: string | null;
+  status: string;
+  note: string | null;
+  updates: { recorded_on: string; value: number | null; source: string; note: string | null }[];
+  progress_note: string | null;
+}
+
+export interface EarnedMilestone {
+  id: string;
+  rule_id: string;
+  label: string;
+  description: string;
+  earned_on: string;
+  evidence: Record<string, unknown>;
+  acknowledged: boolean;
+}
+
+export interface ProgressOverview {
+  period: 'week' | 'month';
+  period_start: string;
+  period_end: string;
+  metrics: Metric[];
+  available_count: number;
+  unavailable_count: number;
+  /** Always true. Stated by the server so a client cannot imply otherwise. */
+  no_overall_score: boolean;
+  no_overall_score_note: string;
+  goals: Goal[];
+  milestones: EarnedMilestone[];
+}
+
+export interface MemoryEvidence {
+  source: string;
+  source_label: string;
+  observed_at: string | null;
+  evidence: Record<string, unknown>;
+}
+
+export interface MemoryFact {
+  id: string;
+  category: string;
+  category_label: string;
+  fact: string;
+  source: string;
+  source_label: string;
+  confidence: number;
+  created_at: string | null;
+  last_reinforced_at: string | null;
+  reinforcement_count: number;
+  verification_state: MemoryVerification;
+  deletion_state: 'active' | 'deleted';
+  deleted_at: string | null;
+  /** Whether this fact is currently shaping what the app suggests. */
+  influences_recommendations: boolean;
+  linked_evidence: MemoryEvidence[];
+  why_we_remember: string;
+  category_enabled: boolean;
+}
+
+export interface MemoryCategorySummary {
+  key: string;
+  label: string;
+  enabled: boolean;
+  count: number;
+}
+
+export interface MemoryOverview {
+  facts: MemoryFact[];
+  categories: MemoryCategorySummary[];
+  influencing_count: number;
+  note: string;
+}
+
+export interface ComparisonCheck {
+  key: string;
+  passed: boolean;
+  blocking: boolean;
+  detail: string;
+}
+
+export interface ComparisonResponse {
+  body_area: string;
+  comparable: boolean;
+  comparison: {
+    comparable: boolean;
+    checks: ComparisonCheck[];
+    blocking_reasons: string[];
+    days_apart: number | null;
+    guidance: string[];
+    disclaimer: string;
+    baseline: { photo_id: string; media_id: string; taken_on: string };
+    current: { photo_id: string; media_id: string; taken_on: string };
+  } | null;
+  photos_held: number;
+  rejected?: { photo_id: string; taken_on: string; reasons: string[] }[];
+  message: string;
+  guidance?: string[];
+}
+
+export const getProgress = async (period: 'week' | 'month' = 'week'): Promise<ProgressOverview> =>
+  (await api.get<ProgressOverview>(`${V2}/progress`, { params: { period } })).data;
+
+export const getMetricDefinitions = async (): Promise<{
+  metrics: Metric[]; registry_version: string; no_overall_score: boolean; note: string;
+}> => (await api.get(`${V2}/progress/metrics`)).data;
+
+export const getMetric = async (key: string): Promise<{
+  definition: Metric;
+  current: Metric;
+  history: { period: string; period_start: string; value: number | null; status: MetricStatus; formula_version: string }[];
+  how_it_is_worked_out: string;
+  what_it_is_not: string;
+}> => (await api.get(`${V2}/progress/metrics/${encodeURIComponent(key)}`)).data;
+
+export const recordSelfReport = async (
+  rating: 1 | 2 | 3 | 4 | 5, note?: string
+): Promise<{ rating: number; message: string }> =>
+  (await api.post(`${V2}/progress/self-report`, { rating, note })).data;
+
+export const addProgressPhoto = async (body: {
+  media_id: string;
+  body_area: 'face' | 'hair' | 'scalp' | 'skin' | 'full_body' | 'hands';
+  lighting: string; angle: string; framing: string;
+  taken_on?: string; time_of_day?: string; note?: string;
+}): Promise<{ id: string; note: string }> =>
+  (await api.post(`${V2}/progress/photos`, body)).data;
+
+export const getComparisons = async (body_area = 'face'): Promise<ComparisonResponse> =>
+  (await api.get<ComparisonResponse>(`${V2}/progress/comparisons`, { params: { body_area } })).data;
+
+export const getGoals = async (): Promise<{ goals: Goal[] }> =>
+  (await api.get(`${V2}/goals`)).data;
+
+export const createGoal = async (body: {
+  kind: GoalKind; title: string; metric_key?: string;
+  target_value?: number; starts_on?: string; target_date?: string; note?: string;
+}): Promise<Goal> => (await api.post<Goal>(`${V2}/goals`, body)).data;
+
+export const patchGoal = async (id: string, body: {
+  title?: string; target_value?: number; target_date?: string;
+  status?: 'active' | 'paused' | 'achieved' | 'abandoned';
+  progress_value?: number; progress_note?: string;
+}): Promise<Goal> => (await api.patch<Goal>(`${V2}/goals/${id}`, body)).data;
+
+export const getMemory = async (category?: string): Promise<MemoryOverview> =>
+  (await api.get<MemoryOverview>(`${V2}/memory`, { params: category ? { category } : undefined })).data;
+
+export const patchMemory = async (id: string, body: {
+  fact?: string; verification_state?: MemoryVerification;
+}): Promise<MemoryFact> => (await api.patch<MemoryFact>(`${V2}/memory/${id}`, body)).data;
+
+export const deleteMemory = async (id: string): Promise<{ id: string; message: string }> =>
+  (await api.delete(`${V2}/memory/${id}`)).data;
+
+export const exportMemory = async (): Promise<{
+  exported_at: string; facts: MemoryFact[]; total: number;
+  deleted_count: number; disabled_categories: string[]; note: string;
+}> => (await api.get(`${V2}/memory/export`)).data;
+
+export const setMemoryCategory = async (
+  category: string, enabled: boolean
+): Promise<{ category: string; label: string; enabled: boolean; message: string }> =>
+  (await api.patch(`${V2}/memory/categories/${category}`, { category, enabled })).data;
+
+export const sendMemoryFeedback = async (body: {
+  subject_type: 'look' | 'product' | 'routine_step' | 'purchase' | 'colour' | 'occasion';
+  signal: 'liked' | 'rejected' | 'wore_it' | 'not_for_me' | 'returned' | 'complimented';
+  subject_id?: string; subject_label?: string; reason?: string;
+}): Promise<{ learned: MemoryFact | null; message: string }> =>
+  (await api.post(`${V2}/memory/feedback`, body)).data;
+
+export const getMilestones = async (): Promise<{
+  earned: EarnedMilestone[];
+  streaks: { behaviour: string; current_length: number; longest_length: number; reset_count: number; note: string }[];
+  all_rules: { rule_id: string; label: string; description: string; behaviour: string; threshold: number }[];
+  rewarded_behaviours: string[];
+  never_rewarded: string[];
+  note: string;
+}> => (await api.get(`${V2}/milestones`)).data;
+
+export const acknowledgeMilestone = async (id: string): Promise<{ acknowledged: boolean }> =>
+  (await api.post(`${V2}/milestones/${id}/acknowledge`, {})).data;

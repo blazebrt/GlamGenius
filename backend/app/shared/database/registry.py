@@ -29,6 +29,7 @@ from app.domains.profile.models import (
     UserConstraint,
 )
 from app.domains.planning import models as planning_models
+from app.domains.progress import models as progress_models
 from app.domains.recommendation import models as recommendation_models
 from app.domains.routines import models as routines_models
 from app.shared.database.base import Base
@@ -61,4 +62,5 @@ __all__ = [
     "recommendation_models",
     "planning_models",
     "routines_models",
+    "progress_models",
 ]
