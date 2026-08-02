@@ -33,7 +33,7 @@ export default function AuthWelcome() {
 
   const goHome = () => {
     try {
-      router.replace('/(tabs)/home');
+      router.replace('/(tabs)/today');
     } catch {
       router.replace('/');
     }

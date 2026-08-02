@@ -849,3 +849,234 @@ export const recordPurchaseDecision = async (
   id: string, decision: 'bought' | 'waiting' | 'skipped', note?: string
 ): Promise<PurchaseEvaluation> =>
   (await api.post<PurchaseEvaluation>(`${V2}/shopping/evaluations/${id}/decision`, { decision, note })).data;
+
+// --- Phase 5: the Today engine and the weekly planner ----------------------
+
+export const PLAN_MODULES = [
+  'outfit', 'skincare', 'hair', 'perfume', 'hydration', 'nutrition', 'shopping',
+] as const;
+export type PlanModule = typeof PLAN_MODULES[number];
+
+/** `cache` is the good case: nothing material changed, so nothing was rebuilt. */
+export type PlanSource = 'cache' | 'fresh';
+
+export type LaundryState = 'clean' | 'worn' | 'in_wash' | 'unavailable';
+
+export interface PlanAction {
+  id: string;
+  module: PlanModule;
+  action_type: string;
+  title: string;
+  body: string;
+  priority: number;
+  /** Why this appeared today. Every optional module carries one. */
+  relevance: string;
+  inventory_item_id: string | null;
+  completed: boolean;
+  completed_at: string | null;
+}
+
+export interface WeatherSnapshot {
+  id: string;
+  for_date: string;
+  condition: WeatherCondition;
+  temp_min_c: number | null;
+  temp_max_c: number | null;
+  precipitation_chance: number | null;
+  humidity: number | null;
+  location: string | null;
+  provider: string;
+  source: string;
+}
+
+export interface Clarification {
+  key: string;
+  question: string;
+  why: string;
+  options: { value: string; label: string }[];
+}
+
+export interface DailyPlan {
+  plan_date: string;
+  timezone: string;
+  weekday: string;
+  status: 'ready' | 'needs_inventory';
+  headline: string;
+  confidence: number;
+  generated_from: PlanSource;
+  engine_version: string;
+  used_llm: boolean;
+  locked: boolean;
+  version: number;
+  outfit: Look | null;
+  weather: WeatherSnapshot | null;
+  weather_note: string;
+  event_note: string;
+  /** The short list Today opens with. */
+  primary: PlanAction[];
+  /** Shown underneath, and only when they have something to say. */
+  optional_modules: PlanAction[];
+  needs_clarification: boolean;
+  clarification: Clarification | null;
+  missing_information: string[];
+  worn: boolean;
+  computed_at: string | null;
+  disclaimer: string;
+  recalculations?: { trigger: string; detail: string; recomputed: boolean; created_at: string | null }[];
+}
+
+export interface PlannerDay {
+  plan_date: string;
+  weekday: string;
+  locked: boolean;
+  note: string | null;
+  headline: string | null;
+  status: string;
+  confidence: number | null;
+  weather: WeatherSnapshot | null;
+  owned_items: LookPiece[];
+  optional_addition_count?: number;
+  needs_clarification?: boolean;
+  worn?: boolean;
+}
+
+export interface WeeklyPlan {
+  week_start: string;
+  week_end?: string;
+  timezone?: string;
+  status: string;
+  version?: number;
+  engine_version?: string;
+  repetition_window_days?: number;
+  days: PlannerDay[];
+  repetition?: {
+    repeated_items: { display_name: string; dates: string[]; times: number }[];
+    note: string;
+  };
+  laundry?: { item_id: string; state: LaundryState; available_from: string | null }[];
+  generated_at?: string | null;
+  message?: string;
+}
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  starts_at: string;
+  local_time: string;
+  local_date: string;
+  ends_at: string | null;
+  all_day: boolean;
+  location: string | null;
+  occasion_key: OccasionKey | null;
+  dress_code_hint: string | null;
+  inference_confidence: number;
+  user_confirmed: boolean;
+  provider: string;
+  source: string;
+  status: string;
+}
+
+export interface CalendarStatus {
+  connected: boolean;
+  integrations: {
+    id: string; provider: string; status: string; label: string | null;
+    last_synced_at: string | null; revoked_at: string | null; last_error: string | null;
+    /** Always false. No access token is ever held in the app database. */
+    stores_credentials: false;
+  }[];
+  providers: { key: string; label: string; available: boolean }[];
+  note: string;
+  events_added?: number;
+  duplicates_ignored?: number;
+  revoked?: number;
+  message?: string;
+}
+
+export interface NotificationPreferences {
+  enabled: boolean;
+  daily_cap: number;
+  quiet_hours: { start: number; end: number };
+  preferred_hour: number;
+  modules: Record<PlanModule, boolean>;
+  timezone: string;
+  note: string;
+}
+
+export const getToday = async (plan_date?: string): Promise<DailyPlan> =>
+  (await api.get<DailyPlan>(`${V2}/today`, { params: plan_date ? { plan_date } : undefined })).data;
+
+export const regenerateToday = async (
+  reason?: 'weather_changed' | 'plans_changed' | 'not_my_style' | 'item_unavailable' | 'manual',
+  plan_date?: string
+): Promise<DailyPlan> =>
+  (await api.post<DailyPlan>(`${V2}/today/regenerate`, { reason, plan_date })).data;
+
+export const completePlanAction = async (id: string, completed = true): Promise<DailyPlan> =>
+  (await api.post<DailyPlan>(`${V2}/today/actions/${id}/complete`, { completed })).data;
+
+export const swapTodayItem = async (
+  slot: LookSlot, to_item_id: string | null, from_item_id?: string, plan_date?: string
+): Promise<DailyPlan> =>
+  (await api.post<DailyPlan>(`${V2}/today/outfit/swap`, { slot, to_item_id, from_item_id, plan_date })).data;
+
+export const sendTodayFeedback = async (
+  rating: 'wore_it' | 'loved' | 'not_for_me' | 'changed_it', reason?: string, plan_date?: string
+): Promise<DailyPlan> =>
+  (await api.post<DailyPlan>(`${V2}/today/feedback`, { rating, reason, plan_date })).data;
+
+export const answerClarification = async (
+  question_key: string, answer: string, plan_date?: string
+): Promise<DailyPlan> =>
+  (await api.post<DailyPlan>(`${V2}/today/clarify`, { question_key, answer, plan_date })).data;
+
+export const reportItemUnavailable = async (
+  item_id: string, state: LaundryState = 'in_wash', available_from?: string
+): Promise<DailyPlan> =>
+  (await api.post<DailyPlan>(`${V2}/today/items/unavailable`, { item_id, state, available_from })).data;
+
+export const setTodayWeather = async (
+  for_date: string, condition: WeatherCondition, precipitation_chance?: number
+): Promise<{ weather: WeatherSnapshot; plan: DailyPlan }> =>
+  (await api.post(`${V2}/today/weather`, { for_date, condition, precipitation_chance })).data;
+
+export const addPlannerEvent = async (
+  title: string, starts_at: string, occasion_key?: OccasionKey
+): Promise<{ event: CalendarEvent; created: boolean; plan: DailyPlan }> =>
+  (await api.post(`${V2}/today/events`, { title, starts_at, occasion_key })).data;
+
+export const getWeek = async (week_start?: string): Promise<WeeklyPlan> =>
+  (await api.get<WeeklyPlan>(`${V2}/planner/week`, { params: week_start ? { week_start } : undefined })).data;
+
+export const generateWeek = async (
+  week_start?: string, repetition_window_days = 7
+): Promise<WeeklyPlan> =>
+  (await api.post<WeeklyPlan>(`${V2}/planner/week/generate`, { week_start, repetition_window_days })).data;
+
+export const patchPlannerDay = async (
+  plan_date: string, body: { swap_with_date?: string; regenerate?: boolean; note?: string }
+): Promise<WeeklyPlan> =>
+  (await api.patch<WeeklyPlan>(`${V2}/planner/day/${plan_date}`, body)).data;
+
+export const lockPlannerDay = async (plan_date: string, locked = true): Promise<WeeklyPlan> =>
+  (await api.post<WeeklyPlan>(`${V2}/planner/day/${plan_date}/lock`, { locked })).data;
+
+export const getCalendarStatus = async (): Promise<CalendarStatus> =>
+  (await api.get<CalendarStatus>(`${V2}/integrations/calendar/status`)).data;
+
+export const connectCalendar = async (
+  provider = 'manual', events: { title: string; starts_at: string }[] = [], label?: string
+): Promise<CalendarStatus> =>
+  (await api.post<CalendarStatus>(`${V2}/integrations/calendar/connect`, { provider, events, label })).data;
+
+export const disconnectCalendar = async (): Promise<CalendarStatus> =>
+  (await api.delete<CalendarStatus>(`${V2}/integrations/calendar`)).data;
+
+export const getNotificationPreferences = async (): Promise<{
+  preferences: NotificationPreferences;
+  recent: { id: string; title: string; status: string; suppressed_reason: string | null }[];
+}> => (await api.get(`${V2}/today/notifications`)).data;
+
+export const patchNotificationPreferences = async (
+  body: Partial<{ enabled: boolean; daily_cap: number; preferred_hour: number; modules: Record<string, boolean> }>
+): Promise<{ preferences: NotificationPreferences }> =>
+  (await api.patch(`${V2}/today/notifications`, body)).data;

@@ -32,7 +32,7 @@ export default function WelcomeScreen() {
       const storedUserId = await AsyncStorage.getItem('glamgenius_user_id');
       if (storedUserId) {
         setUserId(storedUserId);
-        setTimeout(() => router.replace('/(tabs)/home'), 900);
+        setTimeout(() => router.replace('/(tabs)/today'), 900);
       } else {
         setLoading(false);
       }

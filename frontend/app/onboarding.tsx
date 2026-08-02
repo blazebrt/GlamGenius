@@ -57,7 +57,7 @@ export default function OnboardingScreen() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const home = () => router.replace('/(tabs)/home');
+  const home = () => router.replace('/(tabs)/today');
   const save = async (step: string, data: Record<string, any> = {}, skipped = false) => {
     setSaving(true);
     try {

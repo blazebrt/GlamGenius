@@ -5,7 +5,10 @@ and keeps working exactly as before.
 """
 from fastapi import APIRouter
 
-from app.api.v2 import account, config, consent, inventory, jobs, me, media, onboarding, privacy, profile, shopping, style
+from app.api.v2 import (
+    account, config, consent, integrations, inventory, jobs, me, media, onboarding,
+    planner, privacy, profile, shopping, style, today,
+)
 
 router = APIRouter(prefix="/api/v2")
 
@@ -21,5 +24,8 @@ router.include_router(onboarding.router, tags=["v2-onboarding"])
 router.include_router(inventory.router, tags=["v2-inventory"])
 router.include_router(style.router, tags=["v2-style"])
 router.include_router(shopping.router, tags=["v2-shopping"])
+router.include_router(today.router, tags=["v2-today"])
+router.include_router(planner.router, tags=["v2-planner"])
+router.include_router(integrations.router, tags=["v2-integrations"])
 
 __all__ = ["router"]
