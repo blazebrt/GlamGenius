@@ -98,6 +98,29 @@ CONSENT_VERSION = _env_str("CONSENT_VERSION", "2026-08-01")
 # reads this from /api/v2/config and hides payment UI when it is false.
 SUBSCRIPTIONS_AVAILABLE = _env_bool("SUBSCRIPTIONS_AVAILABLE", False)
 
+# Prices, in whole rupees. Deliberately configuration rather than constants: a
+# price is a business decision and must never need a deploy. Nothing in
+# app/domains/billing/catalogue.py contains a literal amount.
+EVENT_PASS_PRICE_INR = _env_int("EVENT_PASS_PRICE_INR", 499)
+EVENT_PASS_VALID_DAYS = _env_int("EVENT_PASS_VALID_DAYS", 14)
+PLUS_MONTHLY_INR = _env_int("PLUS_MONTHLY_INR", 399)
+PLUS_YEARLY_INR = _env_int("PLUS_YEARLY_INR", 3499)
+
+# Which payment provider handles checkout. "manual" is an honest no-op used in
+# development and in tests; "razorpay" is the production path for India.
+# Neither can grant access on its own — only a verified webhook does that.
+BILLING_PROVIDER = _env_str("BILLING_PROVIDER", "manual")
+RAZORPAY_KEY_ID = _env_str("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = _env_str("RAZORPAY_KEY_SECRET", "")
+# Razorpay signs each webhook with this, separately from the API key secret.
+RAZORPAY_WEBHOOK_SECRET = _env_str("RAZORPAY_WEBHOOK_SECRET", "")
+
+# Days a subscription keeps working after a failed renewal, while the payment
+# is retried. Access continues; the app says plainly that payment failed.
+BILLING_GRACE_DAYS = _env_int("BILLING_GRACE_DAYS", 3)
+# How long a client may trust its cached entitlement snapshot when offline.
+ENTITLEMENT_CACHE_SECONDS = _env_int("ENTITLEMENT_CACHE_SECONDS", 900)
+
 # --- AI gateway --------------------------------------------------------------
 AI_TIMEOUT_SECONDS = _env_float("AI_TIMEOUT_SECONDS", 45.0)
 # Rough per-1K-token prices used only to estimate spend for the ai_runs ledger.
