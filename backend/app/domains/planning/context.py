@@ -1,0 +1,445 @@
+"""The context service: everything the planner is allowed to know about a day.
+
+One object, gathered once, hashed into a cache key. If the hash has not moved,
+nothing about the day can have changed in a way that would change the plan, so
+the stored plan is served straight back. That is what makes Today cheap.
+
+The hash covers only **material** inputs. The current time is not in it —
+otherwise every request would look like a change and the cache would never hit.
+An event's title is in it, because renaming "coffee" to "client dinner" should
+absolutely rebuild the plan.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import uuid
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, List, Optional, Sequence
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.domains.planning import clock
+from app.domains.planning.models import (
+    LAUNDRY_CLEAN, LAUNDRY_IN_WASH, LAUNDRY_UNAVAILABLE, CalendarEvent, LaundryStateEvent,
+    OutfitSchedule, WeatherSnapshot,
+)
+from app.domains.planning.providers import ProviderUnavailable, weather_provider
+from app.domains.planning.providers.base import CalendarEventReading, WeatherReading
+from app.domains.recommendation import context as style_context
+from app.domains.recommendation.context import OwnedItem
+from app.domains.recommendation.occasions import OCCASIONS, get_occasion
+
+# --- Inferring an occasion from an event title -------------------------------
+# Deliberately conservative. A wrong guess here silently changes what someone
+# wears to work, so a match must be a real word match, and a weak match is
+# reported as low confidence rather than acted on silently.
+EVENT_KEYWORDS: Dict[str, tuple[str, ...]] = {
+    "interview": ("interview", "hiring panel", "screening round"),
+    "wedding": ("wedding", "shaadi", "baraat", "reception", "sangeet", "mehendi", "nikah", "haldi"),
+    "festival": ("diwali", "holi", "eid", "pongal", "onam", "navratri", "puja", "pooja", "ganesh", "durga", "christmas", "festival"),
+    "business_meeting": ("client meeting", "board meeting", "investor", "client call", "stakeholder", "vendor meeting"),
+    "conference": ("conference", "summit", "seminar", "convention", "symposium", "meetup"),
+    "photoshoot": ("photoshoot", "photo shoot", "shoot", "headshot", "portrait session"),
+    "birthday": ("birthday", "bday", "cake cutting"),
+    "party": ("party", "night out", "celebration", "farewell", "housewarming"),
+    "date": ("date night", "dinner date", "anniversary"),
+    "gym": ("gym", "workout", "training session", "yoga", "pilates", "run club"),
+    "travel": ("flight", "train", "airport", "railway", "travel", "commute to"),
+    "vacation": ("vacation", "holiday trip", "resort", "beach"),
+    "college": ("lecture", "class", "seminar hall", "campus", "viva", "exam"),
+    "office": ("standup", "stand-up", "sprint", "1:1", "one on one", "review meeting", "office", "work"),
+}
+
+# How confident a keyword match makes us. Anything below the clarification
+# threshold gets asked about rather than assumed.
+STRONG_MATCH = 0.85
+WEAK_MATCH = 0.5
+CLARIFY_BELOW = 0.6
+
+
+def infer_occasion(title: str, *, is_weekend: bool = False) -> tuple[Optional[str], float]:
+    """Guess what kind of event this is, and say how sure we are."""
+    text = " ".join((title or "").lower().split())
+    if not text:
+        return None, 0.0
+    for occasion_key, keywords in EVENT_KEYWORDS.items():
+        for keyword in keywords:
+            # Word boundaries, not substrings. "networking" contains "work"
+            # and "shooting" contains "shoot"; matching those would silently
+            # change the formality of someone's day.
+            if re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", text):
+                # A multi-word phrase is a much stronger signal than one common
+                # word like "work" appearing somewhere in a title.
+                confidence = STRONG_MATCH if " " in keyword or len(keyword) > 7 else WEAK_MATCH
+                return occasion_key, confidence
+    return None, 0.0
+
+
+def default_occasion_for(plan_date: date, work_context: Optional[str]) -> str:
+    """What a day is when nothing on the calendar says otherwise."""
+    if clock.is_weekend(plan_date):
+        return "everyday"
+    if work_context and any(word in str(work_context).lower() for word in ("office", "corporate", "work from office", "hybrid")):
+        return "office"
+    if work_context and "student" in str(work_context).lower():
+        return "college"
+    return "everyday"
+
+
+# --- Value objects ----------------------------------------------------------
+
+
+@dataclass
+class DayEvent:
+    """A commitment, as the compiler sees it."""
+
+    id: Optional[uuid.UUID]
+    title: str
+    starts_at: datetime
+    ends_at: Optional[datetime]
+    all_day: bool
+    location: Optional[str]
+    occasion_key: Optional[str]
+    dress_code_hint: Optional[str]
+    confidence: float
+    user_confirmed: bool
+
+    def local_time(self, timezone_name: str) -> str:
+        return clock.local_now(timezone_name, moment=self.starts_at).strftime("%H:%M")
+
+
+@dataclass
+class DayContext:
+    """Everything known about one person on one local day."""
+
+    account_id: uuid.UUID
+    plan_date: date
+    timezone_name: str
+    now_local: datetime
+
+    weather: Optional[WeatherReading] = None
+    weather_snapshot_id: Optional[uuid.UUID] = None
+    weather_unavailable_reason: Optional[str] = None
+
+    events: List[DayEvent] = field(default_factory=list)
+    occasion_key: str = "everyday"
+    occasion_confidence: float = 1.0
+    dress_code: Optional[str] = None
+
+    owned: List[OwnedItem] = field(default_factory=list)
+    unavailable_item_ids: List[uuid.UUID] = field(default_factory=list)
+    draft_count: int = 0
+
+    recent_look_ids: List[uuid.UUID] = field(default_factory=list)
+    item_last_worn: Dict[uuid.UUID, date] = field(default_factory=dict)
+    repetition_window_days: int = 7
+
+    profile: Dict[str, Any] = field(default_factory=dict)
+    missing_information: List[str] = field(default_factory=list)
+
+    @property
+    def primary_event(self) -> Optional[DayEvent]:
+        """The commitment that should drive the outfit.
+
+        The most formal one, then the earliest — dressing for the 9am standup
+        when there is a 6pm client dinner is the wrong way round.
+        """
+        if not self.events:
+            return None
+        def rank(event: DayEvent) -> tuple[int, datetime]:
+            occasion = OCCASIONS.get(event.occasion_key or "")
+            return (-(occasion.formality if occasion else 0), event.starts_at)
+        return sorted(self.events, key=rank)[0]
+
+    @property
+    def season(self) -> str:
+        return clock.season_for(self.plan_date)
+
+    def available_owned(self) -> List[OwnedItem]:
+        blocked = set(self.unavailable_item_ids)
+        return [item for item in self.owned if item.id not in blocked]
+
+    @property
+    def recent_item_ids(self) -> List[uuid.UUID]:
+        return list(self.item_last_worn)
+
+    def days_since_worn(self, item_id: uuid.UUID) -> Optional[int]:
+        worn = self.item_last_worn.get(item_id)
+        return None if worn is None else (self.plan_date - worn).days
+
+    def worn_within(self, days: int) -> set:
+        """Items worn in the last ``days`` days — the set worth avoiding."""
+        return {
+            item_id for item_id in self.item_last_worn
+            if (self.days_since_worn(item_id) or 0) <= days
+        }
+
+
+# --- Gathering --------------------------------------------------------------
+
+
+async def resolve_timezone_for(session: AsyncSession, account_id: uuid.UUID) -> str:
+    attributes = await style_context.confirmed_attributes(session, account_id)
+    return clock.resolve_timezone(None, city=attributes.get("city"))
+
+
+async def unavailable_items(session: AsyncSession, account_id: uuid.UUID, plan_date: date) -> List[uuid.UUID]:
+    """Items that cannot be worn on this date.
+
+    The latest event per item wins. ``available_from`` lets a user say "it is in
+    the wash until Thursday" once, instead of remembering to clear it.
+    """
+    rows = (await session.execute(
+        select(LaundryStateEvent)
+        .where(LaundryStateEvent.account_id == account_id)
+        .order_by(LaundryStateEvent.item_id, LaundryStateEvent.created_at.desc())
+    )).scalars().all()
+    latest: Dict[uuid.UUID, LaundryStateEvent] = {}
+    for row in rows:
+        latest.setdefault(row.item_id, row)
+    blocked: List[uuid.UUID] = []
+    for item_id, row in latest.items():
+        if row.state not in (LAUNDRY_IN_WASH, LAUNDRY_UNAVAILABLE):
+            continue
+        if row.available_from and row.available_from <= plan_date:
+            continue
+        blocked.append(item_id)
+    return blocked
+
+
+async def recent_wear(
+    session: AsyncSession, account_id: uuid.UUID, plan_date: date, window_days: int
+) -> tuple[List[uuid.UUID], Dict[uuid.UUID, date]]:
+    """Looks worn in the window, and when each item was last worn.
+
+    The *date* matters, not just the fact. Treating everything worn in the last
+    seven days as equally "recent" means that by Thursday the whole wardrobe is
+    recent and the signal is worthless. Wearing the same trousers again after
+    five days is completely normal; wearing them again tomorrow is the thing
+    worth avoiding.
+    """
+    if window_days <= 0:
+        return [], {}
+    since = plan_date - timedelta(days=window_days)
+    rows = (await session.execute(
+        select(OutfitSchedule).where(
+            OutfitSchedule.account_id == account_id,
+            OutfitSchedule.plan_date >= since,
+            OutfitSchedule.plan_date < plan_date,
+            OutfitSchedule.status.in_(["planned", "worn"]),
+        ).order_by(OutfitSchedule.plan_date)
+    )).scalars().all()
+    looks: List[uuid.UUID] = []
+    last_worn: Dict[uuid.UUID, date] = {}
+    for row in rows:
+        if row.look_id and row.look_id not in looks:
+            looks.append(row.look_id)
+        for raw in row.item_ids or []:
+            try:
+                value = uuid.UUID(str(raw))
+            except (ValueError, AttributeError, TypeError):
+                continue
+            # Rows are ordered by date, so the last write is the most recent.
+            last_worn[value] = row.plan_date
+    return looks, last_worn
+
+
+async def day_events(
+    session: AsyncSession, account_id: uuid.UUID, plan_date: date, timezone_name: str
+) -> List[DayEvent]:
+    start, end = clock.day_bounds(plan_date, timezone_name)
+    rows = (await session.execute(
+        select(CalendarEvent).where(
+            CalendarEvent.account_id == account_id,
+            CalendarEvent.status == "active",
+            CalendarEvent.starts_at >= start,
+            CalendarEvent.starts_at < end,
+        ).order_by(CalendarEvent.starts_at)
+    )).scalars().all()
+    return [
+        DayEvent(
+            id=row.id, title=row.title, starts_at=row.starts_at, ends_at=row.ends_at,
+            all_day=row.all_day, location=row.location, occasion_key=row.occasion_key,
+            dress_code_hint=row.dress_code_hint, confidence=row.inference_confidence,
+            user_confirmed=row.user_confirmed,
+        )
+        for row in rows
+    ]
+
+
+async def latest_weather(
+    session: AsyncSession, account_id: uuid.UUID, plan_date: date
+) -> Optional[WeatherSnapshot]:
+    return (await session.execute(
+        select(WeatherSnapshot)
+        .where(WeatherSnapshot.account_id == account_id, WeatherSnapshot.for_date == plan_date)
+        .order_by(WeatherSnapshot.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+
+async def gather(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    plan_date: Optional[date] = None,
+    timezone_name: Optional[str] = None,
+    repetition_window_days: int = 7,
+    moment: Optional[datetime] = None,
+) -> DayContext:
+    """Build the full picture of one day."""
+    attributes = await style_context.confirmed_attributes(session, account_id)
+    resolved_tz = timezone_name or clock.resolve_timezone(None, city=attributes.get("city"))
+    target = plan_date or clock.local_today(resolved_tz, moment=moment)
+
+    owned, drafts = await style_context.confirmed_inventory(session, account_id)
+    blocked = await unavailable_items(session, account_id, target)
+    events = await day_events(session, account_id, target, resolved_tz)
+    looks, last_worn = await recent_wear(session, account_id, target, repetition_window_days)
+
+    context = DayContext(
+        account_id=account_id, plan_date=target, timezone_name=resolved_tz,
+        now_local=clock.local_now(resolved_tz, moment=moment),
+        owned=owned, draft_count=drafts, unavailable_item_ids=blocked,
+        events=events, recent_look_ids=looks, item_last_worn=last_worn,
+        repetition_window_days=repetition_window_days, profile=attributes,
+    )
+
+    # Weather, through the provider abstraction rather than a direct read.
+    provider = weather_provider("manual", session, account_id)
+    try:
+        readings = await provider.forecast(location=attributes.get("city"), dates=[target], timezone_name=resolved_tz)
+        context.weather = readings[0] if readings else None
+    except ProviderUnavailable as exc:
+        context.weather_unavailable_reason = exc.message
+    if context.weather is not None:
+        snapshot = await latest_weather(session, account_id, target)
+        context.weather_snapshot_id = snapshot.id if snapshot else None
+
+    _resolve_occasion(context)
+    _note_gaps(context)
+    return context
+
+
+def _resolve_occasion(context: DayContext) -> None:
+    """Decide what kind of day this is, and how sure we are."""
+    event = context.primary_event
+    if event is None:
+        context.occasion_key = default_occasion_for(context.plan_date, context.profile.get("work_context"))
+        # A default is a real decision, but a weak one — it is a guess from the
+        # day of the week, not from anything the user told us about today.
+        context.occasion_confidence = 0.65 if context.profile.get("work_context") else 0.5
+        return
+
+    if event.occasion_key:
+        context.occasion_key = event.occasion_key
+        context.occasion_confidence = 1.0 if event.user_confirmed else max(event.confidence, WEAK_MATCH)
+    else:
+        guess, confidence = infer_occasion(event.title, is_weekend=clock.is_weekend(context.plan_date))
+        context.occasion_key = guess or default_occasion_for(context.plan_date, context.profile.get("work_context"))
+        context.occasion_confidence = confidence if guess else 0.5
+    context.dress_code = event.dress_code_hint
+
+
+def _note_gaps(context: DayContext) -> None:
+    gaps: List[str] = []
+    if context.weather is None:
+        gaps.append(
+            context.weather_unavailable_reason
+            or "No weather recorded for today, so nothing was ruled in or out on that basis."
+        )
+    if not context.events:
+        gaps.append("Nothing on your calendar for today, so this is planned as a normal day.")
+    if context.draft_count:
+        gaps.append(f"{context.draft_count} inventory draft{'s are' if context.draft_count > 1 else ' is'} waiting to be confirmed and was not used.")
+    if context.unavailable_item_ids:
+        gaps.append(f"{len(context.unavailable_item_ids)} item{'s are' if len(context.unavailable_item_ids) > 1 else ' is'} marked unavailable and was skipped.")
+    context.missing_information = gaps
+
+
+# --- The cache key ----------------------------------------------------------
+
+
+def cache_key(context: DayContext) -> str:
+    """A hash of every input that could change the plan.
+
+    Sorted and explicit rather than hashing the object: two contexts that mean
+    the same thing must produce the same key regardless of row ordering, or the
+    cache never hits and Today is slow for everyone.
+    """
+    payload = {
+        "version": "phase5-v2",
+        "date": context.plan_date.isoformat(),
+        "timezone": context.timezone_name,
+        # The compiler's routine modules branch on the time of day — skincare is
+        # a morning action. Without this, a plan first built in the evening stays
+        # a cache hit all the next morning and never gains its morning routine.
+        # Four buckets a day, not a clock reading, so the cache still holds.
+        "part_of_day": clock.part_of_day(context.now_local),
+        "occasion": context.occasion_key,
+        "dress_code": context.dress_code,
+        "weather": None if context.weather is None else {
+            "condition": context.weather.condition,
+            "min": context.weather.temp_min_c,
+            "max": context.weather.temp_max_c,
+            "rain": context.weather.precipitation_chance,
+        },
+        "events": sorted(
+            f"{event.starts_at.isoformat()}|{event.title}|{event.occasion_key or ''}|{event.dress_code_hint or ''}"
+            for event in context.events
+        ),
+        # Item *content*, not just identity. The compiler scores on colour,
+        # fabric, formality and condition, so editing a garment has to
+        # invalidate the day — an id list alone would serve the old outfit and
+        # the old reasoning until something unrelated changed.
+        "available_items": sorted(
+            "|".join([
+                str(item.id), item.display_name, item.category, item.condition,
+                json.dumps(item.details, sort_keys=True, default=str),
+            ])
+            for item in context.available_owned()
+        ),
+        "unavailable_items": sorted(str(value) for value in context.unavailable_item_ids),
+        # Drafts drive a "confirm these" action, so their count is material too.
+        "draft_count": context.draft_count,
+        "recent_looks": sorted(str(value) for value in context.recent_look_ids),
+        "recent_items": sorted(str(value) for value in context.recent_item_ids),
+        "repetition_window": context.repetition_window_days,
+        "profile": {key: context.profile.get(key) for key in sorted(context.profile)},
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def changed_keys(previous: Dict[str, Any], current: Dict[str, Any]) -> List[str]:
+    return sorted({key for key in set(previous) | set(current) if previous.get(key) != current.get(key)})
+
+
+def input_rows(context: DayContext) -> List[Dict[str, Any]]:
+    """The audit trail written to ``daily_plan_inputs``."""
+    rows: List[Dict[str, Any]] = [
+        {"input_type": "date", "input_key": "plan_date", "value": context.plan_date.isoformat(), "source": "derived"},
+        {"input_type": "date", "input_key": "timezone", "value": context.timezone_name, "source": "profile_confirmed" if context.profile.get("city") else "default"},
+        {"input_type": "date", "input_key": "season", "value": context.season, "source": "derived"},
+        {"input_type": "occasion", "input_key": "occasion_key", "value": context.occasion_key, "source": "calendar" if context.events else "derived"},
+        {"input_type": "occasion", "input_key": "occasion_confidence", "value": context.occasion_confidence, "source": "derived"},
+        {"input_type": "weather", "input_key": "condition", "value": context.weather.condition if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
+        {"input_type": "calendar", "input_key": "event_count", "value": len(context.events), "source": "calendar"},
+        {"input_type": "inventory", "input_key": "available_item_count", "value": len(context.available_owned()), "source": "inventory"},
+        {"input_type": "inventory", "input_key": "unavailable_item_count", "value": len(context.unavailable_item_ids), "source": "laundry"},
+        {"input_type": "history", "input_key": "recent_look_count", "value": len(context.recent_look_ids), "source": "outfit_schedule"},
+        {"input_type": "history", "input_key": "repetition_window_days", "value": context.repetition_window_days, "source": "preference"},
+    ]
+    for key, value in sorted(context.profile.items()):
+        rows.append({"input_type": "profile", "input_key": key, "value": value, "source": "profile_confirmed"})
+    for event in context.events:
+        rows.append({
+            "input_type": "calendar_event", "input_key": event.title[:64],
+            "value": {"starts_at": event.starts_at.isoformat(), "occasion_key": event.occasion_key, "confidence": event.confidence},
+            "source": "user_declared" if event.user_confirmed else "inferred",
+        })
+    return rows

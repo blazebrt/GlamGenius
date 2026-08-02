@@ -361,9 +361,9 @@ export default function ScanScreen() {
         onClose={() => {
           try {
             if (router.canGoBack()) router.back();
-            else router.replace('/(tabs)/home');
+            else router.replace('/(tabs)/today');
           } catch {
-            router.replace('/(tabs)/home');
+            router.replace('/(tabs)/today');
           }
         }}
         onPlan={() => router.push('/get-advice')}
@@ -382,7 +382,7 @@ export default function ScanScreen() {
               if (router.canGoBack()) router.back();
               else router.replace('/(tabs)/scan-tab');
             } catch {
-              router.replace('/(tabs)/home');
+              router.replace('/(tabs)/today');
             }
           }}
           style={styles.iconBtn}

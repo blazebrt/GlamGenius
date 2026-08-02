@@ -20,6 +20,10 @@ Currently **invite-only**, in a private beta. Nothing is for sale.
   items you have confirmed you own, across 16 occasions
 - **Should I buy this?** — Buy, Wait or Skip from a published Appearance ROI formula,
   with the owned alternatives you already have shown alongside
+- **Today** — one short answer to "what do I wear today", built from what you own and
+  served from cache, with no AI call per user per morning
+- **Weekly planner** — Monday to Sunday, with lock, move, redo, laundry state and a
+  repetition indicator
 
 ### What happens when a check fails
 
@@ -132,7 +136,7 @@ autogenerate will not see it and the table will silently never be created.
 V2 modules are off unless switched on. Set `V2_FEATURES` in `.env` for the boot default:
 
 ```
-V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions
+V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions,v2_today,v2_planner
 ```
 
 The `feature_flags` table overrides that at runtime with no redeploy. A route behind a
@@ -219,6 +223,63 @@ comes from the token, never from the URL or request body.
 | POST | /api/v2/shopping/evaluate | 🔒 | Should I buy this: Buy, Wait or Skip |
 | GET | /api/v2/shopping/evaluations/{id} | 🔒 | One evaluation with the full calculation |
 | POST | /api/v2/shopping/evaluations/{id}/decision | 🔒 | Record what you actually did |
+| GET | /api/v2/today | 🔒 | Today's plan, served from cache unless something changed |
+| POST | /api/v2/today/regenerate | 🔒 | Rebuild today on purpose |
+| POST | /api/v2/today/actions/{id}/complete | 🔒 | Tick something off |
+| POST | /api/v2/today/outfit/swap | 🔒 | Change one piece without rebuilding the day |
+| POST | /api/v2/today/feedback | 🔒 | What you wore, and what you thought |
+| POST | /api/v2/today/clarify | 🔒 | Answer the one question the plan asked |
+| POST | /api/v2/today/items/unavailable | 🔒 | "I can't wear that today" |
+| POST | /api/v2/today/weather | 🔒 | Record the weather yourself |
+| POST | /api/v2/today/events | 🔒 | Add a commitment by hand |
+| GET/PATCH | /api/v2/today/notifications | 🔒 | Notification preferences and history |
+| GET | /api/v2/planner/week | 🔒 | The Monday-to-Sunday week |
+| POST | /api/v2/planner/week/generate | 🔒 | Build or rebuild the week |
+| PATCH | /api/v2/planner/day/{date} | 🔒 | Move, regenerate or annotate one day |
+| POST | /api/v2/planner/day/{date}/lock | 🔒 | Lock a day so a rebuild leaves it alone |
+| GET | /api/v2/integrations/calendar/status | 🔒 | What is connected, and what it holds |
+| POST | /api/v2/integrations/calendar/connect | 🔒 | Connect a calendar source |
+| DELETE | /api/v2/integrations/calendar | 🔒 | Disconnect, and stop using its events |
+| GET | /api/v2/integrations/providers | 🔒 | Which sources exist and which are usable |
+
+## Today and the weekly planner
+
+Today answers one question — *what should I wear or do to look prepared today?* — and it is
+deliberately a short list, not a dashboard. Optional modules (skincare, hair, perfume,
+hydration, nutrition, shopping) appear only when they have something relevant to say, and
+each one carries the reason it showed up.
+
+**It does not run an AI for every user every morning.** The outfit comes from the same
+deterministic engine as Style Me. Every material input — the date, the weather, your calendar,
+what is available, what you wore recently — is hashed into a cache key. If the hash has not
+moved, the stored plan is returned untouched. When it does move, one row is written to
+`plan_recalculation_events` saying which input changed, so a plan that changed under you can
+always be explained.
+
+**Dates are yours, not the server's.** At 20:00 UTC it is already tomorrow in India, so every
+date is resolved in your timezone (`Asia/Kolkata` by default, or from your city).
+
+The planner runs Monday to Sunday and builds days in order, so each day knows what the days
+before it are already using. Locked days are never touched by a rebuild. Repetition is
+*shown*, not forbidden — wearing the same trousers twice in a week is normal.
+
+### Calendar and weather
+
+Both go through a provider abstraction, and the source that ships working is **you**: add the
+events and the weather that matter and nothing leaves the app. Other providers are declared so
+the API can report them honestly as "known, not connected" rather than pretending.
+
+**No access token is ever stored in the app database.** `external_integrations.credential_ref`
+is an opaque handle only, and `GET /api/v2/integrations/calendar/status` says so in its
+response. Disconnecting actually disconnects: events that came from that connection stop
+feeding your plans, and anything you typed yourself is left alone.
+
+### Notifications
+
+At most **one** proactive appearance notification a day by default, with quiet hours in your
+local time. Every notification is deduplicated on a content hash, so the same thing is never
+sent twice. Suppressed notifications are recorded with the reason, so "why didn't I hear about
+that" is answerable.
 
 ## Style Me and Should I buy this?
 

@@ -28,6 +28,7 @@ from app.domains.profile.models import (
     StylePreference,
     UserConstraint,
 )
+from app.domains.planning import models as planning_models
 from app.domains.recommendation import models as recommendation_models
 from app.shared.database.base import Base
 from app.shared.events.models import OutboxEvent
@@ -57,4 +58,5 @@ __all__ = [
     "ProfileChangeEvent",
     "inventory_models",
     "recommendation_models",
+    "planning_models",
 ]
