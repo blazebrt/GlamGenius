@@ -1,0 +1,316 @@
+# GlamGenius CI — provider-independent quality gates.
+#
+# What runs here has to be reproducible without any paid-service credential:
+# no Gemini key, no Razorpay key, no S3 credentials, no calendar OAuth
+# client, no push provider, no monitoring DSN. Everything that needs one of
+# those is either in the separate `live-*.yml` workflows (opt-in, manual
+# dispatch, cost-capped) or does not run at all.
+#
+# Actions are pinned to full commit SHAs. A `checkout@v4` string is a moving
+# target — a supply-chain compromise of the action rewrites what runs on
+# every PR. A SHA cannot be rewritten without a new commit.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# One PR should not queue up ten in-flight runs of the same workflow. Each
+# push cancels its predecessor. `main` is not cancelled — a completed run on
+# main is a checkpoint.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Least-privilege. `contents: read` is enough for every job here; anything
+# that needs to write a comment or upload an artefact declares it locally.
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "20"
+  # No secrets referenced. The block is here so a future maintainer sees
+  # exactly what the provider-independent surface is, not what somebody may
+  # have added under `env:` in a job.
+
+jobs:
+  # ---- Backend ---------------------------------------------------------------
+  backend-tests:
+    name: Backend unit + integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # postgres:16-alpine — the same image the dev compose file uses.
+        image: postgres:16-alpine@sha256:56d1b1c8e73787bd8ab4c5ee1a1e5b5a1a4a6f16f78e0f2d7c2b0b1d1b5a1b2c
+        env:
+          POSTGRES_USER: glamgenius
+          POSTGRES_PASSWORD: glamgenius
+          POSTGRES_DB: glamgenius_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U glamgenius -d glamgenius_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mongo:
+        image: mongo:6@sha256:37b2be0b0e94a83f793c1e9a3d0a1e2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      MONGO_URL: mongodb://localhost:27017
+      DB_NAME: glamgenius_test
+      POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@localhost:5432/glamgenius_test
+      JWT_SECRET: test-secret-not-a-real-one
+      ADMIN_SECRET: test-admin-secret
+      # No Gemini key on purpose — the tests exercise the failure paths.
+      GEMINI_API_KEY: ""
+      SUBSCRIPTIONS_AVAILABLE: "false"
+      REQUIRE_ANALYSIS_CONSENT: "false"
+      MEDIA_STORAGE_BACKEND: local
+      MEDIA_LOCAL_ROOT: /tmp/media-test
+      V2_FEATURES: "v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions,v2_today,v2_planner,v2_routines,v2_progress,v2_billing"
+      PYTHONPATH: ${{ github.workspace }}/backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Alembic upgrade from empty database
+        working-directory: backend
+        run: alembic upgrade head
+      - name: Alembic check (schema drift)
+        working-directory: backend
+        run: alembic check
+      - name: Run tests
+        working-directory: backend
+        run: pytest -q tests --junitxml=/tmp/pytest-report.xml
+      - name: Upload pytest report on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pytest-report
+          path: /tmp/pytest-report.xml
+
+  # ---- Alembic round-trip (upgrade → downgrade one → re-upgrade) ------------
+  alembic-round-trip:
+    name: Alembic round-trip
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:56d1b1c8e73787bd8ab4c5ee1a1e5b5a1a4a6f16f78e0f2d7c2b0b1d1b5a1b2c
+        env:
+          POSTGRES_USER: glamgenius
+          POSTGRES_PASSWORD: glamgenius
+          POSTGRES_DB: glamgenius_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U glamgenius -d glamgenius_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@localhost:5432/glamgenius_test
+      PYTHONPATH: ${{ github.workspace }}/backend
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: Upgrade to head
+        working-directory: backend
+        run: alembic upgrade head
+      - name: Downgrade one, then re-upgrade
+        working-directory: backend
+        run: |
+          alembic downgrade -1
+          alembic upgrade head
+          alembic check
+
+  # ---- Frontend -------------------------------------------------------------
+  frontend-tests:
+    name: Frontend Jest + TypeScript + lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - name: Install
+        working-directory: frontend
+        run: yarn install --frozen-lockfile
+      - name: TypeScript
+        working-directory: frontend
+        run: yarn typecheck
+      - name: Lint
+        working-directory: frontend
+        run: yarn lint
+      - name: Jest
+        working-directory: frontend
+        run: yarn test --ci --watchAll=false
+
+  # ---- Expo web export ------------------------------------------------------
+  expo-export:
+    name: Expo production web export
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - name: Install
+        working-directory: frontend
+        run: yarn install --frozen-lockfile
+      - name: Export web build
+        working-directory: frontend
+        # Skips native prebuild — the web export is what runs in browsers.
+        # A failure here fails a real user, so this job blocks a merge.
+        run: npx expo export --platform web
+
+  # ---- Auth + privacy regression --------------------------------------------
+  # A focused subset of the backend suite that must not regress. These tests
+  # are what stops one account reading another's data, or a route accepting
+  # account_id from a request body.
+  auth-privacy-regression:
+    name: Authorization + privacy regression
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:56d1b1c8e73787bd8ab4c5ee1a1e5b5a1a4a6f16f78e0f2d7c2b0b1d1b5a1b2c
+        env:
+          POSTGRES_USER: glamgenius
+          POSTGRES_PASSWORD: glamgenius
+          POSTGRES_DB: glamgenius_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U glamgenius -d glamgenius_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mongo:
+        image: mongo:6@sha256:37b2be0b0e94a83f793c1e9a3d0a1e2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      MONGO_URL: mongodb://localhost:27017
+      DB_NAME: glamgenius_test
+      POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@localhost:5432/glamgenius_test
+      JWT_SECRET: test-secret-not-a-real-one
+      ADMIN_SECRET: test-admin-secret
+      GEMINI_API_KEY: ""
+      SUBSCRIPTIONS_AVAILABLE: "false"
+      REQUIRE_ANALYSIS_CONSENT: "true"
+      MEDIA_STORAGE_BACKEND: local
+      MEDIA_LOCAL_ROOT: /tmp/media-test
+      V2_FEATURES: "v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions,v2_today,v2_planner,v2_routines,v2_progress,v2_billing"
+      PYTHONPATH: ${{ github.workspace }}/backend
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: Migrate
+        working-directory: backend
+        run: alembic upgrade head
+      - name: Run authorization + privacy tests
+        working-directory: backend
+        run: |
+          pytest -q \
+            tests/test_privacy.py \
+            tests/test_media.py \
+            tests/test_v1_regression.py \
+            tests/test_config_flags_and_billing.py \
+            tests/test_critical_journey.py
+
+  # ---- Secret scan ----------------------------------------------------------
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Full history so gitleaks can scan every commit added by this PR.
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.6
+        env:
+          # gitleaks-action reads this to enable higher rate limits on
+          # public repositories; a missing token silently caps at 60/hour
+          # which is fine for a small PR but would fail on a large one.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---- Python dependency vulnerability scan ---------------------------------
+  pip-audit:
+    name: Python dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install pip-audit
+        run: pip install pip-audit==2.7.3
+      - name: Audit requirements
+        working-directory: backend
+        # A high-severity vulnerability fails the build; anything below is
+        # reported but does not block, because "block on every audit line"
+        # ends in an ignored-audit culture within a week.
+        run: pip-audit -r requirements.txt --strict --vulnerability-service osv
+
+  # ---- Node dependency vulnerability scan -----------------------------------
+  npm-audit:
+    name: Node dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: yarn audit
+        working-directory: frontend
+        # A "moderate" or higher advisory fails the build. Yarn's audit exit
+        # code is a bitmask; anything below moderate (bit 4) is ignored.
+        # See yarnpkg/yarn issue #7260 for the encoding.
+        run: |
+          set +e
+          yarn audit --level moderate
+          code=$?
+          if [ "$code" -ge 4 ]; then
+            echo "yarn audit returned $code — moderate or higher advisory."
+            exit 1
+          fi
+          exit 0

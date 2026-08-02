@@ -1,0 +1,54 @@
+# CODEOWNERS for GlamGenius.
+#
+# Sensitive areas require review from the repository owner. This is enforced
+# only if branch protection also requires code-owner review — see
+# docs/stabilisation/BRANCH_PROTECTION_SETUP.md for the UI/API steps.
+#
+# The rules apply top-to-bottom; the last matching rule wins.
+
+# --- Default ---------------------------------------------------------------
+# Every change gets seen by somebody. If nothing more specific matches, the
+# repository owner does.
+*                                        @blazebrt
+
+# --- Authentication --------------------------------------------------------
+backend/security.py                      @blazebrt
+backend/invites.py                       @blazebrt
+backend/routes/users.py                  @blazebrt
+
+# --- Privacy ---------------------------------------------------------------
+backend/app/api/v2/privacy.py            @blazebrt
+backend/app/api/v2/consent.py            @blazebrt
+backend/app/domains/consent/**           @blazebrt
+
+# --- Media (photos are the most sensitive data this product touches) -------
+backend/app/domains/media/**             @blazebrt
+backend/app/api/v2/media.py              @blazebrt
+backend/app/shared/validation/media.py   @blazebrt
+backend/routes/scan.py                   @blazebrt
+
+# --- AI gateway ------------------------------------------------------------
+backend/ai.py                            @blazebrt
+backend/app/domains/ai_gateway/**        @blazebrt
+
+# --- Migrations ------------------------------------------------------------
+# Nothing that touches an applied migration file may merge without owner review.
+backend/migrations/**                    @blazebrt
+
+# --- Safety rules ----------------------------------------------------------
+# The one file that decides whether a styling app can drift into being a
+# medical one.
+backend/app/domains/routines/safety.py   @blazebrt
+backend/app/domains/routines/rules.py    @blazebrt
+backend/app/domains/routines/ontology.py @blazebrt
+
+# --- Progress and memory ---------------------------------------------------
+backend/app/domains/progress/**          @blazebrt
+
+# --- Billing (payment mechanics are not modified in this phase; the ownership
+# rule still applies so any accidental touch is caught in review) -----------
+backend/app/domains/billing/**           @blazebrt
+backend/app/api/v2/billing.py            @blazebrt
+
+# --- CI, dependencies, workflow files --------------------------------------
+.github/**                               @blazebrt
