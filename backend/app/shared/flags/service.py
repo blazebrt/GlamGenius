@@ -36,6 +36,7 @@ KNOWN_FLAGS: Dict[str, str] = {
     "v2_shopping_decisions": "Shopping decisions: should I buy this?",
     "v2_today": "The Today engine: one plan for the day",
     "v2_planner": "The Monday-to-Sunday weekly planner",
+    "v2_routines": "Safe appearance routines, shelf, perfume, supplement and food context",
 }
 
 
