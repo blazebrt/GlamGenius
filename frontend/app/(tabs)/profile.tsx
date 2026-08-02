@@ -156,6 +156,18 @@ export default function ProfileScreen() {
           <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
         </TouchableOpacity>
 
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open Progress" style={styles.appearanceCard} onPress={() => router.push('/progress')}>
+          <Ionicons name="trending-up-outline" size={28} color={COLORS.primary} />
+          <View style={{ flex: 1 }}><Text style={styles.appearanceTitle}>Progress</Text><Text style={styles.appearanceText}>Explainable numbers, your goals, and what you have reached — no overall rating</Text></View>
+          <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
+        </TouchableOpacity>
+
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open Memory" style={styles.appearanceCard} onPress={() => router.push('/memory')}>
+          <Ionicons name="bookmark-outline" size={28} color={COLORS.primary} />
+          <View style={{ flex: 1 }}><Text style={styles.appearanceTitle}>Memory</Text><Text style={styles.appearanceText}>What GlamGenius remembers, where it came from, and how to change or delete it</Text></View>
+          <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
+        </TouchableOpacity>
+
         <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open Improve" style={styles.appearanceCard} onPress={() => router.push('/improve')}>
           <Ionicons name="list-outline" size={28} color={COLORS.primary} />
           <View style={{ flex: 1 }}><Text style={styles.appearanceTitle}>Improve</Text><Text style={styles.appearanceText}>Your routines, how they are going, and what on your shelf needs attention</Text></View>

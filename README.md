@@ -136,7 +136,7 @@ autogenerate will not see it and the table will silently never be created.
 V2 modules are off unless switched on. Set `V2_FEATURES` in `.env` for the boot default:
 
 ```
-V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions,v2_today,v2_planner,v2_routines
+V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions,v2_today,v2_planner,v2_routines,v2_progress
 ```
 
 The `feature_flags` table overrides that at runtime with no redeploy. A route behind a
@@ -260,6 +260,53 @@ comes from the token, never from the URL or request body.
 | GET | /api/v2/nutrition/appearance-suggestions | 🔒 | Food context, filtered to what you eat |
 | GET/PATCH | /api/v2/nutrition/preferences | 🔒 | Diet, focus nutrients, on or off |
 | GET/PATCH | /api/v2/nutrition/hydration | 🔒 | Hydration reminders. No target volume |
+| GET | /api/v2/progress | 🔒 | Every metric for the week or month, with its formula |
+| GET | /api/v2/progress/metrics | 🔒 | Every metric this product can show, and how each is worked out |
+| GET | /api/v2/progress/metrics/{key} | 🔒 | One metric: formula, value now, and history |
+| POST | /api/v2/progress/self-report | 🔒 | How you felt, in your own words |
+| POST | /api/v2/progress/photos | 🔒 | Keep a photo for comparison, with its conditions |
+| GET | /api/v2/progress/comparisons | 🔒 | A side-by-side, only if the conditions allow one |
+| GET/POST | /api/v2/goals | 🔒 | Goals, with where you started recorded |
+| PATCH | /api/v2/goals/{id} | 🔒 | Update or complete a goal |
+| GET | /api/v2/memory | 🔒 | What we remember, why, and where it came from |
+| PATCH | /api/v2/memory/{id} | 🔒 | Correct or confirm something we remember |
+| DELETE | /api/v2/memory/{id} | 🔒 | Forget it. Stops affecting suggestions immediately |
+| GET | /api/v2/memory/export | 🔒 | Everything held, including what was deleted |
+| PATCH | /api/v2/memory/categories/{cat} | 🔒 | Switch a category of memory off. Nothing is destroyed |
+| POST | /api/v2/memory/feedback | 🔒 | Tell us what you thought; we say what we learned |
+| GET | /api/v2/milestones | 🔒 | What you have reached, and what is on the list |
+| POST | /api/v2/milestones/{id}/acknowledge | 🔒 | Dismiss a milestone |
+
+## Progress and memory
+
+**There is no overall score, and one cannot be added.** Every metric declares the *domains* it
+reads, and `registry.validate_registry()` — which runs at import — rejects any metric whose
+inputs name another metric. A composite of the thirteen is not expressible, which is the only
+honest way to promise this in a codebase other people will keep editing.
+
+Every metric carries a formula, a formula version, its required inputs, what it does when they
+are missing, an explanation, an update frequency, and what it is *not* a measure of. Those are
+required fields with no defaults, so an undocumented metric does not compile. Every stored
+metric event keeps the formula version and the actual input counts, so an old number can be
+checked by hand against the formula that produced it.
+
+**Missing data is never zero.** An uncomputable metric reports `unavailable` and names what it
+is waiting for. A zero would read as a real, bad score.
+
+**Memory is the user's.** Every fact carries its source, confidence, verification state and
+linked evidence, and can be corrected, confirmed, deleted or switched off by category.
+`memory.active_facts()` is the single accessor for anything that influences a recommendation
+and filters deleted, rejected and disabled facts at the query level; deletion also blanks the
+text, so nothing can act on it even by mistake.
+
+**Photo comparisons refuse by default.** Six conditions — area, lighting, angle, framing, image
+quality and time gap — must all hold, and the conditions are recorded by the user rather than
+guessed from the image. A refusal explains every reason and says how to take a comparable photo
+next time.
+
+**Gamification rewards useful behaviour only.** The rewardable list contains no app opens, no
+logins and no time-in-app; events are deduplicated by a unique constraint so nothing can be
+farmed; and milestone copy is swept for both childish and shaming wording.
 
 ## Routines and shelf intelligence
 
