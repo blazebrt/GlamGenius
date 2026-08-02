@@ -6,8 +6,8 @@ and keeps working exactly as before.
 from fastapi import APIRouter
 
 from app.api.v2 import (
-    account, config, consent, integrations, inventory, jobs, me, media, onboarding,
-    planner, privacy, profile, progress, routines, shelf, shopping, style, today,
+    account, billing, config, consent, integrations, inventory, jobs, me, media,
+    onboarding, planner, privacy, profile, progress, routines, shelf, shopping, style, today,
 )
 
 router = APIRouter(prefix="/api/v2")
@@ -30,5 +30,6 @@ router.include_router(integrations.router, tags=["v2-integrations"])
 router.include_router(shelf.router, tags=["v2-shelf"])
 router.include_router(routines.router, tags=["v2-routines"])
 router.include_router(progress.router, tags=["v2-progress"])
+router.include_router(billing.router, tags=["v2-billing"])
 
 __all__ = ["router"]

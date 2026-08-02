@@ -11,6 +11,7 @@ from __future__ import annotations
 from app.domains.ai_gateway.models import AIRun, AIRunOutput
 from app.domains.analytics.models import AppEvent
 from app.domains.audit.models import AuditEvent
+from app.domains.billing import models as billing_models
 from app.domains.consent.models import Consent
 from app.domains.entitlements.models import UsageLedgerEntry
 from app.domains.identity.models import AccountLink
@@ -63,4 +64,5 @@ __all__ = [
     "planning_models",
     "routines_models",
     "progress_models",
+    "billing_models",
 ]

@@ -66,10 +66,25 @@ async def get_config(session: AsyncSession = Depends(get_session)):
 
 @router.get("/health")
 async def v2_health():
-    """V2 health, including PostgreSQL. The V1 /api/health is unchanged."""
+    """V2 health, including PostgreSQL. The V1 /api/health is unchanged.
+
+    Reports the billing provider too, because "payments are configured" is a
+    thing an operator needs to know at a glance — and getting it wrong is the
+    difference between taking money and silently not taking it. Only ever
+    booleans and a provider name; never key material.
+    """
+    from app.domains.billing.providers.factory import provider_status
+
     postgres_ok = await sql.ping()
+    billing = provider_status()
     return {
         "status": "healthy" if postgres_ok else "degraded",
         "postgres": "up" if postgres_ok else "down",
         "ai_provider_configured": gemini.is_configured(),
+        "billing": {
+            "available": SUBSCRIPTIONS_AVAILABLE,
+            "provider": billing["provider"],
+            "configured": billing["configured"],
+            "simulated": billing["simulated"],
+        },
     }
