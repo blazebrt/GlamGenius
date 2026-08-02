@@ -110,6 +110,8 @@ async def swap_today_item(
     plan.cache_key = context_stage.cache_key(context)
     plan.version += 1
     await service.mark_worn(session, current.account_id, plan_date, worn=False)
+    # The schedule feeds repetition history, so it has to follow the swap.
+    await service.sync_schedule_items(session, current.account_id, plan_date, plan.look_id)
     await session.flush()
     await session.commit()
     return await service.serialize_plan(session, plan)

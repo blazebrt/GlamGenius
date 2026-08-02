@@ -31,6 +31,7 @@ from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryItem
 from app.domains.planning import clock
 from app.domains.planning import context as context_stage
+from app.domains.planning import notifications
 from app.domains.planning.context import DayContext
 from app.domains.planning.models import (
     MODULE_HAIR, MODULE_HYDRATION, MODULE_NUTRITION, MODULE_OUTFIT, MODULE_PERFUME,
@@ -568,6 +569,16 @@ async def compile_day(
 
     await _schedule_outfit(session, context, plan, ranked)
     await session.flush()
+
+    # Queue the day's single notification. The decision layer — dedup, the
+    # daily cap, quiet hours — runs here so preferences actually take effect;
+    # delivery to a device is a separate transport and is not wired yet, so a
+    # queued row is where this stops. Never allowed to break a plan.
+    try:
+        await notifications.queue_for_plan(session, plan=plan, timezone_name=context.timezone_name)
+    except Exception:  # noqa: BLE001 - a notification must not fail the day
+        logger.exception("notification_queue_failed date=%s", context.plan_date)
+
     return plan, True
 
 

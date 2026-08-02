@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -67,7 +68,10 @@ def infer_occasion(title: str, *, is_weekend: bool = False) -> tuple[Optional[st
         return None, 0.0
     for occasion_key, keywords in EVENT_KEYWORDS.items():
         for keyword in keywords:
-            if keyword in text:
+            # Word boundaries, not substrings. "networking" contains "work"
+            # and "shooting" contains "shoot"; matching those would silently
+            # change the formality of someone's day.
+            if re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", text):
                 # A multi-word phrase is a much stronger signal than one common
                 # word like "work" appearing somewhere in a title.
                 confidence = STRONG_MATCH if " " in keyword or len(keyword) > 7 else WEAK_MATCH
@@ -368,9 +372,14 @@ def cache_key(context: DayContext) -> str:
     cache never hits and Today is slow for everyone.
     """
     payload = {
-        "version": "phase5-v1",
+        "version": "phase5-v2",
         "date": context.plan_date.isoformat(),
         "timezone": context.timezone_name,
+        # The compiler's routine modules branch on the time of day — skincare is
+        # a morning action. Without this, a plan first built in the evening stays
+        # a cache hit all the next morning and never gains its morning routine.
+        # Four buckets a day, not a clock reading, so the cache still holds.
+        "part_of_day": clock.part_of_day(context.now_local),
         "occasion": context.occasion_key,
         "dress_code": context.dress_code,
         "weather": None if context.weather is None else {
@@ -383,9 +392,20 @@ def cache_key(context: DayContext) -> str:
             f"{event.starts_at.isoformat()}|{event.title}|{event.occasion_key or ''}|{event.dress_code_hint or ''}"
             for event in context.events
         ),
-        # Item identity and version, so an edit to a garment invalidates the day.
-        "available_items": sorted(str(item.id) for item in context.available_owned()),
+        # Item *content*, not just identity. The compiler scores on colour,
+        # fabric, formality and condition, so editing a garment has to
+        # invalidate the day — an id list alone would serve the old outfit and
+        # the old reasoning until something unrelated changed.
+        "available_items": sorted(
+            "|".join([
+                str(item.id), item.display_name, item.category, item.condition,
+                json.dumps(item.details, sort_keys=True, default=str),
+            ])
+            for item in context.available_owned()
+        ),
         "unavailable_items": sorted(str(value) for value in context.unavailable_item_ids),
+        # Drafts drive a "confirm these" action, so their count is material too.
+        "draft_count": context.draft_count,
         "recent_looks": sorted(str(value) for value in context.recent_look_ids),
         "recent_items": sorted(str(value) for value in context.recent_item_ids),
         "repetition_window": context.repetition_window_days,

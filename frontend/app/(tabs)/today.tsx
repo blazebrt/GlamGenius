@@ -5,7 +5,7 @@
  * refresh only replaces what is on screen when the server actually sends
  * something different.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -45,7 +45,8 @@ export default function TodayScreen() {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  // useFocusEffect fires on mount as well as on every focus, so a separate
+  // mount effect would just double the first request.
   useFocusEffect(useCallback(() => { void load('refresh'); }, [load]));
 
   const apply = (next: DailyPlan) => { setPlan(next); setOffline(false); };

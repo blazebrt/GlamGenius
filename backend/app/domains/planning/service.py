@@ -8,6 +8,7 @@ the plan was built cannot keep appearing on Today.
 """
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence
@@ -114,7 +115,14 @@ async def upsert_event(
     """
     from app.domains.planning.context import infer_occasion
 
-    external_id = body.external_id or f"user-{abs(hash((body.title, body.starts_at.isoformat()))) % (10 ** 12)}"
+    # Python's built-in hash() is salted per interpreter process, so the same
+    # event reposted after a restart (or handled by another worker) would get
+    # a different key and slip past deduplication. A digest is stable forever.
+    if body.external_id:
+        external_id = body.external_id
+    else:
+        seed = f"{body.title}|{body.starts_at.isoformat()}".encode("utf-8")
+        external_id = f"user-{hashlib.sha256(seed).hexdigest()[:24]}"
     dedup_key = f"{provider}:{external_id}:{body.starts_at.isoformat()}"
 
     existing = (await session.execute(
@@ -427,6 +435,41 @@ async def recalculation_history(
         "trigger": row.trigger, "detail": row.detail, "recomputed": row.recomputed,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     } for row in rows]
+
+
+async def sync_schedule_items(
+    session: AsyncSession, account_id: uuid.UUID, plan_date: date, look_id: Optional[uuid.UUID]
+) -> Optional[OutfitSchedule]:
+    """Re-read the look's items into the schedule row.
+
+    The schedule is what ``recent_wear`` builds repetition history from. If it
+    is not refreshed after a swap it keeps the piece the user took *off*, so
+    later days penalise the wrong garment and can recommend the very item the
+    user just chose to wear.
+    """
+    row = (await session.execute(
+        select(OutfitSchedule).where(
+            OutfitSchedule.account_id == account_id, OutfitSchedule.plan_date == plan_date
+        )
+    )).scalar_one_or_none()
+    if row is None:
+        return None
+
+    from app.domains.recommendation.models import OWNERSHIP_OWNED, LookItem
+
+    item_ids: List[str] = []
+    if look_id is not None:
+        rows = (await session.execute(
+            select(LookItem.inventory_item_id)
+            .where(LookItem.look_id == look_id, LookItem.ownership == OWNERSHIP_OWNED)
+            .order_by(LookItem.position)
+        )).scalars().all()
+        item_ids = [str(value) for value in rows if value is not None]
+
+    row.look_id = look_id
+    row.item_ids = item_ids
+    await session.flush()
+    return row
 
 
 async def mark_worn(

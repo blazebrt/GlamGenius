@@ -22,7 +22,7 @@ from app.domains.planning.models import (
 from app.domains.planning.notifications import dedup_hash, in_quiet_hours
 from app.domains.planning.weekly import repetition_report
 from app.shared.database import sql
-from tests.conftest import auth
+from tests.conftest import auth, png_bytes
 
 IST = "Asia/Kolkata"
 
@@ -948,3 +948,207 @@ async def test_phase_5_does_not_disturb_the_earlier_phases(app_client, make_user
         "/api/v2/style/occasion", json={"occasion": {"occasion_key": "wedding"}}, headers=auth(token)
     )).json()
     assert styled["status"] in ("ready", "not_enough_inventory")
+
+
+# --- Review fixes -----------------------------------------------------------
+# One test per defect found in review on PR #15, so none of them can return.
+
+
+def test_event_keywords_match_whole_words_only():
+    """"networking" is not "work", and "shooting" is not "shoot"."""
+    assert infer_occasion("Networking drinks")[0] is None
+    assert infer_occasion("Shooting range trip")[0] is None
+    assert infer_occasion("Classical concert")[0] is None
+    assert infer_occasion("Reworking the deck")[0] is None
+    # Real matches still land, including ones with punctuation.
+    assert infer_occasion("work thing")[0] == "office"
+    assert infer_occasion("Daily stand-up")[0] == "office"
+    assert infer_occasion("1:1 with manager")[0] == "office"
+    assert infer_occasion("Photoshoot on Friday")[0] == "photoshoot"
+
+
+async def test_manual_event_dedup_survives_a_process_restart(app_client, make_user):
+    """The fallback id must not depend on Python's per-process hash salt."""
+    from app.domains.identity.models import AccountLink
+    from app.domains.planning.schemas import CalendarEventInput
+    from app.domains.planning.service import upsert_event
+
+    _, token = await make_user()
+    starts = datetime.now(dt_timezone.utc).replace(microsecond=0)
+    body = CalendarEventInput(title="Quarterly review", starts_at=starts)
+
+    factory = sql.get_sessionmaker()
+    async with factory() as session:
+        account_id = (await session.execute(
+            select(AccountLink.id).order_by(AccountLink.created_at.desc()).limit(1)
+        )).scalar_one()
+        first, created_first = await upsert_event(session, account_id, body)
+        key = first.dedup_key
+        await session.commit()
+
+    # A fresh session stands in for a fresh worker: the key must be identical.
+    async with factory() as session:
+        second, created_second = await upsert_event(session, account_id, body)
+        await session.commit()
+
+    assert created_first is True and created_second is False
+    assert second.dedup_key == key
+    # And it is a stable digest, not a salted integer.
+    assert key.startswith("manual:user-")
+
+
+async def test_editing_a_garment_invalidates_the_cached_plan(app_client, make_user):
+    _, token = await make_user()
+    created = await stock(app_client, token)
+    first = (await today(app_client, token)).json()
+    assert (await today(app_client, token)).json()["generated_from"] == "cache"
+
+    # Change a garment's colour. The compiler scores on colour, so the day must
+    # be rebuilt rather than served from cache.
+    shirt = next(row for row in created if row["display_name"] == "Navy formal shirt")
+    patched = await app_client.patch(
+        f"/api/v2/inventory/items/{shirt['id']}",
+        json={"details": {"colour": "maroon"}}, headers=auth(token),
+    )
+    assert patched.status_code == 200, patched.text
+
+    after = (await today(app_client, token)).json()
+    assert after["generated_from"] == "fresh", "editing an item must invalidate the day"
+    assert after["version"] > first["version"]
+
+
+async def test_a_new_draft_invalidates_the_cached_plan(app_client, make_user, fake_provider):
+    _, token = await make_user()
+    await stock(app_client, token)
+    await today(app_client, token)
+    assert (await today(app_client, token)).json()["generated_from"] == "cache"
+
+    media_id = (await app_client.post(
+        "/api/v2/media/upload", files={"file": ("i.png", png_bytes(), "image/png")},
+        data={"purpose": "inventory_item"}, headers=auth(token),
+    )).json()["id"]
+    fake_provider.text = json.dumps({
+        "category": "wardrobe", "display_name": "Extracted shirt", "confidence": 0.8,
+        "details": {"colour": "green"}, "attributes": [], "uncertain_fields": [],
+        "photo_quality_notes": "Readable",
+    })
+    await app_client.post("/api/v2/inventory/extract", json={"media_asset_id": media_id}, headers=auth(token))
+
+    after = (await today(app_client, token)).json()
+    assert after["generated_from"] == "fresh", "a new draft changes the draft count and the plan"
+
+
+def test_the_cache_key_tracks_time_of_day_and_item_content():
+    """Two gaps that made stale plans stick: routines and garment edits."""
+    from app.domains.planning.context import DayContext
+    from app.domains.recommendation.context import OwnedItem
+
+    def item(colour: str) -> OwnedItem:
+        return OwnedItem(
+            id=uuid.UUID(int=1), category="wardrobe", subcategory="shirt",
+            display_name="Shirt", brand=None, details={"colour": colour},
+            condition="good", usage_count=0, last_used_at=None,
+            purchase_price=None, currency="INR",
+        )
+
+    def context_at(hour: int, colour: str, drafts: int = 0) -> DayContext:
+        return DayContext(
+            account_id=uuid.UUID(int=9), plan_date=date(2026, 8, 3), timezone_name=IST,
+            now_local=datetime(2026, 8, 3, hour, 0),
+            owned=[item(colour)], draft_count=drafts,
+        )
+
+    morning = cache_key(context_at(9, "navy"))
+    assert cache_key(context_at(10, "navy")) == morning, "same part of day must still hit cache"
+    assert cache_key(context_at(22, "navy")) != morning, "night must not reuse a morning plan"
+    assert cache_key(context_at(9, "maroon")) != morning, "editing a colour must invalidate"
+    assert cache_key(context_at(9, "navy", drafts=1)) != morning, "a new draft must invalidate"
+
+
+async def test_swapping_two_days_moves_the_outfit_not_the_weather(app_client, make_user):
+    """Each day keeps its own date, weather and event; only the outfit moves."""
+    _, token = await make_user()
+    await stock(app_client, token)
+    monday = clock.week_start(date.today())
+    tuesday = monday + timedelta(days=1)
+
+    for value, condition in ((monday, "rainy"), (tuesday, "hot")):
+        await app_client.post(
+            "/api/v2/today/weather",
+            json={"for_date": value.isoformat(), "condition": condition}, headers=auth(token),
+        )
+    week = (await app_client.post(
+        "/api/v2/planner/week/generate", json={"week_start": monday.isoformat()}, headers=auth(token)
+    )).json()
+
+    before_monday = {p["inventory_item_id"] for p in week["days"][0]["owned_items"]}
+    before_tuesday = {p["inventory_item_id"] for p in week["days"][1]["owned_items"]}
+
+    swapped = (await app_client.patch(
+        f"/api/v2/planner/day/{monday.isoformat()}",
+        json={"swap_with_date": tuesday.isoformat()}, headers=auth(token),
+    )).json()
+
+    monday_after = next(d for d in swapped["days"] if d["plan_date"] == monday.isoformat())
+    tuesday_after = next(d for d in swapped["days"] if d["plan_date"] == tuesday.isoformat())
+
+    # The outfits moved...
+    assert {p["inventory_item_id"] for p in monday_after["owned_items"]} == before_tuesday
+    assert {p["inventory_item_id"] for p in tuesday_after["owned_items"]} == before_monday
+    # ...but each day's own weather stayed put.
+    assert monday_after["weather"]["condition"] == "rainy"
+    assert tuesday_after["weather"]["condition"] == "hot"
+
+    # And /today for that date agrees with the planner rather than contradicting it.
+    direct = (await today(app_client, token, plan_date=monday.isoformat())).json()
+    assert direct["plan_date"] == monday.isoformat()
+    assert direct["weather"]["condition"] == "rainy"
+    assert {p["inventory_item_id"] for p in direct["outfit"]["owned_items"]} == before_tuesday
+
+
+async def test_a_swap_updates_the_repetition_history(app_client, make_user):
+    """The schedule feeds recent_wear, so it has to follow the swap."""
+    _, token = await make_user()
+    created = await stock(app_client, token)
+    body = (await today(app_client, token)).json()
+    worn = next(p for p in body["outfit"]["owned_items"] if p["slot"] == "shoes")
+    other = next(r for r in created if r["category"] == "shoes" and r["id"] != worn["inventory_item_id"])
+
+    await app_client.post(
+        "/api/v2/today/outfit/swap",
+        json={"slot": "shoes", "from_item_id": worn["inventory_item_id"], "to_item_id": other["id"]},
+        headers=auth(token),
+    )
+
+    factory = sql.get_sessionmaker()
+    async with factory() as session:
+        row = (await session.execute(
+            select(OutfitSchedule).where(OutfitSchedule.plan_date == date.today())
+            .order_by(OutfitSchedule.created_at.desc()).limit(1)
+        )).scalar_one()
+        assert other["id"] in row.item_ids, "the item actually worn must be in the history"
+        assert worn["inventory_item_id"] not in row.item_ids, "the removed item must be gone"
+
+
+async def test_generating_a_plan_queues_the_daily_notification(app_client, make_user):
+    """The queue must be reachable from a production path, not only from tests."""
+    from app.domains.identity.models import AccountLink
+
+    _, token = await make_user()
+    await stock(app_client, token)
+    await today(app_client, token)
+
+    factory = sql.get_sessionmaker()
+    async with factory() as session:
+        account_id = (await session.execute(
+            select(AccountLink.id).order_by(AccountLink.created_at.desc()).limit(1)
+        )).scalar_one()
+        rows = (await session.execute(
+            select(NotificationDelivery).where(NotificationDelivery.account_id == account_id)
+        )).scalars().all()
+
+    assert rows, "opening Today must record a notification decision"
+    # Whether it sends depends on the cap and quiet hours; either way the
+    # decision is recorded with a reason, which is the point.
+    assert all(row.status in ("queued", "suppressed") for row in rows)
+    assert all(row.status == "queued" or row.suppressed_reason for row in rows)

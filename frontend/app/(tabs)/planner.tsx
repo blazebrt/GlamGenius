@@ -5,7 +5,7 @@
  * goes. It reaches the same outcome as drag-and-drop, works with one thumb on
  * a phone, and is usable with a screen reader, which a drag is not.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -43,7 +43,15 @@ export default function PlannerScreen() {
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { void load(plan ? 'refresh' : 'initial'); }, [load, plan]));
+  // `plan` must NOT be a dependency here. Every successful load sets it to a
+  // new object, which would change this callback, re-run the effect, and
+  // refetch forever while the tab is focused. A ref carries the "have we
+  // loaded once" bit without changing the callback's identity.
+  const hasLoaded = useRef(false);
+  useFocusEffect(useCallback(() => {
+    void load(hasLoaded.current ? 'refresh' : 'initial');
+    hasLoaded.current = true;
+  }, [load]));
 
   const run = async (action: () => Promise<WeeklyPlan>) => {
     setBusy(true);

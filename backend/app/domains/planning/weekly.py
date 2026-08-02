@@ -126,10 +126,17 @@ async def set_lock(
 async def swap_days(
     session: AsyncSession, *, account_id: uuid.UUID, first: date, second: date
 ) -> WeeklyPlan:
-    """Move one day's outfit to another day, and vice versa.
+    """Move one day's **outfit** to another day, and vice versa.
 
-    This is the drag-and-drop operation. A locked day cannot be dragged onto,
-    because that is the same as overwriting it.
+    Only the outfit moves. Swapping the whole ``daily_plan_id`` would drag each
+    day's date-specific facts along with it — the weather, the calendar event,
+    the headline — so a Monday/Friday swap would show Friday's rain and Friday's
+    meeting on Monday, and ``/today?plan_date=`` would disagree with the
+    planner. Each ``DailyPlan`` stays attached to its own date; the ``look_id``
+    is what changes hands.
+
+    A locked day cannot be swapped onto, because that is the same as
+    overwriting it.
     """
     if first == second:
         raise ValidationFailedError("Those are the same day.", field="swap_with_date")
@@ -150,11 +157,38 @@ async def swap_days(
             "One of those days is locked. Unlock it first if you want to move it.", field="swap_with_date"
         )
 
-    left.daily_plan_id, right.daily_plan_id = right.daily_plan_id, left.daily_plan_id
+    left_plan = await session.get(DailyPlan, left.daily_plan_id) if left.daily_plan_id else None
+    right_plan = await session.get(DailyPlan, right.daily_plan_id) if right.daily_plan_id else None
+    if left_plan is None or right_plan is None:
+        raise ValidationFailedError(
+            "Both days need a plan before they can be swapped. Generate the week first.",
+            field="swap_with_date",
+        )
+    if left_plan.account_id != account_id or right_plan.account_id != account_id:
+        raise NotFoundError("We could not find those days.")
+
+    # Only the outfit changes hands. Each plan keeps its own date, weather and
+    # event.
+    left_plan.look_id, right_plan.look_id = right_plan.look_id, left_plan.look_id
+    for row in (left_plan, right_plan):
+        row.version += 1
+        # Pin to the current context so the next Today open is a cache hit and
+        # the user's arrangement survives, rather than being rebuilt away.
+        row.cache_key = await _pinned_cache_key(session, account_id, row)
+
     await _swap_schedule(session, account_id, first, second)
     plan.version += 1
     await session.flush()
     return plan
+
+
+async def _pinned_cache_key(session: AsyncSession, account_id: uuid.UUID, plan: DailyPlan) -> str:
+    """The cache key for this plan's day as context stands right now."""
+    context = await context_stage.gather(
+        session, account_id=account_id, plan_date=plan.plan_date,
+        timezone_name=plan.timezone_name,
+    )
+    return context_stage.cache_key(context)
 
 
 async def _swap_schedule(session: AsyncSession, account_id: uuid.UUID, first: date, second: date) -> None:

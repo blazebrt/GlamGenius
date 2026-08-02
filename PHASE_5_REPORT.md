@@ -196,7 +196,7 @@ the plan already on screen rather than blanking it, and says it is showing the s
 
 ## 6. Tests
 
-### Backend — 54 new, `backend/tests/test_planning.py`
+### Backend — 62 new, `backend/tests/test_planning.py`
 
 Every listed area is covered: timezone handling, India timezones, weather changes, calendar
 sync, revoked calendar access, duplicate events, daily-plan idempotency, cache invalidation,
@@ -230,7 +230,7 @@ laundry, and a banned-language sweep.
 |---|---|---|
 | `alembic upgrade head` | clean | clean |
 | `alembic check` | no drift | no drift |
-| Backend pytest | 170 passed | **224 passed** |
+| Backend pytest | 170 passed | **232 passed** |
 | `tsc --noEmit` | clean | clean |
 | `expo lint` | 0 errors, 3 warnings | 0 errors, **same 3 warnings** |
 | Jest | 83 passed | **117 passed** |
@@ -291,7 +291,7 @@ docker compose -f docker-compose.test.yml run --rm frontend-tests
 docker compose -f docker-compose.test.yml down -v
 ```
 
-Expect 224 backend tests and 117 frontend tests to pass, `alembic check` clean.
+Expect 232 backend tests and 117 frontend tests to pass, `alembic check` clean.
 
 To see it running:
 
@@ -346,7 +346,7 @@ key — that is the point.
 | Calendar access can be disconnected | ✅ and its events stop feeding plans |
 | Notifications are controlled and deduplicated | ✅ cap, quiet hours, content hash |
 | Relevant optional modules appear contextually | ✅ each with its reason |
-| All relevant tests pass | ✅ 224 backend, 117 frontend |
+| All relevant tests pass | ✅ 232 backend, 117 frontend |
 | `PHASE_5_REPORT.md` exists | ✅ |
 | The phase is committed | ✅ |
 
@@ -358,5 +358,50 @@ still owns V2; V1 auth not migrated; no duplicated identity; no ownership check 
 fallbacks; no appearance scores; billing still unavailable; still seven inventory categories;
 "Money Wasted" appears nowhere; **no new dependencies** in `backend/requirements.txt` or
 `frontend/package.json`.
+
+## 13. Review round
+
+Eight findings were raised on PR #15 by an automated reviewer. All eight were real
+and all eight are fixed, each with a regression test.
+
+**P1 — the planner refetched forever.** `useFocusEffect` had `plan` in its dependency
+list; every successful load produced a new object, changed the callback, re-ran the
+effect and fetched again, for as long as the tab was focused. The "have we loaded
+once" bit now lives in a ref, so the callback identity is stable. Today had a milder
+version of the same thing — a mount effect *and* a focus effect — which doubled the
+first request; the redundant one is gone.
+
+**P1 — swapping two days moved the whole day, not the outfit.** Exchanging
+`daily_plan_id` dragged each day's date-specific facts with it, so a Monday/Friday
+swap showed Friday's weather and Friday's meeting under Monday's heading, and
+`/today?plan_date=` disagreed with the planner. Only the `look_id` moves now; each
+`DailyPlan` stays attached to its own date, and both plans are re-keyed to the
+current context so the arrangement survives.
+
+**P2 — the schedule kept stale item ids after a swap.** `OutfitSchedule.item_ids`
+feeds `recent_wear`, so later days penalised the garment the user took *off* and
+could recommend the one they had just chosen. The schedule now follows the swap.
+
+**P2 — the cache key ignored garment content and the draft count.** Editing a
+colour, or adding a draft, left the hash unchanged and served the old outfit and
+the old reasoning. Item content and `draft_count` are now hashed.
+
+**P2 — the cache key ignored the time of day.** Routine modules branch on it, so a
+plan first built in the evening stayed a cache hit all the next morning and never
+gained its morning skincare. The part of day (four buckets, not a clock reading) is
+now in the hash.
+
+**P2 — the manual-event dedup id used `hash()`**, which is salted per interpreter
+process, so the same event reposted after a restart slipped past deduplication.
+It is a SHA-256 digest now.
+
+**P2 — the notification queue had no production caller.** Only tests reached it, so
+no `NotificationDelivery` was ever created and changing preferences did nothing.
+`compile_day` now queues the day's notification through the full decision layer.
+Delivery to a device is still a separate transport and remains out of scope.
+
+**P2 — keyword matching was substring, not word-boundary**, despite the comment
+claiming otherwise: "networking" matched "work" and "shooting" matched "shoot",
+silently changing the formality of a day. It uses word boundaries now.
 
 **Stop after Phase 5.**
