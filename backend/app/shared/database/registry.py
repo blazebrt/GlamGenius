@@ -30,6 +30,7 @@ from app.domains.profile.models import (
 )
 from app.domains.planning import models as planning_models
 from app.domains.recommendation import models as recommendation_models
+from app.domains.routines import models as routines_models
 from app.shared.database.base import Base
 from app.shared.events.models import OutboxEvent
 from app.shared.flags.models import FeatureFlag
@@ -59,4 +60,5 @@ __all__ = [
     "inventory_models",
     "recommendation_models",
     "planning_models",
+    "routines_models",
 ]

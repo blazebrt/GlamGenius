@@ -15,9 +15,12 @@ import {
   ActionRow, ClarificationCard, MissingInformation, NeedsInventory, OfflineNotice,
   OptionalModules, OutfitCard, StaleNotice, TodayHeader, TodayLoading, isStale,
 } from '../../src/components/today/TodayPieces';
+import { TodayFood, TodayPerfume, TodayRoutineCard } from '../../src/components/routines/TodayRoutine';
 import {
-  DailyPlan, LookPiece, PlanAction, answerClarification, completePlanAction,
-  getToday, regenerateToday, reportItemUnavailable, sendTodayFeedback,
+  DailyPlan, LookPiece, NutritionSuggestion, PerfumePick, PlanAction, Routine, RoutineStep,
+  answerClarification, completePlanAction, completeRoutineStep, getNutritionSuggestions,
+  getPerfumeRecommendation, getRoutinesToday, getToday, regenerateToday, reportItemUnavailable,
+  sendTodayFeedback,
 } from '../../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../src/theme/colors';
 
@@ -29,11 +32,30 @@ export default function TodayScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [offline, setOffline] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  // Phase 6 modules. Each stays null until the server has something to say, and
+  // a failure to load one must never blank the outfit.
+  const [routines, setRoutines] = useState<Routine[]>([]);
+  const [perfume, setPerfume] = useState<PerfumePick | null>(null);
+  const [food, setFood] = useState<NutritionSuggestion | null>(null);
+
+  const loadModules = useCallback(async () => {
+    const [routineResult, perfumeResult, foodResult] = await Promise.allSettled([
+      getRoutinesToday(), getPerfumeRecommendation(), getNutritionSuggestions(),
+    ]);
+    if (routineResult.status === 'fulfilled') setRoutines(routineResult.value.routines);
+    if (perfumeResult.status === 'fulfilled') setPerfume(perfumeResult.value.recommendations[0] ?? null);
+    if (foodResult.status === 'fulfilled') {
+      // Off unless the user turned it on, and the server says so rather than
+      // the client guessing.
+      setFood(foodResult.value.enabled ? foodResult.value.suggestions[0] ?? null : null);
+    }
+  }, []);
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     if (mode === 'refresh') setRefreshing(true);
     try {
       setPlan(await getToday());
+      void loadModules();
       setOffline(false);
     } catch (err) {
       console.warn('today load failed', err);
@@ -43,7 +65,7 @@ export default function TodayScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [loadModules]);
 
   // useFocusEffect fires on mount as well as on every focus, so a separate
   // mount effect would just double the first request.
@@ -76,6 +98,14 @@ export default function TodayScreen() {
   const onSomethingElse = async () => {
     try { apply(await regenerateToday('not_my_style')); }
     catch (err) { console.warn('regenerate failed', err); }
+  };
+
+  const onRoutineStep = async (step: RoutineStep) => {
+    if (!step.id) return;
+    try {
+      await completeRoutineStep(step.id, !step.completed_today);
+      await loadModules();
+    } catch (err) { console.warn('routine step failed', err); }
   };
 
   if (loading && !plan) return <View style={styles.container}><TodayLoading /></View>;
@@ -134,6 +164,17 @@ export default function TodayScreen() {
           )}
         </View>
 
+        {routines.map((routine) => (
+          <TodayRoutineCard
+            key={routine.id ?? routine.kind}
+            routine={routine}
+            onComplete={(step) => void onRoutineStep(step)}
+            onOpen={() => router.push('/improve')}
+          />
+        ))}
+        <TodayPerfume pick={perfume} />
+        <TodayFood suggestion={food} />
+
         <MissingInformation plan={plan} />
 
         <View style={styles.shortcuts}>
@@ -141,9 +182,9 @@ export default function TodayScreen() {
             <Ionicons name="calendar-outline" size={19} color={COLORS.primary} />
             <Text style={styles.shortcutText}>Plan the week</Text>
           </TouchableOpacity>
-          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open the skin and hair check" onPress={() => router.push('/(tabs)/scan-tab')} style={styles.shortcut}>
-            <Ionicons name="scan-outline" size={19} color={COLORS.primary} />
-            <Text style={styles.shortcutText}>Skin & hair check</Text>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open my routines" onPress={() => router.push('/improve')} style={styles.shortcut}>
+            <Ionicons name="list-outline" size={19} color={COLORS.primary} />
+            <Text style={styles.shortcutText}>My routines</Text>
           </TouchableOpacity>
         </View>
 

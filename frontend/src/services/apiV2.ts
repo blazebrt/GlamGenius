@@ -1080,3 +1080,233 @@ export const patchNotificationPreferences = async (
   body: Partial<{ enabled: boolean; daily_cap: number; preferred_hour: number; modules: Record<string, boolean> }>
 ): Promise<{ preferences: NotificationPreferences }> =>
   (await api.patch(`${V2}/today/notifications`, body)).data;
+
+// --- Phase 6: routines, shelf, perfume, supplements, food context -----------
+// Every warning carries the id of a reviewed rule. The client never invents
+// one, and it never renders a warning that arrived without one.
+
+export type RoutineKind = 'morning' | 'evening' | 'wash_day' | 'weekly' | 'event';
+export type Severity = 'info' | 'caution' | 'avoid';
+export type Diet = 'vegan' | 'vegetarian' | 'jain' | 'eggetarian' | 'pescatarian' | 'non_vegetarian';
+
+export interface RuleWarning {
+  /** Always present. A warning with no reviewed rule behind it does not exist. */
+  rule_id: string;
+  severity: Severity;
+  headline: string;
+  detail: string;
+  evidence_note: string;
+  item_ids: string[];
+  slot: string | null;
+  plain_english?: string;
+}
+
+export interface RoutineStep {
+  id?: string;
+  slot: string;
+  label: string;
+  order: number;
+  required: boolean;
+  optional: boolean;
+  why: string;
+  frequency: string;
+  inventory_item_id: string | null;
+  product_name: string | null;
+  owned: boolean;
+  safety_note: string;
+  alternative: string;
+  climate_note: string;
+  /** A required step with nothing owned for it. Names a category, never a product. */
+  is_gap: boolean;
+  completed_today?: boolean;
+  plain_english?: string;
+}
+
+export interface Routine {
+  id?: string;
+  kind: RoutineKind;
+  label: string;
+  frequency: string;
+  version?: number;
+  steps: RoutineStep[];
+  warnings: RuleWarning[];
+  climate_notes: { rule_id: string; slot: string; note: string }[];
+  skipped_for_allergy: string[];
+  summary?: string;
+  disclaimer: string;
+}
+
+export interface ShelfProductRow {
+  inventory_item_id: string;
+  display_name: string;
+  brand: string | null;
+  category: string;
+  slot: string | null;
+  slot_label: string | null;
+  effective_expiry: string | null;
+  days_to_expiry: number | null;
+  low_use: boolean;
+  usage_count: number;
+  remaining_percent: number | null;
+  ingredients: { ingredient_key: string; display_name: string; needs_confirmation: boolean }[];
+  needs_confirmation: { ingredient_key: string; display_name: string }[];
+  rule_id?: string;
+}
+
+export interface ShelfSummary {
+  categories: Record<string, { product_count: number; slots_filled: string[]; warning_count: number }>;
+  counts: {
+    products: number; avoid: number; caution: number;
+    needs_attention: number; awaiting_confirmation: number; drafts: number;
+  };
+  needs_attention: RuleWarning[];
+  draft_note: string | null;
+}
+
+export interface ExpiringReport {
+  window_days: number;
+  expired: ShelfProductRow[];
+  expiring_soon: ShelfProductRow[];
+  no_date_recorded: ShelfProductRow[];
+  note: string;
+}
+
+export interface PerfumePick {
+  inventory_item_id: string;
+  display_name: string;
+  brand: string | null;
+  fragrance_family: string | null;
+  remaining_percent: number | null;
+  reasons: { rule_id: string; factor: string; note: string }[];
+  missing_information: string[];
+  owned: boolean;
+}
+
+export interface SupplementRow {
+  inventory_item_id: string;
+  display_name: string;
+  brand: string | null;
+  user_entered_purpose: string | null;
+  use_frequency: string | null;
+  expiry_date: string | null;
+  days_to_expiry: number | null;
+  flags: { flag: string; message: string }[];
+}
+
+export interface NutritionSuggestion {
+  rule_id: string;
+  nutrient: string;
+  display_name: string;
+  appearance_context: string;
+  foods: string[];
+  note: string;
+  climate_note?: string;
+}
+
+export interface ImproveOverview {
+  has_shelf: boolean;
+  has_routines: boolean;
+  routines: Routine[];
+  consistency: { days_considered: number; days_with_activity: number; steps_completed: number; note: string };
+  needs_attention: RuleWarning[];
+  expiring: ExpiringReport;
+  low_use: { rule_id: string; products: ShelfProductRow[]; count: number; definition: string; note: string };
+  missing_categories: RuleWarning[];
+  counts: ShelfSummary['counts'];
+  disclaimer: string;
+}
+
+export const analyseShelf = async (climate?: string): Promise<ShelfSummary> =>
+  (await api.post<ShelfSummary>(`${V2}/shelf/analyse`, climate ? { climate } : {})).data;
+
+export const getShelfSummary = async (): Promise<ShelfSummary> =>
+  (await api.get<ShelfSummary>(`${V2}/shelf/summary`)).data;
+
+export const getShelfExpiring = async (days = 60): Promise<ExpiringReport> =>
+  (await api.get<ExpiringReport>(`${V2}/shelf/expiring`, { params: { days } })).data;
+
+export const getShelfLowUse = async (): Promise<ImproveOverview['low_use']> =>
+  (await api.get(`${V2}/shelf/low-use`)).data;
+
+export const getShelfValueToRecover = async (): Promise<{
+  estimated_total: number; currency: string; is_estimate: boolean;
+  items: { item_id: string; display_name: string; estimated_value: number | null }[];
+  items_missing_price: number; explanation: string;
+}> => (await api.get(`${V2}/shelf/value-to-recover`)).data;
+
+export const generateRoutines = async (
+  body: { kinds?: RoutineKind[]; climate?: string; explain?: boolean } = {}
+): Promise<{ routines: Routine[]; explanation_source: ExplanationSource; message: string | null; disclaimer: string }> =>
+  (await api.post(`${V2}/routines/generate`, body)).data;
+
+export const getRoutinesToday = async (): Promise<{
+  date: string; part_of_day: string; routines: Routine[]; message: string | null; disclaimer: string;
+}> => (await api.get(`${V2}/routines/today`)).data;
+
+export const completeRoutineStep = async (
+  stepId: string, completed = true, done_on?: string
+): Promise<{ step_id: string; completed: boolean; note: string }> =>
+  (await api.post(`${V2}/routines/steps/${stepId}/complete`, { completed, done_on })).data;
+
+export const getImproveOverview = async (): Promise<ImproveOverview> =>
+  (await api.get<ImproveOverview>(`${V2}/routines/improve`)).data;
+
+export const checkIngredients = async (body: {
+  label_text?: string; ingredients?: string[]; item_ids?: string[];
+  against_owned?: boolean; explain?: boolean;
+}): Promise<{
+  identified: { ingredient_key: string; display_name: string; needs_confirmation: boolean }[];
+  unidentified: string[];
+  warnings: RuleWarning[];
+  needs_confirmation: { ingredient_key: string; display_name: string }[];
+  note: string;
+}> => (await api.post(`${V2}/ingredients/check`, body)).data;
+
+export const confirmIngredients = async (
+  item_id: string, ingredient_keys: string[], confirmed = true
+): Promise<{ updated: number; confirmed: boolean; note: string }> =>
+  (await api.post(`${V2}/ingredients/confirm`, { item_id, ingredient_keys, confirmed })).data;
+
+export const getIngredient = async (key: string): Promise<{
+  ingredient_key: string; display_name: string; inci_name: string | null; family: string;
+  summary: string; common_use: string; aliases: string[];
+  rules: { rule_id: string; severity: Severity; headline: string; guidance: string }[];
+  note: string;
+}> => (await api.get(`${V2}/ingredients/${encodeURIComponent(key)}`)).data;
+
+export const getPerfumeRecommendation = async (params: {
+  occasion_key?: string; weather?: string; time_of_day?: string; season?: string;
+} = {}): Promise<{
+  recommendations: PerfumePick[]; considered: number;
+  missing_information: string[]; note: string; message: string | null;
+}> => (await api.get(`${V2}/perfume/recommendation`, { params })).data;
+
+export const getSupplementsSummary = async (): Promise<{
+  supplements: SupplementRow[]; count: number;
+  tracked_fields: string[]; we_do_not: string[];
+  disclaimer: string; message: string | null;
+}> => (await api.get(`${V2}/supplements/summary`)).data;
+
+export const getNutritionSuggestions = async (): Promise<{
+  enabled: boolean; diet?: Diet; diet_label?: string;
+  suggestions: NutritionSuggestion[]; boundaries?: string[];
+  disclaimer: string; message?: string;
+}> => (await api.get(`${V2}/nutrition/appearance-suggestions`)).data;
+
+export const patchNutritionPreferences = async (body: {
+  enabled?: boolean; diet?: Diet; focus_nutrients?: string[]; avoid_foods?: string[];
+}): Promise<{ enabled: boolean; diet: Diet }> =>
+  (await api.patch(`${V2}/nutrition/preferences`, body)).data;
+
+export const getHydrationPreferences = async (): Promise<{
+  enabled: boolean; remind_in_hot_weather_only: boolean; note: string | null; no_target: string;
+}> => (await api.get(`${V2}/nutrition/hydration`)).data;
+
+export const patchHydrationPreferences = async (body: {
+  enabled?: boolean; remind_in_hot_weather_only?: boolean; note?: string;
+}): Promise<{ enabled: boolean }> => (await api.patch(`${V2}/nutrition/hydration`, body)).data;
+
+export const recordObservation = async (
+  note: string, area: 'skin' | 'hair' | 'scalp' | 'nails' | 'general' = 'general'
+): Promise<{ id: string; note: string; boundary: { boundary: boolean; message: string } | null; message: string }> =>
+  (await api.post(`${V2}/routines/observations`, { note, area })).data;

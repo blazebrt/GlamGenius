@@ -136,7 +136,7 @@ autogenerate will not see it and the table will silently never be created.
 V2 modules are off unless switched on. Set `V2_FEATURES` in `.env` for the boot default:
 
 ```
-V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions,v2_today,v2_planner
+V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions,v2_today,v2_planner,v2_routines
 ```
 
 The `feature_flags` table overrides that at runtime with no redeploy. A route behind a
@@ -241,6 +241,48 @@ comes from the token, never from the URL or request body.
 | POST | /api/v2/integrations/calendar/connect | 🔒 | Connect a calendar source |
 | DELETE | /api/v2/integrations/calendar | 🔒 | Disconnect, and stop using its events |
 | GET | /api/v2/integrations/providers | 🔒 | Which sources exist and which are usable |
+| POST | /api/v2/shelf/analyse | 🔒 | Re-read your beauty and hair labels |
+| GET | /api/v2/shelf/summary | 🔒 | Your whole shelf, counted rather than scored |
+| GET | /api/v2/shelf/expiring | 🔒 | What is running out, and what has no date recorded |
+| GET | /api/v2/shelf/low-use | 🔒 | Products sitting unused |
+| GET | /api/v2/shelf/value-to-recover | 🔒 | An estimate, scoped to the shelf |
+| POST | /api/v2/routines/generate | 🔒 | Build routines from products you already own |
+| GET | /api/v2/routines/today | 🔒 | Only the routines due right now |
+| POST | /api/v2/routines/steps/{id}/complete | 🔒 | Tick a step off for a day |
+| GET | /api/v2/routines/consistency | 🔒 | How it is going. No streaks |
+| GET | /api/v2/routines/improve | 🔒 | Everything the Improve screen shows |
+| GET/POST | /api/v2/routines/observations | 🔒 | Notes in your own words, never interpreted |
+| POST | /api/v2/ingredients/check | 🔒 | Check a label or a list against the reviewed rules |
+| POST | /api/v2/ingredients/confirm | 🔒 | Confirm a low-confidence label read |
+| GET | /api/v2/ingredients/{key} | 🔒 | The reviewed note for one ingredient |
+| GET | /api/v2/perfume/recommendation | 🔒 | Which perfume you own suits today |
+| GET | /api/v2/supplements/summary | 🔒 | Supplement inventory. Dates only, never a dose |
+| GET | /api/v2/nutrition/appearance-suggestions | 🔒 | Food context, filtered to what you eat |
+| GET/PATCH | /api/v2/nutrition/preferences | 🔒 | Diet, focus nutrients, on or off |
+| GET/PATCH | /api/v2/nutrition/hydration | 🔒 | Hydration reminders. No target volume |
+
+## Routines and shelf intelligence
+
+Routines are built from products the user already owns. A required step with nothing to fill
+it becomes a gap that names a *category* — "a gentle face wash" — never a brand and never a
+link. Optional steps with nothing owned are left out entirely.
+
+Two boundaries are structural rather than aspirational:
+
+**Every warning names a reviewed rule.** A `Finding` cannot be constructed without a
+`rule_id`, and those ids are rows seeded into `compatibility_rules` and friends by migration
+`0006`. The model is handed rule ids and asked for wording; a note whose id did not actually
+fire is discarded. It cannot introduce a warning, change a severity, or reorder a step.
+
+**No diagnosis, no dosage.** `app/domains/routines/safety.py` sweeps every generated string —
+AI-written *and* deterministic — against a banned-term list and a bare-dosage regex. A failure
+discards the wording, never the result underneath. Questions that belong with a clinician get
+a professional-consultation boundary instead of an answer. Supplements are tracked as
+inventory: name, brand, dates, and what the user said it is for. Nothing else.
+
+Nutrition is appearance-adjacent food context with Indian examples, off by default. Diet is a
+constraint, not a suggestion — and when a nutrient's usual sources are all excluded by
+someone's diet, the app says so rather than dropping it in silence.
 
 ## Today and the weekly planner
 

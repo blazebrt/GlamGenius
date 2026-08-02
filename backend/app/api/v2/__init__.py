@@ -7,7 +7,7 @@ from fastapi import APIRouter
 
 from app.api.v2 import (
     account, config, consent, integrations, inventory, jobs, me, media, onboarding,
-    planner, privacy, profile, shopping, style, today,
+    planner, privacy, profile, routines, shelf, shopping, style, today,
 )
 
 router = APIRouter(prefix="/api/v2")
@@ -27,5 +27,7 @@ router.include_router(shopping.router, tags=["v2-shopping"])
 router.include_router(today.router, tags=["v2-today"])
 router.include_router(planner.router, tags=["v2-planner"])
 router.include_router(integrations.router, tags=["v2-integrations"])
+router.include_router(shelf.router, tags=["v2-shelf"])
+router.include_router(routines.router, tags=["v2-routines"])
 
 __all__ = ["router"]
