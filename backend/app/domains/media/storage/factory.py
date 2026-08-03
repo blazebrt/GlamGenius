@@ -1,11 +1,8 @@
 """Picking the storage adapter from configuration.
 
-Fix 9 (Work Package 2): in a production deployment the local filesystem
-adapter is not acceptable. A pod's local disk is lost on redeploy, and no
-other pod can serve the writes. `get_storage()` refuses to boot with
-``MEDIA_STORAGE_BACKEND=local`` when ``APP_ENV=production`` unless the
-operator has consciously set ``MEDIA_ALLOW_LOCAL_IN_PRODUCTION=true`` in
-the environment (which is only ever right for a single-pod dev-preview).
+Production default is ``supabase``. The ``local`` adapter is retained for
+tests only. The ``s3`` adapter is retained temporarily so the existing MinIO
+integration test still passes; Prompt 2 removes it.
 """
 from __future__ import annotations
 
@@ -32,26 +29,26 @@ def get_storage() -> MediaStorage:
         return _storage
 
     backend = MEDIA_STORAGE_BACKEND
-    if backend == "local":
+    if backend == "supabase":
+        from app.domains.media.storage.supabase import SupabaseStorage
+
+        _storage = SupabaseStorage()
+    elif backend == "local":
         if APP_ENV == "production" and not MEDIA_ALLOW_LOCAL_IN_PRODUCTION:
-            # Fail closed at boot rather than half-way through the first upload.
-            # The message names the exact escape hatch so a knowledgeable
-            # operator running a single-pod dev-preview can still proceed.
             raise StorageError(
                 "MEDIA_STORAGE_BACKEND=local is not permitted when APP_ENV=production. "
-                "Set MEDIA_STORAGE_BACKEND=s3 and provide S3_ENDPOINT_URL, S3_BUCKET, "
-                "S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or set "
-                "MEDIA_ALLOW_LOCAL_IN_PRODUCTION=true to acknowledge the risk. "
-                "See docs/stabilisation/MEDIA_STORAGE_OPERATIONS.md."
+                "Set MEDIA_STORAGE_BACKEND=supabase (recommended) or acknowledge the "
+                "single-pod trade-off with MEDIA_ALLOW_LOCAL_IN_PRODUCTION=true."
             )
         _storage = LocalFilesystemStorage()
     elif backend == "s3":
+        # Retained until Prompt 2 for the MinIO integration test.
         from app.domains.media.storage.s3 import S3CompatibleStorage
 
         _storage = S3CompatibleStorage()
     else:
         raise StorageError(
-            f"MEDIA_STORAGE_BACKEND must be 'local' or 's3', got {backend!r}"
+            f"MEDIA_STORAGE_BACKEND must be 'supabase', 'local' or 's3', got {backend!r}"
         )
 
     logger.info("media_storage_backend=%s", _storage.backend_name)
