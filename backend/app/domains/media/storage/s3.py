@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from app.config import (
     S3_ACCESS_KEY_ID,
@@ -20,6 +20,7 @@ from app.config import (
     S3_ENDPOINT_URL,
     S3_REGION,
     S3_SECRET_ACCESS_KEY,
+    S3_SERVER_SIDE_ENCRYPTION,
 )
 from app.domains.media.storage.base import StorageError
 
@@ -73,8 +74,22 @@ class S3CompatibleStorage:
         client = self._get_client()
 
         def _put() -> None:
+            # Every write asks the server to encrypt at rest. When the target
+            # bucket already has default encryption configured, the header is
+            # honoured silently; when it does not, the write is refused, which
+            # is the outcome we want (fail-closed on missing encryption). Set
+            # S3_SERVER_SIDE_ENCRYPTION="" to disable this behaviour when the
+            # provider does not accept the header (see
+            # docs/stabilisation/MEDIA_STORAGE_OPERATIONS.md).
+            extra: dict = {}
+            if S3_SERVER_SIDE_ENCRYPTION:
+                extra["ServerSideEncryption"] = S3_SERVER_SIDE_ENCRYPTION
             client.put_object(
-                Bucket=self.bucket, Key=key, Body=data, ContentType=content_type
+                Bucket=self.bucket,
+                Key=key,
+                Body=data,
+                ContentType=content_type,
+                **extra,
             )
 
         # boto3 is synchronous; a thread keeps it off the event loop.
@@ -111,3 +126,31 @@ class S3CompatibleStorage:
                 return False
 
         return await asyncio.to_thread(_head)
+
+    async def presigned_get_url(self, key: str, ttl_seconds: int) -> Optional[str]:
+        """Short-lived signed URL the client can fetch directly.
+
+        Returning ``None`` from here would force every read through the
+        backend; returning a URL keeps the app server out of the byte path
+        for photo delivery. The TTL is clamped at the low end to prevent a
+        misconfiguration granting a multi-day link.
+        """
+        client = self._get_client()
+        # 60 seconds is the shortest TTL that survives realistic clock skew;
+        # anything longer than 15 minutes is treated as a misconfiguration
+        # and clamped. If a legitimate use case needs longer, add a new
+        # setting rather than raising this ceiling.
+        ttl = max(60, min(ttl_seconds, 900))
+
+        def _sign() -> Optional[str]:
+            try:
+                return client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self.bucket, "Key": key},
+                    ExpiresIn=ttl,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("presigned_url_failed key=%s error=%s", key, type(exc).__name__)
+                return None
+
+        return await asyncio.to_thread(_sign)

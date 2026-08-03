@@ -73,18 +73,37 @@ POSTGRES_ECHO = _env_bool("POSTGRES_ECHO", False)
 V2_FEATURES = _env_csv("V2_FEATURES", "")
 
 # --- Media storage -----------------------------------------------------------
+# APP_ENV is the deployment tier: 'development' (default), 'test',
+# 'staging', 'production'. Currently only the media-storage guard reads it;
+# add a fail-fast check when a new subsystem needs a per-tier behaviour.
+APP_ENV = _env_str("APP_ENV", "development").lower()
+
 MEDIA_STORAGE_BACKEND = _env_str("MEDIA_STORAGE_BACKEND", "local").lower()
 MEDIA_LOCAL_ROOT = _env_str("MEDIA_LOCAL_ROOT", "/data/media")
 MEDIA_MAX_BYTES = _env_int("MEDIA_MAX_BYTES", 8 * 1024 * 1024)
 MEDIA_ALLOWED_MIME = _env_csv(
     "MEDIA_ALLOWED_MIME", "image/jpeg,image/png,image/webp"
 )
+# In production the local filesystem adapter is not a valid storage backend —
+# it is fine for development and for CI, but a production pod loses its
+# uploads on redeploy and cannot serve another pod's writes. Set this to
+# 'true' only if you fully understand that trade-off (single-pod dev-preview
+# etc.). Fix 9 (WP2) adds the fail-closed guard in
+# app.domains.media.storage.factory.
+MEDIA_ALLOW_LOCAL_IN_PRODUCTION = _env_bool("MEDIA_ALLOW_LOCAL_IN_PRODUCTION", False)
 
 S3_ENDPOINT_URL = _env_str("S3_ENDPOINT_URL")
 S3_BUCKET = _env_str("S3_BUCKET")
 S3_REGION = _env_str("S3_REGION", "auto")
 S3_ACCESS_KEY_ID = _env_str("S3_ACCESS_KEY_ID")
 S3_SECRET_ACCESS_KEY = _env_str("S3_SECRET_ACCESS_KEY")
+# TTL of a presigned GET URL, in seconds. Short-lived by default so a
+# leaked URL stops working quickly. Increase only for a specific reason.
+S3_SIGNED_URL_TTL_SECONDS = _env_int("S3_SIGNED_URL_TTL_SECONDS", 300)
+# Server-side encryption header sent on every PUT. Empty disables it,
+# which is only safe when the bucket is configured with default
+# encryption at the storage layer. See docs/stabilisation/MEDIA_STORAGE_OPERATIONS.md.
+S3_SERVER_SIDE_ENCRYPTION = _env_str("S3_SERVER_SIDE_ENCRYPTION", "AES256")
 
 # --- Consent -----------------------------------------------------------------
 # Consent is a trust boundary, not an optional rollout experiment. The frontend
