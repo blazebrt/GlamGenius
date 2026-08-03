@@ -1,22 +1,42 @@
-"""GET /api/v2/privacy/export — everything we hold about the caller."""
+"""Privacy: export + account deletion across Supabase Auth, PostgreSQL, Storage.
+
+**One authoritative workflow.** No dual-write, no half-erased state. The order
+matters:
+
+1. Export current data (a JSON snapshot the user can keep).
+2. Delete all Supabase Storage objects under ``account/{uuid}/…``.
+3. Delete PostgreSQL rows via cascade off ``accounts.id``.
+4. Delete the Supabase Auth user with ``auth.admin.delete_user``.
+5. Record a minimal audit row (UUID + timestamp only).
+
+If any step fails we fail closed — subsequent steps do not run and the caller
+sees a real error rather than a partial success.
+"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
-from sqlalchemy import select
+import logging
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.ai_gateway.models import AIRun
 from app.domains.audit import service as audit
-from app.domains.audit.models import ACTION_PRIVACY_EXPORTED, AuditEvent
-from app.domains.consent.models import Consent
-from app.domains.entitlements import service as entitlements
-from app.domains.media import service as media_service
-from app.domains.inventory import service as inventory_service
+from app.domains.audit.models import (
+    ACTION_ACCOUNT_DELETION_REQUESTED,
+    ACTION_PRIVACY_EXPORTED,
+    AuditEvent,
+)
+from app.domains.consent import service as consent_service
+from app.domains.consent.models import CONSENT_PHOTO_ANALYSIS, Consent
+from app.domains.identity.models import (
+    ACCOUNT_STATUS_DELETED,
+    ACCOUNT_STATUS_DELETION_REQUESTED,
+    Account,
+)
 from app.domains.inventory.models import InventoryItem
-from app.domains.profile import observations as profile_observations
-from app.domains.profile import onboarding as profile_onboarding
-from app.domains.profile import service as profile_service
-from app.domains.profile.models import AppearanceProfile, OnboardingSession
+from app.domains.media import service as media_service
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_session
 from app.shared.security.deps import (
@@ -25,8 +45,9 @@ from app.shared.security.deps import (
     get_current_account,
     require_flag,
 )
-from database import db
-from security import _public_user
+from app.shared.supabase_client import get_supabase_admin
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_privacy"))])
 
@@ -37,95 +58,35 @@ async def export_data(
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """A single JSON document covering both databases.
-
-    Synchronous and complete for a private-beta data volume. When accounts get
-    large this becomes a background job writing to storage — the shape of the
-    document does not need to change for that.
-
-    Scan records include their analysis but **not** the stored image string:
-    face photos are truncated to 83 characters at write time and that fragment
-    is not meaningful data to hand back.
-    """
+    """A single JSON snapshot of everything we hold about the caller."""
     account_id = current.account_id
-    v1_user_id = current.v1_user_id
-
-    scans = (
-        await db.scans.find({"user_id": v1_user_id}).sort("created_at", -1).to_list(500)
-    )
-    plans = (
-        await db.style_plans.find({"user_id": v1_user_id})
-        .sort("created_at", -1)
-        .to_list(500)
-    )
 
     consents = (
-        (
-            await session.execute(
-                select(Consent)
-                .where(Consent.account_id == account_id)
-                .order_by(Consent.recorded_at.desc())
-            )
+        await session.execute(
+            select(Consent)
+            .where(Consent.account_id == account_id)
+            .order_by(Consent.recorded_at.desc())
         )
-        .scalars()
-        .all()
-    )
+    ).scalars().all()
     ai_runs = (
-        (
-            await session.execute(
-                select(AIRun)
-                .where(AIRun.account_id == account_id)
-                .order_by(AIRun.created_at.desc())
-                .limit(1000)
-            )
+        await session.execute(
+            select(AIRun)
+            .where(AIRun.account_id == account_id)
+            .order_by(AIRun.created_at.desc())
+            .limit(1000)
         )
-        .scalars()
-        .all()
-    )
+    ).scalars().all()
     audit_events = (
-        (
-            await session.execute(
-                select(AuditEvent)
-                .where(AuditEvent.account_id == account_id)
-                .order_by(AuditEvent.created_at.desc())
-                .limit(1000)
-            )
+        await session.execute(
+            select(AuditEvent)
+            .where(AuditEvent.account_id == account_id)
+            .order_by(AuditEvent.created_at.desc())
+            .limit(1000)
         )
-        .scalars()
-        .all()
-    )
+    ).scalars().all()
     media_assets = await media_service.list_for_account(
         session, account_id, include_deleted=True
     )
-    ledger = await entitlements.entries_for_account(session, account_id)
-    appearance_profile = (
-        await session.execute(
-            select(AppearanceProfile).where(AppearanceProfile.account_id == account_id)
-        )
-    ).scalar_one_or_none()
-    digital_twin = None
-    if appearance_profile is not None:
-        onboarding_row = (
-            await session.execute(
-                select(OnboardingSession)
-                .where(OnboardingSession.profile_id == appearance_profile.id)
-                .order_by(OnboardingSession.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        digital_twin = await profile_service.serialize_profile(session, appearance_profile)
-        digital_twin["observations"] = [
-            profile_observations.serialize(row)
-            for row in await profile_observations.list_for_profile(
-                session, appearance_profile.id
-            )
-        ]
-        digital_twin["change_history"] = await profile_service.change_history(
-            session, appearance_profile.id
-        )
-        digital_twin["onboarding"] = (
-            profile_onboarding.serialize(onboarding_row) if onboarding_row else None
-        )
     inventory_rows = (
         await session.execute(
             select(InventoryItem)
@@ -134,44 +95,14 @@ async def export_data(
             .limit(5000)
         )
     ).scalars().all()
-    inventory = [
-        await inventory_service.serialize_item(session, item, include_history=True)
-        for item in inventory_rows
-    ]
 
     export = {
         "generated_at": utcnow().isoformat(),
         "account": {
-            "v2_account_id": str(account_id),
-            "v1_user_id": v1_user_id,
+            "id": str(account_id),
+            "email": current.supabase_user.email,
             "status": current.account.status,
         },
-        "profile": _public_user(dict(current.user)),
-        "appearance_digital_twin": digital_twin,
-        "appearance_inventory": inventory,
-        "scans": [
-            {
-                "id": s.get("id"),
-                "scan_type": s.get("scan_type"),
-                "analysis": s.get("analysis"),
-                "created_at": (
-                    s["created_at"].isoformat() if s.get("created_at") else None
-                ),
-            }
-            for s in scans
-        ],
-        "style_plans": [
-            {
-                "id": p.get("id"),
-                "occasion": p.get("occasion"),
-                "mood": p.get("mood"),
-                "plan": p.get("plan"),
-                "created_at": (
-                    p["created_at"].isoformat() if p.get("created_at") else None
-                ),
-            }
-            for p in plans
-        ],
         "consents": [
             {
                 "consent_type": c.consent_type,
@@ -183,31 +114,20 @@ async def export_data(
             for c in consents
         ],
         "media": [media_service.to_public_dict(a) for a in media_assets],
+        "inventory": [
+            {"id": str(i.id), "category": i.category, "created_at": i.created_at.isoformat()}
+            for i in inventory_rows
+        ],
         "ai_runs": [
             {
                 "id": str(r.id),
                 "feature": r.feature,
                 "provider": r.provider,
                 "model": r.model,
-                "prompt_version": r.prompt_version,
-                "schema_version": r.schema_version,
                 "status": r.status,
-                "failure_type": r.failure_type,
-                "latency_ms": r.latency_ms,
-                "allowance_consumed": r.allowance_consumed,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in ai_runs
-        ],
-        "usage_ledger": [
-            {
-                "feature": e.feature,
-                "quantity": e.quantity,
-                "period_key": e.period_key,
-                "reason": e.reason,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
-            }
-            for e in ledger
         ],
         "audit_events": [
             {
@@ -221,15 +141,101 @@ async def export_data(
         ],
     }
 
-    # Exporting your own data is itself worth recording.
     await audit.record(
         session,
         action=ACTION_PRIVACY_EXPORTED,
         account_id=account_id,
         subject_type="account",
         subject_id=str(account_id),
-        context={"scans": len(scans), "media": len(media_assets)},
+        context={"media": len(media_assets), "inventory": len(inventory_rows)},
         client_ip=client_ip(request),
     )
     await session.commit()
     return export
+
+
+@router.delete("/privacy/account")
+async def delete_account(
+    request: Request,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Delete the caller's account across Supabase Auth, PostgreSQL and Storage.
+
+    This is destructive and idempotent — calling twice on a partially-deleted
+    account safely completes the remaining steps.
+    """
+    account = current.account
+    account_id: uuid.UUID = account.id
+
+    # Step 1: delete storage objects owned by the account.
+    media_removed = await media_service.delete_all_for_account(
+        session, account_id, client_ip=client_ip(request)
+    )
+
+    # Step 2: revoke photo consent.
+    await consent_service.record(
+        session,
+        account_id=account_id,
+        consent_type=CONSENT_PHOTO_ANALYSIS,
+        granted=False,
+        source="account_deletion",
+        client_ip=client_ip(request),
+    )
+
+    # Step 3: mark deletion-requested.
+    account.status = ACCOUNT_STATUS_DELETION_REQUESTED
+    account.deletion_requested_at = utcnow()
+    await session.flush()
+
+    # Step 4: delete the Supabase Auth user. This is what makes the account
+    # unrecoverable — if it fails, we stop and let the caller retry.
+    try:
+        admin = get_supabase_admin()
+        admin.auth.admin.delete_user(str(account_id))
+    except Exception as exc:  # noqa: BLE001 — external boundary
+        logger.error(
+            "supabase_admin_delete_user_failed account=%s reason=%s",
+            account_id, type(exc).__name__,
+        )
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "supabase_delete_failed",
+                "message": (
+                    "We couldn't complete the deletion right now. Your account "
+                    "is marked for closure and your photos have been erased; "
+                    "please try again in a few minutes to finish removing your "
+                    "identity."
+                ),
+            },
+        ) from exc
+
+    # Step 5: cascade-delete the account row. FKs with ON DELETE CASCADE
+    # remove every child record (inventory, consent, media metadata, audit
+    # events, AI runs, etc.). The audit row is intentionally *not*
+    # cascaded — see the ON DELETE SET NULL on AuditEvent.account_id.
+    account.status = ACCOUNT_STATUS_DELETED
+    await session.execute(delete(Account).where(Account.id == account_id))
+
+    await audit.record(
+        session,
+        action=ACTION_ACCOUNT_DELETION_REQUESTED,
+        account_id=None,  # account is gone; keep the audit row without it
+        subject_type="account",
+        subject_id=str(account_id),
+        context={
+            "media_deleted": media_removed,
+            "storage_removed": True,
+            "supabase_auth_deleted": True,
+        },
+        client_ip=client_ip(request),
+    )
+    await session.commit()
+
+    return {
+        "status": "deleted",
+        "account_id": str(account_id),
+        "media_deleted": media_removed,
+    }

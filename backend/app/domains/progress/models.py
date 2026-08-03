@@ -111,7 +111,7 @@ class MetricEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "metric_events"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     metric_key: Mapped[str] = mapped_column(String(48), nullable=False)
     formula_version: Mapped[str] = mapped_column(String(16), nullable=False)
     period: Mapped[str] = mapped_column(String(16), nullable=False, default="point", server_default="point")
@@ -134,7 +134,7 @@ class ProgressSnapshot(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "progress_snapshots"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     period: Mapped[str] = mapped_column(String(16), nullable=False)
     period_start: Mapped[date] = mapped_column(Date, nullable=False)
     period_end: Mapped[date] = mapped_column(Date, nullable=False)
@@ -157,7 +157,7 @@ class ScoreExplanation(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "score_explanations"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     metric_event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("metric_events.id", ondelete="CASCADE"), nullable=False)
     metric_key: Mapped[str] = mapped_column(String(48), nullable=False)
     formula_version: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -177,7 +177,7 @@ class ComparisonSession(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "comparison_sessions"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     baseline_media_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"), nullable=False)
     current_media_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"), nullable=False)
     body_area: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -199,7 +199,7 @@ class ProgressPhoto(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "progress_photos"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     media_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"), nullable=False)
     body_area: Mapped[str] = mapped_column(String(32), nullable=False)
     taken_on: Mapped[date] = mapped_column(Date, nullable=False)
@@ -223,7 +223,7 @@ class ProgressGoal(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "progress_goals"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     # Optional link to the Phase 2 declared goal this was promoted from.
     appearance_goal_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("appearance_goals.id", ondelete="SET NULL"))
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -248,7 +248,7 @@ class GoalUpdate(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "goal_updates"
 
     goal_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("progress_goals.id", ondelete="CASCADE"), nullable=False)
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     value: Mapped[Optional[float]] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(24), nullable=False, default="metric", server_default="metric")
     note: Mapped[Optional[str]] = mapped_column(String(500))
@@ -270,7 +270,7 @@ class MemoryFact(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "memory_facts"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     category: Mapped[str] = mapped_column(String(32), nullable=False)
     subject_key: Mapped[str] = mapped_column(String(200), nullable=False)
     fact: Mapped[str] = mapped_column(Text, nullable=False)
@@ -324,7 +324,7 @@ class MemoryCategoryPreference(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "memory_category_preferences"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     category: Mapped[str] = mapped_column(String(32), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
 
@@ -342,7 +342,7 @@ class FeedbackEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "feedback_events"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
     subject_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True)
     signal: Mapped[str] = mapped_column(String(24), nullable=False)
@@ -361,7 +361,7 @@ class Milestone(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "milestones"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     rule_id: Mapped[str] = mapped_column(ForeignKey("milestone_rules.rule_id", ondelete="CASCADE"), nullable=False)
     label: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
@@ -385,7 +385,7 @@ class GamificationEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "gamification_events"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     behaviour: Mapped[str] = mapped_column(String(48), nullable=False)
     occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
     subject_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True)
@@ -408,7 +408,7 @@ class Streak(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "streaks"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     behaviour: Mapped[str] = mapped_column(String(48), nullable=False)
     current_length: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     longest_length: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

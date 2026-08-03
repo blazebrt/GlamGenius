@@ -1,69 +1,56 @@
-"""
-GlamGenius API — Personal Stylist & Skin/Hair Wellness Coach (India)
+"""GlamGenius API — Personal Appearance Operating System
 
-One FastAPI application. V1 lives at /api and is unchanged. V2 mounts at
-/api/v2 alongside it — there is deliberately no second entrypoint.
+A single FastAPI application. **V2 only.** Every route is mounted under
+``/api/v2`` and authenticated with a verified Supabase JWT. No MongoDB, no
+local password store, no payment stack. Prompt 2 will remove the last few
+legacy artefacts still lingering in the tree.
 """
-# Sentry has to be initialised before any FastAPI import so its middleware
-# can attach to the app's exception path. A missing DSN is a supported
-# state — init_sentry() short-circuits cleanly.
+from __future__ import annotations
+
+# Sentry must be initialised before FastAPI so its middleware can attach to
+# the exception path. A missing DSN is fine — init_sentry() no-ops.
 from app.shared.observability.sentry_bootstrap import init_sentry
 
 init_sentry()
 
-from fastapi import FastAPI, APIRouter
-from starlette.middleware.cors import CORSMiddleware
 import logging
 
-from settings import (
-    ALLOWED_ORIGINS,
-    ALLOWED_ORIGINS_IS_DEFAULT,
-    AI_REQUESTS_PER_HOUR,
-    AI_REQUESTS_PER_HOUR_PLUS,
-    AI_RATE_WINDOW_MINUTES,
-    LOGIN_LOCKOUT_MINUTES,
-    PREVIEW_WINDOW_MINUTES,
-    JWT_SECRET,
-)
-from database import client, db
-from routes import health, users, scan, quiz, plans, recommendations, services, subscription, admin
+from fastapi import FastAPI
+from starlette.middleware.cors import CORSMiddleware
 
 from app.api.v2 import router as v2_router
-from app.config import MEDIA_STORAGE_BACKEND, V2_FEATURES
+from app.config import (
+    ALLOWED_ORIGINS,
+    ALLOWED_ORIGINS_IS_DEFAULT,
+    MEDIA_STORAGE_BACKEND,
+    SUPABASE_JWT_SECRET,
+    SUPABASE_JWKS_URL,
+    SUPABASE_URL,
+    V2_FEATURES,
+)
 from app.shared.database import sql
 from app.shared.errors.handlers import register_error_handlers
 from app.shared.observability.logging import configure_logging
 from app.shared.observability.request_id import RequestIdMiddleware
 
-app = FastAPI(title="GlamGenius — Personal Stylist & Wellness Coach", version="2.0.0")
-api_router = APIRouter(prefix="/api")
+app = FastAPI(
+    title="GlamGenius — Personal Appearance Operating System",
+    version="2.0.0-supabase",
+)
 
-api_router.include_router(health.router)
-api_router.include_router(users.router)
-api_router.include_router(scan.router)
-api_router.include_router(quiz.router)
-api_router.include_router(plans.router)
-api_router.include_router(recommendations.router)
-api_router.include_router(services.router)
-api_router.include_router(subscription.router)
-api_router.include_router(admin.router)
-
-app.include_router(api_router)
 app.include_router(v2_router)
 
-# Structured, logged, correlated failures for both V1 and V2 routes.
+# Structured, logged, correlated failures for every route.
 register_error_handlers(app)
 
 app.add_middleware(
     CORSMiddleware,
-    # Only these websites may call the API from a browser. Set ALLOWED_ORIGINS
-    # to your real site before going live. This does not affect the phone app,
-    # which is not a browser and sends no Origin header.
+    # Only these websites may call the API from a browser. The Expo app is
+    # not a browser and sends no Origin header, so this does not affect it.
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    # So a client can read the correlation id off any response, including errors.
     expose_headers=["X-Request-Id"],
 )
 app.add_middleware(RequestIdMiddleware)
@@ -71,68 +58,29 @@ app.add_middleware(RequestIdMiddleware)
 configure_logging(logging.INFO)
 logger = logging.getLogger(__name__)
 
-INSECURE_JWT_DEFAULT = "glamgenius-dev-secret-change-me"
-
 
 @app.on_event("startup")
-async def startup_db_client():
-    logger.info("Starting GlamGenius Wellness Coach API v2...")
-    await db.users.create_index("id", unique=True)
-    await db.users.create_index("email")
-    await db.scans.create_index("user_id")
-    await db.style_plans.create_index("user_id")
-    await db.subscription_orders.create_index("user_id")
-    await db.invite_codes.create_index("code", unique=True)
-    await db.invite_codes.create_index("active")
-    await db.login_attempts.create_index("key")
-    # Failed attempts clean themselves up once the lockout window has passed.
-    await db.login_attempts.create_index(
-        "created_at", expireAfterSeconds=LOGIN_LOCKOUT_MINUTES * 60
-    )
-    await db.preview_attempts.create_index("key")
-    await db.preview_attempts.create_index(
-        "created_at", expireAfterSeconds=PREVIEW_WINDOW_MINUTES * 60
-    )
-    await db.ai_usage.create_index("user_id")
-    # Usage records clean themselves up once the window has passed.
-    await db.ai_usage.create_index(
-        "created_at", expireAfterSeconds=AI_RATE_WINDOW_MINUTES * 60
-    )
-    logger.info(
-        "CORS allowed origins: %s | AI rate limit: %s/hour free, %s/hour Plus",
-        ALLOWED_ORIGINS, AI_REQUESTS_PER_HOUR, AI_REQUESTS_PER_HOUR_PLUS,
-    )
+async def _startup() -> None:
+    logger.info("Starting GlamGenius V2 (Supabase cutover)...")
 
-    if JWT_SECRET == INSECURE_JWT_DEFAULT:
-        # Every deployment that forgets this shares one publicly known signing
-        # key, which means anyone can mint a token for any account.
+    if not SUPABASE_URL:
         logger.error(
-            "JWT_SECRET is not set, so the API is signing tokens with a default "
-            "value that is published in this repository. Anyone could forge a "
-            "login. Set JWT_SECRET to a long random string before letting real "
-            "users near this server."
+            "SUPABASE_URL is empty. Every V2 route will refuse to authenticate "
+            "until you set SUPABASE_URL, SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY "
+            "in backend/.env."
+        )
+    if not (SUPABASE_JWKS_URL or SUPABASE_JWT_SECRET):
+        logger.error(
+            "Neither SUPABASE_JWKS_URL nor SUPABASE_JWT_SECRET is set — JWT "
+            "verification is not configured. All requests will return 401."
         )
 
     if ALLOWED_ORIGINS_IS_DEFAULT:
-        # Loud on purpose. Without this, a deployed website fails to load any
-        # data with no server-side error, which looks like a website bug.
         logger.warning(
-            "ALLOWED_ORIGINS is not set, so only local development addresses can "
-            "call this API from a browser. That is correct on your own machine. "
-            "If this server is deployed, your website will load but show no data "
-            "until you set ALLOWED_ORIGINS to your site address "
-            "(for example https://yoursite.com,https://www.yoursite.com). "
-            "The phone app is not affected."
+            "ALLOWED_ORIGINS is not set — only local development addresses can "
+            "call this API from a browser."
         )
-    for origin in ALLOWED_ORIGINS:
-        if not origin.startswith(("http://", "https://")):
-            logger.warning(
-                "ALLOWED_ORIGINS entry %r has no http:// or https:// prefix and will "
-                "never match. Browsers compare the full address.", origin,
-            )
 
-    # V2 does not block startup. A missing PostgreSQL must degrade the new
-    # endpoints, not take the working V1 app down with it.
     postgres_ok = await sql.ping()
     logger.info(
         "V2: postgres=%s storage=%s features=%s",
@@ -142,12 +90,11 @@ async def startup_db_client():
     )
     if not postgres_ok:
         logger.warning(
-            "PostgreSQL is not reachable, so /api/v2 routes will fail. V1 is "
-            "unaffected. Check POSTGRES_URL and that the postgres service is up."
+            "PostgreSQL is not reachable — every V2 route will fail. Check "
+            "POSTGRES_URL in backend/.env."
         )
 
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+async def _shutdown() -> None:
     await sql.dispose_engine()

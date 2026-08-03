@@ -38,7 +38,8 @@ KNOWN_FLAGS: Dict[str, str] = {
     "v2_planner": "The Monday-to-Sunday weekly planner",
     "v2_routines": "Safe appearance routines, shelf, perfume, supplement and food context",
     "v2_progress": "Explainable progress metrics, goals, milestones and controlled memory",
-    "v2_billing": "Plans, entitlements, checkout and support tooling",
+    "v2_scan": "Face/hair/hands photo analysis with consent enforcement",
+    "v2_quiz": "Style vibe quiz",
     "v2_virtual_tryon": "Virtual try-on. No provider is selected; keep this off.",
 }
 
