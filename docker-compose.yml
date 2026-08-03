@@ -1,13 +1,13 @@
-# Development / preview stack.
+# Development / preview stack — Supabase-cutover version.
 #
-# Runs the whole application from a machine with only Git and Docker
-# installed. Service-image digests are pinned via scripts/update_service_digests.sh
-# so a `docker compose build --no-cache && docker compose up -d` today produces
-# the same runtime bytes it produced yesterday.
+# GlamGenius is Supabase-Auth + PostgreSQL + Supabase-Storage in production.
+# This compose file mirrors the runtime for local development: PostgreSQL is
+# local, and Supabase Auth / Storage are used via the real Supabase project
+# (secrets in .env).
 #
-# Fix 4 (WP2): images are pinned to sha256 digests, not moving minor tags.
-# The tag comment after each digest is guidance for the human reviewer only;
-# Docker resolves the digest.
+# There is no MongoDB service. The V1 identity foundation and its Mongo
+# datastore were removed in the Supabase cutover; the Postgres service is
+# the only application database.
 #
 # Bring up:
 #   docker compose build --no-cache
@@ -18,28 +18,7 @@
 #   docker compose down -v
 
 services:
-  mongo:
-    # Fix 4 (WP2): pin to a sha256 digest via scripts/update_service_digests.sh
-    # before the first production deployment. The minor tag below is the
-    # baseline for the pre-digest work; a bump replaces the whole `image:` line
-    # with `mongo:6.0.19@sha256:<digest>`. See docs/engineering/DOCKER_REPRODUCIBILITY.md.
-    image: mongo:6.0.19
-    restart: unless-stopped
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      # Audit finding F28: the backend could start before Mongo accepted
-      # connections. It has a healthcheck now, and the backend waits for it.
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
   postgres:
-    # Fix 4 (WP2): pin to sha256 via scripts/update_service_digests.sh — see
-    # comment above.
     image: postgres:16.6-alpine
     restart: unless-stopped
     environment:
@@ -64,25 +43,17 @@ services:
     ports:
       - "8000:8000"
     environment:
-      MONGO_URL: mongodb://mongo:27017
-      DB_NAME: glamgenius
       POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@postgres:5432/glamgenius_v2
       MEDIA_LOCAL_ROOT: /data/media
-      # Pass secrets via env_file (.env) — never hardcode API keys here
+      # Supabase URL, keys, JWKS URL and storage bucket come from .env.
     env_file:
       - .env
     volumes:
       - media_data:/data/media
     depends_on:
-      mongo:
-        condition: service_healthy
       postgres:
         condition: service_healthy
-    # Migrations run on start so a fresh checkout needs one command, and a
-    # deploy can never serve a schema older than its code.
     healthcheck:
-      # The API starts only after Alembic succeeds. Waiting for this endpoint
-      # therefore also guarantees that workers see the migrated schema.
       test:
         [
           "CMD",
@@ -101,8 +72,6 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      MONGO_URL: mongodb://mongo:27017
-      DB_NAME: glamgenius
       POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@postgres:5432/glamgenius_v2
       MEDIA_LOCAL_ROOT: /data/media
     env_file:
@@ -117,6 +86,5 @@ services:
     command: python -m app.workers.outbox_relay
 
 volumes:
-  mongo_data:
   postgres_data:
   media_data:

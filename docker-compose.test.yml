@@ -1,34 +1,19 @@
-# Test stack. Everything runs in containers — this machine needs no Python,
-# no Node, and no MinIO installed.
+# Test stack — Supabase-cutover version.
+#
+# Everything runs in containers — the host needs no Python and no Node.
 #
 #   docker compose -f docker-compose.test.yml build --no-cache
 #   docker compose -f docker-compose.test.yml run --rm backend-tests
 #   docker compose -f docker-compose.test.yml run --rm frontend-tests
 #   docker compose -f docker-compose.test.yml down -v
 #
-# Fix 4 (WP2): service-image digests are pinned via
-# scripts/update_service_digests.sh. Two consecutive `up && down -v` cycles
-# see the same bytes.
-#
-# Fix 9 (WP2): a MinIO container is started alongside Postgres and Mongo so
-# the S3 integration tests in tests/test_media_s3.py can exercise the
-# production storage adapter without a paid provider.
-#
-# Databases here are throwaway: tmpfs, no volumes, dropped with the stack.
+# There is no Mongo, no MinIO and no S3 test service. The V1 identity
+# datastore is gone; production media goes to Supabase Storage, and the
+# adapter under test uses the local filesystem fixture. Real Supabase
+# Storage is not called from CI — its behaviour is covered by unit tests
+# that stub the client.
 
 services:
-  test-mongo:
-    # Fix 4 (WP2): the digest below is added by scripts/update_service_digests.sh
-    # before this file is merged. See docs/engineering/DOCKER_REPRODUCIBILITY.md.
-    image: mongo:6.0.19
-    tmpfs:
-      - /data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
-      interval: 3s
-      timeout: 5s
-      retries: 30
-
   test-postgres:
     image: postgres:16.6-alpine
     environment:
@@ -43,63 +28,27 @@ services:
       timeout: 5s
       retries: 30
 
-  minio:
-    # MinIO is the S3-compatible service the media adapter is tested against.
-    # RELEASE.2024-11-07T00-52-20Z is a stable release tag at the time of WP2;
-    # the sha256 digest is added by scripts/update_service_digests.sh.
-    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    command: server /data --console-address ":9001"
-    tmpfs:
-      - /data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 3s
-      timeout: 5s
-      retries: 30
-
   backend-tests:
     build:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      MONGO_URL: mongodb://test-mongo:27017
-      DB_NAME: glamgenius_test
       POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@test-postgres:5432/glamgenius_test
-      # Storage: local for the unit suite (tmpfs); S3 tests skip themselves
-      # unless S3_INTEGRATION_ENABLED is true — set below.
       MEDIA_STORAGE_BACKEND: local
       MEDIA_LOCAL_ROOT: /tmp/media-test
-      # S3 integration (Fix 9). The test suite skips when this is unset.
-      S3_INTEGRATION_ENABLED: "true"
-      S3_ENDPOINT_URL: http://minio:9000
-      S3_BUCKET: glamgenius-test
-      S3_REGION: us-east-1
-      S3_ACCESS_KEY_ID: minioadmin
-      S3_SECRET_ACCESS_KEY: minioadmin
-      # APP_ENV=test disables the production-only refusals in the storage
-      # factory guard, so the suite can use the local adapter for non-S3
-      # tests without setting the escape-hatch.
       APP_ENV: test
-      JWT_SECRET: test-secret-not-a-real-one
-      ADMIN_SECRET: test-admin-secret
-      # No Gemini key on purpose. The provider is faked in tests, and the
-      # unconfigured-provider path is itself something worth testing.
+      SUPABASE_URL: https://test.supabase.co
+      SUPABASE_ANON_KEY: test-anon
+      SUPABASE_SERVICE_ROLE_KEY: test-service
+      SUPABASE_JWT_SECRET: test-secret
+      SUPABASE_JWT_ISSUER: https://test.supabase.co/auth/v1
+      SUPABASE_STORAGE_BUCKET: glamgenius-media
       GEMINI_API_KEY: ""
-      SUBSCRIPTIONS_AVAILABLE: "false"
-      # Most tests exercise AI failure behaviour rather than the consent gate.
-      # Dedicated tests turn enforcement on and prove the real scan routes.
       REQUIRE_ANALYSIS_CONSENT: "false"
-      V2_FEATURES: "v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions,v2_today,v2_planner,v2_routines,v2_progress,v2_billing"
+      INVITE_REQUIRED: "false"
       PYTHONPATH: /app
     depends_on:
-      test-mongo:
-        condition: service_healthy
       test-postgres:
-        condition: service_healthy
-      minio:
         condition: service_healthy
     working_dir: /app
     command: >
@@ -113,14 +62,8 @@ services:
       dockerfile: Dockerfile.test
     working_dir: /workspace
     volumes:
-      # Read the source from the host so the test runs against exactly the
-      # committed files. `node_modules` is a container-local volume so the
-      # host does not get a foreign install and yarn install is deterministic.
       - ./frontend:/workspace
       - frontend_node_modules:/workspace/node_modules
-    # yarn is what the app ships; --frozen-lockfile ensures a lockfile drift
-    # fails this job rather than silently pulling different transitive
-    # versions.
     command: >
       sh -c "yarn install --frozen-lockfile &&
              yarn typecheck &&
