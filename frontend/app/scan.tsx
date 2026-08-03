@@ -54,13 +54,16 @@ export default function ScanScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const scanType = (params.scanType as string) || 'face';
-  const { userId, user, refreshSubscription } = useUserStore();
+  const { userId, user } = useUserStore();
   const setLatestScan = usePlanStore((s) => s.setLatestScan);
 
   const [phase, setPhase] = useState<ScanPhase>('camera');
   const [step, setStep] = useState(0);
   const [analysis, setAnalysis] = useState<any>(null);
-  const [preview, setPreview] = useState<any>(null);
+  // `setPreview` was called by the removed signed-out preview flow. The
+  // preview branch of the UI still reads `preview` (it is always null now),
+  // and will be deleted alongside the rest of the preview path in Prompt 2.
+  const [preview] = useState<any>(null);
   const [errorLimit, setErrorLimit] = useState(false);
   const [cameraError, setCameraError] = useState(false);
   const [previewInvite, setPreviewInvite] = useState('');
@@ -101,57 +104,14 @@ export default function ScanScreen() {
     return () => clearInterval(t);
   }, [phase]);
 
-  const runPreview = async (base64: string) => {
-    if (!photoConsent) {
-      notify('Consent needed', 'Please agree before sending a photo for analysis.');
-      setPhase('camera');
-      return;
-    }
-    if (!previewInvite.trim()) {
-      notify(
-        'Invite required',
-        'GlamGenius is invite-only. Enter your invite code to try a preview.',
-      );
-      setPhase('camera');
-      return;
-    }
-    setPhase('processing');
-    setErrorLimit(false);
-    setFailure(null);
-    setLastImage(base64);
-    try {
-      const res = await api.post('/scan/preview', {
-        image_base64: base64,
-        scan_type: scanType,
-        invite_code: previewInvite.trim(),
-        photo_analysis_consent: true,
-      });
-      setPreview(res.data);
-      setPhase('results');
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      if (err?.response?.status === 429) {
-        notify(
-          'Free previews used',
-          typeof detail === 'object' ? detail?.message : 'Please create an account to continue.',
-        );
-        setErrorLimit(true);
-        setPhase('camera');
-        return;
-      }
-      if (err?.response?.status === 400) {
-        notify(
-          'Invite needed',
-          typeof detail === 'object' ? (detail?.message || 'Check your invite code.') : String(detail || 'Check your invite code.'),
-        );
-        setPhase('camera');
-        return;
-      }
-      // Anything else — including the analysis genuinely failing — gets the
-      // full explanation, not a one-line toast.
-      setFailure(classifyFailure(err));
-      setPhase('failed');
-    }
+  const runPreview = async (_base64: string) => {
+    // Signed-out preview was removed with the Supabase cutover. Every scan is
+    // now authenticated. Send the user back to camera with a clear prompt.
+    notify(
+      'Sign in to run a scan',
+      'GlamGenius scans now require an account. Please sign in with your invite to continue.',
+    );
+    setPhase('camera');
   };
 
   const runAnalysis = async (base64: string) => {
@@ -170,20 +130,18 @@ export default function ScanScreen() {
     setLastImage(base64);
     try {
       // No user_id — the server identifies us from the login token.
-      const res = await api.post('/scan/analyze', {
+      const res = await api.post('/api/v2/scan/analyse', {
         image_base64: base64,
         scan_type: scanType,
         city: user?.city,
         diet: user?.diet,
         budget_range: user?.budget_range,
         height_cm: user?.height_cm,
-        weight_kg: user?.weight_kg,
         body_type: user?.body_type,
         style_vibe: user?.style_vibe,
       });
       setAnalysis(res.data.analysis);
       setLatestScan(res.data.analysis);
-      await refreshSubscription();
       setPhase('results');
     } catch (err: any) {
       const detail = err?.response?.data?.detail;

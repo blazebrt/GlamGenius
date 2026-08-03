@@ -13,7 +13,6 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useUserStore } from '../../src/store/userStore';
-import { useConfigStore } from '../../src/store/configStore';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../../src/theme/colors';
 
 const VIBES = [
@@ -32,8 +31,7 @@ function notify(title: string, message: string) {
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, fetchUser, updateUser, refreshSubscription, logout } = useUserStore();
-  const billingAvailable = useConfigStore((s) => s.billingAvailable);
+  const { user, fetchUser, updateUser, logout } = useUserStore();
   const [name, setName] = React.useState(user?.name || '');
   const [city, setCity] = React.useState(user?.city || '');
   const [diet, setDiet] = React.useState(user?.diet || 'veg');
@@ -42,8 +40,7 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     void fetchUser();
-    void refreshSubscription();
-  }, [fetchUser, refreshSubscription]);
+  }, [fetchUser]);
 
   useEffect(() => {
     setName(user?.name || '');
@@ -79,30 +76,10 @@ export default function ProfileScreen() {
         </Text>
 
         <View style={styles.planCard}>
-          <Text style={styles.planTitle}>
-            {billingAvailable() && user?.plan === 'plus' ? 'Plus member' : 'Private beta member'}
+          <Text style={styles.planTitle}>Private beta member</Text>
+          <Text style={styles.planSub} testID="beta-plan-note">
+            Full access is included with your invite — nothing to pay.
           </Text>
-          <Text style={styles.planSub}>
-            {`${user?.scans_remaining_free ?? 0} of ${user?.free_scans_per_month ?? 1} checks left this month`}
-          </Text>
-          {/* "Upgrade to Plus" led to a paywall that always refused the payment.
-              It only appears when the backend says billing is really open. */}
-          {billingAvailable() ? (
-            user?.plan !== 'plus' && (
-              <TouchableOpacity
-                style={styles.upgradeBtn}
-                onPress={() => router.push('/subscription')}
-                accessibilityRole="button"
-                testID="upgrade-button"
-              >
-                <Text style={styles.upgradeText}>Upgrade to Plus</Text>
-              </TouchableOpacity>
-            )
-          ) : (
-            <Text style={styles.planSub} testID="beta-plan-note">
-              Full access is included with your invite — nothing to pay.
-            </Text>
-          )}
         </View>
 
         <View style={styles.stats}>

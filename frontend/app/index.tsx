@@ -21,21 +21,20 @@ export default function WelcomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
-  const { userId, setUserId } = useUserStore();
+  const { userId } = useUserStore();
 
   useEffect(() => {
     checkExistingUser();
-    // Runs once on mount to route the user based on their persisted id.
-    // `checkExistingUser` closes over router / setUserId / setLoading, all
-    // of which are stable; re-running this effect would double-navigate.
+    // Runs once on mount. Session hydration happens in userStore.initializeUser,
+    // which the root layout kicks off before this screen mounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const checkExistingUser = async () => {
     try {
-      const storedUserId = await AsyncStorage.getItem('glamgenius_user_id');
-      if (storedUserId) {
-        setUserId(storedUserId);
+      // Legacy value from before the Supabase cutover — cleared for good.
+      await AsyncStorage.removeItem('glamgenius_user_id').catch(() => {});
+      if (useUserStore.getState().userId) {
         setTimeout(() => router.replace('/(tabs)/today'), 900);
       } else {
         setLoading(false);

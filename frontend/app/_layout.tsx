@@ -87,8 +87,6 @@ function RootLayout() {
             <Stack.Screen name="style-quiz" />
             <Stack.Screen name="get-advice" />
             <Stack.Screen name="recommendations" />
-            <Stack.Screen name="service-details" />
-            <Stack.Screen name="subscription" />
             <Stack.Screen name="onboarding" />
             <Stack.Screen name="my-appearance" />
             <Stack.Screen name="inventory-add" />

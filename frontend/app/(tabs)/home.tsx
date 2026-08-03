@@ -31,14 +31,6 @@ const MEMBERSHIP_ACTION = {
   color: COLORS.warning,
 };
 
-const UPGRADE_ACTION = {
-  id: 'plus',
-  icon: 'diamond-outline',
-  label: 'Go Plus',
-  route: '/subscription',
-  color: COLORS.warning,
-};
-
 const TIPS = [
   { tip: 'Add height & weight in Profile — your stylist uses them with skin tone for better outfit fits.', source: 'Stylist tip' },
   { tip: 'SPF every morning helps skin look more even — and your clothing colours photograph better.', source: 'Everyday care' },
@@ -56,28 +48,22 @@ const SALON_PREVIEWS = [
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, fetchUser, refreshSubscription } = useUserStore();
+  const { user, fetchUser } = useUserStore();
   const [tipIndex, setTipIndex] = useState(0);
-  const billingAvailable = useConfigStore((s) => s.billingAvailable);
   const loadConfig = useConfigStore((s) => s.load);
   const configLoaded = useConfigStore((s) => s.loaded);
 
   useEffect(() => {
     fetchUser();
-    refreshSubscription();
     if (!configLoaded) void loadConfig();
     setTipIndex(new Date().getHours() % TIPS.length);
-    // The user, config, and subscription stores are Zustand singletons; the
-    // action references are stable across renders. Running this effect once
-    // on mount is deliberate — re-running it on every render would spam the
-    // backend. See docs/engineering/CHECKLIST_MOBILE_UX.md §5.
+    // The user and config stores are Zustand singletons; the action
+    // references are stable across renders. Running this effect once on
+    // mount is deliberate.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const quickActions = [
-    ...QUICK_ACTIONS,
-    billingAvailable() ? UPGRADE_ACTION : MEMBERSHIP_ACTION,
-  ];
+  const quickActions = [...QUICK_ACTIONS, MEMBERSHIP_ACTION];
 
   const greeting = () => {
     const h = new Date().getHours();
@@ -86,13 +72,11 @@ export default function HomeScreen() {
     return 'Good evening';
   };
 
-  // "Unlimited checks" was never true — invited members have a monthly
-  // allowance like everyone else, it is just a larger one. Show the real number.
-  const plan = billingAvailable() && user?.plan === 'plus' ? 'Plus' : 'Private beta';
-  const remaining =
-    typeof user?.scans_remaining_free === 'number'
-      ? `${user.scans_remaining_free} checks left this month`
-      : 'Checks included';
+  // Beta shows the neutral membership label. Beta usage counters, when
+  // needed, come from `/api/v2/me`'s `beta_usage` block, not from a plan
+  // field on the user profile.
+  const plan = 'Private beta';
+  const remaining = 'Checks included';
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -110,11 +94,6 @@ export default function HomeScreen() {
         <Animated.View entering={FadeInDown.delay(80)} style={styles.planChip}>
           <Ionicons name="leaf-outline" size={16} color={COLORS.primary} />
           <Text style={styles.planChipText}>{plan} · {remaining}</Text>
-          {billingAvailable() && user?.plan !== 'plus' && (
-            <TouchableOpacity onPress={() => router.push('/subscription')}>
-              <Text style={styles.upgradeText}>Upgrade</Text>
-            </TouchableOpacity>
-          )}
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(120)} style={styles.tipCard}>

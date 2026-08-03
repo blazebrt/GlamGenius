@@ -37,7 +37,7 @@ export default function GetAdviceScreen() {
   const submit = async () => {
     setLoading(true);
     try {
-      const res = await api.post('/plans/style', {
+      const res = await api.post('/api/v2/style/occasion', {
         user_id: userId,
         mood,
         occasion,
@@ -45,7 +45,7 @@ export default function GetAdviceScreen() {
         diet: user?.diet,
         city: user?.city,
         height_cm: user?.height_cm,
-        weight_kg: user?.weight_kg,
+        weight_kg: undefined as number | undefined,
         body_type: user?.body_type,
         style_vibe: user?.style_vibe,
         follow_trends: true,

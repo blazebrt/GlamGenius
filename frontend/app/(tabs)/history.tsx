@@ -29,7 +29,7 @@ export default function HistoryScreen() {
     }
     setLoading(true);
     try {
-      const h = await api.get('/scan/history');
+      const h = await api.get('/api/v2/scan/history');
       setScans(h.data || []);
     } catch {
       setScans([]);

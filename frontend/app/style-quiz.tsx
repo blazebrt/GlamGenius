@@ -30,7 +30,7 @@ export default function StyleQuizScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.get('/quiz/questions');
+        const res = await api.get('/api/v2/quiz/questions');
         setQuestions(res.data);
       } catch {
         setQuestions([]);
@@ -65,7 +65,7 @@ export default function StyleQuizScreen() {
         occasion: 'everyday',
         budget: 'mid',
       };
-      const res = await api.post('/quiz/submit', payload);
+      const res = await api.post('/api/v2/quiz/submit', payload);
       setLatestPlan(res.data.plan);
       router.push('/recommendations');
     } catch (err: any) {
