@@ -23,13 +23,11 @@ const QUICK_ACTIONS = [
   { id: 'quiz', icon: 'clipboard-outline', label: 'Stylist quiz', route: '/style-quiz', color: COLORS.info },
 ];
 
-const MEMBERSHIP_ACTION = {
-  id: 'membership',
-  icon: 'sparkles-outline',
-  label: 'Membership',
-  route: '/subscription',
-  color: COLORS.warning,
-};
+// The membership tile was removed with the payment UI cleanup. Adding
+// something premium/paid back here is the wrong move — payments are a
+// separate future workstream. See docs/stabilisation/SUPABASE_HARDENING_AUDIT.md.
+
+const QUICK_ACTION_LIST = QUICK_ACTIONS;
 
 const TIPS = [
   { tip: 'Add height & weight in Profile — your stylist uses them with skin tone for better outfit fits.', source: 'Stylist tip' },
@@ -63,7 +61,7 @@ export default function HomeScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const quickActions = [...QUICK_ACTIONS, MEMBERSHIP_ACTION];
+  const quickActions = QUICK_ACTION_LIST;
 
   const greeting = () => {
     const h = new Date().getHours();

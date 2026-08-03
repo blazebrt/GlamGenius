@@ -133,11 +133,8 @@ export default function ProfileScreen() {
           <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
         </TouchableOpacity>
 
-        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open your plan" style={styles.appearanceCard} onPress={() => router.push('/paywall')}>
-          <Ionicons name="card-outline" size={28} color={COLORS.primary} />
-          <View style={{ flex: 1 }}><Text style={styles.appearanceTitle}>Your plan</Text><Text style={styles.appearanceText}>What is included, what you have used, and what Plus adds</Text></View>
-          <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
-        </TouchableOpacity>
+        {/* The "Your plan" card was removed with the payment UI cleanup.
+            Paid membership is a future workstream; no CTA appears here. */}
 
         <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open Progress" style={styles.appearanceCard} onPress={() => router.push('/progress')}>
           <Ionicons name="trending-up-outline" size={28} color={COLORS.primary} />
