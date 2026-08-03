@@ -29,7 +29,7 @@ class MediaAsset(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("account_links.id", ondelete="CASCADE"),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
         nullable=False,
     )
 

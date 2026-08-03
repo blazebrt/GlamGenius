@@ -13,7 +13,7 @@ Two shapes of work live here and they are deliberately kept apart:
 into a recommendation is written down with where it came from, so "why did it
 suggest this" can be answered from the database months later.
 
-Every table hangs off ``account_links.id``. No table here stores user identity,
+Every table hangs off ``accounts.id``. No table here stores user identity,
 and no route takes an account id from a request body.
 """
 from __future__ import annotations
@@ -52,7 +52,7 @@ class OccasionRecord(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "occasions"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     occasion_key: Mapped[str] = mapped_column(String(32), nullable=False)
     title: Mapped[Optional[str]] = mapped_column(String(160))
     event_date: Mapped[Optional[date]] = mapped_column(Date)
@@ -80,7 +80,7 @@ class StyleRequest(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "style_requests"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     occasion_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("occasions.id", ondelete="CASCADE"), nullable=False)
     preferred_item_ids: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     answers: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
@@ -98,7 +98,7 @@ class RecommendationRun(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "recommendation_runs"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     style_request_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("style_requests.id", ondelete="CASCADE"))
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="running", server_default="running")
@@ -132,7 +132,7 @@ class Look(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "looks"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("recommendation_runs.id", ondelete="CASCADE"), nullable=False)
     variant: Mapped[str] = mapped_column(String(24), nullable=False)
     rank: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
@@ -186,7 +186,7 @@ class LookAdjustment(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "look_adjustments"
 
     look_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("looks.id", ondelete="CASCADE"), nullable=False)
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     adjustment_type: Mapped[str] = mapped_column(String(24), nullable=False)
     slot: Mapped[Optional[str]] = mapped_column(String(24))
     from_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("inventory_items.id", ondelete="SET NULL"))
@@ -203,7 +203,7 @@ class LookFeedback(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "look_feedback"
 
     look_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("looks.id", ondelete="CASCADE"), nullable=False)
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     rating: Mapped[str] = mapped_column(String(24), nullable=False)
     reason: Mapped[Optional[str]] = mapped_column(String(64))
     note: Mapped[Optional[str]] = mapped_column(String(500))
@@ -220,7 +220,7 @@ class ShoppingCandidate(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "shopping_candidates"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     source: Mapped[str] = mapped_column(String(24), nullable=False)
     media_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("media_assets.id", ondelete="SET NULL"))
     ai_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL"))
@@ -253,7 +253,7 @@ class PurchaseEvaluation(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "purchase_evaluations"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     candidate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shopping_candidates.id", ondelete="CASCADE"), nullable=False)
     run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("recommendation_runs.id", ondelete="CASCADE"), nullable=False)
     verdict: Mapped[str] = mapped_column(String(8), nullable=False)
@@ -300,7 +300,7 @@ class PurchaseDecision(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "purchase_decisions"
 
     evaluation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("purchase_evaluations.id", ondelete="CASCADE"), nullable=False)
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
     note: Mapped[Optional[str]] = mapped_column(String(500))
     followed_recommendation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
@@ -320,7 +320,7 @@ class CompatibilityEdge(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "compatibility_edges"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     item_a_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     item_b_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     score: Mapped[float] = mapped_column(Float, nullable=False)
@@ -343,7 +343,7 @@ class RecommendationEntitlement(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "recommendation_entitlements"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     feature: Mapped[str] = mapped_column(String(48), nullable=False)
     period_key: Mapped[str] = mapped_column(String(7), nullable=False)
     included: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

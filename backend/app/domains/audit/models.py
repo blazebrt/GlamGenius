@@ -32,7 +32,7 @@ class AuditEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("account_links.id", ondelete="SET NULL"),
+        ForeignKey("accounts.id", ondelete="SET NULL"),
         nullable=True,
     )
 

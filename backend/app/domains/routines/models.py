@@ -10,7 +10,7 @@ what the engine knows, seeded from ``ontology.py`` and ``nutrition.py``. Every
 warning the product shows carries the ``rule_id`` of a row in one of them, which
 is what makes "no invented safety rules" checkable rather than merely promised.
 
-**User data** — everything else. Scoped to ``account_links.id`` like every other
+**User data** — everything else. Scoped to ``accounts.id`` like every other
 V2 table, and holding only what the user told us or what the engine computed
 from it.
 
@@ -181,7 +181,7 @@ class ProductIngredient(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "product_ingredients"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     ingredient_key: Mapped[str] = mapped_column(ForeignKey("ingredients.key", ondelete="CASCADE"), nullable=False)
     matched_text: Mapped[str] = mapped_column(String(160), nullable=False, default="", server_default="")
@@ -202,7 +202,7 @@ class Routine(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "routines"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     kind: Mapped[str] = mapped_column(String(24), nullable=False)
     label: Mapped[str] = mapped_column(String(80), nullable=False)
     frequency: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -252,7 +252,7 @@ class RoutineAdherence(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "routine_adherence"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     routine_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("routines.id", ondelete="CASCADE"), nullable=False)
     step_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("routine_steps.id", ondelete="CASCADE"), nullable=False)
     done_on: Mapped[date] = mapped_column(Date, nullable=False)
@@ -275,7 +275,7 @@ class UserReportedObservation(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "user_reported_observations"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     observed_on: Mapped[date] = mapped_column(Date, nullable=False)
     area: Mapped[str] = mapped_column(String(32), nullable=False)
     note: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -294,7 +294,7 @@ class ProductExpiryEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "product_expiry_events"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     rule_id: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False)
@@ -310,7 +310,7 @@ class RoutineRecommendationRun(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "routine_recommendation_runs"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="succeeded", server_default="succeeded")
     engine_version: Mapped[str] = mapped_column(String(24), nullable=False, default=KNOWLEDGE_VERSION, server_default=KNOWLEDGE_VERSION)
     explanation_source: Mapped[str] = mapped_column(String(24), nullable=False, default="deterministic", server_default="deterministic")
@@ -333,7 +333,7 @@ class SupplementSafetyFlag(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "supplement_safety_flags"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     flag: Mapped[str] = mapped_column(String(32), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
@@ -350,7 +350,7 @@ class NutritionPreference(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "nutrition_preferences"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False, unique=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True)
     diet: Mapped[str] = mapped_column(String(32), nullable=False, default="non_vegetarian", server_default="non_vegetarian")
     avoid_foods: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     focus_nutrients: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
@@ -366,7 +366,7 @@ class HydrationPreference(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "hydration_preferences"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False, unique=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     remind_in_hot_weather_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     note: Mapped[Optional[str]] = mapped_column(String(240))

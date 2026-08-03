@@ -183,6 +183,11 @@ BETA_SHOPPING_CHECK_LIMIT_PER_MONTH = _env_int(
 # ---------------------------------------------------------------------------
 # AI gateway
 # ---------------------------------------------------------------------------
+GEMINI_API_KEY = _env_str("GEMINI_API_KEY") or _env_str("GOOGLE_API_KEY")
+GEMINI_MODEL = _env_str("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_FALLBACK_MODELS = _env_csv(
+    "GEMINI_FALLBACK_MODELS", "gemini-2.5-flash,gemini-2.5-pro"
+)
 AI_TIMEOUT_SECONDS = _env_float("AI_TIMEOUT_SECONDS", 45.0)
 AI_COST_PER_1K_INPUT_USD = _env_float("AI_COST_PER_1K_INPUT_USD", 0.0003)
 AI_COST_PER_1K_OUTPUT_USD = _env_float("AI_COST_PER_1K_OUTPUT_USD", 0.0025)

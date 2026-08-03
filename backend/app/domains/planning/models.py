@@ -71,7 +71,7 @@ class ExternalIntegration(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "external_integrations"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)          # calendar | weather
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="connected", server_default="connected")
@@ -93,7 +93,7 @@ class CalendarEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "calendar_events"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     integration_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("external_integrations.id", ondelete="CASCADE"))
     external_id: Mapped[str] = mapped_column(String(200), nullable=False)
     dedup_key: Mapped[str] = mapped_column(String(400), nullable=False)
@@ -122,7 +122,7 @@ class WeatherSnapshot(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "weather_snapshots"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     for_date: Mapped[date] = mapped_column(Date, nullable=False)
     location: Mapped[Optional[str]] = mapped_column(String(160))
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", server_default="manual")
@@ -142,7 +142,7 @@ class DailyPlan(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "daily_plans"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     plan_date: Mapped[date] = mapped_column(Date, nullable=False)
     timezone_name: Mapped[str] = mapped_column(String(48), nullable=False, default="Asia/Kolkata", server_default="Asia/Kolkata")
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="ready", server_default="ready")
@@ -212,7 +212,7 @@ class DailyPlanAction(UUIDPrimaryKey, TimestampMixin, Base):
 class WeeklyPlan(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "weekly_plans"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     week_start: Mapped[date] = mapped_column(Date, nullable=False)   # always a Monday
     timezone_name: Mapped[str] = mapped_column(String(48), nullable=False, default="Asia/Kolkata", server_default="Asia/Kolkata")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ready", server_default="ready")
@@ -255,7 +255,7 @@ class OutfitSchedule(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "outfit_schedule"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     plan_date: Mapped[date] = mapped_column(Date, nullable=False)
     look_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("looks.id", ondelete="SET NULL"))
     item_ids: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
@@ -274,7 +274,7 @@ class LaundryStateEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "laundry_state_events"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False)
     available_from: Mapped[Optional[date]] = mapped_column(Date)
@@ -293,7 +293,7 @@ class NotificationPreference(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "notification_preferences"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False, unique=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     daily_cap: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     quiet_hours_start: Mapped[int] = mapped_column(Integer, nullable=False, default=21, server_default="21")
@@ -312,7 +312,7 @@ class NotificationDelivery(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "notification_deliveries"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     plan_date: Mapped[date] = mapped_column(Date, nullable=False)
     notification_key: Mapped[str] = mapped_column(String(64), nullable=False)
     dedup_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -334,7 +334,7 @@ class PlanRecalculationEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "plan_recalculation_events"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     plan_date: Mapped[date] = mapped_column(Date, nullable=False)
     trigger: Mapped[str] = mapped_column(String(48), nullable=False)
     detail: Mapped[str] = mapped_column(String(400), nullable=False, default="", server_default="")

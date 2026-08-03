@@ -45,6 +45,18 @@ class CurrentAccount:
         return str(self.account.id)
 
     @property
+    def v1_user_id(self) -> str:
+        """Deprecated compatibility alias.
+
+        The V1 identity foundation is gone. Existing V2 service signatures
+        still spell the caller's id ``v1_user_id`` and pass it to the AI
+        gateway ledger and similar. This property returns the canonical
+        Supabase UUID as a string so those signatures keep working during the
+        cutover; Prompt 2 renames them.
+        """
+        return str(self.account.id)
+
+    @property
     def is_admin(self) -> bool:
         return self.supabase_user.is_admin
 

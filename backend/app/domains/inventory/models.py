@@ -23,7 +23,7 @@ class InventoryCategory(TimestampMixin, Base):
 
 class InventoryItem(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "inventory_items"
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     category: Mapped[str] = mapped_column(ForeignKey("inventory_categories.key"), nullable=False)
     subcategory: Mapped[Optional[str]] = mapped_column(String(80))
     display_name: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -153,7 +153,7 @@ class ItemExpiryEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
 class ItemRelationship(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "item_relationships"
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     from_item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     to_item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     relationship_type: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -161,7 +161,7 @@ class ItemRelationship(UUIDPrimaryKey, TimestampMixin, Base):
 
 class DuplicateCandidate(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "duplicate_candidates"
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     item_a_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     item_b_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False); reason: Mapped[str] = mapped_column(String(240), nullable=False); status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", server_default="pending"); resolution: Mapped[Optional[str]] = mapped_column(String(32)); resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -170,7 +170,7 @@ class DuplicateCandidate(UUIDPrimaryKey, TimestampMixin, Base):
 
 class InventoryImportJob(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "inventory_import_jobs"
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     capture_type: Mapped[str] = mapped_column(String(32), nullable=False); status: Mapped[str] = mapped_column(String(24), nullable=False); media_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("media_assets.id", ondelete="SET NULL")); ai_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL")); detected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0"); error_code: Mapped[Optional[str]] = mapped_column(String(64)); completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
@@ -182,7 +182,7 @@ class InventoryValueEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
 class InventoryEvent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "inventory_events"
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     item_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"))
     event_type: Mapped[str] = mapped_column(String(48), nullable=False); actor: Mapped[str] = mapped_column(String(32), nullable=False); payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     __table_args__ = (Index("ix_inventory_events_account_item", "account_id", "item_id", "created_at"),)

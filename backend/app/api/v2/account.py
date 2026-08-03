@@ -80,7 +80,7 @@ async def request_account_deletion(
         aggregate_type="account",
         aggregate_id=str(account.id),
         event_type="account.deletion_requested",
-        payload={"v1_user_id": current.v1_user_id, "media_deleted": media_removed},
+        payload={"account_id": str(account.id), "media_deleted": media_removed},
     )
     await session.commit()
 

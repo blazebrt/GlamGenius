@@ -14,7 +14,7 @@ from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
 
 class AppearanceProfile(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "appearance_profiles"
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account_links.id", ondelete="CASCADE"), nullable=False, unique=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     baseline_status: Mapped[str] = mapped_column(String(24), nullable=False, default="not_started", server_default="not_started")
     baseline_ai_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True)

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 from app.config import AI_TIMEOUT_SECONDS
-from settings import GEMINI_API_KEY, GEMINI_FALLBACK_MODELS, GEMINI_MODEL
+from app.config import GEMINI_API_KEY, GEMINI_FALLBACK_MODELS, GEMINI_MODEL
 
 logger = logging.getLogger(__name__)
 
