@@ -109,7 +109,6 @@ describe('a11y static sweep (Fix 17, WP6)', () => {
     if (violations.length < BASELINE) {
       // Friendly nudge — does not fail the build. When the count drops,
       // the developer lowers BASELINE in the same PR that made the fix.
-      // eslint-disable-next-line no-console
       console.warn(
         `a11y baseline improved: violations=${violations.length}, BASELINE=${BASELINE}. ` +
         `Lower BASELINE in this PR to lock in the improvement.`
