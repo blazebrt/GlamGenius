@@ -10,7 +10,10 @@
  */
 import { api } from './api';
 
-export const V2 = '/v2';
+// Every V2 call is prefixed with `/api/v2`. The shared axios instance in
+// `./api` uses the backend origin as its baseURL and does not add `/api` on
+// its own, so the prefix lives here.
+export const V2 = '/api/v2';
 
 // --- Error contract ---------------------------------------------------------
 

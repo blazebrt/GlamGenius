@@ -1,26 +1,36 @@
 import { create } from 'zustand';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import {
-  api,
-  setAuthToken,
-  loadAuthToken,
-  clearAuthToken,
-  setUnauthorizedHandler,
-} from '../services/api';
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
+import { supabase } from '../services/supabase';
+import { api, setUnauthorizedHandler } from '../services/api';
 
-const USER_ID_KEY = 'glamgenius_user_id';
-
+/**
+ * Neutral session + profile store.
+ *
+ * Supabase Auth is the source of truth for the session. This store simply
+ * mirrors the Supabase session and layers the FastAPI profile on top so
+ * screens can read `useUserStore(s => s.user)` without knowing about auth
+ * mechanics.
+ *
+ * Fields removed from the pre-cutover shape (deliberately, do not add back):
+ *   - plan
+ *   - plan_expires_at
+ *   - scans_remaining_free
+ *   - free_scans_per_month
+ *   - refreshSubscription
+ *
+ * Beta usage counters, if a screen needs them, come from `/api/v2/me` under
+ * `beta_usage`, not from a user profile field.
+ */
 export interface UserProfile {
   id: string;
-  name: string;
-  email: string;
+  name?: string;
+  email?: string;
   phone?: string;
   age?: number;
   city?: string;
   diet?: string;
   budget_range?: string;
   height_cm?: number;
-  weight_kg?: number;
   body_type?: string;
   style_vibe?: string;
   hair_type?: string;
@@ -30,65 +40,84 @@ export interface UserProfile {
   undertone?: string;
   skin_concerns: string[];
   hair_concerns: string[];
-  preferences: Record<string, any>;
-  plan?: string;
-  plan_expires_at?: string;
-  scans_used_this_month?: number;
-  scans_remaining_free?: number | null;
-  free_scans_per_month?: number;
-  created_at: string;
-  updated_at: string;
+  preferences: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AuthResult {
+  ok: boolean;
+  code?:
+    | 'invalid_credentials'
+    | 'email_in_use'
+    | 'invite_required'
+    | 'invite_invalid'
+    | 'network'
+    | 'unknown';
+  message?: string;
 }
 
 interface UserStore {
-  userId: string;
+  session: Session | null;
   user: UserProfile | null;
+  userId: string;
   loading: boolean;
   initialized: boolean;
-  setUserId: (id: string) => void;
-  setUser: (user: UserProfile | null) => void;
+
   initializeUser: () => Promise<void>;
   fetchUser: () => Promise<void>;
-  createUser: (name: string, email: string, extra: Partial<UserProfile> & { password: string }) => Promise<UserProfile | null>;
-  login: (email: string, password: string) => Promise<UserProfile | null>;
+  createUser: (
+    name: string,
+    email: string,
+    password: string,
+    inviteCode: string
+  ) => Promise<AuthResult>;
+  login: (email: string, password: string) => Promise<AuthResult>;
   updateUser: (data: Partial<UserProfile>) => Promise<void>;
   updateUserProfile: (data: Partial<UserProfile>) => void;
-  refreshSubscription: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
+const emptyProfile = (id: string, email?: string): UserProfile => ({
+  id,
+  email,
+  skin_concerns: [],
+  hair_concerns: [],
+  preferences: {},
+});
+
 export const useUserStore = create<UserStore>((set, get) => ({
-  userId: '',
+  session: null,
   user: null,
+  userId: '',
   loading: false,
   initialized: false,
 
-  setUserId: (id: string) => set({ userId: id }),
-  setUser: (user: UserProfile | null) => set({ user }),
-
   initializeUser: async () => {
     try {
-      // Session is only usable if we still hold a token.
-      const token = await loadAuthToken();
-      const storedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-
-      if (!token) {
-        if (storedUserId) await AsyncStorage.removeItem(USER_ID_KEY);
-        set({ userId: '', user: null });
+      const { data } = await supabase.auth.getSession();
+      const session = data.session;
+      if (!session) {
+        set({ session: null, user: null, userId: '' });
         return;
       }
-
+      set({
+        session,
+        userId: session.user.id,
+        user: emptyProfile(session.user.id, session.user.email ?? undefined),
+      });
+      // Best-effort profile hydrate; failure just leaves the empty profile.
       try {
-        const response = await api.get('/users/me');
-        set({ user: response.data, userId: response.data.id });
-        await AsyncStorage.setItem(USER_ID_KEY, response.data.id);
+        const res = await api.get('/api/v2/me');
+        const me = res.data?.profile ?? res.data;
+        if (me && typeof me === 'object') {
+          set({ user: { ...emptyProfile(session.user.id), ...me } });
+        }
       } catch {
-        // A 401 is already handled by the api interceptor.
-        console.log('Stored session is no longer valid, clearing it');
-        await AsyncStorage.removeItem(USER_ID_KEY);
-        set({ userId: '', user: null });
+        // Profile row may not exist yet on very first login; ignore.
       }
     } catch (error) {
+       
       console.error('Error initializing user:', error);
     } finally {
       set({ initialized: true });
@@ -96,45 +125,76 @@ export const useUserStore = create<UserStore>((set, get) => ({
   },
 
   fetchUser: async () => {
-    const { userId } = get();
-    if (!userId) return;
+    if (!get().userId) return;
     set({ loading: true });
     try {
-      const response = await api.get('/users/me');
-      set({ user: response.data });
+      const res = await api.get('/api/v2/me');
+      const me = res.data?.profile ?? res.data;
+      if (me) set({ user: { ...emptyProfile(get().userId), ...me } });
     } catch (error) {
+       
       console.error('Error fetching user:', error);
     } finally {
       set({ loading: false });
     }
   },
 
-  createUser: async (name, email, extra) => {
+  createUser: async (name, email, password, inviteCode) => {
     set({ loading: true });
     try {
-      // An email and password are required — anonymous accounts no longer exist.
-      const response = await api.post('/users', {
-        name,
+      const { data, error } = await supabase.auth.signUp({
         email,
-        phone: extra?.phone || '',
-        password: extra.password,
-        invite_code: (extra as any)?.invite_code || '',
-        age: extra?.age,
-        city: extra?.city,
-        diet: extra?.diet,
-        height_cm: extra?.height_cm,
-        weight_kg: extra?.weight_kg,
-        body_type: extra?.body_type,
-        style_vibe: extra?.style_vibe,
+        password,
+        options: {
+          data: { name, invite_code: inviteCode },
+        },
       });
-      const { token, ...user } = response.data;
-      if (token) await setAuthToken(token);
-      await AsyncStorage.setItem(USER_ID_KEY, user.id);
-      set({ user: user as UserProfile, userId: user.id });
-      return user as UserProfile;
+      if (error) {
+        const msg = error.message || 'Registration failed.';
+        const code = /registered|exists/i.test(msg)
+          ? 'email_in_use'
+          : 'unknown';
+        return { ok: false, code, message: msg };
+      }
+      if (!data.session || !data.user) {
+        return {
+          ok: false,
+          code: 'unknown',
+          message:
+            'Please confirm your email to finish creating your account.',
+        };
+      }
+      // Redeem the invite server-side. FastAPI validates the code, marks it
+      // used, and creates the `accounts`/`profiles` rows tied to the
+      // authenticated Supabase UUID.
+      try {
+        await api.post('/api/v2/access/register', {
+          name,
+          invite_code: inviteCode,
+        });
+      } catch (err) {
+        // Roll the Supabase session back so the user isn't left half-created.
+        await supabase.auth.signOut().catch(() => {});
+        const detail = (err as { response?: { data?: { detail?: { code?: string; message?: string } } } })
+          ?.response?.data?.detail;
+        const code = detail?.code === 'INVITE_INVALID' ? 'invite_invalid' : 'invite_required';
+        return {
+          ok: false,
+          code,
+          message: detail?.message ?? 'This invite code cannot be used.',
+        };
+      }
+      set({
+        session: data.session,
+        userId: data.user.id,
+        user: emptyProfile(data.user.id, data.user.email ?? undefined),
+      });
+      await get().fetchUser();
+      return { ok: true };
     } catch (error) {
-      console.error('Error creating user:', error);
-      return null;
+       
+      console.error('createUser error:', error);
+      return { ok: false, code: 'network', message: 'Network error.' };
     } finally {
       set({ loading: false });
     }
@@ -143,30 +203,46 @@ export const useUserStore = create<UserStore>((set, get) => ({
   login: async (email, password) => {
     set({ loading: true });
     try {
-      const response = await api.post('/auth/login', { email, password });
-      const user = response.data.user;
-      const token = response.data.token;
-      if (token) await setAuthToken(token);
-      await AsyncStorage.setItem(USER_ID_KEY, user.id);
-      set({ user, userId: user.id });
-      return user;
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) {
+        return {
+          ok: false,
+          code: 'invalid_credentials',
+          message: error.message,
+        };
+      }
+      if (!data.session || !data.user) {
+        return { ok: false, code: 'unknown', message: 'Sign-in failed.' };
+      }
+      set({
+        session: data.session,
+        userId: data.user.id,
+        user: emptyProfile(data.user.id, data.user.email ?? undefined),
+      });
+      await get().fetchUser();
+      return { ok: true };
     } catch (error) {
-      console.error('Login error:', error);
-      return null;
+       
+      console.error('login error:', error);
+      return { ok: false, code: 'network', message: 'Network error.' };
     } finally {
       set({ loading: false });
     }
   },
 
   updateUser: async (data) => {
-    const { userId } = get();
-    if (!userId) return;
+    if (!get().userId) return;
     set({ loading: true });
     try {
-      const response = await api.put('/users/me', data);
-      set({ user: response.data });
+      const res = await api.patch('/api/v2/profile', { attributes: data });
+      const updated = res.data?.profile ?? res.data;
+      if (updated) set({ user: { ...emptyProfile(get().userId), ...updated } });
     } catch (error) {
-      console.error('Error updating user:', error);
+       
+      console.error('updateUser error:', error);
     } finally {
       set({ loading: false });
     }
@@ -174,46 +250,38 @@ export const useUserStore = create<UserStore>((set, get) => ({
 
   updateUserProfile: (data) => {
     const { user } = get();
-    if (user) set({ user: { ...user, ...data } as UserProfile });
-  },
-
-  refreshSubscription: async () => {
-    const { userId } = get();
-    if (!userId) return;
-    try {
-      const response = await api.get('/subscription/status');
-      const { user } = get();
-      if (user) {
-        set({
-          user: {
-            ...user,
-            plan: response.data.plan,
-            plan_expires_at: response.data.expires_at,
-            scans_used_this_month: response.data.scans_used_this_month,
-            scans_remaining_free: response.data.scans_remaining,
-            free_scans_per_month: response.data.free_scans_per_month,
-          },
-        });
-      }
-    } catch (error) {
-      console.error('Subscription refresh error:', error);
-    }
+    if (user) set({ user: { ...user, ...data } });
   },
 
   logout: async () => {
     try {
-      await clearAuthToken();
-      await AsyncStorage.multiRemove([USER_ID_KEY]);
+      await supabase.auth.signOut();
     } catch (error) {
-      console.error('Error clearing session:', error);
+       
+      console.error('signOut error:', error);
     }
-    set({ userId: '', user: null });
+    set({ session: null, user: null, userId: '' });
   },
 }));
 
-// When the server rejects our token, drop the in-app session too. The api
-// layer clears the token and navigates back to welcome.
+// Sync Zustand with Supabase's own session change events so refresh, remote
+// sign-out and social sign-in all update the app.
+supabase.auth.onAuthStateChange((_event: AuthChangeEvent, session) => {
+  if (session) {
+    useUserStore.setState({
+      session,
+      userId: session.user.id,
+      user:
+        useUserStore.getState().user ??
+        emptyProfile(session.user.id, session.user.email ?? undefined),
+    });
+  } else {
+    useUserStore.setState({ session: null, user: null, userId: '' });
+  }
+});
+
+// When FastAPI rejects our token (rare — Supabase refreshes proactively),
+// clear the in-app session as well.
 setUnauthorizedHandler(() => {
-  useUserStore.setState({ userId: '', user: null });
-  AsyncStorage.removeItem(USER_ID_KEY).catch(() => {});
+  useUserStore.setState({ session: null, user: null, userId: '' });
 });
