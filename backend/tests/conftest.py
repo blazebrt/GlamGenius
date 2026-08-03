@@ -193,11 +193,17 @@ class FakeProvider:
         self.raises: Optional[BaseException] = None
         self.calls: int = 0
         self.model: str = "fake-model"
+        self.last_system: Optional[str] = None
 
     async def generate(
-        self, prompt: str, image_base64: Optional[str] = None, **kwargs: Any
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        image_base64: Optional[str] = None,
+        **kwargs: Any,
     ) -> gemini.ProviderResponse:
         self.calls += 1
+        self.last_system = system
         if self.raises is not None:
             raise self.raises
         return gemini.ProviderResponse(
