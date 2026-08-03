@@ -1,14 +1,26 @@
-"""V2 configuration.
+"""V2 application configuration.
 
-Reads the same ``.env`` the V1 ``settings.py`` reads, in the same plain style, so
-there is one environment file and one way of doing things. Values are parsed and
-validated here rather than at the point of use, so a bad value fails at startup
-with a message that says what to fix.
+The single Supabase-backed application reads its environment here and validates
+it once, at startup, so a malformed value fails fast with a message pointing at
+the variable to fix.
+
+**No payment settings live in this file.** Prices, subscriptions, Razorpay and
+paid entitlements were removed in the Supabase cutover; Prompt 2 will delete
+the remaining code paths that expected them.
 """
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import List
+
+from dotenv import load_dotenv
+
+
+# Load the same .env file the rest of the backend uses. Path-anchored so this
+# works from tests, Alembic and Uvicorn alike.
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_BACKEND_ROOT / ".env")
 
 
 def _env_str(name: str, default: str = "") -> str:
@@ -31,7 +43,7 @@ def _env_int(name: str, default: int) -> int:
     except ValueError as exc:
         raise RuntimeError(
             f"{name} must be a whole number, got {raw!r}. "
-            f"Fix it in your .env file or remove it to use the default ({default})."
+            f"Fix your .env file or remove {name} to use the default ({default})."
         ) from exc
 
 
@@ -44,7 +56,7 @@ def _env_float(name: str, default: float) -> float:
     except ValueError as exc:
         raise RuntimeError(
             f"{name} must be a number, got {raw!r}. "
-            f"Fix it in your .env file or remove it to use the default ({default})."
+            f"Fix your .env file or remove {name} to use the default ({default})."
         ) from exc
 
 
@@ -55,99 +67,139 @@ def _env_csv(name: str, default: str = "") -> List[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
-# --- PostgreSQL (V2 only — MongoDB is untouched and still authoritative for V1) ---
-# Async driver. asyncpg speaks the binary protocol and is what SQLAlchemy 2.x
-# expects behind create_async_engine.
-POSTGRES_URL = _env_str(
-    "POSTGRES_URL",
-    "postgresql+asyncpg://glamgenius:glamgenius@postgres:5432/glamgenius_v2",
+# ---------------------------------------------------------------------------
+# Supabase — identity, database, storage
+# ---------------------------------------------------------------------------
+SUPABASE_URL = _env_str("SUPABASE_URL")
+SUPABASE_ANON_KEY = _env_str("SUPABASE_ANON_KEY")
+SUPABASE_SERVICE_ROLE_KEY = _env_str("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_JWT_ISSUER = _env_str(
+    "SUPABASE_JWT_ISSUER",
+    f"{SUPABASE_URL}/auth/v1" if SUPABASE_URL else "",
 )
+SUPABASE_JWKS_URL = _env_str(
+    "SUPABASE_JWKS_URL",
+    f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json" if SUPABASE_URL else "",
+)
+# Optional HS256 fallback. Only used when JWKS does not match a token's kid,
+# which is the case for legacy Supabase projects that still use the shared
+# HS256 secret.
+SUPABASE_JWT_SECRET = _env_str("SUPABASE_JWT_SECRET")
+SUPABASE_STORAGE_BUCKET = _env_str("SUPABASE_STORAGE_BUCKET", "glamgenius-media")
+
+SUPABASE_ADMIN_USER_IDS = {
+    uid.lower() for uid in _env_csv("SUPABASE_ADMIN_USER_IDS", "")
+}
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL
+# ---------------------------------------------------------------------------
+# The user may paste a bare ``postgresql://`` URL from Supabase. asyncpg needs
+# the ``+asyncpg`` driver suffix; Alembic needs the sync driver. We normalise
+# both here so no code path has to think about it.
+_raw_pg = _env_str(
+    "POSTGRES_URL",
+    "postgresql://postgres:postgres@localhost:5432/postgres",
+)
+
+
+def _to_async_url(url: str) -> str:
+    if url.startswith("postgresql+asyncpg://"):
+        return url
+    if url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + url[len("postgresql://"):]
+    if url.startswith("postgres://"):
+        return "postgresql+asyncpg://" + url[len("postgres://"):]
+    return url
+
+
+def _to_sync_url(url: str) -> str:
+    if url.startswith("postgresql+asyncpg://"):
+        return "postgresql://" + url[len("postgresql+asyncpg://"):]
+    if url.startswith("postgres://"):
+        return "postgresql://" + url[len("postgres://"):]
+    return url
+
+
+POSTGRES_URL = _to_async_url(_raw_pg)
+POSTGRES_SYNC_URL = _to_sync_url(_raw_pg)
 POSTGRES_POOL_SIZE = _env_int("POSTGRES_POOL_SIZE", 5)
 POSTGRES_MAX_OVERFLOW = _env_int("POSTGRES_MAX_OVERFLOW", 5)
 POSTGRES_ECHO = _env_bool("POSTGRES_ECHO", False)
 
-# --- Feature flags -----------------------------------------------------------
-# Comma-separated flag keys switched on at boot. The database table can override
-# these at runtime; this is the bootstrap default so a fresh deployment starts
-# closed rather than open.
+
+# ---------------------------------------------------------------------------
+# Feature flags
+# ---------------------------------------------------------------------------
 V2_FEATURES = _env_csv("V2_FEATURES", "")
 
-# --- Media storage -----------------------------------------------------------
-# APP_ENV is the deployment tier: 'development' (default), 'test',
-# 'staging', 'production'. Currently only the media-storage guard reads it;
-# add a fail-fast check when a new subsystem needs a per-tier behaviour.
+
+# ---------------------------------------------------------------------------
+# Deployment tier
+# ---------------------------------------------------------------------------
 APP_ENV = _env_str("APP_ENV", "development").lower()
 
-MEDIA_STORAGE_BACKEND = _env_str("MEDIA_STORAGE_BACKEND", "local").lower()
+
+# ---------------------------------------------------------------------------
+# Media
+# ---------------------------------------------------------------------------
+MEDIA_STORAGE_BACKEND = _env_str("MEDIA_STORAGE_BACKEND", "supabase").lower()
 MEDIA_LOCAL_ROOT = _env_str("MEDIA_LOCAL_ROOT", "/data/media")
 MEDIA_MAX_BYTES = _env_int("MEDIA_MAX_BYTES", 8 * 1024 * 1024)
 MEDIA_ALLOWED_MIME = _env_csv(
     "MEDIA_ALLOWED_MIME", "image/jpeg,image/png,image/webp"
 )
-# In production the local filesystem adapter is not a valid storage backend —
-# it is fine for development and for CI, but a production pod loses its
-# uploads on redeploy and cannot serve another pod's writes. Set this to
-# 'true' only if you fully understand that trade-off (single-pod dev-preview
-# etc.). Fix 9 (WP2) adds the fail-closed guard in
-# app.domains.media.storage.factory.
+MEDIA_SIGNED_URL_TTL_SECONDS = _env_int("MEDIA_SIGNED_URL_TTL_SECONDS", 300)
+# Development/test only. A production pod loses uploads on redeploy so the
+# storage factory refuses ``local`` when APP_ENV=production.
 MEDIA_ALLOW_LOCAL_IN_PRODUCTION = _env_bool("MEDIA_ALLOW_LOCAL_IN_PRODUCTION", False)
 
-S3_ENDPOINT_URL = _env_str("S3_ENDPOINT_URL")
-S3_BUCKET = _env_str("S3_BUCKET")
-S3_REGION = _env_str("S3_REGION", "auto")
-S3_ACCESS_KEY_ID = _env_str("S3_ACCESS_KEY_ID")
-S3_SECRET_ACCESS_KEY = _env_str("S3_SECRET_ACCESS_KEY")
-# TTL of a presigned GET URL, in seconds. Short-lived by default so a
-# leaked URL stops working quickly. Increase only for a specific reason.
-S3_SIGNED_URL_TTL_SECONDS = _env_int("S3_SIGNED_URL_TTL_SECONDS", 300)
-# Server-side encryption header sent on every PUT. Empty disables it,
-# which is only safe when the bucket is configured with default
-# encryption at the storage layer. See docs/stabilisation/MEDIA_STORAGE_OPERATIONS.md.
-S3_SERVER_SIDE_ENCRYPTION = _env_str("S3_SERVER_SIDE_ENCRYPTION", "AES256")
 
-# --- Consent -----------------------------------------------------------------
-# Consent is a trust boundary, not an optional rollout experiment. The frontend
-# asks before sending a photo, and the backend enforces the answer even if a
-# caller bypasses the app.
+# ---------------------------------------------------------------------------
+# Consent
+# ---------------------------------------------------------------------------
 REQUIRE_ANALYSIS_CONSENT = _env_bool("REQUIRE_ANALYSIS_CONSENT", True)
-CONSENT_VERSION = _env_str("CONSENT_VERSION", "2026-08-01")
+CONSENT_VERSION = _env_str("CONSENT_VERSION", "2026-01-01")
 
-# --- Billing -----------------------------------------------------------------
-# Single source of truth for whether any paid action may be offered. The app
-# reads this from /api/v2/config and hides payment UI when it is false.
-SUBSCRIPTIONS_AVAILABLE = _env_bool("SUBSCRIPTIONS_AVAILABLE", False)
 
-# Prices, in whole rupees. Deliberately configuration rather than constants: a
-# price is a business decision and must never need a deploy. Nothing in
-# app/domains/billing/catalogue.py contains a literal amount.
-EVENT_PASS_PRICE_INR = _env_int("EVENT_PASS_PRICE_INR", 499)
-EVENT_PASS_VALID_DAYS = _env_int("EVENT_PASS_VALID_DAYS", 14)
-PLUS_MONTHLY_INR = _env_int("PLUS_MONTHLY_INR", 399)
-PLUS_YEARLY_INR = _env_int("PLUS_YEARLY_INR", 3499)
+# ---------------------------------------------------------------------------
+# Invite gate
+# ---------------------------------------------------------------------------
+INVITE_REQUIRED = _env_bool("INVITE_REQUIRED", True)
 
-# Which payment provider handles checkout. "manual" is an honest no-op used in
-# development and in tests; "razorpay" is the production path for India.
-# Neither can grant access on its own — only a verified webhook does that.
-BILLING_PROVIDER = _env_str("BILLING_PROVIDER", "manual")
-RAZORPAY_KEY_ID = _env_str("RAZORPAY_KEY_ID", "")
-RAZORPAY_KEY_SECRET = _env_str("RAZORPAY_KEY_SECRET", "")
-# Razorpay signs each webhook with this, separately from the API key secret.
-RAZORPAY_WEBHOOK_SECRET = _env_str("RAZORPAY_WEBHOOK_SECRET", "")
 
-# Days a subscription keeps working after a failed renewal, while the payment
-# is retried. Access continues; the app says plainly that payment failed.
-BILLING_GRACE_DAYS = _env_int("BILLING_GRACE_DAYS", 3)
-# How long a client may trust its cached entitlement snapshot when offline.
-ENTITLEMENT_CACHE_SECONDS = _env_int("ENTITLEMENT_CACHE_SECONDS", 900)
+# ---------------------------------------------------------------------------
+# Beta usage controls — non-payment abuse and cost limits
+# ---------------------------------------------------------------------------
+BETA_AI_REQUESTS_PER_HOUR = _env_int("BETA_AI_REQUESTS_PER_HOUR", 60)
+BETA_SCAN_LIMIT_PER_MONTH = _env_int("BETA_SCAN_LIMIT_PER_MONTH", 60)
+BETA_STYLE_LIMIT_PER_MONTH = _env_int("BETA_STYLE_LIMIT_PER_MONTH", 60)
+BETA_SHOPPING_CHECK_LIMIT_PER_MONTH = _env_int(
+    "BETA_SHOPPING_CHECK_LIMIT_PER_MONTH", 60
+)
 
-# --- AI gateway --------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# AI gateway
+# ---------------------------------------------------------------------------
 AI_TIMEOUT_SECONDS = _env_float("AI_TIMEOUT_SECONDS", 45.0)
-# Rough per-1K-token prices used only to estimate spend for the ai_runs ledger.
-# Not billing. Override when Google changes pricing.
 AI_COST_PER_1K_INPUT_USD = _env_float("AI_COST_PER_1K_INPUT_USD", 0.0003)
 AI_COST_PER_1K_OUTPUT_USD = _env_float("AI_COST_PER_1K_OUTPUT_USD", 0.0025)
 
-# --- Request limits ----------------------------------------------------------
-# A base64 image arrives as a JSON string. Without a ceiling, one request can
-# push an arbitrarily large payload straight to a paid provider.
+
+# ---------------------------------------------------------------------------
+# Request limits
+# ---------------------------------------------------------------------------
 MAX_IMAGE_BASE64_CHARS = _env_int("MAX_IMAGE_BASE64_CHARS", 12_000_000)
+
+
+# ---------------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------------
+_DEV_ORIGINS = "http://localhost:8081,http://localhost:19006,http://127.0.0.1:8081"
+_allowed_origins_raw = _env_str("ALLOWED_ORIGINS", _DEV_ORIGINS)
+ALLOWED_ORIGINS = [
+    o.strip().rstrip("/") for o in _allowed_origins_raw.split(",") if o.strip()
+]
+ALLOWED_ORIGINS_IS_DEFAULT = "ALLOWED_ORIGINS" not in os.environ

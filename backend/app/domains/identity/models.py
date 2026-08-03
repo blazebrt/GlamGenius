@@ -1,17 +1,18 @@
-"""The account link.
+"""Accounts — Supabase-keyed.
 
-**Why a link table and not a copy of the user.**
+The account's primary key **is** the Supabase Auth user UUID. Every V2 table
+foreign-keys against ``accounts.id`` and cascades on delete. There is no
+separate ``v1_user_id`` and no ``account_links`` bridge table.
 
-V1 owns users: email, password hash, plan, quotas, invite. Copying any of that
-into PostgreSQL creates two sources of truth and a synchronisation problem, and
-the instruction is explicit — do not duplicate existing users carelessly.
+Why keep an explicit table at all rather than a bare UUID?
 
-So V2 stores no user attributes at all. It stores one row per user containing
-the V1 user id and nothing else identifying. Every V2 table hangs off
-``account_links.id``. Authentication stays entirely V1.
+* Ownership: every child table cascades cleanly on account deletion.
+* Lifecycle: we can mark an account as ``deletion_requested`` before the
+  destructive privacy workflow runs.
+* Provenance: cheap place to store the account's ``created_at``.
 
-The link is created lazily on a user's first V2 request, so there is no
-migration and no backfill.
+The identity itself lives in Supabase Auth. This table stores no email, no
+password, no phone, no Supabase-managed profile field.
 """
 from __future__ import annotations
 
@@ -19,18 +20,19 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Index, String
+from sqlalchemy import DateTime, String
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
+from app.shared.database.base import Base, TimestampMixin
 
 
-class AccountLink(UUIDPrimaryKey, TimestampMixin, Base):
-    __tablename__ = "account_links"
+class Account(TimestampMixin, Base):
+    __tablename__ = "accounts"
 
-    # The UUID string from Mongo `users.id`. Not a foreign key — it points at a
-    # different database — so it is indexed and unique here instead.
-    v1_user_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    # This UUID is the Supabase Auth user id. We never generate one — the
+    # caller must supply the value that came from the verified access token.
+    id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True)
 
     # active | deletion_requested | deleted
     status: Mapped[str] = mapped_column(
@@ -40,12 +42,16 @@ class AccountLink(UUIDPrimaryKey, TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
 
-    __table_args__ = (Index("ix_account_links_v1_user_id", "v1_user_id"),)
-
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"<AccountLink id={self.id} v1_user_id={self.v1_user_id}>"
+        return f"<Account id={self.id} status={self.status}>"
 
 
 ACCOUNT_STATUS_ACTIVE = "active"
 ACCOUNT_STATUS_DELETION_REQUESTED = "deletion_requested"
 ACCOUNT_STATUS_DELETED = "deleted"
+
+
+# Backwards-compatible alias while the domain modules still spell it
+# ``AccountLink``. The alias is a type re-export only — the underlying table is
+# ``accounts`` and there is no bridge column.
+AccountLink = Account
