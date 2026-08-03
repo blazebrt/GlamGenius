@@ -47,6 +47,9 @@ function RootLayout() {
     // The store fails closed, so a failure here hides paid actions rather than
     // showing them.
     loadConfig().catch((err) => console.warn('load config failed', err));
+    // Both action references come from Zustand singleton stores and are
+    // stable across renders. This effect must run exactly once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!fontsLoaded) {

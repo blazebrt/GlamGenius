@@ -10,6 +10,10 @@
  * originate on either side of the wire.
  */
 import * as Sentry from '@sentry/react-native';
+// React type import must live at the top of the module so lint stops
+// warning about `import/first`; it is only referenced by the
+// `wrapRoot<T extends React.ComponentType<any>>` type signature below.
+import type * as React from 'react';
 
 const REDACTED = '[Redacted by application]';
 
@@ -80,7 +84,3 @@ export function wrapRoot<T extends React.ComponentType<any>>(Component: T): T {
 
 // Re-export the primitives the app uses.
 export { Sentry };
-
-// Local import so the wrapRoot signature compiles.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import type * as React from 'react';

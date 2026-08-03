@@ -237,6 +237,26 @@ deliberately left alone.
    That is a platform default. Not modified.
 3. `.emergent/emergent.yml` embeds the preview job id in plain text.
    Not a secret.
+4. **Platform regeneration.** The Emergent preview-pod reconciler
+   re-templates files under `.emergent/cron/` on some pod-lifecycle
+   events (observed during Work Package 1: on a pod restart the
+   dispatcher was rewritten back to its unhardened baseline and the
+   `webhook-crons` `JOB_ID=…` line was rotated to the current pod's
+   id). The **committed** state on this branch preserves the
+   hardening in git history, so any fresh clone of the repo — CI,
+   another reviewer, a re-created pod that respects the repo state —
+   sees the hardened dispatcher. On a live preview pod, though, the
+   platform's own template is the effective code path. To make the
+   hardening effective in the running platform, the same change has
+   to land in the platform's dispatcher template upstream. That is
+   an owner action tracked in
+   [`../../STABILISATION_REPORT.md §10`](../../STABILISATION_REPORT.md#10-owner-actions-required),
+   not a code fix on this branch. Reviewers who see
+   `git status` show `.emergent/cron/dispatch_webhook.sh` as
+   "modified" after a pod restart are looking at that regeneration;
+   the correct response is `git checkout HEAD -- .emergent/cron/`
+   to restore the committed hardened version — never to commit the
+   platform's regeneration as a "revert".
 
 None of the above are product-repository concerns; they are
 platform-repository concerns. If the platform ownership of
