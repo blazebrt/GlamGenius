@@ -320,18 +320,18 @@ For a non-technical reviewer:
 | 4 | Docker workflow proof | **DONE on this branch.** Owner runs `scripts/update_service_digests.sh` + `scripts/verify_clean_environment.sh` on a Docker host and pastes the two-cycle exit-0 evidence into the PR before merge. |
 | 5 | Live Gemini validation | **DONE on this branch.** Opt-in `workflow_dispatch`-only `.github/workflows/live-gemini.yml` runs `scripts/live_gemini_probe.py` (project-owned PNG fixture, cost-capped at 10 calls, structured failure classification, JSON report as an artefact). Owner adds `GEMINI_API_KEY` to repo secrets and dispatches manually when they want to record a live run. |
 | 6 | Weather / calendar / push | NOT STARTED — Work Package 5, credentials + device required. |
-| 7 | Packing decision | NOT STARTED — Work Package 4. |
+| 7 | Packing decision | **DONE on this branch.** `docs/product/PACKING_DECISION.md` — planned, not shipped; `FEATURE_PACKING` catalogue id retained without fulfilment; acceptance criteria recorded for the future work-package that ships it. |
 | 8 | Monitoring (real events, alert, uptime) | PARTIAL. SDK exists on `main`; operational proof is Work Package 5, credentials required. |
 | 9 | Production S3-compatible media | **DONE on this branch.** Production-refusal guard, boto3 dependency, presigned-URL surface, server-side-encryption header, MinIO integration test, and operations runbook are landed. Local `pytest tests/test_media_production_guard.py` — **6/6 pass**. The MinIO integration test itself runs in the docker test stack (see Fix 4 owner action). |
-| 10 | Architecture inventory + ADRs | NOT STARTED — Work Package 4. |
-| 11 | V1 deprecation plan | NOT STARTED — Work Package 4. |
+| 10 | Architecture inventory + ADRs | **DONE on this branch.** `docs/engineering/ARCHITECTURE.md` + five ADRs under `docs/engineering/adrs/` (dual datastore, feature flags, deterministic safety, media adapter, migrations frozen). |
+| 11 | V1 deprecation plan | **DONE on this branch.** `docs/stabilisation/V1_DEPRECATION_PLAN.md` — five-phase plan (read-parity → dual-write → cut reads → one-way migration → remove code). No V1 code touched on this branch. |
 | 12 | Remove stored image base64 prefixes | **DONE on this branch.** New writes store `image_base64=None`; the regression test that asserted the 83-character rule is inverted to `test_new_scans_store_no_image_fragment`; `backend/scripts/cleanup_v1_scan_image_prefixes.py` is idempotent, dry-run by default, batched, and verified against a real Mongo (dry-run→3, apply→3, re-apply→0). |
 | 13 | Ingredient rule metadata | **DONE on this branch.** Every rule id emitted by the engine now has an evidence row in `docs/stabilisation/INGREDIENT_COVERAGE.md` with source, reviewer, applicability limits, and status (active / deprecated / disputed). `backend/tests/test_routine_rules_coverage.py` — **6/6 pass**; also asserts uncovered ingredients are labelled "not covered", not "safe", and that no LLM-boilerplate strings leaked in. |
 | 14 | Structured safety classification | **DONE on this branch.** New `backend/app/domains/routines/safety_classifier.py` implements the 13 typed categories from the brief; every pattern carries a stable rule id linked to the coverage doc. Deterministic; a model-based second opinion can ADD categories but never remove one. Banned-word sweep in `safety.py` remains as the secondary defence. `backend/tests/test_safety_classifier.py` — **15/15 pass**. |
-| 15 | Photo comparison honesty | NOT STARTED — Work Package 4. |
-| 16 | Metric governance | NOT STARTED — Work Package 4. |
+| 15 | Photo comparison honesty | **DONE on this branch.** `docs/product/PHOTO_COMPARISON_HONESTY.md` — no appearance scores; no "% improved" claims; every progress-photo string passes through the safety classifier; observations labelled `self_report` / `photo` / `provider`. |
+| 16 | Metric governance | **DONE on this branch.** `docs/engineering/METRIC_GOVERNANCE.md` policy + `docs/engineering/METRICS.md` register with decision-informed / hypothesis / owner / retirement / privacy-cost per event. |
 | 17 | Physical-device UX + a11y | NOT STARTED — Work Package 6, device required. |
-| 18 | Time to first value ≤ 5 min | NOT STARTED — Work Package 4. |
+| 18 | Time to first value ≤ 5 min | **DONE on this branch.** `docs/product/TIME_TO_FIRST_VALUE.md` — the promise, the shipped path, what blocks the claim, light-touch measurement. Actual device walk is Work Package 6. |
 | 19 | Independent review policy | **DONE on `main` via PR #33.** |
 | 20 | Branching strategy | **DONE on `main` via PR #33.** |
 
