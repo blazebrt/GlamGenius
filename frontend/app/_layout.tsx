@@ -20,8 +20,14 @@ import { COLORS } from '../src/theme/colors';
 import { useUserStore } from '../src/store/userStore';
 import { useConfigStore } from '../src/store/configStore';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
+import { initSentry, wrapRoot } from '../src/monitoring';
 
-export default function RootLayout() {
+// Fire Sentry init before the root component mounts so a rendering error
+// inside <RootLayout /> itself is still captured. Safe to call with no
+// DSN configured — returns quietly and the app continues.
+initSentry();
+
+function RootLayout() {
   const { initializeUser } = useUserStore();
   const loadConfig = useConfigStore((s) => s.load);
 
@@ -111,3 +117,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
 });
+
+// Wrap the root so React render errors reach Sentry when a DSN is
+// configured. When there is no DSN this returns the component unchanged.
+export default wrapRoot(RootLayout);

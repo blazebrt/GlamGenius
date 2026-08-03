@@ -11,6 +11,11 @@ google-genai>=1.0.0
 pyjwt==2.13.0
 bcrypt==5.0.0
 
+# --- Monitoring (Fix 8) ---
+# Optional crash reporter. If SENTRY_BACKEND_DSN is unset, this dependency
+# is installed but no client is initialised and no network call is made.
+sentry-sdk[fastapi]==2.66.1
+
 # --- V2: PostgreSQL ---
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0

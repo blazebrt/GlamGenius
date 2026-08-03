@@ -4,6 +4,13 @@ GlamGenius API — Personal Stylist & Skin/Hair Wellness Coach (India)
 One FastAPI application. V1 lives at /api and is unchanged. V2 mounts at
 /api/v2 alongside it — there is deliberately no second entrypoint.
 """
+# Sentry has to be initialised before any FastAPI import so its middleware
+# can attach to the app's exception path. A missing DSN is a supported
+# state — init_sentry() short-circuits cleanly.
+from app.shared.observability.sentry_bootstrap import init_sentry
+
+init_sentry()
+
 from fastapi import FastAPI, APIRouter
 from starlette.middleware.cors import CORSMiddleware
 import logging
