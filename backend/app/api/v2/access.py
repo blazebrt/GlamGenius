@@ -27,7 +27,7 @@ from typing import Deque, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import INVITE_REQUIRED
@@ -333,3 +333,135 @@ async def admin_get_invite(
         for r in redemptions
     ]
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Reservation metrics (admin) — visibility into private-beta throughput
+# ---------------------------------------------------------------------------
+
+@router.get("/access/admin/reservations/stats")
+async def admin_reservation_stats(
+    admin: SupabaseUser = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Live vs consumed vs expired reservation counts, plus the top invites
+    with active reservations right now.
+
+    ``active`` counts reservations whose ``expires_at`` has not passed and
+    whose ``status`` is still ``active`` — the row hasn't been swept yet by
+    the housekeeping job.
+
+    ``expired`` covers both explicitly-swept ``expired`` rows **and** rows
+    that are still nominally ``active`` but whose ``expires_at`` has
+    elapsed — the two are semantically the same from an operator's view
+    and merging them avoids under-reporting between housekeeping runs.
+    """
+    from app.domains.beta_access.models import InviteRegistrationReservation
+    from app.domains.beta_access.service import (
+        RESERVATION_STATUS_ACTIVE,
+        RESERVATION_STATUS_CONSUMED,
+        RESERVATION_STATUS_EXPIRED,
+        _now,
+    )
+
+    now = _now()
+
+    counts_row = (
+        await session.execute(
+            select(
+                func.count().label("total"),
+                func.sum(
+                    case(
+                        (
+                            (
+                                InviteRegistrationReservation.status
+                                == RESERVATION_STATUS_ACTIVE
+                            )
+                            & (InviteRegistrationReservation.expires_at > now),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("active"),
+                func.sum(
+                    case(
+                        (
+                            InviteRegistrationReservation.status
+                            == RESERVATION_STATUS_CONSUMED,
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("consumed"),
+                func.sum(
+                    case(
+                        (
+                            (
+                                InviteRegistrationReservation.status
+                                == RESERVATION_STATUS_EXPIRED
+                            )
+                            | (
+                                (
+                                    InviteRegistrationReservation.status
+                                    == RESERVATION_STATUS_ACTIVE
+                                )
+                                & (InviteRegistrationReservation.expires_at <= now)
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("expired"),
+            )
+        )
+    ).one()
+
+    total = int(counts_row.total or 0)
+    active = int(counts_row.active or 0)
+    consumed = int(counts_row.consumed or 0)
+    expired = int(counts_row.expired or 0)
+
+    # Top invites currently holding live reservations.
+    top_stmt = (
+        select(
+            Invite.id,
+            Invite.code,
+            Invite.label,
+            Invite.max_uses,
+            Invite.uses_count,
+            func.count(InviteRegistrationReservation.id).label("live"),
+        )
+        .join(
+            InviteRegistrationReservation,
+            InviteRegistrationReservation.invite_id == Invite.id,
+        )
+        .where(
+            InviteRegistrationReservation.status == RESERVATION_STATUS_ACTIVE,
+            InviteRegistrationReservation.expires_at > now,
+        )
+        .group_by(Invite.id)
+        .order_by(func.count(InviteRegistrationReservation.id).desc())
+        .limit(10)
+    )
+    top_rows = (await session.execute(top_stmt)).all()
+
+    return {
+        "totals": {
+            "total": total,
+            "active": active,
+            "consumed": consumed,
+            "expired": expired,
+        },
+        "active_by_invite": [
+            {
+                "invite_id": str(r.id),
+                "code": r.code,
+                "label": r.label,
+                "max_uses": r.max_uses,
+                "uses_count": r.uses_count,
+                "live_reservations": int(r.live),
+            }
+            for r in top_rows
+        ],
+        "generated_at": now.isoformat(),
+    }

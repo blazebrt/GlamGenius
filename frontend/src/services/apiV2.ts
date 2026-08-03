@@ -136,6 +136,30 @@ export const finalizeRegistration = async (
     registration_challenge,
   })).data;
 
+// --- Admin: reservation metrics -------------------------------------------
+
+export interface ReservationStats {
+  totals: {
+    total: number;
+    active: number;
+    consumed: number;
+    expired: number;
+  };
+  active_by_invite: Array<{
+    invite_id: string;
+    code: string;
+    label: string;
+    max_uses: number;
+    uses_count: number;
+    live_reservations: number;
+  }>;
+  generated_at: string;
+}
+
+/** Admin-only: live vs consumed vs expired reservation counts + top invites. */
+export const getReservationStats = async (): Promise<ReservationStats> =>
+  (await api.get<ReservationStats>(`${V2}/access/admin/reservations/stats`)).data;
+
 // --- Me ---------------------------------------------------------------------
 
 export interface ConsentState {

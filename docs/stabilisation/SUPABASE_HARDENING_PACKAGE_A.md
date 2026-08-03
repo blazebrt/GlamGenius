@@ -102,6 +102,28 @@ unknown-kid refresh bound. All 17 pass locally.
 * Other §13 blocking checks (Android compile, EAS preview, secret
   scanning, node dep audit) remain in scope for Package D.
 
+## §14 slice — docs
+
+* `docs/stabilisation/SUPABASE_HARDENING_PACKAGE_A.md` (this file).
+* Hardening report stop-condition table updated for §2.
+
+## Reservation metrics tile (follow-up)
+
+* New backend endpoint `GET /api/v2/access/admin/reservations/stats`
+  returns live / consumed / expired totals across the project plus the
+  top invites currently holding live reservations. Stale-active
+  reservations (status still `active` but `expires_at` passed) count as
+  expired so operators are never under-counting between housekeeping
+  sweeps.
+* New admin route `app/admin.tsx` renders the tile. Both sides guard the
+  route: the screen redirects non-admins home, and the backend returns
+  403 to non-admins.
+* Frontend `userStore` now carries an `isAdmin` flag hydrated from
+  `/api/v2/me`.
+* `tests/test_admin_reservation_stats.py` — 3 tests: forbidden for
+  non-admins, correct counts across all four states, correct zero-state
+  on an empty project.
+
 ## Test evidence
 
 Backend, in this environment (no Postgres available):

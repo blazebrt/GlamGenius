@@ -88,6 +88,7 @@ interface UserStore {
   initialized: boolean;
   registrationState: RegistrationState;
   pendingChallenge: string | null;
+  isAdmin: boolean;
 
   initializeUser: () => Promise<void>;
   hydrateRegistration: () => Promise<void>;
@@ -138,6 +139,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
   initialized: false,
   registrationState: 'signed_out',
   pendingChallenge: null,
+  isAdmin: false,
 
   initializeUser: async () => {
     try {
@@ -173,17 +175,19 @@ export const useUserStore = create<UserStore>((set, get) => ({
     try {
       const res = await api.get('/api/v2/me');
       const me = res.data?.profile ?? res.data;
+      const isAdmin = !!res.data?.account?.is_admin;
       if (me && typeof me === 'object') {
         set({
           user: { ...emptyProfile(get().userId), ...me },
           registrationState: 'registered',
+          isAdmin,
         });
       } else {
-        set({ registrationState: 'registered' });
+        set({ registrationState: 'registered', isAdmin });
       }
     } catch (err) {
       if (isRegistrationRequired(err)) {
-        set({ registrationState: 'registration_pending' });
+        set({ registrationState: 'registration_pending', isAdmin: false });
       } else {
          
         console.warn('hydrate registration error', err);
@@ -389,6 +393,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
       userId: '',
       pendingChallenge: null,
       registrationState: 'signed_out',
+      isAdmin: false,
     });
   },
 }));
@@ -413,6 +418,7 @@ supabase.auth.onAuthStateChange(async (_event: AuthChangeEvent, session) => {
       user: null,
       userId: '',
       registrationState: 'signed_out',
+      isAdmin: false,
     });
   }
 });
@@ -424,6 +430,7 @@ setUnauthorizedHandler(() => {
     userId: '',
     registrationState: 'signed_out',
     pendingChallenge: null,
+    isAdmin: false,
   });
   void writeStoredChallenge(null);
 });
