@@ -1,7 +1,10 @@
 # Supabase V2 Cutover — Session Progress Tracker
 
 **Repo**: https://github.com/blazebrt/GlamGenius
-**Branch (this session)**: `architecture/supabase-v2-cutover` (checked out locally in `/app`)
+**Branches created (both unpushed until you use Save to GitHub)**:
+- `architecture/supabase-v2-cutover` — first session, initial cutover finishing touches
+- `fix/supabase-cutover-hardening` — second session, this consolidated hardening pass (**current**)
+
 **Baseline commit (verified ancestor of HEAD)**: `ac4822d3de04e283b3869bc8947e8a7710e99404`
 **Latest main HEAD when session started**: `236ef9d6` (Merge #40 from `legacy-remover`, CI marked failure)
 
@@ -80,6 +83,74 @@ _Update this list after every commit-worthy change._
 - [x] Frontend: `_layout.tsx` — dropped `subscription` and `service-details` from active Stack.Screen list.
 - [x] Frontend: V1 path swaps — `get-advice.tsx` → `/api/v2/style/occasion`, `history.tsx` → `/api/v2/scan/history`, `scan.tsx` → `/api/v2/scan/analyse` (signed-out preview flow removed), `style-quiz.tsx` → `/api/v2/quiz/*`.
 - [x] Frontend: `home.tsx` — removed `refreshSubscription`, `user?.plan`, `user?.scans_remaining_free`.
+
+---
+
+## Second-session hardening pass (branch `fix/supabase-cutover-hardening`)
+
+### DONE this session
+
+- [x] Audit doc: `docs/stabilisation/SUPABASE_HARDENING_AUDIT.md`.
+- [x] **§1 Invite-bypass fixed**: `deps.get_current_account` no longer auto-creates.
+  Returns `403 REGISTRATION_REQUIRED` if there is no `accounts` row.
+  `identity.get_or_create_account` deleted. `identity.register_account` added, called
+  only by `POST /api/v2/access/register`.
+- [x] **§3 JWT hardened**: audience `authenticated` verified, role positively required
+  to equal `authenticated`. Anon / service-role / missing / wrong role all rejected.
+- [x] **§4 V1 compat names removed**: `CurrentAccount.v1_user_id` gone; 21 call sites
+  renamed to `.account_id_str`. `AccountLink` alias deleted from `identity/models.py`.
+- [x] **§13 Mongo removed** from `docker-compose.yml` and `docker-compose.test.yml`.
+  `MONGO_URL`, `DB_NAME` env vars gone.
+- [x] **§14 Payment UI deleted**: `paywall.tsx`, `subscription.tsx`,
+  `components/billing/`, `paywall.test.tsx`; billing types + calls stripped from
+  `apiV2.ts`; home/profile UI links removed; shared UI primitives moved to
+  `components/common/FormPieces.tsx`.
+- [x] **§20 Absence regression**: `tests/test_no_legacy_terms.py` parametrised over
+  every forbidden term.
+- [x] **§10 Schema**: verified — no `recommendation_entitlements`, no bridge tables.
+- [x] Regression tests: `test_invite_bypass_regression.py` (10 tests) — protected
+  routes refuse unregistered Supabase users; `/me` works once registered;
+  re-registration is idempotent.
+- [x] Backend: **67/67 tests pass**; alembic upgrade + downgrade round-trip clean.
+- [x] Frontend: **179/179 tests pass** (13 suites), typecheck ✓, lint zero-warning ✓.
+- [x] Hardening report: `docs/stabilisation/SUPABASE_HARDENING_REPORT.md`.
+
+### NOT DONE — for the next session
+
+Every one of these is written up in the hardening report as either partial or
+not done. Do **not** re-audit; pick the item and start.
+
+- [ ] **§2 Registration reservation protocol**: add `POST /api/v2/access/reserve`
+  that atomically reserves an invite and returns a short-lived registration
+  challenge. `POST /api/v2/access/register` consumes it. Existing cleanup path
+  (sign-out on failure) is a fallback but not as strong as the reservation
+  design in the spec.
+- [ ] **§5 Restore backend regression coverage**: search `git log` for deleted
+  test files (`test_privacy.py`, `test_media.py`, `test_consent.py`,
+  `test_profile.py`, `test_onboarding.py`, `test_inventory_*`, `test_scan_*`,
+  `test_quiz_*`, `test_recommendations_*`, `test_shopping_*`, `test_today.py`,
+  `test_planner.py`, `test_routines*`, `test_progress.py`, `test_goals.py`,
+  `test_memory.py`, `test_critical_journey.py`) and port them to the V2 fixtures.
+- [ ] **§6 Full critical journey test**: one deterministic end-to-end test
+  covering every domain, using the `registered_supabase_user` fixture and a
+  mocked AI provider.
+- [ ] **§7 Complete privacy export**: per-domain seed-and-verify test that every
+  active user-owned table appears in the export.
+- [ ] **§8 Durable deletion state machine**: model + worker + retry endpoint.
+- [ ] **§9 Storage error differentiation**: distinct codes for missing /
+  unauthorized / outage / timeout / misconfiguration; remove `boto3` from
+  `requirements.txt`.
+- [ ] **§11 Idempotent reference-data seed**: inventory categories, ingredient
+  catalogue + aliases, compatibility rules, routine templates, metric
+  definitions, milestone rules.
+- [ ] **§12 Feature-flag startup warning** when the enabled set diverges from
+  the private-beta baseline.
+- [ ] **§16 Emergent Android native E2E**: run journeys A–H once the emulator
+  is available. iOS if the simulator is available; otherwise report unavailable.
+- [ ] **§18 CI green on PR head**: verify after push.
+- [ ] Owner: push `fix/supabase-cutover-hardening` via Save to GitHub, open PR,
+  keep unmerged for review.
+
 - [x] Frontend: `profile.tsx` — removed `refreshSubscription`, `plan`, `scans_remaining_free`, `free_scans_per_month`, `useConfigStore` import.
 - [x] Frontend: `get-advice.tsx` — dropped `user?.weight_kg` (field removed from profile).
 - [x] Frontend: `index.tsx` — dropped legacy `setUserId` usage; Supabase session handles identity.
