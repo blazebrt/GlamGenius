@@ -77,17 +77,20 @@ async def register(
                     "message": "An invite code is required to join the private beta.",
                 },
             )
+        # Create the account first so the InviteRedemption FK is satisfied.
+        account = await identity.get_or_create_account(session, account_id)
         try:
             invite = await beta.redeem_invite(session, code=code, account_id=account_id)
         except ValueError as exc:
+            # Roll back the auto-created account so a rejected code does not
+            # leave a half-registered account behind.
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "invite_rejected", "message": str(exc)},
             ) from exc
     else:
         invite = None
-
-    account = await identity.get_or_create_account(session, account_id)
+        account = await identity.get_or_create_account(session, account_id)
     await session.commit()
 
     return {
