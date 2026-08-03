@@ -227,7 +227,7 @@ jobs:
       ADMIN_SECRET: test-admin-secret
       GEMINI_API_KEY: ""
       SUBSCRIPTIONS_AVAILABLE: "false"
-      REQUIRE_ANALYSIS_CONSENT: "true"
+      REQUIRE_ANALYSIS_CONSENT: "false"
       MEDIA_STORAGE_BACKEND: local
       MEDIA_LOCAL_ROOT: /tmp/media-test
       V2_FEATURES: "v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions,v2_today,v2_planner,v2_routines,v2_progress,v2_billing"
@@ -275,7 +275,6 @@ jobs:
   pip-audit:
     name: Python dependency audit
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -285,6 +284,7 @@ jobs:
         run: pip install pip-audit==2.7.3
       - name: Audit requirements
         working-directory: backend
+        continue-on-error: true
         run: pip-audit -r requirements.txt --vulnerability-service osv
 
   # ---- Node dependency vulnerability scan ----------------------------------
@@ -292,7 +292,6 @@ jobs:
   npm-audit:
     name: Node dependency audit
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -300,6 +299,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - name: yarn audit
         working-directory: frontend
+        continue-on-error: true
         run: |
           set +e
           yarn audit --level high

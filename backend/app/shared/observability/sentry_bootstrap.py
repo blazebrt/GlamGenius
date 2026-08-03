@@ -19,6 +19,20 @@ def init_sentry() -> None:
         # Optional integration. No SDK client, no hooks, no network call.
         return
 
+    # Never initialise Sentry when the process is running under pytest.
+    # A test failure would otherwise emit an event to the real project
+    # and pollute the dashboard. `init_sentry` runs at import time, before
+    # any test has started, so `PYTEST_CURRENT_TEST` may not yet be in the
+    # environment — instead detect the pytest module or an explicit
+    # TESTING=1 flag.
+    import sys
+    if (
+        "pytest" in sys.modules
+        or "PYTEST_CURRENT_TEST" in os.environ
+        or os.environ.get("TESTING") == "1"
+    ):
+        return
+
     try:
         import sentry_sdk
         from sentry_sdk.integrations.fastapi import FastApiIntegration
