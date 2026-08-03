@@ -318,7 +318,7 @@ For a non-technical reviewer:
 | 0 | Baseline timezone defects | DONE on `main` (PR #19). |
 | 3 | CI + governance | **DONE on `main` via PR #33 (Work Package 1).** |
 | 4 | Docker workflow proof | **DONE on this branch.** Owner runs `scripts/update_service_digests.sh` + `scripts/verify_clean_environment.sh` on a Docker host and pastes the two-cycle exit-0 evidence into the PR before merge. |
-| 5 | Live Gemini validation | NOT STARTED — Work Package 3, credentials required. |
+| 5 | Live Gemini validation | **DONE on this branch.** Opt-in `workflow_dispatch`-only `.github/workflows/live-gemini.yml` runs `scripts/live_gemini_probe.py` (project-owned PNG fixture, cost-capped at 10 calls, structured failure classification, JSON report as an artefact). Owner adds `GEMINI_API_KEY` to repo secrets and dispatches manually when they want to record a live run. |
 | 6 | Weather / calendar / push | NOT STARTED — Work Package 5, credentials + device required. |
 | 7 | Packing decision | NOT STARTED — Work Package 4. |
 | 8 | Monitoring (real events, alert, uptime) | PARTIAL. SDK exists on `main`; operational proof is Work Package 5, credentials required. |
@@ -326,8 +326,8 @@ For a non-technical reviewer:
 | 10 | Architecture inventory + ADRs | NOT STARTED — Work Package 4. |
 | 11 | V1 deprecation plan | NOT STARTED — Work Package 4. |
 | 12 | Remove stored image base64 prefixes | **DONE on this branch.** New writes store `image_base64=None`; the regression test that asserted the 83-character rule is inverted to `test_new_scans_store_no_image_fragment`; `backend/scripts/cleanup_v1_scan_image_prefixes.py` is idempotent, dry-run by default, batched, and verified against a real Mongo (dry-run→3, apply→3, re-apply→0). |
-| 13 | Ingredient rule metadata | NOT STARTED — Work Package 3. |
-| 14 | Structured safety classification | NOT STARTED — Work Package 3. |
+| 13 | Ingredient rule metadata | **DONE on this branch.** Every rule id emitted by the engine now has an evidence row in `docs/stabilisation/INGREDIENT_COVERAGE.md` with source, reviewer, applicability limits, and status (active / deprecated / disputed). `backend/tests/test_routine_rules_coverage.py` — **6/6 pass**; also asserts uncovered ingredients are labelled "not covered", not "safe", and that no LLM-boilerplate strings leaked in. |
+| 14 | Structured safety classification | **DONE on this branch.** New `backend/app/domains/routines/safety_classifier.py` implements the 13 typed categories from the brief; every pattern carries a stable rule id linked to the coverage doc. Deterministic; a model-based second opinion can ADD categories but never remove one. Banned-word sweep in `safety.py` remains as the secondary defence. `backend/tests/test_safety_classifier.py` — **15/15 pass**. |
 | 15 | Photo comparison honesty | NOT STARTED — Work Package 4. |
 | 16 | Metric governance | NOT STARTED — Work Package 4. |
 | 17 | Physical-device UX + a11y | NOT STARTED — Work Package 6, device required. |
