@@ -87,7 +87,7 @@ Supabase host, add `?sslmode=require` to `POSTGRES_URL`.
    Multiple admins are comma-separated:
 
    ```
-   SUPABASE_ADMIN_USER_IDS=771846b8-e033-4dac-94ed-f03bbafb88bc,<second-admin-uuid>
+   SUPABASE_ADMIN_USER_IDS=93726443-a8f0-4a9d-9389-d4e5b4d846f7,<second-admin-uuid>
    ```
 3. Restart the FastAPI process. That user can now call
    `POST /api/v2/access/admin/invites` to create invite codes.

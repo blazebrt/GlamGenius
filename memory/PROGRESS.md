@@ -50,11 +50,11 @@ Stored **only** in `/app/backend/.env` (git-ignored). Never commit.
 | SUPABASE_ANON_KEY            | `eyJhbGciOiJIUzI1NiIs...` (HS256, iat 2026-11-30, exp 2036-11-27, `role=anon`)            |
 | SUPABASE_SERVICE_ROLE_KEY    | `eyJhbGciOiJIUzI1NiIs...` (`role=service_role`) — server-side only                        |
 | POSTGRES_URL (direct)        | `postgresql://postgres:Ravi225207%40@db.llttywcumaqxzonvrhug.supabase.co:5432/postgres`  |
-| First admin UUID             | `771846b8-e033-4dac-94ed-f03bbafb88bc` (seed as first `SUPABASE_ADMIN_USER_IDS`)          |
+| First admin UUID             | `93726443-a8f0-4a9d-9389-d4e5b4d846f7` (seed as first `SUPABASE_ADMIN_USER_IDS`)          |
+| First admin email            | `charan15april2002@gmail.com`                                                             |
 | Storage bucket               | `glamgenius-media` (private) — must be created by owner in Supabase dashboard              |
 
 **Owner still to confirm/provide**:
-- Real admin email (currently placeholdered as `admin@glamgenius.dev`).
 - Whether AI provider is Emergent LLM key or a raw `GEMINI_API_KEY`.
 - Whether direct `db.*:5432` works from CI network; fallback is the
   pooler URI at port `6543` (`aws-0-<region>.pooler.supabase.com`).
