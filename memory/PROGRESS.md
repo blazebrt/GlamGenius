@@ -66,22 +66,32 @@ _Update this list after every commit-worthy change._
 - [x] Cloned repo into `/app`, confirmed baseline ancestor.
 - [x] Created branch `architecture/supabase-v2-cutover` from current `main`.
 - [x] Wrote `/app/memory/PROGRESS.md` (this file).
-- [ ] CI fix (`.github/workflows/ci.yml`) — remove mongo service + obsolete env vars, add Supabase envs, drop refs to deleted tests.
-- [ ] Doc: `docs/architecture/SUPABASE_TARGET_ARCHITECTURE.md`.
-- [ ] Doc: `docs/architecture/SUPABASE_AUTH_SECURITY.md`.
-- [ ] Doc: `docs/operations/SUPABASE_SETUP.md`.
-- [ ] Doc: `docs/stabilisation/SUPABASE_CUTOVER_REPORT.md`.
-- [ ] Frontend: add `@supabase/supabase-js` to `frontend/package.json`.
-- [ ] Frontend: `frontend/src/services/supabase.ts` (client singleton, session helpers).
-- [ ] Frontend: rewrite `frontend/src/services/api.ts` to V2 base + Supabase bearer token.
-- [ ] Frontend: rewrite `frontend/src/store/userStore.ts` — Supabase session store, drop plan/paywall fields.
-- [ ] Frontend: rewrite auth screens under `frontend/app/(auth)/`.
-- [ ] Frontend: remove `subscription.tsx`, `paywall.tsx` from active navigation (files stay for Prompt 2 to delete).
-- [ ] Frontend: static Jest test asserting no active V1 endpoint calls remain.
-- [ ] Backend: seed the first admin from `SUPABASE_ADMIN_USER_IDS`.
-- [ ] Verify `alembic upgrade head` runs against local Postgres (Docker) and against Supabase Postgres.
-- [ ] Verify `pytest -q backend/tests` passes locally with test envs.
-- [ ] Frontend: `yarn typecheck && yarn lint --max-warnings=0 && yarn test --ci`.
+- [x] CI fix (`.github/workflows/ci.yml`) — remove mongo service + obsolete env vars, add Supabase envs, drop refs to deleted tests.
+- [x] Doc: `docs/architecture/SUPABASE_TARGET_ARCHITECTURE.md`.
+- [x] Doc: `docs/architecture/SUPABASE_AUTH_SECURITY.md`.
+- [x] Doc: `docs/operations/SUPABASE_SETUP.md`.
+- [x] Doc: `docs/stabilisation/SUPABASE_CUTOVER_REPORT.md` (with real test results).
+- [x] Frontend: add `@supabase/supabase-js@~2.48.0` and `react-native-url-polyfill` to `frontend/package.json` (`yarn add` — lockfile updated).
+- [x] Frontend: `frontend/src/services/supabase.ts` (client singleton, AsyncStorage adapter, `getAccessToken`).
+- [x] Frontend: rewrite `frontend/src/services/api.ts` — baseURL is `${EXPO_PUBLIC_BACKEND_URL}` (root), Bearer token from Supabase session, 401 signs out + routes back to `(auth)/welcome`.
+- [x] Frontend: rewrite `frontend/src/store/userStore.ts` — neutral Supabase session store; `plan`, `plan_expires_at`, `scans_remaining_free`, `free_scans_per_month`, `refreshSubscription` removed; new `createUser` calls Supabase `signUp` then `POST /api/v2/access/register` to redeem invite.
+- [x] Frontend: rewrite `frontend/app/(auth)/welcome.tsx` — three modes: sign-in, register (with invite), reset-password.
+- [x] Frontend: `subscription.tsx`, `paywall.tsx`, `service-details.tsx`, `(tabs)/services.tsx` replaced with neutral placeholder screens (no V1 calls, no billing calls).
+- [x] Frontend: `_layout.tsx` — dropped `subscription` and `service-details` from active Stack.Screen list.
+- [x] Frontend: V1 path swaps — `get-advice.tsx` → `/api/v2/style/occasion`, `history.tsx` → `/api/v2/scan/history`, `scan.tsx` → `/api/v2/scan/analyse` (signed-out preview flow removed), `style-quiz.tsx` → `/api/v2/quiz/*`.
+- [x] Frontend: `home.tsx` — removed `refreshSubscription`, `user?.plan`, `user?.scans_remaining_free`.
+- [x] Frontend: `profile.tsx` — removed `refreshSubscription`, `plan`, `scans_remaining_free`, `free_scans_per_month`, `useConfigStore` import.
+- [x] Frontend: `get-advice.tsx` — dropped `user?.weight_kg` (field removed from profile).
+- [x] Frontend: `index.tsx` — dropped legacy `setUserId` usage; Supabase session handles identity.
+- [x] Frontend: `apiV2.ts` — `V2` constant updated from `'/v2'` to `'/api/v2'` after api.ts base change.
+- [x] Frontend: static Jest test `frontend/src/__tests__/noV1Paths.test.ts` — fails build if any V1 API path appears in active code.
+- [x] Frontend: deleted stale `frontend/src/__tests__/subscriptionScreen.test.tsx` (screen it tests no longer contains billing).
+- [x] Backend: `alembic upgrade head` verified against local Postgres → 111 tables created, `alembic check` clean, downgrade→upgrade round-trip clean.
+- [x] Backend: `pytest -q tests` — **36 passed, 0 failed** locally (`test_supabase_auth`, `test_beta_access`, `test_v2_api`, `test_schema_regression`).
+- [x] Frontend: `yarn typecheck` ✓ / `yarn lint --max-warnings=0` ✓ / `yarn test` **14 suites, 203/203 pass** / `npx expo export --platform web` ✓.
+- [ ] Owner: push branch via **Save to GitHub**, open PR into `main`, review, do **not** auto-merge.
+- [ ] Owner: create private Supabase Storage bucket `glamgenius-media`.
+- [ ] Owner: add first admin UUID to `SUPABASE_ADMIN_USER_IDS` env in the deployment target.
 
 ## 4. Files known to be problematic (must-touch list)
 

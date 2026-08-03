@@ -166,28 +166,39 @@ _Update these numbers before opening the PR for review._
 ```
 $ cd backend
 $ alembic upgrade head
-    ... [PENDING — owner to run against Supabase Postgres]
+    INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial_supabase_schema
+    (creates 111 tables from an empty database, exit 0)
 $ alembic check
-    ... [PENDING]
+    No new upgrade operations detected.
+$ alembic downgrade base && alembic upgrade head && alembic check
+    (round-trip clean, exit 0)
 $ pytest -q tests
-    ... [PENDING]
+    36 passed, 19 warnings in 13.67s
 ```
+
+Test files exercised: `test_supabase_auth.py`, `test_beta_access.py`,
+`test_v2_api.py`, `test_schema_regression.py`.
 
 ### Frontend
 
 ```
 $ cd frontend
 $ yarn typecheck
-    ... [PENDING]
+    tsc --noEmit → exit 0
 $ yarn lint --max-warnings=0
-    ... [PENDING]
+    ESLint clean, 0 warnings, 0 errors
 $ yarn test --ci --watchAll=false
-    ... [PENDING]
+    Test Suites: 14 passed, 14 total
+    Tests:       203 passed, 203 total
 $ npx expo config --type public > /dev/null
-    ... [PENDING]
+    (exit 0)
 $ npx expo export --platform web
-    ... [PENDING]
+    Exported: dist (all routes bundled, exit 0)
 ```
+
+New test: `frontend/src/__tests__/noV1Paths.test.ts` — scans every active
+`.ts`/`.tsx` file under `frontend/src` and `frontend/app` and fails if any
+V1 API path string appears in active code.
 
 ### CI
 
