@@ -15,6 +15,20 @@ import pytest
 from sqlalchemy import select
 
 from app.domains.planning import clock, notifications
+
+
+def local_today() -> date:
+    """The date the app treats as "today".
+
+    Every test that reasons about a plan_date has to use this rather than
+    ``local_today()``. Between 18:30 UTC and midnight UTC, the server's calendar
+    day and the Asia/Kolkata calendar day disagree, and the planner only ever
+    consults the Kolkata one (see clock.local_today). A test that hard-codes
+    ``local_today()`` therefore fails for five and a half hours out of every
+    twenty-four — the exact bug this comment used to describe but the tests
+    themselves used to reintroduce.
+    """
+    return clock.local_today(None)
 from app.domains.planning.context import cache_key, infer_occasion
 from app.domains.planning.models import (
     DailyPlan, DailyPlanInput, NotificationDelivery, OutfitSchedule, PlanRecalculationEvent,
@@ -109,7 +123,7 @@ def test_indian_seasons_map_to_the_months_people_actually_use():
 
 
 async def test_every_phase_5_route_requires_authentication(app_client):
-    day = date.today().isoformat()
+    day = local_today().isoformat()
     calls = [
         ("GET", "/api/v2/today", None),
         ("POST", "/api/v2/today/regenerate", {}),
@@ -208,7 +222,7 @@ async def test_optional_modules_appear_only_when_relevant(app_client, make_user)
 
     _, other = await make_user()
     await stock(app_client, other)
-    await app_client.post("/api/v2/today/weather", json={"for_date": date.today().isoformat(), "condition": "hot"}, headers=auth(other))
+    await app_client.post("/api/v2/today/weather", json={"for_date": local_today().isoformat(), "condition": "hot"}, headers=auth(other))
     rich = (await today(app_client, other)).json()
     rich_modules = {row["module"] for row in rich["primary"] + rich["optional_modules"]}
     # Hot weather makes hydration relevant; owning a serum makes skincare relevant.
@@ -245,7 +259,7 @@ async def test_a_daily_plan_is_idempotent_and_never_duplicated(app_client, make_
     factory = sql.get_sessionmaker()
     async with factory() as session:
         rows = (await session.execute(
-            select(DailyPlan).where(DailyPlan.plan_date == date.today())
+            select(DailyPlan).where(DailyPlan.plan_date == local_today())
         )).scalars().all()
         mine = [row for row in rows if str(row.account_id)]
         # The unique constraint is the guarantee; this asserts it holds in practice.
@@ -263,7 +277,7 @@ async def test_changing_the_weather_invalidates_the_cache_and_rebuilds(app_clien
 
     changed = (await app_client.post(
         "/api/v2/today/weather",
-        json={"for_date": date.today().isoformat(), "condition": "rainy", "precipitation_chance": 80},
+        json={"for_date": local_today().isoformat(), "condition": "rainy", "precipitation_chance": 80},
         headers=auth(token),
     )).json()
 
@@ -275,7 +289,7 @@ async def test_changing_the_weather_invalidates_the_cache_and_rebuilds(app_clien
     factory = sql.get_sessionmaker()
     async with factory() as session:
         events = (await session.execute(
-            select(PlanRecalculationEvent).where(PlanRecalculationEvent.plan_date == date.today())
+            select(PlanRecalculationEvent).where(PlanRecalculationEvent.plan_date == local_today())
         )).scalars().all()
         assert any(row.trigger == "weather_changed" and row.recomputed for row in events)
 
@@ -301,7 +315,7 @@ async def test_an_item_returns_once_its_available_from_date_passes(app_client, m
     created = await stock(app_client, token)
     shirt = next(row for row in created if row["display_name"] == "Navy formal shirt")
 
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    yesterday = (local_today() - timedelta(days=1)).isoformat()
     await app_client.post(
         "/api/v2/today/items/unavailable",
         json={"item_id": shirt["id"], "state": "in_wash", "available_from": yesterday},
@@ -342,7 +356,7 @@ async def test_the_planner_avoids_wearing_the_same_thing_two_days_running(app_cl
     _, token = await make_user()
     await stock(app_client, token)
 
-    monday = clock.week_start(date.today())
+    monday = clock.week_start(local_today())
     (await app_client.post(
         "/api/v2/planner/week/generate",
         json={"week_start": monday.isoformat()}, headers=auth(token),
@@ -380,7 +394,7 @@ def test_the_repetition_report_surfaces_repeats_without_forbidding_them():
 async def test_a_full_monday_to_sunday_week_is_generated(app_client, make_user):
     _, token = await make_user()
     await stock(app_client, token)
-    monday = clock.week_start(date.today())
+    monday = clock.week_start(local_today())
 
     week = (await app_client.post(
         "/api/v2/planner/week/generate",
@@ -406,7 +420,7 @@ async def test_an_ungenerated_week_says_so_instead_of_erroring(app_client, make_
 async def test_a_locked_day_survives_regenerating_the_week(app_client, make_user):
     _, token = await make_user()
     await stock(app_client, token)
-    monday = clock.week_start(date.today())
+    monday = clock.week_start(local_today())
     await app_client.post("/api/v2/planner/week/generate", json={"week_start": monday.isoformat()}, headers=auth(token))
 
     target = (monday + timedelta(days=2)).isoformat()
@@ -427,7 +441,7 @@ async def test_a_locked_day_survives_regenerating_the_week(app_client, make_user
 async def test_a_locked_day_refuses_to_be_regenerated_on_its_own(app_client, make_user):
     _, token = await make_user()
     await stock(app_client, token)
-    monday = clock.week_start(date.today())
+    monday = clock.week_start(local_today())
     await app_client.post("/api/v2/planner/week/generate", json={"week_start": monday.isoformat()}, headers=auth(token))
     target = (monday + timedelta(days=3)).isoformat()
     await app_client.post(f"/api/v2/planner/day/{target}/lock", json={"locked": True}, headers=auth(token))
@@ -440,7 +454,7 @@ async def test_a_locked_day_refuses_to_be_regenerated_on_its_own(app_client, mak
 async def test_two_days_can_be_swapped_and_locked_days_cannot(app_client, make_user):
     _, token = await make_user()
     await stock(app_client, token)
-    monday = clock.week_start(date.today())
+    monday = clock.week_start(local_today())
     week = (await app_client.post("/api/v2/planner/week/generate", json={"week_start": monday.isoformat()}, headers=auth(token))).json()
 
     first, second = week["days"][0]["plan_date"], week["days"][1]["plan_date"]
@@ -462,7 +476,7 @@ async def test_two_days_can_be_swapped_and_locked_days_cannot(app_client, make_u
 async def test_days_cannot_be_swapped_across_weeks(app_client, make_user):
     _, token = await make_user()
     await stock(app_client, token)
-    monday = clock.week_start(date.today())
+    monday = clock.week_start(local_today())
     await app_client.post("/api/v2/planner/week/generate", json={"week_start": monday.isoformat()}, headers=auth(token))
 
     response = await app_client.patch(
@@ -541,7 +555,7 @@ async def test_recording_what_was_worn_feeds_tomorrows_repetition_rules(app_clie
     factory = sql.get_sessionmaker()
     async with factory() as session:
         row = (await session.execute(
-            select(OutfitSchedule).where(OutfitSchedule.plan_date == date.today(), OutfitSchedule.status == "worn")
+            select(OutfitSchedule).where(OutfitSchedule.plan_date == local_today(), OutfitSchedule.status == "worn")
         )).scalars().first()
         assert row is not None and row.item_ids
 
@@ -577,7 +591,7 @@ def test_event_titles_are_only_matched_on_real_words():
 async def test_adding_an_event_shapes_the_day_and_shows_the_commitment(app_client, make_user):
     _, token = await make_user()
     await stock(app_client, token)
-    starts = datetime.combine(date.today(), datetime.min.time()).replace(hour=10, tzinfo=dt_timezone.utc)
+    starts = datetime.combine(local_today(), datetime.min.time()).replace(hour=10, tzinfo=dt_timezone.utc)
 
     body = (await app_client.post(
         "/api/v2/today/events",
@@ -644,7 +658,7 @@ async def test_a_declared_but_unconnected_provider_reports_itself_honestly(app_c
 async def test_disconnecting_a_calendar_actually_stops_using_its_events(app_client, make_user):
     _, token = await make_user()
     await stock(app_client, token)
-    starts = datetime.combine(date.today(), datetime.min.time()).replace(hour=9, tzinfo=dt_timezone.utc)
+    starts = datetime.combine(local_today(), datetime.min.time()).replace(hour=9, tzinfo=dt_timezone.utc)
     await app_client.post(
         "/api/v2/integrations/calendar/connect",
         json={"provider": "manual", "events": [
@@ -669,7 +683,7 @@ async def test_disconnecting_a_calendar_actually_stops_using_its_events(app_clie
 
 async def test_a_user_typed_event_survives_disconnecting_a_calendar(app_client, make_user):
     _, token = await make_user()
-    starts = datetime.combine(date.today(), datetime.min.time()).replace(hour=11, tzinfo=dt_timezone.utc)
+    starts = datetime.combine(local_today(), datetime.min.time()).replace(hour=11, tzinfo=dt_timezone.utc)
     await app_client.post(
         "/api/v2/today/events",
         json={"title": "My own dinner plan", "starts_at": starts.isoformat()}, headers=auth(token),
@@ -687,7 +701,7 @@ async def test_a_user_typed_event_survives_disconnecting_a_calendar(app_client, 
 async def test_a_low_confidence_day_asks_exactly_one_question(app_client, make_user):
     _, token = await make_user()
     await stock(app_client, token)
-    starts = datetime.combine(date.today(), datetime.min.time()).replace(hour=15, tzinfo=dt_timezone.utc)
+    starts = datetime.combine(local_today(), datetime.min.time()).replace(hour=15, tzinfo=dt_timezone.utc)
     # "work" is a weak single-word signal, deliberately below the threshold.
     body = (await app_client.post(
         "/api/v2/today/events",
@@ -704,7 +718,7 @@ async def test_a_low_confidence_day_asks_exactly_one_question(app_client, make_u
 async def test_answering_the_question_rebuilds_and_stops_it_being_asked_again(app_client, make_user):
     _, token = await make_user()
     await stock(app_client, token)
-    starts = datetime.combine(date.today(), datetime.min.time()).replace(hour=15, tzinfo=dt_timezone.utc)
+    starts = datetime.combine(local_today(), datetime.min.time()).replace(hour=15, tzinfo=dt_timezone.utc)
     plan = (await app_client.post(
         "/api/v2/today/events",
         json={"title": "work thing", "starts_at": starts.isoformat()}, headers=auth(token),
@@ -729,7 +743,7 @@ async def test_a_confident_day_asks_nothing_at_all(app_client, make_user):
     await stock(app_client, token)
     await app_client.post(
         "/api/v2/today/weather",
-        json={"for_date": date.today().isoformat(), "condition": "mild"}, headers=auth(token),
+        json={"for_date": local_today().isoformat(), "condition": "mild"}, headers=auth(token),
     )
     body = (await today(app_client, token)).json()
     assert body["needs_clarification"] is False, "do not ask what we already know"
@@ -799,6 +813,11 @@ async def test_the_same_notification_is_never_queued_twice(app_client, make_user
             select(NotificationDelivery).where(
                 NotificationDelivery.account_id == account_id,
                 NotificationDelivery.plan_date == date(2026, 8, 3),
+                # Filter to this test's specific dedup hash — the ``stock`` +
+                # ``today`` calls above legitimately queue their own
+                # notification for the same account and plan date, and this
+                # test is about deduplication, not about counting every row.
+                NotificationDelivery.dedup_hash == first.dedup_hash,
             )
         )).scalars().all()
         assert len(rows) == 1
@@ -876,7 +895,7 @@ async def test_a_plan_records_the_inputs_that_produced_it(app_client, make_user)
     factory = sql.get_sessionmaker()
     async with factory() as session:
         plan = (await session.execute(
-            select(DailyPlan).where(DailyPlan.plan_date == date.today()).order_by(DailyPlan.created_at.desc()).limit(1)
+            select(DailyPlan).where(DailyPlan.plan_date == local_today()).order_by(DailyPlan.created_at.desc()).limit(1)
         )).scalar_one()
         rows = (await session.execute(
             select(DailyPlanInput).where(DailyPlanInput.plan_id == plan.id)
@@ -905,9 +924,9 @@ async def test_today_and_planner_sit_behind_their_own_flags(app_client, make_use
 async def test_no_plan_response_uses_banned_language(app_client, make_user):
     _, token = await make_user()
     await stock(app_client, token)
-    await app_client.post("/api/v2/today/weather", json={"for_date": date.today().isoformat(), "condition": "hot"}, headers=auth(token))
+    await app_client.post("/api/v2/today/weather", json={"for_date": local_today().isoformat(), "condition": "hot"}, headers=auth(token))
     plan = (await today(app_client, token)).json()
-    monday = clock.week_start(date.today())
+    monday = clock.week_start(local_today())
     week = (await app_client.post("/api/v2/planner/week/generate", json={"week_start": monday.isoformat()}, headers=auth(token))).json()
 
     text = (json.dumps(plan) + json.dumps(week)).lower()
@@ -923,7 +942,7 @@ async def test_the_planner_never_calls_a_model(app_client, make_user, fake_provi
     """Deterministic by construction: a week is seven plans and zero AI calls."""
     _, token = await make_user()
     await stock(app_client, token)
-    monday = clock.week_start(date.today())
+    monday = clock.week_start(local_today())
 
     await app_client.post("/api/v2/planner/week/generate", json={"week_start": monday.isoformat()}, headers=auth(token))
     await today(app_client, token)
@@ -1069,7 +1088,7 @@ async def test_swapping_two_days_moves_the_outfit_not_the_weather(app_client, ma
     """Each day keeps its own date, weather and event; only the outfit moves."""
     _, token = await make_user()
     await stock(app_client, token)
-    monday = clock.week_start(date.today())
+    monday = clock.week_start(local_today())
     tuesday = monday + timedelta(days=1)
 
     for value, condition in ((monday, "rainy"), (tuesday, "hot")):
@@ -1123,7 +1142,7 @@ async def test_a_swap_updates_the_repetition_history(app_client, make_user):
     factory = sql.get_sessionmaker()
     async with factory() as session:
         row = (await session.execute(
-            select(OutfitSchedule).where(OutfitSchedule.plan_date == date.today())
+            select(OutfitSchedule).where(OutfitSchedule.plan_date == local_today())
             .order_by(OutfitSchedule.created_at.desc()).limit(1)
         )).scalar_one()
         assert other["id"] in row.item_ids, "the item actually worn must be in the history"

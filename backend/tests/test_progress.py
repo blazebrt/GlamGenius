@@ -15,6 +15,7 @@ from datetime import date, timedelta
 import pytest
 from sqlalchemy import select
 
+from app.domains.planning import clock
 from app.domains.progress import comparison, memory, metrics, milestones, registry
 from app.domains.progress.models import (
     GamificationEvent, MemoryFact, MetricEvent, Milestone, ProgressGoal,
@@ -22,7 +23,11 @@ from app.domains.progress.models import (
 from app.shared.database import sql
 from tests.conftest import auth, png_bytes
 
-TODAY = date.today()
+# The app always resolves "today" in Asia/Kolkata (see clock.local_today).
+# Using date.today() here would silently disagree with the app for five and a
+# half hours out of every twenty-four, so every test that reasons about a
+# calendar date has to use this instead.
+TODAY = clock.local_today(None)
 
 
 async def add_item(client, token, category, name, details=None, **overrides):

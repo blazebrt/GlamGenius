@@ -1,0 +1,94 @@
+# Dependency updates for GlamGenius.
+#
+# Deliberately open per-ecosystem PRs rather than one big one. A single
+# multi-ecosystem PR would ask a reviewer to sign off on unrelated moving
+# parts at once, and dependabot's ability to bundle updates has a way of
+# hiding a risky change behind a safe one.
+
+version: 2
+
+updates:
+  # Python backend.
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    reviewers:
+      - blazebrt
+    labels:
+      - dependencies
+      - backend
+    groups:
+      # Group patch versions together — the majority of updates that are
+      # safe by inspection. Anything minor or major gets its own PR because
+      # it needs a human to look at the changelog.
+      patch-updates:
+        applies-to: version-updates
+        update-types:
+          - patch
+    # Deliberately do not auto-bump these. Every one of them is a decision
+    # somebody made explicitly:
+    #   - google-genai: model provider, pinned to the version tests trust
+    #   - pydantic:     validation shape, mass upgrade is a real audit
+    #   - sqlalchemy:   async engine behaviour changes between minors
+    #   - alembic:      migration script format
+    ignore:
+      - dependency-name: google-genai
+      - dependency-name: pydantic
+        update-types:
+          - version-update:semver-major
+      - dependency-name: sqlalchemy
+        update-types:
+          - version-update:semver-major
+      - dependency-name: alembic
+        update-types:
+          - version-update:semver-major
+
+  # Frontend (Expo + React Native).
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    reviewers:
+      - blazebrt
+    labels:
+      - dependencies
+      - frontend
+    groups:
+      expo-patch:
+        applies-to: version-updates
+        patterns:
+          - "expo*"
+        update-types:
+          - patch
+    ignore:
+      # Expo SDK bumps have to be coordinated with the app.json runtimeVersion
+      # and with the Xcode / Android SDK the client uses. Not auto.
+      - dependency-name: expo
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+      - dependency-name: react-native
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+      - dependency-name: react
+        update-types:
+          - version-update:semver-major
+
+  # The workflows themselves.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    reviewers:
+      - blazebrt
+    labels:
+      - dependencies
+      - ci

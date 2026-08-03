@@ -72,7 +72,12 @@ class ProgressPhotoInput(BaseModel):
 
     @model_validator(mode="after")
     def _not_in_the_future(self):
-        if self.taken_on and self.taken_on > date.today():
+        # The app resolves "today" in Asia/Kolkata (see planning.clock). Using
+        # date.today() here rejected a photo taken today for five and a half
+        # hours out of every twenty-four when the server was in UTC.
+        from app.domains.planning import clock as _clock
+
+        if self.taken_on and self.taken_on > _clock.local_today(None):
             raise ValueError("A photo cannot have been taken in the future.")
         return self
 

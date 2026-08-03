@@ -1,0 +1,43 @@
+{
+  "//": "EAS Build configuration for GlamGenius. Documented at https://docs.expo.dev/build/eas-json/",
+  "cli": {
+    "version": ">= 12.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "//": "For developers running the app on a physical device with a debugger attached.",
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "gradleCommand": ":app:assembleDebug",
+        "buildType": "apk"
+      }
+    },
+    "preview": {
+      "//": "For internal testers. Produces an installable APK you can share via a link or upload to Play Console's Internal Testing track.",
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "channel": "preview"
+    },
+    "production": {
+      "//": "For the Play Store. Produces an AAB (Android App Bundle) — the format Google requires for new listings.",
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "channel": "production"
+    }
+  },
+  "submit": {
+    "production": {
+      "//": "Once you have a Play Console service-account JSON, drop the path here. Until then, submissions are manual (upload the AAB via the Play Console UI).",
+      "android": {
+        "track": "internal",
+        "releaseStatus": "draft"
+      }
+    }
+  }
+}
