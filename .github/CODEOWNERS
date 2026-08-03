@@ -52,3 +52,20 @@ backend/app/api/v2/billing.py            @blazebrt
 
 # --- CI, dependencies, workflow files --------------------------------------
 .github/**                               @blazebrt
+
+# --- Engineering governance ------------------------------------------------
+# Review policy, branching strategy, and the seven checklists gate every
+# other review, so amendments to them go through the owner.
+docs/engineering/**                      @blazebrt
+
+# --- Stabilisation documentation -------------------------------------------
+# The stabilisation report is the single source of truth about what is
+# actually done. Only the owner promotes items from partial to complete.
+STABILISATION_REPORT.md                  @blazebrt
+docs/stabilisation/**                    @blazebrt
+
+# --- Emergent hosting metadata ---------------------------------------------
+# The .emergent directory contains platform-generated cron and webhook
+# code that runs inside preview pods with an app secret. Anything under it
+# is owner-only.
+.emergent/**                             @blazebrt
