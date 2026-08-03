@@ -138,7 +138,14 @@ async def analyze_scan(
     scan_result = ScanResult(
         user_id=user_id,
         scan_type=request.scan_type,
-        image_base64=(request.image_base64[:80] + "...") if request.image_base64 else None,
+        # V1 previously stored `image_base64=(request.image_base64[:80] + "...")`
+        # as "a receipt that a photo was involved". That receipt was actually a
+        # slice of the user's photo bytes, which then rode along in every future
+        # `scan_history` and `trends` query. Fix 12 removes it: the ScanResult
+        # keeps no fragment of the image at all. The AI run's provenance in
+        # `analysis.meta.provenance.ai_run_id` is the durable reference; the
+        # bytes themselves live only for the duration of the outbound AI call.
+        image_base64=None,
         analysis=analysis,
     )
     await db.scans.insert_one(scan_result.dict())
