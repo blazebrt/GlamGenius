@@ -141,6 +141,31 @@ def fake_supabase_user(monkeypatch):
     return _register
 
 
+@pytest_asyncio.fixture
+async def registered_supabase_user(fake_supabase_user):
+    """Mint a Supabase token AND create the ``accounts`` row.
+
+    Use this in tests that hit protected routes (`/api/v2/me`, quiz, scan,
+    inventory, etc.). Tests that specifically need to assert the
+    invite-bypass gate ("valid token, no account row → 403") must use the
+    raw ``fake_supabase_user`` fixture instead.
+    """
+    from app.domains.identity import service as identity
+    from app.shared.database.sql import get_sessionmaker
+
+    factory = get_sessionmaker()
+
+    async def _register(**kwargs):
+        token, uid = fake_supabase_user(**kwargs)
+        async with factory() as session:
+            await identity.register_account(session, uid)
+            await session.commit()
+        return token, uid
+
+    return _register
+
+
+
 def auth(token: str) -> Dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 

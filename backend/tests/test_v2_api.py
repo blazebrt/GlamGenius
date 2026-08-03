@@ -20,8 +20,8 @@ async def test_me_requires_bearer(app_client, db_clean):
 
 
 @pytest.mark.asyncio
-async def test_me_returns_supabase_uuid(app_client, db_clean, fake_supabase_user):
-    token, uid = fake_supabase_user()
+async def test_me_returns_supabase_uuid(app_client, db_clean, registered_supabase_user):
+    token, uid = await registered_supabase_user()
     resp = await app_client.get("/api/v2/me", headers=auth(token))
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -62,9 +62,9 @@ async def test_access_register_with_valid_invite(app_client, db_clean, fake_supa
 
 @pytest.mark.asyncio
 async def test_admin_only_endpoints_hide_from_regular_users(
-    app_client, db_clean, fake_supabase_user
+    app_client, db_clean, registered_supabase_user
 ):
-    token, _ = fake_supabase_user()
+    token, _ = await registered_supabase_user()
     resp = await app_client.get("/api/v2/access/admin/invites", headers=auth(token))
     # Admin surface returns 404 (not 403) to non-admins so a switched-off
     # feature does not leak its existence.
@@ -73,9 +73,9 @@ async def test_admin_only_endpoints_hide_from_regular_users(
 
 @pytest.mark.asyncio
 async def test_admin_can_create_and_list_invites(
-    app_client, db_clean, fake_supabase_user
+    app_client, db_clean, registered_supabase_user
 ):
-    token, _ = fake_supabase_user(admin=True)
+    token, _ = await registered_supabase_user(admin=True)
     r = await app_client.post(
         "/api/v2/access/admin/invites",
         headers=auth(token),
@@ -92,8 +92,8 @@ async def test_admin_can_create_and_list_invites(
 
 
 @pytest.mark.asyncio
-async def test_quiz_submit_and_retrieve(app_client, db_clean, fake_supabase_user):
-    token, uid = fake_supabase_user()
+async def test_quiz_submit_and_retrieve(app_client, db_clean, registered_supabase_user):
+    token, uid = await registered_supabase_user()
     q = await app_client.get("/api/v2/quiz/questions", headers=auth(token))
     assert q.status_code == 200
     assert q.json()["schema_version"].startswith("quiz.")
@@ -118,8 +118,8 @@ async def test_quiz_submit_and_retrieve(app_client, db_clean, fake_supabase_user
 
 
 @pytest.mark.asyncio
-async def test_quiz_rejects_missing_answers(app_client, db_clean, fake_supabase_user):
-    token, _ = fake_supabase_user()
+async def test_quiz_rejects_missing_answers(app_client, db_clean, registered_supabase_user):
+    token, _ = await registered_supabase_user()
     r = await app_client.post(
         "/api/v2/quiz/submit",
         headers=auth(token),
@@ -131,10 +131,10 @@ async def test_quiz_rejects_missing_answers(app_client, db_clean, fake_supabase_
 
 @pytest.mark.asyncio
 async def test_quiz_history_is_scoped_to_caller(
-    app_client, db_clean, fake_supabase_user
+    app_client, db_clean, registered_supabase_user
 ):
-    token_a, _ = fake_supabase_user()
-    token_b, _ = fake_supabase_user()
+    token_a, _ = await registered_supabase_user()
+    token_b, _ = await registered_supabase_user()
     answers = {
         "vibe": "polished",
         "occasion_focus": "work",
@@ -152,9 +152,9 @@ async def test_quiz_history_is_scoped_to_caller(
 
 @pytest.mark.asyncio
 async def test_scan_requires_consent(
-    app_client, db_clean, fake_supabase_user, fake_provider
+    app_client, db_clean, registered_supabase_user, fake_provider
 ):
-    token, _ = fake_supabase_user()
+    token, _ = await registered_supabase_user()
     image_b64 = base64.b64encode(png_bytes()).decode("ascii")
     r = await app_client.post(
         "/api/v2/scan/analyse",
@@ -167,19 +167,19 @@ async def test_scan_requires_consent(
 
 @pytest.mark.asyncio
 async def test_scan_records_history_after_consent(
-    app_client, db_clean, fake_supabase_user, fake_provider
+    app_client, db_clean, registered_supabase_user, fake_provider
 ):
     from app.domains.consent import service as consent_service
     from app.domains.consent.models import CONSENT_PHOTO_ANALYSIS
     from app.shared.database.sql import get_sessionmaker
 
-    token, uid = fake_supabase_user()
+    token, uid = await registered_supabase_user()
     # Grant consent server-side (the frontend would POST /consent).
     from app.domains.identity import service as identity_service
 
     factory = get_sessionmaker()
     async with factory() as session:
-        await identity_service.get_or_create_account(session, uid)
+        await identity_service.register_account(session, uid)
         await consent_service.record(
             session,
             account_id=uid,
@@ -209,7 +209,7 @@ async def test_scan_records_history_after_consent(
 
 @pytest.mark.asyncio
 async def test_scan_failure_preserves_allowance(
-    app_client, db_clean, fake_supabase_user, fake_provider
+    app_client, db_clean, registered_supabase_user, fake_provider
 ):
     from app.domains.ai_gateway.providers import gemini
     from app.domains.consent import service as consent_service
@@ -217,11 +217,11 @@ async def test_scan_failure_preserves_allowance(
     from app.domains.identity import service as identity_service
     from app.shared.database.sql import get_sessionmaker
 
-    token, uid = fake_supabase_user()
+    token, uid = await registered_supabase_user()
 
     factory = get_sessionmaker()
     async with factory() as session:
-        await identity_service.get_or_create_account(session, uid)
+        await identity_service.register_account(session, uid)
         await consent_service.record(
             session,
             account_id=uid,
@@ -249,20 +249,20 @@ async def test_scan_failure_preserves_allowance(
 
 @pytest.mark.asyncio
 async def test_cross_account_scan_read_is_404(
-    app_client, db_clean, fake_supabase_user, fake_provider
+    app_client, db_clean, registered_supabase_user, fake_provider
 ):
     from app.domains.consent import service as consent_service
     from app.domains.consent.models import CONSENT_PHOTO_ANALYSIS
     from app.domains.identity import service as identity_service
     from app.shared.database.sql import get_sessionmaker
 
-    token_a, uid_a = fake_supabase_user()
-    token_b, uid_b = fake_supabase_user()
+    token_a, uid_a = await registered_supabase_user()
+    token_b, uid_b = await registered_supabase_user()
 
     factory = get_sessionmaker()
     async with factory() as session:
         for uid in (uid_a, uid_b):
-            await identity_service.get_or_create_account(session, uid)
+            await identity_service.register_account(session, uid)
             await consent_service.record(
                 session,
                 account_id=uid,
