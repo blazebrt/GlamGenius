@@ -100,8 +100,9 @@ architecturally removed, not toggled.
 - No dual-write bridge to any legacy datastore.
 - No V1 identity bridge (`account_links`, `v1_user_id`).
 - No payment provider (Razorpay, Stripe or otherwise).
-- No S3 in production; the `boto3` adapter is retained only for the
-  local-test fixture and will be removed in Prompt 2.
+- No S3 in production. The `boto3` adapter and its dependency were
+  removed in Package B; Supabase Storage is the only production media
+  backend.
 - No paid plans, entitlements, event passes, paywalls.
 
 ## 8. Rollout & rollback posture

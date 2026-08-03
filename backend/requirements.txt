@@ -26,12 +26,6 @@ alembic==1.14.0
 # Runtime queries all go through asyncpg.
 psycopg2-binary==2.9.10
 
-# --- V2: S3 fixture (test-only) ---
-# boto3 is retained only so the legacy S3 storage adapter still imports for
-# tests that run against MinIO in CI. Prompt 2 removes the S3 adapter and
-# this dependency alongside it.
-boto3==1.35.99
-
 # --- Tests ---
 pytest==8.3.4
 pytest-asyncio==0.26.0

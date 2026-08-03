@@ -1,0 +1,226 @@
+"""Privacy: authoritative, versioned export of everything the account owns.
+
+The registry
+------------
+Every ORM table registered on :data:`app.shared.database.registry.Base.metadata`
+is classified in :data:`REGISTRY` as one of:
+
+* ``INCLUDED`` — user-owned data exported to the caller.
+* ``NOT_USER_OWNED`` — reference or global data (taxonomy, rules, templates,
+  feature flags). Never account-linked.
+* ``OPERATIONAL`` — internal state (outbox, deletion jobs, notification
+  delivery attempts) whose personal payload is redacted or intentionally
+  omitted.
+* ``SECRET_EXCLUDED`` — a table whose contents include secrets, credentials
+  or tokens and must never appear in an export.
+* ``LEGALLY_RETAINED`` — data we keep even after account deletion (a minimal
+  deletion audit tombstone).
+
+The critical safety net is :func:`assert_registry_complete`, which walks the
+metadata and fails if a new table is introduced without a classification.
+Adding a table without deciding whether it goes into the export is exactly
+the kind of silent omission a periodic audit is meant to catch.
+
+The export shape
+----------------
+::
+
+    {
+      "schema_version": "1.0",
+      "generated_at": "...",
+      "account": {...},
+      "domains": {
+        "identity": {...},
+        "profile": {...},
+        "consent": {...},
+        "inventory": {...},
+        ...
+      }
+    }
+
+Each domain has a stable key and a documented schema; see the module docstrings
+of ``registry.py`` and ``service.py``.
+"""
+from __future__ import annotations
+
+from enum import Enum
+from typing import Dict, Set
+
+
+EXPORT_SCHEMA_VERSION = "1.0"
+
+
+class Classification(str, Enum):
+    INCLUDED = "included"
+    NOT_USER_OWNED = "not_user_owned"
+    OPERATIONAL = "operational"
+    SECRET_EXCLUDED = "secret_excluded"
+    LEGALLY_RETAINED = "legally_retained"
+
+
+# One entry per table. Adding a new table without adding a row here fails
+# ``assert_registry_complete``, which is exercised by
+# ``tests/test_privacy_export_registry.py``.
+REGISTRY: Dict[str, Classification] = {
+    # --- Identity + lifecycle ---
+    "accounts": Classification.INCLUDED,
+    # Deletion tombstone; retained after the account is gone.
+    "account_deletion_jobs": Classification.LEGALLY_RETAINED,
+    # --- Invite gate ---
+    # Global invites table is not per-account; the redemption *is*.
+    "invites": Classification.NOT_USER_OWNED,
+    "invite_redemptions": Classification.INCLUDED,
+    "invite_registration_reservations": Classification.OPERATIONAL,
+    # --- Consent ---
+    "consents": Classification.INCLUDED,
+    # --- Profile + onboarding ---
+    "appearance_profiles": Classification.INCLUDED,
+    "profile_attributes": Classification.INCLUDED,  # via appearance_profiles
+    "profile_change_events": Classification.INCLUDED,  # via appearance_profiles
+    "attribute_observations": Classification.INCLUDED,  # via appearance_profiles
+    "style_preferences": Classification.INCLUDED,  # via appearance_profiles
+    "fit_preferences": Classification.INCLUDED,  # via appearance_profiles
+    "lifestyle_context": Classification.INCLUDED,  # via appearance_profiles
+    "user_constraints": Classification.INCLUDED,  # via appearance_profiles
+    "appearance_goals": Classification.INCLUDED,  # via appearance_profiles
+    "user_reported_observations": Classification.INCLUDED,
+    "onboarding_sessions": Classification.INCLUDED,  # via appearance_profiles
+    "hydration_preferences": Classification.INCLUDED,
+    "nutrition_preferences": Classification.INCLUDED,
+    # --- Inventory ---
+    "inventory_items": Classification.INCLUDED,
+    "inventory_attributes": Classification.INCLUDED,  # via inventory_items
+    "inventory_events": Classification.INCLUDED,
+    "inventory_item_images": Classification.INCLUDED,  # via inventory_items
+    "inventory_import_jobs": Classification.INCLUDED,
+    "inventory_value_events": Classification.INCLUDED,  # via inventory_items
+    "item_condition_events": Classification.INCLUDED,  # via inventory_items
+    "item_expiry_events": Classification.INCLUDED,  # via inventory_items
+    "item_usage_events": Classification.INCLUDED,  # via inventory_items
+    "item_relationships": Classification.INCLUDED,
+    "duplicate_candidates": Classification.INCLUDED,
+    "product_ingredients": Classification.INCLUDED,
+    "product_expiry_events": Classification.INCLUDED,
+    "laundry_state_events": Classification.INCLUDED,
+    # Category-specific detail rows are joined to inventory_items and exported
+    # under the inventory domain via that relationship.
+    "wardrobe_item_details": Classification.INCLUDED,
+    "shoe_item_details": Classification.INCLUDED,
+    "accessory_item_details": Classification.INCLUDED,
+    "beauty_product_details": Classification.INCLUDED,
+    "hair_product_details": Classification.INCLUDED,
+    "perfume_details": Classification.INCLUDED,
+    "supplement_details": Classification.INCLUDED,
+    "supplement_safety_flags": Classification.INCLUDED,
+    # Reference taxonomy
+    "inventory_categories": Classification.NOT_USER_OWNED,
+    # --- Scans + AI ---
+    "scans": Classification.INCLUDED,
+    "ai_runs": Classification.INCLUDED,
+    "ai_run_outputs": Classification.INCLUDED,  # via ai_runs
+    # --- Quiz + styling ---
+    "quiz_submissions": Classification.INCLUDED,
+    "occasions": Classification.INCLUDED,
+    "style_requests": Classification.INCLUDED,
+    "recommendation_runs": Classification.INCLUDED,
+    "recommendation_inputs": Classification.INCLUDED,  # via recommendation_runs
+    "recommendation_entitlements": Classification.INCLUDED,
+    "looks": Classification.INCLUDED,
+    "look_items": Classification.INCLUDED,  # via looks
+    "look_adjustments": Classification.INCLUDED,
+    "look_feedback": Classification.INCLUDED,
+    "outfit_schedule": Classification.INCLUDED,
+    "feedback_events": Classification.INCLUDED,
+    # --- Shopping ---
+    "shopping_candidates": Classification.INCLUDED,
+    "purchase_evaluations": Classification.INCLUDED,
+    "purchase_evaluation_factors": Classification.INCLUDED,  # via purchase_evaluations
+    "purchase_decisions": Classification.INCLUDED,
+    # --- Planning + weather ---
+    "daily_plans": Classification.INCLUDED,
+    "daily_plan_actions": Classification.INCLUDED,  # via daily_plans
+    "daily_plan_inputs": Classification.INCLUDED,  # via daily_plans
+    "weekly_plans": Classification.INCLUDED,
+    "weekly_plan_days": Classification.INCLUDED,  # via weekly_plans
+    "calendar_events": Classification.INCLUDED,
+    "weather_snapshots": Classification.INCLUDED,
+    "plan_recalculation_events": Classification.INCLUDED,
+    # --- Routines + safety ---
+    "routines": Classification.INCLUDED,
+    "routine_steps": Classification.INCLUDED,  # via routines
+    "routine_adherence": Classification.INCLUDED,
+    "routine_recommendation_runs": Classification.INCLUDED,
+    "routine_templates": Classification.NOT_USER_OWNED,
+    "ingredients": Classification.NOT_USER_OWNED,
+    "ingredient_aliases": Classification.NOT_USER_OWNED,
+    "ingredient_rules": Classification.NOT_USER_OWNED,
+    "compatibility_rules": Classification.NOT_USER_OWNED,
+    "compatibility_edges": Classification.INCLUDED,  # per-account compatibility overrides
+    "contraindication_rules": Classification.NOT_USER_OWNED,
+    "perfume_context_rules": Classification.NOT_USER_OWNED,
+    "appearance_nutrition_rules": Classification.NOT_USER_OWNED,
+    # --- Progress + goals + memory ---
+    "metric_definitions": Classification.NOT_USER_OWNED,
+    "metric_events": Classification.INCLUDED,
+    "milestone_rules": Classification.NOT_USER_OWNED,
+    "milestones": Classification.INCLUDED,
+    "progress_goals": Classification.INCLUDED,
+    "goal_updates": Classification.INCLUDED,
+    "progress_photos": Classification.INCLUDED,
+    "progress_snapshots": Classification.INCLUDED,
+    "comparison_sessions": Classification.INCLUDED,
+    "score_explanations": Classification.INCLUDED,
+    "streaks": Classification.INCLUDED,
+    "gamification_events": Classification.INCLUDED,
+    "memory_facts": Classification.INCLUDED,
+    "memory_revisions": Classification.INCLUDED,  # via memory_facts
+    "memory_sources": Classification.INCLUDED,  # via memory_facts
+    "memory_category_preferences": Classification.INCLUDED,
+    # --- Media (metadata only; bytes are opaque to the export) ---
+    "media_assets": Classification.INCLUDED,
+    # --- Notifications + integrations ---
+    "notification_preferences": Classification.INCLUDED,
+    "notification_deliveries": Classification.INCLUDED,
+    "external_integrations": Classification.INCLUDED,
+    # --- Audit + beta usage ---
+    "audit_events": Classification.INCLUDED,
+    "beta_usage_events": Classification.INCLUDED,
+    "app_events": Classification.INCLUDED,
+    # --- Feature flags (global) ---
+    "feature_flags": Classification.NOT_USER_OWNED,
+    # --- Operational only ---
+    "domain_outbox": Classification.OPERATIONAL,
+}
+
+
+def assert_registry_complete() -> None:
+    """Fail if a table lives in the ORM but has no classification.
+
+    Called from a test on every CI run; also safe to call at boot as a
+    defensive check.
+    """
+    # Import inside the function so this module has no import-time metadata
+    # side effect. Alembic must be able to import it before models load.
+    from app.shared.database.registry import Base
+
+    tables: Set[str] = {t.name for t in Base.metadata.sorted_tables}
+    unclassified = tables - set(REGISTRY.keys())
+    stale = set(REGISTRY.keys()) - tables
+    problems = []
+    if unclassified:
+        problems.append(
+            "Tables missing from the privacy export registry (add an entry in "
+            "app/domains/privacy/registry.py): "
+            + ", ".join(sorted(unclassified))
+        )
+    if stale:
+        problems.append(
+            "Privacy registry references tables that no longer exist: "
+            + ", ".join(sorted(stale))
+        )
+    if problems:
+        raise AssertionError("\n".join(problems))
+
+
+def included_tables() -> Set[str]:
+    return {name for name, kind in REGISTRY.items() if kind == Classification.INCLUDED}

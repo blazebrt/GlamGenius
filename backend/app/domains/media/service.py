@@ -4,13 +4,18 @@ Every read and every delete goes through :func:`get_owned_asset`, which is the
 single place ownership is enforced. Missing and not-yours both return 404 — a
 403 would confirm that someone else's asset id exists, which is a free
 enumeration oracle.
+
+Storage failures are mapped precisely: a missing object with an owned row is
+logged as a 404 to the caller and an internal inconsistency in our own logs;
+credential failures are 502; timeouts and outages are retryable 503; a
+misconfiguration is 500. See :mod:`app.domains.media.storage.base`.
 """
 from __future__ import annotations
 
 import hashlib
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,9 +28,22 @@ from app.domains.media.models import (
     MediaAsset,
 )
 from app.domains.media.storage import get_storage
-from app.domains.media.storage.base import StorageError, build_key
+from app.domains.media.storage.base import (
+    StorageError,
+    StorageMisconfigured,
+    StorageObjectMissing,
+    StorageTimeout,
+    StorageUnauthorized,
+    StorageUnavailable,
+    account_prefix,
+    build_key,
+)
 from app.shared.database.base import new_uuid, utcnow
-from app.shared.errors.exceptions import NotFoundError
+from app.shared.errors.exceptions import (
+    NotFoundError,
+    StorageMisconfiguredError,
+    StorageUnavailableError,
+)
 from app.shared.events import outbox
 from app.shared.validation.media import read_dimensions, validate_upload
 
@@ -52,6 +70,29 @@ def to_public_dict(asset: MediaAsset) -> Dict[str, Any]:
     }
 
 
+def _raise_for_storage(exc: StorageError, *, op: str) -> None:
+    """Translate a storage-layer exception into a user-facing AppError.
+
+    Missing objects are handled by the caller (they mean row/object drift and
+    still return 404); everything else becomes a 5xx that keeps the client
+    from silently discarding the failure.
+    """
+    if isinstance(exc, StorageMisconfigured):
+        logger.error("storage_misconfigured op=%s", op)
+        raise StorageMisconfiguredError() from exc
+    if isinstance(exc, StorageUnauthorized):
+        logger.error("storage_unauthorized op=%s", op)
+        # A credential problem is not something the caller can retry, but the
+        # provider is up — surface as 502 with a retryable=false payload.
+        raise StorageUnavailableError(
+            "Photo storage refused our credentials. Please try again shortly."
+        ) from exc
+    if isinstance(exc, (StorageTimeout, StorageUnavailable)):
+        raise StorageUnavailableError() from exc
+    # Fallthrough: an adapter-reported storage error we did not classify.
+    raise StorageUnavailableError() from exc
+
+
 async def upload(
     session: AsyncSession,
     *,
@@ -72,7 +113,12 @@ async def upload(
 
     # Bytes first. A storage failure must not leave a database row pointing at
     # an object that was never written.
-    await storage.put(key, data, content_type)
+    try:
+        await storage.put(key, data, content_type)
+    except StorageObjectMissing as exc:  # nonsensical on upload, but be safe
+        _raise_for_storage(StorageUnavailable(str(exc)), op="upload")
+    except StorageError as exc:
+        _raise_for_storage(exc, op="upload")
 
     asset = MediaAsset(
         id=asset_id,
@@ -85,8 +131,6 @@ async def upload(
         width=width,
         height=height,
         purpose=purpose,
-        # Only the extension is kept from a caller-supplied name; the rest is
-        # untrusted text that would end up in logs and exports.
         original_filename=(original_filename or "")[:255] or None,
         status=MEDIA_STATUS_ACTIVE,
     )
@@ -136,13 +180,17 @@ async def get_owned_asset(
 async def read_bytes(asset: MediaAsset) -> bytes:
     try:
         return await get_storage().get(asset.storage_key)
-    except StorageError as exc:
+    except StorageObjectMissing as exc:
         # The row says it exists but the bytes are gone. To the caller this is
-        # simply "not found"; the detail belongs in the log.
+        # "not found"; the detail belongs in the log because it is a real
+        # internal inconsistency we should follow up on.
         logger.error(
-            "media_bytes_missing asset_id=%s backend=%s", asset.id, asset.storage_backend
+            "media_bytes_missing_row_present asset_id=%s backend=%s",
+            asset.id, asset.storage_backend,
         )
         raise NotFoundError("That photo is no longer available.") from exc
+    except StorageError as exc:
+        _raise_for_storage(exc, op="read")
 
 
 async def delete(
@@ -161,7 +209,14 @@ async def delete(
     """
     asset = await get_owned_asset(session, account_id=account_id, asset_id=asset_id)
 
-    await get_storage().delete(asset.storage_key)
+    try:
+        await get_storage().delete(asset.storage_key)
+    except StorageObjectMissing:
+        # If the provider says the object is already gone, the row is safe to
+        # mark deleted — this is exactly the state the caller wanted.
+        pass
+    except StorageError as exc:
+        _raise_for_storage(exc, op="delete")
 
     asset.status = MEDIA_STATUS_DELETED
     asset.deleted_at = utcnow()
@@ -199,16 +254,21 @@ async def list_for_account(
 async def delete_all_for_account(
     session: AsyncSession, account_id: uuid.UUID, client_ip: Optional[str] = None
 ) -> int:
-    """Erase every active asset. Used by account deletion."""
-    assets = await list_for_account(session, account_id)
+    """Erase every active asset for an account. Legacy call used by the
+    synchronous privacy-delete route; the new deletion state machine uses
+    :func:`purge_account_storage` instead so it can verify the prefix is empty.
+    """
+    assets = await list_for_account(session, account_id, include_deleted=True)
     storage = get_storage()
     removed = 0
     for asset in assets:
+        if asset.status == MEDIA_STATUS_DELETED and asset.deleted_at is not None:
+            continue
         try:
             await storage.delete(asset.storage_key)
+        except StorageObjectMissing:
+            pass
         except StorageError:
-            # Keep going. One unreachable object must not strand the rest of a
-            # deletion request; the audit record captures the count either way.
             logger.error("media_delete_failed asset_id=%s", asset.id)
             continue
         asset.status = MEDIA_STATUS_DELETED
@@ -216,3 +276,18 @@ async def delete_all_for_account(
         removed += 1
     await session.flush()
     return removed
+
+
+async def purge_account_storage(account_id: uuid.UUID) -> Tuple[int, List[str]]:
+    """Delete every object under an account's storage prefix.
+
+    Returns ``(removed_count, remaining_keys)``. The deletion state machine
+    only advances past the storage stage when ``remaining_keys`` is empty.
+    Errors from the storage adapter propagate — the caller records them on
+    the deletion job and retries.
+    """
+    storage = get_storage()
+    prefix = account_prefix(account_id)
+    removed = await storage.delete_prefix(prefix)
+    remaining = list(await storage.list_prefix(prefix))
+    return removed, remaining

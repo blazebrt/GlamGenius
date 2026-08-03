@@ -31,14 +31,18 @@ async def test_me_returns_supabase_uuid(app_client, db_clean, registered_supabas
 
 @pytest.mark.asyncio
 async def test_access_register_requires_invite(app_client, db_clean, fake_supabase_user):
+    """Package A/B: registration requires a reservation challenge from
+    ``/access/reserve``. Calling ``/access/register`` without one is a
+    400 with ``registration_challenge_required``."""
     token, _ = fake_supabase_user()
     resp = await app_client.post("/api/v2/access/register", headers=auth(token), json={})
     assert resp.status_code == 400
-    assert resp.json()["detail"]["code"] == "invite_required"
+    assert resp.json()["detail"]["code"] == "registration_challenge_required"
 
 
 @pytest.mark.asyncio
 async def test_access_register_with_valid_invite(app_client, db_clean, fake_supabase_user):
+    """Full two-step: reserve then register."""
     from app.domains.beta_access import service as beta
     from app.shared.database.sql import get_sessionmaker
 
@@ -48,11 +52,21 @@ async def test_access_register_with_valid_invite(app_client, db_clean, fake_supa
         await session.commit()
         code = invite.code
 
-    token, uid = fake_supabase_user()
+    # Step 1: reserve.
+    email = "critical-journey@example.com"
+    reserve_resp = await app_client.post(
+        "/api/v2/access/reserve",
+        json={"invite_code": code, "email": email},
+    )
+    assert reserve_resp.status_code == 200, reserve_resp.text
+    challenge = reserve_resp.json()["challenge"]
+
+    # Step 2: register with the same email in the Supabase token.
+    token, uid = fake_supabase_user(email=email)
     resp = await app_client.post(
         "/api/v2/access/register",
         headers=auth(token),
-        json={"invite_code": code},
+        json={"registration_challenge": challenge},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()

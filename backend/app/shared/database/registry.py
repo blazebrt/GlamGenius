@@ -20,6 +20,7 @@ from app.domains.consent.models import Consent
 from app.domains.identity.models import Account
 from app.domains.inventory import models as inventory_models
 from app.domains.media.models import MediaAsset
+from app.domains.privacy.models import AccountDeletionJob
 from app.domains.profile.models import (
     AppearanceGoal,
     AppearanceProfile,
@@ -47,6 +48,7 @@ __all__ = [
     "Account",
     "Consent",
     "MediaAsset",
+    "AccountDeletionJob",
     "AIRun",
     "AIRunOutput",
     "FeatureFlag",

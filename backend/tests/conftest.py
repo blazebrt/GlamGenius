@@ -52,6 +52,16 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_access_rate_state():
+    """The invite-reserve route has an in-process rate limiter; other tests
+    hitting the same fake IP would otherwise accumulate over a session."""
+    from app.api.v2 import access
+    access._rate_state.clear()
+    yield
+    access._rate_state.clear()
+
+
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def _dispose_engine() -> AsyncIterator[None]:
     yield

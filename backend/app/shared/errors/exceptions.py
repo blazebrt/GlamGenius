@@ -174,3 +174,30 @@ class ConflictError(AppError):
 
     def __init__(self, message: str, *, current_version: int) -> None:
         super().__init__(message, extra={"current_version": current_version})
+
+
+class StorageUnavailableError(AppError):
+    """Provider is reachable but degraded, or the network failed."""
+
+    status_code = 503
+    code = ErrorCode.STORAGE_UNAVAILABLE
+    retryable = True
+
+    def __init__(
+        self, message: str = "Photo storage is unavailable right now. Please try again."
+    ) -> None:
+        super().__init__(message)
+
+
+class StorageMisconfiguredError(AppError):
+    """A required storage setting is missing. Not user-recoverable."""
+
+    status_code = 500
+    code = ErrorCode.STORAGE_MISCONFIGURED
+    retryable = False
+
+    def __init__(
+        self,
+        message: str = "Photo storage is not set up. Please contact support.",
+    ) -> None:
+        super().__init__(message)

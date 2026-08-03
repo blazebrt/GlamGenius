@@ -214,15 +214,18 @@ async def register(
                 },
             )
         try:
+            # Package B fix: create the account row before consuming the
+            # reservation so the ``invite_redemptions.account_id`` FK to
+            # ``accounts.id`` is satisfied at insert time. Both operations
+            # run in the same transaction — a subsequent failure rolls the
+            # accounts row back too.
+            account = await identity.register_account(session, account_id)
             invite = await beta.consume_reservation(
                 session,
                 challenge=challenge,
                 email=supabase_user.email,
                 supabase_user_id=account_id,
             )
-            # Now create the account row inside the same transaction. Any
-            # rollback below unwinds the reservation *and* the invite bump.
-            account = await identity.register_account(session, account_id)
         except beta.InviteReservationError as exc:
             await session.rollback()
             raise _reservation_error(exc) from exc

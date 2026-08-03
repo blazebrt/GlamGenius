@@ -24,11 +24,13 @@ from tests.conftest import auth
 async def test_non_admin_cannot_read_reservation_stats(
     app_client, db_clean, registered_supabase_user
 ):
-    token, _ = registered_supabase_user
+    token, _ = await registered_supabase_user()
     resp = await app_client.get(
         "/api/v2/access/admin/reservations/stats", headers=auth(token)
     )
-    assert resp.status_code == 403
+    # Admin surfaces return 404 (not 403) so their existence isn't disclosed
+    # to non-admins — see ``get_current_admin`` in supabase_auth.
+    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio

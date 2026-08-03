@@ -4,7 +4,9 @@
 **Baseline SHA:** `73f94d17e0c4c9ce7a293e17732a9b7ed82f4d43` (main at audit time; still an ancestor of HEAD)
 **Scope:** §1 (invite reservation), §2 (email-confirmation and registration-incomplete flow), §3 (RS256/JWKS asymmetric tests), §4 (payment / preview absence), §11 (feature-flag defaults), §13 (CI slice for the above), §14 (this document).
 
-Packages B, C and D covering §5–§10, §12 and the remainder of §13 are **not** included in this PR and remain open.
+Packages B, C and D covering §5–§10, §12 and the remainder of §13 landed
+in the follow-up PR `fix/finish-supabase-hardening-bcd` — see
+[`SUPABASE_HARDENING_PACKAGES_BCD.md`](./SUPABASE_HARDENING_PACKAGES_BCD.md).
 
 ## §1 Invite reservation
 

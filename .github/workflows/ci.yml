@@ -95,6 +95,11 @@ jobs:
       - name: Alembic check (schema drift)
         working-directory: backend
         run: alembic check
+      - name: Reference-data seed (idempotent)
+        working-directory: backend
+        run: |
+          python -m app.bootstrap.reference_data
+          python -m app.bootstrap.reference_data
       - name: Run tests
         working-directory: backend
         run: pytest -q tests --junitxml=/tmp/pytest-report.xml
@@ -176,9 +181,40 @@ jobs:
         # `--passWithNoTests` is intentionally NOT set.
         run: yarn test --ci --watchAll=false
 
+  # ---- Mobile: Android bundle validation (blocking) ------------------------
+  # Verifies the Expo project compiles for Android as a Metro bundle. This is
+  # the smallest blocking check that proves the mobile shell still builds. A
+  # full APK/AAB build via EAS runs on release cuts, not on every PR.
+  mobile-android-bundle:
+    name: Mobile Android Metro bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - name: Install
+        working-directory: frontend
+        run: yarn install --frozen-lockfile
+      - name: Metro Android bundle (verifies native shell compiles)
+        working-directory: frontend
+        env:
+          EXPO_PUBLIC_BACKEND_URL: http://localhost:8001
+          EXPO_PUBLIC_SUPABASE_URL: https://ci-project.supabase.co
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ci-anon-key-not-a-real-one
+        run: |
+          npx expo export --platform android --output-dir /tmp/expo-android || \
+            npx expo export --platform android
+
   # ---- Expo config + web export --------------------------------------------
+  # Non-blocking web export as a shared-code smoke test. Web export is NOT
+  # mobile validation — see ``mobile-android-bundle`` above for the blocking
+  # native check, and ``docs/stabilisation/SUPABASE_HARDENING_PACKAGES_BCD.md``
+  # for the full mobile validation matrix.
   expo-export:
-    name: Expo web export (bundle smoke test)
+    name: Expo web export (shared-code smoke test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

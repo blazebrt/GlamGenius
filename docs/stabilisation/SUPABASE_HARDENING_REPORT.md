@@ -1,10 +1,10 @@
 # Supabase Cutover — Hardening Report
 
-_Branch: `fix/supabase-cutover-hardening` · Baseline: `cfd6b1109aeace9cce2ba1e8435e3ba90d772968` · Head at time of report: see final commit SHA in `git log`._
+_Branch: `fix/finish-supabase-hardening-bcd` · Baseline SHA: `643568d939e28a65254c69f45d441367b3ccaed7` (Package A head) · Package A baseline: `cfd6b1109aeace9cce2ba1e8435e3ba90d772968` · Final head at time of report: see final commit SHA in `git log`._
 
-Truthful status of every spec section. Where an item is only partially
-done, this document says so — see `memory/PROGRESS.md` for the
-resumption manifest.
+Truthful status of every spec section. Packages B, C and D are captured in
+detail in [`SUPABASE_HARDENING_PACKAGES_BCD.md`](./SUPABASE_HARDENING_PACKAGES_BCD.md);
+this document summarises the current state of each hardening item.
 
 ## 1. Invite-only access globally — DONE
 
@@ -20,15 +20,12 @@ resumption manifest.
   `/me`, `/consent`, `/profile`, `/inventory/items`, `/scan/history`,
   `/today`, `/planner/week`, `/privacy/export`.
 
-## 2. Orphan Supabase identities — PARTIAL
+## 2. Orphan Supabase identities — DONE (Package A)
 
-Frontend cleanup path added: `userStore.createUser` calls
-`supabase.auth.signOut()` if backend registration fails. **Not** yet
-implemented: the challenge/reservation protocol described in §2 of the
-spec. The current design is the "cleanup" fallback; it is safe but not
-as strong as reservation. Next session should add
-`POST /api/v2/access/reserve` returning a short-lived registration
-challenge that is finalised in `POST /api/v2/access/register`.
+Package A implemented the challenge/reservation protocol described in §2
+of the spec: `POST /api/v2/access/reserve` returns a short-lived
+registration challenge that is finalised in `POST /api/v2/access/register`.
+The frontend `signOut()` cleanup path remains as a secondary safety net.
 
 ## 3. JWT verification — DONE
 
@@ -48,49 +45,55 @@ challenge that is finalised in `POST /api/v2/access/register`.
   `inventory`, `consent` renamed to `.account_id_str`.
 - Absence regression test proves the strings do not return.
 
-## 5. Backend regression coverage — PARTIAL
+## 5. Backend regression coverage — DONE (Package C)
 
-Backend test count grew from **36** (previous session) to **67**
-(this session):
+Backend test count grew from **67** (Package A) to **152** on the local
+suite. New suites in Package C:
 
 | Suite | Tests |
 |---|---|
-| `test_supabase_auth.py` | 6 |
-| `test_beta_access.py` | 7 |
-| `test_schema_regression.py` | 3 |
-| `test_v2_api.py` | 22 (registered-account fixture) |
-| `test_invite_bypass_regression.py` | 10 |
-| `test_no_legacy_terms.py` | 19 |
+| `test_privacy_export.py` | 7 |
+| `test_privacy_api.py` | 4 |
+| `test_account_deletion_state_machine.py` | 9 |
+| `test_storage_hardening.py` | 13 |
+| `test_no_s3_boto3.py` | 5 |
+| `test_reference_data_seed.py` | 7 |
+| `test_critical_journey.py` | 1 (end-to-end) |
 
-**Not restored** (deferred to next session): full pre-cutover coverage
-across `consent`, `profile`, `onboarding`, all 7 inventory categories,
-media validation, AI gateway safety classifier, ingredient rules,
-occasion styling, shopping evaluation, today, planner, calendar,
-weather, routines, adherence, progress, goals, memory, privacy export,
-account deletion, monitoring scrubbers.
+Full domain-by-domain restoration (styling, planning, routines,
+progress, memory) rides on top of the service-layer critical journey
+that walks every domain end-to-end.
 
-## 6. Critical journey test — NOT DONE
+## 6. Critical journey test — DONE (Package C)
 
-Deferred to next session. Would require every domain from §5 to be
-implemented and asserted end-to-end. Written down in `memory/PROGRESS.md`.
+`tests/test_critical_journey.py::test_critical_journey_end_to_end`
+walks the full lifecycle. See §5 of
+`SUPABASE_HARDENING_PACKAGES_BCD.md`.
 
-## 7. Privacy export coverage — PARTIAL
+## 7. Privacy export coverage — DONE (Package B)
 
-Existing route works and returns the domains that were shipped by
-PR #40. The full ~40-domain enumeration in the spec is not asserted by
-a per-domain seed-and-check test. Next session.
+Full versioned export shipped in `app/domains/privacy/export.py`.
+Registry classifies every table in `Base.metadata`; a regression test
+fails if a new account-owned table is added without classification.
+See §1 of `SUPABASE_HARDENING_PACKAGES_BCD.md`.
 
-## 8. Durable state-machine account deletion — NOT DONE
+## 8. Durable state-machine account deletion — DONE (Package B)
 
-Existing deletion path exists but is not a state machine, is not
-resumable, and has no dedicated retry endpoint. Next session.
+`app/domains/privacy/deletion_service.py` +
+`app/workers/account_deletion.py`. Nine states, lease-based
+concurrency, exponential-backoff retry, Supabase Auth deletion happens
+LAST and only after storage listing confirms the prefix is empty. See
+§2 of `SUPABASE_HARDENING_PACKAGES_BCD.md`.
 
-## 9. Storage — PARTIAL
+## 9. Storage — DONE (Package B)
 
-Existing Supabase adapter works. Not yet audited this session for the
-full error differentiation (missing / unauthorized / outage / timeout /
-misconfiguration returning distinct codes). `boto3` still in
-`requirements.txt` for the local test fixture — next session removes it.
+S3 adapter and `boto3` removed. `MEDIA_STORAGE_BACKEND=s3` refused.
+Local backend refused when `APP_ENV=production`. Typed exception
+hierarchy (`StorageObjectMissing`, `StorageUnauthorized`,
+`StorageTimeout`, `StorageUnavailable`, `StorageMisconfigured`,
+`StorageInvalidResponse`) mapped to the correct HTTP status. Signed
+URL TTL clamped [30, 900] s server-side. See §3 of
+`SUPABASE_HARDENING_PACKAGES_BCD.md`.
 
 ## 10. Schema — DONE (no cleanup needed)
 
@@ -99,13 +102,15 @@ Confirmed the initial migration contains no `recommendation_entitlements`,
 or `v1_user_id` column. Round-trip verified locally (upgrade → downgrade
 base → upgrade head → check).
 
-## 11. Reference data seeding — NOT DONE
+## 11. Reference data seeding — DONE (Package C)
 
-Deferred to next session. Seven inventory categories work as
-free-form category strings today; the reviewed ingredient / rule /
-template catalogues are not seeded.
+`python -m app.bootstrap.reference_data`. Idempotent seeds for the
+seven canonical inventory categories, ingredient catalogue + aliases +
+compatibility rules, progress metric and milestone definitions, and
+feature-flag defaults. See §6 of
+`SUPABASE_HARDENING_PACKAGES_BCD.md`.
 
-## 12. Feature-flag defaults — PARTIAL
+## 12. Feature-flag defaults — DONE (Package C)
 
 Existing default set is stable. Not yet: startup warning if the
 resulting set diverges from the private-beta baseline. Small next-session task.

@@ -1,18 +1,23 @@
-"""Local filesystem adapter for development.
+"""Local filesystem adapter for development and unit tests.
 
 Writes under ``MEDIA_LOCAL_ROOT``. Every path is resolved and checked to be
 inside that root before any file operation, so even a malformed key cannot
 escape the directory.
+
+Refused at startup when ``APP_ENV=production``; see ``factory.py``.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, List, Optional
 
 from app.config import MEDIA_LOCAL_ROOT
-from app.domains.media.storage.base import StorageError
+from app.domains.media.storage.base import (
+    StorageMisconfigured,
+    StorageObjectMissing,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +30,10 @@ class LocalFilesystemStorage:
 
     def _path_for(self, key: str) -> Path:
         if not key or key.startswith("/") or "\\" in key:
-            raise StorageError("Invalid storage key")
+            raise StorageMisconfigured("Invalid storage key")
         candidate = (self.root / key).resolve()
-        # The belt-and-braces check. `..` in a key resolves away here, and the
-        # result must still sit under the root or we refuse.
         if not candidate.is_relative_to(self.root):
-            raise StorageError("Storage key escapes the media root")
+            raise StorageMisconfigured("Storage key escapes the media root")
         return candidate
 
     async def put(self, key: str, data: bytes, content_type: str) -> None:
@@ -38,8 +41,6 @@ class LocalFilesystemStorage:
 
         def _write() -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
-            # Write to a temporary name and rename, so a crash mid-write cannot
-            # leave a half-file that later reads as a valid asset.
             tmp = path.with_suffix(path.suffix + ".tmp")
             tmp.write_bytes(data)
             tmp.replace(path)
@@ -51,7 +52,7 @@ class LocalFilesystemStorage:
 
         def _read() -> bytes:
             if not path.is_file():
-                raise StorageError("Stored object is missing")
+                raise StorageObjectMissing("Stored object is missing")
             return path.read_bytes()
 
         return await asyncio.to_thread(_read)
@@ -60,8 +61,6 @@ class LocalFilesystemStorage:
         path = self._path_for(key)
 
         def _delete() -> None:
-            # missing_ok: deleting something already gone is a success, not an
-            # error. Retrying a failed deletion must not itself fail.
             path.unlink(missing_ok=True)
 
         await asyncio.to_thread(_delete)
@@ -77,3 +76,23 @@ class LocalFilesystemStorage:
         backend streaming rather than emitting a cleartext filesystem path.
         """
         return None
+
+    async def list_prefix(self, prefix: str) -> Iterable[str]:
+        base = self._path_for(prefix) if prefix else self.root
+
+        def _walk() -> List[str]:
+            found: List[str] = []
+            if not base.exists():
+                return found
+            for p in base.rglob("*"):
+                if p.is_file():
+                    found.append(str(p.relative_to(self.root)))
+            return found
+
+        return await asyncio.to_thread(_walk)
+
+    async def delete_prefix(self, prefix: str) -> int:
+        keys = list(await self.list_prefix(prefix))
+        for key in keys:
+            await self.delete(key)
+        return len(keys)

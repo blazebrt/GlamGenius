@@ -1,0 +1,410 @@
+"""Privacy export service.
+
+Assembles a JSON snapshot of everything the account owns from every domain
+listed in :mod:`app.domains.privacy` as ``INCLUDED``. Each domain has a
+handler that turns a set of ORM rows into a JSON-safe dict.
+
+Boundaries this service enforces
+--------------------------------
+* Rows are always filtered by ``account_id`` at the SQL level, either directly
+  (when the row carries ``account_id``) or through the parent row (e.g.
+  ``look_items`` are joined via ``looks``).
+* Secrets never appear. There are no columns in the ORM that store secrets
+  today, but the registry marks tables ``SECRET_EXCLUDED`` for any future
+  columns; ``included_tables()`` excludes them.
+* Raw storage keys and provider paths are omitted. ``media_assets`` is exported
+  via :func:`app.domains.media.service.to_public_dict`, which already strips
+  ``storage_key`` and ``storage_backend``.
+* Face/hair/hand image bytes are transient request data and never enter the
+  export.
+* Large collections are capped (``_MAX_ROWS``) so a runaway export cannot OOM
+  the server; the cap is generous enough to cover a full beta account.
+"""
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.domains.ai_gateway.models import AIRun, AIRunOutput
+from app.domains.audit.models import AuditEvent
+from app.domains.beta_access.models import (
+    BetaUsageEvent,
+    Invite,
+    InviteRedemption,
+)
+from app.domains.consent.models import Consent
+from app.domains.identity.models import Account
+from app.domains.inventory.models import (
+    InventoryAttribute,
+    InventoryEvent,
+    InventoryItem,
+)
+from app.domains.media import service as media_service
+from app.domains.media.models import MediaAsset
+from app.domains.planning.models import CalendarEvent, DailyPlan, WeatherSnapshot, WeeklyPlan
+from app.domains.privacy import EXPORT_SCHEMA_VERSION, REGISTRY, Classification
+from app.domains.profile.models import (
+    AppearanceGoal,
+    AppearanceProfile,
+    AttributeObservation,
+    OnboardingSession,
+    ProfileAttribute,
+)
+from app.domains.progress.models import (
+    MetricEvent,
+    Milestone,
+    ProgressGoal,
+    ProgressPhoto,
+)
+from app.domains.quiz.models import QuizSubmission
+from app.domains.recommendation.models import (
+    Look,
+    LookAdjustment,
+    LookFeedback,
+    OccasionRecord as Occasion,
+    PurchaseDecision,
+    PurchaseEvaluation,
+    RecommendationRun,
+    ShoppingCandidate,
+    StyleRequest,
+)
+from app.domains.routines.models import Routine, RoutineAdherence, RoutineStep
+from app.domains.scan.models import Scan
+from app.shared.database.base import utcnow
+
+logger = logging.getLogger(__name__)
+
+# Generous per-collection cap. A beta account with heavy use has been observed
+# at ~3.5k inventory events and ~1.6k routine adherence rows; 20 000 covers
+# well above that and keeps the export bounded.
+_MAX_ROWS = 20_000
+
+
+def _iso(dt: Optional[datetime]) -> Optional[str]:
+    return dt.isoformat() if dt else None
+
+
+def _row_dict(row: Any, fields: List[str]) -> Dict[str, Any]:
+    """Turn a subset of a row's columns into a JSON-safe dict.
+
+    ``uuid.UUID`` and ``datetime`` are serialised to strings; everything else
+    is returned as-is (SQLAlchemy already gives us primitives for JSON, int
+    and bool).
+    """
+    out: Dict[str, Any] = {}
+    for name in fields:
+        value = getattr(row, name, None)
+        if isinstance(value, uuid.UUID):
+            out[name] = str(value)
+        elif isinstance(value, datetime):
+            out[name] = value.isoformat()
+        else:
+            out[name] = value
+    return out
+
+
+async def _fetch(session: AsyncSession, stmt) -> List[Any]:
+    stmt = stmt.limit(_MAX_ROWS)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+# ---------------------------------------------------------------------------
+# Domain handlers
+# ---------------------------------------------------------------------------
+
+async def _identity(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    account = (await session.execute(
+        select(Account).where(Account.id == account_id)
+    )).scalar_one_or_none()
+    if account is None:
+        return {}
+    redemptions = await _fetch(
+        session,
+        select(InviteRedemption).where(InviteRedemption.account_id == account_id),
+    )
+    # Join through invite table to expose the code (safe to show to the owner)
+    invites = await _fetch(
+        session,
+        select(Invite).where(
+            Invite.id.in_(select(InviteRedemption.invite_id).where(
+                InviteRedemption.account_id == account_id
+            ))
+        ),
+    )
+    invite_lookup = {inv.id: inv for inv in invites}
+    return {
+        "id": str(account.id),
+        "status": account.status,
+        "created_at": _iso(account.created_at),
+        "updated_at": _iso(account.updated_at),
+        "deletion_requested_at": _iso(account.deletion_requested_at),
+        "invite_redemptions": [
+            {
+                "invite_code": getattr(invite_lookup.get(r.invite_id), "code", None),
+                "redeemed_at": _iso(r.created_at),
+            }
+            for r in redemptions
+        ],
+    }
+
+
+async def _profile(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    profiles = await _fetch(
+        session,
+        select(AppearanceProfile).where(AppearanceProfile.account_id == account_id),
+    )
+    profile_ids = [p.id for p in profiles]
+    attributes = await _fetch(
+        session,
+        select(ProfileAttribute).where(ProfileAttribute.profile_id.in_(profile_ids)),
+    ) if profile_ids else []
+    goals = await _fetch(
+        session,
+        select(AppearanceGoal).where(AppearanceGoal.profile_id.in_(profile_ids)),
+    ) if profile_ids else []
+    observations = await _fetch(
+        session,
+        select(AttributeObservation).where(AttributeObservation.profile_id.in_(profile_ids)),
+    ) if profile_ids else []
+    onboarding = await _fetch(
+        session,
+        select(OnboardingSession).where(OnboardingSession.profile_id.in_(profile_ids)),
+    ) if profile_ids else []
+    return {
+        "profiles": [_row_dict(p, [c.name for c in AppearanceProfile.__table__.columns]) for p in profiles],
+        "attributes": [_row_dict(a, [c.name for c in ProfileAttribute.__table__.columns]) for a in attributes],
+        "goals": [_row_dict(g, [c.name for c in AppearanceGoal.__table__.columns]) for g in goals],
+        "observations": [_row_dict(o, [c.name for c in AttributeObservation.__table__.columns]) for o in observations],
+        "onboarding_sessions": [_row_dict(o, [c.name for c in OnboardingSession.__table__.columns]) for o in onboarding],
+    }
+
+
+async def _consent(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    rows = await _fetch(
+        session,
+        select(Consent).where(Consent.account_id == account_id).order_by(Consent.recorded_at.desc()),
+    )
+    return {"entries": [_row_dict(r, [c.name for c in Consent.__table__.columns]) for r in rows]}
+
+
+async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    items = await _fetch(
+        session,
+        select(InventoryItem).where(InventoryItem.account_id == account_id),
+    )
+    item_ids = [i.id for i in items]
+    attrs = await _fetch(
+        session,
+        select(InventoryAttribute).where(InventoryAttribute.item_id.in_(item_ids)),
+    ) if item_ids else []
+    events = await _fetch(
+        session,
+        select(InventoryEvent).where(InventoryEvent.account_id == account_id),
+    )
+    return {
+        "items": [_row_dict(i, [c.name for c in InventoryItem.__table__.columns]) for i in items],
+        "attributes": [_row_dict(a, [c.name for c in InventoryAttribute.__table__.columns]) for a in attrs],
+        "events": [_row_dict(e, [c.name for c in InventoryEvent.__table__.columns]) for e in events],
+    }
+
+
+async def _media(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    assets = await _fetch(
+        session,
+        select(MediaAsset).where(MediaAsset.account_id == account_id),
+    )
+    # ``to_public_dict`` already strips storage_key / storage_backend and
+    # returns only safe fields.
+    return {"assets": [media_service.to_public_dict(a) for a in assets]}
+
+
+async def _scans(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    rows = await _fetch(
+        session,
+        select(Scan).where(Scan.account_id == account_id).order_by(Scan.created_at.desc()),
+    )
+    # Scan rows never contain raw image bytes — face/hair/hand photos are
+    # transient request data. We keep the analysis result reference.
+    return {"scans": [_row_dict(r, [c.name for c in Scan.__table__.columns]) for r in rows]}
+
+
+async def _quiz_and_styling(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    submissions = await _fetch(
+        session,
+        select(QuizSubmission).where(QuizSubmission.account_id == account_id),
+    )
+    occasions = await _fetch(
+        session,
+        select(Occasion).where(Occasion.account_id == account_id),
+    )
+    style_requests = await _fetch(
+        session,
+        select(StyleRequest).where(StyleRequest.account_id == account_id),
+    )
+    runs = await _fetch(
+        session,
+        select(RecommendationRun).where(RecommendationRun.account_id == account_id),
+    )
+    looks = await _fetch(
+        session,
+        select(Look).where(Look.account_id == account_id),
+    )
+    adjustments = await _fetch(
+        session,
+        select(LookAdjustment).where(LookAdjustment.account_id == account_id),
+    )
+    feedback = await _fetch(
+        session,
+        select(LookFeedback).where(LookFeedback.account_id == account_id),
+    )
+    return {
+        "quiz_submissions": [_row_dict(r, [c.name for c in QuizSubmission.__table__.columns]) for r in submissions],
+        "occasions": [_row_dict(r, [c.name for c in Occasion.__table__.columns]) for r in occasions],
+        "style_requests": [_row_dict(r, [c.name for c in StyleRequest.__table__.columns]) for r in style_requests],
+        "recommendation_runs": [_row_dict(r, [c.name for c in RecommendationRun.__table__.columns]) for r in runs],
+        "looks": [_row_dict(r, [c.name for c in Look.__table__.columns]) for r in looks],
+        "look_adjustments": [_row_dict(r, [c.name for c in LookAdjustment.__table__.columns]) for r in adjustments],
+        "look_feedback": [_row_dict(r, [c.name for c in LookFeedback.__table__.columns]) for r in feedback],
+    }
+
+
+async def _shopping(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    candidates = await _fetch(session, select(ShoppingCandidate).where(ShoppingCandidate.account_id == account_id))
+    evaluations = await _fetch(session, select(PurchaseEvaluation).where(PurchaseEvaluation.account_id == account_id))
+    decisions = await _fetch(session, select(PurchaseDecision).where(PurchaseDecision.account_id == account_id))
+    return {
+        "candidates": [_row_dict(r, [c.name for c in ShoppingCandidate.__table__.columns]) for r in candidates],
+        "evaluations": [_row_dict(r, [c.name for c in PurchaseEvaluation.__table__.columns]) for r in evaluations],
+        "decisions": [_row_dict(r, [c.name for c in PurchaseDecision.__table__.columns]) for r in decisions],
+    }
+
+
+async def _planning(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    daily = await _fetch(session, select(DailyPlan).where(DailyPlan.account_id == account_id))
+    weekly = await _fetch(session, select(WeeklyPlan).where(WeeklyPlan.account_id == account_id))
+    calendar = await _fetch(session, select(CalendarEvent).where(CalendarEvent.account_id == account_id))
+    weather = await _fetch(session, select(WeatherSnapshot).where(WeatherSnapshot.account_id == account_id))
+    return {
+        "daily_plans": [_row_dict(r, [c.name for c in DailyPlan.__table__.columns]) for r in daily],
+        "weekly_plans": [_row_dict(r, [c.name for c in WeeklyPlan.__table__.columns]) for r in weekly],
+        "calendar_events": [_row_dict(r, [c.name for c in CalendarEvent.__table__.columns]) for r in calendar],
+        "weather_snapshots": [_row_dict(r, [c.name for c in WeatherSnapshot.__table__.columns]) for r in weather],
+    }
+
+
+async def _routines(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    routines = await _fetch(session, select(Routine).where(Routine.account_id == account_id))
+    steps = await _fetch(
+        session,
+        select(RoutineStep).where(RoutineStep.routine_id.in_([r.id for r in routines])),
+    ) if routines else []
+    adherence = await _fetch(session, select(RoutineAdherence).where(RoutineAdherence.account_id == account_id))
+    return {
+        "routines": [_row_dict(r, [c.name for c in Routine.__table__.columns]) for r in routines],
+        "steps": [_row_dict(r, [c.name for c in RoutineStep.__table__.columns]) for r in steps],
+        "adherence": [_row_dict(r, [c.name for c in RoutineAdherence.__table__.columns]) for r in adherence],
+    }
+
+
+async def _progress_and_memory(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    from app.domains.progress.models import MemoryFact  # local import to keep top-level tidy
+
+    events = await _fetch(session, select(MetricEvent).where(MetricEvent.account_id == account_id))
+    goals = await _fetch(session, select(ProgressGoal).where(ProgressGoal.account_id == account_id))
+    milestones = await _fetch(session, select(Milestone).where(Milestone.account_id == account_id))
+    photos = await _fetch(session, select(ProgressPhoto).where(ProgressPhoto.account_id == account_id))
+    facts = await _fetch(session, select(MemoryFact).where(MemoryFact.account_id == account_id))
+    return {
+        "metric_events": [_row_dict(r, [c.name for c in MetricEvent.__table__.columns]) for r in events],
+        "goals": [_row_dict(r, [c.name for c in ProgressGoal.__table__.columns]) for r in goals],
+        "milestones": [_row_dict(r, [c.name for c in Milestone.__table__.columns]) for r in milestones],
+        "photos": [_row_dict(r, [c.name for c in ProgressPhoto.__table__.columns]) for r in photos],
+        "memory_facts": [_row_dict(r, [c.name for c in MemoryFact.__table__.columns]) for r in facts],
+    }
+
+
+async def _ai_and_ops(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    runs = await _fetch(
+        session,
+        select(AIRun).where(AIRun.account_id == account_id).order_by(AIRun.created_at.desc()),
+    )
+    outputs = await _fetch(
+        session,
+        select(AIRunOutput).where(AIRunOutput.ai_run_id.in_([r.id for r in runs])),
+    ) if runs else []
+    audit = await _fetch(
+        session,
+        select(AuditEvent).where(AuditEvent.account_id == account_id).order_by(AuditEvent.created_at.desc()),
+    )
+    beta = await _fetch(
+        session,
+        select(BetaUsageEvent).where(BetaUsageEvent.account_id == account_id),
+    )
+    return {
+        "ai_runs": [_row_dict(r, [c.name for c in AIRun.__table__.columns]) for r in runs],
+        "ai_run_outputs": [_row_dict(r, [c.name for c in AIRunOutput.__table__.columns]) for r in outputs],
+        "audit_events": [_row_dict(r, [c.name for c in AuditEvent.__table__.columns]) for r in audit],
+        "beta_usage_events": [_row_dict(r, [c.name for c in BetaUsageEvent.__table__.columns]) for r in beta],
+    }
+
+
+DomainHandler = Callable[[AsyncSession, uuid.UUID], Any]
+
+DOMAIN_HANDLERS: Dict[str, DomainHandler] = {
+    "identity": _identity,
+    "profile": _profile,
+    "consent": _consent,
+    "inventory": _inventory,
+    "media": _media,
+    "scans": _scans,
+    "quiz_and_styling": _quiz_and_styling,
+    "shopping": _shopping,
+    "planning": _planning,
+    "routines": _routines,
+    "progress_and_memory": _progress_and_memory,
+    "ai_and_ops": _ai_and_ops,
+}
+
+
+async def build_export(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+    """Build the complete privacy-export payload for ``account_id``."""
+    domains: Dict[str, Any] = {}
+    for name, handler in DOMAIN_HANDLERS.items():
+        try:
+            domains[name] = await handler(session, account_id)
+        except Exception:  # noqa: BLE001 — one domain must not sink the export
+            logger.exception("privacy_export_domain_failed domain=%s", name)
+            # Emit an explicit failure marker so the user can see something
+            # went wrong for that domain rather than silently missing it.
+            domains[name] = {"error": "domain_export_failed"}
+
+    return {
+        "schema_version": EXPORT_SCHEMA_VERSION,
+        "generated_at": utcnow().isoformat(),
+        "account": {"id": str(account_id)},
+        "domains": domains,
+        "registry_summary": {
+            "included_domains": sorted(DOMAIN_HANDLERS.keys()),
+            "included_tables": sorted(
+                name for name, kind in REGISTRY.items()
+                if kind == Classification.INCLUDED
+            ),
+            "not_user_owned": sorted(
+                name for name, kind in REGISTRY.items()
+                if kind == Classification.NOT_USER_OWNED
+            ),
+            "operational_only": sorted(
+                name for name, kind in REGISTRY.items()
+                if kind == Classification.OPERATIONAL
+            ),
+            "legally_retained": sorted(
+                name for name, kind in REGISTRY.items()
+                if kind == Classification.LEGALLY_RETAINED
+            ),
+        },
+    }

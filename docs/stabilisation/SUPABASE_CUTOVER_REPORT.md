@@ -8,10 +8,9 @@ section below reports the truth._
 ## 1. What this PR ships
 
 - The V1 identity foundation (MongoDB + local JWT + `account_links`
-  bridge + payment stack) is gone. The remnants that live in
-  `docker-compose.yml`, the `boto3` local-test fixture and the inactive
-  `subscription.tsx` / `paywall.tsx` screens are documented as **T** in
-  `SUPABASE_CUTOVER_AUDIT.md` §20 and will be swept by Prompt 2.
+  bridge + payment stack) is gone. The last remnants (S3 adapter,
+  `boto3` dependency, inactive `subscription.tsx` / `paywall.tsx`
+  screens) were removed in Package B.
 - Supabase Auth is the sole identity provider for V2.
 - The Supabase Auth user UUID is the canonical `account_id` end-to-end.
 - Every V2 route reads `Depends(get_current_supabase_user)`. No route
@@ -49,9 +48,8 @@ database state must be preserved:
 - `grep -rniE 'razorpay|stripe|paywall|checkout|entitlement|subscription' backend/app`
   returns **zero hits** in active code paths. The only occurrences are:
   - Inline comments in the audit doc listing what was removed.
-  - The `subscription.tsx` / `paywall.tsx` files in `frontend/app/`,
-    kept purely because Prompt 2 will delete them; they are not linked
-    from any active navigation and no route pushes into them.
+  - The `subscription.tsx` / `paywall.tsx` files in `frontend/app/`
+    were removed in Package B; nothing references them.
 - The V2 API contains no `/billing/*`, `/subscription/*`,
   `/entitlements`, `/paywall`, `/event-passes` endpoints. Any test
   that reintroduces one will fail `test_schema_regression.py`.
@@ -147,15 +145,13 @@ order, refund, entitlement or event-pass tables.
 
 ## 8. V1 dependencies temporarily retained
 
-Classified **T** in the audit and scheduled for Prompt 2:
+*(Cleared by Package B — this section is preserved for audit history.)*
 
-- `docker-compose.yml` still declares a `mongo` service.
-- `frontend/app/subscription.tsx` and `frontend/app/paywall.tsx` files
-  remain (unlinked from navigation).
-- The `boto3`-based S3 storage adapter remains reachable only via
-  `MEDIA_STORAGE_BACKEND=s3` for local testing.
-
-No code path in the running application uses any of the above.
+- `docker-compose.yml` mongo service — removed prior to Package B.
+- `frontend/app/subscription.tsx` and `frontend/app/paywall.tsx` — removed
+  in Package B.
+- `boto3` S3 storage adapter — removed in Package B; regression test
+  `tests/test_no_s3_boto3.py` asserts it stays gone.
 
 ## 9. Test results (fill in when running)
 
@@ -212,7 +208,7 @@ regression` job now runs the current, existing test files. The
 ## 10. Known limitations
 
 - The Expo password-reset flow relies on Supabase's default email
-  template. Custom template + SMTP setup is deferred to Prompt 2.
+  template. Custom template + SMTP setup remains an owner action.
 - The direct Supabase Postgres endpoint (`db.<ref>:5432`) may not be
   reachable from every network. The setup doc documents the pooler URI
   fallback (`pooler.supabase.com:6543`).

@@ -55,7 +55,15 @@ def test_accounts_table_has_uuid_primary_key():
 
 def test_every_user_scoped_fk_targets_accounts_id():
     """Every ``account_id`` column must FK to ``accounts.id`` — never
-    ``account_links.id`` or a bare UUID with no ownership constraint."""
+    ``account_links.id`` or a bare UUID with no ownership constraint.
+
+    ``account_deletion_jobs`` is deliberately exempt: the deletion state
+    machine must survive the account row being deleted (the tombstone), so
+    that table stores ``account_id`` without an FK. See
+    ``app/domains/privacy/models.py``.
+    """
+    # Tables that intentionally hold ``account_id`` without an FK.
+    NO_FK_EXEMPT = {"account_deletion_jobs"}
     problems: list[str] = []
     for tname, table in Base.metadata.tables.items():
         col = table.columns.get("account_id")
@@ -63,6 +71,8 @@ def test_every_user_scoped_fk_targets_accounts_id():
             continue
         fks = list(col.foreign_keys)
         if not fks:
+            if tname in NO_FK_EXEMPT:
+                continue
             problems.append(f"{tname}.account_id has no foreign key")
             continue
         targets = {fk.target_fullname for fk in fks}

@@ -1,72 +1,116 @@
-# GlamGenius — Supabase hardening PR (Package A)
+# GlamGenius — PRD (as of Package B/C/D)
 
-## Current focus
+## Original problem
 
-Complete the residual Supabase hardening work described in the
-14-section brief. Branch `fix/finish-supabase-hardening` off
-`73f94d17e0c4c9ce7a293e17732a9b7ed82f4d43` (an ancestor of `main`) has
-been prepared with **Package A** committed locally, not pushed. Packages
-B, C, D remain open.
+Complete the remaining Supabase hardening for GlamGenius on branch
+`fix/finish-supabase-hardening-bcd`, preserving Package A (invite
+reservation, canonical Supabase UUID identity, RS256/JWKS, payment sweep,
+MongoDB removal). Deliver: complete privacy export, durable
+account-deletion state machine, Supabase Storage hardening + S3 removal,
+restored regression coverage, deterministic critical journey, versioned
+reference-data seed, native mobile validation, complete blocking CI, and
+final documentation + PR.
 
-## What is in Package A (this branch, committed at 8eeab70)
+Baseline SHA: `643568d939e28a65254c69f45d441367b3ccaed7`.
 
-- **§1 Invite reservation** — new endpoint `POST /api/v2/access/reserve`,
-  new model `invite_registration_reservations`, atomic
-  `beta.consume_reservation`, migration `0002_invite_reservation`.
-- **§2 Registration state** — frontend `registrationState` machine,
-  `(auth)/callback` and `(auth)/registration-incomplete` screens,
-  Axios 401-vs-403-REGISTRATION_REQUIRED interceptor.
-- **§3 RS256 / JWKS** — `tests/test_jwks_asymmetric.py`, 17 tests over
-  generated RSA keys.
-- **§4 Payment / preview absence** — `SubscriptionsUnavailableError`,
-  `ErrorCode.SUBSCRIPTIONS_UNAVAILABLE`, `billingAvailable()`,
-  `PreviewView`, `previewInvite`, the `Try a free check` landing CTA and
-  the `Create free account` locked panel all removed. New
-  `noPaymentRemnants.test.ts` guards.
-- **§11 Feature-flag defaults** — `STABLE_BETA_DEFAULTS`,
-  `ESSENTIAL_BETA_FLAGS`, startup warning when essentials off.
-- **§13 slice** — CI runs invite-reservation + bypass suites a second
-  time with `INVITE_REQUIRED=true`.
-- **§14 slice** — `docs/stabilisation/SUPABASE_HARDENING_PACKAGE_A.md`.
+## Architecture
 
-## Test evidence (this environment, no Postgres)
+```
+Expo Android/iOS → Supabase Auth → FastAPI V2 → Supabase Postgres + Storage
+```
 
-- Backend: 50/50 pass across `test_jwks_asymmetric.py`,
-  `test_feature_flag_defaults.py`, `test_no_legacy_terms.py`.
-- Reservation and invite-bypass suites require Postgres — CI runs them.
-- Frontend: **179/179** jest tests pass, `yarn typecheck` clean.
+- Supabase Auth is the sole identity provider.
+- Account primary key = Supabase Auth UUID.
+- V2 routes only; no V1 identity bridge, no payment code.
+- Supabase Storage is the only production media backend; local backend
+  restricted to tests and non-production `APP_ENV`.
 
-## Backlog (not in this PR)
+## User personas
 
-- **Package B** (§5 privacy export, §6 durable deletion state machine,
-  §7 storage error differentiation + remove boto3).
-- **Package C** (§8 restore ~30 backend test suites, §9 deterministic
-  critical journey test, §10 reference-data seed).
-- **Package D** (§12 Android native validation via EAS build, iOS if
-  simulator available, final report; residual §13 items —
-  Android compile job, secret scanning, dep audits).
+- **Beta invitee** — receives an invite, redeems it, gets an account.
+- **Registered beta user** — full seven-category inventory, styling,
+  routines, planning, progress, memory, privacy export/deletion.
+- **Admin** — creates invites, reads reservation stats.
 
-## Next tasks
+## Core requirements (static)
 
-1. Owner clicks **Save to GitHub** in the Emergent chat input to push
-   `fix/finish-supabase-hardening` to `origin`.
-2. Owner opens the PR on
-   [github.com/blazebrt/GlamGenius](https://github.com/blazebrt/GlamGenius)
-   titled `fix: finish Supabase hardening and mobile validation`.
-3. Owner waits for CI to run and pastes the CI URL back so the next
-   session can begin Package B on a fresh branch off this one, or on a
-   new baseline once this PR merges.
-4. Do NOT tick auto-merge. Independent human review required.
+- Invite-only access.
+- Seven inventory categories: wardrobe, shoes, accessories, beauty shelf,
+  hair shelf, perfumes, supplements.
+- Privacy export must include every account-owned domain.
+- Account deletion must be durable, retryable, and delete Supabase Auth
+  identity **last**.
+- No payment / subscription / billing / paywall / event pass.
+- No MongoDB / Motor / PyMongo.
 
-## Constraints held throughout
+## What's implemented in this PR (Package B/C/D)
 
-- MongoDB, V1 routes, custom JWTs, `account_links`, `v1_user_id`,
-  Razorpay, subscription UI: not reintroduced.
-- Direct pushes to `main`: none.
-- Payment or billing behaviour: not touched.
+Delivered on `fix/finish-supabase-hardening-bcd` on 2026-02-15:
 
-## Non-goals in this PR
+### Backend
+- Privacy export service (`app/domains/privacy/export.py`) + registry
+  (`app/domains/privacy/__init__.py`) covering 12 domain groups + all
+  seven inventory categories.
+- Account-deletion state machine (`app/domains/privacy/models.py`,
+  `deletion_service.py`, worker at `app/workers/account_deletion.py`) with
+  9 states + lease-based concurrency + retry.
+- New Alembic revision `0003_account_deletion_jobs`.
+- New privacy routes: `GET /api/v2/privacy/export`,
+  `DELETE /api/v2/privacy/account`,
+  `GET /api/v2/privacy/account-deletion`,
+  `POST /api/v2/privacy/account-deletion/cancel`.
+- Storage hardening: typed exceptions (Missing / Unauthorized / Timeout /
+  Unavailable / Misconfigured / InvalidResponse), signed URL TTL clamp,
+  `list_prefix` + `delete_prefix`, S3 adapter and `boto3` removed.
+- Reference-data bootstrap (`app/bootstrap/__init__.py`,
+  `python -m app.bootstrap.reference_data`) — seven inventory categories,
+  ingredients + aliases + compatibility rules, progress metrics +
+  milestones, feature-flag defaults.
+- Register-route fix so `InviteRedemption.account_id` FK is satisfied
+  (account row created before consuming the reservation).
 
-- Live Supabase project changes (no seed rows, no bucket creation).
-- Real Gemini calls.
-- Android emulator / EAS Build (Package D).
+### Tests
+- `test_privacy_export.py` (7), `test_privacy_api.py` (4),
+  `test_account_deletion_state_machine.py` (9),
+  `test_storage_hardening.py` (13), `test_no_s3_boto3.py` (5),
+  `test_reference_data_seed.py` (7), `test_critical_journey.py` (1).
+- Updated Package A tests to reflect the two-step reserve+register flow
+  and the intentional 404 (not 403) admin surface.
+- Rate-limiter reset fixture to prevent inter-test 429 pollution.
+- **Local suite: 152 passed, 0 failed.**
+
+### CI
+- `mobile-android-bundle` job (blocking) — verifies the Expo shell
+  compiles for Android via Metro export.
+- Backend job now runs `python -m app.bootstrap.reference_data` twice to
+  prove idempotency.
+- `expo-export` renamed to "shared-code smoke test" so it can no longer
+  be mistaken for mobile validation.
+
+### Documentation
+- New: `docs/stabilisation/SUPABASE_HARDENING_PACKAGES_BCD.md` — full
+  per-item mapping of the task specification to the code.
+- New: `docs/stabilisation/PR_BODY.md` — pre-filled PR description with
+  the owner-action mobile checklist.
+- Updated: `SUPABASE_HARDENING_REPORT.md` (PARTIAL → DONE for
+  §5, §7, §8, §9, §11, §12).
+- Updated: `SUPABASE_CUTOVER_REPORT.md`, `SUPABASE_TARGET_ARCHITECTURE.md`,
+  `SUPABASE_HARDENING_PACKAGE_A.md` — remove active-source "Prompt 2"
+  references.
+
+## Backlog (owner actions before merge)
+
+- `eas build --platform android --profile preview` → attach the APK URL
+  and walk the on-device checklist in the PR description.
+- iOS validation OR the truthful "iOS native E2E not available" line.
+- Fill in the CI run URL, head SHA and job statuses in the PR description
+  after the last CI run.
+- Human reviewer sign-off. **Do not auto-merge.**
+
+## Next tasks (post-merge)
+
+- Add scheduled live smokes for Gemini and Supabase Storage (owner
+  provisions the sandbox project).
+- Custom Supabase password-reset email template + SMTP setup.
+- Domain-specific regression coverage on top of the critical journey
+  (styling, planning, routines, progress, memory) as time allows.
