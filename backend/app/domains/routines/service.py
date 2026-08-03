@@ -316,7 +316,7 @@ async def _replace_routines(
 
 
 async def generate_routines(
-    session: AsyncSession, *, account_id: uuid.UUID, v1_user_id: str, body: RoutineGenerateRequest
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, body: RoutineGenerateRequest
 ) -> Dict[str, Any]:
     """Build every routine this person has the products for.
 
@@ -340,7 +340,7 @@ async def generate_routines(
     source = explanation.SOURCE_DETERMINISTIC
     if body.explain and compiled:
         narratives, ai_run_id, source = await explanation.explain_routines(
-            compiled, climate=context.climate, v1_user_id=v1_user_id,
+            compiled, climate=context.climate, account_id_str=account_id_str,
         )
 
     stored = await _replace_routines(
@@ -525,7 +525,7 @@ async def consistency(
 
 
 async def check_ingredients(
-    session: AsyncSession, *, account_id: uuid.UUID, v1_user_id: str, body: IngredientCheckRequest
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, body: IngredientCheckRequest
 ) -> Dict[str, Any]:
     """Check a label, a list, or products you own against the reviewed rules.
 
@@ -586,7 +586,7 @@ async def check_ingredients(
     plain: Dict[str, str] = {}
     source = explanation.SOURCE_DETERMINISTIC
     if body.explain and findings:
-        plain, _, source = await explanation.explain_findings(findings, v1_user_id=v1_user_id)
+        plain, _, source = await explanation.explain_findings(findings, account_id_str=account_id_str)
 
     warnings = []
     for row in findings:

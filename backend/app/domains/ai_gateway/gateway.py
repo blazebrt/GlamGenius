@@ -167,9 +167,9 @@ async def _record_run(**fields: Any) -> Optional[uuid.UUID]:
         factory = get_sessionmaker()
         async with factory() as session:
             account_id = None
-            v1_user_id = fields.pop("v1_user_id", None)
-            if v1_user_id:
-                account = await identity.get_or_create_account(session, v1_user_id)
+            account_id_str = fields.pop("account_id_str", None)
+            if account_id_str:
+                account = await identity.get_account(session, account_id_str)
                 account_id = account.id
 
             output_payload = fields.pop("output_payload", None)
@@ -217,7 +217,7 @@ async def run_structured(
     schema: Type[T],
     prompt_version: str,
     schema_version: str,
-    v1_user_id: Optional[str] = None,
+    account_id_str: Optional[str] = None,
     image_base64: Optional[str] = None,
 ) -> AIResult[T]:
     """Call the provider and return a validated result, or raise.
@@ -229,7 +229,7 @@ async def run_structured(
     started = time.perf_counter()
 
     base_record: Dict[str, Any] = {
-        "v1_user_id": v1_user_id,
+        "account_id_str": account_id_str,
         "feature": feature,
         "provider": gemini.PROVIDER_NAME,
         "model": gemini.GEMINI_MODEL or "unknown",

@@ -27,7 +27,7 @@ async def get_me(
     """The signed-in caller's V2 state.
 
     Neutral, non-billing shape. No plan, no scans-remaining-free, no
-    ``paywall`` field. The beta usage summary lives at
+    paid-membership fields. The beta usage summary lives at
     ``/api/v2/access/usage``.
     """
     return {

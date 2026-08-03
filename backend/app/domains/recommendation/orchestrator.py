@@ -71,7 +71,7 @@ async def style_for_occasion(
     session: AsyncSession,
     *,
     account_id: uuid.UUID,
-    v1_user_id: str,
+    account_id_str: str,
     occasion_record: OccasionRecord,
     preferred_item_ids: Sequence[uuid.UUID] = (),
     client_mutation_id: Optional[str] = None,
@@ -114,7 +114,7 @@ async def style_for_occasion(
     entitlement = await service.consume_entitlement(session, account_id, service.FEATURE_STYLE)
 
     # Stages 7 and 8. Failure here is survivable by design.
-    narratives, ai_run_id, source = await explanation_stage.explain_looks(ranked, context, v1_user_id=v1_user_id)
+    narratives, ai_run_id, source = await explanation_stage.explain_looks(ranked, context, account_id_str=account_id_str)
 
     looks: List[Look] = []
     for index, item in enumerate(ranked, start=1):
@@ -216,7 +216,7 @@ REVISION_HINTS = {
 
 
 async def revise_look(
-    session: AsyncSession, *, look: Look, body: LookRevise, v1_user_id: str
+    session: AsyncSession, *, look: Look, body: LookRevise, account_id_str: str
 ) -> Dict[str, Any]:
     """Rebuild one look, avoiding what the user pushed back on.
 
@@ -265,7 +265,7 @@ async def revise_look(
     look.version += 1
     await _replace_look_items(session, look, replacement.candidate)
 
-    narratives, _, source = await explanation_stage.explain_looks([replacement], context, v1_user_id=v1_user_id)
+    narratives, _, source = await explanation_stage.explain_looks([replacement], context, account_id_str=account_id_str)
     narrative = narratives.get(replacement.variant)
     if narrative is not None:
         look.why_it_works = narrative.why_it_works
@@ -406,14 +406,14 @@ async def evaluate_purchase(
     session: AsyncSession,
     *,
     account_id: uuid.UUID,
-    v1_user_id: str,
+    account_id_str: str,
     body: ShoppingEvaluateRequest,
 ) -> Dict[str, Any]:
     """Read the item if needed, score it, and return Buy, Wait or Skip."""
     started = time.perf_counter()
     run = await service.start_run(session, account_id, kind="shopping_evaluation")
 
-    candidate_row, extraction_notes = await _resolve_shopping_candidate(session, account_id=account_id, v1_user_id=v1_user_id, body=body, run_id=run.id)
+    candidate_row, extraction_notes = await _resolve_shopping_candidate(session, account_id=account_id, account_id_str=account_id_str, body=body, run_id=run.id)
 
     owned, drafts = await context_stage.confirmed_inventory(session, account_id)
     attributes = await context_stage.confirmed_attributes(session, account_id)
@@ -451,7 +451,7 @@ async def evaluate_purchase(
     entitlement = await service.consume_entitlement(session, account_id, service.FEATURE_SHOPPING)
 
     summary = roi_stage.deterministic_summary(result, candidate)
-    ai_summary, ai_run_id, source = await explanation_stage.explain_purchase(result, candidate, v1_user_id=v1_user_id)
+    ai_summary, ai_run_id, source = await explanation_stage.explain_purchase(result, candidate, account_id_str=account_id_str)
     if ai_summary:
         summary = ai_summary
 
@@ -488,7 +488,7 @@ async def evaluate_purchase(
 
 
 async def _resolve_shopping_candidate(
-    session: AsyncSession, *, account_id: uuid.UUID, v1_user_id: str, body: ShoppingEvaluateRequest, run_id: uuid.UUID
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, body: ShoppingEvaluateRequest, run_id: uuid.UUID
 ) -> tuple[ShoppingCandidate, List[str]]:
     """Build the candidate row, reading a screenshot when one was sent."""
     notes: List[str] = []
@@ -498,7 +498,7 @@ async def _resolve_shopping_candidate(
         if asset.purpose != MEDIA_PURPOSE_INVENTORY:
             raise ValidationFailedError("Only inventory photos can be used for a shopping check.", field="media_asset_id")
         data = await media_service.read_bytes(asset)
-        extracted, ai_run_id, model, prompt_version, schema_version = await explanation_stage.extract_shopping_item(data, v1_user_id=v1_user_id)
+        extracted, ai_run_id, model, prompt_version, schema_version = await explanation_stage.extract_shopping_item(data, account_id_str=account_id_str)
         from app.domains.ai_gateway.models import AIRun
 
         linked = ai_run_id if await session.get(AIRun, ai_run_id) else None

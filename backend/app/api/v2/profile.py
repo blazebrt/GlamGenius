@@ -98,6 +98,6 @@ async def baseline_analysis(body: BaselineRequest, current: CurrentAccount = Dep
         raise ValidationFailedError("That image is too large. Please choose a smaller photo.", field="image_base64")
     await consent_service.require_analysis_consent(session, current.account_id)
     profile = await _profile(session, current)
-    result = await baseline.analyse(session, profile, v1_user_id=current.v1_user_id, image_base64=body.image_base64)
+    result = await baseline.analyse(session, profile, account_id_str=current.account_id_str, image_base64=body.image_base64)
     await session.commit()
     return result

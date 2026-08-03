@@ -38,7 +38,7 @@ async def generate_routines(
 ):
     """Build routines from the products you already own."""
     result = await service.generate_routines(
-        session, account_id=current.account_id, v1_user_id=current.v1_user_id, body=body,
+        session, account_id=current.account_id, account_id_str=current.account_id_str, body=body,
     )
     await session.commit()
     return result
@@ -98,7 +98,7 @@ async def check_ingredients(
 ):
     """Check a label, a typed list, or products you own against the reviewed rules."""
     return await service.check_ingredients(
-        session, account_id=current.account_id, v1_user_id=current.v1_user_id, body=body,
+        session, account_id=current.account_id, account_id_str=current.account_id_str, body=body,
     )
 
 

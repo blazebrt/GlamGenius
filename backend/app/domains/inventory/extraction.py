@@ -42,7 +42,7 @@ Do not return purchase price. Do not return supplement dosage or usage recommend
 
 async def analyse(
     session: AsyncSession,
-    *, account_id: uuid.UUID, v1_user_id: str, media_asset_id: uuid.UUID,
+    *, account_id: uuid.UUID, account_id_str: str, media_asset_id: uuid.UUID,
     category_hint: Optional[str], capture_type: str,
 ) -> tuple[InventoryImportJob, Any, ExtractedInventoryItem]:
     asset = await media_service.get_owned_asset(session, account_id=account_id, asset_id=media_asset_id)
@@ -50,7 +50,7 @@ async def analyse(
     job = InventoryImportJob(account_id=account_id, capture_type=capture_type, status="processing", media_asset_id=media_asset_id)
     session.add(job); await session.flush()
     try:
-        result = await gateway.run_structured(feature="inventory_extract", prompt=prompt(category_hint), system=SYSTEM, schema=ExtractedInventoryItem, prompt_version=PROMPT_VERSION, schema_version=SCHEMA_VERSION, v1_user_id=v1_user_id, image_base64=base64.b64encode(data).decode("ascii"))
+        result = await gateway.run_structured(feature="inventory_extract", prompt=prompt(category_hint), system=SYSTEM, schema=ExtractedInventoryItem, prompt_version=PROMPT_VERSION, schema_version=SCHEMA_VERSION, account_id_str=account_id_str, image_base64=base64.b64encode(data).decode("ascii"))
     except AnalysisUnavailableError as exc:
         job.status = "failed"; job.error_code = exc.failure_type.value; job.completed_at = utcnow()
         # The request dependency rolls back raised requests. Commit only this

@@ -50,7 +50,7 @@ async def evaluate_purchase(
 ):
     """Buy, Wait or Skip, with the whole calculation attached."""
     result = await orchestrator.evaluate_purchase(
-        session, account_id=current.account_id, v1_user_id=current.v1_user_id, body=body
+        session, account_id=current.account_id, account_id_str=current.account_id_str, body=body
     )
     await session.commit()
     return result

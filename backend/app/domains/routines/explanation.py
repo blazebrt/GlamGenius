@@ -115,7 +115,7 @@ def _routine_prompt(routines: Sequence[CompiledRoutine], *, climate: Optional[st
 
 
 async def explain_routines(
-    routines: Sequence[CompiledRoutine], *, climate: Optional[str], v1_user_id: str
+    routines: Sequence[CompiledRoutine], *, climate: Optional[str], account_id_str: str
 ) -> tuple[Dict[str, RoutineNarrative], Optional[Any], str]:
     """Better wording for routines that already exist.
 
@@ -135,7 +135,7 @@ async def explain_routines(
             schema=RoutineExplanationResponse,
             prompt_version=PROMPT_VERSION_ROUTINE,
             schema_version=SCHEMA_VERSION_ROUTINE_EXPLANATION,
-            v1_user_id=v1_user_id,
+            account_id_str=account_id_str,
         )
     except AnalysisUnavailableError as exc:
         # Expected and survivable. The routines are already complete.
@@ -177,7 +177,7 @@ def _ingredient_prompt(findings: Sequence[Finding]) -> str:
 
 
 async def explain_findings(
-    findings: Sequence[Finding], *, v1_user_id: str
+    findings: Sequence[Finding], *, account_id_str: str
 ) -> tuple[Dict[str, str], Optional[Any], str]:
     """Plain-English wording for warnings that have already been decided.
 
@@ -197,7 +197,7 @@ async def explain_findings(
             schema=IngredientExplanationResponse,
             prompt_version=PROMPT_VERSION_INGREDIENT,
             schema_version=SCHEMA_VERSION_INGREDIENT_EXPLANATION,
-            v1_user_id=v1_user_id,
+            account_id_str=account_id_str,
         )
     except AnalysisUnavailableError as exc:
         logger.info("ingredient_explanation_unavailable failure=%s", exc.extra.get("failure_type"))

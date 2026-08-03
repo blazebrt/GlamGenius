@@ -41,11 +41,11 @@ LOW_QUALITY_GUIDANCE = [
 ]
 
 
-async def analyse(session: AsyncSession, profile: AppearanceProfile, *, v1_user_id: str, image_base64: str) -> Dict[str, Any]:
+async def analyse(session: AsyncSession, profile: AppearanceProfile, *, account_id_str: str, image_base64: str) -> Dict[str, Any]:
     result = await run_structured(
         feature="appearance_baseline", prompt=PROMPT, system=SYSTEM,
         schema=BaselineAnalysis, prompt_version=PROMPT_VERSION,
-        schema_version=SCHEMA_VERSION, v1_user_id=v1_user_id,
+        schema_version=SCHEMA_VERSION, account_id_str=account_id_str,
         image_base64=image_base64,
     )
     data = result.data

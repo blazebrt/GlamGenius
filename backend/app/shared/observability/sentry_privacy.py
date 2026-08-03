@@ -28,7 +28,7 @@ _BASE64_LIKE = re.compile(r"^[A-Za-z0-9+/=_-]{80,}$")
 # Key-name filter — anything matching is redacted whole regardless of type.
 _SENSITIVE_KEY = re.compile(
     r"(?:image|photo|bytes|base64|ingredient|memory|jwt|token|"
-    r"authorization|razorpay|payment|order_id|receipt|email|phone|mobile|"
+    r"authorization|payment|order_id|receipt|email|phone|mobile|"
     r"tel|password|secret|api_key)",
     re.I,
 )

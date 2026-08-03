@@ -98,7 +98,7 @@ async def style_for_occasion(
     result = await orchestrator.style_for_occasion(
         session,
         account_id=current.account_id,
-        v1_user_id=current.v1_user_id,
+        account_id_str=current.account_id_str,
         occasion_record=record,
         preferred_item_ids=body.preferred_item_ids,
         client_mutation_id=body.client_mutation_id,
@@ -125,7 +125,7 @@ async def revise_look(
     session: AsyncSession = Depends(get_session),
 ):
     look = await service.owned_look(session, current.account_id, look_id)
-    result = await orchestrator.revise_look(session, look=look, body=body, v1_user_id=current.v1_user_id)
+    result = await orchestrator.revise_look(session, look=look, body=body, account_id_str=current.account_id_str)
     await session.commit()
     return result
 

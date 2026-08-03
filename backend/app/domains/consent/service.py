@@ -92,11 +92,11 @@ async def require_analysis_consent(
     )
 
 
-async def require_analysis_consent_for_v1_user(v1_user_id: str) -> None:
+async def require_analysis_consent_for_account(account_id_str: str) -> None:
     """Enforce V2 consent on the existing authenticated V1 scan route.
 
     The old route authenticates through MongoDB and does not have a SQLAlchemy
-    request session. Resolve its stable user id through ``account_links`` only
+    request session. Resolve the caller through the Supabase-Auth-owned account id only
     when enforcement is enabled, keeping the V1 identity source authoritative.
     """
     if not REQUIRE_ANALYSIS_CONSENT:
@@ -104,7 +104,7 @@ async def require_analysis_consent_for_v1_user(v1_user_id: str) -> None:
 
     factory = get_sessionmaker()
     async with factory() as session:
-        account = await identity.get_or_create_account(session, str(v1_user_id))
+        account = await identity.get_account(session, str(account_id_str))
         await session.commit()
         await require_analysis_consent(session, account.id)
 

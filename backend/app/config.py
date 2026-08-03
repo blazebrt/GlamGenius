@@ -4,9 +4,9 @@ The single Supabase-backed application reads its environment here and validates
 it once, at startup, so a malformed value fails fast with a message pointing at
 the variable to fix.
 
-**No payment settings live in this file.** Prices, subscriptions, Razorpay and
-paid entitlements were removed in the Supabase cutover; Prompt 2 will delete
-the remaining code paths that expected them.
+**No payment settings live in this file.** Prices, subscriptions and paid
+plan machinery were removed by the Supabase cutover; adding them back is
+outside the scope of the current architecture.
 """
 from __future__ import annotations
 

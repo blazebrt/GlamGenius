@@ -123,7 +123,7 @@ def _look_prompt(looks: Sequence[RankedLook], context: StyleContext) -> str:
 
 
 async def explain_looks(
-    looks: Sequence[RankedLook], context: StyleContext, *, v1_user_id: str
+    looks: Sequence[RankedLook], context: StyleContext, *, account_id_str: str
 ) -> tuple[Dict[str, Any], Optional[Any], str]:
     """Better wording for looks that already exist.
 
@@ -141,7 +141,7 @@ async def explain_looks(
             schema=LookExplanationResponse,
             prompt_version=PROMPT_VERSION_LOOKS,
             schema_version=SCHEMA_VERSION_LOOK_EXPLANATION,
-            v1_user_id=v1_user_id,
+            account_id_str=account_id_str,
         )
     except AnalysisUnavailableError as exc:
         # Expected and survivable. The looks are already complete.
@@ -162,7 +162,7 @@ async def explain_looks(
     return narratives, result.run_id, source
 
 
-async def extract_shopping_item(image_bytes: bytes, *, v1_user_id: str) -> tuple[ExtractedShoppingItem, Any, str, str, str]:
+async def extract_shopping_item(image_bytes: bytes, *, account_id_str: str) -> tuple[ExtractedShoppingItem, Any, str, str, str]:
     """Read a product screenshot. Raises ``AnalysisUnavailableError`` on failure.
 
     This one is allowed to fail loudly: there is nothing to fall back to, because
@@ -181,7 +181,7 @@ async def extract_shopping_item(image_bytes: bytes, *, v1_user_id: str) -> tuple
         schema=ExtractedShoppingItem,
         prompt_version=PROMPT_VERSION_SHOPPING_EXTRACT,
         schema_version=SCHEMA_VERSION_SHOPPING_ITEM,
-        v1_user_id=v1_user_id,
+        account_id_str=account_id_str,
         image_base64=base64.b64encode(image_bytes).decode("ascii"),
     )
     return result.data, result.run_id, result.model, result.prompt_version, result.schema_version
@@ -222,7 +222,7 @@ def purchase_summary_is_consistent(summary: str, verdict: str) -> bool:
 
 
 async def explain_purchase(
-    result: ROIResult, candidate: Candidate, *, v1_user_id: str
+    result: ROIResult, candidate: Candidate, *, account_id_str: str
 ) -> tuple[Optional[str], Optional[Any], str]:
     """Better wording for a verdict that is already decided.
 
@@ -237,7 +237,7 @@ async def explain_purchase(
             schema=PurchaseNarrative,
             prompt_version=PROMPT_VERSION_PURCHASE,
             schema_version=SCHEMA_VERSION_PURCHASE_EXPLANATION,
-            v1_user_id=v1_user_id,
+            account_id_str=account_id_str,
         )
     except AnalysisUnavailableError as exc:
         logger.info("purchase_explanation_unavailable failure=%s", exc.extra.get("failure_type"))
