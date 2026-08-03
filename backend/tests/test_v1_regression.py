@@ -140,10 +140,13 @@ async def test_scan_history_and_trends_are_empty_but_valid(app_client, make_user
     assert trends.status_code == 200 and trends.json() == {"points": []}
 
 
-async def test_the_face_image_truncation_rule_still_holds(
+async def test_new_scans_store_no_image_fragment(
     app_client, make_user, fake_provider
 ):
-    """CLAUDE.md: stored image_base64 is 83 characters and must never grow."""
+    """Fix 12: V1 previously stored the first 80 characters of the base64
+    payload as a "receipt" (`image_base64[:80] + "..."`). That receipt was a
+    slice of the user's photo bytes and rode along in every future history /
+    trends response. New scans must not store any fragment of the image."""
     import base64
     import json
 
@@ -164,4 +167,17 @@ async def test_the_face_image_truncation_rule_still_holds(
     assert response.status_code == 200
 
     scan = await db.scans.find_one({"user_id": user["id"]})
-    assert len(scan["image_base64"]) == 83
+    # The bytes themselves must not appear in the persisted record — no full
+    # copy, no prefix, no "..." marker, no derivative slice. `None` is the
+    # correct value; older records may still have a truncated string until the
+    # cleanup script runs (see scripts/cleanup_v1_scan_image_prefixes.py and
+    # docs/stabilisation/HISTORICAL_IMAGE_CLEANUP.md).
+    assert scan.get("image_base64") is None, (
+        "V1 scan record still stores a fragment of the image; Fix 12 requires it to be None."
+    )
+    # Belt and braces: even a shortened prefix would fail the following, so a
+    # future regression that stores a truncated 'safe-looking' string is caught.
+    for surface in (scan.get("image_base64"), scan.get("image_preview"), scan.get("image_thumb")):
+        if surface is None:
+            continue
+        assert long_image[:20] not in surface, "Scan record contains bytes from the user's photo."

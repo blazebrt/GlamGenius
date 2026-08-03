@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1.7
+#
+# Frontend test image (Fix 4, WP2).
+#
+# Only the container has Node and Yarn. The compose file `frontend-tests`
+# service mounts the /app/frontend source into this image at /workspace, so a
+# host with only Docker installed can run typecheck + lint + jest without
+# any local Node install.
+#
+# The image intentionally does NOT bake node_modules — the test job runs
+# yarn install --frozen-lockfile against the mounted lockfile so a lockfile
+# drift is caught in the same job that would ship it.
+
+FROM node:20.18.1-alpine AS runtime
+
+# yarn is bundled with node:20-alpine (yarn 1.x). Corepack is disabled by
+# default; enabling it here lets a future move to yarn 3+ / pnpm land as a
+# lockfile change alone.
+RUN corepack enable
+
+# Non-root user. node's default UID is 1000 on this image; keeping our own
+# uid stable across rebuilds keeps host-bind-mount permissions predictable.
+RUN addgroup -S -g 10001 app \
+    && adduser  -S -u 10001 -G app -h /workspace app \
+    && chown -R 10001:10001 /workspace
+
+WORKDIR /workspace
+
+USER 10001
+
+# No CMD — the compose file overrides it with the exact test command it
+# wants to run (typecheck, lint, jest). Leaving it unset stops an accidental
+# `docker run` from doing something surprising.

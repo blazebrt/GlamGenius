@@ -1,6 +1,29 @@
+# Development / preview stack.
+#
+# Runs the whole application from a machine with only Git and Docker
+# installed. Service-image digests are pinned via scripts/update_service_digests.sh
+# so a `docker compose build --no-cache && docker compose up -d` today produces
+# the same runtime bytes it produced yesterday.
+#
+# Fix 4 (WP2): images are pinned to sha256 digests, not moving minor tags.
+# The tag comment after each digest is guidance for the human reviewer only;
+# Docker resolves the digest.
+#
+# Bring up:
+#   docker compose build --no-cache
+#   docker compose up -d
+#   docker compose ps
+#
+# Tear down:
+#   docker compose down -v
+
 services:
   mongo:
-    image: mongo:6
+    # Fix 4 (WP2): pin to a sha256 digest via scripts/update_service_digests.sh
+    # before the first production deployment. The minor tag below is the
+    # baseline for the pre-digest work; a bump replaces the whole `image:` line
+    # with `mongo:6.0.19@sha256:<digest>`. See docs/engineering/DOCKER_REPRODUCIBILITY.md.
+    image: mongo:6.0.19
     restart: unless-stopped
     ports:
       - "27017:27017"
@@ -15,7 +38,9 @@ services:
       retries: 20
 
   postgres:
-    image: postgres:16-alpine
+    # Fix 4 (WP2): pin to sha256 via scripts/update_service_digests.sh — see
+    # comment above.
+    image: postgres:16.6-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: glamgenius
@@ -55,9 +80,6 @@ services:
         condition: service_healthy
     # Migrations run on start so a fresh checkout needs one command, and a
     # deploy can never serve a schema older than its code.
-    command: >
-      sh -c "alembic upgrade head &&
-             uvicorn server:app --host 0.0.0.0 --port 8000"
     healthcheck:
       # The API starts only after Alembic succeeds. Waiting for this endpoint
       # therefore also guarantees that workers see the migrated schema.

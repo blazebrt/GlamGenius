@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import Optional
 
 from app.config import MEDIA_LOCAL_ROOT
 from app.domains.media.storage.base import StorageError
@@ -68,3 +69,11 @@ class LocalFilesystemStorage:
     async def exists(self, key: str) -> bool:
         path = self._path_for(key)
         return await asyncio.to_thread(path.is_file)
+
+    async def presigned_get_url(self, key: str, ttl_seconds: int) -> Optional[str]:
+        """Local storage has no cryptographically-signed URL scheme.
+
+        Returning ``None`` here tells the service layer to fall back to
+        backend streaming rather than emitting a cleartext filesystem path.
+        """
+        return None

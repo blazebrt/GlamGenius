@@ -21,6 +21,15 @@ sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 alembic==1.14.0
 
+# --- V2: S3-compatible media storage (Fix 9, WP2) ---
+# boto3 is what talks to S3-compatible providers (AWS S3, Cloudflare R2,
+# DigitalOcean Spaces, MinIO). It is a production dependency, but it is
+# also imported by the S3 integration test that runs against MinIO in CI,
+# so it lives in the base requirements file rather than an extras file.
+# The pin is a tested-safe version at the time of WP2; dependabot manages
+# subsequent bumps.
+boto3==1.35.99
+
 # --- Tests (installed in the image so the test container needs no extra step) ---
 pytest==8.3.4
 # 0.26 is the first release with asyncio_default_test_loop_scope, which is what

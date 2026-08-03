@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Protocol, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable
 
 
 class StorageError(Exception):
@@ -42,3 +42,13 @@ class MediaStorage(Protocol):
     async def delete(self, key: str) -> None: ...
 
     async def exists(self, key: str) -> bool: ...
+
+    async def presigned_get_url(self, key: str, ttl_seconds: int) -> Optional[str]:
+        """Short-lived signed URL for the caller to fetch bytes directly.
+
+        Returns ``None`` when the adapter does not support signed URLs (the
+        local filesystem adapter, for instance). The service layer falls back
+        to backend streaming when this returns ``None`` — never returning a
+        cleartext local path to a client.
+        """
+        ...
