@@ -5,7 +5,7 @@ Covers:
     * Attribute observations and appearance goals persist and can be listed.
     * Attribute application overwrites the same key rather than duplicating.
     * Onboarding sessions can progress from ``in_progress`` to ``complete``.
-    * ``sync_projections`` writes into the wardrobe / beauty / hair rows.
+    * ``sync_projections`` writes into the fit / style / lifestyle projection rows.
 """
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ from app.domains.profile import service as profile_service
 from app.domains.profile.models import (
     AppearanceGoal,
     AttributeObservation,
+    FitPreference,
     OnboardingSession,
     ProfileAttribute,
-    WardrobeProfile,
 )
 from app.shared.database.sql import get_sessionmaker
 
@@ -60,7 +60,7 @@ async def test_attribute_apply_overwrites_same_key(db_clean):
         await profile_service.apply_attributes(
             session,
             profile,
-            {"skin_type": "combination"},
+            [{"key": "skin_tone", "value": "medium"}],
             source="onboarding",
         )
         await session.commit()
@@ -70,7 +70,7 @@ async def test_attribute_apply_overwrites_same_key(db_clean):
         await profile_service.apply_attributes(
             session,
             profile,
-            {"skin_type": "dry"},
+            [{"key": "skin_tone", "value": "deep"}],
             source="user_declared",
         )
         await session.commit()
@@ -79,11 +79,11 @@ async def test_attribute_apply_overwrites_same_key(db_clean):
         rows = (await session.execute(
             select(ProfileAttribute).where(
                 ProfileAttribute.profile_id == profile.id,
-                ProfileAttribute.key == "skin_type",
+                ProfileAttribute.key == "skin_tone",
             )
         )).scalars().all()
     # Same key kept as a single row with the latest value.
-    assert len(rows) == 1 and rows[0].value == "dry"
+    assert len(rows) == 1 and rows[0].value == "deep"
 
 
 async def test_onboarding_session_lifecycle(db_clean):
@@ -178,16 +178,17 @@ async def test_projection_row_created_via_sync(db_clean):
         profile = await profile_service.get_or_create_profile(session, account_id)
         await profile_service.sync_projections(
             session, profile.id,
-            {"body_type": "hourglass"},
+            {"usual_top_size": "M"},
         )
         await session.commit()
 
     async with factory() as session:
         row = (await session.execute(
-            select(WardrobeProfile).where(
-                WardrobeProfile.profile_id == profile.id
+            select(FitPreference).where(
+                FitPreference.profile_id == profile.id
             )
         )).scalar_one_or_none()
     # Projection created — the exact shape depends on the projection but a
     # row must exist for downstream planner reads.
     assert row is not None
+    assert row.usual_top_size == "M"
