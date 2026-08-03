@@ -105,7 +105,7 @@ jobs:
         run: pytest -q tests/test_invite_reservation.py tests/test_invite_bypass_regression.py
       - name: Upload pytest report on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pytest-report
           path: /tmp/pytest-report.xml
@@ -248,7 +248,7 @@ jobs:
         run: pip-audit -r requirements.txt --vulnerability-service osv --format=json > /tmp/pip-audit.json || true
       - name: Upload full pip-audit report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pip-audit-report
           path: /tmp/pip-audit.json
@@ -276,7 +276,7 @@ jobs:
           exit 0
       - name: Upload yarn-audit report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: yarn-audit-report
           path: /tmp/yarn-audit.json
