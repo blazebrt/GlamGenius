@@ -12,6 +12,12 @@ if (!BACKEND_URL) {
   );
 }
 
+// axios exposes both a default export and a named `create`. The default
+// export is the correct entry point here (it carries interceptors and
+// the axios-instance type); the eslint rule flags any use of a
+// default-export's members as a named-export collision. Disable the
+// rule for this specific instantiation.
+// eslint-disable-next-line import/no-named-as-default-member
 export const api = axios.create({
   baseURL: BACKEND_URL ? `${BACKEND_URL.replace(/\/$/, '')}/api` : undefined,
   timeout: 60000, // 60 seconds for AI requests

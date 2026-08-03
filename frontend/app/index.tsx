@@ -25,6 +25,10 @@ export default function WelcomeScreen() {
 
   useEffect(() => {
     checkExistingUser();
+    // Runs once on mount to route the user based on their persisted id.
+    // `checkExistingUser` closes over router / setUserId / setLoading, all
+    // of which are stable; re-running this effect would double-navigate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const checkExistingUser = async () => {

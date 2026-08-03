@@ -67,6 +67,11 @@ export default function HomeScreen() {
     refreshSubscription();
     if (!configLoaded) void loadConfig();
     setTipIndex(new Date().getHours() % TIPS.length);
+    // The user, config, and subscription stores are Zustand singletons; the
+    // action references are stable across renders. Running this effect once
+    // on mount is deliberate — re-running it on every render would spam the
+    // backend. See docs/engineering/CHECKLIST_MOBILE_UX.md §5.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const quickActions = [

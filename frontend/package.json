@@ -82,6 +82,10 @@
     "react-test-renderer": "19.1.0",
     "typescript": "~5.9.2"
   },
+  "resolutions": {
+    "//": "Work Package 1 — pin the transitive postcss dependency of expo's metro-config to a patched version. Advisory GHSA/npm 1124252 and 1124288 (arbitrary file read + path traversal via sourceMappingURL) are HIGH and pull expo > @expo/metro-config > postcss into a vulnerable range on the expo 54 line. When Expo publishes a metro-config that pins ≥8.5.18 upstream, this override is removed.",
+    "postcss": "^8.5.18"
+  },
   "private": true,
   "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }
