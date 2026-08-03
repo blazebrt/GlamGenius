@@ -7,7 +7,6 @@ from app.shared.errors.exceptions import (
     FeatureUnavailableError,
     MediaTooLargeError,
     NotFoundError,
-    SubscriptionsUnavailableError,
     UnsupportedMediaTypeError,
     ValidationFailedError,
 )
@@ -20,7 +19,6 @@ __all__ = [
     "FeatureUnavailableError",
     "MediaTooLargeError",
     "NotFoundError",
-    "SubscriptionsUnavailableError",
     "UnsupportedMediaTypeError",
     "ValidationFailedError",
 ]

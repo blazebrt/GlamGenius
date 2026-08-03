@@ -44,9 +44,9 @@ export default function WelcomeScreen() {
     }
   };
 
-  // Invite-only: the scan screen asks for an invite code before the teaser runs.
+  // Invite-only private beta: signed-out users go straight to the invite flow.
   const handleGetStarted = () => {
-    router.push('/scan?scanType=face&preview=1');
+    router.push('/(auth)/welcome');
   };
 
   if (loading && userId) {
@@ -93,12 +93,12 @@ export default function WelcomeScreen() {
             <ActivityIndicator color={COLORS.white} />
           ) : (
             <>
-              <Text style={styles.ctaText}>Try a free check</Text>
+              <Text style={styles.ctaText}>Join the private beta</Text>
               <Ionicons name="arrow-forward" size={20} color={COLORS.white} />
             </>
           )}
         </TouchableOpacity>
-        <Text style={styles.freeNote}>No account needed to see your colours</Text>
+        <Text style={styles.freeNote}>Invite-only — enter your code on the next screen</Text>
         <TouchableOpacity onPress={() => router.push('/(auth)/welcome')} style={{ marginTop: 14 }}>
           <Text style={styles.secondaryLink}>Already have an account? Sign in</Text>
         </TouchableOpacity>

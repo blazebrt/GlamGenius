@@ -4,6 +4,7 @@ Everything scoped to a Supabase Auth user UUID.
 """
 from __future__ import annotations
 
+import hashlib
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,7 @@ from app.domains.beta_access.models import (
     BetaUsageEvent,
     Invite,
     InviteRedemption,
+    InviteRegistrationReservation,
 )
 
 
@@ -164,6 +166,282 @@ async def redeem_invite(
 
     await session.refresh(invite)
     return invite
+
+
+# ---------------------------------------------------------------------------
+# Registration reservations (§1 — invite reservation before Supabase sign-up)
+# ---------------------------------------------------------------------------
+
+RESERVATION_TTL_SECONDS = 30 * 60  # 30 minutes — long enough for email confirm
+RESERVATION_STATUS_ACTIVE = "active"
+RESERVATION_STATUS_CONSUMED = "consumed"
+RESERVATION_STATUS_EXPIRED = "expired"
+
+
+class InviteReservationError(Exception):
+    """Base class for invite reservation failures.
+
+    Callers translate this to a 400 response with a stable ``code`` field so
+    the mobile client can present accurate copy without probing back-end
+    internals. Deliberately uniform for missing/expired/exhausted invites so
+    unauthenticated reservation probing cannot enumerate valid codes.
+    """
+
+    default_code = "invite_invalid"
+
+    def __init__(self, code: Optional[str] = None, message: str = "") -> None:
+        super().__init__(message or "The invite cannot be reserved.")
+        self.code = code or self.default_code
+        self.message = message or "The invite cannot be reserved."
+
+
+class InviteNotReservable(InviteReservationError):
+    """The invite is missing, inactive, expired, or fully redeemed."""
+
+    default_code = "invite_invalid"
+
+
+class ReservationChallengeInvalid(InviteReservationError):
+    """The challenge/email pair does not match any live reservation."""
+
+    default_code = "reservation_invalid"
+
+
+class ReservationExpired(InviteReservationError):
+    """The reservation was found but is past ``expires_at`` or already consumed."""
+
+    default_code = "reservation_expired"
+
+
+def _normalise_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def _hash_challenge(challenge: str) -> str:
+    return hashlib.sha256(challenge.encode("utf-8")).hexdigest()
+
+
+def _generate_challenge() -> str:
+    """32-byte URL-safe secret. Never persisted — only its SHA-256 hash is."""
+    return secrets.token_urlsafe(32)
+
+
+async def reserve_invite(
+    session: AsyncSession,
+    *,
+    code: str,
+    email: str,
+    now: Optional[datetime] = None,
+) -> tuple[InviteRegistrationReservation, str]:
+    """Atomically reserve a spot for ``email`` against invite ``code``.
+
+    Returns the ORM row **and** the raw challenge string. Only the hash is
+    persisted; the challenge is handed to the caller and must be presented
+    to ``POST /api/v2/access/register`` to finalise.
+
+    Race safety: the check-and-reserve runs inside a transaction with
+    ``SELECT ... FOR UPDATE`` on the invite row plus a bounded count of live
+    reservations, so two concurrent reservers cannot exceed the invite cap.
+    """
+    normalised_code = (code or "").strip().upper()
+    normalised_email = _normalise_email(email)
+    if not normalised_code:
+        raise InviteNotReservable(message="An invite code is required.")
+    if "@" not in normalised_email:
+        raise InviteReservationError(
+            code="email_invalid", message="A valid email address is required."
+        )
+
+    ts = now or _now()
+
+    invite = (
+        await session.execute(
+            select(Invite)
+            .where(Invite.code == normalised_code)
+            .with_for_update(skip_locked=False)
+        )
+    ).scalar_one_or_none()
+    if invite is None:
+        raise InviteNotReservable()
+    if not invite.active:
+        raise InviteNotReservable()
+    if invite.expires_at is not None and invite.expires_at <= ts:
+        raise InviteNotReservable()
+
+    # An idempotent retry: if the same email already has an active,
+    # unexpired reservation for the same invite, hand back a fresh
+    # challenge that supersedes the previous one. The previous
+    # challenge is invalidated because ``challenge_hash`` is unique.
+    existing = (
+        await session.execute(
+            select(InviteRegistrationReservation)
+            .where(
+                and_(
+                    InviteRegistrationReservation.invite_id == invite.id,
+                    InviteRegistrationReservation.email_normalised == normalised_email,
+                    InviteRegistrationReservation.status == RESERVATION_STATUS_ACTIVE,
+                    InviteRegistrationReservation.expires_at > ts,
+                )
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+
+    live_count_stmt = select(func.count(InviteRegistrationReservation.id)).where(
+        and_(
+            InviteRegistrationReservation.invite_id == invite.id,
+            InviteRegistrationReservation.status == RESERVATION_STATUS_ACTIVE,
+            InviteRegistrationReservation.expires_at > ts,
+        )
+    )
+    live_count = int(
+        (await session.execute(live_count_stmt)).scalar_one() or 0
+    )
+    # If we are refreshing an existing reservation, it already occupies
+    # a slot — do not double-count it.
+    outstanding = live_count if existing is None else max(0, live_count - 1)
+    if invite.uses_count + outstanding >= invite.max_uses:
+        raise InviteNotReservable()
+
+    challenge = _generate_challenge()
+    challenge_hash = _hash_challenge(challenge)
+    expires_at = ts + timedelta(seconds=RESERVATION_TTL_SECONDS)
+
+    if existing is not None:
+        existing.challenge_hash = challenge_hash
+        existing.expires_at = expires_at
+        reservation = existing
+    else:
+        reservation = InviteRegistrationReservation(
+            invite_id=invite.id,
+            email_normalised=normalised_email,
+            challenge_hash=challenge_hash,
+            status=RESERVATION_STATUS_ACTIVE,
+            expires_at=expires_at,
+        )
+        session.add(reservation)
+    await session.flush()
+    return reservation, challenge
+
+
+async def consume_reservation(
+    session: AsyncSession,
+    *,
+    challenge: str,
+    email: str,
+    supabase_user_id: uuid.UUID,
+    now: Optional[datetime] = None,
+) -> Invite:
+    """Atomically consume a reservation and redeem the underlying invite.
+
+    Called from ``POST /api/v2/access/register`` inside the same
+    transaction that creates the ``accounts`` row. Behaviour:
+
+    * The challenge/email pair must match a live reservation.
+    * The reservation must not be expired, consumed, or bound to another
+      Supabase user.
+    * A conditional UPDATE flips ``status`` from ``active`` to ``consumed``
+      only if the row is still active — a second finalisation on the same
+      challenge fails without redeeming a second invite slot.
+    * Once the reservation is consumed the invite ``uses_count`` is
+      incremented; if the invite is full the whole finalisation is rolled
+      back by the caller.
+    """
+    normalised_email = _normalise_email(email)
+    if not challenge:
+        raise ReservationChallengeInvalid()
+    if not normalised_email:
+        raise ReservationChallengeInvalid()
+
+    ts = now or _now()
+    challenge_hash = _hash_challenge(challenge)
+
+    reservation = (
+        await session.execute(
+            select(InviteRegistrationReservation)
+            .where(InviteRegistrationReservation.challenge_hash == challenge_hash)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if reservation is None:
+        raise ReservationChallengeInvalid()
+    if reservation.email_normalised != normalised_email:
+        raise ReservationChallengeInvalid()
+    if reservation.status != RESERVATION_STATUS_ACTIVE:
+        raise ReservationExpired()
+    if reservation.expires_at <= ts:
+        reservation.status = RESERVATION_STATUS_EXPIRED
+        await session.flush()
+        raise ReservationExpired()
+
+    # Atomic consume: single row UPDATE conditioned on the current active
+    # state, so two racing finalisations cannot both succeed.
+    result = await session.execute(
+        update(InviteRegistrationReservation)
+        .where(
+            and_(
+                InviteRegistrationReservation.id == reservation.id,
+                InviteRegistrationReservation.status == RESERVATION_STATUS_ACTIVE,
+            )
+        )
+        .values(
+            status=RESERVATION_STATUS_CONSUMED,
+            consumed_at=ts,
+            supabase_user_id=supabase_user_id,
+        )
+        .returning(InviteRegistrationReservation.id)
+    )
+    if result.first() is None:
+        raise ReservationExpired()
+
+    invite = await session.get(Invite, reservation.invite_id)
+    if invite is None:
+        raise InviteNotReservable()
+
+    bump = await session.execute(
+        update(Invite)
+        .where(
+            and_(
+                Invite.id == invite.id,
+                Invite.active.is_(True),
+                (Invite.expires_at.is_(None)) | (Invite.expires_at > ts),
+                Invite.uses_count < Invite.max_uses,
+            )
+        )
+        .values(uses_count=Invite.uses_count + 1)
+        .returning(Invite.id)
+    )
+    if bump.first() is None:
+        raise InviteNotReservable()
+
+    session.add(
+        InviteRedemption(invite_id=invite.id, account_id=supabase_user_id)
+    )
+    await session.flush()
+    await session.refresh(invite)
+    return invite
+
+
+async def expire_stale_reservations(
+    session: AsyncSession, *, now: Optional[datetime] = None
+) -> int:
+    """Mark active reservations whose ``expires_at`` has passed as expired.
+
+    Called from a scheduled job. Returns the number of rows updated.
+    """
+    ts = now or _now()
+    result = await session.execute(
+        update(InviteRegistrationReservation)
+        .where(
+            and_(
+                InviteRegistrationReservation.status == RESERVATION_STATUS_ACTIVE,
+                InviteRegistrationReservation.expires_at <= ts,
+            )
+        )
+        .values(status=RESERVATION_STATUS_EXPIRED)
+        .returning(InviteRegistrationReservation.id)
+    )
+    return len(result.all())
 
 
 # ---------------------------------------------------------------------------

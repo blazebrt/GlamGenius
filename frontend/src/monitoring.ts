@@ -22,7 +22,7 @@ const PHONE_RE = /(?<!\w)(?:\+?\d[\d ().-]{7,}\d)(?!\w)/g;
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b/g;
 const BASE64_RE = /^[A-Za-z0-9+/=_-]{80,}$/;
 const SENSITIVE_KEY =
-  /(image|photo|bytes|base64|ingredient|memory|jwt|token|authorization|razorpay|payment|order_id|receipt|email|phone|mobile|tel|password|secret|api_key)/i;
+  /(image|photo|bytes|base64|ingredient|memory|jwt|token|authorization|payment|order_id|receipt|email|phone|mobile|tel|password|secret|api_key)/i;
 
 function scrub(value: unknown, key = ''): unknown {
   if (SENSITIVE_KEY.test(key)) return REDACTED;

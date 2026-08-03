@@ -14,9 +14,8 @@ import { useUserStore } from '../../src/store/userStore';
 import { useConfigStore } from '../../src/store/configStore';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../../src/theme/colors';
 
-// "Go Plus" used to sit here and lead to a paywall that could only refuse the
-// payment. The membership entry stays — people should be able to see what they
-// have — but it no longer sells anything while billing is off.
+// The membership entry stays — people should be able to see what they
+// have — but it no longer sells anything (private beta, no billing).
 const QUICK_ACTIONS = [
   { id: 'scan', icon: 'scan-outline', label: 'Skin check', route: '/(tabs)/scan-tab', color: COLORS.primary },
   { id: 'plan', icon: 'shirt-outline', label: 'Outfit plan', route: '/get-advice', color: COLORS.accent },

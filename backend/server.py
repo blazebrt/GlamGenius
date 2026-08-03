@@ -82,11 +82,15 @@ async def _startup() -> None:
         )
 
     postgres_ok = await sql.ping()
+    from app.shared.flags import service as flags_service
+
+    missing_essentials = flags_service.warn_if_essentials_disabled()
     logger.info(
-        "V2: postgres=%s storage=%s features=%s",
+        "V2: postgres=%s storage=%s features=%s essentials_off=%s",
         "up" if postgres_ok else "DOWN",
         MEDIA_STORAGE_BACKEND,
-        ",".join(V2_FEATURES) or "(none enabled)",
+        ",".join(V2_FEATURES) or "(env not set — using stable beta defaults)",
+        ",".join(missing_essentials) or "(none)",
     )
     if not postgres_ok:
         logger.warning(

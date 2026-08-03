@@ -8,7 +8,6 @@ import {
   ScrollView,
   Dimensions,
   Platform,
-  TextInput,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -31,7 +30,6 @@ import {
   ProviderUnavailableState,
 } from '../src/components/TrustStates';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../src/theme/colors';
-
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 // 'failed' is a first-class phase. A failure renders its own screen rather than
 // a toast over a half-built result — the app must never show a personalised
@@ -54,30 +52,30 @@ export default function ScanScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const scanType = (params.scanType as string) || 'face';
-  const { userId, user } = useUserStore();
+  const { userId, user, registrationState } = useUserStore();
   const setLatestScan = usePlanStore((s) => s.setLatestScan);
 
   const [phase, setPhase] = useState<ScanPhase>('camera');
   const [step, setStep] = useState(0);
   const [analysis, setAnalysis] = useState<any>(null);
-  // `setPreview` was called by the removed signed-out preview flow. The
-  // preview branch of the UI still reads `preview` (it is always null now),
-  // and will be deleted alongside the rest of the preview path in Prompt 2.
-  const [preview] = useState<any>(null);
   const [errorLimit, setErrorLimit] = useState(false);
   const [cameraError, setCameraError] = useState(false);
-  const [previewInvite, setPreviewInvite] = useState('');
   const [failure, setFailure] = useState<Failure | null>(null);
   const [photoConsent, setPhotoConsentState] = useState(false);
   const [consentSaving, setConsentSaving] = useState(false);
   // Kept so "Try again" re-sends the same photo instead of making the user
   // take a new one after a failure that was never their fault.
   const [lastImage, setLastImage] = useState<string | null>(null);
-  const billingAvailable = useConfigStore((s) => s.billingAvailable);
   const betaMessage = useConfigStore((s) => s.betaMessage);
 
-  // Signed-out visitors get a free teaser instead of the full check.
-  const isPreviewMode = !userId;
+  // Signed-out visitors cannot scan. §4 hardening: the signed-out "preview"
+  // path was removed. A deep link that lands here without a session is
+  // routed to authentication.
+  useEffect(() => {
+    if (!userId || registrationState !== 'registered') {
+      router.replace('/(auth)/welcome');
+    }
+  }, [userId, registrationState, router]);
 
   useEffect(() => {
     if (!userId) return;
@@ -104,19 +102,9 @@ export default function ScanScreen() {
     return () => clearInterval(t);
   }, [phase]);
 
-  const runPreview = async (_base64: string) => {
-    // Signed-out preview was removed with the Supabase cutover. Every scan is
-    // now authenticated. Send the user back to camera with a clear prompt.
-    notify(
-      'Sign in to run a scan',
-      'GlamGenius scans now require an account. Please sign in with your invite to continue.',
-    );
-    setPhase('camera');
-  };
-
   const runAnalysis = async (base64: string) => {
-    if (isPreviewMode) {
-      await runPreview(base64);
+    if (!userId) {
+      router.replace('/(auth)/welcome');
       return;
     }
     if (!photoConsent) {
@@ -129,7 +117,6 @@ export default function ScanScreen() {
     setFailure(null);
     setLastImage(base64);
     try {
-      // No user_id — the server identifies us from the login token.
       const res = await api.post('/api/v2/scan/analyse', {
         image_base64: base64,
         scan_type: scanType,
@@ -146,17 +133,13 @@ export default function ScanScreen() {
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
       if (isRateLimited(err)) {
-        // A short-term speed limit, not the monthly allowance. Upgrading
-        // would not help, so don't offer it.
         setPhase('camera');
         notify('Slow down a moment', errorMessage(err, 'Please try again in a little while.'));
         return;
       }
-      if (err?.response?.status === 402 || detail?.code === 'SCAN_LIMIT') {
+      if (detail?.code === 'SCAN_LIMIT') {
         setErrorLimit(true);
         setPhase('camera');
-        // No upgrade offer while billing is off — the old "Go Plus" button led
-        // to a paywall that could only ever refuse the payment.
         notify(
           'Monthly checks used',
           detail?.message || 'Your allowance resets next month.',
@@ -190,11 +173,6 @@ export default function ScanScreen() {
   };
 
   const updatePhotoConsent = async (next: boolean) => {
-    if (isPreviewMode) {
-      setPhotoConsentState(next);
-      return;
-    }
-
     setConsentSaving(true);
     try {
       const summary = await setConsent(next);
@@ -274,7 +252,7 @@ export default function ScanScreen() {
             onRetry={retryLastAnalysis}
             onDismiss={dismissFailure}
           />
-        ) : failure.kind === 'allowance_exhausted' && !billingAvailable() ? (
+        ) : failure.kind === 'allowance_exhausted' ? (
           <BetaFeatureUnavailableState
             message={`${failure.message} ${betaMessage()}`}
             onDismiss={dismissFailure}
@@ -290,24 +268,6 @@ export default function ScanScreen() {
           />
         )}
       </View>
-    );
-  }
-
-  if (phase === 'results' && preview) {
-    return (
-      <PreviewView
-        preview={preview}
-        insets={insets}
-        onSignUp={() => router.push('/(auth)/welcome')}
-        onClose={() => {
-          try {
-            if (router.canGoBack()) router.back();
-            else router.replace('/');
-          } catch {
-            router.replace('/');
-          }
-        }}
-      />
     );
   }
 
@@ -394,22 +354,6 @@ export default function ScanScreen() {
         {errorLimit && (
           <Text style={styles.limitText}>Monthly checks used. Your allowance resets next month.</Text>
         )}
-        {isPreviewMode && (
-          <>
-            <Text style={styles.hint}>
-              Invite-only private test — enter your invite code to try a preview.
-            </Text>
-            <TextInput
-              style={styles.inviteInput}
-              placeholder="Invite code"
-              placeholderTextColor="rgba(255,255,255,0.5)"
-              autoCapitalize="characters"
-              autoCorrect={false}
-              value={previewInvite}
-              onChangeText={setPreviewInvite}
-            />
-          </>
-        )}
         <PhotoAnalysisConsentControl
           checked={photoConsent}
           busy={consentSaving}
@@ -428,79 +372,6 @@ export default function ScanScreen() {
           </TouchableOpacity>
           <View style={{ width: 72 }} />
         </View>
-      </View>
-    </View>
-  );
-}
-
-function PreviewView({
-  preview,
-  insets,
-  onSignUp,
-  onClose,
-}: {
-  preview: any;
-  insets: any;
-  onSignUp: () => void;
-  onClose: () => void;
-}) {
-  const profile = preview.profile || {};
-  const colors = preview.best_clothing_colors || [];
-  const locked = preview.locked || [];
-  const moreColors = Math.max(0, (preview.total_colors_found || 0) - colors.length);
-
-  return (
-    <View style={[styles.container, { backgroundColor: COLORS.backgroundSecondary, paddingTop: insets.top }]}>
-      <View style={styles.resultsHeader}>
-        <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color={COLORS.textPrimary} /></TouchableOpacity>
-        <Text style={styles.resultsTitle}>Your colours</Text>
-        <View style={{ width: 24 }} />
-      </View>
-
-      <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: 160 }}>
-        <Animated.View entering={FadeInDown} style={styles.previewCard}>
-          <Text style={styles.sectionTitle}>What we can see</Text>
-          <Text style={styles.previewTone}>
-            {profile.skin_tone ? `${profile.skin_tone} skin tone` : 'Skin tone read'}
-            {profile.undertone ? ` · ${profile.undertone} undertone` : ''}
-          </Text>
-        </Animated.View>
-
-        <Animated.View entering={FadeInDown.delay(100)} style={styles.previewCard}>
-          <Text style={styles.sectionTitle}>Colours that suit you</Text>
-          {colors.map((c: any, i: number) => (
-            <View key={i} style={styles.previewColorRow}>
-              <View style={[styles.previewSwatch, { backgroundColor: c.hex_hint || COLORS.primary }]} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.previewColorName}>{c.color}</Text>
-                {!!c.why && <Text style={styles.previewColorWhy}>{c.why}</Text>}
-              </View>
-            </View>
-          ))}
-          {moreColors > 0 && (
-            <Text style={styles.previewMore}>+{moreColors} more in your full result</Text>
-          )}
-        </Animated.View>
-
-        <Animated.View entering={FadeInDown.delay(200)} style={[styles.previewCard, styles.previewLockedCard]}>
-          <View style={styles.previewLockRow}>
-            <Ionicons name="lock-closed" size={18} color={COLORS.primary} />
-            <Text style={styles.sectionTitle}>  Create a free account to unlock</Text>
-          </View>
-          {locked.map((item: string, i: number) => (
-            <Text key={i} style={styles.previewLockedItem}>• {item}</Text>
-          ))}
-        </Animated.View>
-
-        <Text style={styles.previewDisclaimer}>{preview.meta?.disclaimer}</Text>
-      </ScrollView>
-
-      <View style={[styles.previewCtaBar, { paddingBottom: insets.bottom + 16 }]}>
-        <TouchableOpacity style={styles.previewCtaButton} onPress={onSignUp} activeOpacity={0.85}>
-          <Text style={styles.previewCtaText}>Create free account</Text>
-          <Ionicons name="arrow-forward" size={18} color={COLORS.white} />
-        </TouchableOpacity>
-        <Text style={styles.previewCtaNote}>Free — saves your result and your history</Text>
       </View>
     </View>
   );
@@ -725,20 +596,6 @@ const styles = StyleSheet.create({
   },
   bottomBar: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 20 },
   hint: { color: 'rgba(255,255,255,0.85)', textAlign: 'center', marginBottom: 16, fontFamily: FONTS.family.body, fontSize: 13 },
-  inviteInput: {
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.25)',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 12,
-    color: COLORS.white,
-    fontFamily: FONTS.family.body,
-    fontSize: 15,
-    textAlign: 'center',
-    letterSpacing: 1,
-  },
   limitText: { color: '#FECACA', textAlign: 'center', marginBottom: 8, fontFamily: FONTS.family.bodyMedium, fontSize: 13 },
   actions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   uploadBtn: { width: 72, alignItems: 'center', gap: 4 },
@@ -759,41 +616,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.lg, paddingVertical: 12,
   },
   resultsTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 20, color: COLORS.textPrimary },
-  previewCard: {
-    backgroundColor: COLORS.card, borderRadius: RADIUS.xl, padding: SPACING.lg, marginBottom: SPACING.md,
-    borderWidth: 1, borderColor: COLORS.border, ...SHADOWS.sm,
-  },
-  previewTone: {
-    fontFamily: FONTS.family.bodySemibold, fontSize: 16, color: COLORS.primary,
-    textTransform: 'capitalize',
-  },
-  previewColorRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
-  previewSwatch: { width: 44, height: 44, borderRadius: 10, borderWidth: 1, borderColor: COLORS.border },
-  previewColorName: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.textPrimary },
-  previewColorWhy: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textSecondary, marginTop: 2, lineHeight: 17 },
-  previewMore: { fontFamily: FONTS.family.bodyMedium, fontSize: 13, color: COLORS.primary, marginTop: 4 },
-  previewLockedCard: { backgroundColor: COLORS.primaryLight, borderColor: COLORS.primary },
-  previewLockRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  previewLockedItem: {
-    fontFamily: FONTS.family.body, fontSize: 14, color: COLORS.textSecondary, lineHeight: 24,
-  },
-  previewDisclaimer: {
-    marginTop: SPACING.lg, fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textMuted,
-    lineHeight: 18, textAlign: 'center',
-  },
-  previewCtaBar: {
-    position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: SPACING.lg, paddingTop: 12,
-    backgroundColor: COLORS.backgroundSecondary, borderTopWidth: 1, borderTopColor: COLORS.border,
-  },
-  previewCtaButton: {
-    backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, paddingVertical: 16,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-  },
-  previewCtaText: { fontFamily: FONTS.family.bodySemibold, fontSize: 16, color: COLORS.white },
-  previewCtaNote: {
-    fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textMuted,
-    textAlign: 'center', marginTop: 8,
-  },
   scoreCard: {
     backgroundColor: COLORS.card, borderRadius: RADIUS.xl, padding: SPACING.lg,
     borderWidth: 1, borderColor: COLORS.border, ...SHADOWS.sm,

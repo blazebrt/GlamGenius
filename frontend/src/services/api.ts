@@ -5,9 +5,15 @@
  * every request (Supabase caches it in-memory, so this is cheap) so a rotated
  * or refreshed token is picked up automatically.
  *
- * The baseURL is the raw backend URL, and callers pass full paths starting
- * with `/api/v2/...`. There are no active V1 paths — the static test at
- * `src/__tests__/no_v1_paths.test.ts` fails the build if one appears.
+ * Two response codes trigger client-side navigation (§2 hardening spec):
+ *
+ *   401 Unauthorized              → sign out of Supabase, go to /(auth)/welcome
+ *   403 REGISTRATION_REQUIRED     → keep the Supabase session, route to
+ *                                    /(auth)/registration-incomplete so the
+ *                                    user can finish invite redemption.
+ *
+ * A plain 403 without ``code === "REGISTRATION_REQUIRED"`` (e.g. an admin-only
+ * route) is left to the calling screen to render, exactly as before.
  */
 import axios from 'axios';
 import { router } from 'expo-router';
@@ -24,25 +30,27 @@ if (!BACKEND_URL) {
 
 // Lets the user store clear its own state when the session ends.
 let onUnauthorized: (() => void) | null = null;
+let onRegistrationRequired: (() => void) | null = null;
 
 export const setUnauthorizedHandler = (handler: (() => void) | null) => {
   onUnauthorized = handler;
 };
 
+export const setRegistrationRequiredHandler = (
+  handler: (() => void) | null
+) => {
+  onRegistrationRequired = handler;
+};
+
 // eslint-disable-next-line import/no-named-as-default-member
 export const api = axios.create({
   baseURL: BACKEND_URL ? BACKEND_URL.replace(/\/$/, '') : undefined,
-  timeout: 60000, // 60 seconds — some AI endpoints legitimately take that long.
+  timeout: 60000,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-/**
- * Pull a message worth showing out of a failed request. The backend writes
- * refusals for a person to read (hourly limit, monthly limit, etc.); screens
- * should show that text rather than replacing it with a generic apology.
- */
 export const errorMessage = (err: unknown, fallback: string): string => {
   const anyErr = err as { response?: { data?: { detail?: unknown } } };
   const detail = anyErr?.response?.data?.detail;
@@ -54,7 +62,6 @@ export const errorMessage = (err: unknown, fallback: string): string => {
   return fallback;
 };
 
-/** True when the caller has hit a rate limit. */
 export const isRateLimited = (err: unknown): boolean => {
   const anyErr = err as {
     response?: { status?: number; data?: { detail?: { code?: string } } };
@@ -65,7 +72,16 @@ export const isRateLimited = (err: unknown): boolean => {
   );
 };
 
-// Attach the Supabase access token to every request.
+export const isRegistrationRequired = (err: unknown): boolean => {
+  const anyErr = err as {
+    response?: { status?: number; data?: { detail?: { code?: string } } };
+  };
+  return (
+    anyErr?.response?.status === 403 &&
+    anyErr?.response?.data?.detail?.code === 'REGISTRATION_REQUIRED'
+  );
+};
+
 api.interceptors.request.use(async (config) => {
   const token = await getAccessToken();
   if (token) {
@@ -74,17 +90,31 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
-// Handle expired / invalid sessions: sign out of Supabase and go to welcome.
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401) {
+    const status = error?.response?.status;
+    const code = error?.response?.data?.detail?.code;
+
+    // Registration-incomplete: KEEP the Supabase session — the user is
+    // authenticated, just not yet a GlamGenius account.
+    if (status === 403 && code === 'REGISTRATION_REQUIRED') {
+      onRegistrationRequired?.();
+      try {
+        router.replace('/(auth)/registration-incomplete');
+      } catch {
+        // Router not mounted yet.
+      }
+      return Promise.reject(error);
+    }
+
+    if (status === 401) {
       await signOut().catch(() => {});
       onUnauthorized?.();
       try {
         router.replace('/(auth)/welcome');
       } catch {
-        // Router may not be mounted yet during boot; ignore.
+        // Router not mounted yet.
       }
       return Promise.reject(error);
     }

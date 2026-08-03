@@ -20,7 +20,6 @@ class ErrorCode(str, Enum):
     MEDIA_TOO_LARGE = "MEDIA_TOO_LARGE"
 
     # --- Product state ---
-    SUBSCRIPTIONS_UNAVAILABLE = "SUBSCRIPTIONS_UNAVAILABLE"
     FEATURE_UNAVAILABLE = "FEATURE_UNAVAILABLE"
 
     # --- Input ---

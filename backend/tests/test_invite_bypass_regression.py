@@ -73,16 +73,26 @@ async def test_register_then_repeat_is_idempotent(
         await session.commit()
         code = invite.code
 
-    token, uid = fake_supabase_user()
+    email = "idem-user@example.com"
+    # Step 1: reserve.
+    resv = await app_client.post(
+        "/api/v2/access/reserve",
+        json={"invite_code": code, "email": email},
+    )
+    assert resv.status_code == 200, resv.text
+    challenge = resv.json()["challenge"]
+
+    # Step 2: register with the challenge.
+    token, uid = fake_supabase_user(email=email)
     r1 = await app_client.post(
         "/api/v2/access/register",
         headers=auth(token),
-        json={"invite_code": code},
+        json={"registration_challenge": challenge},
     )
     assert r1.status_code == 200, r1.text
     assert r1.json()["invite_redeemed"] is True
 
-    # Second call: account already exists, no invite required.
+    # Second call: account already exists, no challenge required.
     r2 = await app_client.post(
         "/api/v2/access/register",
         headers=auth(token),

@@ -25,7 +25,7 @@ function notify(title: string, message: string) {
 export default function AuthWelcome() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { login, createUser, loading } = useUserStore();
+  const { login, reserveAndRegister, loading } = useUserStore();
   const [mode, setMode] = useState<'login' | 'register' | 'reset'>('login');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -73,7 +73,9 @@ export default function AuthWelcome() {
       if (mode === 'login') {
         const result = await login(email.trim(), password);
         if (result.ok) goHome();
-        else notify('Sign in failed', result.message ?? 'Check your email and password.');
+        else if (result.code === 'invite_required') {
+          router.replace('/(auth)/registration-incomplete');
+        } else notify('Sign in failed', result.message ?? 'Check your email and password.');
       } else {
         if (!name.trim()) {
           notify('Missing name', 'Please enter your name.');
@@ -86,9 +88,14 @@ export default function AuthWelcome() {
           );
           return;
         }
-        const result = await createUser(name.trim(), email.trim(), password, inviteCode.trim());
-        if (result.ok) router.replace('/onboarding');
-        else {
+        const result = await reserveAndRegister(name.trim(), email.trim(), password, inviteCode.trim());
+        if (result.ok) {
+          router.replace('/onboarding');
+        } else if (result.needsEmailConfirmation) {
+          // Supabase requires email confirmation. Route to a screen that
+          // explains what to do; the deep-link callback will finalise.
+          router.replace('/(auth)/registration-incomplete');
+        } else {
           notify(
             'Could not register',
             result.message ?? 'Check your invite code and email, then try again.'
@@ -103,13 +110,17 @@ export default function AuthWelcome() {
   };
 
   const title =
-    mode === 'login' ? 'Welcome back' : mode === 'register' ? 'Create account' : 'Reset password';
+    mode === 'login'
+      ? 'Sign in with your invite'
+      : mode === 'register'
+        ? 'Join the private beta'
+        : 'Reset password';
 
   const subtitle =
     mode === 'login'
-      ? 'Save your checks, colours, and progress across devices.'
+      ? 'Sign in to see your looks, colours, and progress across devices.'
       : mode === 'register'
-        ? 'GlamGenius is currently invite-only for a private test group. Enter the invite code you were given to create your account.'
+        ? 'GlamGenius is currently invite-only. Enter the code you were given to create your account.'
         : 'Enter your email and we will send you a reset link.';
 
   return (
@@ -204,7 +215,7 @@ export default function AuthWelcome() {
               {mode === 'login'
                 ? 'Sign in'
                 : mode === 'register'
-                  ? 'Create account'
+                  ? 'Reserve my invite'
                   : 'Send reset email'}
             </Text>
           )}
@@ -220,9 +231,9 @@ export default function AuthWelcome() {
         >
           <Text style={styles.switchText}>
             {mode === 'login'
-              ? 'New here? Create an account'
+              ? 'Have an invite? Join the beta'
               : mode === 'register'
-                ? 'Have an account? Sign in'
+                ? 'Already registered? Sign in'
                 : 'Back to sign in'}
           </Text>
         </TouchableOpacity>

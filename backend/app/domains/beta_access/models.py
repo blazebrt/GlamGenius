@@ -66,6 +66,63 @@ class InviteRedemption(TimestampMixin, Base):
     )
 
 
+class InviteRegistrationReservation(TimestampMixin, Base):
+    """Short-lived hold on an invite created BEFORE Supabase sign-up.
+
+    The reservation is the fix for §1 of the hardening spec: the previous
+    flow created a Supabase Auth identity first and only then asked the
+    backend whether the invite was valid, so a rejected invite left an
+    orphan Supabase user. Now the client calls
+    ``POST /api/v2/access/reserve`` (unauthenticated), receives a
+    single-use challenge, then completes Supabase sign-up, then calls
+    ``POST /api/v2/access/register`` with the challenge. Invite usage is
+    only bumped when the finalisation transaction commits.
+
+    We store ``challenge_hash`` (SHA-256 of a URL-safe random 32-byte
+    challenge) — the raw challenge is only ever held by the client.
+    ``email_normalised`` binds the reservation to the email supplied at
+    reserve-time; finalisation must present the same email in the Supabase
+    JWT. ``supabase_user_id`` is populated at finalisation, purely so an
+    audit trail exists.
+    """
+
+    __tablename__ = "invite_registration_reservations"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    invite_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("invites.id", ondelete="CASCADE"), nullable=False
+    )
+    email_normalised: Mapped[str] = mapped_column(String(320), nullable=False)
+    challenge_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # active | consumed | expired
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    supabase_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PgUUID(as_uuid=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("challenge_hash", name="uq_invite_reservation_challenge_hash"),
+        Index(
+            "ix_invite_reservation_invite_active",
+            "invite_id",
+            "status",
+        ),
+        Index(
+            "ix_invite_reservation_email_active",
+            "email_normalised",
+            "status",
+        ),
+    )
+
+
 class BetaUsageEvent(Base):
     """One row per counted, successful, cost-bearing action.
 

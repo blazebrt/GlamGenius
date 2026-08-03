@@ -22,8 +22,8 @@ export type ErrorCode =
   | 'CONSENT_REQUIRED'
   | 'UNSUPPORTED_MEDIA_TYPE'
   | 'MEDIA_TOO_LARGE'
-  | 'SUBSCRIPTIONS_UNAVAILABLE'
   | 'FEATURE_UNAVAILABLE'
+  | 'REGISTRATION_REQUIRED'
   | 'VALIDATION_FAILED'
   | 'CONFLICT'
   | 'NOT_FOUND'
@@ -80,9 +80,13 @@ export const failureGuidance = (err: any): string[] =>
 
 export interface AppConfig {
   api_version: string;
-  billing: {
-    subscriptions_available: boolean;
-    invite_only: boolean;
+  supabase: {
+    url: string;
+    anon_key: string;
+    configured: boolean;
+  };
+  access: {
+    invite_required: boolean;
     beta_message: string;
   };
   analysis: {
@@ -103,6 +107,34 @@ export const getConfig = async (): Promise<AppConfig> => {
   const response = await api.get<AppConfig>(`${V2}/config`);
   return response.data;
 };
+
+// --- Access: invite reservation + registration finalisation ---------------
+
+export interface ReserveResponse {
+  challenge: string;
+  reservation_id: string;
+  expires_at: string;
+}
+
+/** Step 1 of the invite-gated registration flow (§1 hardening spec). */
+export const reserveInvite = async (
+  invite_code: string,
+  email: string
+): Promise<ReserveResponse> =>
+  (await api.post<ReserveResponse>(`${V2}/access/reserve`, { invite_code, email })).data;
+
+export interface FinalizeRegistrationResponse {
+  account: { id: string; status: string; created_at: string | null };
+  invite_redeemed: boolean;
+}
+
+/** Step 3: finalise registration for the currently-authenticated Supabase user. */
+export const finalizeRegistration = async (
+  registration_challenge?: string
+): Promise<FinalizeRegistrationResponse> =>
+  (await api.post<FinalizeRegistrationResponse>(`${V2}/access/register`, {
+    registration_challenge,
+  })).data;
 
 // --- Me ---------------------------------------------------------------------
 

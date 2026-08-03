@@ -1,20 +1,32 @@
-"""V2 access routes: registration finalisation, invite admin, usage summary.
+"""V2 access routes: invite reservation, registration finalisation, admin.
 
-**Note on registration.** The Supabase Auth sign-up itself happens client-side
-using the Supabase JS SDK (or the Supabase REST endpoints directly). What this
-endpoint does is *finalise* a fresh Supabase user against an invite: it takes
-a valid Supabase access token *and* the invite code, atomically redeems the
-invite, creates the ``accounts`` row and returns the account snapshot. The
-backend never sees a password.
+The registration flow is a **two-step** protocol (§1 of the Supabase
+hardening spec):
+
+1. ``POST /api/v2/access/reserve`` (unauthenticated) — validate the invite
+   BEFORE the Supabase Auth sign-up. Reserves a short-lived slot bound to
+   the caller's email and returns a single-use registration challenge.
+2. The client performs the Supabase Auth sign-up (client-side, with
+   Supabase JS). Supabase may require email confirmation.
+3. ``POST /api/v2/access/register`` (authenticated with the new Supabase
+   token) — presents the challenge, atomically consumes the reservation,
+   redeems the invite, and creates the ``accounts`` row.
+
+This eliminates the previous invite bypass where a rejected invite would
+leave an orphan Supabase identity: the identity is only ever created
+after step 1 has already accepted the invite.
 """
 from __future__ import annotations
 
+import logging
+import time
 import uuid
+from collections import defaultdict, deque
 from datetime import datetime
-from typing import Optional
+from typing import Deque, Dict, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,19 +38,127 @@ from app.shared.database.sql import get_session
 from app.shared.security.deps import CurrentAccount, get_current_account
 from app.shared.security.supabase_auth import (
     SupabaseUser,
+    client_ip,
     get_current_admin,
     get_current_supabase_user,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# Registration
+# Simple in-process rate limiter for unauthenticated ``/access/reserve``.
+#
+# A real deployment should sit behind a proper edge rate limiter, but we
+# guarantee a floor here so a leaked endpoint cannot be enumerated at
+# millions of RPS from one host.
+# ---------------------------------------------------------------------------
+_RATE_LIMIT_WINDOW_SECONDS = 60.0
+_RATE_LIMIT_MAX_PER_WINDOW = 10  # per IP + per email
+_rate_state: Dict[str, Deque[float]] = defaultdict(deque)
+
+
+def _hit_rate_limit(key: str) -> bool:
+    now = time.monotonic()
+    bucket = _rate_state[key]
+    while bucket and now - bucket[0] > _RATE_LIMIT_WINDOW_SECONDS:
+        bucket.popleft()
+    if len(bucket) >= _RATE_LIMIT_MAX_PER_WINDOW:
+        return True
+    bucket.append(now)
+    return False
+
+
+def _reservation_error(exc: beta.InviteReservationError) -> HTTPException:
+    """Map service errors to a uniform 400 body — no code enumeration.
+
+    Any invite failure surfaces as ``invite_invalid`` unless the caller
+    already has a live reservation (``reservation_expired`` is legitimate
+    for the mobile app to distinguish so it can prompt for a fresh
+    reservation). We deliberately do NOT reveal whether an email is
+    already registered.
+    """
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={"code": exc.code, "message": exc.message, "retryable": False},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 1: Reserve
+# ---------------------------------------------------------------------------
+
+class ReserveRequest(BaseModel):
+    invite_code: str = Field(min_length=1, max_length=64)
+    email: EmailStr
+
+
+class ReserveResponse(BaseModel):
+    challenge: str
+    reservation_id: str
+    expires_at: datetime
+
+
+@router.post("/access/reserve", response_model=ReserveResponse)
+async def reserve(
+    body: ReserveRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> ReserveResponse:
+    """Reserve an invite slot BEFORE the Supabase Auth sign-up."""
+    if not INVITE_REQUIRED:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    caller_ip = client_ip(request) or "unknown"
+    email_key = body.email.lower()
+    for key in (f"ip:{caller_ip}", f"email:{email_key}"):
+        if _hit_rate_limit(key):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "code": "rate_limited",
+                    "message": (
+                        "Too many reservation attempts. Please wait a "
+                        "moment and try again."
+                    ),
+                    "retryable": True,
+                },
+            )
+
+    try:
+        reservation, challenge = await beta.reserve_invite(
+            session, code=body.invite_code, email=body.email
+        )
+    except beta.InviteReservationError as exc:
+        # Do not commit anything; the transaction is safe to leave to
+        # FastAPI dependency teardown.
+        raise _reservation_error(exc) from exc
+
+    await session.commit()
+    return ReserveResponse(
+        challenge=challenge,
+        reservation_id=str(reservation.id),
+        expires_at=reservation.expires_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 3: Register (finalise)
 # ---------------------------------------------------------------------------
 
 class RegisterRequest(BaseModel):
-    invite_code: Optional[str] = Field(default=None, description="Invite code. Required when INVITE_REQUIRED is true.")
+    """The finalisation payload.
+
+    ``registration_challenge`` is the token returned by ``/access/reserve``.
+    When ``INVITE_REQUIRED=false`` (dev/tests only), the challenge is
+    optional and finalisation degrades to creating the ``accounts`` row for
+    the caller's Supabase UUID.
+    """
+
+    registration_challenge: Optional[str] = Field(default=None, max_length=256)
 
 
 @router.post("/access/register")
@@ -47,60 +167,80 @@ async def register(
     supabase_user: SupabaseUser = Depends(get_current_supabase_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Finalise an invite-gated account for a newly-registered Supabase user.
+    """Finalise an invite-gated account for a Supabase-authenticated user.
 
-    Idempotent: called twice for the same user, the second call is a no-op
-    that returns the same account snapshot.
+    Idempotent: repeated calls after a successful finalisation return the
+    existing account snapshot and do not touch the invite or reservation.
     """
     account_id = supabase_user.id
 
-    # If the account already exists, we are done. No re-check of the invite
-    # against the same account.
     existing = await identity.get_account(session, account_id)
     if existing is not None:
         return {
             "account": {
                 "id": str(existing.id),
                 "status": existing.status,
-                "created_at": existing.created_at.isoformat() if existing.created_at else None,
+                "created_at": (
+                    existing.created_at.isoformat() if existing.created_at else None
+                ),
             },
             "invite_redeemed": False,
         }
 
     if INVITE_REQUIRED:
-        code = (body.invite_code or "").strip()
-        if not code:
+        challenge = (body.registration_challenge or "").strip()
+        if not challenge:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "code": "invite_required",
-                    "message": "An invite code is required to join the private beta.",
+                    "code": "registration_challenge_required",
+                    "message": (
+                        "Registration requires a reservation. Please "
+                        "reserve your invite first."
+                    ),
+                    "retryable": False,
                 },
             )
-        # Create the account first so the InviteRedemption FK is satisfied.
-        account = await identity.register_account(session, account_id)
-        try:
-            invite = await beta.redeem_invite(session, code=code, account_id=account_id)
-        except ValueError as exc:
-            # Roll back the auto-created account so a rejected code does not
-            # leave a half-registered account behind.
+        if not supabase_user.email:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "invite_rejected", "message": str(exc)},
-            ) from exc
+                detail={
+                    "code": "email_required",
+                    "message": (
+                        "This Supabase session does not carry a verified "
+                        "email. Please confirm your email and try again."
+                    ),
+                    "retryable": False,
+                },
+            )
+        try:
+            invite = await beta.consume_reservation(
+                session,
+                challenge=challenge,
+                email=supabase_user.email,
+                supabase_user_id=account_id,
+            )
+            # Now create the account row inside the same transaction. Any
+            # rollback below unwinds the reservation *and* the invite bump.
+            account = await identity.register_account(session, account_id)
+        except beta.InviteReservationError as exc:
+            await session.rollback()
+            raise _reservation_error(exc) from exc
     else:
         invite = None
         account = await identity.register_account(session, account_id)
+
     await session.commit()
 
     return {
         "account": {
             "id": str(account.id),
             "status": account.status,
-            "created_at": account.created_at.isoformat() if account.created_at else None,
+            "created_at": (
+                account.created_at.isoformat() if account.created_at else None
+            ),
         },
         "invite_redeemed": invite is not None,
-        "invite_code": invite.code if invite else None,
     }
 
 

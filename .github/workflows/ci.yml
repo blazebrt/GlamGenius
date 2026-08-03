@@ -98,6 +98,11 @@ jobs:
       - name: Run tests
         working-directory: backend
         run: pytest -q tests --junitxml=/tmp/pytest-report.xml
+      - name: Run invite-reservation tests with INVITE_REQUIRED=true
+        working-directory: backend
+        env:
+          INVITE_REQUIRED: "true"
+        run: pytest -q tests/test_invite_reservation.py tests/test_invite_bypass_regression.py
       - name: Upload pytest report on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

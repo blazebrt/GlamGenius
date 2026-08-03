@@ -57,16 +57,21 @@ FORBIDDEN = [
     "/api/auth/",
     "/api/users",
     "/api/subscription",
-    # Payment stack
+    # Payment stack (extended §4 hardening — every remnant term)
     "app.domains.billing",
     "razorpay",
     "SUBSCRIPTIONS_AVAILABLE",
+    "SUBSCRIPTIONS_UNAVAILABLE",
+    "SubscriptionsUnavailable",
     "BILLING_PROVIDER",
     "PAYMENTS_ENABLED",
     "plus_monthly",
     "plus_yearly",
     "event_pass",
     "paywall",
+    "checkout",
+    "billingAvailable",
+    "billing_available",
 ]
 
 

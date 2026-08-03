@@ -190,7 +190,7 @@ files (may legitimately assert on absence).
 Referring to the spec's stop-condition list:
 
 - Invite bypass remains possible: **NO** — proved absent by 10 regression tests.
-- Invalid registration can leave a usable account: **PARTIAL** — cleanup path exists (sign-out on failure), reservation protocol pending.
+- Invalid registration can leave a usable account: **FIXED IN PACKAGE A** — reservation protocol implemented before Supabase sign-up; see `SUPABASE_HARDENING_PACKAGE_A.md`.
 - JWT audience or role not verified: **NO** — both verified, tested.
 - Privacy export omits active domains: **UNKNOWN in full** — the existing route works but per-domain seed test not written yet.
 - Personal media orphaned without retry record: **NOT YET FIXED** — state machine deferred.

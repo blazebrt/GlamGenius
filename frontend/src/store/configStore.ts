@@ -1,12 +1,12 @@
 /**
  * Server-driven capability, loaded once at startup.
  *
- * The audit found the app selling ₹249/month subscriptions the backend refuses
- * on principle, because nothing ever asked the backend. Screens now read
- * `billingAvailable` from here instead of assuming.
- *
  * The safe default while loading, and after a failure, is "nothing is
- * available". A network blip must never be the reason a payment button appears.
+ * available". Screens read from the getters below rather than assuming.
+ *
+ * Payment concepts are intentionally absent from this store (§4 hardening
+ * spec): the backend no longer publishes a ``billing`` block, and screens
+ * that used to render an upgrade path have been removed.
  */
 import { create } from 'zustand';
 import { AppConfig, getConfig } from '../services/apiV2';
@@ -18,15 +18,15 @@ interface ConfigStore {
   error: string | null;
   load: () => Promise<void>;
 
-  billingAvailable: () => boolean;
   analysisAvailable: () => boolean;
   consentRequired: () => boolean;
   featureEnabled: (key: string) => boolean;
+  inviteRequired: () => boolean;
   betaMessage: () => string;
 }
 
 const BETA_FALLBACK =
-  'GlamGenius is in a private beta. Your invite gives you full access — there is nothing to pay for yet.';
+  'GlamGenius is a private beta. Your invite gives you full access.';
 
 export const useConfigStore = create<ConfigStore>((set, get) => ({
   config: null,
@@ -40,8 +40,6 @@ export const useConfigStore = create<ConfigStore>((set, get) => ({
       const config = await getConfig();
       set({ config, loaded: true });
     } catch (err: any) {
-      // Leave config null. Every getter below then returns the closed-down
-      // answer, which is the safe direction to fail in.
       set({
         error: err?.message ?? 'Could not load app configuration',
         loaded: true,
@@ -51,9 +49,9 @@ export const useConfigStore = create<ConfigStore>((set, get) => ({
     }
   },
 
-  billingAvailable: () => get().config?.billing.subscriptions_available === true,
   analysisAvailable: () => get().config?.analysis.provider_configured === true,
   consentRequired: () => get().config?.analysis.consent_required === true,
   featureEnabled: (key: string) => get().config?.features?.[key] === true,
-  betaMessage: () => get().config?.billing.beta_message ?? BETA_FALLBACK,
+  inviteRequired: () => get().config?.access?.invite_required !== false,
+  betaMessage: () => get().config?.access?.beta_message ?? BETA_FALLBACK,
 }));

@@ -146,21 +146,6 @@ class MediaTooLargeError(AppError):
         super().__init__(message, extra={"max_bytes": max_bytes})
 
 
-class SubscriptionsUnavailableError(AppError):
-    status_code = 403
-    code = ErrorCode.SUBSCRIPTIONS_UNAVAILABLE
-    retryable = False
-
-    def __init__(
-        self,
-        message: str = (
-            "GlamGenius is in a private beta, so there is nothing to pay for yet. "
-            "Your invite already gives you full access."
-        ),
-    ) -> None:
-        super().__init__(message)
-
-
 class FeatureUnavailableError(AppError):
     status_code = 404
     code = ErrorCode.FEATURE_UNAVAILABLE
