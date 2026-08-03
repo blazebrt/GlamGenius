@@ -1,8 +1,15 @@
 """V2 request dependencies.
 
-Authentication is done in ``app.shared.security.supabase_auth`` — this module
-only lifts the verified Supabase user into a session-bound ``CurrentAccount``
-and provides the feature-flag gate.
+Authentication is handled in ``app.shared.security.supabase_auth`` — that
+module verifies the Supabase JWT and produces a ``SupabaseUser``. This module
+adds the second gate: a verified Supabase identity is **not** on its own a
+GlamGenius account. Protected routes must call ``get_current_account``, which
+looks up the ``accounts`` row and refuses (403 REGISTRATION_REQUIRED) if the
+caller has never completed invite-gated registration.
+
+The only route that accepts a raw ``SupabaseUser`` is
+``POST /api/v2/access/register``, which is where the ``accounts`` row is
+created in the same transaction as invite redemption.
 """
 from __future__ import annotations
 
@@ -10,7 +17,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.identity import service as identity
@@ -24,13 +31,36 @@ from app.shared.security.supabase_auth import (
 )
 
 
+class RegistrationRequiredError(HTTPException):
+    """403 raised when a valid Supabase user has no GlamGenius account row.
+
+    The Supabase token is fine; the caller has simply never redeemed an
+    invite. Distinct from 401 so the client knows to send the user to the
+    registration flow, not the login flow.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "REGISTRATION_REQUIRED",
+                "message": (
+                    "Your Supabase account is authenticated, but you have not "
+                    "yet completed the GlamGenius invite-only registration. "
+                    "Redeem your invite to continue."
+                ),
+                "retryable": False,
+            },
+        )
+
+
 @dataclass
 class CurrentAccount:
-    """A signed-in caller.
+    """A caller with a completed GlamGenius account.
 
     ``account_id`` is the canonical account UUID and equals the Supabase Auth
-    user UUID.  ``supabase_user`` carries the raw verified claims for the rare
-    caller that needs email or admin state.
+    user UUID. There is no separate identity or bridge; the invariant
+    ``accounts.id == auth.users.id`` is enforced everywhere.
     """
 
     account: Account
@@ -45,16 +75,9 @@ class CurrentAccount:
         return str(self.account.id)
 
     @property
-    def v1_user_id(self) -> str:
-        """Deprecated compatibility alias.
-
-        The V1 identity foundation is gone. Existing V2 service signatures
-        still spell the caller's id ``v1_user_id`` and pass it to the AI
-        gateway ledger and similar. This property returns the canonical
-        Supabase UUID as a string so those signatures keep working during the
-        cutover; Prompt 2 renames them.
-        """
-        return str(self.account.id)
+    def supabase_user_id(self) -> uuid.UUID:
+        """Alias that reads well at call sites that emphasise identity."""
+        return self.account.id
 
     @property
     def is_admin(self) -> bool:
@@ -65,14 +88,25 @@ async def get_current_account(
     supabase_user: SupabaseUser = Depends(get_current_supabase_user),
     session: AsyncSession = Depends(get_session),
 ) -> CurrentAccount:
-    """Resolve the caller and their ``accounts`` row, creating it on first use.
+    """Resolve the caller's GlamGenius account.
 
-    Committing here means a later failure inside the request does not undo the
-    create, and the next request does not have to redo it.
+    **Does not auto-create.** A valid Supabase token without a matching
+    ``accounts`` row is refused with 403 ``REGISTRATION_REQUIRED``. The only
+    place that creates an ``accounts`` row is
+    ``POST /api/v2/access/register`` (through
+    ``domains.identity.service.register_account``), and it does so atomically
+    with invite redemption.
     """
-    account = await identity.get_or_create_account(session, supabase_user.id)
-    await session.commit()
+    account = await identity.get_account(session, supabase_user.id)
+    if account is None:
+        raise RegistrationRequiredError()
     return CurrentAccount(account=account, supabase_user=supabase_user)
+
+
+# Kept for symmetry with the spec §1 wording. The FastAPI dependency object
+# is the same callable — renaming the import site is optional and does not
+# change semantics.
+get_registered_account = get_current_account
 
 
 def client_ip(request: Request) -> Optional[str]:
@@ -95,8 +129,10 @@ def require_flag(key: str):
 
 __all__ = [
     "CurrentAccount",
+    "RegistrationRequiredError",
     "client_ip",
     "get_current_account",
     "get_current_supabase_user",
+    "get_registered_account",
     "require_flag",
 ]

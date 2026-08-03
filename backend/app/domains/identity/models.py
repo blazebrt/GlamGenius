@@ -2,7 +2,7 @@
 
 The account's primary key **is** the Supabase Auth user UUID. Every V2 table
 foreign-keys against ``accounts.id`` and cascades on delete. There is no
-separate ``v1_user_id`` and no ``account_links`` bridge table.
+separate ``account_id_str`` and no bridge table.
 
 Why keep an explicit table at all rather than a bare UUID?
 
@@ -52,6 +52,3 @@ ACCOUNT_STATUS_DELETED = "deleted"
 
 
 # Backwards-compatible alias while the domain modules still spell it
-# ``AccountLink``. The alias is a type re-export only — the underlying table is
-# ``accounts`` and there is no bridge column.
-AccountLink = Account

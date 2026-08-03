@@ -161,12 +161,13 @@ async def _decode_with_jwks(token: str, unverified_header: Dict[str, Any]) -> Di
         signing_key.key,
         algorithms=[alg],
         issuer=SUPABASE_JWT_ISSUER or None,
+        audience="authenticated",
         options={
             "require": ["exp", "sub"],
             "verify_signature": True,
             "verify_exp": True,
             "verify_iss": bool(SUPABASE_JWT_ISSUER),
-            "verify_aud": False,
+            "verify_aud": True,
         },
     )
 
@@ -179,12 +180,13 @@ def _decode_with_shared_secret(token: str) -> Dict[str, Any]:
         SUPABASE_JWT_SECRET,
         algorithms=["HS256"],
         issuer=SUPABASE_JWT_ISSUER or None,
+        audience="authenticated",
         options={
             "require": ["exp", "sub"],
             "verify_signature": True,
             "verify_exp": True,
             "verify_iss": bool(SUPABASE_JWT_ISSUER),
-            "verify_aud": False,
+            "verify_aud": True,
         },
     )
 
@@ -249,13 +251,18 @@ def _extract_sub_uuid(claims: Dict[str, Any]) -> uuid.UUID:
         raise AuthError()
 
 
-def _reject_service_and_anon(claims: Dict[str, Any]) -> None:
-    """Anon and service-role JWTs are project-level API keys, never user tokens.
+def _require_authenticated_role(claims: Dict[str, Any]) -> None:
+    """Positively require ``role == "authenticated"``.
 
-    They must never authenticate a user request.
+    Supabase issues three role families on JWTs: ``anon`` (project-level API
+    key, never a user), ``service_role`` (server-side privileged key, never a
+    user), and ``authenticated`` (a real user session). Only the last one is
+    accepted here. A token that carries any other role — including a missing
+    role, which never happens for a genuine Supabase user session — is
+    rejected.
     """
     role = claims.get("role")
-    if role in ("anon", "service_role"):
+    if role != "authenticated":
         raise AuthError()
 
 
@@ -270,7 +277,7 @@ async def get_current_supabase_user(
         raise AuthError()
 
     claims = await verify_supabase_token(credentials.credentials)
-    _reject_service_and_anon(claims)
+    _require_authenticated_role(claims)
 
     user_id = _extract_sub_uuid(claims)
     email_raw = claims.get("email")

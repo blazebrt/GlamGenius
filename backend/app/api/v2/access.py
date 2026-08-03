@@ -78,7 +78,7 @@ async def register(
                 },
             )
         # Create the account first so the InviteRedemption FK is satisfied.
-        account = await identity.get_or_create_account(session, account_id)
+        account = await identity.register_account(session, account_id)
         try:
             invite = await beta.redeem_invite(session, code=code, account_id=account_id)
         except ValueError as exc:
@@ -90,7 +90,7 @@ async def register(
             ) from exc
     else:
         invite = None
-        account = await identity.get_or_create_account(session, account_id)
+        account = await identity.register_account(session, account_id)
     await session.commit()
 
     return {
