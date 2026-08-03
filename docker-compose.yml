@@ -1,0 +1,90 @@
+# Development / preview stack — Supabase-cutover version.
+#
+# GlamGenius is Supabase-Auth + PostgreSQL + Supabase-Storage in production.
+# This compose file mirrors the runtime for local development: PostgreSQL is
+# local, and Supabase Auth / Storage are used via the real Supabase project
+# (secrets in .env).
+#
+# There is no MongoDB service. The V1 identity foundation and its Mongo
+# datastore were removed in the Supabase cutover; the Postgres service is
+# the only application database.
+#
+# Bring up:
+#   docker compose build --no-cache
+#   docker compose up -d
+#   docker compose ps
+#
+# Tear down:
+#   docker compose down -v
+
+services:
+  postgres:
+    image: postgres:16.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: glamgenius
+      POSTGRES_PASSWORD: glamgenius
+      POSTGRES_DB: glamgenius_v2
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U glamgenius -d glamgenius_v2"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@postgres:5432/glamgenius_v2
+      MEDIA_LOCAL_ROOT: /data/media
+      # Supabase URL, keys, JWKS URL and storage bucket come from .env.
+    env_file:
+      - .env
+    volumes:
+      - media_data:/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v2/health', timeout=3)",
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@postgres:5432/glamgenius_v2
+      MEDIA_LOCAL_ROOT: /data/media
+    env_file:
+      - .env
+    volumes:
+      - media_data:/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    command: python -m app.workers.outbox_relay
+
+volumes:
+  postgres_data:
+  media_data:

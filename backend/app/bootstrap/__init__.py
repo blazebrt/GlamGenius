@@ -1,0 +1,922 @@
+"""Versioned reference-data bootstrap.
+
+Reference data (inventory taxonomy, ingredient catalogue, compatibility and
+contraindication rules, routine templates, progress metric and milestone
+definitions, feature-flag defaults) is committed as code and applied to the
+database with this idempotent script:
+
+.. code-block:: shell
+
+    python -m app.bootstrap.reference_data
+
+Guarantees
+----------
+* **Deterministic identifiers.** Every row keys against a natural column so a
+  second run updates rather than duplicates.
+* **Idempotent upserts.** Running the script against a populated database is
+  a safe no-op.
+* **Versioned.** Each seed table stores the ``SEED_VERSION`` marker so an
+  operator can tell which release wrote which row.
+* **Bounded scope.** Reference data only. Never touches per-account rows.
+
+The seed is meant to be safe to run inside an empty database after Alembic
+has upgraded to head. It is also safe to run repeatedly during development.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import List, Tuple
+
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.domains.inventory.models import InventoryCategory
+from app.domains.inventory.taxonomy import CATEGORIES
+from app.shared.database.sql import get_sessionmaker
+
+logger = logging.getLogger(__name__)
+
+
+SEED_VERSION = "2026.02.16"
+
+
+# ---------------------------------------------------------------------------
+# Inventory taxonomy — the seven canonical categories
+# ---------------------------------------------------------------------------
+
+# (internal key, display name, position)
+CANONICAL_INVENTORY_CATEGORIES: List[Tuple[str, str, int]] = [
+    ("wardrobe", "Wardrobe", 1),
+    ("shoes", "Shoes", 2),
+    ("accessories", "Accessories", 3),
+    ("beauty", "Beauty Shelf", 4),
+    ("hair", "Hair Shelf", 5),
+    ("perfumes", "Perfumes", 6),
+    ("supplements", "Supplements", 7),
+]
+
+
+async def seed_inventory_categories(session: AsyncSession) -> int:
+    """Upsert the seven canonical inventory categories.
+
+    Idempotent — a second call is a no-op. Category keys are the same
+    internal identifiers used by :mod:`app.domains.inventory.taxonomy`, and
+    the display names are the user-facing names in the product spec.
+    """
+    seed_keys = {k for k, _, _ in CANONICAL_INVENTORY_CATEGORIES}
+    tax_keys = set(CATEGORIES.keys())
+    if seed_keys != tax_keys:
+        raise RuntimeError(
+            f"Inventory taxonomy drift: seed keys {sorted(seed_keys)} != "
+            f"taxonomy keys {sorted(tax_keys)}"
+        )
+    rows = [
+        {"key": key, "display_name": display, "position": pos, "active": True}
+        for key, display, pos in CANONICAL_INVENTORY_CATEGORIES
+    ]
+    stmt = pg_insert(InventoryCategory).values(rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["key"],
+        set_={
+            "display_name": stmt.excluded.display_name,
+            "position": stmt.excluded.position,
+            "active": stmt.excluded.active,
+        },
+    )
+    await session.execute(stmt)
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# Ingredient catalogue + aliases + compatibility rules
+# ---------------------------------------------------------------------------
+
+# Small representative catalogue keyed by the ingredient family used by the
+# routines engine. Production expands this from ``docs/stabilisation/
+# INGREDIENT_COVERAGE.md``; the seed shipped in the app is scoped to the
+# ingredients the routine engine reasons about explicitly.
+CORE_INGREDIENTS: List[dict] = [
+    {"key": "retinol", "display_name": "Retinol", "family": "retinoid"},
+    {"key": "retinoid", "display_name": "Retinoid", "family": "retinoid"},
+    {"key": "vitamin_c", "display_name": "Vitamin C", "family": "antioxidant"},
+    {"key": "niacinamide", "display_name": "Niacinamide", "family": "vitamin"},
+    {"key": "aha", "display_name": "AHA", "family": "exfoliant"},
+    {"key": "bha", "display_name": "BHA", "family": "exfoliant"},
+    {"key": "benzoyl_peroxide", "display_name": "Benzoyl Peroxide", "family": "acne"},
+    {"key": "salicylic_acid", "display_name": "Salicylic Acid", "family": "exfoliant"},
+    {"key": "hyaluronic_acid", "display_name": "Hyaluronic Acid", "family": "humectant"},
+    {"key": "spf", "display_name": "Broad-spectrum SPF", "family": "sunscreen"},
+]
+
+INGREDIENT_ALIASES: List[Tuple[str, str]] = [
+    ("retinol", "retin-a"),
+    ("retinol", "retinaldehyde"),
+    ("retinoid", "adapalene"),
+    ("aha", "glycolic acid"),
+    ("aha", "lactic acid"),
+    ("bha", "salicylic acid"),
+    ("vitamin_c", "ascorbic acid"),
+    ("vitamin_c", "l-ascorbic acid"),
+    ("hyaluronic_acid", "sodium hyaluronate"),
+]
+
+# (family_a, family_b, severity, headline, guidance)
+# Values are conservative, product-safety guidance — never diagnosis.
+COMPATIBILITY_RULES: List[Tuple[str, str, str, str, str]] = [
+    ("retinoid", "exfoliant", "avoid",
+     "Retinoids and exfoliants together can irritate skin.",
+     "Use on alternate evenings instead of the same night."),
+    ("retinoid", "acne", "caution",
+     "Retinoids and benzoyl peroxide can neutralise each other.",
+     "Apply on alternate evenings."),
+    ("antioxidant", "vitamin", "compatible",
+     "Modern vitamin C and niacinamide formulations play well together.",
+     "Safe to layer in a daytime routine."),
+    ("sunscreen", "any", "required",
+     "Daytime routines finish with SPF.",
+     "Apply broad-spectrum SPF as the final daytime step."),
+]
+
+
+async def seed_ingredients(session: AsyncSession) -> int:
+    from app.domains.routines.models import (
+        CompatibilityRuleRow,
+        Ingredient,
+        IngredientAlias,
+    )
+
+    seeded = 0
+    for row in CORE_INGREDIENTS:
+        existing = (await session.execute(
+            select(Ingredient).where(Ingredient.key == row["key"])
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(Ingredient(
+                key=row["key"],
+                display_name=row["display_name"],
+                family=row["family"],
+                knowledge_version=SEED_VERSION,
+            ))
+            seeded += 1
+        else:
+            existing.display_name = row["display_name"]
+            existing.family = row["family"]
+            existing.knowledge_version = SEED_VERSION
+
+    await session.flush()
+
+    for canonical, alias in INGREDIENT_ALIASES:
+        existing = (await session.execute(
+            select(IngredientAlias).where(
+                IngredientAlias.ingredient_key == canonical,
+                IngredientAlias.alias == alias,
+            )
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(IngredientAlias(ingredient_key=canonical, alias=alias))
+            seeded += 1
+
+    await session.flush()
+
+    for a, b, severity, headline, guidance in COMPATIBILITY_RULES:
+        rule_id = f"{a}__{b}__{severity}"
+        existing = (await session.execute(
+            select(CompatibilityRuleRow).where(CompatibilityRuleRow.rule_id == rule_id)
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(CompatibilityRuleRow(
+                rule_id=rule_id,
+                family_a=a,
+                family_b=b,
+                severity=severity,
+                headline=headline,
+                guidance=guidance,
+                knowledge_version=SEED_VERSION,
+            ))
+            seeded += 1
+        else:
+            existing.headline = headline
+            existing.guidance = guidance
+            existing.severity = severity
+            existing.knowledge_version = SEED_VERSION
+
+    await session.flush()
+    return seeded
+
+
+# ---------------------------------------------------------------------------
+# Progress metrics + milestones
+# ---------------------------------------------------------------------------
+
+METRIC_DEFINITIONS: List[dict] = [
+    {
+        "key": "wardrobe_utilisation",
+        "label": "Wardrobe utilisation",
+        "unit": "percent",
+        "direction": "higher_better",
+        "formula": "worn_last_90_days / active_wardrobe_size",
+        "formula_version": "1",
+        "inputs": ["item_usage_events", "inventory_items"],
+        "missing_data_behaviour": "hide",
+        "explanation": "Share of active wardrobe worn in the last 90 days.",
+        "update_frequency": "daily",
+        "not_a_measure_of": "How much you spent, how big your closet is, or a value judgement.",
+    },
+    {
+        "key": "routine_adherence",
+        "label": "Routine adherence",
+        "unit": "percent",
+        "direction": "higher_better",
+        "formula": "completed_steps / scheduled_steps",
+        "formula_version": "1",
+        "inputs": ["routine_adherence"],
+        "missing_data_behaviour": "hide",
+        "explanation": "Share of scheduled routine steps completed.",
+        "update_frequency": "daily",
+        "not_a_measure_of": "How your skin, hair or wardrobe look overall.",
+    },
+]
+
+MILESTONE_RULES: List[dict] = [
+    {
+        "rule_id": "first_look_completed",
+        "label": "First styled look",
+        "description": "You completed your first styled look. Great start.",
+        "behaviour": "one_off",
+        "threshold": 1,
+        "repeatable": False,
+    },
+    {
+        "rule_id": "routine_seven_day",
+        "label": "One-week streak",
+        "description": "You kept your routine on track for a week.",
+        "behaviour": "streak_days",
+        "threshold": 7,
+        "repeatable": True,
+    },
+]
+
+
+async def seed_progress(session: AsyncSession) -> int:
+    from app.domains.progress.models import MetricDefinition, MilestoneRule
+
+    seeded = 0
+    for row in METRIC_DEFINITIONS:
+        existing = (await session.execute(
+            select(MetricDefinition).where(MetricDefinition.key == row["key"])
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(MetricDefinition(registry_version=SEED_VERSION, **row))
+            seeded += 1
+        else:
+            for k, v in row.items():
+                setattr(existing, k, v)
+            existing.registry_version = SEED_VERSION
+
+    for row in MILESTONE_RULES:
+        existing = (await session.execute(
+            select(MilestoneRule).where(MilestoneRule.rule_id == row["rule_id"])
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(MilestoneRule(registry_version=SEED_VERSION, **row))
+            seeded += 1
+        else:
+            for k, v in row.items():
+                setattr(existing, k, v)
+            existing.registry_version = SEED_VERSION
+
+    await session.flush()
+    return seeded
+
+
+# ---------------------------------------------------------------------------
+# Feature flags — stable private-beta defaults
+# ---------------------------------------------------------------------------
+
+# (flag key, enabled, description)
+FEATURE_FLAG_DEFAULTS: List[Tuple[str, bool, str]] = [
+    ("v2_scan", True, "Photo analysis (face/hair/hand)"),
+    ("v2_quiz", True, "Style quiz"),
+    ("v2_profile", True, "Appearance profile"),
+    ("v2_inventory", True, "Inventory across seven categories"),
+    ("v2_recommendations", True, "Styling recommendations"),
+    ("v2_media", True, "Media upload/read/delete"),
+    ("v2_privacy", True, "Privacy export + deletion"),
+    ("v2_consent", True, "Consent capture"),
+    ("v2_ai_gateway", True, "AI gateway"),
+    ("v2_progress", True, "Progress and goals"),
+    ("v2_routines", True, "Routine engine"),
+    ("v2_today", True, "Today plan"),
+    ("v2_planner", True, "Weekly planner"),
+    ("v2_shopping_decisions", True, "Shopping evaluation"),
+    ("v2_virtual_try_on", False, "Off until a real provider is wired"),
+    ("v2_packing", False, "Not yet built"),
+]
+
+
+async def seed_feature_flags(session: AsyncSession) -> int:
+    from app.shared.flags.models import FeatureFlag
+
+    seeded = 0
+    for key, enabled, description in FEATURE_FLAG_DEFAULTS:
+        existing = (await session.execute(
+            select(FeatureFlag).where(FeatureFlag.key == key)
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(FeatureFlag(key=key, enabled=enabled, description=description))
+            seeded += 1
+        # Preserve operator-changed enabled state on existing rows; refresh only
+        # the description to keep it in sync with the code.
+        else:
+            existing.description = description
+
+    await session.flush()
+    return seeded
+
+
+# ---------------------------------------------------------------------------
+# Inventory subtypes — per-category attribute schema
+# ---------------------------------------------------------------------------
+
+# One row per (category, subtype). ``required``/``optional`` are lists of
+# attribute keys the item form is allowed to collect. Kept intentionally
+# small; production loads a broader catalogue but the seed here is enough
+# for the routine engine and the shopping evaluation to reason about.
+INVENTORY_SUBTYPES: List[dict] = [
+    # Wardrobe
+    {"cat": "wardrobe", "key": "top", "name": "Top",
+     "req": ["colour"], "opt": ["fabric", "fit", "occasion", "season"],
+     "expiry": False, "condition": True, "usage": True},
+    {"cat": "wardrobe", "key": "bottom", "name": "Bottom",
+     "req": ["colour"], "opt": ["fabric", "fit", "occasion", "season"],
+     "expiry": False, "condition": True, "usage": True},
+    {"cat": "wardrobe", "key": "outerwear", "name": "Outerwear",
+     "req": ["colour"], "opt": ["fabric", "fit", "occasion", "season", "warmth"],
+     "expiry": False, "condition": True, "usage": True},
+    {"cat": "wardrobe", "key": "dress", "name": "Dress",
+     "req": ["colour"], "opt": ["fabric", "fit", "occasion", "season"],
+     "expiry": False, "condition": True, "usage": True},
+    # Shoes
+    {"cat": "shoes", "key": "everyday", "name": "Everyday",
+     "req": ["colour"], "opt": ["material", "occasion", "size"],
+     "expiry": False, "condition": True, "usage": True},
+    {"cat": "shoes", "key": "formal", "name": "Formal",
+     "req": ["colour"], "opt": ["material", "size"],
+     "expiry": False, "condition": True, "usage": True},
+    {"cat": "shoes", "key": "athletic", "name": "Athletic",
+     "req": ["colour"], "opt": ["material", "size"],
+     "expiry": False, "condition": True, "usage": True},
+    # Accessories
+    {"cat": "accessories", "key": "bag", "name": "Bag",
+     "req": ["colour"], "opt": ["material", "occasion"],
+     "expiry": False, "condition": True, "usage": True},
+    {"cat": "accessories", "key": "jewellery", "name": "Jewellery",
+     "req": [], "opt": ["material", "colour", "occasion"],
+     "expiry": False, "condition": True, "usage": True},
+    {"cat": "accessories", "key": "eyewear", "name": "Eyewear",
+     "req": [], "opt": ["colour", "prescription"],
+     "expiry": False, "condition": True, "usage": True},
+    # Beauty shelf
+    {"cat": "beauty", "key": "cleanser", "name": "Cleanser",
+     "req": ["brand"], "opt": ["skin_type", "ingredients"],
+     "expiry": True, "condition": False, "usage": True},
+    {"cat": "beauty", "key": "moisturiser", "name": "Moisturiser",
+     "req": ["brand"], "opt": ["skin_type", "ingredients"],
+     "expiry": True, "condition": False, "usage": True},
+    {"cat": "beauty", "key": "serum", "name": "Serum",
+     "req": ["brand"], "opt": ["ingredients", "concentration_note"],
+     "expiry": True, "condition": False, "usage": True},
+    {"cat": "beauty", "key": "sunscreen", "name": "Sunscreen",
+     "req": ["brand"], "opt": ["spf", "ingredients"],
+     "expiry": True, "condition": False, "usage": True},
+    # Hair shelf
+    {"cat": "hair", "key": "shampoo", "name": "Shampoo",
+     "req": ["brand"], "opt": ["hair_type", "ingredients"],
+     "expiry": True, "condition": False, "usage": True},
+    {"cat": "hair", "key": "conditioner", "name": "Conditioner",
+     "req": ["brand"], "opt": ["hair_type", "ingredients"],
+     "expiry": True, "condition": False, "usage": True},
+    {"cat": "hair", "key": "treatment", "name": "Treatment",
+     "req": ["brand"], "opt": ["hair_type", "ingredients"],
+     "expiry": True, "condition": False, "usage": True},
+    # Perfumes
+    {"cat": "perfumes", "key": "eau_de_parfum", "name": "Eau de Parfum",
+     "req": ["brand"], "opt": ["family", "occasion", "climate"],
+     "expiry": True, "condition": False, "usage": True},
+    {"cat": "perfumes", "key": "eau_de_toilette", "name": "Eau de Toilette",
+     "req": ["brand"], "opt": ["family", "occasion", "climate"],
+     "expiry": True, "condition": False, "usage": True},
+    # Supplements
+    {"cat": "supplements", "key": "vitamin", "name": "Vitamin",
+     "req": ["brand"], "opt": ["ingredients"],
+     "expiry": True, "condition": False, "usage": True},
+    {"cat": "supplements", "key": "mineral", "name": "Mineral",
+     "req": ["brand"], "opt": ["ingredients"],
+     "expiry": True, "condition": False, "usage": True},
+    {"cat": "supplements", "key": "other", "name": "Other",
+     "req": ["brand"], "opt": ["ingredients"],
+     "expiry": True, "condition": False, "usage": True},
+]
+
+
+async def seed_inventory_subtypes(session: AsyncSession) -> int:
+    from app.domains.reference import InventorySubtypeDefinition
+
+    seeded = 0
+    for row in INVENTORY_SUBTYPES:
+        existing = (await session.execute(
+            select(InventorySubtypeDefinition).where(
+                InventorySubtypeDefinition.category_key == row["cat"],
+                InventorySubtypeDefinition.subtype_key == row["key"],
+            )
+        )).scalar_one_or_none()
+        req = ",".join(row["req"])
+        opt = ",".join(row["opt"])
+        if existing is None:
+            session.add(InventorySubtypeDefinition(
+                category_key=row["cat"],
+                subtype_key=row["key"],
+                display_name=row["name"],
+                required_attributes=req,
+                optional_attributes=opt,
+                supports_expiry=row["expiry"],
+                supports_condition=row["condition"],
+                supports_usage=row["usage"],
+                version=SEED_VERSION,
+            ))
+            seeded += 1
+        else:
+            existing.display_name = row["name"]
+            existing.required_attributes = req
+            existing.optional_attributes = opt
+            existing.supports_expiry = row["expiry"]
+            existing.supports_condition = row["condition"]
+            existing.supports_usage = row["usage"]
+            existing.version = SEED_VERSION
+    await session.flush()
+    return seeded
+
+
+# ---------------------------------------------------------------------------
+# Routine templates + ordered steps (skincare + hair-care)
+# ---------------------------------------------------------------------------
+
+# The existing ``routine_templates`` table (in routines/models.py) holds
+# ``kind``, ``label``, ``frequency`` and ``slots`` (JSONB). The new
+# ``routine_template_steps`` table adds the ordered display list a UI can
+# render. Every template + step is versioned so an operator can trace which
+# release wrote which guidance.
+
+# (kind, label, frequency, slots)
+ROUTINE_TEMPLATE_DEFS: List[Tuple[str, str, str, List[str]]] = [
+    ("morning_minimal", "Minimal Morning", "daily",
+     ["cleanser", "moisturiser", "spf"]),
+    ("evening_minimal", "Minimal Evening", "daily",
+     ["cleanser", "moisturiser"]),
+    ("hydration_focus", "Hydration Focus", "daily",
+     ["cleanser", "hydrating_serum", "moisturiser"]),
+    ("oil_control", "Oil Control", "daily",
+     ["cleanser", "niacinamide_serum", "moisturiser"]),
+    ("sensitive_gentle", "Sensitive Skin", "daily",
+     ["gentle_cleanser", "moisturiser"]),
+    ("climate_hot_humid", "Hot & Humid", "daily",
+     ["cleanser", "lightweight_moisturiser", "spf"]),
+    ("climate_cold_dry", "Cold & Dry", "daily",
+     ["cleanser", "rich_moisturiser", "occlusive"]),
+    ("beginner", "Beginner Basics", "daily",
+     ["cleanser", "moisturiser", "spf"]),
+    ("shelf_use", "Use What You Own", "daily",
+     ["cleanser", "serum", "moisturiser"]),
+    # Hair care
+    ("hair_wash_day", "Wash Day", "twice_weekly",
+     ["shampoo", "conditioner", "leave_in"]),
+    ("hair_non_wash_day", "Non-wash Day", "daily",
+     ["refresh", "style"]),
+    ("hair_dryness_support", "Dryness Support", "twice_weekly",
+     ["gentle_shampoo", "deep_conditioner"]),
+    ("hair_oil_control", "Hair Oil Control", "three_times_weekly",
+     ["clarifying_shampoo", "lightweight_conditioner"]),
+    ("hair_scalp_care", "Scalp Care", "weekly",
+     ["scalp_treatment", "gentle_shampoo", "conditioner"]),
+    ("hair_climate_aware", "Climate-aware Hair", "twice_weekly",
+     ["gentle_shampoo", "conditioner", "leave_in"]),
+    ("hair_beginner", "Hair Beginner", "twice_weekly",
+     ["shampoo", "conditioner"]),
+    ("hair_shelf_use", "Use What You Own (Hair)", "twice_weekly",
+     ["shampoo", "conditioner"]),
+]
+
+# Steps rendered by the app. Each (template_kind, position, step_key, name, guidance, optional).
+ROUTINE_STEP_DEFS: List[Tuple[str, int, str, str, str, bool]] = [
+    # Minimal morning
+    ("morning_minimal", 1, "cleanser", "Gentle cleanse",
+     "Lather a small amount of gentle cleanser and rinse. Skip if you cleansed within the last hour.", False),
+    ("morning_minimal", 2, "moisturiser", "Moisturise",
+     "Apply a light moisturiser to damp skin.", False),
+    ("morning_minimal", 3, "spf", "Broad-spectrum SPF",
+     "Finish with broad-spectrum SPF. Daytime routines always finish with SPF.", False),
+    # Minimal evening
+    ("evening_minimal", 1, "cleanser", "Cleanse",
+     "Remove the day gently. A second cleanse is optional if you wore SPF or makeup.", False),
+    ("evening_minimal", 2, "moisturiser", "Moisturise",
+     "Apply a moisturiser suited to your skin type.", False),
+    # Sensitive
+    ("sensitive_gentle", 1, "gentle_cleanser", "Gentle cleanse",
+     "Use a fragrance-free cleanser and lukewarm water. Pat dry — no rubbing.", False),
+    ("sensitive_gentle", 2, "moisturiser", "Moisturise",
+     "Apply while skin is still damp. Fragrance-free is a safer default.", False),
+    # Climate hot & humid
+    ("climate_hot_humid", 1, "cleanser", "Cleanse",
+     "A gel or foam cleanser keeps things comfortable in humidity.", False),
+    ("climate_hot_humid", 2, "lightweight_moisturiser", "Light moisturiser",
+     "Reach for a gel or lotion; skip anything that feels heavy.", False),
+    ("climate_hot_humid", 3, "spf", "Broad-spectrum SPF",
+     "Even in humidity, finish with SPF. Reapply if you're outside.", False),
+    # Hair wash day
+    ("hair_wash_day", 1, "shampoo", "Shampoo",
+     "Focus on the scalp. Rinse thoroughly.", False),
+    ("hair_wash_day", 2, "conditioner", "Conditioner",
+     "Focus on mid-lengths and ends. Rinse after a couple of minutes.", False),
+    ("hair_wash_day", 3, "leave_in", "Leave-in",
+     "Distribute a small amount through damp lengths and ends.", True),
+    # Beginner
+    ("beginner", 1, "cleanser", "Cleanse",
+     "One gentle wash, morning and evening.", False),
+    ("beginner", 2, "moisturiser", "Moisturise",
+     "Apply while skin is damp to lock in hydration.", False),
+    ("beginner", 3, "spf", "Broad-spectrum SPF",
+     "Add SPF during the day — this is the single highest-impact step.", False),
+]
+
+
+async def seed_routine_templates(session: AsyncSession) -> int:
+    """Upsert the existing ``routine_templates`` rows and the new step rows.
+
+    The template table already exists (Package A schema). This seed keeps
+    it aligned with the shipped templates and adds the ordered steps table
+    that gives the UI a versioned rendering surface.
+    """
+    from app.domains.routines.models import RoutineTemplate
+    from app.domains.reference import RoutineTemplateStep
+
+    seeded = 0
+    for kind, label, frequency, slots in ROUTINE_TEMPLATE_DEFS:
+        existing = (await session.execute(
+            select(RoutineTemplate).where(RoutineTemplate.kind == kind)
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(RoutineTemplate(
+                kind=kind,
+                label=label,
+                frequency=frequency,
+                slots=slots,
+                knowledge_version=SEED_VERSION,
+            ))
+            seeded += 1
+        else:
+            existing.label = label
+            existing.frequency = frequency
+            existing.slots = slots
+            existing.knowledge_version = SEED_VERSION
+
+    await session.flush()
+
+    for kind, pos, step_key, name, guidance, optional in ROUTINE_STEP_DEFS:
+        existing = (await session.execute(
+            select(RoutineTemplateStep).where(
+                RoutineTemplateStep.template_kind == kind,
+                RoutineTemplateStep.position == pos,
+            )
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(RoutineTemplateStep(
+                template_kind=kind, position=pos, step_key=step_key,
+                display_name=name, guidance=guidance, optional=optional,
+                version=SEED_VERSION,
+            ))
+            seeded += 1
+        else:
+            existing.step_key = step_key
+            existing.display_name = name
+            existing.guidance = guidance
+            existing.optional = optional
+            existing.version = SEED_VERSION
+
+    await session.flush()
+    return seeded
+
+
+# ---------------------------------------------------------------------------
+# Perfume context — occasions, time-of-day, climate, layering
+# ---------------------------------------------------------------------------
+
+# The existing ``perfume_context_rules`` table (in routines/models.py) has
+# ``rule_id``, ``factor``, ``match_value``, ``families``, ``note``.
+
+PERFUME_CONTEXT_DEFS: List[dict] = [
+    # Occasions
+    {"rule_id": "occ_work", "factor": "occasion", "match_value": "work",
+     "families": ["fresh", "clean", "citrus"],
+     "note": "A restrained, fresh scent tends to sit well in a shared workspace."},
+    {"rule_id": "occ_casual", "factor": "occasion", "match_value": "casual_day",
+     "families": ["fresh", "green", "citrus"],
+     "note": "Light and easygoing suits a daytime, low-formality moment."},
+    {"rule_id": "occ_evening", "factor": "occasion", "match_value": "evening",
+     "families": ["woody", "amber", "oriental"],
+     "note": "A warmer, richer family adds presence for the evening."},
+    {"rule_id": "occ_celebration", "factor": "occasion", "match_value": "celebration",
+     "families": ["floral", "oriental", "amber"],
+     "note": "A memorable, festive family suits a celebration."},
+    {"rule_id": "occ_formal", "factor": "occasion", "match_value": "formal",
+     "families": ["woody", "clean", "chypre"],
+     "note": "Refined and elegant families suit a formal setting."},
+    # Time of day
+    {"rule_id": "tod_morning", "factor": "time_of_day", "match_value": "morning",
+     "families": ["citrus", "fresh", "green"],
+     "note": "Brighter families feel appropriate in the first half of the day."},
+    {"rule_id": "tod_evening", "factor": "time_of_day", "match_value": "evening",
+     "families": ["woody", "amber", "oriental"],
+     "note": "Warmer families tend to shine in the evening."},
+    # Climate
+    {"rule_id": "clim_hot", "factor": "climate", "match_value": "hot_humid",
+     "families": ["citrus", "fresh", "aquatic"],
+     "note": "Lighter families sit more comfortably in heat and humidity."},
+    {"rule_id": "clim_cold", "factor": "climate", "match_value": "cold_dry",
+     "families": ["woody", "amber", "gourmand"],
+     "note": "Denser families project better in cold air."},
+    # Intensity
+    {"rule_id": "int_close", "factor": "intensity", "match_value": "close_contact",
+     "families": ["fresh", "clean", "citrus"],
+     "note": "Close-contact settings suit a subtle, wearable trail."},
+    {"rule_id": "int_outdoor", "factor": "intensity", "match_value": "outdoor",
+     "families": ["woody", "aromatic"],
+     "note": "Outdoor projection welcomes a slightly stronger scent."},
+    # Layering + application safety (advisory)
+    {"rule_id": "lay_note", "factor": "layering", "match_value": "same_family",
+     "families": ["compatible"],
+     "note": "Layering scents in the same family tends to reinforce, not clash."},
+    {"rule_id": "app_safety", "factor": "application_safety", "match_value": "skin",
+     "families": ["caution"],
+     "note": "Perfume goes on pulse points; keep it away from eyes and broken skin."},
+]
+
+
+async def seed_perfume_context(session: AsyncSession) -> int:
+    from app.domains.routines.models import PerfumeContextRule
+
+    seeded = 0
+    for row in PERFUME_CONTEXT_DEFS:
+        existing = (await session.execute(
+            select(PerfumeContextRule).where(
+                PerfumeContextRule.rule_id == row["rule_id"]
+            )
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(PerfumeContextRule(
+                rule_id=row["rule_id"],
+                factor=row["factor"],
+                match_value=row["match_value"],
+                families=row["families"],
+                note=row["note"],
+            ))
+            seeded += 1
+        else:
+            existing.factor = row["factor"]
+            existing.match_value = row["match_value"]
+            existing.families = row["families"]
+            existing.note = row["note"]
+    await session.flush()
+    return seeded
+
+
+# ---------------------------------------------------------------------------
+# Supplement / food appearance context — general wellness only
+# ---------------------------------------------------------------------------
+
+# Safety category is one of:
+#   - ``general_wellness`` — safe general context, no professional gate.
+#   - ``consult_professional`` — mention that professional guidance helps.
+#   - ``pregnancy_flag`` — a clear flag to check with a professional.
+# Never diagnosis, dosage, or medication substitution.
+
+SUPPLEMENT_CONTEXT_DEFS: List[dict] = [
+    {"key": "hydration", "name": "Hydration",
+     "guidance": "Even hydration through the day is one of the simplest levers for how skin and hair feel. Water is boring advice; it also happens to be true.",
+     "safety": "general_wellness"},
+    {"key": "protein_general", "name": "Protein (general context)",
+     "guidance": "Regular protein intake supports hair strength and recovery. Reach for foods that fit your routine rather than a specific number.",
+     "safety": "general_wellness"},
+    {"key": "micronutrients", "name": "Micronutrient awareness",
+     "guidance": "Variety across meals is more valuable than any single hero ingredient. If you're considering a supplement, a professional can help make it worth your time.",
+     "safety": "consult_professional"},
+    {"key": "sleep_recovery", "name": "Sleep and recovery",
+     "guidance": "A consistent sleep window supports skin, hair and mood. Small nudges beat big overhauls.",
+     "safety": "general_wellness"},
+    {"key": "routine_consistency", "name": "Routine consistency",
+     "guidance": "Consistency compounds. Two steps every day beat five steps sometimes.",
+     "safety": "general_wellness"},
+    {"key": "pregnancy_general", "name": "Pregnancy context",
+     "guidance": "If you're pregnant or trying, some ingredients call for a professional's input before you start or continue them.",
+     "safety": "pregnancy_flag"},
+    {"key": "safety_disclaimer", "name": "General safety disclaimer",
+     "guidance": "This app shares general appearance context, not medical guidance. For anything that needs a professional, please talk to one.",
+     "safety": "consult_professional"},
+]
+
+
+async def seed_supplement_context(session: AsyncSession) -> int:
+    from app.domains.reference import SupplementContextRule
+
+    seeded = 0
+    for row in SUPPLEMENT_CONTEXT_DEFS:
+        rule_id = f"supp_{row['key']}"
+        existing = (await session.execute(
+            select(SupplementContextRule).where(
+                SupplementContextRule.rule_id == rule_id
+            )
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(SupplementContextRule(
+                rule_id=rule_id,
+                context_key=row["key"],
+                display_name=row["name"],
+                guidance=row["guidance"],
+                safety_category=row["safety"],
+                version=SEED_VERSION,
+            ))
+            seeded += 1
+        else:
+            existing.display_name = row["name"]
+            existing.guidance = row["guidance"]
+            existing.safety_category = row["safety"]
+            existing.version = SEED_VERSION
+    await session.flush()
+    return seeded
+
+
+# ---------------------------------------------------------------------------
+# Ingredient contraindications + sensitivities
+# ---------------------------------------------------------------------------
+
+# Contraindications are stronger than compatibility rules: "do not use this
+# ingredient in this condition." Sensitivity rules are the softer counterpart.
+
+CONTRAINDICATION_DEFS: List[dict] = [
+    {"ing": "retinol", "cond": "pregnancy",
+     "headline": "Retinol is generally avoided during pregnancy.",
+     "guidance": "During pregnancy or if trying, most professionals recommend pausing retinoids. A dermatologist or midwife can suggest alternatives."},
+    {"ing": "retinoid", "cond": "pregnancy",
+     "headline": "Prescription retinoids are avoided during pregnancy.",
+     "guidance": "Please pause and speak with the professional who prescribed it."},
+    {"ing": "aha", "cond": "compromised_skin_barrier",
+     "headline": "Skip AHAs when the barrier is inflamed.",
+     "guidance": "Give sensitised skin a break — a gentler routine helps more than active ingredients here."},
+    {"ing": "bha", "cond": "compromised_skin_barrier",
+     "headline": "Skip BHAs when the barrier is inflamed.",
+     "guidance": "Focus on cleanse-moisturise-SPF while your skin recovers."},
+    {"ing": "benzoyl_peroxide", "cond": "pregnancy",
+     "headline": "Benzoyl peroxide during pregnancy calls for professional input.",
+     "guidance": "Ask a dermatologist or GP before continuing."},
+]
+
+
+async def seed_contraindications(session: AsyncSession) -> int:
+    from app.domains.reference import IngredientContraindicationRule
+
+    seeded = 0
+    for row in CONTRAINDICATION_DEFS:
+        rule_id = f"{row['ing']}__{row['cond']}"
+        existing = (await session.execute(
+            select(IngredientContraindicationRule).where(
+                IngredientContraindicationRule.rule_id == rule_id
+            )
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(IngredientContraindicationRule(
+                rule_id=rule_id,
+                ingredient_key=row["ing"],
+                condition_key=row["cond"],
+                headline=row["headline"],
+                guidance=row["guidance"],
+                version=SEED_VERSION,
+            ))
+            seeded += 1
+        else:
+            existing.headline = row["headline"]
+            existing.guidance = row["guidance"]
+            existing.version = SEED_VERSION
+    await session.flush()
+    return seeded
+
+
+SENSITIVITY_DEFS: List[dict] = [
+    {"ing": "retinol", "sens": "sensitive_skin",
+     "headline": "Retinol on sensitive skin: start slow.",
+     "guidance": "Twice a week for two weeks, then evaluate. Buffer with moisturiser if needed."},
+    {"ing": "vitamin_c", "sens": "sensitive_skin",
+     "headline": "Vitamin C on sensitive skin: choose the formulation carefully.",
+     "guidance": "Lower concentrations and pH-buffered formulations are usually kinder."},
+    {"ing": "aha", "sens": "sensitive_skin",
+     "headline": "AHAs on sensitive skin: keep frequency low.",
+     "guidance": "Once or twice a week is often enough. Always finish daytime routines with SPF."},
+    {"ing": "spf", "sens": "physical_only_preference",
+     "headline": "Physical SPF is a good choice for reactive skin.",
+     "guidance": "Zinc or titanium formulas can suit sensitive skin better than some chemical filters."},
+]
+
+
+async def seed_sensitivities(session: AsyncSession) -> int:
+    from app.domains.reference import IngredientSensitivityRule
+
+    seeded = 0
+    for row in SENSITIVITY_DEFS:
+        rule_id = f"{row['ing']}__{row['sens']}"
+        existing = (await session.execute(
+            select(IngredientSensitivityRule).where(
+                IngredientSensitivityRule.rule_id == rule_id
+            )
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(IngredientSensitivityRule(
+                rule_id=rule_id,
+                ingredient_key=row["ing"],
+                sensitivity_key=row["sens"],
+                headline=row["headline"],
+                guidance=row["guidance"],
+                version=SEED_VERSION,
+            ))
+            seeded += 1
+        else:
+            existing.headline = row["headline"]
+            existing.guidance = row["guidance"]
+            existing.version = SEED_VERSION
+    await session.flush()
+    return seeded
+
+
+# ---------------------------------------------------------------------------
+# Seed-version audit trail
+# ---------------------------------------------------------------------------
+
+
+async def record_seed_version(session: AsyncSession, counts: dict) -> None:
+    """Write one audit row per seed domain for this run."""
+    from datetime import datetime, timezone
+    from app.domains.reference import SeedVersionRecord
+
+    now = datetime.now(timezone.utc)
+    for domain, count in counts.items():
+        existing = (await session.execute(
+            select(SeedVersionRecord).where(
+                SeedVersionRecord.seed_domain == domain,
+                SeedVersionRecord.seed_version == SEED_VERSION,
+            )
+        )).scalar_one_or_none()
+        if existing is None:
+            session.add(SeedVersionRecord(
+                seed_domain=domain,
+                seed_version=SEED_VERSION,
+                applied_at=now,
+                rows_written=count,
+            ))
+        else:
+            existing.applied_at = now
+            existing.rows_written = count
+    await session.flush()
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
+
+
+async def run(session: AsyncSession) -> dict:
+    counts = {
+        "inventory_categories": await seed_inventory_categories(session),
+        "inventory_subtypes": await seed_inventory_subtypes(session),
+        "ingredients_and_rules": await seed_ingredients(session),
+        "ingredient_contraindications": await seed_contraindications(session),
+        "ingredient_sensitivities": await seed_sensitivities(session),
+        "routine_templates": await seed_routine_templates(session),
+        "perfume_context": await seed_perfume_context(session),
+        "supplement_context": await seed_supplement_context(session),
+        "progress": await seed_progress(session),
+        "feature_flags": await seed_feature_flags(session),
+    }
+    await record_seed_version(session, counts)
+    await session.commit()
+    return {"seed_version": SEED_VERSION, "counts": counts}
+
+
+async def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+    factory = get_sessionmaker()
+    async with factory() as session:
+        result = await run(session)
+    logger.info("reference_data_seed_complete %s", result)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    asyncio.run(main())

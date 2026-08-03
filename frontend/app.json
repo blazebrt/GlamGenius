@@ -1,41 +1,66 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
-    "version": "1.0.0",
+    "name": "GlamGenius",
+    "slug": "glamgenius",
+    "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
+    "scheme": "glamgenius",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
+    "jsEngine": "jsc",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.sessioncontinue.ujzorz"
+      "bundleIdentifier": "com.glamgenius.coach"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000000"
+        "backgroundColor": "#0F5C4C"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.emergent.sessioncontinue.ujzorz"
+      "jsEngine": "jsc",
+      "package": "com.glamgenius.coach"
     },
     "web": {
       "bundler": "metro",
-      "output": "single",
+      "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
       "expo-router",
       [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://sentry.io/",
+          "organization": "vast-beauty-and-wellness",
+          "project": "glamgenius"
+        }
+      ],
+      [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-image.png",
+          "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#000000"
+          "backgroundColor": "#F7F3EC"
         }
-      ]
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow GlamGenius to access your camera for skin and hair checks",
+          "microphonePermission": "Allow GlamGenius to access your microphone"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow GlamGenius to access your photos for skin and hair checks"
+        }
+      ],
+      "expo-font",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

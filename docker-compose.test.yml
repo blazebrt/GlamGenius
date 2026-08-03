@@ -1,0 +1,74 @@
+# Test stack — Supabase-cutover version.
+#
+# Everything runs in containers — the host needs no Python and no Node.
+#
+#   docker compose -f docker-compose.test.yml build --no-cache
+#   docker compose -f docker-compose.test.yml run --rm backend-tests
+#   docker compose -f docker-compose.test.yml run --rm frontend-tests
+#   docker compose -f docker-compose.test.yml down -v
+#
+# There is no Mongo, no MinIO and no S3 test service. The V1 identity
+# datastore is gone; production media goes to Supabase Storage, and the
+# adapter under test uses the local filesystem fixture. Real Supabase
+# Storage is not called from CI — its behaviour is covered by unit tests
+# that stub the client.
+
+services:
+  test-postgres:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_USER: glamgenius
+      POSTGRES_PASSWORD: glamgenius
+      POSTGRES_DB: glamgenius_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U glamgenius -d glamgenius_test"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  backend-tests:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@test-postgres:5432/glamgenius_test
+      MEDIA_STORAGE_BACKEND: local
+      MEDIA_LOCAL_ROOT: /tmp/media-test
+      APP_ENV: test
+      SUPABASE_URL: https://test.supabase.co
+      SUPABASE_ANON_KEY: test-anon
+      SUPABASE_SERVICE_ROLE_KEY: test-service
+      SUPABASE_JWT_SECRET: test-secret
+      SUPABASE_JWT_ISSUER: https://test.supabase.co/auth/v1
+      SUPABASE_STORAGE_BUCKET: glamgenius-media
+      GEMINI_API_KEY: ""
+      REQUIRE_ANALYSIS_CONSENT: "false"
+      INVITE_REQUIRED: "false"
+      PYTHONPATH: /app
+    depends_on:
+      test-postgres:
+        condition: service_healthy
+    working_dir: /app
+    command: >
+      sh -c "alembic upgrade head &&
+             alembic check &&
+             pytest -q tests"
+
+  frontend-tests:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.test
+    working_dir: /workspace
+    volumes:
+      - ./frontend:/workspace
+      - frontend_node_modules:/workspace/node_modules
+    command: >
+      sh -c "yarn install --frozen-lockfile &&
+             yarn typecheck &&
+             yarn lint --max-warnings=0 &&
+             yarn test --ci --watchAll=false"
+
+volumes:
+  frontend_node_modules:
