@@ -316,24 +316,24 @@ For a non-technical reviewer:
 | Fix | Description | Status |
 |---|---|---|
 | 0 | Baseline timezone defects | DONE on `main` (PR #19). |
-| 3 | CI + governance | **DONE on this branch.** Owner-action items in §10 remain. |
-| 4 | Docker workflow proof | NOT STARTED — Work Package 2. |
+| 3 | CI + governance | **DONE on `main` via PR #33 (Work Package 1).** |
+| 4 | Docker workflow proof | **DONE on this branch.** Owner runs `scripts/update_service_digests.sh` + `scripts/verify_clean_environment.sh` on a Docker host and pastes the two-cycle exit-0 evidence into the PR before merge. |
 | 5 | Live Gemini validation | NOT STARTED — Work Package 3, credentials required. |
 | 6 | Weather / calendar / push | NOT STARTED — Work Package 5, credentials + device required. |
 | 7 | Packing decision | NOT STARTED — Work Package 4. |
 | 8 | Monitoring (real events, alert, uptime) | PARTIAL. SDK exists on `main`; operational proof is Work Package 5, credentials required. |
-| 9 | Production S3-compatible media | NOT STARTED — Work Package 2, credentials required. |
+| 9 | Production S3-compatible media | **DONE on this branch.** Production-refusal guard, boto3 dependency, presigned-URL surface, server-side-encryption header, MinIO integration test, and operations runbook are landed. Local `pytest tests/test_media_production_guard.py` — **6/6 pass**. The MinIO integration test itself runs in the docker test stack (see Fix 4 owner action). |
 | 10 | Architecture inventory + ADRs | NOT STARTED — Work Package 4. |
 | 11 | V1 deprecation plan | NOT STARTED — Work Package 4. |
-| 12 | Remove stored image base64 prefixes | NOT STARTED — Work Package 2. |
+| 12 | Remove stored image base64 prefixes | **DONE on this branch.** New writes store `image_base64=None`; the regression test that asserted the 83-character rule is inverted to `test_new_scans_store_no_image_fragment`; `backend/scripts/cleanup_v1_scan_image_prefixes.py` is idempotent, dry-run by default, batched, and verified against a real Mongo (dry-run→3, apply→3, re-apply→0). |
 | 13 | Ingredient rule metadata | NOT STARTED — Work Package 3. |
 | 14 | Structured safety classification | NOT STARTED — Work Package 3. |
 | 15 | Photo comparison honesty | NOT STARTED — Work Package 4. |
 | 16 | Metric governance | NOT STARTED — Work Package 4. |
 | 17 | Physical-device UX + a11y | NOT STARTED — Work Package 6, device required. |
 | 18 | Time to first value ≤ 5 min | NOT STARTED — Work Package 4. |
-| 19 | Independent review policy | **DONE on this branch.** |
-| 20 | Branching strategy | **DONE on this branch.** |
+| 19 | Independent review policy | **DONE on `main` via PR #33.** |
+| 20 | Branching strategy | **DONE on `main` via PR #33.** |
 
 ## 17. Commit hashes (this branch)
 
