@@ -20,9 +20,9 @@ from sqlalchemy import func, select
 from app.bootstrap import (
     CANONICAL_INVENTORY_CATEGORIES,
     CONTRAINDICATION_DEFS,
-    FEATURE_FLAG_DEFAULTS,
+    _feature_flag_defaults,
     INVENTORY_SUBTYPES,
-    METRIC_DEFINITIONS,
+    _metric_definitions,
     PERFUME_CONTEXT_DEFS,
     ROUTINE_TEMPLATE_DEFS,
     SEED_VERSION,
@@ -43,6 +43,7 @@ from app.domains.reference import (
 from app.domains.routines.models import (
     CompatibilityRuleRow,
     Ingredient,
+    IngredientAlias,
     PerfumeContextRule,
     RoutineTemplate,
 )
@@ -59,7 +60,7 @@ async def test_seed_produces_expected_counts_on_empty_db(db_clean):
         result = await run_seed(session)
     assert result["seed_version"] == SEED_VERSION
     assert result["counts"]["inventory_categories"] == len(CANONICAL_INVENTORY_CATEGORIES)
-    assert result["counts"]["feature_flags"] == len(FEATURE_FLAG_DEFAULTS)
+    assert result["counts"]["feature_flags"] == len(_feature_flag_defaults())
 
 
 async def test_seed_is_idempotent(db_clean):
@@ -277,14 +278,22 @@ async def test_feature_flag_defaults_seeded(db_clean):
     async with factory() as session:
         await run_seed(session)
         keys = (await session.execute(select(FeatureFlag.key))).scalars().all()
-    assert "v2_privacy" in keys
-    assert "v2_inventory" in keys
-    # Unfinished features stay off by default.
+    from app.shared.flags.service import KNOWN_FLAGS, STABLE_BETA_DEFAULTS
+
+    # Every flag the code understands has a database row, and no row names a
+    # flag the code has never heard of.
+    assert set(keys) == set(KNOWN_FLAGS)
+
     async with factory() as session:
-        vto = (await session.execute(
-            select(FeatureFlag).where(FeatureFlag.key == "v2_virtual_try_on")
-        )).scalar_one()
-        assert vto.enabled is False
+        rows = (await session.execute(select(FeatureFlag))).scalars().all()
+    by_key = {row.key: row for row in rows}
+    for key in KNOWN_FLAGS:
+        assert by_key[key].enabled is STABLE_BETA_DEFAULTS[key], key
+        assert by_key[key].description, key
+
+    # Unfinished features stay off: no provider, no flag.
+    assert by_key["v2_virtual_tryon"].enabled is False
+    assert by_key["v2_packing"].enabled is False
 
 
 async def test_metric_definitions_and_milestone_rules_seeded(db_clean):
@@ -295,8 +304,18 @@ async def test_metric_definitions_and_milestone_rules_seeded(db_clean):
             select(MetricDefinition.key)
         )).scalars().all()
         milestones = (await session.execute(select(MilestoneRule))).scalars().all()
-    assert set(metric_keys) >= {m["key"] for m in METRIC_DEFINITIONS}
-    assert len(milestones) >= 2
+    # The seeded catalogue must cover every metric the engine can compute —
+    # a metric the app shows but the seed omits has no published formula, and
+    # a seeded metric the engine does not know is dead data.
+    from app.domains.progress.registry import METRIC_KEYS
+
+    assert set(metric_keys) == set(METRIC_KEYS)
+    assert set(metric_keys) == {m["key"] for m in _metric_definitions()}
+    assert not any("overall" in key or "attractive" in key for key in metric_keys)
+
+    from app.domains.progress.milestones import RULES
+
+    assert {row.rule_id for row in milestones} == {rule.rule_id for rule in RULES}
 
 
 async def test_ingredient_and_compatibility_rules_seeded(db_clean):
@@ -307,8 +326,26 @@ async def test_ingredient_and_compatibility_rules_seeded(db_clean):
             select(Ingredient.key)
         )).scalars().all()
         rules = (await session.execute(select(CompatibilityRuleRow))).scalars().all()
+        aliases = (await session.execute(select(IngredientAlias))).scalars().all()
+
+    from app.domains.routines import ontology
+
+    # The seeded catalogue is the engine's ontology. A catalogue that holds
+    # less than the parser recognises means an ingredient warning can fire for
+    # something the ingredient screen cannot then explain.
+    assert set(ingredients) == {row.key for row in ontology.INGREDIENTS}
     assert "retinol" in ingredients
-    assert "spf" in ingredients
+    assert any(row.family == "sunscreen_filter" for row in ontology.INGREDIENTS)
+
+    # Every alias the parser resolves is stored, pointing at its canonical key.
+    seeded_aliases = {row.alias: row.ingredient_key for row in aliases}
+    assert seeded_aliases == ontology.alias_index()
+    assert seeded_aliases["l-ascorbic acid"] == "ascorbic_acid"
+
+    assert {r.rule_id for r in rules} == {r.rule_id for r in ontology.COMPATIBILITY_RULES}
+    assert {r.severity for r in rules} <= set(ontology.SEVERITIES)
     # Never diagnostic or dosage guidance — evidence a conservative rule set.
-    assert all("diagnosis" not in (r.guidance or "").lower() for r in rules)
-    assert all("prescription" not in (r.guidance or "").lower() for r in rules)
+    for row in rules:
+        text = f"{row.headline} {row.guidance} {row.evidence_note}".lower()
+        for banned in ("diagnosis", "prescription", "dosage", "cure", "treat your"):
+            assert banned not in text, f"{row.rule_id} reads as medical advice"

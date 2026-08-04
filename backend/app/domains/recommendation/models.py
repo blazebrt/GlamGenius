@@ -244,8 +244,14 @@ class ShoppingCandidate(UUIDPrimaryKey, TimestampMixin, Base):
     model_version: Mapped[Optional[str]] = mapped_column(String(64))
     prompt_version: Mapped[Optional[str]] = mapped_column(String(32))
     schema_version: Mapped[Optional[str]] = mapped_column(String(32))
+    # Retry key. A dropped response on a mobile connection must not cost the
+    # user a second run from their allowance.
+    client_mutation_id: Mapped[Optional[str]] = mapped_column(String(80))
 
-    __table_args__ = (Index("ix_shopping_candidates_account_created", "account_id", "created_at"),)
+    __table_args__ = (
+        UniqueConstraint("account_id", "client_mutation_id", name="uq_shopping_candidate_client_mutation"),
+        Index("ix_shopping_candidates_account_created", "account_id", "created_at"),
+    )
 
 
 class PurchaseEvaluation(UUIDPrimaryKey, TimestampMixin, Base):

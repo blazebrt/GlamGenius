@@ -29,7 +29,12 @@ _BASE64_LIKE = re.compile(r"^[A-Za-z0-9+/=_-]{80,}$")
 _SENSITIVE_KEY = re.compile(
     r"(?:image|photo|bytes|base64|ingredient|memory|jwt|token|"
     r"authorization|payment|order_id|receipt|email|phone|mobile|"
-    r"tel|password|secret|api_key)",
+    r"tel|password|secret|api_key|"
+    # Credentials and anything that identifies one account's storage. A
+    # service-role key is the most dangerous value in this system and its name
+    # matches none of the words above.
+    r"service_role|credential|private_key|access_key|anon_key|dsn|"
+    r"storage_key|storage_path|object_key)",
     re.I,
 )
 

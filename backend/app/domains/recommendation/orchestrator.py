@@ -411,6 +411,17 @@ async def evaluate_purchase(
 ) -> Dict[str, Any]:
     """Read the item if needed, score it, and return Buy, Wait or Skip."""
     started = time.perf_counter()
+
+    # A retry must return the original verdict, not score the item again.
+    replay = await service.replayed_evaluation(session, account_id, body.client_mutation_id)
+    if replay is not None:
+        payload = await service.serialize_evaluation(session, replay)
+        payload["entitlement"] = service.serialize_entitlement(
+            await service.entitlement_for(session, account_id, service.FEATURE_SHOPPING)
+        )
+        payload["replayed"] = True
+        return payload
+
     run = await service.start_run(session, account_id, kind="shopping_evaluation")
 
     candidate_row, extraction_notes = await _resolve_shopping_candidate(session, account_id=account_id, account_id_str=account_id_str, body=body, run_id=run.id)
@@ -513,6 +524,7 @@ async def _resolve_shopping_candidate(
             price=body.price if body.price is not None else extracted.price,
             currency=(body.currency or extracted.currency or "INR").upper(),
             product_url=body.product_url, extraction_confidence=extracted.confidence,
+            client_mutation_id=body.client_mutation_id,
             uncertain_fields=list(extracted.uncertain_fields), verification_state="draft",
             model_version=model, prompt_version=prompt_version, schema_version=schema_version,
         )
@@ -532,7 +544,7 @@ async def _resolve_shopping_candidate(
             price=body.price if body.price is not None else item.price,
             currency=(body.currency or item.currency).upper(),
             product_url=body.product_url or item.product_url,
-            verification_state="user_declared",
+            verification_state="user_declared", client_mutation_id=body.client_mutation_id,
         )
     session.add(row)
     await session.flush()

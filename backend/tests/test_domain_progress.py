@@ -34,6 +34,7 @@ from app.domains.inventory.schemas import ItemCreate
 from app.domains.progress import metrics, milestones
 from app.domains.progress import service as progress_service
 from app.domains.progress.models import (
+    GamificationEvent,
     Milestone,
     MilestoneRule,
     ProgressGoal,
@@ -41,7 +42,7 @@ from app.domains.progress.models import (
 from app.domains.progress.registry import METRIC_BY_KEY, METRIC_KEYS
 from app.domains.progress.schemas import GoalCreate, GoalPatch
 from app.shared.database.sql import get_sessionmaker
-from app.shared.errors.exceptions import NotFoundError
+from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 
 
 pytestmark = pytest.mark.asyncio
@@ -152,8 +153,10 @@ async def test_inventory_balance_becomes_ok_after_items(db_clean):
             session, account, "inventory_balance", today=date(2026, 2, 15)
         )
     assert result.status in {metrics.STATUS_OK, metrics.STATUS_PARTIAL}
-    payload = result.to_payload()
+    payload = result.as_dict()
     assert payload["formula_version"] == METRIC_BY_KEY["inventory_balance"].formula_version
+    assert payload["key"] == "inventory_balance"
+    assert payload["explanation"], "a metric must be able to explain itself"
 
 
 # ---------------------------------------------------------------------------
@@ -278,60 +281,81 @@ async def test_milestone_rules_are_seeded_and_versioned(db_clean):
         ).scalars().all()
     assert rules, "milestone rules must be seeded"
     for rule in rules:
-        assert rule.rule_key
+        assert rule.rule_id
         assert rule.registry_version
-        assert rule.headline
+        assert rule.label
+        assert rule.description
+        assert rule.behaviour in milestones.REWARDABLE_BEHAVIOURS
+    # §3.9 — every seeded rule must be reachable, i.e. no rule rewards a
+    # behaviour the service refuses to record.
+    assert not {r.behaviour for r in rules} & set(milestones.NEVER_REWARDABLE)
 
 
 async def test_milestone_award_is_idempotent(db_clean):
-    """Same behaviour recorded twice must produce at most one milestone
-    row per rule (§3.9 — safe against duplicate event processing)."""
+    """Replaying the identical behaviour event must not award a second
+    milestone (§3.9 — safe against duplicate event processing).
+
+    ``avoided_duplicate_purchase`` has threshold 1, so the first recording
+    awards ``milestone.avoided_duplicate`` immediately and the replay has a
+    milestone to (wrongly) duplicate if dedup were broken.
+    """
+    factory = get_sessionmaker()
+    await run_seed()
+    account = await _account()
+    subject = uuid.uuid4()
+
+    async def _record(note: str):
+        async with factory() as session:
+            event = await progress_service.record_behaviour(
+                session,
+                account,
+                milestones.BEHAVIOUR_AVOIDED_DUPLICATE,
+                occurred_on=date(2026, 2, 15),
+                subject_id=subject,
+                detail={"note": note},
+            )
+            await session.commit()
+            return event
+
+    first = await _record("first")
+    assert first is not None, "the first recording must be accepted"
+
+    replay = await _record("duplicate")
+    assert replay is None, "an identical replay must be swallowed, not recorded"
+
+    async with factory() as session:
+        behaviour_rows = (await session.execute(
+            select(func.count(GamificationEvent.id)).where(
+                GamificationEvent.account_id == account
+            )
+        )).scalar_one()
+        awarded = (await session.execute(
+            select(Milestone.rule_id).where(Milestone.account_id == account)
+        )).scalars().all()
+
+    assert behaviour_rows == 1, "the same real-world action must be stored once"
+    assert awarded == ["milestone.avoided_duplicate"]
+    assert len(awarded) == len(set(awarded))
+
+
+async def test_engagement_behaviour_is_refused(db_clean):
+    """§1.12 — behaviours on the NEVER_REWARDABLE list (app opens, streaks)
+    must be rejected outright, so an engagement metric cannot be smuggled in
+    as a milestone."""
     factory = get_sessionmaker()
     await run_seed()
     account = await _account()
 
-    async with factory() as session:
-        # Behaviour that maps to a milestone: reached_own_goal is triggered
-        # by achieving a goal. Directly call record_behaviour to keep the
-        # test focused.
-        await progress_service.record_behaviour(
-            session,
-            account,
-            milestones.BEHAVIOUR_ORGANISED_INVENTORY,
-            occurred_on=date(2026, 2, 15),
-            subject_id=None,
-            detail={"note": "first"},
-        )
-        await session.commit()
+    assert milestones.NEVER_REWARDABLE, "the refusal list must not be empty"
+    forbidden = sorted(milestones.NEVER_REWARDABLE)[0]
 
     async with factory() as session:
-        await progress_service.record_behaviour(
-            session,
-            account,
-            milestones.BEHAVIOUR_ORGANISED_INVENTORY,
-            occurred_on=date(2026, 2, 15),
-            subject_id=None,
-            detail={"note": "duplicate"},
-        )
-        await session.commit()
-
-    async with factory() as session:
-        awarded = (
-            await session.execute(
-                select(func.count(Milestone.id)).where(
-                    Milestone.account_id == account
-                )
+        with pytest.raises(ValidationFailedError):
+            await progress_service.record_behaviour(
+                session,
+                account,
+                forbidden,
+                occurred_on=date(2026, 2, 15),
+                subject_id=None,
+                detail={},
             )
-        ).scalar_one()
-    # Independent of whether a rule matched, awarding must never explode a
-    # duplicate. The count is capped at the number of distinct milestone
-    # rules that matched.
-    async with factory() as session:
-        distinct = (
-            await session.execute(
-                select(func.count(func.distinct(Milestone.rule_key))).where(
-                    Milestone.account_id == account
-                )
-            )
-        ).scalar_one()
-    assert awarded == distinct

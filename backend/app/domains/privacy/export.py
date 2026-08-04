@@ -312,19 +312,49 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, A
 
 
 async def _progress_and_memory(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
-    from app.domains.progress.models import MemoryFact  # local import to keep top-level tidy
+    # Local imports to keep the top of the module tidy.
+    from app.domains.progress.models import (
+        FeedbackEvent,
+        GamificationEvent,
+        MemoryFact,
+        MemoryRevision,
+        MemorySource,
+    )
 
     events = await _fetch(session, select(MetricEvent).where(MetricEvent.account_id == account_id))
     goals = await _fetch(session, select(ProgressGoal).where(ProgressGoal.account_id == account_id))
     milestones = await _fetch(session, select(Milestone).where(Milestone.account_id == account_id))
     photos = await _fetch(session, select(ProgressPhoto).where(ProgressPhoto.account_id == account_id))
     facts = await _fetch(session, select(MemoryFact).where(MemoryFact.account_id == account_id))
+
+    # Revisions and sources hang off the fact, not the account, so they are
+    # fetched through the account's facts. Corrections and tombstones are the
+    # part of memory a user most needs to see: an export that lists only the
+    # current wording hides what was remembered before, and what was deleted.
+    fact_ids = select(MemoryFact.id).where(MemoryFact.account_id == account_id)
+    revisions = await _fetch(
+        session, select(MemoryRevision).where(MemoryRevision.fact_id.in_(fact_ids))
+    )
+    sources = await _fetch(
+        session, select(MemorySource).where(MemorySource.fact_id.in_(fact_ids))
+    )
+    feedback = await _fetch(
+        session, select(FeedbackEvent).where(FeedbackEvent.account_id == account_id)
+    )
+    behaviours = await _fetch(
+        session, select(GamificationEvent).where(GamificationEvent.account_id == account_id)
+    )
+
     return {
         "metric_events": [_row_dict(r, [c.name for c in MetricEvent.__table__.columns]) for r in events],
         "goals": [_row_dict(r, [c.name for c in ProgressGoal.__table__.columns]) for r in goals],
         "milestones": [_row_dict(r, [c.name for c in Milestone.__table__.columns]) for r in milestones],
         "photos": [_row_dict(r, [c.name for c in ProgressPhoto.__table__.columns]) for r in photos],
         "memory_facts": [_row_dict(r, [c.name for c in MemoryFact.__table__.columns]) for r in facts],
+        "memory_revisions": [_row_dict(r, [c.name for c in MemoryRevision.__table__.columns]) for r in revisions],
+        "memory_sources": [_row_dict(r, [c.name for c in MemorySource.__table__.columns]) for r in sources],
+        "feedback_events": [_row_dict(r, [c.name for c in FeedbackEvent.__table__.columns]) for r in feedback],
+        "behaviour_events": [_row_dict(r, [c.name for c in GamificationEvent.__table__.columns]) for r in behaviours],
     }
 
 
