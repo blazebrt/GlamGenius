@@ -34,7 +34,16 @@ os.environ.setdefault(
 )
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("MEDIA_STORAGE_BACKEND", "local")
-os.environ.setdefault("INVITE_REQUIRED", "true")
+# These two describe the product configuration the suite asserts: the beta is
+# invite-only and photo analysis requires consent. They are set, not defaulted,
+# because an ambient value from the environment would silently change what the
+# tests mean — CI exports INVITE_REQUIRED=false and REQUIRE_ANALYSIS_CONSENT=
+# false, which unmounts the invite-reservation route and switches off the
+# consent gate, so "scan without consent is refused" quietly became "scan
+# without consent succeeds" and the test failed for a configuration reason
+# rather than a code one.
+os.environ["INVITE_REQUIRED"] = "true"
+os.environ["REQUIRE_ANALYSIS_CONSENT"] = "true"
 os.environ.setdefault(
     "POSTGRES_URL",
     "postgresql://glamgenius:glamgenius@localhost:5432/glamgenius_v2_test",
