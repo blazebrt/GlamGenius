@@ -1,7 +1,7 @@
 """GET /api/v2/config + /api/v2/health — client-side capability + ops health."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import (
@@ -65,14 +65,23 @@ async def get_config(session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/health")
-async def v2_health():
+async def v2_health(response: Response):
     """V2 health: PostgreSQL reachability and AI provider status.
 
     No billing block — payments are not part of this architecture.
     """
     postgres_ok = await sql.ping()
+    if not postgres_ok:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
     return {
         "status": "healthy" if postgres_ok else "degraded",
         "postgres": "up" if postgres_ok else "down",
         "ai_provider_configured": gemini.is_configured(),
     }
+
+
+@router.get("/sentry-debug")
+async def trigger_error():
+    """Synthetic exception to verify Sentry configuration."""
+    raise RuntimeError("This is a test exception for Sentry.")

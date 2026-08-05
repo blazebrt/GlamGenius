@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useUserStore } from '../../src/store/userStore';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../../src/theme/colors';
+import { requestPrivacyAccountDeletion, getPrivacyAccountDeletionStatus, cancelPrivacyAccountDeletion, AccountDeletion } from '../../src/services/apiV2';
 
 const VIBES = [
   { id: 'natural', label: 'Natural' },
@@ -37,9 +38,17 @@ export default function ProfileScreen() {
   const [diet, setDiet] = React.useState(user?.diet || 'veg');
   const [height, setHeight] = React.useState(user?.height_cm ? String(user.height_cm) : '');
   const [styleVibe, setStyleVibe] = React.useState(user?.style_vibe || 'natural');
+  const [deletionStatus, setDeletionStatus] = React.useState<AccountDeletion | null>(null);
 
   useEffect(() => {
     void fetchUser();
+    getPrivacyAccountDeletionStatus()
+      .then(setDeletionStatus)
+      .catch((e) => {
+         if (e.response?.status !== 404) {
+           console.warn('Failed to fetch deletion status', e);
+         }
+      });
   }, [fetchUser]);
 
   useEffect(() => {
@@ -66,6 +75,31 @@ export default function ProfileScreen() {
     notify('Saved', 'Your stylist profile was updated.');
   };
 
+  const handleDeleteAccount = () => {
+    if (Platform.OS === 'web') {
+      if (window.confirm('Are you sure you want to delete your account? This will permanently remove all your data.')) {
+        requestPrivacyAccountDeletion().then(setDeletionStatus).catch((e) => notify('Error', 'Failed to request deletion.'));
+      }
+    } else {
+      Alert.alert(
+        'Delete Account',
+        'Are you sure you want to delete your account? This will permanently remove all your data.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Delete', style: 'destructive', onPress: () => {
+            requestPrivacyAccountDeletion().then(setDeletionStatus).catch((e) => notify('Error', 'Failed to request deletion.'));
+          } },
+        ]
+      );
+    }
+  };
+
+  const handleCancelDeletion = () => {
+    cancelPrivacyAccountDeletion()
+      .then(() => setDeletionStatus(null))
+      .catch((e) => notify('Error', e.response?.data?.detail?.message || 'Failed to cancel deletion.'));
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: 120 }}>
@@ -81,6 +115,18 @@ export default function ProfileScreen() {
             Full access is included with your invite — nothing to pay.
           </Text>
         </View>
+
+        {deletionStatus && (
+          <View style={[styles.planCard, { backgroundColor: COLORS.error }]}>
+            <Text style={styles.planTitle}>Account Deletion Pending</Text>
+            <Text style={styles.planSub}>
+              Your account is scheduled for deletion (Status: {deletionStatus.status}).
+            </Text>
+            <TouchableOpacity style={[styles.upgradeBtn, { marginTop: 16 }]} onPress={handleCancelDeletion}>
+              <Text style={[styles.upgradeText, { color: COLORS.error }]}>Cancel Deletion</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         <View style={styles.stats}>
           <Stat label="Skin tone" value={user?.skin_tone || '—'} />
@@ -174,6 +220,13 @@ export default function ProfileScreen() {
           <Ionicons name="log-out-outline" size={20} color={COLORS.primary} />
           <Text style={styles.linkText}>Sign out</Text>
         </TouchableOpacity>
+
+        {!deletionStatus && (
+          <TouchableOpacity style={[styles.linkRow, { marginTop: 24 }]} onPress={handleDeleteAccount}>
+            <Ionicons name="trash-outline" size={20} color={COLORS.error} />
+            <Text style={[styles.linkText, { color: COLORS.error }]}>Delete Account</Text>
+          </TouchableOpacity>
+        )}
 
         <Text style={styles.disclaimer}>
           GlamGenius is your pocket fashion stylist and wellness coach. It does not diagnose medical conditions.

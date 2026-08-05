@@ -17,7 +17,8 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 def test_boto3_is_not_importable_and_not_in_requirements():
     """boto3 must not be a declared or installed dependency."""
     # A. Not in requirements.txt
-    req = (REPO_ROOT / "backend" / "requirements.txt").read_text()
+    req_path = pathlib.Path(__file__).resolve().parent.parent / "requirements.txt"
+    req = req_path.read_text()
     assert "boto3" not in req.lower(), "boto3 must not appear in requirements.txt"
 
     # B. Not importable. If a stale wheel is on disk, the test wants to fail

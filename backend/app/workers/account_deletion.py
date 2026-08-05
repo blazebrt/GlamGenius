@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import time
+from pathlib import Path
 
 from app.domains.privacy import deletion_service
 from app.shared.database.sql import get_sessionmaker
@@ -34,11 +36,14 @@ async def run_forever() -> None:
 
     factory = get_sessionmaker()
     logger.info("account_deletion_worker_started")
+    heartbeat_file = Path("/tmp/worker_heartbeat")
+    
     while not stop.is_set():
         try:
             async with factory() as session:
                 did_work = await deletion_service.process_once(session)
                 await session.commit()
+            heartbeat_file.touch()
         except Exception:  # noqa: BLE001
             logger.exception("account_deletion_worker_tick_failed")
             did_work = False

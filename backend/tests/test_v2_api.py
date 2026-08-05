@@ -310,3 +310,9 @@ async def test_config_returns_no_billing_block(app_client, db_clean):
     assert "billing" not in body
     assert "subscriptions_available" not in str(body)
     assert body["supabase"]["configured"] is True or body["supabase"]["url"]
+
+async def test_legacy_account_route_returns_404(app_client, db_clean, registered_supabase_user):
+    token, _ = await registered_supabase_user()
+    resp = await app_client.delete('/api/v2/account', headers={'Authorization': f'Bearer {token}'})
+    assert resp.status_code == 404, resp.text
+

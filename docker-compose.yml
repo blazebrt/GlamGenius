@@ -85,6 +85,28 @@ services:
         condition: service_healthy
     command: python -m app.workers.outbox_relay
 
+  account-deletion-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@postgres:5432/glamgenius_v2
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    command: python -m app.workers.account_deletion
+    healthcheck:
+      test: ["CMD-SHELL", "test $$(find /tmp/worker_heartbeat -mmin -2 | wc -l) -eq 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 volumes:
   postgres_data:
   media_data:

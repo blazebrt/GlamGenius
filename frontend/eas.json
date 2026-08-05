@@ -20,6 +20,9 @@
       "android": {
         "buildType": "apk"
       },
+      "env": {
+        "APP_ENV": "staging"
+      },
       "channel": "preview"
     },
     "production": {
@@ -27,6 +30,9 @@
       "autoIncrement": true,
       "android": {
         "buildType": "app-bundle"
+      },
+      "env": {
+        "APP_ENV": "production"
       },
       "channel": "production"
     }

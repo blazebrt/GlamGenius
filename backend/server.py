@@ -63,6 +63,9 @@ logger = logging.getLogger(__name__)
 async def _startup() -> None:
     logger.info("Starting GlamGenius V2 (Supabase cutover)...")
 
+    from app.config import validate_production_configuration
+    validate_production_configuration()
+
     if not SUPABASE_URL:
         logger.error(
             "SUPABASE_URL is empty. Every V2 route will refuse to authenticate "
