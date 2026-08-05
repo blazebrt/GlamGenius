@@ -36,16 +36,48 @@ async def run_forever() -> None:
 
     factory = get_sessionmaker()
     logger.info("account_deletion_worker_started")
-    heartbeat_file = Path("/tmp/worker_heartbeat")
+    
+    from app.domains.system.models import WorkerStatus
+    from sqlalchemy.dialects.postgresql import insert
+    from sqlalchemy import func
+    import socket
+
+    worker_name = f"account_deletion_worker_{socket.gethostname()}"
     
     while not stop.is_set():
+        did_work = False
         try:
             async with factory() as session:
                 did_work = await deletion_service.process_once(session)
+                
+                stmt = insert(WorkerStatus).values(
+                    worker_name=worker_name,
+                    last_heartbeat_at=func.now(),
+                    last_error=None
+                ).on_conflict_do_update(
+                    index_elements=['worker_name'],
+                    set_={"last_heartbeat_at": func.now(), "last_error": None}
+                )
+                await session.execute(stmt)
                 await session.commit()
-            heartbeat_file.touch()
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             logger.exception("account_deletion_worker_tick_failed")
+            did_work = False
+            try:
+                async with factory() as error_session:
+                    stmt = insert(WorkerStatus).values(
+                        worker_name=worker_name,
+                        last_heartbeat_at=func.now(),
+                        last_error=str(e)
+                    ).on_conflict_do_update(
+                        index_elements=['worker_name'],
+                        set_={"last_heartbeat_at": func.now(), "last_error": str(e)}
+                    )
+                    await error_session.execute(stmt)
+                    await error_session.commit()
+            except Exception:
+                pass
+
             did_work = False
         await asyncio.wait(
             [asyncio.create_task(stop.wait())],

@@ -42,14 +42,30 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     void fetchUser();
-    getPrivacyAccountDeletionStatus()
-      .then(setDeletionStatus)
-      .catch((e) => {
-         if (e.response?.status !== 404) {
-           console.warn('Failed to fetch deletion status', e);
-         }
-      });
-  }, [fetchUser]);
+    let timeoutId: ReturnType<typeof setTimeout>;
+    
+    const poll = async () => {
+      try {
+        const status = await getPrivacyAccountDeletionStatus();
+        setDeletionStatus(status);
+        if (status && status.state !== 'complete' && status.state !== 'failed_terminal') {
+          timeoutId = setTimeout(poll, 3000);
+        } else if (status && status.state === 'complete') {
+           await logout();
+        }
+      } catch (e: any) {
+        if (e.response?.status === 404) {
+          setDeletionStatus(null);
+        } else {
+           timeoutId = setTimeout(poll, 5000);
+        }
+      }
+    };
+    
+    poll();
+    
+    return () => clearTimeout(timeoutId);
+  }, [fetchUser, logout]);
 
   useEffect(() => {
     setName(user?.name || '');
@@ -120,11 +136,15 @@ export default function ProfileScreen() {
           <View style={[styles.planCard, { backgroundColor: COLORS.error }]}>
             <Text style={styles.planTitle}>Account Deletion Pending</Text>
             <Text style={styles.planSub}>
-              Your account is scheduled for deletion (Status: {deletionStatus.status}).
+              Your account is scheduled for deletion (State: {deletionStatus.state}).
+              {deletionStatus.state === 'failed_retryable' && ' Retrying soon...'}
+              {deletionStatus.state === 'failed_terminal' && ' Deletion failed. Please contact support.'}
             </Text>
-            <TouchableOpacity style={[styles.upgradeBtn, { marginTop: 16 }]} onPress={handleCancelDeletion}>
-              <Text style={[styles.upgradeText, { color: COLORS.error }]}>Cancel Deletion</Text>
-            </TouchableOpacity>
+            {deletionStatus.state === 'requested' && (
+              <TouchableOpacity style={[styles.upgradeBtn, { marginTop: 16 }]} onPress={handleCancelDeletion}>
+                <Text style={[styles.upgradeText, { color: COLORS.error }]}>Cancel Deletion</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 

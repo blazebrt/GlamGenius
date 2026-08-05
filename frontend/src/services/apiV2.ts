@@ -285,15 +285,28 @@ export const exportMyData = async (): Promise<Record<string, any>> => {
   return response.data;
 };
 
+export type AccountDeletionState =
+  | 'requested'
+  | 'storage_deleting'
+  | 'storage_complete'
+  | 'integrations_deleting'
+  | 'integrations_complete'
+  | 'database_deleting'
+  | 'database_complete'
+  | 'auth_deleting'
+  | 'failed_retryable'
+  | 'failed_terminal'
+  | 'complete';
+
 export interface AccountDeletion {
-  status: string;
-  message?: string;
-  requested_at?: string;
-  completed_now?: {
-    media_deleted: number;
-    photo_analysis_consent_withdrawn: boolean;
-  };
-  pending?: Record<string, string>;
+  account_id: string;
+  state: AccountDeletionState;
+  attempts: number;
+  retryable: boolean;
+  next_retry_at: string | null;
+  requested_at: string | null;
+  completed_at: string | null;
+  message: string;
 }
 
 export const requestPrivacyAccountDeletion = async (): Promise<AccountDeletion> => {

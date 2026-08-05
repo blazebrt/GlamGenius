@@ -27,6 +27,7 @@ from app.api.v2 import (
     shopping,
     style,
     today,
+    admin,
 )
 
 router = APIRouter(prefix="/api/v2")
@@ -51,5 +52,6 @@ router.include_router(integrations.router, tags=["v2-integrations"])
 router.include_router(shelf.router, tags=["v2-shelf"])
 router.include_router(routines.router, tags=["v2-routines"])
 router.include_router(progress.router, tags=["v2-progress"])
+router.include_router(admin.router, tags=["v2-admin"])
 
 __all__ = ["router"]

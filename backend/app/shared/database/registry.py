@@ -21,6 +21,7 @@ from app.domains.identity.models import Account
 from app.domains.inventory import models as inventory_models
 from app.domains.media.models import MediaAsset
 from app.domains.privacy.models import AccountDeletionJob
+from app.domains.system.models import WorkerStatus
 from app.domains.reference import (
     IngredientContraindicationRule,
     IngredientSensitivityRule,
@@ -56,6 +57,7 @@ __all__ = [
     "Consent",
     "MediaAsset",
     "AccountDeletionJob",
+    "WorkerStatus",
     "AIRun",
     "AIRunOutput",
     "FeatureFlag",
