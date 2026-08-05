@@ -145,14 +145,14 @@ export interface ReservationStats {
     consumed: number;
     expired: number;
   };
-  active_by_invite: Array<{
+  active_by_invite: {
     invite_id: string;
     code: string;
     label: string;
     max_uses: number;
     uses_count: number;
     live_reservations: number;
-  }>;
+  }[];
   generated_at: string;
 }
 

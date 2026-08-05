@@ -54,6 +54,8 @@ from app.domains.planning.models import (
     WeeklyPlanDay,
 )
 from app.domains.privacy import deletion_service, export as export_service
+from app.domains.progress import milestones as progress_milestones
+from app.domains.progress import service as progress_service
 from app.domains.privacy.models import STATE_COMPLETE
 from app.domains.profile.models import (
     AppearanceGoal,
@@ -436,6 +438,7 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
             followed_recommendation=True,
         ))
         await session.commit()
+        candidate_id = candidate.id
 
     # Evaluation is linked to the candidate.
     async with factory() as session:
@@ -628,18 +631,40 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
             goal_id=goal.id, account_id=account_id,
             value=1.0, source="metric", recorded_on=today,
         ))
-        # Milestone — one-week streak.
-        rule = (await session.execute(
-            select(MilestoneRule).where(MilestoneRule.rule_id == "routine_seven_day")
-        )).scalar_one()
-        session.add(Milestone(
-            account_id=account_id,
-            rule_id=rule.rule_id,
-            label=rule.label,
-            description=rule.description,
-            earned_on=today,
-        ))
         await session.commit()
+
+    # Milestone — earned through the real behaviour path, not inserted.
+    # ``avoided_duplicate_purchase`` has threshold 1, so one recording awards
+    # ``milestone.avoided_duplicate`` and a replay must award nothing more.
+    async with factory() as session:
+        rule = (await session.execute(
+            select(MilestoneRule).where(
+                MilestoneRule.rule_id == "milestone.avoided_duplicate"
+            )
+        )).scalar_one()
+        assert rule.behaviour == progress_milestones.BEHAVIOUR_AVOIDED_DUPLICATE
+
+        for _ in range(2):
+            await progress_service.record_behaviour(
+                session,
+                account_id,
+                progress_milestones.BEHAVIOUR_AVOIDED_DUPLICATE,
+                occurred_on=today,
+                subject_id=candidate_id,
+                detail={"reason": "already own something equivalent"},
+            )
+        await session.commit()
+
+    async with factory() as session:
+        earned = (await session.execute(
+            select(Milestone).where(Milestone.account_id == account_id)
+        )).scalars().all()
+    assert [m.rule_id for m in earned] == ["milestone.avoided_duplicate"], (
+        "replaying the same behaviour must not award a duplicate milestone"
+    )
+    assert earned[0].evidence["behaviour"] == (
+        progress_milestones.BEHAVIOUR_AVOIDED_DUPLICATE
+    )
 
     # No overall "attractiveness" metric shipped in the seed.
     async with factory() as session:

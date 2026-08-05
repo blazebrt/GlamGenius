@@ -93,54 +93,18 @@ async def seed_inventory_categories(session: AsyncSession) -> int:
 # Ingredient catalogue + aliases + compatibility rules
 # ---------------------------------------------------------------------------
 
-# Small representative catalogue keyed by the ingredient family used by the
-# routines engine. Production expands this from ``docs/stabilisation/
-# INGREDIENT_COVERAGE.md``; the seed shipped in the app is scoped to the
-# ingredients the routine engine reasons about explicitly.
-CORE_INGREDIENTS: List[dict] = [
-    {"key": "retinol", "display_name": "Retinol", "family": "retinoid"},
-    {"key": "retinoid", "display_name": "Retinoid", "family": "retinoid"},
-    {"key": "vitamin_c", "display_name": "Vitamin C", "family": "antioxidant"},
-    {"key": "niacinamide", "display_name": "Niacinamide", "family": "vitamin"},
-    {"key": "aha", "display_name": "AHA", "family": "exfoliant"},
-    {"key": "bha", "display_name": "BHA", "family": "exfoliant"},
-    {"key": "benzoyl_peroxide", "display_name": "Benzoyl Peroxide", "family": "acne"},
-    {"key": "salicylic_acid", "display_name": "Salicylic Acid", "family": "exfoliant"},
-    {"key": "hyaluronic_acid", "display_name": "Hyaluronic Acid", "family": "humectant"},
-    {"key": "spf", "display_name": "Broad-spectrum SPF", "family": "sunscreen"},
-]
-
-INGREDIENT_ALIASES: List[Tuple[str, str]] = [
-    ("retinol", "retin-a"),
-    ("retinol", "retinaldehyde"),
-    ("retinoid", "adapalene"),
-    ("aha", "glycolic acid"),
-    ("aha", "lactic acid"),
-    ("bha", "salicylic acid"),
-    ("vitamin_c", "ascorbic acid"),
-    ("vitamin_c", "l-ascorbic acid"),
-    ("hyaluronic_acid", "sodium hyaluronate"),
-]
-
-# (family_a, family_b, severity, headline, guidance)
-# Values are conservative, product-safety guidance — never diagnosis.
-COMPATIBILITY_RULES: List[Tuple[str, str, str, str, str]] = [
-    ("retinoid", "exfoliant", "avoid",
-     "Retinoids and exfoliants together can irritate skin.",
-     "Use on alternate evenings instead of the same night."),
-    ("retinoid", "acne", "caution",
-     "Retinoids and benzoyl peroxide can neutralise each other.",
-     "Apply on alternate evenings."),
-    ("antioxidant", "vitamin", "compatible",
-     "Modern vitamin C and niacinamide formulations play well together.",
-     "Safe to layer in a daytime routine."),
-    ("sunscreen", "any", "required",
-     "Daytime routines finish with SPF.",
-     "Apply broad-spectrum SPF as the final daytime step."),
-]
-
-
 async def seed_ingredients(session: AsyncSession) -> int:
+    """Mirror the engine's ingredient ontology into the database.
+
+    ``app.domains.routines.ontology`` is what the label parser and the rules
+    engine actually read. Seeding a separate hand-written subset produced a
+    catalogue that disagreed with the engine — an alias the parser resolves was
+    absent from ``ingredient_aliases``, and ``GET /ingredients/{key}`` answered
+    for keys the seeded table had never heard of. Reading the ontology keeps
+    the seeded catalogue, its aliases and its compatibility rules in step with
+    the code that uses them.
+    """
+    from app.domains.routines import ontology
     from app.domains.routines.models import (
         CompatibilityRuleRow,
         Ingredient,
@@ -148,58 +112,69 @@ async def seed_ingredients(session: AsyncSession) -> int:
     )
 
     seeded = 0
-    for row in CORE_INGREDIENTS:
+    for row in ontology.INGREDIENTS:
         existing = (await session.execute(
-            select(Ingredient).where(Ingredient.key == row["key"])
+            select(Ingredient).where(Ingredient.key == row.key)
         )).scalar_one_or_none()
         if existing is None:
             session.add(Ingredient(
-                key=row["key"],
-                display_name=row["display_name"],
-                family=row["family"],
+                key=row.key,
+                display_name=row.display_name,
+                inci_name=row.inci_name,
+                family=row.family,
+                summary=row.summary,
+                common_use=row.common_use,
                 knowledge_version=SEED_VERSION,
             ))
             seeded += 1
         else:
-            existing.display_name = row["display_name"]
-            existing.family = row["family"]
+            existing.display_name = row.display_name
+            existing.inci_name = row.inci_name
+            existing.family = row.family
+            existing.summary = row.summary
+            existing.common_use = row.common_use
             existing.knowledge_version = SEED_VERSION
 
     await session.flush()
 
-    for canonical, alias in INGREDIENT_ALIASES:
+    # Every spelling the parser resolves — display name, INCI name, the key
+    # itself and each declared alias. ``alias`` is globally unique (one
+    # spelling cannot mean two ingredients), so the lookup is by alias alone.
+    for alias, canonical in ontology.alias_index().items():
         existing = (await session.execute(
-            select(IngredientAlias).where(
-                IngredientAlias.ingredient_key == canonical,
-                IngredientAlias.alias == alias,
-            )
+            select(IngredientAlias).where(IngredientAlias.alias == alias)
         )).scalar_one_or_none()
         if existing is None:
             session.add(IngredientAlias(ingredient_key=canonical, alias=alias))
             seeded += 1
+        else:
+            existing.ingredient_key = canonical
 
     await session.flush()
 
-    for a, b, severity, headline, guidance in COMPATIBILITY_RULES:
-        rule_id = f"{a}__{b}__{severity}"
+    for rule in ontology.COMPATIBILITY_RULES:
         existing = (await session.execute(
-            select(CompatibilityRuleRow).where(CompatibilityRuleRow.rule_id == rule_id)
+            select(CompatibilityRuleRow).where(CompatibilityRuleRow.rule_id == rule.rule_id)
         )).scalar_one_or_none()
         if existing is None:
             session.add(CompatibilityRuleRow(
-                rule_id=rule_id,
-                family_a=a,
-                family_b=b,
-                severity=severity,
-                headline=headline,
-                guidance=guidance,
+                rule_id=rule.rule_id,
+                family_a=rule.family_a,
+                family_b=rule.family_b,
+                severity=rule.severity,
+                headline=rule.headline,
+                guidance=rule.guidance,
+                evidence_note=rule.evidence_note,
                 knowledge_version=SEED_VERSION,
             ))
             seeded += 1
         else:
-            existing.headline = headline
-            existing.guidance = guidance
-            existing.severity = severity
+            existing.family_a = rule.family_a
+            existing.family_b = rule.family_b
+            existing.severity = rule.severity
+            existing.headline = rule.headline
+            existing.guidance = rule.guidance
+            existing.evidence_note = rule.evidence_note
             existing.knowledge_version = SEED_VERSION
 
     await session.flush()
@@ -210,55 +185,44 @@ async def seed_ingredients(session: AsyncSession) -> int:
 # Progress metrics + milestones
 # ---------------------------------------------------------------------------
 
-METRIC_DEFINITIONS: List[dict] = [
-    {
-        "key": "wardrobe_utilisation",
-        "label": "Wardrobe utilisation",
-        "unit": "percent",
-        "direction": "higher_better",
-        "formula": "worn_last_90_days / active_wardrobe_size",
-        "formula_version": "1",
-        "inputs": ["item_usage_events", "inventory_items"],
-        "missing_data_behaviour": "hide",
-        "explanation": "Share of active wardrobe worn in the last 90 days.",
-        "update_frequency": "daily",
-        "not_a_measure_of": "How much you spent, how big your closet is, or a value judgement.",
-    },
-    {
-        "key": "routine_adherence",
-        "label": "Routine adherence",
-        "unit": "percent",
-        "direction": "higher_better",
-        "formula": "completed_steps / scheduled_steps",
-        "formula_version": "1",
-        "inputs": ["routine_adherence"],
-        "missing_data_behaviour": "hide",
-        "explanation": "Share of scheduled routine steps completed.",
-        "update_frequency": "daily",
-        "not_a_measure_of": "How your skin, hair or wardrobe look overall.",
-    },
-]
+def _metric_definitions() -> List[dict]:
+    """The metric catalogue, taken from the domain registry.
 
+    ``app.domains.progress.registry`` is where a metric is defined, computed
+    and versioned. Restating those rows here by hand is how the seed ends up
+    shipping a metric the engine cannot compute — and it did: the catalogue
+    held two rows, one of which named a metric that no longer existed. Reading
+    the registry means the seeded catalogue is complete and correct by
+    construction, including each metric's formula version, inputs,
+    missing-data behaviour, minimum data requirement and direction.
+    """
+    from app.domains.progress.registry import METRICS
+
+    return [
+        {
+            "key": metric.key,
+            "label": metric.label,
+            "unit": metric.unit,
+            "direction": metric.direction,
+            "formula": metric.formula,
+            "formula_version": metric.formula_version,
+            "inputs": list(metric.inputs),
+            "missing_data_behaviour": metric.missing_data_behaviour,
+            "explanation": metric.explanation,
+            "update_frequency": metric.update_frequency,
+            "not_a_measure_of": metric.not_a_measure_of,
+        }
+        for metric in METRICS
+    ]
+
+
+# Every seeded milestone rule must be reachable: ``progress.service`` only
+# records behaviours listed in ``milestones.REWARDABLE_BEHAVIOURS``, so a rule
+# naming anything else could never be awarded. The list below is therefore kept
+# in lockstep with ``app.domains.progress.milestones.RULES`` — that module owns
+# the wording rules (no engagement rewards, no childish language) and validates
+# them at import time.
 MILESTONE_RULES: List[dict] = [
-    {
-        "rule_id": "first_look_completed",
-        "label": "First styled look",
-        "description": "You completed your first styled look. Great start.",
-        "behaviour": "one_off",
-        "threshold": 1,
-        "repeatable": False,
-    },
-    {
-        "rule_id": "routine_seven_day",
-        "label": "One-week streak",
-        "description": "You kept your routine on track for a week.",
-        "behaviour": "streak_days",
-        "threshold": 7,
-        "repeatable": True,
-    },
-    # The behavioural rules driven from ``app.domains.progress.milestones.RULES``
-    # must exist in ``milestone_rules`` so the FK from ``milestones.rule_id``
-    # holds when a behaviour is recorded. Kept in lockstep with milestones.py.
     {
         "rule_id": "milestone.used_five_low_use",
         "label": "Five unused products back in use",
@@ -358,13 +322,43 @@ MILESTONE_RULES: List[dict] = [
 ]
 
 
+def _assert_milestone_rules_are_reachable() -> None:
+    """Refuse to seed a milestone rule that could never be awarded.
+
+    ``progress.service.record_behaviour`` rejects any behaviour outside
+    ``milestones.REWARDABLE_BEHAVIOURS``, so a rule naming something else is
+    dead data — and a rule naming a ``NEVER_REWARDABLE`` behaviour would be an
+    engagement reward, which this product does not ship.
+    """
+    from app.domains.progress import milestones as milestone_registry
+
+    seeded_ids = {row["rule_id"] for row in MILESTONE_RULES}
+    registry_ids = {rule.rule_id for rule in milestone_registry.RULES}
+    if seeded_ids != registry_ids:
+        raise AssertionError(
+            "Seeded milestone rules have drifted from "
+            f"progress.milestones.RULES: {seeded_ids ^ registry_ids}"
+        )
+    for row in MILESTONE_RULES:
+        if row["behaviour"] not in milestone_registry.REWARDABLE_BEHAVIOURS:
+            raise AssertionError(
+                f"Milestone rule '{row['rule_id']}' names behaviour "
+                f"'{row['behaviour']}', which can never be recorded."
+            )
+
+
 async def seed_progress(session: AsyncSession) -> int:
     from app.domains.progress.models import MetricDefinition, MilestoneRule
 
+    _assert_milestone_rules_are_reachable()
+
     seeded = 0
-    for row in METRIC_DEFINITIONS:
+    for row in _metric_definitions():
         existing = (await session.execute(
-            select(MetricDefinition).where(MetricDefinition.key == row["key"])
+            select(MetricDefinition).where(
+                MetricDefinition.key == row["key"],
+                MetricDefinition.formula_version == row["formula_version"],
+            )
         )).scalar_one_or_none()
         if existing is None:
             session.add(MetricDefinition(registry_version=SEED_VERSION, **row))
@@ -395,31 +389,28 @@ async def seed_progress(session: AsyncSession) -> int:
 # ---------------------------------------------------------------------------
 
 # (flag key, enabled, description)
-FEATURE_FLAG_DEFAULTS: List[Tuple[str, bool, str]] = [
-    ("v2_scan", True, "Photo analysis (face/hair/hand)"),
-    ("v2_quiz", True, "Style quiz"),
-    ("v2_profile", True, "Appearance profile"),
-    ("v2_inventory", True, "Inventory across seven categories"),
-    ("v2_recommendations", True, "Styling recommendations"),
-    ("v2_media", True, "Media upload/read/delete"),
-    ("v2_privacy", True, "Privacy export + deletion"),
-    ("v2_consent", True, "Consent capture"),
-    ("v2_ai_gateway", True, "AI gateway"),
-    ("v2_progress", True, "Progress and goals"),
-    ("v2_routines", True, "Routine engine"),
-    ("v2_today", True, "Today plan"),
-    ("v2_planner", True, "Weekly planner"),
-    ("v2_shopping_decisions", True, "Shopping evaluation"),
-    ("v2_virtual_try_on", False, "Off until a real provider is wired"),
-    ("v2_packing", False, "Not yet built"),
-]
+def _feature_flag_defaults() -> List[Tuple[str, bool, str]]:
+    """The private-beta flag set, taken from the flag registry.
+
+    ``app.shared.flags.service`` owns the list of flags the code understands
+    (``KNOWN_FLAGS``) and what each should be in the private beta
+    (``STABLE_BETA_DEFAULTS``). A hand-maintained copy here drifted: it seeded
+    ``v2_virtual_try_on`` — a key nothing reads — and omitted three flags the
+    code knows about, so those rows never appeared in the database at all.
+    """
+    from app.shared.flags.service import KNOWN_FLAGS, STABLE_BETA_DEFAULTS
+
+    return [
+        (key, bool(STABLE_BETA_DEFAULTS.get(key, False)), description)
+        for key, description in KNOWN_FLAGS.items()
+    ]
 
 
 async def seed_feature_flags(session: AsyncSession) -> int:
     from app.shared.flags.models import FeatureFlag
 
     seeded = 0
-    for key, enabled, description in FEATURE_FLAG_DEFAULTS:
+    for key, enabled, description in _feature_flag_defaults():
         existing = (await session.execute(
             select(FeatureFlag).where(FeatureFlag.key == key)
         )).scalar_one_or_none()

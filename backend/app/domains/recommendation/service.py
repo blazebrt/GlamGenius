@@ -515,6 +515,37 @@ async def save_decision(session: AsyncSession, evaluation: PurchaseEvaluation, d
     return row
 
 
+async def replayed_evaluation(
+    session: AsyncSession, account_id: uuid.UUID, client_mutation_id: Optional[str]
+) -> Optional[PurchaseEvaluation]:
+    """The evaluation a previous send of this request already produced.
+
+    The client sends the same ``client_mutation_id`` when it retries, so a
+    dropped response must return the original verdict rather than score the
+    item again — scoring twice would charge the allowance twice and could hand
+    back a different answer for the same question.
+    """
+    if not client_mutation_id:
+        return None
+    candidate = (await session.execute(
+        select(ShoppingCandidate).where(
+            ShoppingCandidate.account_id == account_id,
+            ShoppingCandidate.client_mutation_id == client_mutation_id,
+        )
+    )).scalar_one_or_none()
+    if candidate is None:
+        return None
+    return (await session.execute(
+        select(PurchaseEvaluation)
+        .where(
+            PurchaseEvaluation.account_id == account_id,
+            PurchaseEvaluation.candidate_id == candidate.id,
+        )
+        .order_by(PurchaseEvaluation.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+
 async def create_style_request(session: AsyncSession, account_id: uuid.UUID, occasion: OccasionRecord, preferred_item_ids: Sequence[uuid.UUID], client_mutation_id: Optional[str]) -> StyleRequest:
     if client_mutation_id:
         replay = (await session.execute(

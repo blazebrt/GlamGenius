@@ -292,7 +292,10 @@ export const useUserStore = create<UserStore>((set, get) => ({
       };
     }
     try {
-      const result = await finalizeRegistration(challenge);
+      // Called for its effect: the account row is created server-side. The
+      // response body carries nothing this screen needs, but a failure must
+      // still reach the catch below, so the await stays.
+      await finalizeRegistration(challenge);
       await writeStoredChallenge(null);
       set({ pendingChallenge: null, registrationState: 'registered' });
       await get().fetchUser();

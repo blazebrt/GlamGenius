@@ -86,19 +86,24 @@ async def test_canonical_ingredient_is_addressable_by_key(db_clean):
 async def test_ingredient_alias_resolves_to_canonical_key(db_clean):
     factory = get_sessionmaker()
     await _seed()
+    # The seeded catalogue mirrors the engine's ontology, so the canonical key
+    # is the one the parser resolves to ('ascorbic_acid'), and a label spelt
+    # 'l-ascorbic acid' or 'vitamin c' must reach it.
+    from app.domains.routines import ontology
+
     async with factory() as session:
-        # Vitamin C is aliased to 'ascorbic acid' and 'l-ascorbic acid' by
-        # the seed, so a label spelt either way still resolves.
-        alias_row = (
-            await session.execute(
-                select(IngredientAlias).where(
-                    IngredientAlias.ingredient_key == "vitamin_c",
-                    IngredientAlias.alias == "ascorbic acid",
-                )
-            )
-        ).scalar_one_or_none()
-    assert alias_row is not None
-    assert alias_row.ingredient_key == "vitamin_c"
+        rows = (await session.execute(select(IngredientAlias))).scalars().all()
+        canonical = (await session.execute(
+            select(Ingredient).where(Ingredient.key == "ascorbic_acid")
+        )).scalar_one_or_none()
+
+    by_alias = {row.alias: row.ingredient_key for row in rows}
+    assert canonical is not None, "the canonical ingredient row must be seeded"
+    assert by_alias["l-ascorbic acid"] == "ascorbic_acid"
+    assert by_alias["vitamin c"] == "ascorbic_acid"
+    # Every spelling the parser knows is stored, so a database-side lookup and
+    # the in-process parser can never disagree.
+    assert by_alias == ontology.alias_index()
 
 
 async def test_alias_uniqueness_is_enforced(db_clean):

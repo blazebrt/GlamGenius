@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -521,10 +521,15 @@ async def compile_day(
         )
 
     plan = existing or DailyPlan(account_id=context.account_id, plan_date=context.plan_date, cache_key=key)
+    completed_before: Dict[Tuple[str, str, str], datetime] = {}
     if existing is None:
         session.add(plan)
     else:
         plan.version += 1
+        # Rebuilding the day must not un-tick what the user already did. The
+        # rows are replaced, so the completions are carried across by what the
+        # action *is* rather than by row id.
+        completed_before = await _completed_action_marks(session, plan)
         await _clear_children(session, plan)
 
     clarification = clarification_for(context)
@@ -564,6 +569,9 @@ async def compile_day(
         session.add(DailyPlanAction(
             plan_id=plan.id,
             inventory_item_id=uuid.UUID(item_id) if isinstance(item_id, str) else item_id,
+            completed_at=completed_before.get(
+                (row["module"], row["action_type"], row["title"])
+            ),
             **row,
         ))
 
@@ -580,6 +588,26 @@ async def compile_day(
         logger.exception("notification_queue_failed date=%s", context.plan_date)
 
     return plan, True
+
+
+async def _completed_action_marks(
+    session: AsyncSession, plan: DailyPlan
+) -> Dict[Tuple[str, str, str], datetime]:
+    """When each of the day's finished actions was finished.
+
+    Keyed by what the action is — module, type and title — because the rows
+    themselves are about to be replaced. Two actions that read identically to
+    the user are the same action as far as "I already did that" is concerned.
+    """
+    rows = (await session.execute(
+        select(DailyPlanAction).where(
+            DailyPlanAction.plan_id == plan.id,
+            DailyPlanAction.completed_at.is_not(None),
+        )
+    )).scalars().all()
+    return {
+        (row.module, row.action_type, row.title): row.completed_at for row in rows
+    }
 
 
 async def _clear_children(session: AsyncSession, plan: DailyPlan) -> None:
