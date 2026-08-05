@@ -93,9 +93,6 @@ provider is faked — tests never spend money.
 `frontend-tests` runs `tsc --noEmit`, `expo lint` and Jest with React Native Testing
 Library.
 
-`backend_test.py` at the repository root is a separate end-to-end suite that needs a
-running server, a live database and a real Gemini key. It is not part of the containerised
-run.
 
 ## Databases
 
@@ -132,7 +129,7 @@ autogenerate will not see it and the table will silently never be created.
 V2 modules are off unless switched on. Set `V2_FEATURES` in `.env` for the boot default:
 
 ```
-V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions,v2_today,v2_planner,v2_routines,v2_progress,v2_billing
+V2_FEATURES=v2_media,v2_privacy,v2_consent,v2_ai_gateway,v2_profile,v2_inventory,v2_recommendations,v2_shopping_decisions,v2_today,v2_planner,v2_routines,v2_progress
 ```
 
 The `feature_flags` table overrides that at runtime with no redeploy. A route behind a
@@ -247,48 +244,13 @@ comes from the token, never from the URL or request body.
 | POST | /api/v2/memory/feedback | 🔒 | Tell us what you thought; we say what we learned |
 | GET | /api/v2/milestones | 🔒 | What you have reached, and what is on the list |
 | POST | /api/v2/milestones/{id}/acknowledge | 🔒 | Dismiss a milestone |
-| GET | /api/v2/billing/offers | 🔒 | What is on sale, described as outcomes |
-| POST | /api/v2/billing/checkout | 🔒 | Start a payment. Grants nothing on its own |
-| POST | /api/v2/billing/checkout/cancel | 🔒 | Back out. Nothing was charged |
-| POST | /api/v2/billing/webhook | — | The provider telling us what happened. **This is what grants access** |
-| GET | /api/v2/billing/status | 🔒 | What you have bought and what is in force |
-| GET | /api/v2/entitlements | 🔒 | What you may do, and how long it may be cached |
-| POST | /api/v2/event-passes | 🔒 | Buy a pass for one occasion |
-| GET | /api/v2/account/usage | 🔒 | What you have used this period, itemised |
 | POST | /api/v2/support | 🔒 | Ask for help, with your billing context attached |
 | POST | /api/v2/stylist-review | 🔒 | Ask a human stylist to look at something |
 | GET | /api/v2/tryon/status | 🔒 | Whether virtual try-on exists yet. It does not |
 
 ## Billing
 
-**Access is granted by a verified webhook and by nothing else.** A client can
-start a checkout and can report that the payment sheet closed; neither changes
-what anybody is entitled to. `POST /api/v2/billing/webhook` is unauthenticated
-by design — the provider calls it, and the signature *is* the authentication —
-and it reads the raw request body, because that is what the signature covers.
-
-Razorpay is the production provider for India. Verification is HMAC-SHA256 of
-the raw body against the webhook secret, hex, compared in constant time, exactly
-as Razorpay's own SDK does it — implemented with the standard library, so no
-package was added.
-
-Three failure modes get explicit handling because they are routine in
-production, not exotic:
-
-- **Duplicates.** Providers retry until they get a 2xx. A second delivery
-  collides on a unique constraint and is answered "already handled".
-- **Delay.** Nothing reads the clock to decide what a payment means.
-- **Out of order.** A subscription records the provider timestamp of the last
-  event applied; an older one is recorded and ignored, so the state machine
-  cannot be walked backwards.
-
-**Prices are configuration.** Nothing in the catalogue contains a literal
-amount, and an order freezes what was charged at the time.
-
-**The paywall sells outcomes.** "Plan every week", "use your complete wardrobe",
-"make better shopping decisions". The catalogue refuses at import to serve any
-plan whose copy contains "unlimited AI", "unlimited scans" or "more tokens", so
-that copy cannot reach a screen.
+Payments are not part of the architecture.
 
 Operations — backup, restore, monitoring, and the payment incident runbook —
 are in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).

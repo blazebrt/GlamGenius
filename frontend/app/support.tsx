@@ -1,8 +1,8 @@
 /**
- * Support, with the billing context already attached.
+ * Support, with the account context already attached.
  *
- * Nobody should have to explain their own subscription back to us. The server
- * snapshots the account's billing state onto the case when it is opened, so a
+ * Nobody should have to explain their own account back to us. The server
+ * snapshots the account's state onto the case when it is opened, so a
  * "why was I charged?" question arrives with the answer beside it.
  *
  * Anything mentioning a double charge or a refund is marked urgent by the
@@ -19,7 +19,6 @@ import { openSupportCase } from '../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 
 const CATEGORIES = [
-  { key: 'billing', label: 'A payment or plan' },
   { key: 'account', label: 'My account' },
   { key: 'bug', label: 'Something is broken' },
   { key: 'content', label: 'Something it said' },
@@ -29,7 +28,7 @@ const CATEGORIES = [
 export default function SupportScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [category, setCategory] = useState<(typeof CATEGORIES)[number]['key']>('billing');
+  const [category, setCategory] = useState<(typeof CATEGORIES)[number]['key']>('account');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);

@@ -5,7 +5,7 @@
  * available". Screens read from the getters below rather than assuming.
  *
  * Payment concepts are intentionally absent from this store (§4 hardening
- * spec): the backend no longer publishes a ``billing`` block, and screens
+ * spec): the backend no longer publishes a ``payments`` block, and screens
  * that used to render an upgrade path have been removed.
  */
 import { create } from 'zustand';

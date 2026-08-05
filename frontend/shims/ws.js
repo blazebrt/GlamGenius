@@ -22,7 +22,7 @@
  *
  * GlamGenius does not use Supabase Realtime at all — the app uses Supabase for
  * Auth only, and every product call goes through the FastAPI backend. Nothing
- * in the app opens a channel or a subscription.
+ * in the app opens a channel or a connection.
  *
  * Remove this shim when `@supabase/supabase-js` is upgraded past the release
  * that fixes the dependency upstream (2.49.5+), along with the `ws` branch of

@@ -1,9 +1,8 @@
 """GlamGenius API — Personal Appearance Operating System
 
 A single FastAPI application. **V2 only.** Every route is mounted under
-``/api/v2`` and authenticated with a verified Supabase JWT. No MongoDB, no
-local password store, no payment stack. Prompt 2 will remove the last few
-legacy artefacts still lingering in the tree.
+``/api/v2`` and authenticated with a verified Supabase JWT. No local
+password store, no payment stack.
 """
 from __future__ import annotations
 

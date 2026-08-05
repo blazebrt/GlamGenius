@@ -1,6 +1,6 @@
 /**
  * Small shared UI primitives that used to live in a payment-specific folder.
- * Kept lean and framework-neutral — no billing concepts, no payment copy.
+ * Kept lean and framework-neutral — no payment concepts.
  */
 import React from 'react';
 import {

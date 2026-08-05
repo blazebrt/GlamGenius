@@ -15,7 +15,7 @@ import { useConfigStore } from '../../src/store/configStore';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../../src/theme/colors';
 
 // The membership entry stays — people should be able to see what they
-// have — but it no longer sells anything (private beta, no billing).
+// have — but it no longer sells anything (private beta, no payments).
 const QUICK_ACTIONS = [
   { id: 'scan', icon: 'scan-outline', label: 'Skin check', route: '/(tabs)/scan-tab', color: COLORS.primary },
   { id: 'plan', icon: 'shirt-outline', label: 'Outfit plan', route: '/get-advice', color: COLORS.accent },

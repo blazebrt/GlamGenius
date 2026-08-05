@@ -28,9 +28,7 @@
 set -eu
 
 declare -a IMAGES=(
-    "mongo:6.0.19"
     "postgres:16.6-alpine"
-    "minio/minio:RELEASE.2024-11-07T00-52-20Z"
 )
 
 echo "Pulling and inspecting service images..."
