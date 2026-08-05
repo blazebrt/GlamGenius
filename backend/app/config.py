@@ -81,10 +81,6 @@ SUPABASE_JWKS_URL = _env_str(
     "SUPABASE_JWKS_URL",
     f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json" if SUPABASE_URL else "",
 )
-# Optional HS256 fallback. Only used when JWKS does not match a token's kid,
-# which is the case for legacy Supabase projects that still use the shared
-# HS256 secret.
-SUPABASE_JWT_SECRET = _env_str("SUPABASE_JWT_SECRET")
 SUPABASE_STORAGE_BUCKET = _env_str("SUPABASE_STORAGE_BUCKET", "glamgenius-media")
 
 SUPABASE_ADMIN_USER_IDS = {
@@ -222,8 +218,7 @@ def validate_production_configuration() -> None:
     if not SUPABASE_JWKS_URL:
         raise RuntimeError(
             "CRITICAL: SUPABASE_JWKS_URL is required in production. "
-            "Symmetric HS256 (SUPABASE_JWT_SECRET) is rejected by default to ensure "
-            "production tokens are verified asymmetrically."
+            "Production tokens must be verified asymmetrically."
         )
 
     # 2. Critical variables must be set.
@@ -233,20 +228,36 @@ def validate_production_configuration() -> None:
             "must all be set in production."
         )
 
-    if not POSTGRES_URL:
-        raise RuntimeError("CRITICAL: POSTGRES_URL must be set in production.")
+    if not SUPABASE_JWT_ISSUER:
+        raise RuntimeError("CRITICAL: SUPABASE_JWT_ISSUER must be set in production.")
 
-    if MEDIA_STORAGE_BACKEND.lower() == "local" and not MEDIA_ALLOW_LOCAL_IN_PRODUCTION:
+    if not POSTGRES_URL or "localhost" in POSTGRES_URL.lower() or "127.0.0.1" in POSTGRES_URL:
+        raise RuntimeError("CRITICAL: POSTGRES_URL must be a valid remote URL in production.")
+
+    if not SUPABASE_STORAGE_BUCKET:
+        raise RuntimeError("CRITICAL: SUPABASE_STORAGE_BUCKET must be set in production.")
+
+    if not GEMINI_API_KEY:
+        raise RuntimeError("CRITICAL: GEMINI_API_KEY must be set in production.")
+
+    import os
+    if not os.environ.get("SENTRY_BACKEND_DSN", "").strip():
+        raise RuntimeError("CRITICAL: SENTRY_BACKEND_DSN must be set in production.")
+
+    if not INVITE_REQUIRED:
+        raise RuntimeError("CRITICAL: INVITE_REQUIRED=true is mandatory in production.")
+
+    if not REQUIRE_ANALYSIS_CONSENT or not CONSENT_VERSION:
+        raise RuntimeError("CRITICAL: REQUIRE_ANALYSIS_CONSENT=true and CONSENT_VERSION are mandatory in production.")
+
+    if MEDIA_STORAGE_BACKEND.lower() != "supabase":
         raise RuntimeError(
-            "CRITICAL: MEDIA_STORAGE_BACKEND='local' is not allowed in production "
-            "because local storage does not persist across container redeploys. "
-            "Use 'supabase' instead."
+            "CRITICAL: MEDIA_STORAGE_BACKEND must be 'supabase' in production."
         )
 
-    if ALLOWED_ORIGINS_IS_DEFAULT:
-        import warnings
-        warnings.warn(
-            "ALLOWED_ORIGINS is not set in production. Only local development "
-            "addresses can call this API from a browser."
-        )
+    if ALLOWED_ORIGINS_IS_DEFAULT or not ALLOWED_ORIGINS:
+        raise RuntimeError("CRITICAL: ALLOWED_ORIGINS must be set and non-empty in production.")
+
+    if "*" in ALLOWED_ORIGINS or any("localhost" in o.lower() or "127.0.0.1" in o.lower() for o in ALLOWED_ORIGINS):
+        raise RuntimeError("CRITICAL: ALLOWED_ORIGINS cannot contain wildcards or localhost in production.")
 

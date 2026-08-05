@@ -48,8 +48,8 @@ from jwt.exceptions import InvalidTokenError, PyJWKClientError
 from app.config import (
     SUPABASE_ADMIN_USER_IDS,
     SUPABASE_JWKS_URL,
+    SUPABASE_JWKS_URL,
     SUPABASE_JWT_ISSUER,
-    SUPABASE_JWT_SECRET,
 )
 
 logger = logging.getLogger(__name__)
@@ -172,25 +172,6 @@ async def _decode_with_jwks(token: str, unverified_header: Dict[str, Any]) -> Di
     )
 
 
-def _decode_with_shared_secret(token: str) -> Dict[str, Any]:
-    if not SUPABASE_JWT_SECRET:
-        raise InvalidTokenError("HS256 fallback not configured")
-    return jwt.decode(
-        token,
-        SUPABASE_JWT_SECRET,
-        algorithms=["HS256"],
-        issuer=SUPABASE_JWT_ISSUER or None,
-        audience="authenticated",
-        options={
-            "require": ["exp", "sub"],
-            "verify_signature": True,
-            "verify_exp": True,
-            "verify_iss": bool(SUPABASE_JWT_ISSUER),
-            "verify_aud": True,
-        },
-    )
-
-
 async def verify_supabase_token(token: str) -> Dict[str, Any]:
     """Decode and validate a Supabase access token. Raises AuthError on failure.
 
@@ -221,20 +202,6 @@ async def verify_supabase_token(token: str) -> Dict[str, Any]:
         except httpx.HTTPError as exc:  # pragma: no cover - network-level
             logger.warning("supabase_jwks_network_error reason=%s", type(exc).__name__)
             raise AuthError(code="jwks_unavailable", detail="Authentication is temporarily unavailable")
-
-    if alg == "HS256":
-        # Try JWKS first anyway (new projects can issue HS-shaped keys as
-        # symmetric JWKS entries). If that has no matching kid, fall back to
-        # the shared secret; if neither works, reject.
-        try:
-            return await _decode_with_jwks(token, header)
-        except (InvalidTokenError, PyJWKClientError):
-            pass
-        try:
-            return _decode_with_shared_secret(token)
-        except InvalidTokenError as exc:
-            logger.info("supabase_jwt_reject_hs256 reason=%s", type(exc).__name__)
-            raise AuthError()
 
     # Unknown algorithm or no verification path available. Refuse.
     logger.info("supabase_jwt_reject_alg alg=%s", alg or "<missing>")

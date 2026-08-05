@@ -24,7 +24,6 @@ from httpx import ASGITransport, AsyncClient
 os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service")
-os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret")
 os.environ.setdefault("SUPABASE_JWT_ISSUER", "https://test.supabase.co/auth/v1")
 os.environ.setdefault(
     "V2_FEATURES",

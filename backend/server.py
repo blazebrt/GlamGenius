@@ -22,7 +22,6 @@ from app.config import (
     ALLOWED_ORIGINS,
     ALLOWED_ORIGINS_IS_DEFAULT,
     MEDIA_STORAGE_BACKEND,
-    SUPABASE_JWT_SECRET,
     SUPABASE_JWKS_URL,
     SUPABASE_URL,
     V2_FEATURES,
@@ -71,9 +70,9 @@ async def _startup() -> None:
             "until you set SUPABASE_URL, SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY "
             "in backend/.env."
         )
-    if not (SUPABASE_JWKS_URL or SUPABASE_JWT_SECRET):
+    if not SUPABASE_JWKS_URL:
         logger.error(
-            "Neither SUPABASE_JWKS_URL nor SUPABASE_JWT_SECRET is set — JWT "
+            "SUPABASE_JWKS_URL is not set — JWT "
             "verification is not configured. All requests will return 401."
         )
 
