@@ -1603,10 +1603,10 @@ export const getMilestones = async (): Promise<{
 export const acknowledgeMilestone = async (id: string): Promise<{ acknowledged: boolean }> =>
   (await api.post(`${V2}/milestones/${id}/acknowledge`, {})).data;
 
-// --- Phase 8: support (billing removed with the Supabase cutover) ----------
+// --- Phase 8: support (payments removed with the Supabase cutover) ----------
 
 export const openSupportCase = async (body: {
-  category: 'billing' | 'account' | 'bug' | 'content' | 'other';
+  category: 'account' | 'bug' | 'content' | 'other';
   subject: string;
   message: string;
 }): Promise<{ id: string; severity: string; status: string; message: string }> =>

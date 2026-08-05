@@ -1,5 +1,5 @@
 /**
- * The config store no longer models billing (§4 hardening spec). It reads
+ * The config store no longer models payments (§4 hardening spec). It reads
  * ``access.beta_message``, ``analysis.provider_configured`` and the
  * ``features`` map. This test guards the safe-default behaviour: when the
  * store has not loaded, or loading fails, every getter returns the
