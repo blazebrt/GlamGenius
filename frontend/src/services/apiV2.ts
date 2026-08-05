@@ -287,17 +287,27 @@ export const exportMyData = async (): Promise<Record<string, any>> => {
 
 export interface AccountDeletion {
   status: string;
-  requested_at: string;
-  completed_now: {
+  message?: string;
+  requested_at?: string;
+  completed_now?: {
     media_deleted: number;
     photo_analysis_consent_withdrawn: boolean;
   };
-  pending: Record<string, string>;
-  message: string;
+  pending?: Record<string, string>;
 }
 
-export const requestAccountDeletion = async (): Promise<AccountDeletion> => {
-  const response = await api.delete<AccountDeletion>(`${V2}/account`);
+export const requestPrivacyAccountDeletion = async (): Promise<AccountDeletion> => {
+  const response = await api.delete<AccountDeletion>(`${V2}/privacy/account`);
+  return response.data;
+};
+
+export const getPrivacyAccountDeletionStatus = async (): Promise<AccountDeletion> => {
+  const response = await api.get<AccountDeletion>(`${V2}/privacy/account-deletion`);
+  return response.data;
+};
+
+export const cancelPrivacyAccountDeletion = async (): Promise<AccountDeletion> => {
+  const response = await api.post<AccountDeletion>(`${V2}/privacy/account-deletion/cancel`);
   return response.data;
 };
 

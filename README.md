@@ -43,10 +43,9 @@ cp env.example .env
 docker compose up --build
 ```
 
-Starts MongoDB, PostgreSQL, the API and the outbox worker. Database migrations run
+Starts PostgreSQL, the API and the outbox worker. Database migrations run
 automatically on start.
 
-- API: http://localhost:8000/api/health
 - V2 health (includes PostgreSQL): http://localhost:8000/api/v2/health
 
 ## Backend (local)
@@ -54,7 +53,6 @@ automatically on start.
 ```bash
 cd backend
 cp ../env.example .env
-# edit MONGO_URL=mongodb://localhost:27017
 # edit POSTGRES_URL=postgresql+asyncpg://glamgenius:glamgenius@localhost:5432/glamgenius_v2
 pip install -r requirements.txt
 alembic upgrade head
@@ -101,18 +99,16 @@ run.
 
 ## Databases
 
-Two, on purpose, during the V2 transition.
+One: PostgreSQL via Supabase.
 
-| | MongoDB | PostgreSQL |
-|---|---|---|
-| Owns | users, auth, scans, style plans, invites, rate limits | media, consent, AI runs, appearance digital twin, onboarding, complete appearance inventory, audit, usage ledger, flags, outbox |
-| Used by | V1 (`/api`) | V2 (`/api/v2`) |
-| Migrations | none | Alembic |
+| | PostgreSQL |
+|---|---|
+| Owns | auth (via Supabase), media, consent, AI runs, appearance digital twin, onboarding, complete appearance inventory, audit, usage ledger, flags, outbox |
+| Used by | V2 (`/api/v2`) |
+| Migrations | Alembic |
 
-V2 stores no user attributes. `account_links` holds one row per user containing the V1
-user id and nothing else identifying; every V2 table hangs off that. Authentication is
-entirely V1. The link is created on a user's first V2 request, so there is no migration
-and no backfill.
+Authentication is handled securely via Supabase Auth.
+
 
 ### Migrations
 
@@ -147,31 +143,6 @@ disabled flag returns 404 — a switched-off feature should look absent, not for
 Routes marked 🔒 require an `Authorization: Bearer <token>` header. The token
 comes from register or login and is valid 30 days. The caller's identity always
 comes from the token, never from the URL or request body.
-
-### V1 — `/api`
-
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| GET | /api/health | — | Health |
-| GET | /api/config/public | — | Prices, free limit, billing availability |
-| GET | /api/services | — | Salon ideas |
-| GET | /api/salon-ideas | — | Salon suggestions (no pay) |
-| GET | /api/quiz/questions | — | Stylist quiz questions |
-| POST | /api/scan/preview | — | Free teaser: tone + top colours, saves nothing |
-| POST | /api/users | — | Create account (email + password + invite required) |
-| POST | /api/auth/register | — | Register, returns token |
-| POST | /api/auth/login | — | Login, returns token (rate limited) |
-| GET | /api/users/me | 🔒 | Own profile |
-| PUT | /api/users/me | 🔒 | Update own profile |
-| POST | /api/scan/analyze | 🔒 | Full coach analysis (quota enforced) |
-| GET | /api/scan/history | 🔒 | Own scan history |
-| GET | /api/scan/trends | 🔒 | Legacy historical scan data (not shown in the Phase 1 UI) |
-| POST | /api/quiz/submit | 🔒 | Submit stylist quiz |
-| POST | /api/plans/style | 🔒 | Occasion style plan |
-| GET | /api/recommendations/history | 🔒 | Own past plans |
-| POST | /api/subscription/create-order | 🔒 | Refused while billing is unavailable |
-| POST | /api/subscription/confirm | 🔒 | Refused while billing is unavailable |
-| GET | /api/subscription/status | 🔒 | Own plan status |
 
 ### V2 — `/api/v2`
 

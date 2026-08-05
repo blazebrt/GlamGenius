@@ -8,7 +8,6 @@ from fastapi import APIRouter
 
 from app.api.v2 import (
     access,
-    account,
     config,
     consent,
     integrations,
@@ -39,7 +38,6 @@ router.include_router(consent.router, tags=["v2-consent"])
 router.include_router(media.router, tags=["v2-media"])
 router.include_router(jobs.router, tags=["v2-jobs"])
 router.include_router(privacy.router, tags=["v2-privacy"])
-router.include_router(account.router, tags=["v2-account"])
 router.include_router(profile.router, tags=["v2-profile"])
 router.include_router(onboarding.router, tags=["v2-onboarding"])
 router.include_router(inventory.router, tags=["v2-inventory"])

@@ -468,3 +468,22 @@ async def admin_reservation_stats(
         ],
         "generated_at": now.isoformat(),
     }
+
+@router.get('/access/admin/queue/metrics')
+async def admin_queue_metrics(
+    admin: SupabaseUser = Depends(get_current_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    from sqlalchemy import func, select
+    from app.domains.privacy.models import AccountDeletionJob
+
+    stmt = select(AccountDeletionJob.state, func.count(AccountDeletionJob.id)).group_by(AccountDeletionJob.state)
+    result = await session.execute(stmt)
+    state_counts = dict(result.all())
+
+    return {
+        'queues': {
+            'account_deletion': state_counts
+        }
+    }
+

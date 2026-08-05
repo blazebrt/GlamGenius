@@ -217,7 +217,7 @@ async def test_health_reports_degraded_when_postgres_is_down(app_client, monkeyp
 
     resp = await app_client.get("/api/v2/health")
 
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     assert resp.json()["status"] == "degraded"
     assert resp.json()["postgres"] == "down"
 

@@ -208,3 +208,45 @@ ALLOWED_ORIGINS = [
     o.strip().rstrip("/") for o in _allowed_origins_raw.split(",") if o.strip()
 ]
 ALLOWED_ORIGINS_IS_DEFAULT = "ALLOWED_ORIGINS" not in os.environ
+
+
+def validate_production_configuration() -> None:
+    """Validate that the environment is safe for production use.
+    
+    Raises RuntimeError if a critical production invariant is missing or unsafe.
+    """
+    if APP_ENV not in ("production", "staging"):
+        return
+
+    # 1. Reject HS256 by default. Production must use asymmetric JWKS.
+    if not SUPABASE_JWKS_URL:
+        raise RuntimeError(
+            "CRITICAL: SUPABASE_JWKS_URL is required in production. "
+            "Symmetric HS256 (SUPABASE_JWT_SECRET) is rejected by default to ensure "
+            "production tokens are verified asymmetrically."
+        )
+
+    # 2. Critical variables must be set.
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY or not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError(
+            "CRITICAL: SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY "
+            "must all be set in production."
+        )
+
+    if not POSTGRES_URL:
+        raise RuntimeError("CRITICAL: POSTGRES_URL must be set in production.")
+
+    if MEDIA_STORAGE_BACKEND.lower() == "local" and not MEDIA_ALLOW_LOCAL_IN_PRODUCTION:
+        raise RuntimeError(
+            "CRITICAL: MEDIA_STORAGE_BACKEND='local' is not allowed in production "
+            "because local storage does not persist across container redeploys. "
+            "Use 'supabase' instead."
+        )
+
+    if ALLOWED_ORIGINS_IS_DEFAULT:
+        import warnings
+        warnings.warn(
+            "ALLOWED_ORIGINS is not set in production. Only local development "
+            "addresses can call this API from a browser."
+        )
+
