@@ -16,7 +16,7 @@ and no browser E2E test was added.
 
 ## 1. Backend test inventory
 
-**Total: 382 tests, all passing on PostgreSQL** (was 271 collected / 268
+**Total: 467 tests, all passing on PostgreSQL** (was 271 collected / 268
 passing at the start of this work).
 
 | Test file | Domain (spec §) | Tests | Origin | Risk it protects against |
@@ -28,7 +28,9 @@ passing at the start of this work).
 | `test_beta_access.py` | Identity — invite lifecycle (§1.1) | 7 | existing | Exhausted/deactivated invites still redeeming |
 | `test_admin_reservation_stats.py` | Identity — admin surface (§1.1) | 3 | existing | Non-admins reaching admin endpoints |
 | `test_v2_api.py` | Identity + quiz + scan over HTTP (§1.1) | 14 | existing | Cross-account reads; registration flow regressions |
+| **`test_domain_identity_access.py`** | **Identity — expiry + concurrency (§1.1)** | **9** | **new** | An expired invite or reservation still admitting someone; two devices racing an invite with one seat; a challenge usable by a second account |
 | `test_domain_consent.py` | Consent (§1.2) | 6 | existing | Analysis running without, or after revoked, consent |
+| **`test_domain_consent_profile_api.py`** | **Consent + profile/onboarding over HTTP (§1.2, §1.3)** | **23** | **new** | Consent recorded without version or source; revocation not blocking the next scan; unsupported attributes accepted; an inferred observation outranking the user's own correction; onboarding losing a partial save |
 | `test_domain_profile.py` | Profile + onboarding (§1.3) | 6 | existing | Attribute duplication; onboarding state loss |
 | `test_domain_inventory.py` | Inventory, all 7 categories (§1.4) | 21 | existing | Lifecycle, ownership and category-validation regressions |
 | **`test_domain_media.py`** | **Media (§1.5)** | **29** | **new** | MIME spoofing, oversized uploads, cross-account reads, storage-failure misclassification, row/object drift, prod local-storage, prefix cleanup |
@@ -36,11 +38,14 @@ passing at the start of this work).
 | `test_no_s3_boto3.py` | Media — removed backends (§1.5) | 5 | existing | S3/boto3 creeping back in |
 | `test_domain_ai_gateway.py` | AI gateway + safety (§1.6) | 14 | existing | Fabricated output on provider failure; double usage consumption |
 | `test_domain_scan.py` | Scan / photo analysis (§1.7) | 15 | existing | Consent bypass; raw image bytes in payloads |
-| `test_domain_quiz_style.py` | Quiz + occasion styling (§1.8) | 12 | existing | Ownership leaks; styling using items not owned |
+| `test_domain_quiz_style.py` | Quiz + occasion (§1.8) | 12 | existing | Ownership leaks; unsupported occasion keys |
+| **`test_domain_styling.py`** | **Styling: looks, revise, swap, feedback (§1.8)** | **15** | **new** | A look containing clothes the user does not own; an empty wardrobe producing invented outfits; a swap pulling in another account's item; a deleted memory fact still eligible to shape output |
 | **`test_domain_shopping.py`** | **Shopping evaluation (§1.9)** | **19** | **new** | Verdict without its arithmetic; ignoring owned inventory; duplicate-purchase advice; retry double-charging the allowance; payment language |
 | **`test_domain_planning.py`** | **Today + planner (§1.10)** | **29** | **new** | Lost completions, recompilation on every read, invented weather, provider outage, cross-account plans/events |
-| `test_domain_routines.py` | Routines + ingredient safety (§1.11) | 12 | existing (1 adapted) | Unsafe pairings unflagged; medical language |
+| `test_domain_routines.py` | Routines — seeded rules (§1.11) | 12 | existing (1 adapted) | Unsafe pairings unflagged; medical language |
+| **`test_domain_routines_api.py`** | **Routines over HTTP (§1.11)** | **19** | **new** | A routine naming products the user does not own; a double tap counting a day twice; streak language; supplement or ingredient copy drifting into dosage or diagnosis |
 | `test_domain_progress.py` | Progress, goals, milestones (§1.12) | 13 | existing (3 fixed) | Silent zeros for missing data; duplicate milestones; engagement rewards |
+| **`test_domain_progress_api.py`** | **Progress over HTTP + §1.4/§3.1 remainders** | **19** | **new** | A metric shown without its formula version; two photos in different light shown as a before/after; a confidence metric computed from one reading; purchase metadata lost; a failed seed leaving half-written reference data |
 | `test_domain_memory.py` | Controlled memory (§1.13) | 11 | existing | Deleted facts still influencing output |
 | `test_privacy_export.py` | Privacy — registry (§1.14) | 7 | existing | An unclassified table slipping into the schema |
 | `test_privacy_api.py` | Privacy — routes (§1.14) | 4 | existing | Cross-account deletion status |
@@ -55,10 +60,13 @@ passing at the start of this work).
 | `test_critical_journey_full.py` | Journey — full domain surface | 1 | existing (extended) | Data-relationship regressions across every domain |
 | **`test_critical_journey_api.py`** | **Journey — real HTTP API (Part 2)** | **1** | **new** | The whole product flow breaking at the route layer |
 
-New test files: `test_domain_media.py`, `test_domain_shopping.py`,
+New test files (11): `test_domain_media.py`, `test_domain_shopping.py`,
 `test_domain_planning.py`, `test_domain_privacy_integration.py`,
-`test_monitoring_and_ops.py`, `test_critical_journey_api.py`, plus the shared
-`tests/journey.py` helper (not a test file).
+`test_monitoring_and_ops.py`, `test_critical_journey_api.py`,
+`test_domain_identity_access.py`, `test_domain_consent_profile_api.py`,
+`test_domain_styling.py`, `test_domain_routines_api.py`,
+`test_domain_progress_api.py`, plus the shared `tests/journey.py` helper (not a
+test file).
 
 Restored from Git history: none. The deleted V1-era suites
 (`test_privacy.py`, `test_media.py`, `test_v1_regression.py`,
@@ -202,12 +210,13 @@ python -m app.bootstrap.reference_data      # second run, 0 new rows
 alembic check                               # No new upgrade operations detected
 pytest -q tests/test_reference_data_seed.py # 16 passed
 pytest -q tests/test_critical_journey_api.py# 1 passed
-pytest -q tests                             # 382 passed
+pytest -q tests                             # 467 passed
 ```
 
-The full suite was run twice: against the working database, and against a
-freshly created database that had only been migrated and seeded. Both runs:
-**382 passed, 0 failed, 0 skipped.**
+The full suite was run three times: against the working database, against a
+freshly created database that had only been migrated and seeded, and with CI's
+own `INVITE_REQUIRED=false REQUIRE_ANALYSIS_CONSENT=false` exported. All three:
+**467 passed, 0 failed, 0 skipped.**
 
 Formatting, lint and type checking: the project configures none for the backend
 (`.github/workflows/ci.yml` runs pytest, Alembic, gitleaks and pip-audit; there
@@ -241,3 +250,8 @@ place rather than deleted, since removing it is outside this task's scope.
   §1.9 names.
 * Native Android/iOS journeys remain unverified from this environment; the CI
   Metro-bundle job is the only mobile evidence and is unchanged.
+* Two CI jobs remain red for reasons that predate this branch and live in files
+  it does not touch: the frontend ESLint zero-warning budget (two leftover
+  warnings in `apiV2.ts` and `userStore.ts`) and the Android Metro bundle
+  (`@supabase/supabase-js` resolution). Both fail identically on the base
+  branch. Left for a frontend change rather than fixed here.
