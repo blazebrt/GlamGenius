@@ -48,7 +48,6 @@ from app.domains.recommendation import models as recommendation_models
 from app.domains.routines import models as routines_models
 from app.domains.scan.models import Scan
 from app.shared.database.base import Base
-from app.shared.events.models import OutboxEvent
 from app.shared.flags.models import FeatureFlag
 
 __all__ = [
@@ -61,7 +60,6 @@ __all__ = [
     "AIRunOutput",
     "FeatureFlag",
     "AuditEvent",
-    "OutboxEvent",
     "AppEvent",
     "AppearanceProfile",
     "ProfileAttribute",

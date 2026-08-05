@@ -29,7 +29,6 @@ from app.domains.recommendation import service as recommendation_service
 from app.domains.recommendation.models import Look
 from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
-from app.shared.events import outbox
 
 INTEGRATION_CALENDAR = "calendar"
 INTEGRATION_WEATHER = "weather"
@@ -244,10 +243,6 @@ async def disconnect_calendar(session: AsyncSession, account_id: uuid.UUID) -> L
     for event in events:
         event.status = "revoked"
 
-    await outbox.publish(
-        session, aggregate_type="planning", aggregate_id=str(account_id),
-        event_type="planning.calendar_disconnected", payload={"revoked_events": len(events)},
-    )
     await session.flush()
     return list(rows)
 
@@ -294,11 +289,6 @@ async def set_item_state(
         available_from=available_from, note=note,
     )
     session.add(row)
-    await outbox.publish(
-        session, aggregate_type="planning", aggregate_id=str(item_id),
-        event_type="planning.item_state_changed",
-        payload={"account_id": str(account_id), "state": state},
-    )
     await session.flush()
     return row
 

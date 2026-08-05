@@ -189,7 +189,6 @@ REGISTRY: Dict[str, Classification] = {
     # --- Feature flags (global) ---
     "feature_flags": Classification.NOT_USER_OWNED,
     # --- Operational only ---
-    "domain_outbox": Classification.OPERATIONAL,
     # --- Reference data added by Package E (seed catalogue completion) ---
     # Note: ``routine_templates`` and ``perfume_context_rules`` were declared
     # earlier in this dict; the entries below cover only the new tables.

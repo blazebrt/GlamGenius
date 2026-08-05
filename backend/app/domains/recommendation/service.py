@@ -36,7 +36,6 @@ from app.domains.recommendation.ranking import RankedLook
 from app.domains.recommendation.schemas import OccasionCreate, OccasionPatch
 from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
-from app.shared.events import outbox
 
 SLOT_ORDER = (SLOT_CLOTHING, SLOT_SHOES, SLOT_ACCESSORIES, SLOT_PERFUME, SLOT_HAIR, SLOT_GROOMING)
 
@@ -350,11 +349,6 @@ async def record_adjustment(session: AsyncSession, look: Look, *, adjustment_typ
         look_id=look.id, account_id=look.account_id, adjustment_type=adjustment_type,
         slot=slot, from_item_id=from_item_id, to_item_id=to_item_id, reason=reason, actor="user",
     ))
-    await outbox.publish(
-        session, aggregate_type="look", aggregate_id=str(look.id),
-        event_type=f"recommendation.look_{adjustment_type}",
-        payload={"account_id": str(look.account_id), "slot": slot},
-    )
 
 
 async def save_feedback(session: AsyncSession, look: Look, *, rating: str, reason: Optional[str], note: Optional[str], worn_on: Optional[date]) -> LookFeedback:
@@ -368,11 +362,6 @@ async def save_feedback(session: AsyncSession, look: Look, *, rating: str, reaso
         row.rating, row.reason, row.note, row.worn_on = rating, reason, note, worn_on
     if rating in ("loved", "saved", "worn"):
         look.saved = True
-    await outbox.publish(
-        session, aggregate_type="look", aggregate_id=str(look.id),
-        event_type="recommendation.look_feedback",
-        payload={"account_id": str(look.account_id), "rating": rating},
-    )
     await session.flush()
     return row
 
@@ -506,11 +495,6 @@ async def save_decision(session: AsyncSession, evaluation: PurchaseEvaluation, d
         session.add(row)
     else:
         row.decision, row.note, row.followed_recommendation = decision, note, followed
-    await outbox.publish(
-        session, aggregate_type="purchase_evaluation", aggregate_id=str(evaluation.id),
-        event_type="recommendation.purchase_decided",
-        payload={"account_id": str(evaluation.account_id), "decision": decision, "followed_recommendation": followed},
-    )
     await session.flush()
     return row
 

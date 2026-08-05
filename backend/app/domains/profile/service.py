@@ -13,8 +13,6 @@ from app.domains.profile.models import (
 )
 from app.domains.profile.registry import ATTRIBUTE_REGISTRY, validate_attribute
 from app.shared.database.base import utcnow
-from app.shared.events import outbox
-
 
 STYLE_KEYS = {
     "preferred_style", "favourite_colours", "disliked_colours", "brand_preferences",
@@ -149,10 +147,6 @@ async def apply_attributes(
             attribute_key=row.key, old_value=old_value, new_value=row.value,
             source=source, reason=reason,
         ))
-    await outbox.publish(
-        session, aggregate_type="appearance_profile", aggregate_id=str(profile.id),
-        event_type="profile.changed", payload={"version": profile.version, "keys": [row.key for row, _ in changed]},
-    )
     await session.flush()
     return [row for row, _ in changed]
 
