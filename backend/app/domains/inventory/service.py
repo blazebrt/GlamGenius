@@ -23,7 +23,6 @@ from app.domains.media import service as media_service
 from app.domains.media.models import MEDIA_PURPOSE_INVENTORY
 from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import ConflictError, NotFoundError, ValidationFailedError
-from app.shared.events import outbox
 
 DETAIL_MODELS = {
     "wardrobe": WardrobeItemDetail, "shoes": ShoeItemDetail,
@@ -136,7 +135,6 @@ async def set_images(session: AsyncSession, item: InventoryItem, account_id: uui
 
 async def record_event(session: AsyncSession, item: InventoryItem, event_type: str, payload: Optional[Dict[str, Any]] = None, actor: str = "user") -> None:
     session.add(InventoryEvent(account_id=item.account_id, item_id=item.id, event_type=event_type, actor=actor, payload=payload or {}))
-    await outbox.publish(session, aggregate_type="inventory_item", aggregate_id=str(item.id), event_type=f"inventory.{event_type}", payload={"account_id": str(item.account_id), **(payload or {})})
 
 
 async def detect_duplicates(session: AsyncSession, item: InventoryItem) -> None:

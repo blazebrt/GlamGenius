@@ -44,7 +44,6 @@ from app.shared.errors.exceptions import (
     StorageMisconfiguredError,
     StorageUnavailableError,
 )
-from app.shared.events import outbox
 from app.shared.validation.media import read_dimensions, validate_upload
 
 logger = logging.getLogger(__name__)
@@ -146,13 +145,6 @@ async def upload(
         context={"purpose": purpose, "byte_size": size, "content_type": content_type},
         client_ip=client_ip,
     )
-    await outbox.publish(
-        session,
-        aggregate_type="media_asset",
-        aggregate_id=str(asset.id),
-        event_type="media.uploaded",
-        payload={"account_id": str(account_id), "purpose": purpose},
-    )
     return asset
 
 
@@ -230,13 +222,6 @@ async def delete(
         subject_id=str(asset.id),
         context={"purpose": asset.purpose, "byte_size": asset.byte_size},
         client_ip=client_ip,
-    )
-    await outbox.publish(
-        session,
-        aggregate_type="media_asset",
-        aggregate_id=str(asset.id),
-        event_type="media.deleted",
-        payload={"account_id": str(account_id)},
     )
     return asset
 
