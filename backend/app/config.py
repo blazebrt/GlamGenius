@@ -162,6 +162,12 @@ CONSENT_VERSION = _env_str("CONSENT_VERSION", "2026-01-01")
 # ---------------------------------------------------------------------------
 INVITE_REQUIRED = _env_bool("INVITE_REQUIRED", True)
 
+# ---------------------------------------------------------------------------
+# Policy and Support URLs
+# ---------------------------------------------------------------------------
+PRIVACY_POLICY_URL = _env_str("PRIVACY_POLICY_URL", "https://glamgenius.placeholder/privacy")
+SUPPORT_URL = _env_str("SUPPORT_URL", "https://glamgenius.placeholder/support")
+
 
 # ---------------------------------------------------------------------------
 # Beta usage controls — non-payment abuse and cost limits
@@ -301,6 +307,13 @@ def validate_production_configuration() -> None:
 
     if not REQUIRE_ANALYSIS_CONSENT or not CONSENT_VERSION:
         raise RuntimeError("CRITICAL: REQUIRE_ANALYSIS_CONSENT=true and CONSENT_VERSION are mandatory in production.")
+
+    if not PRIVACY_POLICY_URL or "placeholder" in PRIVACY_POLICY_URL:
+        raise RuntimeError("CRITICAL: PRIVACY_POLICY_URL must be a real URL in production.")
+        
+    if not SUPPORT_URL or "placeholder" in SUPPORT_URL:
+        raise RuntimeError("CRITICAL: SUPPORT_URL must be a real URL in production.")
+
 
     if MEDIA_STORAGE_BACKEND.lower() != "supabase":
         raise RuntimeError(
