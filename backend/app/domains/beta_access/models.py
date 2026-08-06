@@ -126,7 +126,7 @@ class InviteRegistrationReservation(TimestampMixin, Base):
 class BetaUsageEvent(Base):
     """One row per counted, successful, cost-bearing action.
 
-    Not a billing ledger. Read exclusively by the beta abuse-and-cost limiter
+    Not a financial ledger. Read exclusively by the beta abuse-and-cost limiter
     to decide whether an account has exceeded a per-hour or per-month cap.
 
     Failed AI runs are *not* recorded here. Retried idempotent work is

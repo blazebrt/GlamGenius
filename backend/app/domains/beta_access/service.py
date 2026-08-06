@@ -444,7 +444,7 @@ async def expire_stale_reservations(
 
 
 # ---------------------------------------------------------------------------
-# Beta usage limiter — non-billing
+# Beta usage limiter — non-financial
 # ---------------------------------------------------------------------------
 
 class UsageExceeded(Exception):

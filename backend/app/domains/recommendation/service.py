@@ -59,7 +59,7 @@ from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 
 SLOT_ORDER = (SLOT_CLOTHING, SLOT_SHOES, SLOT_ACCESSORIES, SLOT_PERFUME, SLOT_HAIR, SLOT_GROOMING)
 
-# The decision engine is a paid feature and billing is unavailable, so every
+# The decision engine is a paid feature and financials is unavailable, so every
 # account gets the same backend-granted beta allowance. No payment path can
 # change this number, and the app never decides it.
 BETA_MONTHLY_LOOKS = 60

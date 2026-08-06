@@ -2,7 +2,7 @@
 
 Production **must** use ``supabase``. The ``local`` adapter is retained for
 unit tests and local development only, and is refused at startup when
-``APP_ENV=production``. The old S3/MinIO adapter and its ``boto3`` dependency
+``APP_ENV=production``. The old Cloud Object Storage adapter and its Python SDK dependency
 were removed as part of the Supabase hardening (Package B).
 """
 from __future__ import annotations
@@ -47,7 +47,7 @@ def get_storage() -> MediaStorage:
     else:
         raise StorageMisconfigured(
             f"MEDIA_STORAGE_BACKEND must be 'supabase' or 'local', got {backend!r}. "
-            "S3/MinIO support was removed in Package B."
+            "Cloud Object Storage support was removed in Package B."
         )
 
     logger.info("media_storage_backend=%s", _storage.backend_name)

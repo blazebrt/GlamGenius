@@ -187,6 +187,7 @@ REGISTRY: dict[str, Classification] = {
     # --- Feature flags (global) ---
     "feature_flags": Classification.NOT_USER_OWNED,
     # --- Operational only ---
+    "system_worker_status": Classification.OPERATIONAL,
     # --- Reference data added by Package E (seed catalogue completion) ---
     # Note: ``routine_templates`` and ``perfume_context_rules`` were declared
     # earlier in this dict; the entries below cover only the new tables.
@@ -216,7 +217,7 @@ def assert_registry_complete() -> None:
     if unclassified:
         problems.append(
             "Tables missing from the privacy export registry (add an entry in "
-            "app/domains/privacy/registry.py): "
+            "app/domains/privacy/__init__.py): "
             + ", ".join(sorted(unclassified))
         )
     if stale:
