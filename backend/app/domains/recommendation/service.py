@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,7 +68,7 @@ FEATURE_STYLE = "style_occasion"
 FEATURE_SHOPPING = "shopping_evaluation"
 
 
-def period_key(moment: Optional[datetime] = None) -> str:
+def period_key(moment: datetime | None = None) -> str:
     now = moment or utcnow()
     return f"{now.year:04d}-{now.month:02d}"
 
@@ -174,7 +174,7 @@ def serialize_occasion_record(record: OccasionRecord) -> dict[str, Any]:
 # --- Runs -------------------------------------------------------------------
 
 
-async def start_run(session: AsyncSession, account_id: uuid.UUID, kind: str, style_request_id: Optional[uuid.UUID] = None) -> RecommendationRun:
+async def start_run(session: AsyncSession, account_id: uuid.UUID, kind: str, style_request_id: uuid.UUID | None = None) -> RecommendationRun:
     run = RecommendationRun(account_id=account_id, kind=kind, style_request_id=style_request_id, status="running", engine_version=ENGINE_VERSION)
     session.add(run)
     await session.flush()
@@ -187,7 +187,7 @@ async def record_inputs(session: AsyncSession, run: RecommendationRun, rows: Ite
     await session.flush()
 
 
-async def finish_run(session: AsyncSession, run: RecommendationRun, *, status: str, considered: int = 0, ai_run_id: Optional[uuid.UUID] = None, explanation_source: str = "deterministic", error_code: Optional[str] = None, latency_ms: Optional[int] = None) -> None:
+async def finish_run(session: AsyncSession, run: RecommendationRun, *, status: str, considered: int = 0, ai_run_id: uuid.UUID | None = None, explanation_source: str = "deterministic", error_code: str | None = None, latency_ms: int | None = None) -> None:
     run.status = status
     run.candidates_considered = considered
     run.explanation_source = explanation_source
@@ -364,14 +364,14 @@ def shareable(look: Look, owned_items: Sequence[dict[str, Any]], optional_items:
     }
 
 
-async def record_adjustment(session: AsyncSession, look: Look, *, adjustment_type: str, slot: Optional[str] = None, from_item_id: Optional[uuid.UUID] = None, to_item_id: Optional[uuid.UUID] = None, reason: Optional[str] = None) -> None:
+async def record_adjustment(session: AsyncSession, look: Look, *, adjustment_type: str, slot: str | None = None, from_item_id: uuid.UUID | None = None, to_item_id: uuid.UUID | None = None, reason: str | None = None) -> None:
     session.add(LookAdjustment(
         look_id=look.id, account_id=look.account_id, adjustment_type=adjustment_type,
         slot=slot, from_item_id=from_item_id, to_item_id=to_item_id, reason=reason, actor="user",
     ))
 
 
-async def save_feedback(session: AsyncSession, look: Look, *, rating: str, reason: Optional[str], note: Optional[str], worn_on: Optional[date]) -> LookFeedback:
+async def save_feedback(session: AsyncSession, look: Look, *, rating: str, reason: str | None, note: str | None, worn_on: date | None) -> LookFeedback:
     row = (await session.execute(
         select(LookFeedback).where(LookFeedback.look_id == look.id, LookFeedback.account_id == look.account_id)
     )).scalar_one_or_none()
@@ -505,7 +505,7 @@ async def serialize_evaluation(session: AsyncSession, evaluation: PurchaseEvalua
 VERDICT_TO_DECISION = {"buy": "bought", "wait": "waiting", "skip": "skipped"}
 
 
-async def save_decision(session: AsyncSession, evaluation: PurchaseEvaluation, decision: str, note: Optional[str]) -> PurchaseDecision:
+async def save_decision(session: AsyncSession, evaluation: PurchaseEvaluation, decision: str, note: str | None) -> PurchaseDecision:
     row = (await session.execute(
         select(PurchaseDecision).where(PurchaseDecision.evaluation_id == evaluation.id, PurchaseDecision.account_id == evaluation.account_id)
     )).scalar_one_or_none()
@@ -520,8 +520,8 @@ async def save_decision(session: AsyncSession, evaluation: PurchaseEvaluation, d
 
 
 async def replayed_evaluation(
-    session: AsyncSession, account_id: uuid.UUID, client_mutation_id: Optional[str]
-) -> Optional[PurchaseEvaluation]:
+    session: AsyncSession, account_id: uuid.UUID, client_mutation_id: str | None
+) -> PurchaseEvaluation | None:
     """The evaluation a previous send of this request already produced.
 
     The client sends the same ``client_mutation_id`` when it retries, so a
@@ -550,7 +550,7 @@ async def replayed_evaluation(
     )).scalar_one_or_none()
 
 
-async def create_style_request(session: AsyncSession, account_id: uuid.UUID, occasion: OccasionRecord, preferred_item_ids: Sequence[uuid.UUID], client_mutation_id: Optional[str]) -> StyleRequest:
+async def create_style_request(session: AsyncSession, account_id: uuid.UUID, occasion: OccasionRecord, preferred_item_ids: Sequence[uuid.UUID], client_mutation_id: str | None) -> StyleRequest:
     if client_mutation_id:
         replay = (await session.execute(
             select(StyleRequest).where(StyleRequest.account_id == account_id, StyleRequest.client_mutation_id == client_mutation_id)

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 
 # --- Value objects ----------------------------------------------------------
 # Deliberately plain. A provider's job is to return one of these, whatever shape
@@ -35,11 +35,11 @@ class WeatherReading:
 
     for_date: date
     condition: str            # one of compatibility.WEATHER_CONDITIONS
-    temp_min_c: Optional[float] = None
-    temp_max_c: Optional[float] = None
-    precipitation_chance: Optional[int] = None   # 0-100
-    humidity: Optional[int] = None               # 0-100
-    location: Optional[str] = None
+    temp_min_c: float | None = None
+    temp_max_c: float | None = None
+    precipitation_chance: int | None = None   # 0-100
+    humidity: int | None = None               # 0-100
+    location: str | None = None
     provider: str = "manual"
     source: str = "user_declared"
     raw: dict[str, Any] = field(default_factory=dict)
@@ -52,9 +52,9 @@ class CalendarEventReading:
     external_id: str
     title: str
     starts_at: datetime
-    ends_at: Optional[datetime] = None
+    ends_at: datetime | None = None
     all_day: bool = False
-    location: Optional[str] = None
+    location: str | None = None
     provider: str = "manual"
     source: str = "user_declared"
     raw: dict[str, Any] = field(default_factory=dict)
@@ -94,7 +94,7 @@ class WeatherProvider(Protocol):
     def is_configured(self) -> bool: ...
 
     async def forecast(
-        self, *, location: Optional[str], dates: list[date], timezone_name: str
+        self, *, location: str | None, dates: list[date], timezone_name: str
     ) -> list[WeatherReading]:
         """Readings for the requested local dates. May return fewer than asked."""
         ...
@@ -106,6 +106,6 @@ class CalendarProvider(Protocol):
     def is_configured(self) -> bool: ...
 
     async def events(
-        self, *, since: datetime, until: datetime, credential_ref: Optional[str]
+        self, *, since: datetime, until: datetime, credential_ref: str | None
     ) -> list[CalendarEventReading]:
         ...

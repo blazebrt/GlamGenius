@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,7 +30,7 @@ from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 
 
-async def owned_week(session: AsyncSession, account_id: uuid.UUID, week_start: date) -> Optional[WeeklyPlan]:
+async def owned_week(session: AsyncSession, account_id: uuid.UUID, week_start: date) -> WeeklyPlan | None:
     return (await session.execute(
         select(WeeklyPlan).where(
             WeeklyPlan.account_id == account_id, WeeklyPlan.week_start == week_start

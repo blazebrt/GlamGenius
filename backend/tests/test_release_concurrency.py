@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
+
 import pytest
+
 
 @pytest.mark.asyncio
 async def test_release_concurrency_blocks(db_clean):

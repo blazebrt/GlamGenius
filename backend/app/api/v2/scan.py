@@ -6,7 +6,7 @@ allowance. Image base64 is never stored.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -31,7 +31,7 @@ router = APIRouter(dependencies=[Depends(require_flag("v2_scan"))])
 class ScanAnalyseRequest(BaseModel):
     image_base64: str
     scan_type: str = Field(default="face", pattern="^(face|hair|hands|full)$")
-    idempotency_key: Optional[str] = None
+    idempotency_key: str | None = None
 
 
 def _serialise_scan(scan: Scan) -> dict[str, Any]:
@@ -142,7 +142,7 @@ async def analyse_scan(
         "Use premium, constructive language. Never use judgmental terms."
     )
 
-    provider_failure_reason: Optional[str] = None
+    provider_failure_reason: str | None = None
     provider_response = None
     started = __import__("time").monotonic()
     try:

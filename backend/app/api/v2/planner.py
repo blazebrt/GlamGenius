@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +18,7 @@ router = APIRouter(dependencies=[Depends(require_flag("v2_planner"))])
 
 @router.get("/planner/week")
 async def get_week(
-    week_start: Optional[date] = Query(None, description="Any date in the week; the Monday is used"),
+    week_start: date | None = Query(None, description="Any date in the week; the Monday is used"),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):

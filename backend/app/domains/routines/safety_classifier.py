@@ -35,11 +35,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from enum import Enum
-from typing import Optional
+from enum import StrEnum
 
 
-class SafetyCategory(str, Enum):
+class SafetyCategory(StrEnum):
     """The categories a piece of user-facing text can trip.
 
     Names are chosen so a caller reading a category set understands why the
@@ -164,7 +163,7 @@ def all_rule_ids() -> list[str]:
     return [p.rule_id for p in _PATTERNS]
 
 
-def classify(text: Optional[str]) -> frozenset[SafetyCategory]:
+def classify(text: str | None) -> frozenset[SafetyCategory]:
     """Deterministic, additive-only classifier.
 
     Returns the set of categories the text trips. An empty set means the
@@ -180,7 +179,7 @@ def classify(text: Optional[str]) -> frozenset[SafetyCategory]:
     return frozenset(found)
 
 
-def is_blocked_for_display(text: Optional[str]) -> bool:
+def is_blocked_for_display(text: str | None) -> bool:
     """Would we refuse to show this text to a user?
 
     Any BLOCKING category is enough. Informational categories
@@ -206,7 +205,7 @@ def refine_more_restrictive(
     return frozenset(deterministic | proposed_extra)
 
 
-def rule_ids_for(text: Optional[str]) -> list[str]:
+def rule_ids_for(text: str | None) -> list[str]:
     """Which specific rule ids fired. For logs and tests; not for users."""
     if not text:
         return []

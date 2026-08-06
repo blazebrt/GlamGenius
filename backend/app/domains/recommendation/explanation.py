@@ -23,7 +23,7 @@ from __future__ import annotations
 import base64
 import logging
 from collections.abc import Sequence
-from typing import Any, Optional
+from typing import Any
 
 from app.domains.ai_gateway import gateway
 from app.domains.recommendation.candidates import OutfitCandidate
@@ -130,7 +130,7 @@ def _look_prompt(looks: Sequence[RankedLook], context: StyleContext) -> str:
 
 async def explain_looks(
     looks: Sequence[RankedLook], context: StyleContext, *, account_id_str: str
-) -> tuple[dict[str, Any], Optional[Any], str]:
+) -> tuple[dict[str, Any], Any | None, str]:
     """Better wording for looks that already exist.
 
     Returns ``(narratives_by_variant, ai_run_id, source)``. On any failure the
@@ -229,7 +229,7 @@ def purchase_summary_is_consistent(summary: str, verdict: str) -> bool:
 
 async def explain_purchase(
     result: ROIResult, candidate: Candidate, *, account_id_str: str
-) -> tuple[Optional[str], Optional[Any], str]:
+) -> tuple[str | None, Any | None, str]:
     """Better wording for a verdict that is already decided.
 
     Returns ``(summary, ai_run_id, source)``. The summary is discarded if it is

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import uuid
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,10 +44,10 @@ async def create_inventory_item(body: ItemCreate, current: CurrentAccount = Depe
 
 @router.get("/inventory/items")
 async def get_inventory_items(
-    page: int = Query(1, ge=1), page_size: int = Query(24, ge=1, le=100), q: Optional[str] = Query(None, max_length=120),
-    category: Optional[str] = None, brand: Optional[str] = Query(None, max_length=120), colour: Optional[str] = Query(None, max_length=80),
-    ingredient: Optional[str] = Query(None, max_length=120), occasion: Optional[str] = Query(None, max_length=120), season: Optional[str] = Query(None, max_length=80),
-    condition: Optional[str] = Query(None, max_length=24), expiry_status: Optional[str] = None, usage_level: Optional[str] = None, verification_state: Optional[str] = None, sort: str = "newest",
+    page: int = Query(1, ge=1), page_size: int = Query(24, ge=1, le=100), q: str | None = Query(None, max_length=120),
+    category: str | None = None, brand: str | None = Query(None, max_length=120), colour: str | None = Query(None, max_length=80),
+    ingredient: str | None = Query(None, max_length=120), occasion: str | None = Query(None, max_length=120), season: str | None = Query(None, max_length=80),
+    condition: str | None = Query(None, max_length=24), expiry_status: str | None = None, usage_level: str | None = None, verification_state: str | None = None, sort: str = "newest",
     current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session),
 ):
     return await service.list_items(session, current.account_id, page=page, page_size=page_size, q=q, category=category, brand=brand, colour=colour, ingredient=ingredient, occasion=occasion, season=season, condition=condition, expiry_status=expiry_status, usage_level=usage_level, verification_state=verification_state, sort=sort)
@@ -56,9 +55,9 @@ async def get_inventory_items(
 
 @router.get("/inventory/search")
 async def search_inventory(
-    q: str = Query("", max_length=120), page: int = Query(1, ge=1), page_size: int = Query(24, ge=1, le=100), category: Optional[str] = None,
-    brand: Optional[str] = None, colour: Optional[str] = None, ingredient: Optional[str] = None, occasion: Optional[str] = None, season: Optional[str] = None,
-    condition: Optional[str] = None, expiry_status: Optional[str] = None, usage_level: Optional[str] = None, verification_state: Optional[str] = None, sort: str = "newest",
+    q: str = Query("", max_length=120), page: int = Query(1, ge=1), page_size: int = Query(24, ge=1, le=100), category: str | None = None,
+    brand: str | None = None, colour: str | None = None, ingredient: str | None = None, occasion: str | None = None, season: str | None = None,
+    condition: str | None = None, expiry_status: str | None = None, usage_level: str | None = None, verification_state: str | None = None, sort: str = "newest",
     current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session),
 ):
     return await service.list_items(session, current.account_id, page=page, page_size=page_size, q=q or None, category=category, brand=brand, colour=colour, ingredient=ingredient, occasion=occasion, season=season, condition=condition, expiry_status=expiry_status, usage_level=usage_level, verification_state=verification_state, sort=sort)

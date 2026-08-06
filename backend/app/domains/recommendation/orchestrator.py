@@ -28,7 +28,7 @@ import logging
 import time
 import uuid
 from collections.abc import Sequence
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,7 +81,7 @@ async def style_for_occasion(
     account_id_str: str,
     occasion_record: OccasionRecord,
     preferred_item_ids: Sequence[uuid.UUID] = (),
-    client_mutation_id: Optional[str] = None,
+    client_mutation_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the full styling pipeline and persist everything it produced."""
     started = time.perf_counter()

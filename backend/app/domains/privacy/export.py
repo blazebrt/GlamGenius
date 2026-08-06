@@ -26,7 +26,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -88,7 +88,7 @@ logger = logging.getLogger(__name__)
 _MAX_ROWS = 20_000
 
 
-def _iso(dt: Optional[datetime]) -> Optional[str]:
+def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
 
 

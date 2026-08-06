@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -41,18 +41,18 @@ class OccasionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     occasion_key: str = Field(min_length=1, max_length=32)
-    title: Optional[str] = Field(default=None, max_length=160)
-    event_date: Optional[date] = None
-    time_of_day: Optional[Literal[TIMES_OF_DAY]] = None  # type: ignore[valid-type]
-    location: Optional[str] = Field(default=None, max_length=160)
-    setting: Optional[Literal[SETTINGS]] = None  # type: ignore[valid-type]
-    dress_code: Optional[str] = Field(default=None, max_length=32)
-    weather: Optional[Literal[WEATHER_CONDITIONS]] = None  # type: ignore[valid-type]
-    comfort_preference: Optional[Literal[COMFORT_LEVELS]] = None  # type: ignore[valid-type]
-    optional_budget: Optional[Decimal] = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+    title: str | None = Field(default=None, max_length=160)
+    event_date: date | None = None
+    time_of_day: Literal[TIMES_OF_DAY] | None = None  # type: ignore[valid-type]
+    location: str | None = Field(default=None, max_length=160)
+    setting: Literal[SETTINGS] | None = None  # type: ignore[valid-type]
+    dress_code: str | None = Field(default=None, max_length=32)
+    weather: Literal[WEATHER_CONDITIONS] | None = None  # type: ignore[valid-type]
+    comfort_preference: Literal[COMFORT_LEVELS] | None = None  # type: ignore[valid-type]
+    optional_budget: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
     currency: str = Field(default="INR", min_length=3, max_length=3)
-    preparation_time: Optional[str] = Field(default=None, max_length=48)
-    notes: Optional[str] = Field(default=None, max_length=500)
+    preparation_time: str | None = Field(default=None, max_length=48)
+    notes: str | None = Field(default=None, max_length=500)
 
     @field_validator("occasion_key")
     @classmethod
@@ -62,7 +62,7 @@ class OccasionCreate(BaseModel):
 
     @field_validator("dress_code")
     @classmethod
-    def _known_dress_code(cls, value: Optional[str]) -> Optional[str]:
+    def _known_dress_code(cls, value: str | None) -> str | None:
         if value and value not in DRESS_CODES:
             raise ValueError(f"'{value}' is not a dress code we support. Choose one of: {', '.join(DRESS_CODES)}.")
         return value
@@ -71,22 +71,22 @@ class OccasionCreate(BaseModel):
 class OccasionPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    title: Optional[str] = Field(default=None, max_length=160)
-    event_date: Optional[date] = None
-    time_of_day: Optional[Literal[TIMES_OF_DAY]] = None  # type: ignore[valid-type]
-    location: Optional[str] = Field(default=None, max_length=160)
-    setting: Optional[Literal[SETTINGS]] = None  # type: ignore[valid-type]
-    dress_code: Optional[str] = Field(default=None, max_length=32)
-    weather: Optional[Literal[WEATHER_CONDITIONS]] = None  # type: ignore[valid-type]
-    comfort_preference: Optional[Literal[COMFORT_LEVELS]] = None  # type: ignore[valid-type]
-    optional_budget: Optional[Decimal] = Field(default=None, ge=0, max_digits=12, decimal_places=2)
-    preparation_time: Optional[str] = Field(default=None, max_length=48)
-    notes: Optional[str] = Field(default=None, max_length=500)
-    status: Optional[Literal["active", "archived"]] = None
+    title: str | None = Field(default=None, max_length=160)
+    event_date: date | None = None
+    time_of_day: Literal[TIMES_OF_DAY] | None = None  # type: ignore[valid-type]
+    location: str | None = Field(default=None, max_length=160)
+    setting: Literal[SETTINGS] | None = None  # type: ignore[valid-type]
+    dress_code: str | None = Field(default=None, max_length=32)
+    weather: Literal[WEATHER_CONDITIONS] | None = None  # type: ignore[valid-type]
+    comfort_preference: Literal[COMFORT_LEVELS] | None = None  # type: ignore[valid-type]
+    optional_budget: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+    preparation_time: str | None = Field(default=None, max_length=48)
+    notes: str | None = Field(default=None, max_length=500)
+    status: Literal["active", "archived"] | None = None
 
     @field_validator("dress_code")
     @classmethod
-    def _known_dress_code(cls, value: Optional[str]) -> Optional[str]:
+    def _known_dress_code(cls, value: str | None) -> str | None:
         if value and value not in DRESS_CODES:
             raise ValueError(f"'{value}' is not a dress code we support. Choose one of: {', '.join(DRESS_CODES)}.")
         return value
@@ -100,14 +100,14 @@ class StyleForOccasion(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    occasion_id: Optional[uuid.UUID] = None
-    occasion: Optional[OccasionCreate] = None
+    occasion_id: uuid.UUID | None = None
+    occasion: OccasionCreate | None = None
     preferred_item_ids: list[uuid.UUID] = Field(default_factory=list, max_length=12)
-    client_mutation_id: Optional[str] = Field(default=None, max_length=80)
+    client_mutation_id: str | None = Field(default=None, max_length=80)
 
     @field_validator("occasion")
     @classmethod
-    def _one_of_two(cls, value: Optional[OccasionCreate], info) -> Optional[OccasionCreate]:
+    def _one_of_two(cls, value: OccasionCreate | None, info) -> OccasionCreate | None:
         if value is None and not info.data.get("occasion_id"):
             raise ValueError("Send either occasion_id for a saved occasion, or occasion to describe a new one.")
         return value
@@ -116,8 +116,8 @@ class StyleForOccasion(BaseModel):
 class LookRevise(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    reason: Optional[Literal["too_formal", "too_casual", "too_warm", "too_cold", "not_my_style", "want_bolder", "want_simpler"]] = None
-    note: Optional[str] = Field(default=None, max_length=400)
+    reason: Literal["too_formal", "too_casual", "too_warm", "too_cold", "not_my_style", "want_bolder", "want_simpler"] | None = None
+    note: str | None = Field(default=None, max_length=400)
     avoid_item_ids: list[uuid.UUID] = Field(default_factory=list, max_length=12)
 
 
@@ -125,18 +125,18 @@ class LookSwapItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     slot: Literal["clothing", "shoes", "accessories", "perfume", "hair", "grooming"]
-    from_item_id: Optional[uuid.UUID] = None
-    to_item_id: Optional[uuid.UUID] = None
-    note: Optional[str] = Field(default=None, max_length=400)
+    from_item_id: uuid.UUID | None = None
+    to_item_id: uuid.UUID | None = None
+    note: str | None = Field(default=None, max_length=400)
 
 
 class LookFeedbackCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rating: Literal["loved", "worn", "saved", "not_for_me"]
-    reason: Optional[Literal["too_formal", "too_casual", "wrong_weather", "not_my_style", "uncomfortable", "great_fit", "other"]] = None
-    note: Optional[str] = Field(default=None, max_length=500)
-    worn_on: Optional[date] = None
+    reason: Literal["too_formal", "too_casual", "wrong_weather", "not_my_style", "uncomfortable", "great_fit", "other"] | None = None
+    note: str | None = Field(default=None, max_length=500)
+    worn_on: date | None = None
 
 
 # --- Shopping ---------------------------------------------------------------
@@ -149,18 +149,18 @@ class ShoppingItemInput(BaseModel):
 
     category: Literal["wardrobe", "shoes", "accessories", "beauty", "hair", "perfumes", "supplements"]
     display_name: str = Field(min_length=1, max_length=200)
-    brand: Optional[str] = Field(default=None, max_length=120)
-    subcategory: Optional[str] = Field(default=None, max_length=80)
-    colour: Optional[str] = Field(default=None, max_length=80)
-    size: Optional[str] = Field(default=None, max_length=40)
-    fabric: Optional[str] = Field(default=None, max_length=100)
-    fit: Optional[str] = Field(default=None, max_length=80)
-    formality: Optional[str] = Field(default=None, max_length=80)
+    brand: str | None = Field(default=None, max_length=120)
+    subcategory: str | None = Field(default=None, max_length=80)
+    colour: str | None = Field(default=None, max_length=80)
+    size: str | None = Field(default=None, max_length=40)
+    fabric: str | None = Field(default=None, max_length=100)
+    fit: str | None = Field(default=None, max_length=80)
+    formality: str | None = Field(default=None, max_length=80)
     occasion_tags: list[str] = Field(default_factory=list, max_length=20)
     season_tags: list[str] = Field(default_factory=list, max_length=8)
-    price: Optional[Decimal] = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+    price: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
     currency: str = Field(default="INR", min_length=3, max_length=3)
-    product_url: Optional[str] = Field(default=None, max_length=2048)
+    product_url: str | None = Field(default=None, max_length=2048)
 
 
 class ShoppingEvaluateRequest(BaseModel):
@@ -172,25 +172,25 @@ class ShoppingEvaluateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    media_asset_id: Optional[uuid.UUID] = None
-    item: Optional[ShoppingItemInput] = None
+    media_asset_id: uuid.UUID | None = None
+    item: ShoppingItemInput | None = None
     source: Literal["screenshot", "item_photo", "manual"] = "manual"
-    price: Optional[Decimal] = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+    price: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
     currency: str = Field(default="INR", min_length=3, max_length=3)
-    product_url: Optional[str] = Field(default=None, max_length=2048)
-    occasion_key: Optional[str] = Field(default=None, max_length=32)
-    client_mutation_id: Optional[str] = Field(default=None, max_length=80)
+    product_url: str | None = Field(default=None, max_length=2048)
+    occasion_key: str | None = Field(default=None, max_length=32)
+    client_mutation_id: str | None = Field(default=None, max_length=80)
 
     @field_validator("occasion_key")
     @classmethod
-    def _known_occasion(cls, value: Optional[str]) -> Optional[str]:
+    def _known_occasion(cls, value: str | None) -> str | None:
         if value:
             get_occasion(value)
         return value
 
     @field_validator("item")
     @classmethod
-    def _need_something(cls, value: Optional[ShoppingItemInput], info) -> Optional[ShoppingItemInput]:
+    def _need_something(cls, value: ShoppingItemInput | None, info) -> ShoppingItemInput | None:
         if value is None and not info.data.get("media_asset_id"):
             raise ValueError("Send a photo or screenshot to read, or the item details to evaluate.")
         return value
@@ -200,7 +200,7 @@ class PurchaseDecisionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     decision: Literal["bought", "waiting", "skipped"]
-    note: Optional[str] = Field(default=None, max_length=500)
+    note: str | None = Field(default=None, max_length=500)
 
 
 # --- AI output contracts ----------------------------------------------------
@@ -241,19 +241,19 @@ class ExtractedShoppingItem(BaseModel):
 
     category: Literal["wardrobe", "shoes", "accessories", "beauty", "hair", "perfumes", "supplements"]
     display_name: str = Field(min_length=1, max_length=200)
-    brand: Optional[str] = Field(default=None, max_length=120)
-    subcategory: Optional[str] = Field(default=None, max_length=80)
-    colour: Optional[str] = Field(default=None, max_length=80)
-    size: Optional[str] = Field(default=None, max_length=40)
-    fabric: Optional[str] = Field(default=None, max_length=100)
-    fit: Optional[str] = Field(default=None, max_length=80)
-    formality: Optional[str] = Field(default=None, max_length=80)
+    brand: str | None = Field(default=None, max_length=120)
+    subcategory: str | None = Field(default=None, max_length=80)
+    colour: str | None = Field(default=None, max_length=80)
+    size: str | None = Field(default=None, max_length=40)
+    fabric: str | None = Field(default=None, max_length=100)
+    fit: str | None = Field(default=None, max_length=80)
+    formality: str | None = Field(default=None, max_length=80)
     occasion_tags: list[str] = Field(default_factory=list, max_length=20)
     season_tags: list[str] = Field(default_factory=list, max_length=8)
     # Price is read only when it is printed on the screenshot. A missing price
     # stays missing; the ROI model has an explicit branch for that.
-    price: Optional[Decimal] = Field(default=None, ge=0, max_digits=12, decimal_places=2)
-    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+    price: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
     confidence: float = Field(ge=0.35, le=1)
     uncertain_fields: list[str] = Field(default_factory=list, max_length=30)
     photo_quality_notes: str = Field(min_length=3, max_length=400)

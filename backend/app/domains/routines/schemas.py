@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -45,10 +45,10 @@ class ShelfAnalyseRequest(BaseModel):
     categories: list[Literal[SHELF_CATEGORIES]] = Field(  # type: ignore[valid-type]
         default_factory=lambda: list(SHELF_CATEGORIES), max_length=2,
     )
-    climate: Optional[Literal[CLIMATES]] = None  # type: ignore[valid-type]
+    climate: Literal[CLIMATES] | None = None  # type: ignore[valid-type]
     # Overriding "today" is for tests and for a user in a different timezone. It
     # cannot reach further back than a year, so no run can rewrite old history.
-    as_of: Optional[date] = None
+    as_of: date | None = None
 
     @field_validator("categories")
     @classmethod
@@ -70,7 +70,7 @@ class IngredientCheckRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    label_text: Optional[str] = Field(default=None, max_length=8000)
+    label_text: str | None = Field(default=None, max_length=8000)
     ingredients: list[str] = Field(default_factory=list, max_length=60)
     item_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
     source: Literal[INGREDIENT_SOURCES] = SOURCE_USER  # type: ignore[valid-type]
@@ -106,9 +106,9 @@ class RoutineGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kinds: list[Literal[ROUTINE_KINDS]] = Field(default_factory=list, max_length=5)  # type: ignore[valid-type]
-    climate: Optional[Literal[CLIMATES]] = None  # type: ignore[valid-type]
+    climate: Literal[CLIMATES] | None = None  # type: ignore[valid-type]
     explain: bool = True
-    as_of: Optional[date] = None
+    as_of: date | None = None
 
     @field_validator("kinds")
     @classmethod
@@ -121,9 +121,9 @@ class RoutineStepComplete(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    done_on: Optional[date] = None
+    done_on: date | None = None
     completed: bool = True
-    note: Optional[str] = Field(default=None, max_length=240)
+    note: str | None = Field(default=None, max_length=240)
 
 
 class ObservationInput(BaseModel):
@@ -135,10 +135,10 @@ class ObservationInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    observed_on: Optional[date] = None
+    observed_on: date | None = None
     area: Literal["skin", "hair", "scalp", "nails", "general"] = "general"
     note: str = Field(min_length=1, max_length=500)
-    item_id: Optional[uuid.UUID] = None
+    item_id: uuid.UUID | None = None
 
 
 # --- Perfume -----------------------------------------------------------------
@@ -149,10 +149,10 @@ class PerfumeQuery(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    occasion_key: Optional[str] = Field(default=None, max_length=32)
-    weather: Optional[Literal[CLIMATES]] = None  # type: ignore[valid-type]
-    time_of_day: Optional[Literal[TIMES_OF_DAY]] = None  # type: ignore[valid-type]
-    season: Optional[Literal[SEASONS]] = None  # type: ignore[valid-type]
+    occasion_key: str | None = Field(default=None, max_length=32)
+    weather: Literal[CLIMATES] | None = None  # type: ignore[valid-type]
+    time_of_day: Literal[TIMES_OF_DAY] | None = None  # type: ignore[valid-type]
+    season: Literal[SEASONS] | None = None  # type: ignore[valid-type]
 
 
 # --- Nutrition and hydration --------------------------------------------------
@@ -163,14 +163,14 @@ class NutritionPreferencePatch(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    diet: Optional[Literal[DIETS]] = None  # type: ignore[valid-type]
-    avoid_foods: Optional[list[str]] = Field(default=None, max_length=40)
-    focus_nutrients: Optional[list[str]] = Field(default=None, max_length=12)
-    enabled: Optional[bool] = None
+    diet: Literal[DIETS] | None = None  # type: ignore[valid-type]
+    avoid_foods: list[str] | None = Field(default=None, max_length=40)
+    focus_nutrients: list[str] | None = Field(default=None, max_length=12)
+    enabled: bool | None = None
 
     @field_validator("focus_nutrients")
     @classmethod
-    def _known(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+    def _known(cls, value: list[str] | None) -> list[str] | None:
         if value is None:
             return None
         unknown = [row for row in value if row not in NUTRIENT_BY_KEY]
@@ -183,7 +183,7 @@ class NutritionPreferencePatch(BaseModel):
 
     @field_validator("avoid_foods")
     @classmethod
-    def _clean_foods(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+    def _clean_foods(cls, value: list[str] | None) -> list[str] | None:
         if value is None:
             return None
         return [" ".join(row.split())[:80] for row in value if row and row.strip()]
@@ -194,9 +194,9 @@ class HydrationPreferencePatch(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: Optional[bool] = None
-    remind_in_hot_weather_only: Optional[bool] = None
-    note: Optional[str] = Field(default=None, max_length=240)
+    enabled: bool | None = None
+    remind_in_hot_weather_only: bool | None = None
+    note: str | None = Field(default=None, max_length=240)
 
 
 # --- Supplements --------------------------------------------------------------

@@ -16,7 +16,7 @@ import base64
 import json
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 import jwt
 import pytest
@@ -44,13 +44,13 @@ def _mint_token(
     private_key: rsa.RSAPrivateKey,
     *,
     kid: str = "kid-1",
-    sub: Optional[str] = None,
+    sub: str | None = None,
     role: str = "authenticated",
     aud: str = "authenticated",
     iss: str = ISSUER,
     exp_in: int = 300,
     algorithm: str = "RS256",
-    extras: Optional[dict[str, Any]] = None,
+    extras: dict[str, Any] | None = None,
 ) -> str:
     now = int(time.time())
     claims: dict[str, Any] = {
@@ -87,7 +87,7 @@ class _FakeJWKSCache:
         self._keys = dict(keys_by_kid)
         self.refreshes = 0
         self.calls = 0
-        self.raise_next: Optional[BaseException] = None
+        self.raise_next: BaseException | None = None
 
     async def signing_key(self, token: str) -> Any:
         self.calls += 1

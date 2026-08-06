@@ -17,7 +17,7 @@ import base64
 import binascii
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from app.config import AI_TIMEOUT_SECONDS, GEMINI_API_KEY, GEMINI_FALLBACK_MODELS, GEMINI_MODEL
 
@@ -58,8 +58,8 @@ class ImageRejected(ValueError):
 class ProviderResponse:
     text: str
     model: str
-    input_tokens: Optional[int] = None
-    output_tokens: Optional[int] = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 def is_configured() -> bool:
@@ -119,7 +119,7 @@ def _extract_text(response: Any) -> str:
     return text
 
 
-def _extract_tokens(response: Any) -> tuple[Optional[int], Optional[int]]:
+def _extract_tokens(response: Any) -> tuple[int | None, int | None]:
     usage = getattr(response, "usage_metadata", None)
     if usage is None:
         return None, None
@@ -130,7 +130,7 @@ def _extract_tokens(response: Any) -> tuple[Optional[int], Optional[int]]:
 
 
 async def generate(
-    prompt: str, system: str, image_base64: Optional[str] = None
+    prompt: str, system: str, image_base64: str | None = None
 ) -> ProviderResponse:
     """One call to Gemini, with the configured model fallback chain."""
     client = get_client()
@@ -147,7 +147,7 @@ async def generate(
         )
     parts.append(prompt)
 
-    last_error: Optional[Exception] = None
+    last_error: Exception | None = None
     for model_name in _models_to_try():
 
         def _run(model: str = model_name) -> Any:

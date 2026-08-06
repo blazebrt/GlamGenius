@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import date, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -66,7 +66,7 @@ async def record_metric(
     *,
     period: str,
     period_start: date,
-) -> Optional[MetricEvent]:
+) -> MetricEvent | None:
     """Store one computed metric, once.
 
     The unique constraint on ``(account_id, dedup_hash)`` is what makes this
@@ -109,7 +109,7 @@ async def compute_and_record(
     account_id: uuid.UUID,
     *,
     period: str = "week",
-    today: Optional[date] = None,
+    today: date | None = None,
 ) -> list[metrics.MetricResult]:
     day = today or clock.local_today(clock.DEFAULT_TIMEZONE)
     start, _ = _period_bounds(period, day)
@@ -124,7 +124,7 @@ async def overview(
     account_id: uuid.UUID,
     *,
     period: str = "week",
-    today: Optional[date] = None,
+    today: date | None = None,
 ) -> dict[str, Any]:
     """Everything the Progress screen shows."""
     day = today or clock.local_today(clock.DEFAULT_TIMEZONE)
@@ -189,7 +189,7 @@ async def _upsert_snapshot(
 
 
 async def metric_detail(
-    session: AsyncSession, account_id: uuid.UUID, key: str, *, today: Optional[date] = None
+    session: AsyncSession, account_id: uuid.UUID, key: str, *, today: date | None = None
 ) -> dict[str, Any]:
     definition = registry.get(key)
     if definition is None:
@@ -225,10 +225,10 @@ async def metric_detail(
 
 
 async def create_goal(
-    session: AsyncSession, account_id: uuid.UUID, body: GoalCreate, *, today: Optional[date] = None
+    session: AsyncSession, account_id: uuid.UUID, body: GoalCreate, *, today: date | None = None
 ) -> dict[str, Any]:
     day = today or clock.local_today(clock.DEFAULT_TIMEZONE)
-    starting: Optional[float] = None
+    starting: float | None = None
     if body.metric_key:
         result = await metrics.compute(session, account_id, body.metric_key, today=day)
         starting = result.value
@@ -255,7 +255,7 @@ async def create_goal(
 
 async def patch_goal(
     session: AsyncSession, account_id: uuid.UUID, goal_id: uuid.UUID, body: GoalPatch,
-    *, today: Optional[date] = None,
+    *, today: date | None = None,
 ) -> dict[str, Any]:
     goal = (await session.execute(
         select(ProgressGoal).where(
@@ -287,17 +287,17 @@ async def patch_goal(
 
 
 async def serialize_goal(
-    session: AsyncSession, goal: ProgressGoal, *, today: Optional[date] = None
+    session: AsyncSession, goal: ProgressGoal, *, today: date | None = None
 ) -> dict[str, Any]:
     day = today or clock.local_today(clock.DEFAULT_TIMEZONE)
-    current: Optional[float] = None
+    current: float | None = None
     metric_status = None
     if goal.metric_key:
         result = await metrics.compute(session, account_id=goal.account_id, key=goal.metric_key, today=day)
         current = result.value
         metric_status = result.status
 
-    progress: Optional[float] = None
+    progress: float | None = None
     if (
         goal.target_value is not None and current is not None
         and goal.starting_value is not None and goal.target_value != goal.starting_value
@@ -339,7 +339,7 @@ async def serialize_goal(
 
 
 async def list_goals(
-    session: AsyncSession, account_id: uuid.UUID, *, today: Optional[date] = None
+    session: AsyncSession, account_id: uuid.UUID, *, today: date | None = None
 ) -> list[dict[str, Any]]:
     rows = (await session.execute(
         select(ProgressGoal).where(ProgressGoal.account_id == account_id)
@@ -353,7 +353,7 @@ async def list_goals(
 
 async def add_photo(
     session: AsyncSession, account_id: uuid.UUID, body: ProgressPhotoInput,
-    *, today: Optional[date] = None,
+    *, today: date | None = None,
 ) -> dict[str, Any]:
     """Keep a photo for comparison. Ownership of the media is checked here."""
     asset = (await session.execute(
@@ -516,7 +516,7 @@ async def comparisons(
 
 async def list_memory(
     session: AsyncSession, account_id: uuid.UUID, *,
-    category: Optional[str] = None, include_deleted: bool = False,
+    category: str | None = None, include_deleted: bool = False,
 ) -> dict[str, Any]:
     """Everything the app remembers, for the Memory Control screen."""
     rows = await memory.all_facts_including_deleted(session, account_id)
@@ -757,9 +757,9 @@ async def record_behaviour(
     behaviour: str,
     *,
     occurred_on: date,
-    subject_id: Optional[uuid.UUID] = None,
-    detail: Optional[dict[str, Any]] = None,
-) -> Optional[GamificationEvent]:
+    subject_id: uuid.UUID | None = None,
+    detail: dict[str, Any] | None = None,
+) -> GamificationEvent | None:
     """Record one instance of useful behaviour, once.
 
     Refuses anything outside :data:`milestones.REWARDABLE_BEHAVIOURS`, so an

@@ -9,7 +9,6 @@ useful to them.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,7 +40,7 @@ class StoredWeatherProvider:
         return True
 
     async def forecast(
-        self, *, location: Optional[str], dates: list[date], timezone_name: str
+        self, *, location: str | None, dates: list[date], timezone_name: str
     ) -> list[WeatherReading]:
         from app.domains.planning.models import WeatherSnapshot
 
@@ -87,7 +86,7 @@ class StoredCalendarProvider:
         return True
 
     async def events(
-        self, *, since: datetime, until: datetime, credential_ref: Optional[str] = None
+        self, *, since: datetime, until: datetime, credential_ref: str | None = None
     ) -> list[CalendarEventReading]:
         from app.domains.planning.models import CalendarEvent
 

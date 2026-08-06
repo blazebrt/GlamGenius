@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from app.domains.recommendation import compatibility as compat
 from app.domains.recommendation.context import OwnedItem, StyleContext
@@ -48,7 +48,7 @@ BOTTOM_WORDS = (
 LAYER_WORDS = ("blazer", "jacket", "waistcoat", "cardigan", "shrug", "overcoat", "coat")
 
 
-def shape_from_parts(subcategory: Optional[str], display_name: str, fit: Optional[str] = None) -> str:
+def shape_from_parts(subcategory: str | None, display_name: str, fit: str | None = None) -> str:
     """``one_piece``, ``top``, ``bottom``, ``layer`` or ``unknown``.
 
     Takes loose parts rather than an item so a shopping candidate — which is
@@ -80,7 +80,7 @@ class ScoredItem:
     factors: dict[str, float] = field(default_factory=dict)
     reasons: dict[str, str] = field(default_factory=dict)
     fit_risks: list[str] = field(default_factory=list)
-    excluded_reason: Optional[str] = None
+    excluded_reason: str | None = None
 
     @property
     def id(self) -> uuid.UUID:
@@ -166,11 +166,11 @@ class OptionalAddition:
 @dataclass
 class OutfitCandidate:
     clothing: list[ScoredItem] = field(default_factory=list)
-    shoes: Optional[ScoredItem] = None
+    shoes: ScoredItem | None = None
     accessories: list[ScoredItem] = field(default_factory=list)
-    perfume: Optional[ScoredItem] = None
-    hair: Optional[ScoredItem] = None
-    grooming: Optional[ScoredItem] = None
+    perfume: ScoredItem | None = None
+    hair: ScoredItem | None = None
+    grooming: ScoredItem | None = None
     optional_additions: list[OptionalAddition] = field(default_factory=list)
     cohesion_score: float = 0.5
     cohesion_reasons: list[str] = field(default_factory=list)
@@ -282,7 +282,7 @@ def build_candidates(
     if not clothing_sets:
         clothing_sets = [[]]
 
-    shoe_options: list[Optional[ScoredItem]] = list(available[SLOT_SHOES][:4]) or [None]
+    shoe_options: list[ScoredItem | None] = list(available[SLOT_SHOES][:4]) or [None]
     candidates: list[OutfitCandidate] = []
 
     for clothing in clothing_sets:

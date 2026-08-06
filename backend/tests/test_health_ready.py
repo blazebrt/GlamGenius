@@ -22,17 +22,20 @@ async def test_ready_ok_during_normal_operation(app_client: AsyncClient, db_clea
     monkeypatch.setattr(config_mod, "validate_production_configuration", lambda: None)
     
     import uuid
-
-    from app.bootstrap import SEED_VERSION
     from app.shared.database.sql import get_sessionmaker
     from sqlalchemy import text
+    
+    # db_clean truncates seed_version_records, so we must insert it to pass the ready check.
+    # We DO NOT insert into alembic_version, because db_clean does not truncate it,
+    # and modifying it will break subsequent tests that run alembic.
     factory = get_sessionmaker()
     async with factory() as session:
-        await session.execute(text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, 'core', :seed, 1, NOW())"), {"id": str(uuid.uuid4()), "seed": SEED_VERSION})
-        await session.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL)"))
-        await session.execute(text("INSERT INTO alembic_version (version_num) VALUES ('dummy_head')"))
+        await session.execute(
+            text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, 'core', '2026.02.16', 1, NOW())"),
+            {"id": str(uuid.uuid4())}
+        )
         await session.commit()
-
+    
     resp = await app_client.get("/api/v2/ready")
     if resp.status_code != 200:
         print("READY FAILURE:", resp.json())
@@ -98,13 +101,21 @@ async def test_ready_fails_on_alembic_mismatch(app_client: AsyncClient, db_clean
     from sqlalchemy import text
     factory = get_sessionmaker()
     async with factory() as session:
+        result = await session.execute(text("SELECT version_num FROM alembic_version"))
+        version_num = result.scalar()
         await session.execute(text("DELETE FROM alembic_version"))
         await session.commit()
     
-    resp = await app_client.get("/api/v2/ready")
-    assert resp.status_code == 503
-    assert resp.json()["status"] == "not_ready"
-    assert resp.json()["components"]["alembic_status"] == "missing"
+    try:
+        resp = await app_client.get("/api/v2/ready")
+        assert resp.status_code == 503
+        assert resp.json()["status"] == "not_ready"
+        assert resp.json()["components"]["alembic_status"] == "missing"
+    finally:
+        if version_num:
+            async with factory() as session:
+                await session.execute(text("INSERT INTO alembic_version (version_num) VALUES (:v)"), {"v": version_num})
+                await session.commit()
 
 
 async def test_ready_fails_on_stale_worker_heartbeat(app_client: AsyncClient, db_clean, monkeypatch, tmp_path):

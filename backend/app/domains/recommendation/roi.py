@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 from app.domains.recommendation import compatibility as compat
 from app.domains.recommendation.candidates import garment_shape, shape_from_parts
@@ -83,16 +83,16 @@ class Candidate:
 
     category: str
     display_name: str
-    brand: Optional[str] = None
-    subcategory: Optional[str] = None
-    colour: Optional[str] = None
-    size: Optional[str] = None
-    fabric: Optional[str] = None
-    fit: Optional[str] = None
-    formality: Optional[str] = None
+    brand: str | None = None
+    subcategory: str | None = None
+    colour: str | None = None
+    size: str | None = None
+    fabric: str | None = None
+    fit: str | None = None
+    formality: str | None = None
     occasion_tags: Sequence[str] = ()
     season_tags: Sequence[str] = ()
-    price: Optional[Decimal] = None
+    price: Decimal | None = None
     currency: str = "INR"
 
     def as_details(self) -> dict[str, Any]:
@@ -160,9 +160,7 @@ def estimate_new_combinations(candidate: Candidate, owned: Sequence[OwnedItem]) 
         if score < 0.6:
             return False
         other_level = compat.item_formality(other.details)
-        if level is not None and other_level is not None and abs(level - other_level) > 1:
-            return False
-        return True
+        return not (level is not None and other_level is not None and abs(level - other_level) > 1)
 
     if candidate.category == "wardrobe":
         shape = shape_from_parts(candidate.subcategory, candidate.display_name, candidate.fit)
@@ -233,7 +231,7 @@ def similarity(candidate: Candidate, item: OwnedItem) -> float:
     return round(min(1.0, score), 4)
 
 
-def _category_gap(candidate: Candidate, owned: Sequence[OwnedItem], occasion_key: Optional[str]) -> tuple[float, str]:
+def _category_gap(candidate: Candidate, owned: Sequence[OwnedItem], occasion_key: str | None) -> tuple[float, str]:
     same = [item for item in owned if item.category == candidate.category]
     if not same:
         return 1.0, f"You have nothing recorded in {candidate.category} yet."
@@ -289,7 +287,7 @@ def _expected_use(candidate: Candidate, owned: Sequence[OwnedItem], combinations
     return round(min(1.0, combinations / 10.0), 4), f"Estimated from the {combinations} new combinations it would create."
 
 
-def _price_factor(candidate: Candidate, combinations: int) -> Optional[tuple[float, str]]:
+def _price_factor(candidate: Candidate, combinations: int) -> tuple[float, str] | None:
     """Cost against expected wears. Returns None when no price was supplied."""
     if candidate.price is None:
         return None
@@ -316,11 +314,11 @@ def evaluate(
     candidate: Candidate,
     owned: Sequence[OwnedItem],
     *,
-    occasion_key: Optional[str] = None,
+    occasion_key: str | None = None,
     favourite_colours: Sequence[str] = (),
     disliked_colours: Sequence[str] = (),
-    fit_preferences: Optional[dict[str, Any]] = None,
-    climate: Optional[str] = None,
+    fit_preferences: dict[str, Any] | None = None,
+    climate: str | None = None,
 ) -> ROIResult:
     """Score a purchase and return Buy, Wait or Skip with the full arithmetic."""
     details = candidate.as_details()

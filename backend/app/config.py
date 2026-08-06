@@ -232,8 +232,8 @@ def validate_production_configuration() -> None:
     if not POSTGRES_URL:
         raise RuntimeError("CRITICAL: POSTGRES_URL must be set in production.")
     
-    import urllib.parse
     import ipaddress
+    import urllib.parse
     parsed = urllib.parse.urlparse(POSTGRES_URL)
     if not parsed.hostname:
         raise RuntimeError("CRITICAL: POSTGRES_URL must have a valid hostname.")

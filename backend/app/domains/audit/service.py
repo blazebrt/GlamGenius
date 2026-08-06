@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +11,7 @@ from app.domains.audit.models import AuditEvent
 from app.shared.observability.request_id import get_request_id
 
 
-def hash_ip(ip: Optional[str]) -> Optional[str]:
+def hash_ip(ip: str | None) -> str | None:
     """One-way hash of a source address.
 
     Enough to link several actions to one actor during an investigation, but not
@@ -27,12 +27,12 @@ async def record(
     session: AsyncSession,
     *,
     action: str,
-    account_id: Optional[uuid.UUID] = None,
+    account_id: uuid.UUID | None = None,
     actor_type: str = "user",
-    subject_type: Optional[str] = None,
-    subject_id: Optional[str] = None,
-    context: Optional[dict[str, Any]] = None,
-    client_ip: Optional[str] = None,
+    subject_type: str | None = None,
+    subject_id: str | None = None,
+    context: dict[str, Any] | None = None,
+    client_ip: str | None = None,
 ) -> AuditEvent:
     """Add an audit event to the caller's transaction.
 

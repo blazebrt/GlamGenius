@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.ontology import (
@@ -83,8 +83,8 @@ class RoutineStep:
     required: bool
     why: str
     frequency: str
-    item_id: Optional[str] = None
-    product_name: Optional[str] = None
+    item_id: str | None = None
+    product_name: str | None = None
     safety_note: str = ""
     alternative: str = ""
     climate_note: str = ""
@@ -160,8 +160,8 @@ def compile_routine(
     products: Sequence[ShelfProduct],
     *,
     allergies: Sequence[str] = (),
-    climate: Optional[str] = None,
-    today: Optional[date] = None,
+    climate: str | None = None,
+    today: date | None = None,
 ) -> CompiledRoutine:
     """Build one routine from what the user owns."""
     if kind not in ROUTINE_SLOTS:
@@ -253,8 +253,8 @@ def compile_all(
     hair: Sequence[ShelfProduct],
     *,
     allergies: Sequence[str] = (),
-    climate: Optional[str] = None,
-    today: Optional[date] = None,
+    climate: str | None = None,
+    today: date | None = None,
 ) -> list[CompiledRoutine]:
     """Every routine the user has enough products to make sense of.
 

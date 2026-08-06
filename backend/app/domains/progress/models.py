@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -125,7 +125,7 @@ class MetricEvent(UUIDPrimaryKey, TimestampMixin, Base):
     formula_version: Mapped[str] = mapped_column(String(16), nullable=False)
     period: Mapped[str] = mapped_column(String(16), nullable=False, default="point", server_default="point")
     period_start: Mapped[date] = mapped_column(Date, nullable=False)
-    value: Mapped[Optional[float]] = mapped_column(Float)
+    value: Mapped[float | None] = mapped_column(Float)
     unit: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ok", server_default="ok")
     inputs: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
@@ -193,7 +193,7 @@ class ComparisonSession(UUIDPrimaryKey, TimestampMixin, Base):
     comparable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     checks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     blocking_reasons: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    days_apart: Mapped[Optional[int]] = mapped_column(Integer)
+    days_apart: Mapped[int | None] = mapped_column(Integer)
 
     __table_args__ = (Index("ix_comparison_sessions_account", "account_id", "created_at"),)
 
@@ -215,8 +215,8 @@ class ProgressPhoto(UUIDPrimaryKey, TimestampMixin, Base):
     lighting: Mapped[str] = mapped_column(String(24), nullable=False)
     angle: Mapped[str] = mapped_column(String(24), nullable=False)
     framing: Mapped[str] = mapped_column(String(24), nullable=False)
-    time_of_day: Mapped[Optional[str]] = mapped_column(String(16))
-    note: Mapped[Optional[str]] = mapped_column(String(240))
+    time_of_day: Mapped[str | None] = mapped_column(String(16))
+    note: Mapped[str | None] = mapped_column(String(240))
 
     __table_args__ = (
         UniqueConstraint("media_id", name="uq_progress_photo_media"),
@@ -234,19 +234,19 @@ class ProgressGoal(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     # Optional link to the Phase 2 declared goal this was promoted from.
-    appearance_goal_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("appearance_goals.id", ondelete="SET NULL"))
+    appearance_goal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("appearance_goals.id", ondelete="SET NULL"))
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     title: Mapped[str] = mapped_column(String(160), nullable=False)
     # The metric this goal is measured by, when there is one. A goal with no
     # metric is tracked by the user's own updates instead of being scored.
-    metric_key: Mapped[Optional[str]] = mapped_column(String(48))
-    target_value: Mapped[Optional[float]] = mapped_column(Float)
-    starting_value: Mapped[Optional[float]] = mapped_column(Float)
+    metric_key: Mapped[str | None] = mapped_column(String(48))
+    target_value: Mapped[float | None] = mapped_column(Float)
+    starting_value: Mapped[float | None] = mapped_column(Float)
     starts_on: Mapped[date] = mapped_column(Date, nullable=False)
-    target_date: Mapped[Optional[date]] = mapped_column(Date)
+    target_date: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    note: Mapped[Optional[str]] = mapped_column(String(500))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(String(500))
 
     __table_args__ = (Index("ix_progress_goals_account_status", "account_id", "status"),)
 
@@ -258,9 +258,9 @@ class GoalUpdate(UUIDPrimaryKey, TimestampMixin, Base):
 
     goal_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("progress_goals.id", ondelete="CASCADE"), nullable=False)
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
-    value: Mapped[Optional[float]] = mapped_column(Float)
+    value: Mapped[float | None] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(24), nullable=False, default="metric", server_default="metric")
-    note: Mapped[Optional[str]] = mapped_column(String(500))
+    note: Mapped[str | None] = mapped_column(String(500))
     recorded_on: Mapped[date] = mapped_column(Date, nullable=False)
 
     __table_args__ = (Index("ix_goal_updates_goal", "goal_id", "recorded_on"),)
@@ -287,8 +287,8 @@ class MemoryFact(UUIDPrimaryKey, TimestampMixin, Base):
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5, server_default="0.5")
     verification_state: Mapped[str] = mapped_column(String(16), nullable=False, default="unverified", server_default="unverified")
     deletion_state: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
-    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    last_reinforced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_reinforced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reinforcement_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
     __table_args__ = (
@@ -353,10 +353,10 @@ class FeedbackEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    subject_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True)
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     signal: Mapped[str] = mapped_column(String(24), nullable=False)
-    reason: Mapped[Optional[str]] = mapped_column(String(240))
-    learned_fact_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("memory_facts.id", ondelete="SET NULL"))
+    reason: Mapped[str | None] = mapped_column(String(240))
+    learned_fact_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("memory_facts.id", ondelete="SET NULL"))
     applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     __table_args__ = (Index("ix_feedback_events_account", "account_id", "created_at"),)
@@ -376,7 +376,7 @@ class Milestone(UUIDPrimaryKey, TimestampMixin, Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     earned_on: Mapped[date] = mapped_column(Date, nullable=False)
     evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
-    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("account_id", "rule_id", "earned_on", name="uq_milestone_account_rule_day"),
@@ -397,7 +397,7 @@ class GamificationEvent(UUIDPrimaryKey, TimestampMixin, Base):
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     behaviour: Mapped[str] = mapped_column(String(48), nullable=False)
     occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
-    subject_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True)
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     detail: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     dedup_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
@@ -421,9 +421,9 @@ class Streak(UUIDPrimaryKey, TimestampMixin, Base):
     behaviour: Mapped[str] = mapped_column(String(48), nullable=False)
     current_length: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     longest_length: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    started_on: Mapped[Optional[date]] = mapped_column(Date)
-    last_counted_on: Mapped[Optional[date]] = mapped_column(Date)
-    last_reset_on: Mapped[Optional[date]] = mapped_column(Date)
+    started_on: Mapped[date | None] = mapped_column(Date)
+    last_counted_on: Mapped[date | None] = mapped_column(Date)
+    last_reset_on: Mapped[date | None] = mapped_column(Date)
     reset_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     __table_args__ = (

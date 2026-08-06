@@ -1,7 +1,7 @@
 """API and AI schemas for the appearance digital twin."""
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -17,7 +17,7 @@ class ProfilePatch(BaseModel):
 
 class ObservationEdit(BaseModel):
     value: Any
-    verification_state: Optional[Literal["unverified", "not_sure"]] = None
+    verification_state: Literal["unverified", "not_sure"] | None = None
 
 
 class BaselineRequest(BaseModel):
@@ -36,7 +36,7 @@ class BaselineObservation(BaseModel):
 
 class PaletteColour(BaseModel):
     name: str = Field(min_length=1, max_length=64)
-    hex: Optional[str] = Field(default=None, max_length=16)
+    hex: str | None = Field(default=None, max_length=16)
     why: str = Field(min_length=1, max_length=300)
 
 

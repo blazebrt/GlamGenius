@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -100,10 +100,10 @@ def media_root(tmp_path) -> Any:
 
 def make_supabase_claims(
     *,
-    user_id: Optional[uuid.UUID] = None,
-    email: Optional[str] = None,
+    user_id: uuid.UUID | None = None,
+    email: str | None = None,
     role: str = "authenticated",
-    extras: Optional[dict[str, Any]] = None,
+    extras: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     uid = user_id or uuid.uuid4()
     claims: dict[str, Any] = {
@@ -140,8 +140,8 @@ def fake_supabase_user(monkeypatch):
 
     def _register(
         *,
-        user_id: Optional[uuid.UUID] = None,
-        email: Optional[str] = None,
+        user_id: uuid.UUID | None = None,
+        email: str | None = None,
         role: str = "authenticated",
         admin: bool = False,
     ) -> tuple[str, uuid.UUID]:
@@ -199,16 +199,16 @@ class FakeProvider:
             '{"observations": ["Even tone"], "colour_palette": ["#0F766E"], '
             '"recommended_next_steps": ["Drink water"], "confidence": 0.8}'
         )
-        self.raises: Optional[BaseException] = None
+        self.raises: BaseException | None = None
         self.calls: int = 0
         self.model: str = "fake-model"
-        self.last_system: Optional[str] = None
+        self.last_system: str | None = None
 
     async def generate(
         self,
         prompt: str,
-        system: Optional[str] = None,
-        image_base64: Optional[str] = None,
+        system: str | None = None,
+        image_base64: str | None = None,
         **kwargs: Any,
     ) -> gemini.ProviderResponse:
         self.calls += 1

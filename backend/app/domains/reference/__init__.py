@@ -24,7 +24,6 @@ the seed catalogue completion required:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -41,7 +40,7 @@ class SeedVersionRecord(UUIDPrimaryKey, TimestampMixin, Base):
     seed_version: Mapped[str] = mapped_column(String(32), nullable=False)
     applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     rows_written: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint(

@@ -9,7 +9,7 @@ No free-text user content goes in ``properties`` — event names and counts only
 from __future__ import annotations
 
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB
@@ -22,7 +22,7 @@ from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
 class AppEvent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "app_events"
 
-    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("accounts.id", ondelete="SET NULL"),
         nullable=True,
@@ -31,7 +31,7 @@ class AppEvent(UUIDPrimaryKey, TimestampMixin, Base):
     properties: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
     )
-    request_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
         Index("ix_app_events_name_created", "name", "created_at"),

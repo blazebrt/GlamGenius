@@ -14,7 +14,6 @@ call site must have already verified the caller's identity with
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from supabase import Client, create_client
 
@@ -22,7 +21,7 @@ from app.config import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
 
 logger = logging.getLogger(__name__)
 
-_client: Optional[Client] = None
+_client: Client | None = None
 
 
 def get_supabase_admin() -> Client:

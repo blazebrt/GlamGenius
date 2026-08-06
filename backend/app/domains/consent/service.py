@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import uuid
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +18,7 @@ from app.shared.errors.exceptions import ConsentRequiredError
 
 async def latest(
     session: AsyncSession, account_id: uuid.UUID, consent_type: str
-) -> Optional[Consent]:
+) -> Consent | None:
     stmt = (
         select(Consent)
         .where(Consent.account_id == account_id)
@@ -49,7 +48,7 @@ async def record(
     consent_type: str,
     granted: bool,
     source: str = "app",
-    client_ip: Optional[str] = None,
+    client_ip: str | None = None,
 ) -> Consent:
     row = Consent(
         account_id=account_id,

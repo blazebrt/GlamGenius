@@ -8,7 +8,6 @@ were removed as part of the Supabase hardening.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from app.config import (
     APP_ENV,
@@ -23,7 +22,7 @@ from app.domains.media.storage.local import LocalFilesystemStorage
 
 logger = logging.getLogger(__name__)
 
-_storage: Optional[MediaStorage] = None
+_storage: MediaStorage | None = None
 
 
 def get_storage() -> MediaStorage:
@@ -54,7 +53,7 @@ def get_storage() -> MediaStorage:
     return _storage
 
 
-def set_storage(storage: Optional[MediaStorage]) -> None:
+def set_storage(storage: MediaStorage | None) -> None:
     """Override the adapter. Tests use this; nothing else should."""
     global _storage
     _storage = storage

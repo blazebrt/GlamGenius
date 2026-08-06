@@ -20,7 +20,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,8 +66,8 @@ class ShelfContext:
     owned: list[OwnedItem] = field(default_factory=list)
     draft_count: int = 0
     allergies: list[str] = field(default_factory=list)
-    climate: Optional[str] = None
-    diet: Optional[str] = None
+    climate: str | None = None
+    diet: str | None = None
     # Ingredient confirmations the user has already made, keyed item -> keys.
     confirmed_ingredients: dict[str, set] = field(default_factory=dict)
     # Computed once from the stored rows, because Phase 3's low-use rule reads
@@ -120,8 +120,8 @@ async def gather(
     session: AsyncSession,
     *,
     account_id: uuid.UUID,
-    climate: Optional[str] = None,
-    today: Optional[date] = None,
+    climate: str | None = None,
+    today: date | None = None,
 ) -> ShelfContext:
     """Read every confirmed fact the shelf engine may use."""
     rows = (await session.execute(

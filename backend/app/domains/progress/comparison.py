@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 # The conditions a user records with a progress photo.
 LIGHTING = ("daylight_window", "daylight_outdoor", "indoor_warm", "indoor_cool", "mixed", "low_light")
@@ -80,12 +80,12 @@ class PhotoConditions:
     lighting: str
     angle: str
     framing: str
-    time_of_day: Optional[str] = None
-    width: Optional[int] = None
-    height: Optional[int] = None
+    time_of_day: str | None = None
+    width: int | None = None
+    height: int | None = None
 
     @property
-    def short_edge(self) -> Optional[int]:
+    def short_edge(self) -> int | None:
         if self.width is None or self.height is None:
             return None
         return min(self.width, self.height)
@@ -96,7 +96,7 @@ class ComparisonResult:
     comparable: bool
     checks: list[Check] = field(default_factory=list)
     blocking_reasons: list[str] = field(default_factory=list)
-    days_apart: Optional[int] = None
+    days_apart: int | None = None
     guidance: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -276,7 +276,7 @@ def guidance_for(failures: Sequence[Check]) -> list[str]:
 
 def pick_baseline(
     candidates: Sequence[Any], current: PhotoConditions
-) -> tuple[Optional[Any], list[ComparisonResult]]:
+) -> tuple[Any | None, list[ComparisonResult]]:
     """The best comparable earlier photo, and why the others were rejected.
 
     Prefers the oldest comparable photo, because the longest honest gap shows

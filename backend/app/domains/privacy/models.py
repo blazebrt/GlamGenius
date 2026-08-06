@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import DateTime, Index, Integer, String
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -79,20 +78,20 @@ class AccountDeletionJob(UUIDPrimaryKey, TimestampMixin, Base):
 
     # Only the shape of the last failure — never a stack trace, provider
     # response or personal payload.
-    last_error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    last_error_stage: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_error_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
-    next_retry_at: Mapped[Optional[datetime]] = mapped_column(
+    next_retry_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Lease so two workers cannot process the same job. A short lease that
     # expires means a crashed worker cannot lock a job forever.
-    lease_owner: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(
+    lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

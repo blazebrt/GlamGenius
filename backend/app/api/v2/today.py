@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +38,7 @@ router = APIRouter(dependencies=[Depends(require_flag("v2_today"))])
 
 
 async def _plan_for(
-    session: AsyncSession, current: CurrentAccount, plan_date: Optional[date], *, force: bool = False, trigger: str = "requested"
+    session: AsyncSession, current: CurrentAccount, plan_date: date | None, *, force: bool = False, trigger: str = "requested"
 ) -> DailyPlan:
     context = await context_stage.gather(session, account_id=current.account_id, plan_date=plan_date)
     plan, _ = await compiler.compile_day(session, context=context, force=force, trigger=trigger)
@@ -48,7 +47,7 @@ async def _plan_for(
 
 @router.get("/today")
 async def get_today(
-    plan_date: Optional[date] = Query(None, description="Defaults to today in your timezone"),
+    plan_date: date | None = Query(None, description="Defaults to today in your timezone"),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):

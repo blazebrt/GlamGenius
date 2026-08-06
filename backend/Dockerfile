@@ -36,7 +36,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install --prefix=/install --no-cache-dir -r requirements.txt
 
 # ---------- Stage 2: runtime ------------------------------------------------
 FROM python@sha256:840e180ebcc6e5c8efab209c43f5e40fd2af98cb49db5c7103c90539c56bb30e AS runtime
@@ -54,6 +55,8 @@ RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends curl tini \
     && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --upgrade pip setuptools wheel
 
 # Non-root user. Uid/gid are stable across builds so the mounted media volume
 # keeps consistent ownership between rebuilds.

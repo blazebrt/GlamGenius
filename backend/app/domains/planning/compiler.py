@@ -23,7 +23,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -151,7 +151,7 @@ def _apply_repetition(buckets: dict[str, list[candidate_stage.ScoredItem]], cont
         rows.sort(key=lambda row: (-row.score, row.item.display_name))
 
 
-def choose_look(context: DayContext, style: StyleContext) -> Optional[ranking_stage.RankedLook]:
+def choose_look(context: DayContext, style: StyleContext) -> ranking_stage.RankedLook | None:
     """The day's outfit, deterministically.
 
     Unavailable items are excluded outright — the user told us they cannot wear
@@ -201,7 +201,7 @@ def _matches_recent(ranked: ranking_stage.RankedLook, just_worn: set) -> bool:
 # an empty list is the normal, expected outcome for most of them on most days.
 
 
-def _outfit_actions(context: DayContext, ranked: Optional[ranking_stage.RankedLook]) -> list[dict[str, Any]]:
+def _outfit_actions(context: DayContext, ranked: ranking_stage.RankedLook | None) -> list[dict[str, Any]]:
     if ranked is None:
         return [{
             "module": MODULE_OUTFIT, "action_type": "add_inventory", "priority": 10,
@@ -373,7 +373,7 @@ def _shopping_action(context: DayContext, pending: Sequence[dict[str, Any]]) -> 
 # --- Clarification -----------------------------------------------------------
 
 
-def clarification_for(context: DayContext) -> Optional[dict[str, Any]]:
+def clarification_for(context: DayContext) -> dict[str, Any] | None:
     """One focused question, only when the answer would change the plan.
 
     Never asks something we already know: an event the user confirmed, or a
@@ -455,7 +455,7 @@ async def _module_material(session: AsyncSession, context: DayContext) -> dict[s
     }
 
 
-def headline_for(context: DayContext, ranked: Optional[ranking_stage.RankedLook]) -> str:
+def headline_for(context: DayContext, ranked: ranking_stage.RankedLook | None) -> str:
     occasion = get_occasion(context.occasion_key)
     day = context.plan_date.strftime("%A")
     if ranked is None:
@@ -510,7 +510,7 @@ async def compile_day(
     style = style_context_for(context, record)
     ranked = choose_look(context, style)
 
-    look: Optional[Look] = None
+    look: Look | None = None
     if ranked is not None:
         # The run is linked to a style request so the day's look is reachable
         # by the Phase 4 revise and swap endpoints, which walk
@@ -631,7 +631,7 @@ async def _clear_children(session: AsyncSession, plan: DailyPlan) -> None:
 
 
 async def _schedule_outfit(
-    session: AsyncSession, context: DayContext, plan: DailyPlan, ranked: Optional[ranking_stage.RankedLook]
+    session: AsyncSession, context: DayContext, plan: DailyPlan, ranked: ranking_stage.RankedLook | None
 ) -> None:
     """Record what is planned, so tomorrow knows what today used."""
     row = (await session.execute(

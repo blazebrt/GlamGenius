@@ -7,7 +7,7 @@ working.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from app.shared.errors.codes import AIFailureType, ErrorCode
 
@@ -23,10 +23,10 @@ class AppError(Exception):
         self,
         message: str,
         *,
-        status_code: Optional[int] = None,
-        code: Optional[ErrorCode] = None,
-        retryable: Optional[bool] = None,
-        extra: Optional[dict[str, Any]] = None,
+        status_code: int | None = None,
+        code: ErrorCode | None = None,
+        retryable: bool | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -65,9 +65,9 @@ class AnalysisUnavailableError(AppError):
         message: str = "We could not analyse this image reliably.",
         *,
         failure_type: AIFailureType = AIFailureType.PROVIDER_ERROR,
-        guidance: Optional[list[str]] = None,
+        guidance: list[str] | None = None,
         retryable: bool = True,
-        ai_run_id: Optional[str] = None,
+        ai_run_id: str | None = None,
     ) -> None:
         super().__init__(
             message,
@@ -133,7 +133,7 @@ class UnsupportedMediaTypeError(AppError):
     code = ErrorCode.UNSUPPORTED_MEDIA_TYPE
     retryable = False
 
-    def __init__(self, message: str, *, allowed: Optional[list[str]] = None) -> None:
+    def __init__(self, message: str, *, allowed: list[str] | None = None) -> None:
         super().__init__(message, extra={"allowed_types": allowed or []})
 
 
@@ -163,7 +163,7 @@ class ValidationFailedError(AppError):
     code = ErrorCode.VALIDATION_FAILED
     retryable = False
 
-    def __init__(self, message: str, *, field: Optional[str] = None) -> None:
+    def __init__(self, message: str, *, field: str | None = None) -> None:
         super().__init__(message, extra={"field": field} if field else None)
 
 

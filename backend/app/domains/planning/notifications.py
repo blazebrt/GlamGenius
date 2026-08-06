@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -134,7 +134,7 @@ async def queue(
 
 async def queue_for_plan(
     session: AsyncSession, *, plan: DailyPlan, timezone_name: str, moment=None
-) -> Optional[NotificationDelivery]:
+) -> NotificationDelivery | None:
     """The single daily notification, built from the plan's top action.
 
     One notification carrying the most important thing, rather than one per

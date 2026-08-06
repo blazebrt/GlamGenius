@@ -28,7 +28,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,7 +75,7 @@ class MetricResult:
     """One computed metric, with everything needed to reproduce and explain it."""
 
     key: str
-    value: Optional[float]
+    value: float | None
     status: str
     inputs: dict[str, Any] = field(default_factory=dict)
     missing_inputs: list[str] = field(default_factory=list)
@@ -724,7 +724,7 @@ if _missing or _extra:
 
 
 async def compute(
-    session: AsyncSession, account_id: uuid.UUID, key: str, *, today: Optional[date] = None, **kwargs: Any
+    session: AsyncSession, account_id: uuid.UUID, key: str, *, today: date | None = None, **kwargs: Any
 ) -> MetricResult:
     if key not in COMPUTERS:
         raise ValueError(f"'{key}' is not a metric we compute.")
@@ -732,7 +732,7 @@ async def compute(
 
 
 async def compute_all(
-    session: AsyncSession, account_id: uuid.UUID, *, today: Optional[date] = None
+    session: AsyncSession, account_id: uuid.UUID, *, today: date | None = None
 ) -> list[MetricResult]:
     day = today or date.today()
     return [await COMPUTERS[key](session, account_id, today=day) for key in registry.METRIC_KEYS]

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -109,7 +108,7 @@ async def get_current_account(
 get_registered_account = get_current_account
 
 
-def client_ip(request: Request) -> Optional[str]:
+def client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 

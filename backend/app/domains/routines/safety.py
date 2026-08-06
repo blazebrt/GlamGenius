@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 PROFESSIONAL_BOUNDARY = (
     "This is outside what GlamGenius can help with. We track what you own and how you use it — "
@@ -94,7 +93,7 @@ _DOSE_PATTERN = re.compile(
 )
 
 
-def narrative_is_safe(text: Optional[str]) -> bool:
+def narrative_is_safe(text: str | None) -> bool:
     """True when this text may be shown to a user.
 
     Applied to every AI-written string and to the deterministic strings too —
@@ -107,7 +106,7 @@ def narrative_is_safe(text: Optional[str]) -> bool:
     return not _DOSE_PATTERN.search(lowered)
 
 
-def first_violation(text: Optional[str]) -> Optional[str]:
+def first_violation(text: str | None) -> str | None:
     """Which term tripped the check. For logs and tests, never for users."""
     lowered = (text or "").lower()
     for term in BANNED_TERMS:
@@ -136,7 +135,7 @@ _MEDICAL_QUESTION_PATTERNS: tuple[str, ...] = (
 _MEDICAL_QUESTION = re.compile("|".join(_MEDICAL_QUESTION_PATTERNS), re.IGNORECASE)
 
 
-def needs_professional(text: Optional[str]) -> bool:
+def needs_professional(text: str | None) -> bool:
     """True when a question belongs with a clinician, not with this app."""
     return bool(_MEDICAL_QUESTION.search(text or ""))
 
@@ -147,7 +146,7 @@ class BoundaryResponse:
 
     boundary: bool
     message: str
-    matched: Optional[str] = None
+    matched: str | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -162,7 +161,7 @@ class BoundaryResponse:
         }
 
 
-def boundary_for(text: Optional[str]) -> Optional[BoundaryResponse]:
+def boundary_for(text: str | None) -> BoundaryResponse | None:
     match = _MEDICAL_QUESTION.search(text or "")
     if match is None:
         return None

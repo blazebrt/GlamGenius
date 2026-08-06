@@ -12,7 +12,7 @@ a confident score built on an absent fabric or colour would be a fabrication.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any, Optional
+from typing import Any
 
 from app.domains.recommendation.occasions import DRESS_CODES
 
@@ -60,7 +60,7 @@ _HUE_BANDS = (
 )
 
 
-def normalise_colour(value: Any) -> Optional[str]:
+def normalise_colour(value: Any) -> str | None:
     """Reduce a stored colour string to something the wheel can look up."""
     if not isinstance(value, str):
         return None
@@ -79,7 +79,7 @@ def normalise_colour(value: Any) -> Optional[str]:
     return None
 
 
-def is_neutral(colour: Optional[str]) -> bool:
+def is_neutral(colour: str | None) -> bool:
     return colour is not None and colour in NEUTRALS
 
 
@@ -137,7 +137,7 @@ FORMALITY_WORDS: dict[str, int] = {
 }
 
 
-def item_formality(details: dict[str, Any]) -> Optional[int]:
+def item_formality(details: dict[str, Any]) -> int | None:
     """The 1-5 formality of an inventory item, or None when unrecorded."""
     raw = details.get("formality")
     if isinstance(raw, (int, float)) and not isinstance(raw, bool):
@@ -155,7 +155,7 @@ def item_formality(details: dict[str, Any]) -> Optional[int]:
     return None
 
 
-def formality_match(level: Optional[int], target: int) -> tuple[float, str]:
+def formality_match(level: int | None, target: int) -> tuple[float, str]:
     """How close an item's formality is to what the occasion asks for.
 
     Under-dressing is penalised harder than over-dressing: turning up too casual
@@ -197,7 +197,7 @@ def _contains(values: Any, needle: str) -> bool:
     return False
 
 
-def weather_suitability(details: dict[str, Any], condition: Optional[str]) -> tuple[float, str]:
+def weather_suitability(details: dict[str, Any], condition: str | None) -> tuple[float, str]:
     """How well an item copes with the expected weather."""
     if not condition:
         return NEUTRAL, "No weather was given, so nothing was ruled in or out on that basis."
@@ -273,7 +273,7 @@ def fit_alignment(details: dict[str, Any], fit_prefs: dict[str, Any]) -> tuple[f
     return score, risks
 
 
-def comfort_alignment(details: dict[str, Any], comfort_preference: Optional[str]) -> tuple[float, str]:
+def comfort_alignment(details: dict[str, Any], comfort_preference: str | None) -> tuple[float, str]:
     """Weigh an item by how comfortable the user said they need to be."""
     if not comfort_preference:
         return NEUTRAL, "No comfort preference given."

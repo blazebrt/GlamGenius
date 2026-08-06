@@ -23,7 +23,6 @@ import time
 import uuid
 from collections import defaultdict, deque
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
@@ -158,7 +157,7 @@ class RegisterRequest(BaseModel):
     the caller's Supabase UUID.
     """
 
-    registration_challenge: Optional[str] = Field(default=None, max_length=256)
+    registration_challenge: str | None = Field(default=None, max_length=256)
 
 
 @router.post("/access/register")
@@ -267,8 +266,8 @@ async def get_usage(
 class InviteCreateRequest(BaseModel):
     label: str = ""
     max_uses: int = 1
-    expires_at: Optional[datetime] = None
-    code: Optional[str] = None
+    expires_at: datetime | None = None
+    code: str | None = None
 
 
 @router.post("/access/admin/invites")

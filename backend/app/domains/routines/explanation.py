@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import Any, Optional
+from typing import Any
 
 from app.domains.ai_gateway import gateway
 from app.domains.routines.compiler import CompiledRoutine
@@ -106,7 +106,7 @@ def _routine_lines(routine: CompiledRoutine) -> str:
     )
 
 
-def _routine_prompt(routines: Sequence[CompiledRoutine], *, climate: Optional[str]) -> str:
+def _routine_prompt(routines: Sequence[CompiledRoutine], *, climate: str | None) -> str:
     body = "".join(_routine_lines(routine) for routine in routines)
     return (
         f"Weather where this person lives: {climate or 'not recorded'}.\n\n"
@@ -119,8 +119,8 @@ def _routine_prompt(routines: Sequence[CompiledRoutine], *, climate: Optional[st
 
 
 async def explain_routines(
-    routines: Sequence[CompiledRoutine], *, climate: Optional[str], account_id_str: str
-) -> tuple[dict[str, RoutineNarrative], Optional[Any], str]:
+    routines: Sequence[CompiledRoutine], *, climate: str | None, account_id_str: str
+) -> tuple[dict[str, RoutineNarrative], Any | None, str]:
     """Better wording for routines that already exist.
 
     Returns ``(narratives_by_kind, ai_run_id, source)``. On any failure the
@@ -182,7 +182,7 @@ def _ingredient_prompt(findings: Sequence[Finding]) -> str:
 
 async def explain_findings(
     findings: Sequence[Finding], *, account_id_str: str
-) -> tuple[dict[str, str], Optional[Any], str]:
+) -> tuple[dict[str, str], Any | None, str]:
     """Plain-English wording for warnings that have already been decided.
 
     Returns ``(text_by_rule_id, ai_run_id, source)``. A note for a rule that did
@@ -222,7 +222,7 @@ async def explain_findings(
     return notes, result.run_id, (SOURCE_AI if notes else SOURCE_DETERMINISTIC)
 
 
-def apply_to_routine(routine: dict[str, Any], narrative: Optional[RoutineNarrative]) -> dict[str, Any]:
+def apply_to_routine(routine: dict[str, Any], narrative: RoutineNarrative | None) -> dict[str, Any]:
     """Merge validated wording into a serialised routine.
 
     Deterministic text is kept alongside rather than overwritten, so what the

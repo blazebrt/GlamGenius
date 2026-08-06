@@ -28,7 +28,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Generic, Optional, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -67,9 +67,9 @@ class AIResult(Generic[T]):
     model: str
     prompt_version: str
     schema_version: str
-    confidence: Optional[float]
+    confidence: float | None
     latency_ms: int
-    estimated_cost_usd: Optional[Decimal]
+    estimated_cost_usd: Decimal | None
 
     def provenance(self) -> dict[str, Any]:
         """The provenance envelope attached to anything shown to the user."""
@@ -130,8 +130,8 @@ _FAILURE_PRESENTATION: dict[AIFailureType, dict[str, Any]] = {
 
 
 def _estimate_cost(
-    input_tokens: Optional[int], output_tokens: Optional[int]
-) -> Optional[Decimal]:
+    input_tokens: int | None, output_tokens: int | None
+) -> Decimal | None:
     if input_tokens is None and output_tokens is None:
         return None
     cost = Decimal("0")
@@ -157,7 +157,7 @@ def parse_json(text: str) -> dict[str, Any]:
     return parsed
 
 
-async def _record_run(**fields: Any) -> Optional[uuid.UUID]:
+async def _record_run(**fields: Any) -> uuid.UUID | None:
     """Write one ai_runs row. Never raises.
 
     A ledger that can break the feature it is measuring is worse than no ledger,
@@ -197,7 +197,7 @@ async def _record_run(**fields: Any) -> Optional[uuid.UUID]:
 
 
 def _fail(
-    failure_type: AIFailureType, run_id: Optional[uuid.UUID]
+    failure_type: AIFailureType, run_id: uuid.UUID | None
 ) -> AnalysisUnavailableError:
     presentation = _FAILURE_PRESENTATION[failure_type]
     return AnalysisUnavailableError(
@@ -217,8 +217,8 @@ async def run_structured(
     schema: type[T],
     prompt_version: str,
     schema_version: str,
-    account_id_str: Optional[str] = None,
-    image_base64: Optional[str] = None,
+    account_id_str: str | None = None,
+    image_base64: str | None = None,
 ) -> AIResult[T]:
     """Call the provider and return a validated result, or raise.
 
@@ -239,8 +239,8 @@ async def run_structured(
     }
 
     async def record_failure(
-        failure_type: AIFailureType, detail: str, model: Optional[str] = None
-    ) -> Optional[uuid.UUID]:
+        failure_type: AIFailureType, detail: str, model: str | None = None
+    ) -> uuid.UUID | None:
         elapsed = int((time.perf_counter() - started) * 1000)
         return await _record_run(
             **{
@@ -355,7 +355,7 @@ async def run_structured(
     )
 
 
-def _confidence_of(validated: BaseModel) -> Optional[float]:
+def _confidence_of(validated: BaseModel) -> float | None:
     meta = getattr(validated, "meta", None)
     value = getattr(meta, "confidence", None)
     return float(value) if isinstance(value, (int, float)) else None

@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,7 +93,7 @@ async def record_weather(session: AsyncSession, account_id: uuid.UUID, body: Wea
     return row
 
 
-def serialize_weather(row: Optional[WeatherSnapshot]) -> Optional[dict[str, Any]]:
+def serialize_weather(row: WeatherSnapshot | None) -> dict[str, Any] | None:
     if row is None:
         return None
     return {
@@ -113,7 +113,7 @@ async def upsert_event(
     body: CalendarEventInput,
     *,
     provider: str = PROVIDER_MANUAL,
-    integration_id: Optional[uuid.UUID] = None,
+    integration_id: uuid.UUID | None = None,
 ) -> tuple[CalendarEvent, bool]:
     """Add an event, or return the existing one. Returns ``(row, created)``.
 
@@ -186,7 +186,7 @@ def serialize_event(row: CalendarEvent, timezone_name: str) -> dict[str, Any]:
 
 
 async def connect_calendar(
-    session: AsyncSession, account_id: uuid.UUID, provider: str, credential_ref: Optional[str], label: Optional[str]
+    session: AsyncSession, account_id: uuid.UUID, provider: str, credential_ref: str | None, label: str | None
 ) -> ExternalIntegration:
     if provider not in KNOWN_CALENDAR_PROVIDERS:
         raise ValidationFailedError(
@@ -287,7 +287,7 @@ async def calendar_status(session: AsyncSession, account_id: uuid.UUID) -> dict[
 
 async def set_item_state(
     session: AsyncSession, account_id: uuid.UUID, item_id: uuid.UUID, state: str,
-    available_from: Optional[date], note: Optional[str],
+    available_from: date | None, note: str | None,
 ) -> LaundryStateEvent:
     if state not in LAUNDRY_STATES:
         raise ValidationFailedError(f"'{state}' is not a state we track.", field="state")
@@ -322,7 +322,7 @@ async def serialize_plan(
         select(DailyPlanAction).where(DailyPlanAction.plan_id == plan.id).order_by(DailyPlanAction.priority)
     )).scalars().all()
 
-    look_payload: Optional[dict[str, Any]] = None
+    look_payload: dict[str, Any] | None = None
     if include_look and plan.look_id:
         look = await session.get(Look, plan.look_id)
         if look is not None and look.account_id == plan.account_id:
@@ -436,8 +436,8 @@ async def recalculation_history(
 
 
 async def sync_schedule_items(
-    session: AsyncSession, account_id: uuid.UUID, plan_date: date, look_id: Optional[uuid.UUID]
-) -> Optional[OutfitSchedule]:
+    session: AsyncSession, account_id: uuid.UUID, plan_date: date, look_id: uuid.UUID | None
+) -> OutfitSchedule | None:
     """Re-read the look's items into the schedule row.
 
     The schedule is what ``recent_wear`` builds repetition history from. If it
@@ -472,7 +472,7 @@ async def sync_schedule_items(
 
 async def mark_worn(
     session: AsyncSession, account_id: uuid.UUID, plan_date: date, *, worn: bool = True
-) -> Optional[OutfitSchedule]:
+) -> OutfitSchedule | None:
     row = (await session.execute(
         select(OutfitSchedule).where(
             OutfitSchedule.account_id == account_id, OutfitSchedule.plan_date == plan_date

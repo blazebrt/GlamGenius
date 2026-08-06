@@ -43,12 +43,12 @@ of ``registry.py`` and ``service.py``.
 """
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 EXPORT_SCHEMA_VERSION = "1.0"
 
 
-class Classification(str, Enum):
+class Classification(StrEnum):
     INCLUDED = "included"
     NOT_USER_OWNED = "not_user_owned"
     OPERATIONAL = "operational"
