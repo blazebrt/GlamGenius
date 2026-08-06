@@ -15,9 +15,10 @@ so a run can be explained from the database alone.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryItem
 from app.domains.profile import service as profile_service
-from app.domains.profile.models import AppearanceProfile, ProfileAttribute
+from app.domains.profile.models import AppearanceProfile
 from app.domains.recommendation.models import Look, LookFeedback, LookItem, OccasionRecord
 from app.domains.recommendation.occasions import Occasion, dress_code_formality, get_occasion
 
@@ -46,7 +47,7 @@ class OwnedItem:
     subcategory: Optional[str]
     display_name: str
     brand: Optional[str]
-    details: Dict[str, Any]
+    details: dict[str, Any]
     condition: str
     usage_count: int
     last_used_at: Optional[date]
@@ -65,13 +66,13 @@ class StyleContext:
     account_id: uuid.UUID
     occasion_record: OccasionRecord
     occasion: Occasion
-    confirmed_attributes: Dict[str, Any] = field(default_factory=dict)
-    owned: List[OwnedItem] = field(default_factory=list)
+    confirmed_attributes: dict[str, Any] = field(default_factory=dict)
+    owned: list[OwnedItem] = field(default_factory=list)
     draft_count: int = 0
-    preferred_item_ids: List[uuid.UUID] = field(default_factory=list)
-    disliked_item_ids: List[uuid.UUID] = field(default_factory=list)
-    recently_used_item_ids: List[uuid.UUID] = field(default_factory=list)
-    missing_information: List[str] = field(default_factory=list)
+    preferred_item_ids: list[uuid.UUID] = field(default_factory=list)
+    disliked_item_ids: list[uuid.UUID] = field(default_factory=list)
+    recently_used_item_ids: list[uuid.UUID] = field(default_factory=list)
+    missing_information: list[str] = field(default_factory=list)
 
     # --- Resolved constraints ---
     target_formality: int = 3
@@ -81,7 +82,7 @@ class StyleContext:
     comfort_preference: Optional[str] = None
     optional_budget: Optional[float] = None
 
-    def by_category(self, category: str) -> List[OwnedItem]:
+    def by_category(self, category: str) -> list[OwnedItem]:
         return [item for item in self.owned if item.category == category]
 
     @property
@@ -93,11 +94,11 @@ class StyleContext:
         return self.confirmed_attributes.get("disliked_colours") or []
 
     @property
-    def fit_preferences(self) -> Dict[str, Any]:
+    def fit_preferences(self) -> dict[str, Any]:
         return {key: self.confirmed_attributes.get(key) for key in FIT_ATTRIBUTES}
 
 
-async def confirmed_attributes(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def confirmed_attributes(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     profile = (await session.execute(select(AppearanceProfile).where(AppearanceProfile.account_id == account_id))).scalar_one_or_none()
     if profile is None:
         return {}
@@ -110,14 +111,14 @@ async def confirmed_attributes(session: AsyncSession, account_id: uuid.UUID) -> 
     }
 
 
-async def confirmed_inventory(session: AsyncSession, account_id: uuid.UUID) -> tuple[List[OwnedItem], int]:
+async def confirmed_inventory(session: AsyncSession, account_id: uuid.UUID) -> tuple[list[OwnedItem], int]:
     rows = (await session.execute(
         select(InventoryItem).where(
             InventoryItem.account_id == account_id,
             InventoryItem.status == "active",
         )
     )).scalars().all()
-    owned: List[OwnedItem] = []
+    owned: list[OwnedItem] = []
     drafts = 0
     for row in rows:
         if row.verification_state != "confirmed":
@@ -134,7 +135,7 @@ async def confirmed_inventory(session: AsyncSession, account_id: uuid.UUID) -> t
     return owned, drafts
 
 
-async def _feedback_signals(session: AsyncSession, account_id: uuid.UUID) -> tuple[List[uuid.UUID], List[uuid.UUID]]:
+async def _feedback_signals(session: AsyncSession, account_id: uuid.UUID) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
     """Items the user has pushed back on, and items they recently wore.
 
     Rejection is a soft signal, not a ban: something disliked for a wedding may
@@ -149,8 +150,8 @@ async def _feedback_signals(session: AsyncSession, account_id: uuid.UUID) -> tup
         .order_by(LookFeedback.created_at.desc())
         .limit(400)
     )).all()
-    disliked: List[uuid.UUID] = []
-    recent: List[uuid.UUID] = []
+    disliked: list[uuid.UUID] = []
+    recent: list[uuid.UUID] = []
     for rating, item_id in rows:
         if rating == "not_for_me" and item_id not in disliked:
             disliked.append(item_id)
@@ -213,7 +214,7 @@ def resolve_constraints(context: StyleContext) -> StyleContext:
         if mapped is not None:
             context.target_formality = max(1, min(5, round((context.target_formality * 2 + mapped) / 3)))
 
-    missing: List[str] = []
+    missing: list[str] = []
     if not record.weather:
         missing.append("Expected weather was not given, so nothing was ruled out on that basis.")
     if not context.confirmed_attributes.get("favourite_colours") and not context.confirmed_attributes.get("disliked_colours"):
@@ -226,9 +227,9 @@ def resolve_constraints(context: StyleContext) -> StyleContext:
     return context
 
 
-def input_rows(context: StyleContext) -> List[Dict[str, Any]]:
+def input_rows(context: StyleContext) -> list[dict[str, Any]]:
     """The audit trail written to ``recommendation_inputs``."""
-    rows: List[Dict[str, Any]] = [
+    rows: list[dict[str, Any]] = [
         {"input_type": "occasion", "input_key": "occasion_key", "value": context.occasion.key, "source": "user_declared"},
         {"input_type": "constraint", "input_key": "target_formality", "value": context.target_formality, "source": "derived"},
         {"input_type": "constraint", "input_key": "dress_code", "value": context.dress_code, "source": "user_declared" if context.occasion_record.dress_code else "derived"},

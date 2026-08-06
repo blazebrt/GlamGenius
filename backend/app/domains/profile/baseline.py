@@ -1,7 +1,7 @@
 """Optional, transient-photo baseline analysis."""
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +41,7 @@ LOW_QUALITY_GUIDANCE = [
 ]
 
 
-async def analyse(session: AsyncSession, profile: AppearanceProfile, *, account_id_str: str, image_base64: str) -> Dict[str, Any]:
+async def analyse(session: AsyncSession, profile: AppearanceProfile, *, account_id_str: str, image_base64: str) -> dict[str, Any]:
     result = await run_structured(
         feature="appearance_baseline", prompt=PROMPT, system=SYSTEM,
         schema=BaselineAnalysis, prompt_version=PROMPT_VERSION,

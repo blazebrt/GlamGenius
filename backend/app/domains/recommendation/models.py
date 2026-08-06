@@ -21,9 +21,21 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -82,8 +94,8 @@ class StyleRequest(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     occasion_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("occasions.id", ondelete="CASCADE"), nullable=False)
-    preferred_item_ids: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    answers: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    preferred_item_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    answers: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
     client_mutation_id: Mapped[Optional[str]] = mapped_column(String(80))
 
@@ -142,9 +154,9 @@ class Look(UUIDPrimaryKey, TimestampMixin, Base):
     why_it_works: Mapped[str] = mapped_column(Text, nullable=False)
     weather_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     dress_code_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
-    preparation_steps: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    missing_information: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    factor_scores: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    preparation_steps: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    missing_information: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    factor_scores: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     explanation_source: Mapped[str] = mapped_column(String(24), nullable=False, default="deterministic", server_default="deterministic")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
     saved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
@@ -233,13 +245,13 @@ class ShoppingCandidate(UUIDPrimaryKey, TimestampMixin, Base):
     fabric: Mapped[Optional[str]] = mapped_column(String(100))
     fit: Mapped[Optional[str]] = mapped_column(String(80))
     formality: Mapped[Optional[str]] = mapped_column(String(80))
-    occasion_tags: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    season_tags: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    occasion_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    season_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     price: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR", server_default="INR")
     product_url: Mapped[Optional[str]] = mapped_column(String(2048))
     extraction_confidence: Mapped[Optional[float]] = mapped_column(Float)
-    uncertain_fields: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    uncertain_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     verification_state: Mapped[str] = mapped_column(String(24), nullable=False, default="draft", server_default="draft")
     model_version: Mapped[Optional[str]] = mapped_column(String(64))
     prompt_version: Mapped[Optional[str]] = mapped_column(String(32))
@@ -269,12 +281,12 @@ class PurchaseEvaluation(UUIDPrimaryKey, TimestampMixin, Base):
     new_combinations: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     headline: Mapped[str] = mapped_column(String(200), nullable=False, default="", server_default="")
-    duplicate_item_ids: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    alternative_item_ids: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    fit_risks: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    colour_risks: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    climate_notes: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    missing_information: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    duplicate_item_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    alternative_item_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    fit_risks: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    colour_risks: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    climate_notes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    missing_information: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     explanation_source: Mapped[str] = mapped_column(String(24), nullable=False, default="deterministic", server_default="deterministic")
 
     __table_args__ = (Index("ix_purchase_evaluations_account_created", "account_id", "created_at"),)
@@ -330,7 +342,7 @@ class CompatibilityEdge(UUIDPrimaryKey, TimestampMixin, Base):
     item_a_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     item_b_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     score: Mapped[float] = mapped_column(Float, nullable=False)
-    basis: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    basis: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     metric_version: Mapped[str] = mapped_column(String(32), nullable=False, default=ENGINE_VERSION, server_default=ENGINE_VERSION)
 
     __table_args__ = (

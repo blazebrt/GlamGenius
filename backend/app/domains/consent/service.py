@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Dict, Optional
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -109,7 +109,7 @@ async def require_analysis_consent_for_account(account_id_str: str) -> None:
         await require_analysis_consent(session, account.id)
 
 
-async def summary(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, object]:
+async def summary(session: AsyncSession, account_id: uuid.UUID) -> dict[str, object]:
     """What the app needs to decide whether to show a consent prompt."""
     row = await latest(session, account_id, CONSENT_PHOTO_ANALYSIS)
     return {

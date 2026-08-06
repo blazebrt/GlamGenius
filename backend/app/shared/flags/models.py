@@ -1,7 +1,7 @@
 """Feature flag storage."""
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from sqlalchemy import Boolean, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -24,6 +24,6 @@ class FeatureFlag(TimestampMixin, Base):
     )
     # Reserved for percentage or cohort rollout. Unused in Phase 1; the column
     # exists so adding rollout later is not a migration on a live table.
-    rollout: Mapped[Dict[str, Any]] = mapped_column(
+    rollout: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
     )

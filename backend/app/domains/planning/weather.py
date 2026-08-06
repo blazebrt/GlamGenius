@@ -39,7 +39,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional, Protocol, Tuple
+from typing import Optional, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +148,7 @@ class OpenMeteoWeatherProvider:
 
 # --- Factory + cache --------------------------------------------------------
 
-_CACHE: dict[Tuple[float, float], Tuple[float, Weather]] = {}
+_CACHE: dict[tuple[float, float], tuple[float, Weather]] = {}
 _CACHE_TTL_SECONDS = 30 * 60
 
 
@@ -190,7 +190,7 @@ async def get_weather(lat: float, lon: float, provider: Optional[WeatherProvider
     return await _refresh(key, provider)
 
 
-async def _refresh(key: Tuple[float, float], provider: Optional[WeatherProvider]) -> Weather:
+async def _refresh(key: tuple[float, float], provider: Optional[WeatherProvider]) -> Weather:
     lat, lon = key
     provider = provider or _get_provider()
     result = await provider.fetch(lat, lon)

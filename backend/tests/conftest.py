@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import Any, Optional
 
 import pytest
 import pytest_asyncio
@@ -29,7 +30,7 @@ os.environ.setdefault(
     "V2_FEATURES",
     "v2_scan,v2_quiz,v2_profile,v2_inventory,v2_recommendations,v2_media,"
     "v2_privacy,v2_consent,v2_ai_gateway,v2_progress,v2_routines,v2_today,"
-    "v2_planner,v2_shopping_decisions",
+    "v2_planner,v2_shopping_decisions,v2_onboarding,v2_beta_access",
 )
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("MEDIA_STORAGE_BACKEND", "local")
@@ -102,10 +103,10 @@ def make_supabase_claims(
     user_id: Optional[uuid.UUID] = None,
     email: Optional[str] = None,
     role: str = "authenticated",
-    extras: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    extras: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     uid = user_id or uuid.uuid4()
-    claims: Dict[str, Any] = {
+    claims: dict[str, Any] = {
         "sub": str(uid),
         "email": email or f"{uid}@example.com",
         "role": role,
@@ -128,9 +129,9 @@ def fake_supabase_user(monkeypatch):
     stubbed ``verify_supabase_token`` looks it up in ``registry`` and returns
     the corresponding claims.
     """
-    registry: Dict[str, Dict[str, Any]] = {}
+    registry: dict[str, dict[str, Any]] = {}
 
-    async def _verify(token: str) -> Dict[str, Any]:
+    async def _verify(token: str) -> dict[str, Any]:
         if token in registry:
             return registry[token]
         raise supabase_auth.AuthError()
@@ -184,7 +185,7 @@ async def registered_supabase_user(fake_supabase_user):
 
 
 
-def auth(token: str) -> Dict[str, str]:
+def auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -245,9 +246,8 @@ def png_bytes() -> bytes:
 @pytest_asyncio.fixture
 async def db_clean() -> AsyncIterator[None]:
     """Truncate every table before yielding. Requires migrations applied."""
-    from sqlalchemy import text
-
     from app.shared.database.registry import Base
+    from sqlalchemy import text
 
     engine = sql.get_engine()
     async with engine.begin() as conn:

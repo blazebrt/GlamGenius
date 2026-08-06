@@ -25,8 +25,8 @@ from app.domains.audit.models import (
     ACTION_ACCOUNT_DELETION_REQUESTED,
     ACTION_PRIVACY_EXPORTED,
 )
-from app.domains.privacy import export as export_service
 from app.domains.privacy import deletion_service
+from app.domains.privacy import export as export_service
 from app.domains.privacy.models import DESTRUCTIVE_STATES
 from app.shared.database.sql import get_session
 from app.shared.security.deps import (
@@ -142,6 +142,7 @@ async def cancel_deletion(
     # Only the safe, pre-destructive states are cancellable. We drop the row
     # entirely so a subsequent request creates a fresh job.
     from sqlalchemy import delete
+
     from app.domains.identity.models import ACCOUNT_STATUS_ACTIVE, Account
     from app.domains.privacy.models import AccountDeletionJob
 

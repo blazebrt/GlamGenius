@@ -116,6 +116,90 @@ jobs:
           name: pytest-report
           path: /tmp/pytest-report.xml
 
+  backend-lint:
+    name: Backend zero-warning lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: Run Ruff (zero warnings)
+        working-directory: backend
+        run: ruff check .
+
+  backend-release:
+    name: Backend release command test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: glamgenius
+          POSTGRES_PASSWORD: glamgenius
+          POSTGRES_DB: glamgenius_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U glamgenius -d glamgenius_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@localhost:5432/glamgenius_test
+      SUPABASE_URL: https://ci-project.supabase.co
+      SUPABASE_ANON_KEY: ci-anon-key-not-a-real-one
+      SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-not-a-real-one
+      SUPABASE_JWT_ISSUER: https://ci-project.supabase.co/auth/v1
+      SUPABASE_JWKS_URL: https://ci-project.supabase.co/auth/v1/.well-known/jwks.json
+      SUPABASE_JWT_SECRET: ci-hs256-jwt-secret-not-a-real-one
+      SUPABASE_STORAGE_BUCKET: glamgenius-media
+      SUPABASE_ADMIN_USER_IDS: 00000000-0000-0000-0000-000000000001
+      GEMINI_API_KEY: "fake-key"
+      REQUIRE_ANALYSIS_CONSENT: "true"
+      CONSENT_VERSION: "ci-test"
+      MEDIA_STORAGE_BACKEND: supabase
+      MEDIA_LOCAL_ROOT: /tmp/media-test
+      INVITE_REQUIRED: "true"
+      BETA_AI_REQUESTS_PER_HOUR: "60"
+      BETA_SCAN_LIMIT_PER_MONTH: "60"
+      BETA_STYLE_LIMIT_PER_MONTH: "60"
+      BETA_SHOPPING_CHECK_LIMIT_PER_MONTH: "60"
+      ALLOWED_ORIGINS: "http://localhost:8081"
+      APP_ENV: "production"
+      PYTHONPATH: ${{ github.workspace }}/backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: Test release command
+        working-directory: backend
+        run: python -m app.release
+        env:
+          APP_ENV: production
+          GEMINI_API_KEY: "fake-key"
+          SUPABASE_URL: "https://test.supabase.co"
+          SUPABASE_ANON_KEY: "fake-anon-key"
+          SUPABASE_SERVICE_ROLE_KEY: "fake-service-role-key"
+          SUPABASE_JWT_ISSUER: "https://test.supabase.co/auth/v1"
+          SUPABASE_JWKS_URL: "https://test.supabase.co/auth/v1/jwks"
+          POSTGRES_URL: "postgresql+asyncpg://glamgenius:glamgenius@localhost:5432/glamgenius_test"
+          SUPABASE_STORAGE_BUCKET: "media"
+          SENTRY_BACKEND_DSN: "https://fake@sentry.io/123"
+          INVITE_REQUIRED: "true"
+          REQUIRE_ANALYSIS_CONSENT: "true"
+          CONSENT_VERSION: "2026-01-01"
+
   # ---- Alembic round-trip (upgrade → downgrade one → re-upgrade) ------------
   alembic-round-trip:
     name: Alembic round-trip
@@ -317,3 +401,341 @@ jobs:
         with:
           name: yarn-audit-report
           path: /tmp/yarn-audit.json
+
+  # ---- Production Docker build -----------------------------------------------
+  docker-build:
+    name: Production Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build production image
+        run: |
+          docker build \
+            --build-arg COMMIT_SHA=${{ github.sha }} \
+            -t glamgenius-backend:ci \
+            backend/
+      - name: Verify non-root user
+        run: |
+          USER_ID=$(docker run --rm glamgenius-backend:ci id -u)
+          echo "Container runs as UID=$USER_ID"
+          if [ "$USER_ID" = "0" ]; then
+            echo "FAIL: container runs as root"
+            exit 1
+          fi
+      - name: Verify no compiler in runtime image
+        run: |
+          if docker run --rm glamgenius-backend:ci which gcc 2>/dev/null; then
+            echo "FAIL: gcc found in runtime image"
+            exit 1
+          fi
+          echo "PASS: no compiler in runtime image"
+      - name: Verify COMMIT_SHA label
+        run: |
+          SHA=$(docker run --rm glamgenius-backend:ci printenv COMMIT_SHA)
+          echo "COMMIT_SHA=$SHA"
+          if [ "$SHA" != "${{ github.sha }}" ]; then
+            echo "FAIL: COMMIT_SHA mismatch"
+            exit 1
+          fi
+      - name: Save image for downstream jobs
+        run: docker save glamgenius-backend:ci | gzip > /tmp/glamgenius-backend-ci.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: docker-image
+          path: /tmp/glamgenius-backend-ci.tar.gz
+          retention-days: 1
+
+  # ---- Container vulnerability scan (Trivy) ----------------------------------
+  container-scan:
+    name: Container vulnerability scan
+    needs: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: docker-image
+          path: /tmp
+      - name: Load image
+        run: docker load < /tmp/glamgenius-backend-ci.tar.gz
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947e7f3b01541f03957 # v0.30.0
+        with:
+          image-ref: glamgenius-backend:ci
+          format: table
+          exit-code: 0
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+      - name: Generate Trivy JSON report
+        if: always()
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947e7f3b01541f03957 # v0.30.0
+        with:
+          image-ref: glamgenius-backend:ci
+          format: json
+          output: /tmp/trivy-report.json
+          severity: HIGH,CRITICAL
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: trivy-report
+          path: /tmp/trivy-report.json
+
+  # ---- SBOM generation -------------------------------------------------------
+  sbom:
+    name: SBOM generation
+    needs: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: docker-image
+          path: /tmp
+      - name: Load image
+        run: docker load < /tmp/glamgenius-backend-ci.tar.gz
+      - name: Install Syft
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+      - name: Generate SBOM (SPDX JSON)
+        run: syft glamgenius-backend:ci -o spdx-json=/tmp/sbom.spdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom
+          path: /tmp/sbom.spdx.json
+
+  # ---- Legacy and payment absence --------------------------------------------
+  legacy-absence:
+    name: Legacy and payment absence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: No MongoDB references
+        run: |
+          if grep -rn "mongodb\|MongoClient\|pymongo\|motor" backend/app/ backend/server.py --include="*.py"; then
+            echo "FAIL: MongoDB references found in backend code"
+            exit 1
+          fi
+          echo "PASS: no MongoDB references"
+      - name: No MinIO or S3 compatibility
+        run: |
+          if grep -rn "minio\|MinIO\|boto3\|s3_client\|S3_BUCKET" backend/app/ backend/server.py --include="*.py"; then
+            echo "FAIL: MinIO/S3 references found"
+            exit 1
+          fi
+          echo "PASS: no MinIO/S3 references"
+      - name: No payment or billing code
+        run: |
+          if grep -rn "stripe\|Stripe\|payment_intent\|billing\|subscription" backend/app/ backend/server.py --include="*.py"; then
+            echo "FAIL: payment/billing references found"
+            exit 1
+          fi
+          echo "PASS: no payment/billing references"
+
+  # ---- Focused test gates (run from the full backend suite) ------------------
+  # These re-run targeted subsets so failures are immediately attributable.
+
+  auth-security:
+    name: Authentication security
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: glamgenius
+          POSTGRES_PASSWORD: glamgenius
+          POSTGRES_DB: glamgenius_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U glamgenius -d glamgenius_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@localhost:5432/glamgenius_test
+      SUPABASE_URL: https://ci-project.supabase.co
+      SUPABASE_ANON_KEY: ci-anon-key-not-a-real-one
+      SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-not-a-real-one
+      SUPABASE_JWT_ISSUER: https://ci-project.supabase.co/auth/v1
+      SUPABASE_JWKS_URL: https://ci-project.supabase.co/auth/v1/.well-known/jwks.json
+      SUPABASE_JWT_SECRET: ci-hs256-jwt-secret-not-a-real-one
+      SUPABASE_STORAGE_BUCKET: glamgenius-media
+      SUPABASE_ADMIN_USER_IDS: 00000000-0000-0000-0000-000000000001
+      GEMINI_API_KEY: ""
+      REQUIRE_ANALYSIS_CONSENT: "false"
+      CONSENT_VERSION: "ci-test"
+      MEDIA_STORAGE_BACKEND: local
+      MEDIA_LOCAL_ROOT: /tmp/media-test
+      INVITE_REQUIRED: "false"
+      BETA_AI_REQUESTS_PER_HOUR: "60"
+      BETA_SCAN_LIMIT_PER_MONTH: "60"
+      BETA_STYLE_LIMIT_PER_MONTH: "60"
+      BETA_SHOPPING_CHECK_LIMIT_PER_MONTH: "60"
+      ALLOWED_ORIGINS: "http://localhost:8081"
+      APP_ENV: "test"
+      PYTHONPATH: ${{ github.workspace }}/backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r backend/requirements.txt
+      - run: cd backend && alembic upgrade head
+      - name: Auth security tests
+        working-directory: backend
+        run: pytest -q tests/test_domain_identity_access.py tests/test_supabase_auth.py tests/test_jwks_asymmetric.py -v
+
+  health-readiness:
+    name: Health and readiness
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: glamgenius
+          POSTGRES_PASSWORD: glamgenius
+          POSTGRES_DB: glamgenius_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U glamgenius -d glamgenius_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@localhost:5432/glamgenius_test
+      SUPABASE_URL: https://ci-project.supabase.co
+      SUPABASE_ANON_KEY: ci-anon-key-not-a-real-one
+      SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-not-a-real-one
+      SUPABASE_JWT_ISSUER: https://ci-project.supabase.co/auth/v1
+      SUPABASE_JWKS_URL: https://ci-project.supabase.co/auth/v1/.well-known/jwks.json
+      SUPABASE_JWT_SECRET: ci-hs256-jwt-secret-not-a-real-one
+      SUPABASE_STORAGE_BUCKET: glamgenius-media
+      SUPABASE_ADMIN_USER_IDS: 00000000-0000-0000-0000-000000000001
+      GEMINI_API_KEY: ""
+      REQUIRE_ANALYSIS_CONSENT: "false"
+      CONSENT_VERSION: "ci-test"
+      MEDIA_STORAGE_BACKEND: local
+      MEDIA_LOCAL_ROOT: /tmp/media-test
+      INVITE_REQUIRED: "false"
+      BETA_AI_REQUESTS_PER_HOUR: "60"
+      BETA_SCAN_LIMIT_PER_MONTH: "60"
+      BETA_STYLE_LIMIT_PER_MONTH: "60"
+      BETA_SHOPPING_CHECK_LIMIT_PER_MONTH: "60"
+      ALLOWED_ORIGINS: "http://localhost:8081"
+      APP_ENV: "test"
+      PYTHONPATH: ${{ github.workspace }}/backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r backend/requirements.txt
+      - run: cd backend && alembic upgrade head
+      - name: Health and readiness tests
+        working-directory: backend
+        run: pytest -q tests/test_health_ready.py -v
+
+  account-deletion:
+    name: Account-deletion state machine
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: glamgenius
+          POSTGRES_PASSWORD: glamgenius
+          POSTGRES_DB: glamgenius_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U glamgenius -d glamgenius_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@localhost:5432/glamgenius_test
+      SUPABASE_URL: https://ci-project.supabase.co
+      SUPABASE_ANON_KEY: ci-anon-key-not-a-real-one
+      SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-not-a-real-one
+      SUPABASE_JWT_ISSUER: https://ci-project.supabase.co/auth/v1
+      SUPABASE_JWKS_URL: https://ci-project.supabase.co/auth/v1/.well-known/jwks.json
+      SUPABASE_JWT_SECRET: ci-hs256-jwt-secret-not-a-real-one
+      SUPABASE_STORAGE_BUCKET: glamgenius-media
+      SUPABASE_ADMIN_USER_IDS: 00000000-0000-0000-0000-000000000001
+      GEMINI_API_KEY: ""
+      REQUIRE_ANALYSIS_CONSENT: "false"
+      CONSENT_VERSION: "ci-test"
+      MEDIA_STORAGE_BACKEND: local
+      MEDIA_LOCAL_ROOT: /tmp/media-test
+      INVITE_REQUIRED: "false"
+      BETA_AI_REQUESTS_PER_HOUR: "60"
+      BETA_SCAN_LIMIT_PER_MONTH: "60"
+      BETA_STYLE_LIMIT_PER_MONTH: "60"
+      BETA_SHOPPING_CHECK_LIMIT_PER_MONTH: "60"
+      ALLOWED_ORIGINS: "http://localhost:8081"
+      APP_ENV: "test"
+      PYTHONPATH: ${{ github.workspace }}/backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r backend/requirements.txt
+      - run: cd backend && alembic upgrade head
+      - name: Account-deletion state machine tests
+        working-directory: backend
+        run: pytest -q tests/test_account_deletion*.py -v
+
+  critical-journey:
+    name: Critical journey
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: glamgenius
+          POSTGRES_PASSWORD: glamgenius
+          POSTGRES_DB: glamgenius_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U glamgenius -d glamgenius_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@localhost:5432/glamgenius_test
+      SUPABASE_URL: https://ci-project.supabase.co
+      SUPABASE_ANON_KEY: ci-anon-key-not-a-real-one
+      SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-not-a-real-one
+      SUPABASE_JWT_ISSUER: https://ci-project.supabase.co/auth/v1
+      SUPABASE_JWKS_URL: https://ci-project.supabase.co/auth/v1/.well-known/jwks.json
+      SUPABASE_JWT_SECRET: ci-hs256-jwt-secret-not-a-real-one
+      SUPABASE_STORAGE_BUCKET: glamgenius-media
+      SUPABASE_ADMIN_USER_IDS: 00000000-0000-0000-0000-000000000001
+      GEMINI_API_KEY: ""
+      REQUIRE_ANALYSIS_CONSENT: "false"
+      CONSENT_VERSION: "ci-test"
+      MEDIA_STORAGE_BACKEND: local
+      MEDIA_LOCAL_ROOT: /tmp/media-test
+      INVITE_REQUIRED: "false"
+      BETA_AI_REQUESTS_PER_HOUR: "60"
+      BETA_SCAN_LIMIT_PER_MONTH: "60"
+      BETA_STYLE_LIMIT_PER_MONTH: "60"
+      BETA_SHOPPING_CHECK_LIMIT_PER_MONTH: "60"
+      ALLOWED_ORIGINS: "http://localhost:8081"
+      APP_ENV: "test"
+      PYTHONPATH: ${{ github.workspace }}/backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r backend/requirements.txt
+      - run: cd backend && alembic upgrade head
+      - name: Critical journey tests
+        working-directory: backend
+        run: pytest -q tests/test_critical_journey*.py -v

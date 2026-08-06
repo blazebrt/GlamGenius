@@ -17,9 +17,10 @@ and a professional boundary, and nothing else. See :mod:`.safety`.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,8 +36,12 @@ from app.domains.routines.models import ProductIngredient
 from app.domains.routines.ontology import SEVERITY_AVOID, SEVERITY_CAUTION, SLOT_BY_KEY
 from app.domains.routines.rules import Finding, ShelfProduct
 from app.domains.routines.safety import (
-    SUPPLEMENT_DISCLAIMER, SUPPLEMENT_FLAG_EXPIRED, SUPPLEMENT_FLAG_EXPIRING,
-    SUPPLEMENT_FLAG_NO_EXPIRY, SUPPLEMENT_FLAG_PROFESSIONAL, SUPPLEMENT_FLAG_TEXT,
+    SUPPLEMENT_DISCLAIMER,
+    SUPPLEMENT_FLAG_EXPIRED,
+    SUPPLEMENT_FLAG_EXPIRING,
+    SUPPLEMENT_FLAG_NO_EXPIRY,
+    SUPPLEMENT_FLAG_PROFESSIONAL,
+    SUPPLEMENT_FLAG_TEXT,
     needs_professional,
 )
 
@@ -58,18 +63,18 @@ class ShelfContext:
 
     account_id: uuid.UUID
     today: date
-    owned: List[OwnedItem] = field(default_factory=list)
+    owned: list[OwnedItem] = field(default_factory=list)
     draft_count: int = 0
-    allergies: List[str] = field(default_factory=list)
+    allergies: list[str] = field(default_factory=list)
     climate: Optional[str] = None
     diet: Optional[str] = None
     # Ingredient confirmations the user has already made, keyed item -> keys.
-    confirmed_ingredients: Dict[str, set] = field(default_factory=dict)
+    confirmed_ingredients: dict[str, set] = field(default_factory=dict)
     # Computed once from the stored rows, because Phase 3's low-use rule reads
     # the date an item was catalogued and an OwnedItem does not carry it.
-    low_use_ids: Set[uuid.UUID] = field(default_factory=set)
+    low_use_ids: set[uuid.UUID] = field(default_factory=set)
 
-    def by_category(self, category: str) -> List[OwnedItem]:
+    def by_category(self, category: str) -> list[OwnedItem]:
         return [item for item in self.owned if item.category == category]
 
 
@@ -79,7 +84,7 @@ class ShelfContext:
 SHELF_ATTRIBUTES = ("allergies", "climate", "city", "hydration_habits", "preferred_style")
 
 
-async def shelf_attributes(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def shelf_attributes(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     """Confirmed attributes only.
 
     An unconfirmed observation must never silently decide that a product is
@@ -98,14 +103,14 @@ async def shelf_attributes(session: AsyncSession, account_id: uuid.UUID) -> Dict
     }
 
 
-async def _confirmed_ingredient_keys(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, set]:
+async def _confirmed_ingredient_keys(session: AsyncSession, account_id: uuid.UUID) -> dict[str, set]:
     rows = (await session.execute(
         select(ProductIngredient.item_id, ProductIngredient.ingredient_key).where(
             ProductIngredient.account_id == account_id,
             ProductIngredient.confirmed_at.is_not(None),
         )
     )).all()
-    out: Dict[str, set] = {}
+    out: dict[str, set] = {}
     for item_id, key in rows:
         out.setdefault(str(item_id), set()).add(key)
     return out
@@ -126,8 +131,8 @@ async def gather(
         )
     )).scalars().all()
 
-    owned: List[OwnedItem] = []
-    low_use_ids: Set[uuid.UUID] = set()
+    owned: list[OwnedItem] = []
+    low_use_ids: set[uuid.UUID] = set()
     drafts = 0
     for row in rows:
         if row.verification_state != "confirmed":
@@ -161,7 +166,7 @@ async def gather(
     )
 
 
-def build(context: ShelfContext, category: str) -> List[ShelfProduct]:
+def build(context: ShelfContext, category: str) -> list[ShelfProduct]:
     """Parse one category of the user's shelf into what the engine reasons over.
 
     Confirmations already recorded are applied here: an ingredient the user has
@@ -184,7 +189,7 @@ def build(context: ShelfContext, category: str) -> List[ShelfProduct]:
 
 def findings_for(
     products: Sequence[ShelfProduct], category: str, context: ShelfContext
-) -> List[Finding]:
+) -> list[Finding]:
     """Everything worth telling the user about one category of their shelf."""
     return (
         rules_engine.allergy_findings(products, context.allergies)
@@ -197,7 +202,7 @@ def findings_for(
     )
 
 
-def _product_row(product: ShelfProduct, today: date) -> Dict[str, Any]:
+def _product_row(product: ShelfProduct, today: date) -> dict[str, Any]:
     spec = SLOT_BY_KEY.get(product.slot or "")
     return {
         "inventory_item_id": product.id,
@@ -216,7 +221,7 @@ def _product_row(product: ShelfProduct, today: date) -> Dict[str, Any]:
     }
 
 
-def category_report(context: ShelfContext, category: str) -> Dict[str, Any]:
+def category_report(context: ShelfContext, category: str) -> dict[str, Any]:
     """One category of the shelf, end to end."""
     products = build(context, category)
     findings = findings_for(products, category, context)
@@ -238,7 +243,7 @@ def category_report(context: ShelfContext, category: str) -> Dict[str, Any]:
     }
 
 
-def summary(context: ShelfContext) -> Dict[str, Any]:
+def summary(context: ShelfContext) -> dict[str, Any]:
     """The whole shelf at a glance, counted rather than scored.
 
     No overall number. A single "shelf score" would be a judgement of somebody's
@@ -246,7 +251,7 @@ def summary(context: ShelfContext) -> Dict[str, Any]:
     """
     categories = {category: category_report(context, category) for category in ROUTINE_CATEGORIES}
 
-    all_warnings: List[Dict[str, Any]] = []
+    all_warnings: list[dict[str, Any]] = []
     for report in categories.values():
         all_warnings.extend(report["warnings"])
 
@@ -285,15 +290,15 @@ def summary(context: ShelfContext) -> Dict[str, Any]:
     }
 
 
-def expiring(context: ShelfContext, days: int = 60) -> Dict[str, Any]:
+def expiring(context: ShelfContext, days: int = 60) -> dict[str, Any]:
     """Products running out, and products with no date recorded.
 
     A missing date is reported as missing rather than guessed. Inventing an
     expiry would put a confident number on something we simply do not know.
     """
-    soon: List[Dict[str, Any]] = []
-    expired: List[Dict[str, Any]] = []
-    undated: List[Dict[str, Any]] = []
+    soon: list[dict[str, Any]] = []
+    expired: list[dict[str, Any]] = []
+    undated: list[dict[str, Any]] = []
 
     for category in ROUTINE_CATEGORIES:
         for product in build(context, category):
@@ -320,9 +325,9 @@ def expiring(context: ShelfContext, days: int = 60) -> Dict[str, Any]:
     }
 
 
-def low_use(context: ShelfContext) -> Dict[str, Any]:
+def low_use(context: ShelfContext) -> dict[str, Any]:
     """Products sitting unused. Named plainly, never framed as waste."""
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for category in ROUTINE_CATEGORIES:
         rows.extend(
             _product_row(product, context.today)
@@ -337,13 +342,13 @@ def low_use(context: ShelfContext) -> Dict[str, Any]:
     }
 
 
-def value_to_recover(context: ShelfContext, items: Sequence[InventoryItem]) -> Dict[str, Any]:
+def value_to_recover(context: ShelfContext, items: Sequence[InventoryItem]) -> dict[str, Any]:
     """Shelf-only Value to Recover, reusing the Phase 3 estimator unchanged.
 
     Products with no purchase price are listed as missing that input rather than
     given an invented one.
     """
-    estimates: List[Dict[str, Any]] = []
+    estimates: list[dict[str, Any]] = []
     total = 0.0
     for item in items:
         if item.category not in ROUTINE_CATEGORIES:
@@ -375,7 +380,7 @@ def value_to_recover(context: ShelfContext, items: Sequence[InventoryItem]) -> D
 
 def consistency(
     adherence_rows: Sequence[Any], expected_per_day: int, *, days: int = 14
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """How consistently the routine is being followed.
 
     No streaks. A streak turns a missed Tuesday into a failure, and this is a
@@ -402,20 +407,20 @@ def consistency(
 # --- Supplements --------------------------------------------------------------
 
 
-def supplement_flags(context: ShelfContext) -> List[Dict[str, Any]]:
+def supplement_flags(context: ShelfContext) -> list[dict[str, Any]]:
     """The only things this app is allowed to say about a supplement.
 
     Expiry status, a missing date, and a pointer at a professional when the
     user's own recorded purpose reads like a health question. No dosage, no
     effect, no interaction — the set is closed, and it is closed here.
     """
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for item in context.by_category("supplements"):
         details = item.details or {}
         expiry = inventory_service.effective_expiry_from_details(details)
         days = (expiry - context.today).days if expiry else None
 
-        flags: List[str] = []
+        flags: list[str] = []
         if days is None:
             flags.append(SUPPLEMENT_FLAG_NO_EXPIRY)
         elif days < 0:
@@ -442,7 +447,7 @@ def supplement_flags(context: ShelfContext) -> List[Dict[str, Any]]:
     return rows
 
 
-def supplement_summary(context: ShelfContext) -> Dict[str, Any]:
+def supplement_summary(context: ShelfContext) -> dict[str, Any]:
     """Supplement inventory. Tracking only, and it says so."""
     rows = supplement_flags(context)
     return {

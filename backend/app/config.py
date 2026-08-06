@@ -4,7 +4,7 @@ The single Supabase-backed application reads its environment here and validates
 it once, at startup, so a malformed value fails fast with a message pointing at
 the variable to fix.
 
-**No payment settings live in this file.** Prices, subscriptions and paid
+**No financial settings live in this file.** Prices, recurring plans and premium
 plan machinery were removed by the Supabase cutover; adding them back is
 outside the scope of the current architecture.
 """
@@ -12,10 +12,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List
 
 from dotenv import load_dotenv
-
 
 # Load the same .env file the rest of the backend uses. Path-anchored so this
 # works from tests, Alembic and Uvicorn alike.
@@ -60,7 +58,7 @@ def _env_float(name: str, default: float) -> float:
         ) from exc
 
 
-def _env_csv(name: str, default: str = "") -> List[str]:
+def _env_csv(name: str, default: str = "") -> list[str]:
     raw = os.environ.get(name)
     if raw is None:
         raw = default

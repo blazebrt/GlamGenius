@@ -11,22 +11,22 @@ Cover:
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict
+from typing import Any
 
 import pytest
-
 from app.domains.consent.models import CONSENT_PHOTO_ANALYSIS, Consent
 from app.domains.identity import service as identity
 from app.domains.inventory.models import InventoryItem
 from app.domains.privacy import (
-    Classification,
     REGISTRY,
+    Classification,
     assert_registry_complete,
+)
+from app.domains.privacy import (
     export as export_service,
 )
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_sessionmaker
-
 
 pytestmark = pytest.mark.asyncio
 
@@ -71,7 +71,7 @@ async def test_export_shape_has_schema_version_and_domains(db_clean):
     assert "generated_at" in payload
     assert payload["account"]["id"] == str(account_id)
     # Every domain handler must be represented.
-    for domain in export_service.DOMAIN_HANDLERS.keys():
+    for domain in export_service.DOMAIN_HANDLERS:
         assert domain in payload["domains"], f"missing domain {domain}"
 
 
@@ -107,7 +107,8 @@ async def test_export_only_returns_calling_accounts_data(db_clean):
 async def test_export_never_exposes_media_storage_key(db_clean, media_root):
     """``storage_key`` is internal; export must not contain it."""
     import hashlib
-    from app.domains.media.models import MediaAsset, MEDIA_PURPOSE_INVENTORY
+
+    from app.domains.media.models import MEDIA_PURPOSE_INVENTORY, MediaAsset
 
     factory = get_sessionmaker()
     account_id = uuid.uuid4()

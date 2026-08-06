@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from sqlalchemy import (
     Boolean,
@@ -101,7 +101,7 @@ class AIRunOutput(UUIDPrimaryKey, TimestampMixin, Base):
     )
 
     schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
-    payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
 
     # The model's own stated confidence, not ours.
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

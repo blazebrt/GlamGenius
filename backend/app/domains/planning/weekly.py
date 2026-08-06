@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.planning import clock, compiler
 from app.domains.planning import context as context_stage
 from app.domains.planning.models import (
-    PLANNER_VERSION, DailyPlan, OutfitSchedule, WeeklyPlan, WeeklyPlanDay,
+    PLANNER_VERSION,
+    DailyPlan,
+    OutfitSchedule,
+    WeeklyPlan,
+    WeeklyPlanDay,
 )
 from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
@@ -48,7 +52,7 @@ async def get_or_create_week(
     return plan
 
 
-async def _day_rows(session: AsyncSession, plan: WeeklyPlan) -> Dict[date, WeeklyPlanDay]:
+async def _day_rows(session: AsyncSession, plan: WeeklyPlan) -> dict[date, WeeklyPlanDay]:
     rows = (await session.execute(
         select(WeeklyPlanDay).where(WeeklyPlanDay.weekly_plan_id == plan.id)
     )).scalars().all()
@@ -209,14 +213,14 @@ async def _swap_schedule(session: AsyncSession, account_id: uuid.UUID, first: da
     left.item_ids, right.item_ids = right.item_ids, left.item_ids
 
 
-def repetition_report(days: List[Dict[str, Any]]) -> Dict[str, Any]:
+def repetition_report(days: list[dict[str, Any]]) -> dict[str, Any]:
     """Which items appear more than once across the week.
 
     Surfaced rather than silently prevented: wearing the same trousers twice in
     a week is completely normal, and the planner's job is to make it visible,
     not to forbid it.
     """
-    seen: Dict[str, List[str]] = {}
+    seen: dict[str, list[str]] = {}
     for day in days:
         for item in day.get("owned_items", []):
             seen.setdefault(item["display_name"], []).append(day["plan_date"])

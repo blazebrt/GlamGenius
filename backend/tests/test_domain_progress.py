@@ -25,8 +25,6 @@ import uuid
 from datetime import date
 
 import pytest
-from sqlalchemy import func, select
-
 from app.bootstrap import main as run_seed
 from app.domains.identity import service as identity
 from app.domains.inventory import service as inv_service
@@ -43,7 +41,7 @@ from app.domains.progress.registry import METRIC_BY_KEY, METRIC_KEYS
 from app.domains.progress.schemas import GoalCreate, GoalPatch
 from app.shared.database.sql import get_sessionmaker
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
-
+from sqlalchemy import func, select
 
 pytestmark = pytest.mark.asyncio
 

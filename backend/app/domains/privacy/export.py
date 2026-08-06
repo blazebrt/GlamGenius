@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,12 +67,14 @@ from app.domains.recommendation.models import (
     Look,
     LookAdjustment,
     LookFeedback,
-    OccasionRecord as Occasion,
     PurchaseDecision,
     PurchaseEvaluation,
     RecommendationRun,
     ShoppingCandidate,
     StyleRequest,
+)
+from app.domains.recommendation.models import (
+    OccasionRecord as Occasion,
 )
 from app.domains.routines.models import Routine, RoutineAdherence, RoutineStep
 from app.domains.scan.models import Scan
@@ -89,14 +92,14 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
 
 
-def _row_dict(row: Any, fields: List[str]) -> Dict[str, Any]:
+def _row_dict(row: Any, fields: list[str]) -> dict[str, Any]:
     """Turn a subset of a row's columns into a JSON-safe dict.
 
     ``uuid.UUID`` and ``datetime`` are serialised to strings; everything else
     is returned as-is (SQLAlchemy already gives us primitives for JSON, int
     and bool).
     """
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for name in fields:
         value = getattr(row, name, None)
         if isinstance(value, uuid.UUID):
@@ -108,7 +111,7 @@ def _row_dict(row: Any, fields: List[str]) -> Dict[str, Any]:
     return out
 
 
-async def _fetch(session: AsyncSession, stmt) -> List[Any]:
+async def _fetch(session: AsyncSession, stmt) -> list[Any]:
     stmt = stmt.limit(_MAX_ROWS)
     return list((await session.execute(stmt)).scalars().all())
 
@@ -117,7 +120,7 @@ async def _fetch(session: AsyncSession, stmt) -> List[Any]:
 # Domain handlers
 # ---------------------------------------------------------------------------
 
-async def _identity(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def _identity(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     account = (await session.execute(
         select(Account).where(Account.id == account_id)
     )).scalar_one_or_none()
@@ -153,7 +156,7 @@ async def _identity(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, A
     }
 
 
-async def _profile(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     profiles = await _fetch(
         session,
         select(AppearanceProfile).where(AppearanceProfile.account_id == account_id),
@@ -184,7 +187,7 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, An
     }
 
 
-async def _consent(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def _consent(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     rows = await _fetch(
         session,
         select(Consent).where(Consent.account_id == account_id).order_by(Consent.recorded_at.desc()),
@@ -192,7 +195,7 @@ async def _consent(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, An
     return {"entries": [_row_dict(r, [c.name for c in Consent.__table__.columns]) for r in rows]}
 
 
-async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     items = await _fetch(
         session,
         select(InventoryItem).where(InventoryItem.account_id == account_id),
@@ -213,7 +216,7 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, 
     }
 
 
-async def _media(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def _media(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     assets = await _fetch(
         session,
         select(MediaAsset).where(MediaAsset.account_id == account_id),
@@ -223,7 +226,7 @@ async def _media(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]
     return {"assets": [media_service.to_public_dict(a) for a in assets]}
 
 
-async def _scans(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def _scans(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     rows = await _fetch(
         session,
         select(Scan).where(Scan.account_id == account_id).order_by(Scan.created_at.desc()),
@@ -233,7 +236,7 @@ async def _scans(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]
     return {"scans": [_row_dict(r, [c.name for c in Scan.__table__.columns]) for r in rows]}
 
 
-async def _quiz_and_styling(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def _quiz_and_styling(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     submissions = await _fetch(
         session,
         select(QuizSubmission).where(QuizSubmission.account_id == account_id),
@@ -273,7 +276,7 @@ async def _quiz_and_styling(session: AsyncSession, account_id: uuid.UUID) -> Dic
     }
 
 
-async def _shopping(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def _shopping(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     candidates = await _fetch(session, select(ShoppingCandidate).where(ShoppingCandidate.account_id == account_id))
     evaluations = await _fetch(session, select(PurchaseEvaluation).where(PurchaseEvaluation.account_id == account_id))
     decisions = await _fetch(session, select(PurchaseDecision).where(PurchaseDecision.account_id == account_id))
@@ -284,7 +287,7 @@ async def _shopping(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, A
     }
 
 
-async def _planning(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def _planning(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     daily = await _fetch(session, select(DailyPlan).where(DailyPlan.account_id == account_id))
     weekly = await _fetch(session, select(WeeklyPlan).where(WeeklyPlan.account_id == account_id))
     calendar = await _fetch(session, select(CalendarEvent).where(CalendarEvent.account_id == account_id))
@@ -297,7 +300,7 @@ async def _planning(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, A
     }
 
 
-async def _routines(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     routines = await _fetch(session, select(Routine).where(Routine.account_id == account_id))
     steps = await _fetch(
         session,
@@ -311,7 +314,7 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, A
     }
 
 
-async def _progress_and_memory(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def _progress_and_memory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     # Local imports to keep the top of the module tidy.
     from app.domains.progress.models import (
         FeedbackEvent,
@@ -358,7 +361,7 @@ async def _progress_and_memory(session: AsyncSession, account_id: uuid.UUID) -> 
     }
 
 
-async def _ai_and_ops(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def _ai_and_ops(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     runs = await _fetch(
         session,
         select(AIRun).where(AIRun.account_id == account_id).order_by(AIRun.created_at.desc()),
@@ -385,7 +388,7 @@ async def _ai_and_ops(session: AsyncSession, account_id: uuid.UUID) -> Dict[str,
 
 DomainHandler = Callable[[AsyncSession, uuid.UUID], Any]
 
-DOMAIN_HANDLERS: Dict[str, DomainHandler] = {
+DOMAIN_HANDLERS: dict[str, DomainHandler] = {
     "identity": _identity,
     "profile": _profile,
     "consent": _consent,
@@ -401,9 +404,9 @@ DOMAIN_HANDLERS: Dict[str, DomainHandler] = {
 }
 
 
-async def build_export(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def build_export(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     """Build the complete privacy-export payload for ``account_id``."""
-    domains: Dict[str, Any] = {}
+    domains: dict[str, Any] = {}
     for name, handler in DOMAIN_HANDLERS.items():
         try:
             domains[name] = await handler(session, account_id)

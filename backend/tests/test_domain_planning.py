@@ -22,11 +22,9 @@ What this protects against
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select
-
 from app.domains.planning import weather as weather_module
 from app.domains.planning.models import (
     CalendarEvent,
@@ -37,8 +35,9 @@ from app.domains.planning.models import (
     WeeklyPlanDay,
 )
 from app.shared.database.sql import get_sessionmaker
-from tests.conftest import auth
+from sqlalchemy import func, select
 
+from tests.conftest import auth
 
 pytestmark = pytest.mark.asyncio
 
@@ -487,8 +486,8 @@ async def test_manual_event_is_created_and_influences_the_day(
         headers=auth(token),
         json={
             "title": "Client presentation",
-            "starts_at": datetime(2026, 2, 16, 10, 0, tzinfo=timezone.utc).isoformat(),
-            "ends_at": datetime(2026, 2, 16, 11, 0, tzinfo=timezone.utc).isoformat(),
+            "starts_at": datetime(2026, 2, 16, 10, 0, tzinfo=UTC).isoformat(),
+            "ends_at": datetime(2026, 2, 16, 11, 0, tzinfo=UTC).isoformat(),
             "occasion_key": "office",
         },
     )
@@ -516,7 +515,7 @@ async def test_reposting_the_same_event_is_absorbed_not_stacked(
     token, uid = await registered_supabase_user()
     payload = {
         "title": "Client presentation",
-        "starts_at": datetime(2026, 2, 16, 10, 0, tzinfo=timezone.utc).isoformat(),
+        "starts_at": datetime(2026, 2, 16, 10, 0, tzinfo=UTC).isoformat(),
         "occasion_key": "office",
     }
 
@@ -544,7 +543,7 @@ async def test_event_can_be_updated_and_removed(
         headers=auth(token),
         json={
             "title": "Dinner",
-            "starts_at": datetime(2026, 2, 16, 19, 0, tzinfo=timezone.utc).isoformat(),
+            "starts_at": datetime(2026, 2, 16, 19, 0, tzinfo=UTC).isoformat(),
         },
     )).json()["event"]
 
@@ -576,7 +575,7 @@ async def test_event_from_another_account_cannot_be_patched(
         headers=auth(owner_token),
         json={
             "title": "Dinner",
-            "starts_at": datetime(2026, 2, 16, 19, 0, tzinfo=timezone.utc).isoformat(),
+            "starts_at": datetime(2026, 2, 16, 19, 0, tzinfo=UTC).isoformat(),
         },
     )).json()["event"]
 
@@ -597,7 +596,7 @@ async def test_event_with_an_unknown_occasion_is_rejected(
         headers=auth(token),
         json={
             "title": "Coronation",
-            "starts_at": datetime(2026, 2, 16, 10, 0, tzinfo=timezone.utc).isoformat(),
+            "starts_at": datetime(2026, 2, 16, 10, 0, tzinfo=UTC).isoformat(),
             "occasion_key": "coronation",
         },
     )

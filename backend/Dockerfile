@@ -18,7 +18,7 @@
 # stack — see scripts/verify_clean_environment.sh.
 
 # ---------- Stage 1: builder ------------------------------------------------
-FROM python:3.11.10-slim AS builder
+FROM python@sha256:840e180ebcc6e5c8efab209c43f5e40fd2af98cb49db5c7103c90539c56bb30e AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -38,12 +38,13 @@ COPY requirements.txt ./
 RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
 
 # ---------- Stage 2: runtime ------------------------------------------------
-FROM python:3.11.10-slim AS runtime
+FROM python@sha256:840e180ebcc6e5c8efab209c43f5e40fd2af98cb49db5c7103c90539c56bb30e AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    TMPDIR=/tmp
 
 # Runtime OS dependencies: curl for the container health check that the
 # compose files use, and tini so PID 1 handles signals correctly. Neither
@@ -62,6 +63,10 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY --chown=10001:10001 . .
 
+# Emit build version/commit SHA safely
+ARG COMMIT_SHA=unknown
+ENV COMMIT_SHA=${COMMIT_SHA}
+
 # Where the local media adapter writes in development. Overridden by a volume
 # in docker-compose so uploads survive a container rebuild.
 ENV MEDIA_LOCAL_ROOT=/data/media
@@ -71,8 +76,10 @@ USER 10001
 
 EXPOSE 8000
 
-# tini reaps zombies and forwards signals so `docker stop` is graceful. The
-# migration is executed once at start-up; if it fails the container refuses
-# to serve traffic on the health check.
+# tini reaps zombies and forwards signals so `docker stop` is graceful.
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["sh", "-c", "alembic upgrade head && uvicorn server:app --host 0.0.0.0 --port 8000"]
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]

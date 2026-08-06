@@ -36,7 +36,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import httpx
 import jwt
@@ -47,7 +47,6 @@ from jwt.exceptions import InvalidTokenError, PyJWKClientError
 
 from app.config import (
     SUPABASE_ADMIN_USER_IDS,
-    SUPABASE_JWKS_URL,
     SUPABASE_JWKS_URL,
     SUPABASE_JWT_ISSUER,
 )
@@ -81,7 +80,7 @@ class SupabaseUser:
     id: uuid.UUID
     email: Optional[str]
     is_admin: bool
-    raw_claims: Dict[str, Any]
+    raw_claims: dict[str, Any]
 
     @property
     def id_str(self) -> str:
@@ -146,7 +145,7 @@ def _get_jwks_cache() -> Optional[_JWKSCache]:
     return _jwks_cache
 
 
-async def _decode_with_jwks(token: str, unverified_header: Dict[str, Any]) -> Dict[str, Any]:
+async def _decode_with_jwks(token: str, unverified_header: dict[str, Any]) -> dict[str, Any]:
     cache = _get_jwks_cache()
     if cache is None:
         raise InvalidTokenError("JWKS not configured")
@@ -172,7 +171,7 @@ async def _decode_with_jwks(token: str, unverified_header: Dict[str, Any]) -> Di
     )
 
 
-async def verify_supabase_token(token: str) -> Dict[str, Any]:
+async def verify_supabase_token(token: str) -> dict[str, Any]:
     """Decode and validate a Supabase access token. Raises AuthError on failure.
 
     Order: try JWKS first (asymmetric — current Supabase default). If JWKS
@@ -208,7 +207,7 @@ async def verify_supabase_token(token: str) -> Dict[str, Any]:
     raise AuthError()
 
 
-def _extract_sub_uuid(claims: Dict[str, Any]) -> uuid.UUID:
+def _extract_sub_uuid(claims: dict[str, Any]) -> uuid.UUID:
     raw_sub = claims.get("sub")
     if not raw_sub or not isinstance(raw_sub, str):
         raise AuthError()
@@ -218,7 +217,7 @@ def _extract_sub_uuid(claims: Dict[str, Any]) -> uuid.UUID:
         raise AuthError()
 
 
-def _require_authenticated_role(claims: Dict[str, Any]) -> None:
+def _require_authenticated_role(claims: dict[str, Any]) -> None:
     """Positively require ``role == "authenticated"``.
 
     Supabase issues three role families on JWTs: ``anon`` (project-level API

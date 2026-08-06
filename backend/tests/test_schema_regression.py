@@ -7,11 +7,9 @@ the canonical ``accounts.id`` (Supabase UUID) column.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import text
-
 from app.shared.database.registry import Base
 from app.shared.database.sql import get_engine
-
+from sqlalchemy import text
 
 # Payment/subscription/refund/plan-adjacent table names that must never appear.
 FORBIDDEN_TABLE_SUBSTRINGS = (
@@ -31,7 +29,7 @@ FORBIDDEN_TABLE_SUBSTRINGS = (
 
 
 def test_metadata_contains_no_payment_tables():
-    names = list(Base.metadata.tables.keys())
+    names = list(Base.metadata.tables)
     offenders = [
         n
         for n in names
@@ -95,7 +93,7 @@ async def test_empty_database_upgrades_and_survives_a_roundtrip(db_clean):
         )
         live_tables = {r[0] for r in rows}
 
-    expected = {t for t in Base.metadata.tables.keys()}
+    expected = {t for t in Base.metadata.tables}
     # Alembic's own version table lives in the same schema.
     live_tables.discard("alembic_version")
     missing = expected - live_tables

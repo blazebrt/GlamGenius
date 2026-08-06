@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from app.api.v2 import (
     access,
+    admin,
     config,
     consent,
     integrations,
@@ -27,7 +28,6 @@ from app.api.v2 import (
     shopping,
     style,
     today,
-    admin,
 )
 
 router = APIRouter(prefix="/api/v2")

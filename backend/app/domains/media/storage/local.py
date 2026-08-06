@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Optional
 
 from app.config import MEDIA_LOCAL_ROOT
 from app.domains.media.storage.base import (
@@ -80,8 +81,8 @@ class LocalFilesystemStorage:
     async def list_prefix(self, prefix: str) -> Iterable[str]:
         base = self._path_for(prefix) if prefix else self.root
 
-        def _walk() -> List[str]:
-            found: List[str] = []
+        def _walk() -> list[str]:
+            found: list[str] = []
             if not base.exists():
                 return found
             for p in base.rglob("*"):

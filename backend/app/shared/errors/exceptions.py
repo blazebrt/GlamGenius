@@ -7,7 +7,7 @@ working.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from app.shared.errors.codes import AIFailureType, ErrorCode
 
@@ -26,7 +26,7 @@ class AppError(Exception):
         status_code: Optional[int] = None,
         code: Optional[ErrorCode] = None,
         retryable: Optional[bool] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        extra: Optional[dict[str, Any]] = None,
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -36,10 +36,10 @@ class AppError(Exception):
             self.code = code
         if retryable is not None:
             self.retryable = retryable
-        self.extra: Dict[str, Any] = extra or {}
+        self.extra: dict[str, Any] = extra or {}
 
-    def to_detail(self) -> Dict[str, Any]:
-        detail: Dict[str, Any] = {
+    def to_detail(self) -> dict[str, Any]:
+        detail: dict[str, Any] = {
             "code": self.code.value,
             "message": self.message,
             "retryable": self.retryable,
@@ -65,7 +65,7 @@ class AnalysisUnavailableError(AppError):
         message: str = "We could not analyse this image reliably.",
         *,
         failure_type: AIFailureType = AIFailureType.PROVIDER_ERROR,
-        guidance: Optional[List[str]] = None,
+        guidance: Optional[list[str]] = None,
         retryable: bool = True,
         ai_run_id: Optional[str] = None,
     ) -> None:
@@ -83,14 +83,14 @@ class AnalysisUnavailableError(AppError):
 
 
 # Specific, actionable, and free of blame. Shown verbatim in the app.
-DEFAULT_PHOTO_GUIDANCE: List[str] = [
+DEFAULT_PHOTO_GUIDANCE: list[str] = [
     "Face a window or other soft light — avoid a bright light directly behind you",
     "Hold the camera at arm's length, roughly at eye level",
     "Keep the whole area you want checked inside the frame and in focus",
     "Remove sunglasses, and pull hair back if you are checking your face",
 ]
 
-PROVIDER_DOWN_GUIDANCE: List[str] = [
+PROVIDER_DOWN_GUIDANCE: list[str] = [
     "This is a problem on our side, not with your photo",
     "Your check has not been used — try again in a few minutes",
 ]
@@ -133,7 +133,7 @@ class UnsupportedMediaTypeError(AppError):
     code = ErrorCode.UNSUPPORTED_MEDIA_TYPE
     retryable = False
 
-    def __init__(self, message: str, *, allowed: Optional[List[str]] = None) -> None:
+    def __init__(self, message: str, *, allowed: Optional[list[str]] = None) -> None:
         super().__init__(message, extra={"allowed_types": allowed or []})
 
 

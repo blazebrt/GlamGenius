@@ -3,22 +3,43 @@ from __future__ import annotations
 
 import uuid
 from calendar import monthrange
-from datetime import date, datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from collections.abc import Iterable, Sequence
+from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, Optional
 
 from sqlalchemy import String, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.inventory.models import (
-    AccessoryItemDetail, BeautyProductDetail, DuplicateCandidate, HairProductDetail,
-    InventoryAttribute, InventoryCategory, InventoryEvent, InventoryItem,
-    InventoryItemImage, InventoryValueEvent, ItemConditionEvent, ItemExpiryEvent,
-    ItemRelationship, ItemUsageEvent, PerfumeDetail, ShoeItemDetail, SupplementDetail,
+    AccessoryItemDetail,
+    BeautyProductDetail,
+    DuplicateCandidate,
+    HairProductDetail,
+    InventoryAttribute,
+    InventoryCategory,
+    InventoryEvent,
+    InventoryItem,
+    InventoryItemImage,
+    InventoryValueEvent,
+    ItemConditionEvent,
+    ItemExpiryEvent,
+    ItemRelationship,
+    ItemUsageEvent,
+    PerfumeDetail,
+    ShoeItemDetail,
+    SupplementDetail,
     WardrobeItemDetail,
 )
 from app.domains.inventory.schemas import ItemCreate, ItemPatch
-from app.domains.inventory.taxonomy import CATEGORIES, SUPPLEMENT_DISCLAIMER, iter_search_values, normalise_text, validate_attribute_keys, validate_details
+from app.domains.inventory.taxonomy import (
+    CATEGORIES,
+    SUPPLEMENT_DISCLAIMER,
+    iter_search_values,
+    normalise_text,
+    validate_attribute_keys,
+    validate_details,
+)
 from app.domains.media import service as media_service
 from app.domains.media.models import MEDIA_PURPOSE_INVENTORY
 from app.shared.database.base import utcnow
@@ -59,7 +80,7 @@ async def _detail_row(session: AsyncSession, item: InventoryItem, *, create: boo
     model = DETAIL_MODELS[item.category]
     row = (await session.execute(select(model).where(model.item_id == item.id))).scalar_one_or_none()
     if row is None and create:
-        fields: Dict[str, Any] = {"item_id": item.id}
+        fields: dict[str, Any] = {"item_id": item.id}
         if item.category == "supplements":
             fields["safety_disclaimer"] = SUPPLEMENT_DISCLAIMER
         row = model(**fields)
@@ -74,7 +95,7 @@ def _coerce_detail(key: str, value: Any) -> Any:
     return value
 
 
-async def sync_details(session: AsyncSession, item: InventoryItem, details: Dict[str, Any]) -> None:
+async def sync_details(session: AsyncSession, item: InventoryItem, details: dict[str, Any]) -> None:
     cleaned = validate_details(item.category, details)
     if not cleaned:
         return
@@ -89,7 +110,7 @@ async def sync_details(session: AsyncSession, item: InventoryItem, details: Dict
     await session.flush()
 
 
-async def _attribute_map(session: AsyncSession, item_id: uuid.UUID) -> Dict[str, InventoryAttribute]:
+async def _attribute_map(session: AsyncSession, item_id: uuid.UUID) -> dict[str, InventoryAttribute]:
     rows = (await session.execute(select(InventoryAttribute).where(InventoryAttribute.item_id == item_id))).scalars().all()
     return {row.key: row for row in rows}
 
@@ -133,7 +154,7 @@ async def set_images(session: AsyncSession, item: InventoryItem, account_id: uui
             session.add(InventoryItemImage(item_id=item.id, media_asset_id=asset_id, position=position))
 
 
-async def record_event(session: AsyncSession, item: InventoryItem, event_type: str, payload: Optional[Dict[str, Any]] = None, actor: str = "user") -> None:
+async def record_event(session: AsyncSession, item: InventoryItem, event_type: str, payload: Optional[dict[str, Any]] = None, actor: str = "user") -> None:
     session.add(InventoryEvent(account_id=item.account_id, item_id=item.id, event_type=event_type, actor=actor, payload=payload or {}))
 
 
@@ -227,7 +248,7 @@ def add_months(value: date, months: int) -> date:
     return date(year, month, min(value.day, monthrange(year, month)[1]))
 
 
-def effective_expiry_from_details(details: Dict[str, Any]) -> Optional[date]:
+def effective_expiry_from_details(details: dict[str, Any]) -> Optional[date]:
     explicit = details.get("expiry_date")
     if isinstance(explicit, str): explicit = date.fromisoformat(explicit)
     opened = details.get("opened_date")
@@ -242,7 +263,7 @@ def is_low_use(item: InventoryItem, today: Optional[date] = None) -> bool:
     return item.status == "active" and (now - created).days >= 30 and item.usage_count <= 2 and (item.last_used_at is None or (now - item.last_used_at).days >= 30)
 
 
-def value_to_recover(item: InventoryItem, details: Dict[str, Any], today: Optional[date] = None) -> Dict[str, Any]:
+def value_to_recover(item: InventoryItem, details: dict[str, Any], today: Optional[date] = None) -> dict[str, Any]:
     now = today or date.today(); expiry = effective_expiry_from_details(details)
     remaining = details.get("remaining_percent")
     remaining_ratio = Decimal(str(remaining / 100 if remaining is not None else max(0.1, 1 - min(item.usage_count, 30) / 30)))
@@ -258,10 +279,10 @@ def value_to_recover(item: InventoryItem, details: Dict[str, Any], today: Option
     return {"item_id": str(item.id), "display_name": item.display_name, "estimated_value": float(value), "currency": item.currency, "is_estimate": True, "metric_version": "v1", "inputs": inputs, "missing_inputs": [], "explanation": "Estimated from entered price, remaining amount or usage, condition, time since use and expiry proximity. It is not an exact resale or waste value."}
 
 
-def _plain_details(row: Any) -> Dict[str, Any]:
+def _plain_details(row: Any) -> dict[str, Any]:
     if row is None: return {}
     hidden = {"id", "item_id", "created_at", "updated_at", "safety_disclaimer"}
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     for column in row.__table__.columns:
         if column.name in hidden: continue
         value = getattr(row, column.name)
@@ -271,15 +292,15 @@ def _plain_details(row: Any) -> Dict[str, Any]:
     return result
 
 
-async def details_for(session: AsyncSession, item: InventoryItem) -> Dict[str, Any]:
+async def details_for(session: AsyncSession, item: InventoryItem) -> dict[str, Any]:
     return _plain_details(await _detail_row(session, item))
 
 
-async def serialize_item(session: AsyncSession, item: InventoryItem, *, include_history: bool = False) -> Dict[str, Any]:
+async def serialize_item(session: AsyncSession, item: InventoryItem, *, include_history: bool = False) -> dict[str, Any]:
     details = await details_for(session, item)
     attributes = (await session.execute(select(InventoryAttribute).where(InventoryAttribute.item_id == item.id).order_by(InventoryAttribute.key))).scalars().all()
     images = (await session.execute(select(InventoryItemImage).where(InventoryItemImage.item_id == item.id).order_by(InventoryItemImage.position))).scalars().all()
-    body: Dict[str, Any] = {
+    body: dict[str, Any] = {
         "id": str(item.id), "category": item.category, "subcategory": item.subcategory, "display_name": item.display_name,
         "brand": item.brand, "source": item.source, "verification_state": item.verification_state, "confidence": item.confidence,
         "status": item.status, "purchase_date": item.purchase_date.isoformat() if item.purchase_date else None,
@@ -301,7 +322,7 @@ def _attr_filter(key: str, value: str):
     return exists(select(InventoryAttribute.id).where(InventoryAttribute.item_id == InventoryItem.id, InventoryAttribute.key == key, cast(InventoryAttribute.value, String).ilike(f"%{value}%")))
 
 
-async def list_items(session: AsyncSession, account_id: uuid.UUID, *, page: int = 1, page_size: int = 24, q: Optional[str] = None, category: Optional[str] = None, brand: Optional[str] = None, colour: Optional[str] = None, ingredient: Optional[str] = None, occasion: Optional[str] = None, season: Optional[str] = None, condition: Optional[str] = None, expiry_status: Optional[str] = None, usage_level: Optional[str] = None, verification_state: Optional[str] = None, sort: str = "newest") -> Dict[str, Any]:
+async def list_items(session: AsyncSession, account_id: uuid.UUID, *, page: int = 1, page_size: int = 24, q: Optional[str] = None, category: Optional[str] = None, brand: Optional[str] = None, colour: Optional[str] = None, ingredient: Optional[str] = None, occasion: Optional[str] = None, season: Optional[str] = None, condition: Optional[str] = None, expiry_status: Optional[str] = None, usage_level: Optional[str] = None, verification_state: Optional[str] = None, sort: str = "newest") -> dict[str, Any]:
     stmt = select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived")
     if q: stmt = stmt.where(or_(InventoryItem.display_name.ilike(f"%{q}%"), InventoryItem.brand.ilike(f"%{q}%"), InventoryItem.subcategory.ilike(f"%{q}%"), _attr_filter("ingredients_text", q), _attr_filter("active_ingredients", q)))
     if category: stmt = stmt.where(InventoryItem.category == category)
@@ -329,7 +350,7 @@ async def list_items(session: AsyncSession, account_id: uuid.UUID, *, page: int 
     return {"items": [await serialize_item(session, row) for row in rows], "pagination": {"page": page, "page_size": page_size, "total": total, "pages": (total + page_size - 1) // page_size}}
 
 
-async def expiring_items(session: AsyncSession, account_id: uuid.UUID, days: int = 90) -> List[Dict[str, Any]]:
+async def expiring_items(session: AsyncSession, account_id: uuid.UUID, days: int = 90) -> list[dict[str, Any]]:
     rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived"))).scalars().all(); today = date.today(); result = []
     for item in rows:
         details = await details_for(session, item); expiry = effective_expiry_from_details(details)
@@ -338,12 +359,12 @@ async def expiring_items(session: AsyncSession, account_id: uuid.UUID, days: int
     return sorted(result, key=lambda row: row["effective_expiry"])
 
 
-async def low_use_items(session: AsyncSession, account_id: uuid.UUID) -> List[Dict[str, Any]]:
+async def low_use_items(session: AsyncSession, account_id: uuid.UUID) -> list[dict[str, Any]]:
     rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived"))).scalars().all()
     return [await serialize_item(session, item) for item in rows if is_low_use(item)]
 
 
-async def value_report(session: AsyncSession, account_id: uuid.UUID, *, record: bool = False) -> Dict[str, Any]:
+async def value_report(session: AsyncSession, account_id: uuid.UUID, *, record: bool = False) -> dict[str, Any]:
     rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived"))).scalars().all(); estimates = []
     for item in rows:
         estimate = value_to_recover(item, await details_for(session, item)); estimates.append(estimate)
@@ -352,7 +373,7 @@ async def value_report(session: AsyncSession, account_id: uuid.UUID, *, record: 
     return {"label": "Value to Recover", "estimated_total": float(sum(known, Decimal("0"))), "currency": "INR", "is_estimate": True, "metric_version": "v1", "items": estimates, "explanation": "A transparent estimate using only entered price, remaining amount or usage, condition, inactivity and expiry. Missing prices are excluded; this is never exact."}
 
 
-async def duplicates(session: AsyncSession, account_id: uuid.UUID) -> List[Dict[str, Any]]:
+async def duplicates(session: AsyncSession, account_id: uuid.UUID) -> list[dict[str, Any]]:
     rows = (await session.execute(select(DuplicateCandidate).where(DuplicateCandidate.account_id == account_id, DuplicateCandidate.status == "pending").order_by(DuplicateCandidate.created_at.desc()))).scalars().all(); result = []
     for row in rows:
         a = await owned_item(session, account_id, row.item_a_id); b = await owned_item(session, account_id, row.item_b_id)
@@ -370,7 +391,7 @@ async def resolve_duplicate(session: AsyncSession, account_id: uuid.UUID, candid
     row.status = "resolved"; row.resolution = resolution; row.resolved_at = utcnow(); return row
 
 
-async def summary(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def summary(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived"))).scalars().all(); counts = {key: 0 for key in CATEGORIES}
     for item in rows: counts[item.category] += 1
     low = sum(1 for item in rows if is_low_use(item)); expiring = len(await expiring_items(session, account_id)); dupes = len(await duplicates(session, account_id)); values = await value_report(session, account_id)

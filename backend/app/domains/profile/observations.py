@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,7 +51,7 @@ async def create(
     return row
 
 
-async def list_for_profile(session: AsyncSession, profile_id: uuid.UUID) -> List[AttributeObservation]:
+async def list_for_profile(session: AsyncSession, profile_id: uuid.UUID) -> list[AttributeObservation]:
     stmt = select(AttributeObservation).where(AttributeObservation.profile_id == profile_id).order_by(AttributeObservation.created_at.desc())
     return list((await session.execute(stmt)).scalars().all())
 
@@ -92,7 +92,7 @@ def edit(row: AttributeObservation, value: Any, state: Optional[str] = None) -> 
     row.reviewed_at = utcnow() if state == "not_sure" else None
 
 
-def serialize(row: AttributeObservation) -> Dict[str, Any]:
+def serialize(row: AttributeObservation) -> dict[str, Any]:
     return {
         "id": str(row.id), "key": row.key, "label": ATTRIBUTE_REGISTRY[row.key].label,
         "value": row.proposed_value, "source": row.source, "confidence": row.confidence,

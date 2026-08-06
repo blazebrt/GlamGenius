@@ -7,8 +7,8 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any, Optional
 
 from sqlalchemy import and_, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -28,7 +28,6 @@ from app.domains.beta_access.models import (
     InviteRegistrationReservation,
 )
 
-
 # ---------------------------------------------------------------------------
 # Feature name constants — used both by counted-write and by the summary API.
 # ---------------------------------------------------------------------------
@@ -38,19 +37,19 @@ FEATURE_SHOPPING = "shopping.evaluate"
 FEATURE_AI_REQUEST = "ai.request"
 
 
-_MONTH_FEATURES: Dict[str, int] = {
+_MONTH_FEATURES: dict[str, int] = {
     FEATURE_SCAN: BETA_SCAN_LIMIT_PER_MONTH,
     FEATURE_STYLE: BETA_STYLE_LIMIT_PER_MONTH,
     FEATURE_SHOPPING: BETA_SHOPPING_CHECK_LIMIT_PER_MONTH,
 }
 
-_HOUR_FEATURES: Dict[str, int] = {
+_HOUR_FEATURES: dict[str, int] = {
     FEATURE_AI_REQUEST: BETA_AI_REQUESTS_PER_HOUR,
 }
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _month_key(dt: Optional[datetime] = None) -> str:
@@ -98,7 +97,7 @@ async def create_invite(
     return invite
 
 
-async def list_invites(session: AsyncSession) -> List[Invite]:
+async def list_invites(session: AsyncSession) -> list[Invite]:
     result = await session.execute(
         select(Invite).order_by(Invite.created_at.desc())
     )
@@ -480,7 +479,7 @@ async def check_limit(
     *,
     account_id: uuid.UUID,
     feature: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Raise ``UsageExceeded`` if the account is at or above the limit for
     ``feature``. Returns the summary otherwise.
     """
@@ -548,10 +547,10 @@ async def record_usage(
 
 async def usage_summary(
     session: AsyncSession, *, account_id: uuid.UUID
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Public shape read by ``GET /api/v2/access/usage``. Neutral language,
     no plans, no upgrade CTAs."""
-    out: Dict[str, Any] = {"month": _month_key(), "hour": _hour_key(), "features": []}
+    out: dict[str, Any] = {"month": _month_key(), "hour": _hour_key(), "features": []}
     for feature, limit in _MONTH_FEATURES.items():
         used = await _current_usage(
             session,
@@ -587,7 +586,7 @@ async def usage_summary(
     return out
 
 
-def serialise_invite(invite: Invite) -> Dict[str, Any]:
+def serialise_invite(invite: Invite) -> dict[str, Any]:
     return {
         "id": str(invite.id),
         "code": invite.code,

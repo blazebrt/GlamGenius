@@ -1,8 +1,7 @@
 """Resumable, minimal progressive onboarding state machine."""
 from __future__ import annotations
 
-import uuid
-from typing import Any, Dict
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +35,7 @@ def _next_step(done: list[str], skipped: list[str]) -> str:
     return next((step for step in STEPS if step not in handled), "preview")
 
 
-async def record_step(session: AsyncSession, profile: AppearanceProfile, row: OnboardingSession, *, step: str, data: Dict[str, Any], skipped: bool) -> None:
+async def record_step(session: AsyncSession, profile: AppearanceProfile, row: OnboardingSession, *, step: str, data: dict[str, Any], skipped: bool) -> None:
     if row.status == "completed":
         raise ValidationFailedError("Onboarding is already complete.")
     if step == "goal" and skipped:
@@ -69,7 +68,7 @@ async def record_step(session: AsyncSession, profile: AppearanceProfile, row: On
     row.current_step = _next_step(completed, skipped_steps)
 
 
-def preview(row: OnboardingSession) -> Dict[str, Any]:
+def preview(row: OnboardingSession) -> dict[str, Any]:
     answers = row.answers or {}
     goal = (answers.get("goal") or {}).get("current_goal", "Everyday confidence")
     style = (answers.get("style_preferences") or {}).get("preferred_style", "versatile")
@@ -82,7 +81,7 @@ def preview(row: OnboardingSession) -> Dict[str, Any]:
     }
 
 
-async def complete(session: AsyncSession, profile: AppearanceProfile, row: OnboardingSession) -> Dict[str, Any]:
+async def complete(session: AsyncSession, profile: AppearanceProfile, row: OnboardingSession) -> dict[str, Any]:
     if "goal" not in (row.completed_steps or []):
         raise ValidationFailedError("Complete the goal step before finishing onboarding.")
     row.status = "completed"
@@ -92,7 +91,7 @@ async def complete(session: AsyncSession, profile: AppearanceProfile, row: Onboa
     return row.recommendation_preview
 
 
-def serialize(row: OnboardingSession) -> Dict[str, Any]:
+def serialize(row: OnboardingSession) -> dict[str, Any]:
     return {
         "id": str(row.id), "status": row.status, "current_step": row.current_step,
         "steps": STEPS, "completed_steps": row.completed_steps or [],

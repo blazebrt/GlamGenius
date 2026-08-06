@@ -7,11 +7,9 @@ must silently succeed.
 """
 from __future__ import annotations
 
-import asyncio
 import uuid
 
 import pytest
-
 from app.domains.media.storage.base import (
     StorageInvalidResponse,
     StorageMisconfigured,
@@ -23,7 +21,6 @@ from app.domains.media.storage.base import (
     build_key,
 )
 from app.domains.media.storage.supabase import SupabaseStorage
-
 
 pytestmark = pytest.mark.asyncio
 

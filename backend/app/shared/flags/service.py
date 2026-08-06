@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, List
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Every flag the codebase knows about. Listing them makes /api/v2/config able to
 # report the full set rather than only the ones someone happened to switch on.
-KNOWN_FLAGS: Dict[str, str] = {
+KNOWN_FLAGS: dict[str, str] = {
     "v2_media": "Upload, fetch and delete media through the V2 API",
     "v2_privacy": "Data export and account deletion requests",
     "v2_consent": "Record and enforce photo-analysis consent",
@@ -69,7 +68,7 @@ KNOWN_FLAGS: Dict[str, str] = {
 # When neither the database nor the environment says anything about a flag,
 # these defaults win. Everything the app needs to actually deliver value in
 # the private beta is ON; anything unfinished is OFF.
-STABLE_BETA_DEFAULTS: Dict[str, bool] = {
+STABLE_BETA_DEFAULTS: dict[str, bool] = {
     "v2_media": True,
     "v2_privacy": True,
     "v2_consent": True,
@@ -92,7 +91,7 @@ STABLE_BETA_DEFAULTS: Dict[str, bool] = {
 }
 
 
-def _env_list() -> List[str]:
+def _env_list() -> list[str]:
     """Return the current ``V2_FEATURES`` list.
 
     Read fresh (rather than closing over ``V2_FEATURES``) so tests that
@@ -132,7 +131,7 @@ def env_enabled(key: str) -> bool:
 
 # Essential beta flags. If the resolved-config set has any of these off we
 # emit a startup warning so an operator knows the deploy is broken.
-ESSENTIAL_BETA_FLAGS: List[str] = [
+ESSENTIAL_BETA_FLAGS: list[str] = [
     "v2_profile",
     "v2_onboarding",
     "v2_inventory",
@@ -151,7 +150,7 @@ ESSENTIAL_BETA_FLAGS: List[str] = [
 ]
 
 
-def warn_if_essentials_disabled() -> List[str]:
+def warn_if_essentials_disabled() -> list[str]:
     """Return the list of essentials that are currently disabled by config.
 
     Also emits a WARNING log line so ops observability catches the case
@@ -180,7 +179,7 @@ async def is_enabled(session: AsyncSession, key: str) -> bool:
     return bool(row.enabled)
 
 
-async def all_flags(session: AsyncSession) -> Dict[str, bool]:
+async def all_flags(session: AsyncSession) -> dict[str, bool]:
     """Every known flag and its resolved state."""
     resolved = {key: resolved_default(key) for key in KNOWN_FLAGS}
     try:

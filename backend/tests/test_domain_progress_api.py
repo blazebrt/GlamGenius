@@ -18,18 +18,16 @@ What this protects against
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
 
 import pytest
-from sqlalchemy import func, select
-
 from app.bootstrap import run as run_seed
 from app.domains.inventory.models import InventoryEvent, InventoryItem
 from app.domains.progress.models import ProgressGoal
 from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import func, select
+
 from tests.conftest import auth, png_bytes
 from tests.journey import ok
-
 
 pytestmark = pytest.mark.asyncio
 
@@ -77,7 +75,7 @@ async def test_no_metric_is_an_overall_appearance_score(
     for key in keys:
         assert "overall" not in key
         assert "attractive" not in key
-        assert "score" != key
+        assert key != "score"
     assert body["note"], "the refusal to produce one headline number must be stated"
 
 

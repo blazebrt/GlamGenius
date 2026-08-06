@@ -13,7 +13,6 @@ import pytest
 
 from tests.conftest import auth
 
-
 PROTECTED_GETS = [
     "/api/v2/me",
     "/api/v2/consent",

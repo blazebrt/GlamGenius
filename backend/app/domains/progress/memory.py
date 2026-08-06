@@ -29,14 +29,17 @@ it, and switch it back on later with their data intact.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.progress.models import (
-    MemoryCategoryPreference, MemoryFact, MemoryRevision, MemorySource,
+    MemoryCategoryPreference,
+    MemoryFact,
+    MemoryRevision,
+    MemorySource,
 )
 from app.shared.database.base import utcnow
 
@@ -63,7 +66,7 @@ CATEGORIES: tuple = (
     CATEGORY_FEEDBACK,
 )
 
-CATEGORY_LABELS: Dict[str, str] = {
+CATEGORY_LABELS: dict[str, str] = {
     CATEGORY_PREFERENCE: "Things you prefer",
     CATEGORY_REJECTION: "Suggestions you turned down",
     CATEGORY_FAVOURITE: "Outfits you liked",
@@ -87,7 +90,7 @@ SOURCE_INVENTORY = "inventory"
 SOURCE_INFERRED = "inferred"
 SOURCES: tuple = (SOURCE_USER_STATED, SOURCE_USER_ACTION, SOURCE_FEEDBACK, SOURCE_INVENTORY, SOURCE_INFERRED)
 
-SOURCE_LABELS: Dict[str, str] = {
+SOURCE_LABELS: dict[str, str] = {
     SOURCE_USER_STATED: "You told us",
     SOURCE_USER_ACTION: "From something you did in the app",
     SOURCE_FEEDBACK: "From feedback you gave",
@@ -135,7 +138,7 @@ async def active_facts(
     *,
     categories: Optional[Sequence[str]] = None,
     minimum_confidence: float = MIN_INFLUENCE_CONFIDENCE,
-) -> List[MemoryFact]:
+) -> list[MemoryFact]:
     """The **only** way to read memory that will influence what a user sees.
 
     Filters, at the query level, everything that must not influence anything:
@@ -164,7 +167,7 @@ async def active_facts(
 
 async def all_facts_including_deleted(
     session: AsyncSession, account_id: uuid.UUID
-) -> List[MemoryFact]:
+) -> list[MemoryFact]:
     """For the Memory Control screen and the export. **Never** for recommendations.
 
     Named at this length on purpose. Anything that shapes what a user is shown
@@ -186,7 +189,7 @@ async def record(
     fact: str,
     source: str,
     confidence: float = 0.5,
-    evidence: Optional[Dict[str, Any]] = None,
+    evidence: Optional[dict[str, Any]] = None,
     subject_key: Optional[str] = None,
     verification_state: str = STATE_UNVERIFIED,
 ) -> Optional[MemoryFact]:
@@ -245,7 +248,7 @@ async def record(
     return row
 
 
-async def sources_for(session: AsyncSession, fact_id: uuid.UUID) -> List[MemorySource]:
+async def sources_for(session: AsyncSession, fact_id: uuid.UUID) -> list[MemorySource]:
     rows = (await session.execute(
         select(MemorySource)
         .where(MemorySource.fact_id == fact_id)
@@ -328,7 +331,7 @@ async def set_category_enabled(
     return row
 
 
-def serialize(fact: MemoryFact, sources: Sequence[MemorySource] = ()) -> Dict[str, Any]:
+def serialize(fact: MemoryFact, sources: Sequence[MemorySource] = ()) -> dict[str, Any]:
     """One fact, with everything the brief requires shown to the user."""
     return {
         "id": str(fact.id),

@@ -1,7 +1,7 @@
 """Quiz API: GET questions, POST submission, GET latest / history."""
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -26,10 +26,10 @@ router = APIRouter(dependencies=[Depends(require_flag("v2_quiz"))])
 
 class QuizSubmitRequest(BaseModel):
     # {"vibe": "polished", "occasion_focus": "work", ...}
-    answers: Dict[str, str]
+    answers: dict[str, str]
 
 
-def _derive_style_vibe(answers: Dict[str, str]) -> str:
+def _derive_style_vibe(answers: dict[str, str]) -> str:
     """Deterministic derivation from the answers.
 
     Auditable: given the same answers, the same vibe is chosen. No hidden AI.
@@ -37,7 +37,7 @@ def _derive_style_vibe(answers: Dict[str, str]) -> str:
     return (answers.get("vibe") or "").strip() or "natural"
 
 
-def _serialise(sub: QuizSubmission) -> Dict[str, Any]:
+def _serialise(sub: QuizSubmission) -> dict[str, Any]:
     return {
         "id": str(sub.id),
         "schema_version": sub.schema_version,
@@ -116,7 +116,7 @@ async def submission_history(
     session: AsyncSession = Depends(get_session),
     limit: int = 20,
 ):
-    rows: List[QuizSubmission] = list(
+    rows: list[QuizSubmission] = list(
         (
             await session.execute(
                 select(QuizSubmission)

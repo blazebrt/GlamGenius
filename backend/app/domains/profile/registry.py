@@ -7,7 +7,7 @@ readiness calculations one shared vocabulary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 
 @dataclass(frozen=True)
@@ -16,7 +16,7 @@ class AttributeSpec:
     section: str
     label: str
     kind: str = "text"  # text | number | list
-    choices: Tuple[str, ...] = ()
+    choices: tuple[str, ...] = ()
     minimum: Optional[float] = None
     maximum: Optional[float] = None
     ai_observable: bool = False
@@ -26,7 +26,7 @@ def _spec(key: str, section: str, label: str, **kwargs: Any) -> AttributeSpec:
     return AttributeSpec(key=key, section=section, label=label, **kwargs)
 
 
-ATTRIBUTE_REGISTRY: Dict[str, AttributeSpec] = {
+ATTRIBUTE_REGISTRY: dict[str, AttributeSpec] = {
     # Appearance: observations remain unverified until the user acts.
     "skin_tone": _spec("skin_tone", "appearance", "Skin tone", ai_observable=True),
     "undertone": _spec("undertone", "appearance", "Undertone", ai_observable=True),

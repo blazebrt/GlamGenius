@@ -4,9 +4,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-
 from app.domains.beta_access import service as beta
-from app.domains.beta_access.models import Invite, InviteRedemption
 from app.domains.identity import service as identity
 from app.shared.database.sql import get_sessionmaker
 

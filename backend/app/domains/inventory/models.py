@@ -4,9 +4,21 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -81,8 +93,8 @@ class WardrobeItemDetail(UUIDPrimaryKey, TimestampMixin, Base):
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False, unique=True)
     colour: Mapped[Optional[str]] = mapped_column(String(80)); pattern: Mapped[Optional[str]] = mapped_column(String(80))
     fabric: Mapped[Optional[str]] = mapped_column(String(100)); fit: Mapped[Optional[str]] = mapped_column(String(80)); size: Mapped[Optional[str]] = mapped_column(String(40))
-    season: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    occasion: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    season: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    occasion: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     formality: Mapped[Optional[str]] = mapped_column(String(80)); laundry_state: Mapped[Optional[str]] = mapped_column(String(40)); care_instructions: Mapped[Optional[str]] = mapped_column(Text)
 
 
@@ -91,22 +103,22 @@ class ShoeItemDetail(UUIDPrimaryKey, TimestampMixin, Base):
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False, unique=True)
     shoe_type: Mapped[Optional[str]] = mapped_column(String(80)); colour: Mapped[Optional[str]] = mapped_column(String(80)); size: Mapped[Optional[str]] = mapped_column(String(40))
     heel_height: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 1)); comfort: Mapped[Optional[str]] = mapped_column(String(80))
-    occasion: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    weather_suitability: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    occasion: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    weather_suitability: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
 
 
 class AccessoryItemDetail(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "accessory_item_details"
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False, unique=True)
     accessory_type: Mapped[Optional[str]] = mapped_column(String(80)); colour: Mapped[Optional[str]] = mapped_column(String(80)); metal: Mapped[Optional[str]] = mapped_column(String(80)); material: Mapped[Optional[str]] = mapped_column(String(100)); style: Mapped[Optional[str]] = mapped_column(String(100))
-    occasion: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    occasion: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
 
 
 class BeautyProductDetail(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "beauty_product_details"
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False, unique=True)
     product_type: Mapped[Optional[str]] = mapped_column(String(80)); size: Mapped[Optional[str]] = mapped_column(String(40)); opened_date: Mapped[Optional[date]] = mapped_column(Date); expiry_date: Mapped[Optional[date]] = mapped_column(Date); period_after_opening_months: Mapped[Optional[int]] = mapped_column(Integer); purpose: Mapped[Optional[str]] = mapped_column(String(200)); ingredients_text: Mapped[Optional[str]] = mapped_column(Text)
-    active_ingredients: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    active_ingredients: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     use_frequency: Mapped[Optional[str]] = mapped_column(String(80)); routine_position: Mapped[Optional[str]] = mapped_column(String(80)); remaining_percent: Mapped[Optional[int]] = mapped_column(Integer)
 
 
@@ -114,7 +126,7 @@ class HairProductDetail(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "hair_product_details"
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False, unique=True)
     product_type: Mapped[Optional[str]] = mapped_column(String(80)); size: Mapped[Optional[str]] = mapped_column(String(40)); opened_date: Mapped[Optional[date]] = mapped_column(Date); expiry_date: Mapped[Optional[date]] = mapped_column(Date); period_after_opening_months: Mapped[Optional[int]] = mapped_column(Integer); purpose: Mapped[Optional[str]] = mapped_column(String(200)); ingredients_text: Mapped[Optional[str]] = mapped_column(Text)
-    active_ingredients: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    active_ingredients: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     use_frequency: Mapped[Optional[str]] = mapped_column(String(80)); routine_position: Mapped[Optional[str]] = mapped_column(String(80)); remaining_percent: Mapped[Optional[int]] = mapped_column(Integer)
 
 
@@ -122,7 +134,7 @@ class PerfumeDetail(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "perfume_details"
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False, unique=True)
     fragrance_family: Mapped[Optional[str]] = mapped_column(String(100)); concentration: Mapped[Optional[str]] = mapped_column(String(80))
-    season: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]"); occasion: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    season: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]"); occasion: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     longevity_user_reported: Mapped[Optional[str]] = mapped_column(String(100)); usage_frequency: Mapped[Optional[str]] = mapped_column(String(80)); remaining_percent: Mapped[Optional[int]] = mapped_column(Integer)
 
 
@@ -177,12 +189,12 @@ class InventoryImportJob(UUIDPrimaryKey, TimestampMixin, Base):
 class InventoryValueEvent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "inventory_value_events"
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
-    metric_version: Mapped[str] = mapped_column(String(16), nullable=False); estimated_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2)); currency: Mapped[str] = mapped_column(String(3), nullable=False); inputs: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False); explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    metric_version: Mapped[str] = mapped_column(String(16), nullable=False); estimated_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2)); currency: Mapped[str] = mapped_column(String(3), nullable=False); inputs: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False); explanation: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class InventoryEvent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "inventory_events"
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     item_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"))
-    event_type: Mapped[str] = mapped_column(String(48), nullable=False); actor: Mapped[str] = mapped_column(String(32), nullable=False); payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    event_type: Mapped[str] = mapped_column(String(48), nullable=False); actor: Mapped[str] = mapped_column(String(32), nullable=False); payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     __table_args__ = (Index("ix_inventory_events_account_item", "account_id", "item_id", "created_at"),)

@@ -11,28 +11,41 @@ today, against the formula that was live in March rather than today's one.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.inventory.models import InventoryItem
 from app.domains.media.models import MediaAsset
 from app.domains.planning import clock
 from app.domains.progress import comparison, memory, metrics, milestones, registry
 from app.domains.progress.models import (
-    ComparisonSession, FeedbackEvent, GamificationEvent, GoalUpdate, MemoryFact,
-    Milestone, MetricEvent, ProgressGoal, ProgressPhoto, ProgressSnapshot,
-    ScoreExplanation, Streak,
+    ComparisonSession,
+    FeedbackEvent,
+    GamificationEvent,
+    GoalUpdate,
+    MemoryFact,
+    MetricEvent,
+    Milestone,
+    ProgressGoal,
+    ProgressPhoto,
+    ProgressSnapshot,
+    ScoreExplanation,
+    Streak,
 )
 from app.domains.progress.schemas import (
-    FeedbackInput, GoalCreate, GoalPatch, MemoryPatch, ProgressPhotoInput, SelfReport,
+    FeedbackInput,
+    GoalCreate,
+    GoalPatch,
+    MemoryPatch,
+    ProgressPhotoInput,
+    SelfReport,
 )
 from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
-
 
 # --- Metrics -----------------------------------------------------------------------
 
@@ -97,7 +110,7 @@ async def compute_and_record(
     *,
     period: str = "week",
     today: Optional[date] = None,
-) -> List[metrics.MetricResult]:
+) -> list[metrics.MetricResult]:
     day = today or clock.local_today(clock.DEFAULT_TIMEZONE)
     start, _ = _period_bounds(period, day)
     results = await metrics.compute_all(session, account_id, today=day)
@@ -112,7 +125,7 @@ async def overview(
     *,
     period: str = "week",
     today: Optional[date] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Everything the Progress screen shows."""
     day = today or clock.local_today(clock.DEFAULT_TIMEZONE)
     start, end = _period_bounds(period, day)
@@ -177,7 +190,7 @@ async def _upsert_snapshot(
 
 async def metric_detail(
     session: AsyncSession, account_id: uuid.UUID, key: str, *, today: Optional[date] = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     definition = registry.get(key)
     if definition is None:
         raise NotFoundError("We do not track a metric by that name.")
@@ -213,7 +226,7 @@ async def metric_detail(
 
 async def create_goal(
     session: AsyncSession, account_id: uuid.UUID, body: GoalCreate, *, today: Optional[date] = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     day = today or clock.local_today(clock.DEFAULT_TIMEZONE)
     starting: Optional[float] = None
     if body.metric_key:
@@ -243,7 +256,7 @@ async def create_goal(
 async def patch_goal(
     session: AsyncSession, account_id: uuid.UUID, goal_id: uuid.UUID, body: GoalPatch,
     *, today: Optional[date] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     goal = (await session.execute(
         select(ProgressGoal).where(
             ProgressGoal.id == goal_id, ProgressGoal.account_id == account_id,
@@ -275,7 +288,7 @@ async def patch_goal(
 
 async def serialize_goal(
     session: AsyncSession, goal: ProgressGoal, *, today: Optional[date] = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     day = today or clock.local_today(clock.DEFAULT_TIMEZONE)
     current: Optional[float] = None
     metric_status = None
@@ -327,7 +340,7 @@ async def serialize_goal(
 
 async def list_goals(
     session: AsyncSession, account_id: uuid.UUID, *, today: Optional[date] = None
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     rows = (await session.execute(
         select(ProgressGoal).where(ProgressGoal.account_id == account_id)
         .order_by(ProgressGoal.created_at.desc())
@@ -341,7 +354,7 @@ async def list_goals(
 async def add_photo(
     session: AsyncSession, account_id: uuid.UUID, body: ProgressPhotoInput,
     *, today: Optional[date] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Keep a photo for comparison. Ownership of the media is checked here."""
     asset = (await session.execute(
         select(MediaAsset).where(
@@ -395,7 +408,7 @@ async def _conditions_for(session: AsyncSession, photo: ProgressPhoto) -> compar
 
 async def comparisons(
     session: AsyncSession, account_id: uuid.UUID, *, body_area: str = "face",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """The most recent photo against the best comparable earlier one.
 
     Refusing is the normal outcome and it is explained, never silent.
@@ -429,7 +442,7 @@ async def comparisons(
 
     best = None
     best_result = None
-    rejected: List[Dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
     for row, conditions in candidates:
         result = comparison.compare(conditions, current_conditions)
         if result.comparable:
@@ -504,7 +517,7 @@ async def comparisons(
 async def list_memory(
     session: AsyncSession, account_id: uuid.UUID, *,
     category: Optional[str] = None, include_deleted: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Everything the app remembers, for the Memory Control screen."""
     rows = await memory.all_facts_including_deleted(session, account_id)
     if not include_deleted:
@@ -554,7 +567,7 @@ async def _owned_fact(session: AsyncSession, account_id: uuid.UUID, fact_id: uui
 
 async def patch_memory(
     session: AsyncSession, account_id: uuid.UUID, fact_id: uuid.UUID, body: MemoryPatch
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     fact = await _owned_fact(session, account_id, fact_id)
     if fact.deletion_state == memory.DELETION_DELETED:
         raise ValidationFailedError("That has been deleted. There is nothing left to edit.", field="id")
@@ -569,7 +582,7 @@ async def patch_memory(
 
 async def delete_memory(
     session: AsyncSession, account_id: uuid.UUID, fact_id: uuid.UUID
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     fact = await _owned_fact(session, account_id, fact_id)
     await memory.delete(session, fact)
     await session.flush()
@@ -583,7 +596,7 @@ async def delete_memory(
     }
 
 
-async def export_memory(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def export_memory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     """Everything we hold, including what was deleted and why.
 
     A deleted fact appears with empty text and its revision history, so the
@@ -630,7 +643,7 @@ async def export_memory(session: AsyncSession, account_id: uuid.UUID) -> Dict[st
 
 async def set_memory_category(
     session: AsyncSession, account_id: uuid.UUID, category: str, enabled: bool
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     row = await memory.set_category_enabled(session, account_id, category, enabled)
     return {
         "category": row.category,
@@ -667,7 +680,7 @@ SIGNAL_CONFIDENCE = {
 
 async def record_feedback(
     session: AsyncSession, account_id: uuid.UUID, body: FeedbackInput
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Learn from a reaction, and say plainly what was learned.
 
     Nothing is learned silently: the response names the fact that was created,
@@ -719,7 +732,7 @@ async def record_feedback(
 
 async def record_self_report(
     session: AsyncSession, account_id: uuid.UUID, body: SelfReport
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """The user's own 1-5 rating. The only thing that feeds that metric."""
     event = FeedbackEvent(
         account_id=account_id, subject_type="self_report", subject_id=None,
@@ -745,7 +758,7 @@ async def record_behaviour(
     *,
     occurred_on: date,
     subject_id: Optional[uuid.UUID] = None,
-    detail: Optional[Dict[str, Any]] = None,
+    detail: Optional[dict[str, Any]] = None,
 ) -> Optional[GamificationEvent]:
     """Record one instance of useful behaviour, once.
 
@@ -810,7 +823,7 @@ async def _award_milestones(
 
 async def recent_milestones(
     session: AsyncSession, account_id: uuid.UUID, limit: int = 10
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     rows = (await session.execute(
         select(Milestone).where(Milestone.account_id == account_id)
         .order_by(Milestone.earned_on.desc()).limit(limit)
@@ -828,7 +841,7 @@ async def recent_milestones(
 
 async def acknowledge_milestone(
     session: AsyncSession, account_id: uuid.UUID, milestone_id: uuid.UUID
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     row = (await session.execute(
         select(Milestone).where(Milestone.id == milestone_id, Milestone.account_id == account_id)
     )).scalar_one_or_none()
@@ -875,7 +888,7 @@ async def update_streak(
     return row
 
 
-async def streaks_for(session: AsyncSession, account_id: uuid.UUID) -> List[Dict[str, Any]]:
+async def streaks_for(session: AsyncSession, account_id: uuid.UUID) -> list[dict[str, Any]]:
     rows = (await session.execute(
         select(Streak).where(Streak.account_id == account_id)
     )).scalars().all()

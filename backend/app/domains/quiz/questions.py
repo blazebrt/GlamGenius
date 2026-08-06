@@ -5,12 +5,12 @@ readable and comparable.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 QUIZ_SCHEMA_VERSION = "quiz.v1"
 
 
-QUESTIONS: List[Dict[str, Any]] = [
+QUESTIONS: list[dict[str, Any]] = [
     {
         "id": "vibe",
         "prompt": "Which of these feels most like you on a good day?",
@@ -64,5 +64,5 @@ QUESTIONS: List[Dict[str, Any]] = [
 ]
 
 
-def all_question_ids() -> List[str]:
+def all_question_ids() -> list[str]:
     return [q["id"] for q in QUESTIONS]

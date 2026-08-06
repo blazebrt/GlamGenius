@@ -21,8 +21,13 @@ from app.domains.progress import memory as memory_domain
 from app.domains.progress import milestones as milestone_rules
 from app.domains.progress import registry, service
 from app.domains.progress.schemas import (
-    FeedbackInput, GoalCreate, GoalPatch, MemoryCategoryPatch, MemoryPatch,
-    ProgressPhotoInput, SelfReport,
+    FeedbackInput,
+    GoalCreate,
+    GoalPatch,
+    MemoryCategoryPatch,
+    MemoryPatch,
+    ProgressPhotoInput,
+    SelfReport,
 )
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import ValidationFailedError

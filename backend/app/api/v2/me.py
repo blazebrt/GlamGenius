@@ -1,7 +1,7 @@
 """GET /api/v2/me — the caller, as V2 sees them."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +15,7 @@ router = APIRouter()
 
 
 def _month_key() -> str:
-    d = datetime.now(timezone.utc)
+    d = datetime.now(UTC)
     return f"{d.year:04d}-{d.month:02d}"
 
 

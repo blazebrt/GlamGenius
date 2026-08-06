@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,5 +71,5 @@ async def analyse(
     return job, item, result.data
 
 
-def serialize_result(job: InventoryImportJob, item: Dict[str, Any], extracted: ExtractedInventoryItem) -> Dict[str, Any]:
+def serialize_result(job: InventoryImportJob, item: dict[str, Any], extracted: ExtractedInventoryItem) -> dict[str, Any]:
     return {"job_id": str(job.id), "status": job.status, "capture_type": job.capture_type, "batch_accuracy_claimed": False, "item": item, "uncertain_fields": extracted.uncertain_fields, "photo_quality_notes": extracted.photo_quality_notes, "message": "Review this draft. Nothing becomes a verified fact until you confirm it."}

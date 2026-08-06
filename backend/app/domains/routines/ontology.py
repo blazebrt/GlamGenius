@@ -24,8 +24,8 @@ Three rules govern what may be added here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Optional
 
 ONTOLOGY_VERSION = "phase6-v1"
 
@@ -43,7 +43,7 @@ class Ingredient:
     inci_name: Optional[str]
     family: str
     summary: str
-    aliases: Tuple[str, ...] = ()
+    aliases: tuple[str, ...] = ()
     # What it is commonly used for, in plain non-clinical words.
     common_use: str = ""
 
@@ -74,7 +74,7 @@ FAMILY_ALCOHOL = "drying_alcohol"
 FAMILY_CLAY = "clay"
 
 
-def _ing(key: str, display: str, inci: Optional[str], family: str, summary: str, aliases: Tuple[str, ...] = (), common_use: str = "") -> Ingredient:
+def _ing(key: str, display: str, inci: Optional[str], family: str, summary: str, aliases: tuple[str, ...] = (), common_use: str = "") -> Ingredient:
     return Ingredient(key=key, display_name=display, inci_name=inci, family=family, summary=summary, aliases=aliases, common_use=common_use)
 
 
@@ -82,7 +82,7 @@ def _ing(key: str, display: str, inci: Optional[str], family: str, summary: str,
 # Curated, widely documented cosmetic ingredients. Aliases exist because labels
 # print INCI names, marketing names and abbreviations interchangeably, and a
 # parser that only knows one of them silently sees an empty shelf.
-INGREDIENTS: Tuple[Ingredient, ...] = (
+INGREDIENTS: tuple[Ingredient, ...] = (
     # Retinoids
     _ing("retinol", "Retinol", "Retinol", FAMILY_RETINOID,
          "A vitamin A derivative used in evening products.",
@@ -204,15 +204,15 @@ INGREDIENTS: Tuple[Ingredient, ...] = (
          "Gives a cooling feel; can sting on compromised skin.", ("peppermint oil",), ""),
 )
 
-INGREDIENT_BY_KEY: Dict[str, Ingredient] = {row.key: row for row in INGREDIENTS}
+INGREDIENT_BY_KEY: dict[str, Ingredient] = {row.key: row for row in INGREDIENTS}
 
 
-def alias_index() -> Dict[str, str]:
+def alias_index() -> dict[str, str]:
     """Every searchable spelling mapped to its ingredient key.
 
     Longest-first matching happens in the parser; this is just the lookup.
     """
-    index: Dict[str, str] = {}
+    index: dict[str, str] = {}
     for row in INGREDIENTS:
         index[row.display_name.lower()] = row.key
         index[row.key.replace("_", " ")] = row.key
@@ -237,7 +237,7 @@ class CompatibilityRule:
     evidence_note: str
 
 
-COMPATIBILITY_RULES: Tuple[CompatibilityRule, ...] = (
+COMPATIBILITY_RULES: tuple[CompatibilityRule, ...] = (
     CompatibilityRule(
         "rule.retinoid_aha", FAMILY_RETINOID, FAMILY_AHA, SEVERITY_CAUTION,
         "Retinoid and glycolic-type acid in the same routine",
@@ -310,11 +310,11 @@ class StepSlot:
     order: int
     category: str            # beauty | hair
     required: bool = False
-    times: Tuple[str, ...] = ("morning", "evening")
+    times: tuple[str, ...] = ("morning", "evening")
     why: str = ""
 
 
-SKIN_SLOTS: Tuple[StepSlot, ...] = (
+SKIN_SLOTS: tuple[StepSlot, ...] = (
     StepSlot("cleanser", "Cleanser", 10, "beauty", required=True, why="Everything after this works better on a clean face."),
     StepSlot("exfoliant", "Exfoliant", 20, "beauty", times=("evening",), why="Used occasionally rather than daily."),
     StepSlot("toner", "Toner or essence", 30, "beauty", why="A light hydrating layer before the heavier ones."),
@@ -325,7 +325,7 @@ SKIN_SLOTS: Tuple[StepSlot, ...] = (
     StepSlot("sunscreen", "Sunscreen", 80, "beauty", required=True, times=("morning",), why="The last morning step, and the one with the most visible long-term payoff."),
 )
 
-HAIR_SLOTS: Tuple[StepSlot, ...] = (
+HAIR_SLOTS: tuple[StepSlot, ...] = (
     StepSlot("pre_wash_oil", "Pre-wash oil", 5, "hair", times=("wash_day",), why="Applied before washing so the wash does not strip as much."),
     StepSlot("shampoo", "Shampoo", 10, "hair", required=True, times=("wash_day",), why="The cleansing step."),
     StepSlot("scalp_care", "Scalp product", 15, "hair", times=("wash_day",), why="Applied to the scalp while it is clean."),
@@ -336,11 +336,11 @@ HAIR_SLOTS: Tuple[StepSlot, ...] = (
     StepSlot("styling", "Styling product", 50, "hair", times=("wash_day", "event"), why="The last step, once everything else is in."),
 )
 
-ALL_SLOTS: Tuple[StepSlot, ...] = SKIN_SLOTS + HAIR_SLOTS
-SLOT_BY_KEY: Dict[str, StepSlot] = {row.key: row for row in ALL_SLOTS}
+ALL_SLOTS: tuple[StepSlot, ...] = SKIN_SLOTS + HAIR_SLOTS
+SLOT_BY_KEY: dict[str, StepSlot] = {row.key: row for row in ALL_SLOTS}
 
 # Product type wording people actually type, mapped to a slot.
-PRODUCT_TYPE_SLOTS: Dict[str, str] = {
+PRODUCT_TYPE_SLOTS: dict[str, str] = {
     # skin
     "cleanser": "cleanser", "face wash": "cleanser", "facewash": "cleanser", "cleansing oil": "cleanser",
     "micellar water": "cleanser", "face cleanser": "cleanser",
@@ -392,7 +392,7 @@ class ClimateRule:
     note: str
 
 
-CLIMATE_RULES: Tuple[ClimateRule, ...] = (
+CLIMATE_RULES: tuple[ClimateRule, ...] = (
     ClimateRule("rule.climate_humid_moisturiser", "humid", "moisturiser",
                 "In humid weather a lighter gel or lotion usually sits better than a rich cream."),
     ClimateRule("rule.climate_hot_sunscreen", "hot", "sunscreen",
@@ -416,11 +416,11 @@ class PerfumeRule:
     rule_id: str
     factor: str
     match: str
-    families: Tuple[str, ...]
+    families: tuple[str, ...]
     note: str
 
 
-PERFUME_RULES: Tuple[PerfumeRule, ...] = (
+PERFUME_RULES: tuple[PerfumeRule, ...] = (
     PerfumeRule("perfume.hot_light", "weather", "hot", ("citrus", "aquatic", "fresh", "green", "floral"),
                 "Lighter, fresher families tend to sit better in heat; heavier ones can feel cloying."),
     PerfumeRule("perfume.humid_light", "weather", "humid", ("citrus", "aquatic", "fresh", "green"),
@@ -440,7 +440,7 @@ PERFUME_RULES: Tuple[PerfumeRule, ...] = (
 )
 
 # Recognised fragrance families, so a user's free-text entry can be matched.
-FRAGRANCE_FAMILY_ALIASES: Dict[str, str] = {
+FRAGRANCE_FAMILY_ALIASES: dict[str, str] = {
     "citrus": "citrus", "cologne": "citrus", "hesperidic": "citrus",
     "aquatic": "aquatic", "marine": "aquatic", "oceanic": "aquatic",
     "fresh": "fresh", "clean": "fresh", "soapy": "fresh",

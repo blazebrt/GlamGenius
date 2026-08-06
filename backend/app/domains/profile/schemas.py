@@ -1,7 +1,7 @@
 """API and AI schemas for the appearance digital twin."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -12,7 +12,7 @@ class AttributeUpdate(BaseModel):
 
 
 class ProfilePatch(BaseModel):
-    attributes: List[AttributeUpdate] = Field(min_length=1, max_length=40)
+    attributes: list[AttributeUpdate] = Field(min_length=1, max_length=40)
 
 
 class ObservationEdit(BaseModel):
@@ -44,8 +44,8 @@ class BaselineAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     image_quality: Literal["low", "usable", "good"]
     image_quality_notes: str = Field(max_length=300)
-    observations: List[BaselineObservation] = Field(default_factory=list, max_length=12)
-    colour_palette: List[PaletteColour] = Field(default_factory=list, max_length=8)
+    observations: list[BaselineObservation] = Field(default_factory=list, max_length=12)
+    colour_palette: list[PaletteColour] = Field(default_factory=list, max_length=8)
     summary: str = Field(min_length=1, max_length=500)
     disclaimer: str = "Style guidance from visible photo details, not medical advice."
 
@@ -61,7 +61,7 @@ class OnboardingStepRequest(BaseModel):
         "goal", "style_preferences", "fit_preferences", "lifestyle",
         "appearance_photo", "colour_palette", "confirm_attributes", "preview"
     ]
-    data: Dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict)
     skipped: bool = False
 
     @model_validator(mode="after")

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import List, Tuple
+from datetime import UTC
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -47,7 +47,7 @@ SEED_VERSION = "2026.02.16"
 # ---------------------------------------------------------------------------
 
 # (internal key, display name, position)
-CANONICAL_INVENTORY_CATEGORIES: List[Tuple[str, str, int]] = [
+CANONICAL_INVENTORY_CATEGORIES: list[tuple[str, str, int]] = [
     ("wardrobe", "Wardrobe", 1),
     ("shoes", "Shoes", 2),
     ("accessories", "Accessories", 3),
@@ -185,7 +185,7 @@ async def seed_ingredients(session: AsyncSession) -> int:
 # Progress metrics + milestones
 # ---------------------------------------------------------------------------
 
-def _metric_definitions() -> List[dict]:
+def _metric_definitions() -> list[dict]:
     """The metric catalogue, taken from the domain registry.
 
     ``app.domains.progress.registry`` is where a metric is defined, computed
@@ -222,7 +222,7 @@ def _metric_definitions() -> List[dict]:
 # in lockstep with ``app.domains.progress.milestones.RULES`` — that module owns
 # the wording rules (no engagement rewards, no childish language) and validates
 # them at import time.
-MILESTONE_RULES: List[dict] = [
+MILESTONE_RULES: list[dict] = [
     {
         "rule_id": "milestone.used_five_low_use",
         "label": "Five unused products back in use",
@@ -389,7 +389,7 @@ async def seed_progress(session: AsyncSession) -> int:
 # ---------------------------------------------------------------------------
 
 # (flag key, enabled, description)
-def _feature_flag_defaults() -> List[Tuple[str, bool, str]]:
+def _feature_flag_defaults() -> list[tuple[str, bool, str]]:
     """The private-beta flag set, taken from the flag registry.
 
     ``app.shared.flags.service`` owns the list of flags the code understands
@@ -434,7 +434,7 @@ async def seed_feature_flags(session: AsyncSession) -> int:
 # attribute keys the item form is allowed to collect. Kept intentionally
 # small; production loads a broader catalogue but the seed here is enough
 # for the routine engine and the shopping evaluation to reason about.
-INVENTORY_SUBTYPES: List[dict] = [
+INVENTORY_SUBTYPES: list[dict] = [
     # Wardrobe
     {"cat": "wardrobe", "key": "top", "name": "Top",
      "req": ["colour"], "opt": ["fabric", "fit", "occasion", "season"],
@@ -560,7 +560,7 @@ async def seed_inventory_subtypes(session: AsyncSession) -> int:
 # release wrote which guidance.
 
 # (kind, label, frequency, slots)
-ROUTINE_TEMPLATE_DEFS: List[Tuple[str, str, str, List[str]]] = [
+ROUTINE_TEMPLATE_DEFS: list[tuple[str, str, str, list[str]]] = [
     ("morning_minimal", "Minimal Morning", "daily",
      ["cleanser", "moisturiser", "spf"]),
     ("evening_minimal", "Minimal Evening", "daily",
@@ -599,7 +599,7 @@ ROUTINE_TEMPLATE_DEFS: List[Tuple[str, str, str, List[str]]] = [
 ]
 
 # Steps rendered by the app. Each (template_kind, position, step_key, name, guidance, optional).
-ROUTINE_STEP_DEFS: List[Tuple[str, int, str, str, str, bool]] = [
+ROUTINE_STEP_DEFS: list[tuple[str, int, str, str, str, bool]] = [
     # Minimal morning
     ("morning_minimal", 1, "cleanser", "Gentle cleanse",
      "Lather a small amount of gentle cleanser and rinse. Skip if you cleansed within the last hour.", False),
@@ -733,8 +733,8 @@ async def seed_routine_templates(session: AsyncSession) -> int:
     it aligned with the shipped templates and adds the ordered steps table
     that gives the UI a versioned rendering surface.
     """
-    from app.domains.routines.models import RoutineTemplate
     from app.domains.reference import RoutineTemplateStep
+    from app.domains.routines.models import RoutineTemplate
 
     seeded = 0
     for kind, label, frequency, slots in ROUTINE_TEMPLATE_DEFS:
@@ -790,7 +790,7 @@ async def seed_routine_templates(session: AsyncSession) -> int:
 # The existing ``perfume_context_rules`` table (in routines/models.py) has
 # ``rule_id``, ``factor``, ``match_value``, ``families``, ``note``.
 
-PERFUME_CONTEXT_DEFS: List[dict] = [
+PERFUME_CONTEXT_DEFS: list[dict] = [
     # Occasions
     {"rule_id": "occ_work", "factor": "occasion", "match_value": "work",
      "families": ["fresh", "clean", "citrus"],
@@ -876,7 +876,7 @@ async def seed_perfume_context(session: AsyncSession) -> int:
 #   - ``pregnancy_flag`` — a clear flag to check with a professional.
 # Never diagnosis, dosage, or medication substitution.
 
-SUPPLEMENT_CONTEXT_DEFS: List[dict] = [
+SUPPLEMENT_CONTEXT_DEFS: list[dict] = [
     {"key": "hydration", "name": "Hydration",
      "guidance": "Even hydration through the day is one of the simplest levers for how skin and hair feel. Water is boring advice; it also happens to be true.",
      "safety": "general_wellness"},
@@ -938,7 +938,7 @@ async def seed_supplement_context(session: AsyncSession) -> int:
 # Contraindications are stronger than compatibility rules: "do not use this
 # ingredient in this condition." Sensitivity rules are the softer counterpart.
 
-CONTRAINDICATION_DEFS: List[dict] = [
+CONTRAINDICATION_DEFS: list[dict] = [
     {"ing": "retinol", "cond": "pregnancy",
      "headline": "Retinol is generally avoided during pregnancy.",
      "guidance": "During pregnancy or if trying, most professionals recommend pausing retinoids. A dermatologist or midwife can suggest alternatives."},
@@ -986,7 +986,7 @@ async def seed_contraindications(session: AsyncSession) -> int:
     return seeded
 
 
-SENSITIVITY_DEFS: List[dict] = [
+SENSITIVITY_DEFS: list[dict] = [
     {"ing": "retinol", "sens": "sensitive_skin",
      "headline": "Retinol on sensitive skin: start slow.",
      "guidance": "Twice a week for two weeks, then evaluate. Buffer with moisturiser if needed."},
@@ -1038,10 +1038,11 @@ async def seed_sensitivities(session: AsyncSession) -> int:
 
 async def record_seed_version(session: AsyncSession, counts: dict) -> None:
     """Write one audit row per seed domain for this run."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from app.domains.reference import SeedVersionRecord
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for domain, count in counts.items():
         existing = (await session.execute(
             select(SeedVersionRecord).where(

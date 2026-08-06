@@ -23,7 +23,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from datetime import datetime
-from typing import Deque, Dict, Optional, Tuple
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
@@ -56,7 +56,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 _RATE_LIMIT_WINDOW_SECONDS = 60.0
 _RATE_LIMIT_MAX_PER_WINDOW = 10  # per IP + per email
-_rate_state: Dict[str, Deque[float]] = defaultdict(deque)
+_rate_state: dict[str, deque[float]] = defaultdict(deque)
 
 
 def _hit_rate_limit(key: str) -> bool:
@@ -475,6 +475,7 @@ async def admin_queue_metrics(
     session: AsyncSession = Depends(get_session),
 ):
     from sqlalchemy import func, select
+
     from app.domains.privacy.models import AccountDeletionJob
 
     stmt = select(AccountDeletionJob.state, func.count(AccountDeletionJob.id)).group_by(AccountDeletionJob.state)

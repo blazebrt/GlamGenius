@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Optional, Protocol
 
 # --- Value objects ----------------------------------------------------------
 # Deliberately plain. A provider's job is to return one of these, whatever shape
@@ -42,7 +42,7 @@ class WeatherReading:
     location: Optional[str] = None
     provider: str = "manual"
     source: str = "user_declared"
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -57,7 +57,7 @@ class CalendarEventReading:
     location: Optional[str] = None
     provider: str = "manual"
     source: str = "user_declared"
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
 
     def dedup_key(self) -> str:
         """What makes two events the same event.
@@ -94,8 +94,8 @@ class WeatherProvider(Protocol):
     def is_configured(self) -> bool: ...
 
     async def forecast(
-        self, *, location: Optional[str], dates: List[date], timezone_name: str
-    ) -> List[WeatherReading]:
+        self, *, location: Optional[str], dates: list[date], timezone_name: str
+    ) -> list[WeatherReading]:
         """Readings for the requested local dates. May return fewer than asked."""
         ...
 
@@ -107,5 +107,5 @@ class CalendarProvider(Protocol):
 
     async def events(
         self, *, since: datetime, until: datetime, credential_ref: Optional[str]
-    ) -> List[CalendarEventReading]:
+    ) -> list[CalendarEventReading]:
         ...

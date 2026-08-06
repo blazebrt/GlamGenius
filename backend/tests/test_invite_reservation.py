@@ -11,9 +11,6 @@ Covers §1 of the Supabase hardening spec:
 """
 from __future__ import annotations
 
-import asyncio
-import uuid
-
 import pytest
 
 from tests.conftest import auth

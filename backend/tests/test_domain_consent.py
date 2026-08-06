@@ -9,8 +9,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import func, select
-
 from app.config import CONSENT_VERSION
 from app.domains.audit.models import (
     ACTION_CONSENT_GRANTED,
@@ -22,7 +20,7 @@ from app.domains.consent.models import CONSENT_PHOTO_ANALYSIS, Consent
 from app.domains.identity import service as identity
 from app.shared.database.sql import get_sessionmaker
 from app.shared.errors.exceptions import ConsentRequiredError
-
+from sqlalchemy import func, select
 
 pytestmark = pytest.mark.asyncio
 

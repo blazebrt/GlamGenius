@@ -16,14 +16,13 @@ would be pretending to offer a choice that does not exist.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
 
 from app.domains.recommendation import compatibility as compat
 from app.domains.recommendation.candidates import OutfitCandidate, ScoredItem
 from app.domains.recommendation.context import StyleContext
 from app.domains.recommendation.models import VARIANT_COMFORTABLE, VARIANT_EXPRESSIVE, VARIANT_RECOMMENDED
-from app.domains.recommendation.occasions import SLOT_CLOTHING, SLOT_SHOES
 
 VARIANT_TITLES = {
     VARIANT_RECOMMENDED: "Recommended",
@@ -51,8 +50,8 @@ class RankedLook:
     why_it_works: str
     weather_note: str
     dress_code_note: str
-    preparation_steps: List[str]
-    missing_information: List[str]
+    preparation_steps: list[str]
+    missing_information: list[str]
 
 
 def _core_ids(candidate: OutfitCandidate) -> set:
@@ -138,7 +137,7 @@ def _item_phrase(rows: Sequence[ScoredItem]) -> str:
 
 
 def deterministic_why(candidate: OutfitCandidate, context: StyleContext, variant: str) -> str:
-    parts: List[str] = []
+    parts: list[str] = []
     core = _item_phrase(candidate.clothing)
     if core:
         parts.append(f"{core} is {VARIANT_INTENT[variant]} for {context.occasion.label.lower()}.")
@@ -189,8 +188,8 @@ def deterministic_dress_code_note(candidate: OutfitCandidate, context: StyleCont
     return f"This is a little more relaxed than {code}. Add a layer or a smarter shoe if the room is formal."
 
 
-def deterministic_preparation(candidate: OutfitCandidate, context: StyleContext) -> List[str]:
-    steps: List[str] = []
+def deterministic_preparation(candidate: OutfitCandidate, context: StyleContext) -> list[str]:
+    steps: list[str] = []
     laundry = [
         row.item.display_name
         for row in candidate.clothing
@@ -227,10 +226,10 @@ def confidence_for(candidate: OutfitCandidate, context: StyleContext) -> float:
     return round(max(0.2, min(0.95, value)), 4)
 
 
-def rank(context: StyleContext, candidates: Sequence[OutfitCandidate]) -> List[RankedLook]:
+def rank(context: StyleContext, candidates: Sequence[OutfitCandidate]) -> list[RankedLook]:
     """Stage 4 and 6: choose up to three genuinely different looks."""
-    chosen: List[Tuple[str, OutfitCandidate, float]] = []
-    picked: List[OutfitCandidate] = []
+    chosen: list[tuple[str, OutfitCandidate, float]] = []
+    picked: list[OutfitCandidate] = []
 
     for variant in (VARIANT_RECOMMENDED, VARIANT_COMFORTABLE, VARIANT_EXPRESSIVE):
         scorer = VARIANT_SCORERS[variant]

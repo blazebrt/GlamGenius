@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Optional
 
 PROFESSIONAL_BOUNDARY = (
     "This is outside what GlamGenius can help with. We track what you own and how you use it — "
@@ -60,7 +60,7 @@ ROUTINE_DISCLAIMER = (
 # Two groups. Diagnostic language names or asserts a condition. Prescriptive
 # language tells someone to take, stop or dose something.
 
-DIAGNOSTIC_TERMS: Tuple[str, ...] = (
+DIAGNOSTIC_TERMS: tuple[str, ...] = (
     "you have ", "diagnos", "your condition", "symptom of", "suffering from",
     "eczema", "psoriasis", "rosacea", "dermatitis", "fungal acne", "seborrheic",
     "alopecia", "folliculitis", "infection", "disease", "disorder", "syndrome",
@@ -69,7 +69,7 @@ DIAGNOSTIC_TERMS: Tuple[str, ...] = (
     "medicated", "prescription strength", "anti-fungal", "antifungal treatment",
 )
 
-PRESCRIPTIVE_TERMS: Tuple[str, ...] = (
+PRESCRIPTIVE_TERMS: tuple[str, ...] = (
     "mg per day", "mg daily", "iu per day", "iu daily", "mcg per day", "mcg daily",
     "take one tablet", "take two tablets", "take a tablet", "take one capsule",
     "twice daily dose", "recommended dosage", "recommended dose", "your dosage",
@@ -79,13 +79,13 @@ PRESCRIPTIVE_TERMS: Tuple[str, ...] = (
 
 # Appearance-scoring and body-shaming wording is banned across the whole product
 # (Phases 1 and 4); repeated here so Phase 6 output is swept by the same list.
-APPEARANCE_TERMS: Tuple[str, ...] = (
+APPEARANCE_TERMS: tuple[str, ...] = (
     "money wasted", "slimming", "flattering for your body", "problem area",
     "problem areas", "body type", "lose weight", "gain weight", "attractiveness score",
     "beauty score", "overall score", "calorie", "calories", "kcal", "bmi",
 )
 
-BANNED_TERMS: Tuple[str, ...] = DIAGNOSTIC_TERMS + PRESCRIPTIVE_TERMS + APPEARANCE_TERMS
+BANNED_TERMS: tuple[str, ...] = DIAGNOSTIC_TERMS + PRESCRIPTIVE_TERMS + APPEARANCE_TERMS
 
 # Dosage written as a bare quantity, which the term list alone would miss.
 _DOSE_PATTERN = re.compile(
@@ -122,7 +122,7 @@ def first_violation(text: Optional[str]) -> Optional[str]:
 # a polite boundary, a false negative lets the product answer something it has
 # no business answering.
 
-_MEDICAL_QUESTION_PATTERNS: Tuple[str, ...] = (
+_MEDICAL_QUESTION_PATTERNS: tuple[str, ...] = (
     r"\bdiagnos\w*", r"\bprescri\w*", r"\bdosage\b", r"\bdose\b", r"\bhow much (should|do) i take\b",
     r"\bis (this|it) safe (to take|with|during)\b", r"\bcan i take\b", r"\bshould i take\b",
     r"\binteract\w* with\b", r"\bmedication\b", r"\bmedicine\b", r"\btablet\b", r"\bantibiotic\b",

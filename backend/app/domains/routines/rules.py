@@ -12,17 +12,26 @@ not expressible.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Optional
 
 from app.domains.inventory import service as inventory_service
 from app.domains.recommendation.context import OwnedItem
 from app.domains.routines import parser
 from app.domains.routines.ontology import (
-    CLIMATE_RULES, COMPATIBILITY_RULES, HAIR_SLOTS, INGREDIENT_BY_KEY, SEVERITY_AVOID,
-    SEVERITY_CAUTION, SEVERITY_INFO, SKIN_SLOTS, SLOT_BY_KEY, ClimateRule,
-    CompatibilityRule, StepSlot, slot_for_product_type,
+    CLIMATE_RULES,
+    COMPATIBILITY_RULES,
+    HAIR_SLOTS,
+    INGREDIENT_BY_KEY,
+    SEVERITY_AVOID,
+    SEVERITY_CAUTION,
+    SEVERITY_INFO,
+    SKIN_SLOTS,
+    SLOT_BY_KEY,
+    CompatibilityRule,
+    slot_for_product_type,
 )
 from app.domains.routines.parser import ParsedIngredient
 
@@ -37,7 +46,7 @@ RULE_NO_EXPIRY = "rule.no_expiry_recorded"
 RULE_LOW_USE = "rule.low_use_product"
 RULE_UNCONFIRMED = "rule.unconfirmed_ingredient"
 
-ENGINE_RULES: Dict[str, str] = {
+ENGINE_RULES: dict[str, str] = {
     RULE_ALLERGY: "An ingredient you told us to avoid appears in a product you own.",
     RULE_DUPLICATE_SLOT: "More than one product covers the same routine step.",
     RULE_MISSING_SLOT: "A routine step has nothing in it.",
@@ -64,10 +73,10 @@ class Finding:
     headline: str
     detail: str
     evidence_note: str = ""
-    item_ids: List[str] = field(default_factory=list)
+    item_ids: list[str] = field(default_factory=list)
     slot: Optional[str] = None
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "rule_id": self.rule_id, "severity": self.severity,
             "headline": self.headline, "detail": self.detail,
@@ -82,7 +91,7 @@ class ShelfProduct:
 
     item: OwnedItem
     slot: Optional[str]
-    ingredients: List[ParsedIngredient] = field(default_factory=list)
+    ingredients: list[ParsedIngredient] = field(default_factory=list)
     effective_expiry: Optional[date] = None
     low_use: bool = False
 
@@ -91,15 +100,15 @@ class ShelfProduct:
         return str(self.item.id)
 
     @property
-    def families(self) -> Set[str]:
+    def families(self) -> set[str]:
         return {row.family for row in self.ingredients}
 
     @property
-    def confirmed_families(self) -> Set[str]:
+    def confirmed_families(self) -> set[str]:
         return {row.family for row in self.ingredients if not row.needs_confirmation}
 
     @property
-    def unconfirmed(self) -> List[ParsedIngredient]:
+    def unconfirmed(self) -> list[ParsedIngredient]:
         return [row for row in self.ingredients if row.needs_confirmation]
 
     def days_to_expiry(self, today: date) -> Optional[int]:
@@ -109,8 +118,8 @@ class ShelfProduct:
 def build_products(
     items: Sequence[OwnedItem],
     category: str,
-    low_use_ids: Optional[Set[uuid.UUID]] = None,
-) -> List[ShelfProduct]:
+    low_use_ids: Optional[set[uuid.UUID]] = None,
+) -> list[ShelfProduct]:
     """Turn owned inventory into what the engine reasons over.
 
     ``low_use_ids`` is passed in rather than computed here. Phase 3's
@@ -120,7 +129,7 @@ def build_products(
     would mean two definitions of "low use" that could drift apart.
     """
     unused = low_use_ids or set()
-    products: List[ShelfProduct] = []
+    products: list[ShelfProduct] = []
     for item in items:
         if item.category != category:
             continue
@@ -140,16 +149,16 @@ def build_products(
 # --- Allergies ---------------------------------------------------------------
 
 
-def _allergen_keys(allergies: Sequence[str]) -> Dict[str, str]:
+def _allergen_keys(allergies: Sequence[str]) -> dict[str, str]:
     """Map the user's own allergy words onto ingredient keys where we can."""
-    resolved: Dict[str, str] = {}
+    resolved: dict[str, str] = {}
     for value in allergies or []:
         for row in parser.parse_declared([value], source=parser.SOURCE_USER):
             resolved[row.key] = str(value)
     return resolved
 
 
-def allergy_findings(products: Sequence[ShelfProduct], allergies: Sequence[str]) -> List[Finding]:
+def allergy_findings(products: Sequence[ShelfProduct], allergies: Sequence[str]) -> list[Finding]:
     """A user-declared allergen found in a product they own.
 
     This is the only ``avoid`` severity the engine produces, and it is not a
@@ -158,7 +167,7 @@ def allergy_findings(products: Sequence[ShelfProduct], allergies: Sequence[str])
     resolved = _allergen_keys(allergies)
     if not resolved:
         return []
-    findings: List[Finding] = []
+    findings: list[Finding] = []
     for product in products:
         hits = [row for row in product.ingredients if row.key in resolved]
         if not hits:
@@ -170,7 +179,7 @@ def allergy_findings(products: Sequence[ShelfProduct], allergies: Sequence[str])
             severity=SEVERITY_AVOID,
             headline=f"{product.item.display_name} contains {names}",
             detail=(
-                f"You listed this as something to avoid. We have left this product out of your routine."
+                "You listed this as something to avoid. We have left this product out of your routine."
                 + (" We read this from the label at low confidence, so check the packet." if low_confidence else "")
             ),
             evidence_note="Matched against the allergies you entered on your profile.",
@@ -180,7 +189,7 @@ def allergy_findings(products: Sequence[ShelfProduct], allergies: Sequence[str])
     return findings
 
 
-def excluded_by_allergy(products: Sequence[ShelfProduct], allergies: Sequence[str]) -> Set[str]:
+def excluded_by_allergy(products: Sequence[ShelfProduct], allergies: Sequence[str]) -> set[str]:
     resolved = _allergen_keys(allergies)
     if not resolved:
         return set()
@@ -193,10 +202,10 @@ def excluded_by_allergy(products: Sequence[ShelfProduct], allergies: Sequence[st
 # --- Ingredient overlap and conflicts ----------------------------------------
 
 
-def compatibility_findings(products: Sequence[ShelfProduct]) -> List[Finding]:
+def compatibility_findings(products: Sequence[ShelfProduct]) -> list[Finding]:
     """Pairs of owned products that the reviewed rules have something to say about."""
-    findings: List[Finding] = []
-    seen: Set[Tuple[str, str, str]] = set()
+    findings: list[Finding] = []
+    seen: set[tuple[str, str, str]] = set()
 
     for index, first in enumerate(products):
         for second in products[index + 1:]:
@@ -237,9 +246,9 @@ def _rule_applies(rule: CompatibilityRule, first: ShelfProduct, second: ShelfPro
     )
 
 
-def unconfirmed_findings(products: Sequence[ShelfProduct]) -> List[Finding]:
+def unconfirmed_findings(products: Sequence[ShelfProduct]) -> list[Finding]:
     """Ingredients read at low confidence, which the user should confirm."""
-    findings: List[Finding] = []
+    findings: list[Finding] = []
     for product in products:
         rows = product.unconfirmed
         if not rows:
@@ -259,13 +268,13 @@ def unconfirmed_findings(products: Sequence[ShelfProduct]) -> List[Finding]:
     return findings
 
 
-def ingredient_overlap(products: Sequence[ShelfProduct]) -> List[Dict[str, Any]]:
+def ingredient_overlap(products: Sequence[ShelfProduct]) -> list[dict[str, Any]]:
     """Which ingredients you already own more than once.
 
     Not a warning — most people have three products with glycerin and that is
     completely fine. It answers "do I already own this?" before buying again.
     """
-    by_key: Dict[str, List[ShelfProduct]] = {}
+    by_key: dict[str, list[ShelfProduct]] = {}
     for product in products:
         for row in product.ingredients:
             by_key.setdefault(row.key, []).append(product)
@@ -288,12 +297,12 @@ def ingredient_overlap(products: Sequence[ShelfProduct]) -> List[Dict[str, Any]]
 # --- Routine shape -----------------------------------------------------------
 
 
-def duplicate_slot_findings(products: Sequence[ShelfProduct]) -> List[Finding]:
-    by_slot: Dict[str, List[ShelfProduct]] = {}
+def duplicate_slot_findings(products: Sequence[ShelfProduct]) -> list[Finding]:
+    by_slot: dict[str, list[ShelfProduct]] = {}
     for product in products:
         if product.slot:
             by_slot.setdefault(product.slot, []).append(product)
-    findings: List[Finding] = []
+    findings: list[Finding] = []
     for slot, rows in by_slot.items():
         if len(rows) < 2:
             continue
@@ -313,7 +322,7 @@ def duplicate_slot_findings(products: Sequence[ShelfProduct]) -> List[Finding]:
     return findings
 
 
-def missing_slot_findings(products: Sequence[ShelfProduct], category: str) -> List[Finding]:
+def missing_slot_findings(products: Sequence[ShelfProduct], category: str) -> list[Finding]:
     """Only *required* steps count as a gap.
 
     A missing face oil is not a gap, it is a preference. Suggesting products for
@@ -321,7 +330,7 @@ def missing_slot_findings(products: Sequence[ShelfProduct], category: str) -> Li
     """
     filled = {product.slot for product in products if product.slot}
     slots = SKIN_SLOTS if category == "beauty" else HAIR_SLOTS
-    findings: List[Finding] = []
+    findings: list[Finding] = []
     for spec in slots:
         if not spec.required or spec.key in filled:
             continue
@@ -339,9 +348,9 @@ def missing_slot_findings(products: Sequence[ShelfProduct], category: str) -> Li
 # --- Expiry ------------------------------------------------------------------
 
 
-def expiry_findings(products: Sequence[ShelfProduct], today: Optional[date] = None) -> List[Finding]:
+def expiry_findings(products: Sequence[ShelfProduct], today: Optional[date] = None) -> list[Finding]:
     now = today or date.today()
-    findings: List[Finding] = []
+    findings: list[Finding] = []
     for product in products:
         days = product.days_to_expiry(now)
         if days is None:
@@ -371,7 +380,7 @@ def expiry_findings(products: Sequence[ShelfProduct], today: Optional[date] = No
     return findings
 
 
-def low_use_findings(products: Sequence[ShelfProduct]) -> List[Finding]:
+def low_use_findings(products: Sequence[ShelfProduct]) -> list[Finding]:
     rows = [product for product in products if product.low_use]
     if not rows:
         return []
@@ -387,7 +396,7 @@ def low_use_findings(products: Sequence[ShelfProduct]) -> List[Finding]:
 # --- Climate -----------------------------------------------------------------
 
 
-def climate_notes(condition: Optional[str], slots_present: Iterable[str]) -> List[Dict[str, Any]]:
+def climate_notes(condition: Optional[str], slots_present: Iterable[str]) -> list[dict[str, Any]]:
     """Adjustments for the weather, keyed to steps the user actually has."""
     if not condition:
         return []
@@ -402,7 +411,7 @@ def climate_notes(condition: Optional[str], slots_present: Iterable[str]) -> Lis
 # --- Ranking -----------------------------------------------------------------
 
 
-def rank_for_slot(products: Sequence[ShelfProduct], slot: str, today: Optional[date] = None) -> List[ShelfProduct]:
+def rank_for_slot(products: Sequence[ShelfProduct], slot: str, today: Optional[date] = None) -> list[ShelfProduct]:
     """Which owned product should fill a step.
 
     Owned-first is the whole premise, so this only ever ranks things the user
@@ -428,7 +437,7 @@ def rank_for_slot(products: Sequence[ShelfProduct], slot: str, today: Optional[d
     return sorted(rows, key=score)
 
 
-def all_rule_ids() -> Set[str]:
+def all_rule_ids() -> set[str]:
     """Every rule id the engine can emit. Used to prove no warning invents one."""
     return set(ENGINE_RULES) | {rule.rule_id for rule in COMPATIBILITY_RULES} | {
         rule.rule_id for rule in CLIMATE_RULES

@@ -17,10 +17,9 @@ import base64
 import binascii
 import logging
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Optional
 
-from app.config import AI_TIMEOUT_SECONDS
-from app.config import GEMINI_API_KEY, GEMINI_FALLBACK_MODELS, GEMINI_MODEL
+from app.config import AI_TIMEOUT_SECONDS, GEMINI_API_KEY, GEMINI_FALLBACK_MODELS, GEMINI_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +101,8 @@ def _decode_image(image_base64: str) -> tuple[bytes, str]:
     return image_bytes, mime
 
 
-def _models_to_try() -> List[str]:
-    ordered: List[str] = []
+def _models_to_try() -> list[str]:
+    ordered: list[str] = []
     for name in [GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]:
         if name and name not in ordered:
             ordered.append(name)
@@ -140,7 +139,7 @@ async def generate(
             "GEMINI_API_KEY is not set, or google-genai is not installed"
         )
 
-    parts: List[Any] = []
+    parts: list[Any] = []
     if image_base64:
         image_bytes, mime = _decode_image(image_base64)
         parts.append(
@@ -166,7 +165,7 @@ async def generate(
             response = await asyncio.wait_for(
                 asyncio.to_thread(_run), timeout=AI_TIMEOUT_SECONDS
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             # A timeout is not a "try the next model" situation — the next one
             # would take just as long and the caller is already waiting.
             raise ProviderTimeout(

@@ -31,8 +31,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import select
-
 from app.domains.identity import service as identity
 from app.domains.progress.memory import (
     CATEGORY_COLOUR_LIKED,
@@ -43,18 +41,19 @@ from app.domains.progress.memory import (
     SOURCE_USER_STATED,
     STATE_CORRECTED,
     STATE_REJECTED,
-    STATE_UNVERIFIED,
     active_facts,
     all_facts_including_deleted,
-    delete as delete_fact,
     disabled_categories,
     record,
     revise,
     set_category_enabled,
 )
+from app.domains.progress.memory import (
+    delete as delete_fact,
+)
 from app.domains.progress.models import MemoryFact, MemoryRevision
 from app.shared.database.sql import get_sessionmaker
-
+from sqlalchemy import select
 
 pytestmark = pytest.mark.asyncio
 

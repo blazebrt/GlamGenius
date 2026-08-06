@@ -25,15 +25,19 @@ aspirational: the model is handed rule ids and can only ever hand them back.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any, Optional
 
 from app.domains.ai_gateway import gateway
 from app.domains.routines.compiler import CompiledRoutine
 from app.domains.routines.rules import Finding
 from app.domains.routines.safety import narrative_is_safe
 from app.domains.routines.schemas import (
-    SCHEMA_VERSION_INGREDIENT_EXPLANATION, SCHEMA_VERSION_ROUTINE_EXPLANATION,
-    IngredientExplanationResponse, RoutineExplanationResponse, RoutineNarrative,
+    SCHEMA_VERSION_INGREDIENT_EXPLANATION,
+    SCHEMA_VERSION_ROUTINE_EXPLANATION,
+    IngredientExplanationResponse,
+    RoutineExplanationResponse,
+    RoutineNarrative,
 )
 from app.shared.errors.exceptions import AnalysisUnavailableError
 
@@ -116,7 +120,7 @@ def _routine_prompt(routines: Sequence[CompiledRoutine], *, climate: Optional[st
 
 async def explain_routines(
     routines: Sequence[CompiledRoutine], *, climate: Optional[str], account_id_str: str
-) -> tuple[Dict[str, RoutineNarrative], Optional[Any], str]:
+) -> tuple[dict[str, RoutineNarrative], Optional[Any], str]:
     """Better wording for routines that already exist.
 
     Returns ``(narratives_by_kind, ai_run_id, source)``. On any failure the
@@ -142,7 +146,7 @@ async def explain_routines(
         logger.info("routine_explanation_unavailable failure=%s", exc.extra.get("failure_type"))
         return {}, None, SOURCE_DETERMINISTIC
 
-    narratives: Dict[str, RoutineNarrative] = {}
+    narratives: dict[str, RoutineNarrative] = {}
     for narrative in result.data.routines:
         routine = wanted.get(narrative.kind)
         if routine is None:
@@ -178,7 +182,7 @@ def _ingredient_prompt(findings: Sequence[Finding]) -> str:
 
 async def explain_findings(
     findings: Sequence[Finding], *, account_id_str: str
-) -> tuple[Dict[str, str], Optional[Any], str]:
+) -> tuple[dict[str, str], Optional[Any], str]:
     """Plain-English wording for warnings that have already been decided.
 
     Returns ``(text_by_rule_id, ai_run_id, source)``. A note for a rule that did
@@ -203,7 +207,7 @@ async def explain_findings(
         logger.info("ingredient_explanation_unavailable failure=%s", exc.extra.get("failure_type"))
         return {}, None, SOURCE_DETERMINISTIC
 
-    notes: Dict[str, str] = {}
+    notes: dict[str, str] = {}
     for note in result.data.notes:
         if note.rule_id not in allowed:
             # The model reached for a rule that did not fire. This is exactly
@@ -218,7 +222,7 @@ async def explain_findings(
     return notes, result.run_id, (SOURCE_AI if notes else SOURCE_DETERMINISTIC)
 
 
-def apply_to_routine(routine: Dict[str, Any], narrative: Optional[RoutineNarrative]) -> Dict[str, Any]:
+def apply_to_routine(routine: dict[str, Any], narrative: Optional[RoutineNarrative]) -> dict[str, Any]:
     """Merge validated wording into a serialised routine.
 
     Deterministic text is kept alongside rather than overwritten, so what the

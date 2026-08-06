@@ -27,20 +27,16 @@ Assertions:
 from __future__ import annotations
 
 import base64
-from typing import Any, Optional
 
 import pytest
-from sqlalchemy import select
-
 from app.domains.ai_gateway.providers import gemini
 from app.domains.consent import service as consent_service
 from app.domains.consent.models import CONSENT_PHOTO_ANALYSIS
-from app.domains.identity import service as identity_service
 from app.domains.scan.models import Scan
 from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import select
 
 from tests.conftest import auth, png_bytes
-
 
 pytestmark = pytest.mark.asyncio
 

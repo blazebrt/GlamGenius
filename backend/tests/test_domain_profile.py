@@ -12,8 +12,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import func, select
-
 from app.domains.identity import service as identity
 from app.domains.profile import service as profile_service
 from app.domains.profile.models import (
@@ -24,7 +22,7 @@ from app.domains.profile.models import (
     ProfileAttribute,
 )
 from app.shared.database.sql import get_sessionmaker
-
+from sqlalchemy import func, select
 
 pytestmark = pytest.mark.asyncio
 

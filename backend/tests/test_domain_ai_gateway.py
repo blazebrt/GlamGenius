@@ -20,19 +20,17 @@ raise the provider-side exceptions directly.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import pytest
-from pydantic import BaseModel, Field
-from sqlalchemy import select
-
 from app.domains.ai_gateway import gateway
 from app.domains.ai_gateway.models import AI_STATUS_FAILED, AI_STATUS_SUCCEEDED, AIRun, AIRunOutput
 from app.domains.ai_gateway.providers import gemini
 from app.shared.database.sql import get_sessionmaker
 from app.shared.errors.codes import AIFailureType
 from app.shared.errors.exceptions import AnalysisUnavailableError
-
+from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 pytestmark = pytest.mark.asyncio
 

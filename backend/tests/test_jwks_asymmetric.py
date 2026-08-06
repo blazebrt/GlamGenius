@@ -16,17 +16,15 @@ import base64
 import json
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import jwt
 import pytest
+from app.shared.security import supabase_auth
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.exceptions import PyJWKClientError
 from jwt.utils import to_base64url_uint
-
-from app.shared.security import supabase_auth
-
 
 ISSUER = "https://test.supabase.co/auth/v1"
 
@@ -35,7 +33,7 @@ def _make_rsa_keypair() -> rsa.RSAPrivateKey:
     return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
-def _public_jwk(private_key: rsa.RSAPrivateKey, kid: str) -> Dict[str, Any]:
+def _public_jwk(private_key: rsa.RSAPrivateKey, kid: str) -> dict[str, Any]:
     public_numbers = private_key.public_key().public_numbers()
     n = to_base64url_uint(public_numbers.n).decode("ascii")
     e = to_base64url_uint(public_numbers.e).decode("ascii")
@@ -52,10 +50,10 @@ def _mint_token(
     iss: str = ISSUER,
     exp_in: int = 300,
     algorithm: str = "RS256",
-    extras: Optional[Dict[str, Any]] = None,
+    extras: Optional[dict[str, Any]] = None,
 ) -> str:
     now = int(time.time())
-    claims: Dict[str, Any] = {
+    claims: dict[str, Any] = {
         "sub": sub or str(uuid.uuid4()),
         "role": role,
         "aud": aud,
@@ -85,7 +83,7 @@ class _FakeJWKSCache:
     Includes counters so tests can assert refresh behaviour.
     """
 
-    def __init__(self, keys_by_kid: Dict[str, Any]) -> None:
+    def __init__(self, keys_by_kid: dict[str, Any]) -> None:
         self._keys = dict(keys_by_kid)
         self.refreshes = 0
         self.calls = 0
@@ -107,7 +105,7 @@ class _FakeJWKSCache:
             return _FakeSigningKey(self._keys[kid])
         raise PyJWKClientError(f"kid {kid} not found in JWKS")
 
-    def rotate(self, new_keys: Dict[str, Any]) -> None:
+    def rotate(self, new_keys: dict[str, Any]) -> None:
         self._keys = dict(new_keys)
 
 
@@ -121,7 +119,7 @@ def rsa_keys():
 def install_jwks(monkeypatch):
     """Install a fake JWKS cache into the supabase_auth module."""
 
-    def _install(keys_by_kid: Dict[str, Any]) -> _FakeJWKSCache:
+    def _install(keys_by_kid: dict[str, Any]) -> _FakeJWKSCache:
         cache = _FakeJWKSCache(keys_by_kid)
         monkeypatch.setattr(supabase_auth, "_get_jwks_cache", lambda: cache)
         # Force the issuer used by _decode_with_jwks.
@@ -233,7 +231,6 @@ async def test_expired_token_is_rejected(rsa_keys, install_jwks):
 @pytest.mark.asyncio
 async def test_missing_role_is_rejected_by_role_gate(rsa_keys, install_jwks):
     """A validly signed token with no ``role`` still fails the role check."""
-    from fastapi.security import HTTPAuthorizationCredentials
 
     kp, _ = rsa_keys
     install_jwks({"kid-1": kp.public_key()})

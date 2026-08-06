@@ -17,15 +17,22 @@ from app.domains.planning import clock, compiler, notifications, service
 from app.domains.planning import context as context_stage
 from app.domains.planning.models import DailyPlan
 from app.domains.planning.schemas import (
-    ActionComplete, CalendarEventInput, ClarificationAnswer, ItemUnavailable,
-    NotificationPreferencePatch, TodayFeedback, TodayOutfitSwap, TodayRegenerate, WeatherInput,
+    ActionComplete,
+    CalendarEventInput,
+    ClarificationAnswer,
+    ItemUnavailable,
+    NotificationPreferencePatch,
+    TodayFeedback,
+    TodayOutfitSwap,
+    TodayRegenerate,
+    WeatherInput,
 )
 from app.domains.recommendation import orchestrator as recommendation_orchestrator
 from app.domains.recommendation import service as recommendation_service
 from app.domains.recommendation.schemas import LookSwapItem
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_session
-from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
+from app.shared.errors.exceptions import ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_today"))])

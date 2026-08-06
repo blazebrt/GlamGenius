@@ -15,8 +15,9 @@ never a different one.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Optional
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,18 +27,33 @@ from app.domains.planning import clock
 from app.domains.routines import compiler, explanation, nutrition, parser, perfume, shelf
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import (
-    HydrationPreference, NutritionPreference, ProductExpiryEvent, ProductIngredient,
-    Routine, RoutineAdherence, RoutineRecommendationRun, RoutineStep, SupplementSafetyFlag,
+    HydrationPreference,
+    NutritionPreference,
+    ProductExpiryEvent,
+    ProductIngredient,
+    Routine,
+    RoutineAdherence,
+    RoutineRecommendationRun,
+    RoutineStep,
+    SupplementSafetyFlag,
     UserReportedObservation,
 )
 from app.domains.routines.ontology import INGREDIENT_BY_KEY, ONTOLOGY_VERSION
 from app.domains.routines.rules import ShelfProduct
 from app.domains.routines.safety import (
-    NUTRITION_DISCLAIMER, PROFESSIONAL_BOUNDARY, ROUTINE_DISCLAIMER, boundary_for,
+    NUTRITION_DISCLAIMER,
+    PROFESSIONAL_BOUNDARY,
+    ROUTINE_DISCLAIMER,
+    boundary_for,
 )
 from app.domains.routines.schemas import (
-    HydrationPreferencePatch, IngredientCheckRequest, IngredientConfirmRequest,
-    NutritionPreferencePatch, ObservationInput, RoutineGenerateRequest, RoutineStepComplete,
+    HydrationPreferencePatch,
+    IngredientCheckRequest,
+    IngredientConfirmRequest,
+    NutritionPreferencePatch,
+    ObservationInput,
+    RoutineGenerateRequest,
+    RoutineStepComplete,
     ShelfAnalyseRequest,
 )
 from app.shared.database.base import utcnow
@@ -75,7 +91,7 @@ async def hydration_preference(session: AsyncSession, account_id: uuid.UUID) -> 
 
 async def patch_nutrition_preference(
     session: AsyncSession, account_id: uuid.UUID, body: NutritionPreferencePatch
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     row = await nutrition_preference(session, account_id)
     for field in ("diet", "avoid_foods", "focus_nutrients", "enabled"):
         value = getattr(body, field)
@@ -86,7 +102,7 @@ async def patch_nutrition_preference(
 
 async def patch_hydration_preference(
     session: AsyncSession, account_id: uuid.UUID, body: HydrationPreferencePatch
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     row = await hydration_preference(session, account_id)
     for field in ("enabled", "remind_in_hot_weather_only", "note"):
         value = getattr(body, field)
@@ -95,14 +111,14 @@ async def patch_hydration_preference(
     return serialize_hydration_preference(row)
 
 
-def serialize_nutrition_preference(row: NutritionPreference) -> Dict[str, Any]:
+def serialize_nutrition_preference(row: NutritionPreference) -> dict[str, Any]:
     return {
         "diet": row.diet, "avoid_foods": list(row.avoid_foods or []),
         "focus_nutrients": list(row.focus_nutrients or []), "enabled": row.enabled,
     }
 
 
-def serialize_hydration_preference(row: HydrationPreference) -> Dict[str, Any]:
+def serialize_hydration_preference(row: HydrationPreference) -> dict[str, Any]:
     return {
         "enabled": row.enabled,
         "remind_in_hot_weather_only": row.remind_in_hot_weather_only,
@@ -181,7 +197,7 @@ async def _store_expiry_events(
 
 
 async def _store_supplement_flags(
-    session: AsyncSession, account_id: uuid.UUID, rows: Sequence[Dict[str, Any]]
+    session: AsyncSession, account_id: uuid.UUID, rows: Sequence[dict[str, Any]]
 ) -> None:
     """Flags are replaced wholesale, so a resolved one disappears."""
     item_ids = [uuid.UUID(row["inventory_item_id"]) for row in rows]
@@ -202,7 +218,7 @@ async def _store_supplement_flags(
 
 async def analyse_shelf(
     session: AsyncSession, *, account_id: uuid.UUID, body: ShelfAnalyseRequest
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Re-read the shelf, store what the engine concluded, return the summary."""
     context = await shelf.gather(
         session, account_id=account_id, climate=body.climate, today=body.as_of,
@@ -226,7 +242,7 @@ async def analyse_shelf(
 
 async def shelf_summary(
     session: AsyncSession, *, account_id: uuid.UUID, climate: Optional[str] = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     context = await shelf.gather(session, account_id=account_id, climate=climate)
     result = shelf.summary(context)
     result["knowledge_version"] = ONTOLOGY_VERSION
@@ -235,17 +251,17 @@ async def shelf_summary(
 
 async def shelf_expiring(
     session: AsyncSession, *, account_id: uuid.UUID, days: int = 60
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     context = await shelf.gather(session, account_id=account_id)
     return shelf.expiring(context, days)
 
 
-async def shelf_low_use(session: AsyncSession, *, account_id: uuid.UUID) -> Dict[str, Any]:
+async def shelf_low_use(session: AsyncSession, *, account_id: uuid.UUID) -> dict[str, Any]:
     context = await shelf.gather(session, account_id=account_id)
     return shelf.low_use(context)
 
 
-async def shelf_value_to_recover(session: AsyncSession, *, account_id: uuid.UUID) -> Dict[str, Any]:
+async def shelf_value_to_recover(session: AsyncSession, *, account_id: uuid.UUID) -> dict[str, Any]:
     context = await shelf.gather(session, account_id=account_id)
     items = (await session.execute(
         select(InventoryItem).where(
@@ -263,7 +279,7 @@ async def shelf_value_to_recover(session: AsyncSession, *, account_id: uuid.UUID
 async def _replace_routines(
     session: AsyncSession, account_id: uuid.UUID, compiled: Sequence[compiler.CompiledRoutine],
     *, climate: Optional[str], explanation_source: str,
-) -> List[Routine]:
+) -> list[Routine]:
     """Write compiled routines, keeping the version number moving forward."""
     existing = {
         row.kind: row for row in (await session.execute(
@@ -271,7 +287,7 @@ async def _replace_routines(
         )).scalars().all()
     }
 
-    stored: List[Routine] = []
+    stored: list[Routine] = []
     for built in compiled:
         routine = existing.get(built.kind)
         if routine is None:
@@ -317,7 +333,7 @@ async def _replace_routines(
 
 async def generate_routines(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, body: RoutineGenerateRequest
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build every routine this person has the products for.
 
     The compiler decides; the model, if it is reachable and its wording passes
@@ -335,7 +351,7 @@ async def generate_routines(
     if body.kinds:
         compiled = [row for row in compiled if row.kind in body.kinds]
 
-    narratives: Dict[str, Any] = {}
+    narratives: dict[str, Any] = {}
     ai_run_id = None
     source = explanation.SOURCE_DETERMINISTIC
     if body.explain and compiled:
@@ -385,7 +401,7 @@ async def generate_routines(
     }
 
 
-async def _serialize_routine(session: AsyncSession, routine: Routine) -> Dict[str, Any]:
+async def _serialize_routine(session: AsyncSession, routine: Routine) -> dict[str, Any]:
     steps = (await session.execute(
         select(RoutineStep).where(RoutineStep.routine_id == routine.id).order_by(RoutineStep.position)
     )).scalars().all()
@@ -415,7 +431,7 @@ async def _serialize_routine(session: AsyncSession, routine: Routine) -> Dict[st
 
 async def routines_today(
     session: AsyncSession, *, account_id: uuid.UUID, on: Optional[date] = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """The routines that are actually relevant right now.
 
     Morning before the evening, evening after it, and the weekly extras only on
@@ -430,7 +446,7 @@ async def routines_today(
     )).scalars().all()
     by_kind = {row.kind: row for row in rows}
 
-    wanted: List[str] = []
+    wanted: list[str] = []
     if part in ("morning", "afternoon"):
         wanted.append(compiler.ROUTINE_MORNING)
     if part in ("afternoon", "evening", "night"):
@@ -464,7 +480,7 @@ async def routines_today(
 
 async def complete_step(
     session: AsyncSession, *, account_id: uuid.UUID, step_id: uuid.UUID, body: RoutineStepComplete
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Mark a step done. Ownership is checked from the token, not the request."""
     row = (await session.execute(
         select(RoutineStep, Routine)
@@ -503,7 +519,7 @@ async def complete_step(
 
 async def consistency(
     session: AsyncSession, *, account_id: uuid.UUID, days: int = CONSISTENCY_WINDOW_DAYS
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     today = clock.local_today(clock.DEFAULT_TIMEZONE)
     since = today - timedelta(days=days - 1)
     rows = (await session.execute(
@@ -526,7 +542,7 @@ async def consistency(
 
 async def check_ingredients(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, body: IngredientCheckRequest
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Check a label, a list, or products you own against the reviewed rules.
 
     Nothing here is stored: this is the "is it okay to use these together"
@@ -541,7 +557,7 @@ async def check_ingredients(
     context = await shelf.gather(session, account_id=account_id)
     owned_by_id = {str(item.id): item for item in context.owned}
 
-    checked: List[ShelfProduct] = []
+    checked: list[ShelfProduct] = []
     if body.item_ids:
         for item_id in body.item_ids:
             item = owned_by_id.get(str(item_id))
@@ -551,7 +567,7 @@ async def check_ingredients(
             match = [row for row in shelf.build(context, category) if row.id == str(item_id)]
             checked.extend(match)
 
-    typed: List[parser.ParsedIngredient] = []
+    typed: list[parser.ParsedIngredient] = []
     if body.ingredients:
         typed.extend(parser.parse_declared(body.ingredients, source=body.source))
     if body.label_text:
@@ -583,7 +599,7 @@ async def check_ingredients(
         if not row.item_ids or asked_ids & set(row.item_ids)
     ]
 
-    plain: Dict[str, str] = {}
+    plain: dict[str, str] = {}
     source = explanation.SOURCE_DETERMINISTIC
     if body.explain and findings:
         plain, _, source = await explanation.explain_findings(findings, account_id_str=account_id_str)
@@ -622,7 +638,7 @@ def _pseudo_item():
     )
 
 
-def ingredient_detail(key: str) -> Dict[str, Any]:
+def ingredient_detail(key: str) -> dict[str, Any]:
     row = INGREDIENT_BY_KEY.get(key)
     if row is None:
         raise NotFoundError("We have no reviewed note for that ingredient yet.")
@@ -651,7 +667,7 @@ def ingredient_detail(key: str) -> Dict[str, Any]:
 
 async def confirm_ingredients(
     session: AsyncSession, *, account_id: uuid.UUID, body: IngredientConfirmRequest
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Confirm a low-confidence read, so it starts driving the rules."""
     rows = (await session.execute(
         select(ProductIngredient).where(
@@ -690,7 +706,7 @@ async def perfume_recommendation(
     session: AsyncSession, *, account_id: uuid.UUID,
     occasion_key: Optional[str] = None, weather: Optional[str] = None,
     time_of_day: Optional[str] = None, season: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     context = await shelf.gather(session, account_id=account_id)
     perfumes = context.by_category("perfumes")
 
@@ -715,12 +731,12 @@ async def perfume_recommendation(
 # --- Supplements ----------------------------------------------------------------
 
 
-async def supplements_summary(session: AsyncSession, *, account_id: uuid.UUID) -> Dict[str, Any]:
+async def supplements_summary(session: AsyncSession, *, account_id: uuid.UUID) -> dict[str, Any]:
     context = await shelf.gather(session, account_id=account_id)
     return shelf.supplement_summary(context)
 
 
-def supplement_question(text: str) -> Dict[str, Any]:
+def supplement_question(text: str) -> dict[str, Any]:
     """Anything that reads like a health question gets the boundary, not an answer."""
     boundary = boundary_for(text)
     if boundary is None:
@@ -736,7 +752,7 @@ def supplement_question(text: str) -> Dict[str, Any]:
 
 async def nutrition_suggestions(
     session: AsyncSession, *, account_id: uuid.UUID
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Appearance-related food context, filtered to what this person eats.
 
     Off unless the user turned it on. Nobody gets food suggestions because they
@@ -777,7 +793,7 @@ async def nutrition_suggestions(
 
 async def record_observation(
     session: AsyncSession, *, account_id: uuid.UUID, body: ObservationInput
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Store what the user noticed, verbatim, and never interpret it.
 
     If it reads like a health question, the response carries the professional
@@ -809,7 +825,7 @@ async def record_observation(
 
 async def list_observations(
     session: AsyncSession, *, account_id: uuid.UUID, limit: int = 50
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     rows = (await session.execute(
         select(UserReportedObservation)
         .where(UserReportedObservation.account_id == account_id)
@@ -829,7 +845,7 @@ async def list_observations(
 # --- The You → Improve overview ----------------------------------------------------
 
 
-async def improve_overview(session: AsyncSession, *, account_id: uuid.UUID) -> Dict[str, Any]:
+async def improve_overview(session: AsyncSession, *, account_id: uuid.UUID) -> dict[str, Any]:
     """Everything the Improve screen shows, in one call.
 
     Modules with nothing in them are reported as empty rather than filled with

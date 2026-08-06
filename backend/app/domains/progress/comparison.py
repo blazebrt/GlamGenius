@@ -21,9 +21,10 @@ every blocking check passes, so a check that is somehow skipped fails closed.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional
 
 # The conditions a user records with a progress photo.
 LIGHTING = ("daylight_window", "daylight_outdoor", "indoor_warm", "indoor_cool", "mixed", "low_light")
@@ -40,7 +41,7 @@ MAX_USEFUL_DAYS_APART = 400
 
 # Lighting groups that are close enough to compare within. Daylight from a
 # window and daylight outdoors are not the same, so they are not grouped.
-LIGHTING_GROUPS: Dict[str, str] = {
+LIGHTING_GROUPS: dict[str, str] = {
     "daylight_window": "daylight_window",
     "daylight_outdoor": "daylight_outdoor",
     "indoor_warm": "indoor",
@@ -63,7 +64,7 @@ class Check:
     blocking: bool
     detail: str
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "key": self.key, "passed": self.passed,
             "blocking": self.blocking, "detail": self.detail,
@@ -93,12 +94,12 @@ class PhotoConditions:
 @dataclass
 class ComparisonResult:
     comparable: bool
-    checks: List[Check] = field(default_factory=list)
-    blocking_reasons: List[str] = field(default_factory=list)
+    checks: list[Check] = field(default_factory=list)
+    blocking_reasons: list[str] = field(default_factory=list)
     days_apart: Optional[int] = None
-    guidance: List[str] = field(default_factory=list)
+    guidance: list[str] = field(default_factory=list)
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "comparable": self.comparable,
             "checks": [row.as_dict() for row in self.checks],
@@ -118,7 +119,7 @@ def compare(baseline: PhotoConditions, current: PhotoConditions) -> ComparisonRe
     Every check is evaluated — not short-circuited — so the user gets the full
     list of what differed rather than only the first problem.
     """
-    checks: List[Check] = []
+    checks: list[Check] = []
     days_apart = (current.taken_on - baseline.taken_on).days
 
     # --- Same subject -------------------------------------------------------
@@ -250,13 +251,13 @@ def compare(baseline: PhotoConditions, current: PhotoConditions) -> ComparisonRe
     return result
 
 
-def guidance_for(failures: Sequence[Check]) -> List[str]:
+def guidance_for(failures: Sequence[Check]) -> list[str]:
     """How to take a photo that will compare properly next time.
 
     Specific and actionable. "Conditions not comparable" on its own tells a
     person nothing they can do differently.
     """
-    tips: List[str] = []
+    tips: list[str] = []
     keys = {row.key for row in failures}
     if "lighting" in keys:
         tips.append("Stand in the same spot by the same window, and avoid overhead or coloured light.")
@@ -275,15 +276,15 @@ def guidance_for(failures: Sequence[Check]) -> List[str]:
 
 def pick_baseline(
     candidates: Sequence[Any], current: PhotoConditions
-) -> Tuple[Optional[Any], List[ComparisonResult]]:
+) -> tuple[Optional[Any], list[ComparisonResult]]:
     """The best comparable earlier photo, and why the others were rejected.
 
     Prefers the oldest comparable photo, because the longest honest gap shows
     the most. Returns every evaluation so the app can explain a refusal instead
     of silently showing nothing.
     """
-    evaluations: List[ComparisonResult] = []
-    comparable: List[Tuple[Any, ComparisonResult]] = []
+    evaluations: list[ComparisonResult] = []
+    comparable: list[tuple[Any, ComparisonResult]] = []
     for row in candidates:
         conditions = PhotoConditions(
             taken_on=row.taken_on, body_area=row.body_area, lighting=row.lighting,

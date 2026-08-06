@@ -6,7 +6,6 @@ plus cross-account ownership assertions.
 from __future__ import annotations
 
 import base64
-import uuid
 
 import pytest
 

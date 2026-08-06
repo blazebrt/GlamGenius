@@ -13,24 +13,44 @@ Two rules run through everything here:
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.inventory.models import InventoryItem
-from app.domains.recommendation.candidates import OptionalAddition, OutfitCandidate
-from app.domains.recommendation.context import StyleContext
+from app.domains.recommendation.candidates import OutfitCandidate
 from app.domains.recommendation.models import (
-    ENGINE_VERSION, OWNERSHIP_OPTIONAL, OWNERSHIP_OWNED, CompatibilityEdge, Look, LookAdjustment,
-    LookFeedback, LookItem, OccasionRecord, PurchaseDecision, PurchaseEvaluation,
-    PurchaseEvaluationFactor, RecommendationEntitlement, RecommendationInput, RecommendationRun,
-    ShoppingCandidate, StyleRequest,
+    ENGINE_VERSION,
+    OWNERSHIP_OPTIONAL,
+    OWNERSHIP_OWNED,
+    CompatibilityEdge,
+    Look,
+    LookAdjustment,
+    LookFeedback,
+    LookItem,
+    OccasionRecord,
+    PurchaseDecision,
+    PurchaseEvaluation,
+    PurchaseEvaluationFactor,
+    RecommendationEntitlement,
+    RecommendationInput,
+    RecommendationRun,
+    ShoppingCandidate,
+    StyleRequest,
 )
 from app.domains.recommendation.occasions import (
-    SLOT_ACCESSORIES, SLOT_CLOTHING, SLOT_GROOMING, SLOT_HAIR, SLOT_PERFUME, SLOT_SHOES, get_occasion, serialize_occasion,
+    SLOT_ACCESSORIES,
+    SLOT_CLOTHING,
+    SLOT_GROOMING,
+    SLOT_HAIR,
+    SLOT_PERFUME,
+    SLOT_SHOES,
+    get_occasion,
+    serialize_occasion,
 )
 from app.domains.recommendation.ranking import RankedLook
 from app.domains.recommendation.schemas import OccasionCreate, OccasionPatch
@@ -86,7 +106,7 @@ async def consume_entitlement(session: AsyncSession, account_id: uuid.UUID, feat
     return row
 
 
-def serialize_entitlement(row: RecommendationEntitlement) -> Dict[str, Any]:
+def serialize_entitlement(row: RecommendationEntitlement) -> dict[str, Any]:
     return {
         "feature": row.feature, "period": row.period_key, "included": row.included,
         "used": row.used, "remaining": max(0, row.included - row.used), "source": row.source,
@@ -128,14 +148,14 @@ async def update_occasion(session: AsyncSession, record: OccasionRecord, body: O
     return record
 
 
-async def list_occasions(session: AsyncSession, account_id: uuid.UUID, *, include_archived: bool = False) -> List[OccasionRecord]:
+async def list_occasions(session: AsyncSession, account_id: uuid.UUID, *, include_archived: bool = False) -> list[OccasionRecord]:
     stmt = select(OccasionRecord).where(OccasionRecord.account_id == account_id)
     if not include_archived:
         stmt = stmt.where(OccasionRecord.status == "active")
     return list((await session.execute(stmt.order_by(OccasionRecord.created_at.desc()))).scalars().all())
 
 
-def serialize_occasion_record(record: OccasionRecord) -> Dict[str, Any]:
+def serialize_occasion_record(record: OccasionRecord) -> dict[str, Any]:
     return {
         "id": str(record.id), "occasion_key": record.occasion_key, "title": record.title,
         "event_date": record.event_date.isoformat() if record.event_date else None,
@@ -161,7 +181,7 @@ async def start_run(session: AsyncSession, account_id: uuid.UUID, kind: str, sty
     return run
 
 
-async def record_inputs(session: AsyncSession, run: RecommendationRun, rows: Iterable[Dict[str, Any]]) -> None:
+async def record_inputs(session: AsyncSession, run: RecommendationRun, rows: Iterable[dict[str, Any]]) -> None:
     for row in rows:
         session.add(RecommendationInput(run_id=run.id, input_type=row["input_type"], input_key=row["input_key"], value=row["value"], source=row["source"]))
     await session.flush()
@@ -240,7 +260,7 @@ async def owned_look(session: AsyncSession, account_id: uuid.UUID, look_id: uuid
     return look
 
 
-async def _resolve_owned_items(session: AsyncSession, account_id: uuid.UUID, item_ids: Sequence[uuid.UUID]) -> Dict[uuid.UUID, InventoryItem]:
+async def _resolve_owned_items(session: AsyncSession, account_id: uuid.UUID, item_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, InventoryItem]:
     if not item_ids:
         return {}
     rows = (await session.execute(
@@ -253,16 +273,16 @@ async def _resolve_owned_items(session: AsyncSession, account_id: uuid.UUID, ite
     return {row.id: row for row in rows}
 
 
-async def serialize_look(session: AsyncSession, look: Look, *, include_history: bool = False) -> Dict[str, Any]:
+async def serialize_look(session: AsyncSession, look: Look, *, include_history: bool = False) -> dict[str, Any]:
     rows = list((await session.execute(
         select(LookItem).where(LookItem.look_id == look.id).order_by(LookItem.position)
     )).scalars().all())
     resolved = await _resolve_owned_items(session, look.account_id, [row.inventory_item_id for row in rows if row.inventory_item_id])
 
-    slots: Dict[str, List[Dict[str, Any]]] = {slot: [] for slot in SLOT_ORDER}
-    owned_items: List[Dict[str, Any]] = []
-    optional_items: List[Dict[str, Any]] = []
-    unavailable: List[str] = []
+    slots: dict[str, list[dict[str, Any]]] = {slot: [] for slot in SLOT_ORDER}
+    owned_items: list[dict[str, Any]] = []
+    optional_items: list[dict[str, Any]] = []
+    unavailable: list[str] = []
 
     for row in rows:
         if row.ownership == OWNERSHIP_OWNED:
@@ -290,7 +310,7 @@ async def serialize_look(session: AsyncSession, look: Look, *, include_history: 
             optional_items.append(payload)
         slots[row.slot].append(payload)
 
-    body: Dict[str, Any] = {
+    body: dict[str, Any] = {
         "id": str(look.id), "run_id": str(look.run_id), "variant": look.variant,
         "title": look.title, "rank": look.rank, "score": look.score, "confidence": look.confidence,
         "why_it_works": look.why_it_works, "weather_note": look.weather_note,
@@ -325,7 +345,7 @@ async def serialize_look(session: AsyncSession, look: Look, *, include_history: 
     return body
 
 
-def shareable(look: Look, owned_items: Sequence[Dict[str, Any]], optional_items: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+def shareable(look: Look, owned_items: Sequence[dict[str, Any]], optional_items: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """A version of the look that is safe to send to someone else.
 
     Names of garments only. No account id, no inventory ids, no profile, no
@@ -369,14 +389,14 @@ async def save_feedback(session: AsyncSession, look: Look, *, rating: str, reaso
 # --- Compatibility cache ----------------------------------------------------
 
 
-async def cache_edges(session: AsyncSession, account_id: uuid.UUID, edges: Iterable[tuple[uuid.UUID, uuid.UUID, float, Dict[str, Any]]]) -> None:
+async def cache_edges(session: AsyncSession, account_id: uuid.UUID, edges: Iterable[tuple[uuid.UUID, uuid.UUID, float, dict[str, Any]]]) -> None:
     """Store computed pair scores, once per pair.
 
     The same pair legitimately turns up in more than one look of the same run,
     so the batch is deduplicated before anything is looked up — relying on the
     unique constraint to catch it would abort the whole transaction.
     """
-    wanted: Dict[tuple[uuid.UUID, uuid.UUID], tuple[float, Dict[str, Any]]] = {}
+    wanted: dict[tuple[uuid.UUID, uuid.UUID], tuple[float, dict[str, Any]]] = {}
     for first, second, score, basis in edges:
         a, b = sorted([first, second], key=str)
         wanted.setdefault((a, b), (score, basis))
@@ -415,7 +435,7 @@ async def owned_evaluation(session: AsyncSession, account_id: uuid.UUID, evaluat
     return row
 
 
-def serialize_candidate(row: ShoppingCandidate) -> Dict[str, Any]:
+def serialize_candidate(row: ShoppingCandidate) -> dict[str, Any]:
     return {
         "id": str(row.id), "source": row.source, "category": row.category, "subcategory": row.subcategory,
         "display_name": row.display_name, "brand": row.brand, "colour": row.colour, "size": row.size,
@@ -431,7 +451,7 @@ def serialize_candidate(row: ShoppingCandidate) -> Dict[str, Any]:
     }
 
 
-async def serialize_evaluation(session: AsyncSession, evaluation: PurchaseEvaluation) -> Dict[str, Any]:
+async def serialize_evaluation(session: AsyncSession, evaluation: PurchaseEvaluation) -> dict[str, Any]:
     candidate = await session.get(ShoppingCandidate, evaluation.candidate_id)
     factors = (await session.execute(
         select(PurchaseEvaluationFactor).where(PurchaseEvaluationFactor.evaluation_id == evaluation.id).order_by(PurchaseEvaluationFactor.position)
@@ -439,7 +459,7 @@ async def serialize_evaluation(session: AsyncSession, evaluation: PurchaseEvalua
     referenced = [uuid.UUID(value) for value in (evaluation.duplicate_item_ids + evaluation.alternative_item_ids)]
     resolved = await _resolve_owned_items(session, evaluation.account_id, referenced)
 
-    def items(ids: Sequence[str]) -> List[Dict[str, Any]]:
+    def items(ids: Sequence[str]) -> list[dict[str, Any]]:
         out = []
         for value in ids:
             item = resolved.get(uuid.UUID(value))

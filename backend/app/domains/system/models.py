@@ -3,10 +3,9 @@ from __future__ import annotations
 import datetime
 from typing import Optional
 
+from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
 from sqlalchemy import Index, String
 from sqlalchemy.orm import Mapped, mapped_column
-
-from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
 
 
 class WorkerStatus(Base, UUIDPrimaryKey, TimestampMixin):

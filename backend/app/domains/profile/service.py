@@ -2,14 +2,21 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, Iterable, List
+from collections.abc import Iterable
+from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.profile.models import (
-    AppearanceGoal, AppearanceProfile, FitPreference, LifestyleContext,
-    ProfileAttribute, ProfileChangeEvent, StylePreference, UserConstraint,
+    AppearanceGoal,
+    AppearanceProfile,
+    FitPreference,
+    LifestyleContext,
+    ProfileAttribute,
+    ProfileChangeEvent,
+    StylePreference,
+    UserConstraint,
 )
 from app.domains.profile.registry import ATTRIBUTE_REGISTRY, validate_attribute
 from app.shared.database.base import utcnow
@@ -39,12 +46,12 @@ async def get_or_create_profile(session: AsyncSession, account_id: uuid.UUID) ->
     return row
 
 
-async def attributes_for(session: AsyncSession, profile_id: uuid.UUID) -> List[ProfileAttribute]:
+async def attributes_for(session: AsyncSession, profile_id: uuid.UUID) -> list[ProfileAttribute]:
     stmt = select(ProfileAttribute).where(ProfileAttribute.profile_id == profile_id).order_by(ProfileAttribute.key)
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def attribute_map(session: AsyncSession, profile_id: uuid.UUID) -> Dict[str, ProfileAttribute]:
+async def attribute_map(session: AsyncSession, profile_id: uuid.UUID) -> dict[str, ProfileAttribute]:
     return {row.key: row for row in await attributes_for(session, profile_id)}
 
 
@@ -57,7 +64,7 @@ async def _projection(session: AsyncSession, model, profile_id: uuid.UUID):
     return row
 
 
-async def sync_projections(session: AsyncSession, profile_id: uuid.UUID, values: Dict[str, Any]) -> None:
+async def sync_projections(session: AsyncSession, profile_id: uuid.UUID, values: dict[str, Any]) -> None:
     if STYLE_KEYS & values.keys():
         row = await _projection(session, StylePreference, profile_id)
         for key in STYLE_KEYS & values.keys():
@@ -87,14 +94,14 @@ async def sync_projections(session: AsyncSession, profile_id: uuid.UUID, values:
 async def apply_attributes(
     session: AsyncSession,
     profile: AppearanceProfile,
-    updates: Iterable[Dict[str, Any]],
+    updates: Iterable[dict[str, Any]],
     *,
     source: str = "user_declared",
     confidence: float = 1.0,
     verification_state: str = "confirmed",
     source_ai_run_id: uuid.UUID | None = None,
     reason: str = "user_update",
-) -> List[ProfileAttribute]:
+) -> list[ProfileAttribute]:
     """Apply explicit changes and record one immutable profile version.
 
     AI callers may add observations elsewhere, but cannot call this silently.
@@ -102,8 +109,8 @@ async def apply_attributes(
     observation confirmation only.
     """
     existing = await attribute_map(session, profile.id)
-    cleaned: Dict[str, Any] = {}
-    changed: List[tuple[ProfileAttribute, Any]] = []
+    cleaned: dict[str, Any] = {}
+    changed: list[tuple[ProfileAttribute, Any]] = []
     for item in updates:
         key = item["key"]
         value = validate_attribute(key, item["value"])
@@ -151,7 +158,7 @@ async def apply_attributes(
     return [row for row, _ in changed]
 
 
-def readiness(rows: Iterable[ProfileAttribute]) -> List[Dict[str, Any]]:
+def readiness(rows: Iterable[ProfileAttribute]) -> list[dict[str, Any]]:
     values = {row.key: row.value for row in rows if row.verification_state == "confirmed"}
     colour_ready = bool(values.get("skin_tone") and values.get("undertone")) or bool(values.get("favourite_colours"))
     outfit_ready = bool(values.get("current_goal") and values.get("preferred_style"))
@@ -164,7 +171,7 @@ def readiness(rows: Iterable[ProfileAttribute]) -> List[Dict[str, Any]]:
     ]
 
 
-def serialize_attribute(row: ProfileAttribute) -> Dict[str, Any]:
+def serialize_attribute(row: ProfileAttribute) -> dict[str, Any]:
     spec = ATTRIBUTE_REGISTRY[row.key]
     return {
         "id": str(row.id), "key": row.key, "label": spec.label, "section": spec.section,
@@ -179,7 +186,7 @@ def serialize_attribute(row: ProfileAttribute) -> Dict[str, Any]:
     }
 
 
-async def serialize_profile(session: AsyncSession, profile: AppearanceProfile) -> Dict[str, Any]:
+async def serialize_profile(session: AsyncSession, profile: AppearanceProfile) -> dict[str, Any]:
     rows = await attributes_for(session, profile.id)
     return {
         "id": str(profile.id), "version": profile.version,
@@ -191,6 +198,6 @@ async def serialize_profile(session: AsyncSession, profile: AppearanceProfile) -
     }
 
 
-async def change_history(session: AsyncSession, profile_id: uuid.UUID) -> List[Dict[str, Any]]:
+async def change_history(session: AsyncSession, profile_id: uuid.UUID) -> list[dict[str, Any]]:
     rows = (await session.execute(select(ProfileChangeEvent).where(ProfileChangeEvent.profile_id == profile_id).order_by(ProfileChangeEvent.created_at.desc()))).scalars().all()
     return [{"id": str(r.id), "profile_version": r.profile_version, "attribute_key": r.attribute_key, "old_value": r.old_value, "new_value": r.new_value, "source": r.source, "reason": r.reason, "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]

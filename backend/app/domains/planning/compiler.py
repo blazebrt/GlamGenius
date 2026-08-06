@@ -21,22 +21,33 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from datetime import datetime
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.inventory import service as inventory_service
-from app.domains.inventory.models import InventoryItem
-from app.domains.planning import clock
+from app.domains.planning import clock, notifications
 from app.domains.planning import context as context_stage
-from app.domains.planning import notifications
 from app.domains.planning.context import DayContext
 from app.domains.planning.models import (
-    MODULE_HAIR, MODULE_HYDRATION, MODULE_NUTRITION, MODULE_OUTFIT, MODULE_PERFUME,
-    MODULE_SHOPPING, MODULE_SKINCARE, PLANNER_VERSION, PLAN_SOURCE_CACHE, PLAN_SOURCE_FRESH,
-    DailyPlan, DailyPlanAction, DailyPlanInput, OutfitSchedule, PlanRecalculationEvent,
+    MODULE_HAIR,
+    MODULE_HYDRATION,
+    MODULE_NUTRITION,
+    MODULE_OUTFIT,
+    MODULE_PERFUME,
+    MODULE_SHOPPING,
+    MODULE_SKINCARE,
+    PLAN_SOURCE_CACHE,
+    PLAN_SOURCE_FRESH,
+    PLANNER_VERSION,
+    DailyPlan,
+    DailyPlanAction,
+    DailyPlanInput,
+    OutfitSchedule,
+    PlanRecalculationEvent,
 )
 from app.domains.recommendation import candidates as candidate_stage
 from app.domains.recommendation import context as style_stage
@@ -120,7 +131,7 @@ def style_context_for(context: DayContext, record: OccasionRecord) -> StyleConte
 # --- Outfit selection --------------------------------------------------------
 
 
-def _apply_repetition(buckets: Dict[str, List[candidate_stage.ScoredItem]], context: DayContext) -> None:
+def _apply_repetition(buckets: dict[str, list[candidate_stage.ScoredItem]], context: DayContext) -> None:
     """Mark down what was worn recently, in proportion to how recently.
 
     Worn yesterday is heavily penalised; worn six days ago barely at all. A flat
@@ -190,7 +201,7 @@ def _matches_recent(ranked: ranking_stage.RankedLook, just_worn: set) -> bool:
 # an empty list is the normal, expected outcome for most of them on most days.
 
 
-def _outfit_actions(context: DayContext, ranked: Optional[ranking_stage.RankedLook]) -> List[Dict[str, Any]]:
+def _outfit_actions(context: DayContext, ranked: Optional[ranking_stage.RankedLook]) -> list[dict[str, Any]]:
     if ranked is None:
         return [{
             "module": MODULE_OUTFIT, "action_type": "add_inventory", "priority": 10,
@@ -206,7 +217,7 @@ def _outfit_actions(context: DayContext, ranked: Optional[ranking_stage.RankedLo
     }]
 
 
-def _appearance_action(context: DayContext, expiring: Sequence[Dict[str, Any]], low_use: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _appearance_action(context: DayContext, expiring: Sequence[dict[str, Any]], low_use: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """The single most important appearance action, if there is one.
 
     Deliberately one row, not a list. The brief asks for "the most important
@@ -243,7 +254,7 @@ def _appearance_action(context: DayContext, expiring: Sequence[Dict[str, Any]], 
     return []
 
 
-def _weather_action(context: DayContext) -> List[Dict[str, Any]]:
+def _weather_action(context: DayContext) -> list[dict[str, Any]]:
     """Only when the weather actually changes what someone should do."""
     if context.weather is None:
         return []
@@ -273,7 +284,7 @@ def _weather_action(context: DayContext) -> List[Dict[str, Any]]:
     return []
 
 
-def _event_action(context: DayContext) -> List[Dict[str, Any]]:
+def _event_action(context: DayContext) -> list[dict[str, Any]]:
     event = context.primary_event
     if event is None:
         return []
@@ -287,13 +298,13 @@ def _event_action(context: DayContext) -> List[Dict[str, Any]]:
     }]
 
 
-def _routine_actions(context: DayContext, beauty: Sequence[Dict[str, Any]], hair: Sequence[Dict[str, Any]], perfumes: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _routine_actions(context: DayContext, beauty: Sequence[dict[str, Any]], hair: Sequence[dict[str, Any]], perfumes: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """Skincare, hair and perfume — shown only when the user owns the products.
 
     Telling someone to apply a serum they do not own is noise, so these modules
     stay silent until there is something of theirs to point at.
     """
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     part = clock.part_of_day(context.now_local)
     if beauty and part in ("morning", "afternoon"):
         first = beauty[0]
@@ -326,9 +337,9 @@ def _routine_actions(context: DayContext, beauty: Sequence[Dict[str, Any]], hair
     return rows
 
 
-def _wellbeing_actions(context: DayContext) -> List[Dict[str, Any]]:
+def _wellbeing_actions(context: DayContext) -> list[dict[str, Any]]:
     """Hydration and nutrition. Contextual, never a daily nag."""
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     if context.weather and context.weather.condition in ("hot", "humid"):
         rows.append({
             "module": MODULE_HYDRATION, "action_type": "reminder", "priority": 70,
@@ -347,7 +358,7 @@ def _wellbeing_actions(context: DayContext) -> List[Dict[str, Any]]:
     return rows
 
 
-def _shopping_action(context: DayContext, pending: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _shopping_action(context: DayContext, pending: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     if not pending:
         return []
     first = pending[0]
@@ -362,7 +373,7 @@ def _shopping_action(context: DayContext, pending: Sequence[Dict[str, Any]]) -> 
 # --- Clarification -----------------------------------------------------------
 
 
-def clarification_for(context: DayContext) -> Optional[Dict[str, Any]]:
+def clarification_for(context: DayContext) -> Optional[dict[str, Any]]:
     """One focused question, only when the answer would change the plan.
 
     Never asks something we already know: an event the user confirmed, or a
@@ -403,21 +414,21 @@ def clarification_for(context: DayContext) -> Optional[Dict[str, Any]]:
 # --- Compilation -------------------------------------------------------------
 
 
-async def _module_material(session: AsyncSession, context: DayContext) -> Dict[str, List[Dict[str, Any]]]:
+async def _module_material(session: AsyncSession, context: DayContext) -> dict[str, list[dict[str, Any]]]:
     """Read the inventory facts the optional modules need, once."""
     account_id = context.account_id
     expiring = await inventory_service.expiring_items(session, account_id, days=45)
     low_use = await inventory_service.low_use_items(session, account_id)
     available = {item.id for item in context.available_owned()}
 
-    def owned_rows(category: str) -> List[Dict[str, Any]]:
+    def owned_rows(category: str) -> list[dict[str, Any]]:
         return [
             {"id": str(item.id), "display_name": item.display_name, "category": item.category}
             for item in context.available_owned() if item.category == category
         ]
 
-    pending: List[Dict[str, Any]] = []
-    from app.domains.recommendation.models import PurchaseEvaluation, PurchaseDecision, ShoppingCandidate
+    pending: list[dict[str, Any]] = []
+    from app.domains.recommendation.models import PurchaseDecision, PurchaseEvaluation, ShoppingCandidate
 
     rows = (await session.execute(
         select(PurchaseEvaluation, ShoppingCandidate)
@@ -521,7 +532,7 @@ async def compile_day(
         )
 
     plan = existing or DailyPlan(account_id=context.account_id, plan_date=context.plan_date, cache_key=key)
-    completed_before: Dict[Tuple[str, str, str], datetime] = {}
+    completed_before: dict[tuple[str, str, str], datetime] = {}
     if existing is None:
         session.add(plan)
     else:
@@ -555,7 +566,7 @@ async def compile_day(
         session.add(DailyPlanInput(plan_id=plan.id, **row))
 
     material = await _module_material(session, context)
-    actions: List[Dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
     actions.extend(_outfit_actions(context, ranked))
     actions.extend(_appearance_action(context, material["expiring"], material["low_use"]))
     actions.extend(_weather_action(context))
@@ -592,7 +603,7 @@ async def compile_day(
 
 async def _completed_action_marks(
     session: AsyncSession, plan: DailyPlan
-) -> Dict[Tuple[str, str, str], datetime]:
+) -> dict[tuple[str, str, str], datetime]:
     """When each of the day's finished actions was finished.
 
     Keyed by what the action is — module, type and title — because the rows

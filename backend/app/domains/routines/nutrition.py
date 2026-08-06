@@ -14,8 +14,9 @@ Hard boundaries, enforced in code rather than in a prompt:
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Optional
 
 from app.domains.routines.safety import NUTRITION_DISCLAIMER, narrative_is_safe
 
@@ -29,7 +30,7 @@ DIET_PESCATARIAN = "pescatarian"
 DIETS = (DIET_VEGAN, DIET_VEGETARIAN, DIET_JAIN, DIET_EGGETARIAN, DIET_PESCATARIAN, DIET_NON_VEGETARIAN)
 
 # What each diet excludes. Jain additionally excludes root vegetables.
-DIET_EXCLUDES: Dict[str, Set[str]] = {
+DIET_EXCLUDES: dict[str, set[str]] = {
     DIET_VEGAN: {"dairy", "egg", "fish", "meat", "honey"},
     DIET_VEGETARIAN: {"egg", "fish", "meat"},
     DIET_JAIN: {"egg", "fish", "meat", "root"},
@@ -48,7 +49,7 @@ DIET_LABELS = {
 @dataclass(frozen=True)
 class Food:
     name: str
-    tags: Set[str] = field(default_factory=set)   # dairy | egg | fish | meat | root | plant
+    tags: set[str] = field(default_factory=set)   # dairy | egg | fish | meat | root | plant
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,7 @@ class NutrientRule:
     display_name: str
     # Deliberately worded as association, never as effect or cure.
     appearance_context: str
-    foods: List[Food]
+    foods: list[Food]
     note: str = ""
 
 
@@ -70,7 +71,7 @@ def _f(name: str, *tags: str) -> Food:
 # Every entry names a nutrient, says what it is *associated with* in plain
 # language, and lists everyday Indian foods. No amounts, no targets, no claims.
 
-NUTRIENT_RULES: List[NutrientRule] = [
+NUTRIENT_RULES: list[NutrientRule] = [
     NutrientRule(
         "nutrition.protein", "protein", "Protein",
         "Hair and nails are largely protein, so a diet with enough of it across the day is the usual starting point people talk about.",
@@ -185,7 +186,7 @@ def normalise_diet(value: Optional[str]) -> str:
     return DIET_NON_VEGETARIAN
 
 
-def foods_for(rule: NutrientRule, diet: str) -> List[str]:
+def foods_for(rule: NutrientRule, diet: str) -> list[str]:
     excluded = DIET_EXCLUDES.get(diet, set())
     return [food.name for food in rule.foods if not (food.tags & excluded)]
 
@@ -196,12 +197,12 @@ def suggestions(
     focus: Sequence[str] = (),
     climate: Optional[str] = None,
     hydration_enabled: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Appearance-related food context, filtered to what this person eats."""
     resolved = normalise_diet(diet)
     wanted = set(focus) if focus else set(NUTRIENT_BY_KEY)
 
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for rule in NUTRIENT_RULES:
         if rule.key not in wanted:
             continue
@@ -258,7 +259,7 @@ def suggestions(
     return payload
 
 
-def _assert_safe(payload: Dict[str, Any]) -> None:
+def _assert_safe(payload: dict[str, Any]) -> None:
     """Sweep every string. Reviewed rules, but a careless edit is caught here."""
     for row in payload["suggestions"]:
         for value in (row.get("appearance_context"), row.get("note"), row.get("climate_note")):

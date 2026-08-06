@@ -1,10 +1,7 @@
 """API-level tests for /api/v2/privacy/* routes."""
 from __future__ import annotations
 
-import uuid
-
 import pytest
-
 
 pytestmark = pytest.mark.asyncio
 
@@ -31,7 +28,6 @@ async def test_privacy_delete_returns_202_and_creates_job(
     app_client, db_clean, registered_supabase_user, monkeypatch
 ):
     # Stub the Supabase Auth deletion so the worker completes locally.
-    from app.domains.privacy import deletion_service
 
     class _FakeAdmin:
         class auth:

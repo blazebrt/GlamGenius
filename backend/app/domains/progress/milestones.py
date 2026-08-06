@@ -24,9 +24,10 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional
 
 MILESTONES_VERSION = "phase7-v1"
 
@@ -43,7 +44,7 @@ BEHAVIOUR_USED_BEFORE_EXPIRY = "used_product_before_expiry"
 BEHAVIOUR_ORGANISED_INVENTORY = "organised_inventory"
 BEHAVIOUR_REACHED_OWN_GOAL = "reached_own_goal"
 
-REWARDABLE_BEHAVIOURS: Tuple[str, ...] = (
+REWARDABLE_BEHAVIOURS: tuple[str, ...] = (
     BEHAVIOUR_USED_LOW_USE_PRODUCT,
     BEHAVIOUR_COMPLETED_ROUTINE,
     BEHAVIOUR_WORE_DIVERSE_OUTFIT,
@@ -57,14 +58,14 @@ REWARDABLE_BEHAVIOURS: Tuple[str, ...] = (
 
 # Things that must never become rewardable. Kept explicitly rather than left
 # implicit, so an attempt to add one fails loudly with an explanation.
-NEVER_REWARDABLE: Tuple[str, ...] = (
+NEVER_REWARDABLE: tuple[str, ...] = (
     "app_opened", "session_started", "logged_in", "returned_to_app",
     "time_in_app", "screens_viewed", "notification_opened", "streak_of_opens",
     "daily_login", "invited_a_friend",
 )
 
 # Wording that would make this childish, or make it shame somebody.
-FORBIDDEN_WORDS: Tuple[str, ...] = (
+FORBIDDEN_WORDS: tuple[str, ...] = (
     "badge", "trophy", "level up", "levelled up", "unlocked!", "congratulations",
     "well done!", "champion", "superstar", "streak master", "points", "xp",
     "finally", "at last", "about time", "you failed", "you lost",
@@ -80,7 +81,7 @@ class MilestoneRule:
     threshold: int
     repeatable: bool = False
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "rule_id": self.rule_id, "label": self.label, "description": self.description,
             "behaviour": self.behaviour, "threshold": self.threshold,
@@ -91,7 +92,7 @@ class MilestoneRule:
 # Wording is deliberately flat. A milestone states what happened; it does not
 # cheer. "Five products brought back into use" reads like a fact, which is what
 # it is.
-RULES: Tuple[MilestoneRule, ...] = (
+RULES: tuple[MilestoneRule, ...] = (
     MilestoneRule(
         "milestone.used_five_low_use", "Five unused products back in use",
         "You used five products that had been sitting untouched.",
@@ -154,7 +155,7 @@ RULES: Tuple[MilestoneRule, ...] = (
     ),
 )
 
-RULE_BY_ID: Dict[str, MilestoneRule] = {row.rule_id: row for row in RULES}
+RULE_BY_ID: dict[str, MilestoneRule] = {row.rule_id: row for row in RULES}
 
 
 def validate_rules() -> None:
@@ -204,11 +205,11 @@ def dedup_hash(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def rules_for(behaviour: str) -> List[MilestoneRule]:
+def rules_for(behaviour: str) -> list[MilestoneRule]:
     return [row for row in RULES if row.behaviour == behaviour]
 
 
-def earned(behaviour: str, count: int, already_earned: Sequence[str] = ()) -> List[MilestoneRule]:
+def earned(behaviour: str, count: int, already_earned: Sequence[str] = ()) -> list[MilestoneRule]:
     """Which rules this count has just satisfied.
 
     A non-repeatable rule earned before is not earned again. A repeatable one
@@ -216,7 +217,7 @@ def earned(behaviour: str, count: int, already_earned: Sequence[str] = ()) -> Li
     "five unused products back in use" can happen more than once without
     firing on every single event.
     """
-    out: List[MilestoneRule] = []
+    out: list[MilestoneRule] = []
     for rule in rules_for(behaviour):
         if count < rule.threshold:
             continue
@@ -228,5 +229,5 @@ def earned(behaviour: str, count: int, already_earned: Sequence[str] = ()) -> Li
     return out
 
 
-def all_rules() -> List[Dict[str, Any]]:
+def all_rules() -> list[dict[str, Any]]:
     return [row.as_dict() for row in RULES]

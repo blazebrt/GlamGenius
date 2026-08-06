@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
@@ -75,7 +75,7 @@ class ExternalIntegration(UUIDPrimaryKey, TimestampMixin, Base):
     kind: Mapped[str] = mapped_column(String(16), nullable=False)          # calendar | weather
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="connected", server_default="connected")
-    scopes: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    scopes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     credential_ref: Mapped[Optional[str]] = mapped_column(String(200))
     external_account_label: Mapped[Optional[str]] = mapped_column(String(160))
     last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -132,7 +132,7 @@ class WeatherSnapshot(UUIDPrimaryKey, TimestampMixin, Base):
     temp_max_c: Mapped[Optional[float]] = mapped_column(Float)
     precipitation_chance: Mapped[Optional[int]] = mapped_column(Integer)
     humidity: Mapped[Optional[int]] = mapped_column(Integer)
-    raw: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
 
     __table_args__ = (Index("ix_weather_snapshots_account_date", "account_id", "for_date", "created_at"),)
 
@@ -159,8 +159,8 @@ class DailyPlan(UUIDPrimaryKey, TimestampMixin, Base):
     cache_key: Mapped[str] = mapped_column(String(64), nullable=False)
     used_llm: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     needs_clarification: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    clarification: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB)
-    missing_information: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    clarification: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB)
+    missing_information: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     computed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -258,7 +258,7 @@ class OutfitSchedule(UUIDPrimaryKey, TimestampMixin, Base):
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     plan_date: Mapped[date] = mapped_column(Date, nullable=False)
     look_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("looks.id", ondelete="SET NULL"))
-    item_ids: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    item_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="planned", server_default="planned")
     worn_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     note: Mapped[Optional[str]] = mapped_column(String(240))
@@ -299,7 +299,7 @@ class NotificationPreference(UUIDPrimaryKey, TimestampMixin, Base):
     quiet_hours_start: Mapped[int] = mapped_column(Integer, nullable=False, default=21, server_default="21")
     quiet_hours_end: Mapped[int] = mapped_column(Integer, nullable=False, default=7, server_default="7")
     preferred_hour: Mapped[int] = mapped_column(Integer, nullable=False, default=7, server_default="7")
-    modules: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    modules: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     timezone_name: Mapped[str] = mapped_column(String(48), nullable=False, default="Asia/Kolkata", server_default="Asia/Kolkata")
 
 
@@ -338,7 +338,7 @@ class PlanRecalculationEvent(UUIDPrimaryKey, TimestampMixin, Base):
     plan_date: Mapped[date] = mapped_column(Date, nullable=False)
     trigger: Mapped[str] = mapped_column(String(48), nullable=False)
     detail: Mapped[str] = mapped_column(String(400), nullable=False, default="", server_default="")
-    changed_keys: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    changed_keys: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     old_cache_key: Mapped[Optional[str]] = mapped_column(String(64))
     new_cache_key: Mapped[Optional[str]] = mapped_column(String(64))
     recomputed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
