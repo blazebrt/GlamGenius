@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +29,7 @@ supplements. Confidence describes the whole extraction and must be honest.
 """
 
 
-def prompt(category_hint: Optional[str]) -> str:
+def prompt(category_hint: str | None) -> str:
     allowed = ", ".join(CATEGORIES)
     return f"""Inspect this single inventory item or product screenshot.
 Category hint: {category_hint or 'none'}. Allowed categories: {allowed}.
@@ -43,7 +43,7 @@ Do not return purchase price. Do not return supplement dosage or usage recommend
 async def analyse(
     session: AsyncSession,
     *, account_id: uuid.UUID, account_id_str: str, media_asset_id: uuid.UUID,
-    category_hint: Optional[str], capture_type: str,
+    category_hint: str | None, capture_type: str,
 ) -> tuple[InventoryImportJob, Any, ExtractedInventoryItem]:
     asset = await media_service.get_owned_asset(session, account_id=account_id, asset_id=media_asset_id)
     data = await media_service.read_bytes(asset)

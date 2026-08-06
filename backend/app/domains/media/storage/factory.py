@@ -3,12 +3,11 @@
 Production **must** use ``supabase``. The ``local`` adapter is retained for
 unit tests and local development only, and is refused at startup when
 ``APP_ENV=production``. The old Cloud Object Storage adapter and its Python SDK dependency
-were removed as part of the Supabase hardening (Package B).
+were removed as part of the Supabase hardening.
 """
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from app.config import (
     APP_ENV,
@@ -23,7 +22,7 @@ from app.domains.media.storage.local import LocalFilesystemStorage
 
 logger = logging.getLogger(__name__)
 
-_storage: Optional[MediaStorage] = None
+_storage: MediaStorage | None = None
 
 
 def get_storage() -> MediaStorage:
@@ -47,14 +46,14 @@ def get_storage() -> MediaStorage:
     else:
         raise StorageMisconfigured(
             f"MEDIA_STORAGE_BACKEND must be 'supabase' or 'local', got {backend!r}. "
-            "Cloud Object Storage support was removed in Package B."
+            "Cloud Object Storage support was removed."
         )
 
     logger.info("media_storage_backend=%s", _storage.backend_name)
     return _storage
 
 
-def set_storage(storage: Optional[MediaStorage]) -> None:
+def set_storage(storage: MediaStorage | None) -> None:
     """Override the adapter. Tests use this; nothing else should."""
     global _storage
     _storage = storage

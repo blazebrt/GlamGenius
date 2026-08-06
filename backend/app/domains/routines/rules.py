@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 from app.domains.inventory import service as inventory_service
 from app.domains.recommendation.context import OwnedItem
@@ -74,7 +74,7 @@ class Finding:
     detail: str
     evidence_note: str = ""
     item_ids: list[str] = field(default_factory=list)
-    slot: Optional[str] = None
+    slot: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -90,9 +90,9 @@ class ShelfProduct:
     """One owned beauty or hair product, with everything the engine needs."""
 
     item: OwnedItem
-    slot: Optional[str]
+    slot: str | None
     ingredients: list[ParsedIngredient] = field(default_factory=list)
-    effective_expiry: Optional[date] = None
+    effective_expiry: date | None = None
     low_use: bool = False
 
     @property
@@ -111,14 +111,14 @@ class ShelfProduct:
     def unconfirmed(self) -> list[ParsedIngredient]:
         return [row for row in self.ingredients if row.needs_confirmation]
 
-    def days_to_expiry(self, today: date) -> Optional[int]:
+    def days_to_expiry(self, today: date) -> int | None:
         return None if self.effective_expiry is None else (self.effective_expiry - today).days
 
 
 def build_products(
     items: Sequence[OwnedItem],
     category: str,
-    low_use_ids: Optional[set[uuid.UUID]] = None,
+    low_use_ids: set[uuid.UUID] | None = None,
 ) -> list[ShelfProduct]:
     """Turn owned inventory into what the engine reasons over.
 
@@ -348,7 +348,7 @@ def missing_slot_findings(products: Sequence[ShelfProduct], category: str) -> li
 # --- Expiry ------------------------------------------------------------------
 
 
-def expiry_findings(products: Sequence[ShelfProduct], today: Optional[date] = None) -> list[Finding]:
+def expiry_findings(products: Sequence[ShelfProduct], today: date | None = None) -> list[Finding]:
     now = today or date.today()
     findings: list[Finding] = []
     for product in products:
@@ -396,7 +396,7 @@ def low_use_findings(products: Sequence[ShelfProduct]) -> list[Finding]:
 # --- Climate -----------------------------------------------------------------
 
 
-def climate_notes(condition: Optional[str], slots_present: Iterable[str]) -> list[dict[str, Any]]:
+def climate_notes(condition: str | None, slots_present: Iterable[str]) -> list[dict[str, Any]]:
     """Adjustments for the weather, keyed to steps the user actually has."""
     if not condition:
         return []
@@ -411,7 +411,7 @@ def climate_notes(condition: Optional[str], slots_present: Iterable[str]) -> lis
 # --- Ranking -----------------------------------------------------------------
 
 
-def rank_for_slot(products: Sequence[ShelfProduct], slot: str, today: Optional[date] = None) -> list[ShelfProduct]:
+def rank_for_slot(products: Sequence[ShelfProduct], slot: str, today: date | None = None) -> list[ShelfProduct]:
     """Which owned product should fill a step.
 
     Owned-first is the whole premise, so this only ever ranks things the user

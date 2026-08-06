@@ -6,7 +6,7 @@ from calendar import monthrange
 from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import String, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -154,7 +154,7 @@ async def set_images(session: AsyncSession, item: InventoryItem, account_id: uui
             session.add(InventoryItemImage(item_id=item.id, media_asset_id=asset_id, position=position))
 
 
-async def record_event(session: AsyncSession, item: InventoryItem, event_type: str, payload: Optional[dict[str, Any]] = None, actor: str = "user") -> None:
+async def record_event(session: AsyncSession, item: InventoryItem, event_type: str, payload: dict[str, Any] | None = None, actor: str = "user") -> None:
     session.add(InventoryEvent(account_id=item.account_id, item_id=item.id, event_type=event_type, actor=actor, payload=payload or {}))
 
 
@@ -174,8 +174,8 @@ async def create_item(
     account_id: uuid.UUID,
     body: ItemCreate,
     *, source: str = "user_declared", verification_state: str = "confirmed", confidence: float = 1.0,
-    ai_run_id: Optional[uuid.UUID] = None, model_version: Optional[str] = None,
-    prompt_version: Optional[str] = None, schema_version: Optional[str] = None,
+    ai_run_id: uuid.UUID | None = None, model_version: str | None = None,
+    prompt_version: str | None = None, schema_version: str | None = None,
 ) -> InventoryItem:
     await ensure_categories(session)
     if body.client_mutation_id:
@@ -230,14 +230,14 @@ async def archive_item(session: AsyncSession, item: InventoryItem) -> None:
     await record_event(session, item, "archived")
 
 
-async def log_usage(session: AsyncSession, item: InventoryItem, used_on: date, quantity: int, note: Optional[str]) -> None:
+async def log_usage(session: AsyncSession, item: InventoryItem, used_on: date, quantity: int, note: str | None) -> None:
     session.add(ItemUsageEvent(item_id=item.id, used_on=used_on, quantity=quantity, note=note))
     item.usage_count += quantity
     if item.last_used_at is None or used_on > item.last_used_at: item.last_used_at = used_on
     item.version += 1; item.updated_at = utcnow(); await record_event(session, item, "usage_logged", {"used_on": used_on.isoformat(), "quantity": quantity})
 
 
-async def log_condition(session: AsyncSession, item: InventoryItem, condition: str, note: Optional[str]) -> None:
+async def log_condition(session: AsyncSession, item: InventoryItem, condition: str, note: str | None) -> None:
     session.add(ItemConditionEvent(item_id=item.id, condition=condition, note=note)); item.condition = condition; item.version += 1; item.updated_at = utcnow()
     await sync_attributes(session, item, [("condition", condition)], source="user_declared", confidence=1.0, verification_state="confirmed")
     await record_event(session, item, "condition_changed", {"condition": condition})
@@ -248,7 +248,7 @@ def add_months(value: date, months: int) -> date:
     return date(year, month, min(value.day, monthrange(year, month)[1]))
 
 
-def effective_expiry_from_details(details: dict[str, Any]) -> Optional[date]:
+def effective_expiry_from_details(details: dict[str, Any]) -> date | None:
     explicit = details.get("expiry_date")
     if isinstance(explicit, str): explicit = date.fromisoformat(explicit)
     opened = details.get("opened_date")
@@ -258,12 +258,12 @@ def effective_expiry_from_details(details: dict[str, Any]) -> Optional[date]:
     return min(v for v in [explicit, computed] if v is not None) if explicit or computed else None
 
 
-def is_low_use(item: InventoryItem, today: Optional[date] = None) -> bool:
+def is_low_use(item: InventoryItem, today: date | None = None) -> bool:
     now = today or date.today(); created = item.created_at.date() if item.created_at else now
     return item.status == "active" and (now - created).days >= 30 and item.usage_count <= 2 and (item.last_used_at is None or (now - item.last_used_at).days >= 30)
 
 
-def value_to_recover(item: InventoryItem, details: dict[str, Any], today: Optional[date] = None) -> dict[str, Any]:
+def value_to_recover(item: InventoryItem, details: dict[str, Any], today: date | None = None) -> dict[str, Any]:
     now = today or date.today(); expiry = effective_expiry_from_details(details)
     remaining = details.get("remaining_percent")
     remaining_ratio = Decimal(str(remaining / 100 if remaining is not None else max(0.1, 1 - min(item.usage_count, 30) / 30)))
@@ -322,7 +322,7 @@ def _attr_filter(key: str, value: str):
     return exists(select(InventoryAttribute.id).where(InventoryAttribute.item_id == InventoryItem.id, InventoryAttribute.key == key, cast(InventoryAttribute.value, String).ilike(f"%{value}%")))
 
 
-async def list_items(session: AsyncSession, account_id: uuid.UUID, *, page: int = 1, page_size: int = 24, q: Optional[str] = None, category: Optional[str] = None, brand: Optional[str] = None, colour: Optional[str] = None, ingredient: Optional[str] = None, occasion: Optional[str] = None, season: Optional[str] = None, condition: Optional[str] = None, expiry_status: Optional[str] = None, usage_level: Optional[str] = None, verification_state: Optional[str] = None, sort: str = "newest") -> dict[str, Any]:
+async def list_items(session: AsyncSession, account_id: uuid.UUID, *, page: int = 1, page_size: int = 24, q: str | None = None, category: str | None = None, brand: str | None = None, colour: str | None = None, ingredient: str | None = None, occasion: str | None = None, season: str | None = None, condition: str | None = None, expiry_status: str | None = None, usage_level: str | None = None, verification_state: str | None = None, sort: str = "newest") -> dict[str, Any]:
     stmt = select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived")
     if q: stmt = stmt.where(or_(InventoryItem.display_name.ilike(f"%{q}%"), InventoryItem.brand.ilike(f"%{q}%"), InventoryItem.subcategory.ilike(f"%{q}%"), _attr_filter("ingredients_text", q), _attr_filter("active_ingredients", q)))
     if category: stmt = stmt.where(InventoryItem.category == category)
@@ -381,7 +381,7 @@ async def duplicates(session: AsyncSession, account_id: uuid.UUID) -> list[dict[
     return result
 
 
-async def resolve_duplicate(session: AsyncSession, account_id: uuid.UUID, candidate_id: uuid.UUID, resolution: str, canonical_item_id: Optional[uuid.UUID]) -> DuplicateCandidate:
+async def resolve_duplicate(session: AsyncSession, account_id: uuid.UUID, candidate_id: uuid.UUID, resolution: str, canonical_item_id: uuid.UUID | None) -> DuplicateCandidate:
     row = (await session.execute(select(DuplicateCandidate).where(DuplicateCandidate.id == candidate_id, DuplicateCandidate.account_id == account_id))).scalar_one_or_none()
     if row is None: raise NotFoundError("We could not find that duplicate candidate.")
     if resolution == "merge":

@@ -27,7 +27,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 MILESTONES_VERSION = "phase7-v1"
 
@@ -190,7 +190,7 @@ validate_rules()
 
 
 def dedup_hash(
-    account_id: uuid.UUID, behaviour: str, occurred_on: date, subject_id: Optional[uuid.UUID]
+    account_id: uuid.UUID, behaviour: str, occurred_on: date, subject_id: uuid.UUID | None
 ) -> str:
     """Identity of one real-world action.
 

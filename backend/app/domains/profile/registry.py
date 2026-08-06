@@ -7,7 +7,7 @@ readiness calculations one shared vocabulary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -17,8 +17,8 @@ class AttributeSpec:
     label: str
     kind: str = "text"  # text | number | list
     choices: tuple[str, ...] = ()
-    minimum: Optional[float] = None
-    maximum: Optional[float] = None
+    minimum: float | None = None
+    maximum: float | None = None
     ai_observable: bool = False
 
 

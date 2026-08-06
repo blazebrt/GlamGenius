@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -32,7 +32,7 @@ class ProgressQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     period: Literal[PERIODS] = "week"  # type: ignore[valid-type]
-    as_of: Optional[date] = None
+    as_of: date | None = None
 
 
 class SelfReport(BaseModel):
@@ -45,8 +45,8 @@ class SelfReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rating: int = Field(ge=1, le=5)
-    note: Optional[str] = Field(default=None, max_length=500)
-    recorded_on: Optional[date] = None
+    note: str | None = Field(default=None, max_length=500)
+    recorded_on: date | None = None
 
 
 # --- Photos and comparison ---------------------------------------------------------
@@ -66,9 +66,9 @@ class ProgressPhotoInput(BaseModel):
     lighting: Literal[comparison.LIGHTING]  # type: ignore[valid-type]
     angle: Literal[comparison.ANGLES]  # type: ignore[valid-type]
     framing: Literal[comparison.FRAMING]  # type: ignore[valid-type]
-    taken_on: Optional[date] = None
-    time_of_day: Optional[Literal[comparison.TIMES_OF_DAY]] = None  # type: ignore[valid-type]
-    note: Optional[str] = Field(default=None, max_length=240)
+    taken_on: date | None = None
+    time_of_day: Literal[comparison.TIMES_OF_DAY] | None = None  # type: ignore[valid-type]
+    note: str | None = Field(default=None, max_length=240)
 
     @model_validator(mode="after")
     def _not_in_the_future(self):
@@ -96,15 +96,15 @@ class GoalCreate(BaseModel):
 
     kind: Literal[GOAL_KINDS]  # type: ignore[valid-type]
     title: str = Field(min_length=1, max_length=160)
-    metric_key: Optional[str] = Field(default=None, max_length=48)
-    target_value: Optional[float] = None
-    starts_on: Optional[date] = None
-    target_date: Optional[date] = None
-    note: Optional[str] = Field(default=None, max_length=500)
+    metric_key: str | None = Field(default=None, max_length=48)
+    target_value: float | None = None
+    starts_on: date | None = None
+    target_date: date | None = None
+    note: str | None = Field(default=None, max_length=500)
 
     @field_validator("metric_key")
     @classmethod
-    def _known_metric(cls, value: Optional[str]) -> Optional[str]:
+    def _known_metric(cls, value: str | None) -> str | None:
         if value and value not in registry.METRIC_BY_KEY:
             raise ValueError(
                 f"'{value}' is not a metric we track. Choose from: {', '.join(registry.METRIC_KEYS)}."
@@ -122,14 +122,14 @@ class GoalCreate(BaseModel):
 class GoalPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    title: Optional[str] = Field(default=None, min_length=1, max_length=160)
-    target_value: Optional[float] = None
-    target_date: Optional[date] = None
-    status: Optional[Literal["active", "paused", "achieved", "abandoned"]] = None
-    note: Optional[str] = Field(default=None, max_length=500)
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    target_value: float | None = None
+    target_date: date | None = None
+    status: Literal["active", "paused", "achieved", "abandoned"] | None = None
+    note: str | None = Field(default=None, max_length=500)
     # A progress note the user records themselves, for goals with no metric.
-    progress_value: Optional[float] = None
-    progress_note: Optional[str] = Field(default=None, max_length=500)
+    progress_value: float | None = None
+    progress_note: str | None = Field(default=None, max_length=500)
 
 
 # --- Memory -----------------------------------------------------------------------------
@@ -138,7 +138,7 @@ class GoalPatch(BaseModel):
 class MemoryQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    category: Optional[Literal[memory.CATEGORIES]] = None  # type: ignore[valid-type]
+    category: Literal[memory.CATEGORIES] | None = None  # type: ignore[valid-type]
     include_deleted: bool = False
 
 
@@ -151,8 +151,8 @@ class MemoryPatch(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    fact: Optional[str] = Field(default=None, min_length=1, max_length=1000)
-    verification_state: Optional[Literal[memory.VERIFICATION_STATES]] = None  # type: ignore[valid-type]
+    fact: str | None = Field(default=None, min_length=1, max_length=1000)
+    verification_state: Literal[memory.VERIFICATION_STATES] | None = None  # type: ignore[valid-type]
 
     @model_validator(mode="after")
     def _something_to_do(self):
@@ -180,11 +180,11 @@ class FeedbackInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     subject_type: Literal["look", "product", "routine_step", "purchase", "colour", "occasion"]
-    subject_id: Optional[uuid.UUID] = None
+    subject_id: uuid.UUID | None = None
     signal: Literal["liked", "rejected", "wore_it", "not_for_me", "returned", "complimented"]
-    reason: Optional[str] = Field(default=None, max_length=240)
+    reason: str | None = Field(default=None, max_length=240)
     # What the feedback is about in words, used to form the memory fact.
-    subject_label: Optional[str] = Field(default=None, max_length=200)
+    subject_label: str | None = Field(default=None, max_length=200)
 
 
 __all__ = [

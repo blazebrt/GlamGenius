@@ -1,6 +1,6 @@
 """S3 / boto3 / MinIO absence regression.
 
-Package B removed the S3-compatible adapter and the ``boto3`` dependency.
+The S3-compatible adapter and the ``boto3`` dependency were removed.
 These assertions fail if either sneak back in.
 """
 from __future__ import annotations

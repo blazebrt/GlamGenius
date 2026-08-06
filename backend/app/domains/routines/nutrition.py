@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from app.domains.routines.safety import NUTRITION_DISCLAIMER, narrative_is_safe
 
@@ -167,7 +167,7 @@ NUTRIENT_RULES: list[NutrientRule] = [
 NUTRIENT_BY_KEY = {rule.key: rule for rule in NUTRIENT_RULES}
 
 
-def normalise_diet(value: Optional[str]) -> str:
+def normalise_diet(value: str | None) -> str:
     if not value:
         return DIET_NON_VEGETARIAN
     text = " ".join(str(value).lower().split()).replace("-", "_").replace(" ", "_")
@@ -193,9 +193,9 @@ def foods_for(rule: NutrientRule, diet: str) -> list[str]:
 
 def suggestions(
     *,
-    diet: Optional[str] = None,
+    diet: str | None = None,
     focus: Sequence[str] = (),
-    climate: Optional[str] = None,
+    climate: str | None = None,
     hydration_enabled: bool = True,
 ) -> dict[str, Any]:
     """Appearance-related food context, filtered to what this person eats."""

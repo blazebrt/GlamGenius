@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -136,7 +136,7 @@ async def active_facts(
     session: AsyncSession,
     account_id: uuid.UUID,
     *,
-    categories: Optional[Sequence[str]] = None,
+    categories: Sequence[str] | None = None,
     minimum_confidence: float = MIN_INFLUENCE_CONFIDENCE,
 ) -> list[MemoryFact]:
     """The **only** way to read memory that will influence what a user sees.
@@ -189,10 +189,10 @@ async def record(
     fact: str,
     source: str,
     confidence: float = 0.5,
-    evidence: Optional[dict[str, Any]] = None,
-    subject_key: Optional[str] = None,
+    evidence: dict[str, Any] | None = None,
+    subject_key: str | None = None,
     verification_state: str = STATE_UNVERIFIED,
-) -> Optional[MemoryFact]:
+) -> MemoryFact | None:
     """Remember something, or reinforce it if we already knew it.
 
     Returns ``None`` when the category is switched off — a disabled category
@@ -261,8 +261,8 @@ async def revise(
     session: AsyncSession,
     fact: MemoryFact,
     *,
-    new_text: Optional[str] = None,
-    verification_state: Optional[str] = None,
+    new_text: str | None = None,
+    verification_state: str | None = None,
     reason: str = "user_edit",
 ) -> MemoryFact:
     """Edit or confirm a fact, keeping what it used to say.

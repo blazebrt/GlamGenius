@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,7 +41,7 @@ router = APIRouter(dependencies=[Depends(require_flag("v2_progress"))])
 @router.get("/progress")
 async def get_progress(
     period: str = Query("week", pattern="^(week|month)$"),
-    as_of: Optional[date] = Query(None),
+    as_of: date | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
@@ -71,7 +70,7 @@ async def list_metric_definitions(
 @router.get("/progress/metrics/{key}")
 async def get_metric(
     key: str,
-    as_of: Optional[date] = Query(None),
+    as_of: date | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
@@ -164,7 +163,7 @@ async def patch_goal(
 
 @router.get("/memory")
 async def list_memory(
-    category: Optional[str] = Query(None, max_length=32),
+    category: str | None = Query(None, max_length=32),
     include_deleted: bool = Query(False),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),

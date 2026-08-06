@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -97,10 +97,10 @@ async def upload(
     *,
     account_id: uuid.UUID,
     data: bytes,
-    declared_type: Optional[str],
+    declared_type: str | None,
     purpose: str,
-    original_filename: Optional[str] = None,
-    client_ip: Optional[str] = None,
+    original_filename: str | None = None,
+    client_ip: str | None = None,
 ) -> MediaAsset:
     content_type, size = validate_upload(data, declared_type)
     width, height = read_dimensions(data, content_type)
@@ -190,7 +190,7 @@ async def delete(
     *,
     account_id: uuid.UUID,
     asset_id: uuid.UUID,
-    client_ip: Optional[str] = None,
+    client_ip: str | None = None,
 ) -> MediaAsset:
     """Erase the bytes, then mark the row deleted.
 
@@ -237,7 +237,7 @@ async def list_for_account(
 
 
 async def delete_all_for_account(
-    session: AsyncSession, account_id: uuid.UUID, client_ip: Optional[str] = None
+    session: AsyncSession, account_id: uuid.UUID, client_ip: str | None = None
 ) -> int:
     """Erase every active asset for an account. Legacy call used by the
     synchronous privacy-delete route; the new deletion state machine uses

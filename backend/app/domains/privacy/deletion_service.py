@@ -26,7 +26,6 @@ import os
 import socket
 import uuid
 from datetime import timedelta
-from typing import Optional
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -113,7 +112,7 @@ async def request_deletion(session: AsyncSession, account_id: uuid.UUID) -> Acco
     return job
 
 
-async def get_job(session: AsyncSession, account_id: uuid.UUID) -> Optional[AccountDeletionJob]:
+async def get_job(session: AsyncSession, account_id: uuid.UUID) -> AccountDeletionJob | None:
     return (
         await session.execute(
             select(AccountDeletionJob).where(AccountDeletionJob.account_id == account_id)
@@ -155,7 +154,7 @@ def _user_message(job: AccountDeletionJob) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def claim_next(session: AsyncSession) -> Optional[AccountDeletionJob]:
+async def claim_next(session: AsyncSession) -> AccountDeletionJob | None:
     """Take the next job that is ready to run, with a lease.
 
     Uses ``SELECT … FOR UPDATE SKIP LOCKED`` so two workers can safely poll
@@ -194,7 +193,7 @@ async def claim_next(session: AsyncSession) -> Optional[AccountDeletionJob]:
     return job
 
 
-async def run_job(session: AsyncSession, job: AccountDeletionJob) -> tuple[str, Optional[str]]:
+async def run_job(session: AsyncSession, job: AccountDeletionJob) -> tuple[str, str | None]:
     """Advance the job one stage. Returns ``(new_state, error_code)``."""
     try:
         if job.state == STATE_REQUESTED or job.state == STATE_STORAGE_LISTING:

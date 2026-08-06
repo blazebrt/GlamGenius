@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -28,11 +28,11 @@ class WeatherInput(BaseModel):
 
     for_date: date
     condition: Literal[WEATHER_CONDITIONS]  # type: ignore[valid-type]
-    temp_min_c: Optional[float] = Field(default=None, ge=-40, le=60)
-    temp_max_c: Optional[float] = Field(default=None, ge=-40, le=60)
-    precipitation_chance: Optional[int] = Field(default=None, ge=0, le=100)
-    humidity: Optional[int] = Field(default=None, ge=0, le=100)
-    location: Optional[str] = Field(default=None, max_length=160)
+    temp_min_c: float | None = Field(default=None, ge=-40, le=60)
+    temp_max_c: float | None = Field(default=None, ge=-40, le=60)
+    precipitation_chance: int | None = Field(default=None, ge=0, le=100)
+    humidity: int | None = Field(default=None, ge=0, le=100)
+    location: str | None = Field(default=None, max_length=160)
 
     @model_validator(mode="after")
     def _sane_range(self):
@@ -49,23 +49,23 @@ class CalendarEventInput(BaseModel):
 
     title: str = Field(min_length=1, max_length=240)
     starts_at: datetime
-    ends_at: Optional[datetime] = None
+    ends_at: datetime | None = None
     all_day: bool = False
-    location: Optional[str] = Field(default=None, max_length=200)
-    occasion_key: Optional[str] = Field(default=None, max_length=32)
-    dress_code_hint: Optional[str] = Field(default=None, max_length=32)
-    external_id: Optional[str] = Field(default=None, max_length=200)
+    location: str | None = Field(default=None, max_length=200)
+    occasion_key: str | None = Field(default=None, max_length=32)
+    dress_code_hint: str | None = Field(default=None, max_length=32)
+    external_id: str | None = Field(default=None, max_length=200)
 
     @field_validator("occasion_key")
     @classmethod
-    def _known_occasion(cls, value: Optional[str]) -> Optional[str]:
+    def _known_occasion(cls, value: str | None) -> str | None:
         if value:
             get_occasion(value)
         return value
 
     @field_validator("dress_code_hint")
     @classmethod
-    def _known_dress_code(cls, value: Optional[str]) -> Optional[str]:
+    def _known_dress_code(cls, value: str | None) -> str | None:
         if value and value not in DRESS_CODES:
             raise ValueError(f"'{value}' is not a dress code we support. Choose one of: {', '.join(DRESS_CODES)}.")
         return value
@@ -82,14 +82,14 @@ class CalendarEventPatch(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    occasion_key: Optional[str] = Field(default=None, max_length=32)
-    dress_code_hint: Optional[str] = Field(default=None, max_length=32)
-    title: Optional[str] = Field(default=None, min_length=1, max_length=240)
-    status: Optional[Literal["active", "dismissed"]] = None
+    occasion_key: str | None = Field(default=None, max_length=32)
+    dress_code_hint: str | None = Field(default=None, max_length=32)
+    title: str | None = Field(default=None, min_length=1, max_length=240)
+    status: Literal["active", "dismissed"] | None = None
 
     @field_validator("occasion_key")
     @classmethod
-    def _known_occasion(cls, value: Optional[str]) -> Optional[str]:
+    def _known_occasion(cls, value: str | None) -> str | None:
         if value:
             get_occasion(value)
         return value
@@ -106,8 +106,8 @@ class CalendarConnect(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: str = Field(default="manual", max_length=32)
-    credential_ref: Optional[str] = Field(default=None, max_length=200)
-    label: Optional[str] = Field(default=None, max_length=160)
+    credential_ref: str | None = Field(default=None, max_length=200)
+    label: str | None = Field(default=None, max_length=160)
     events: list[CalendarEventInput] = Field(default_factory=list, max_length=200)
 
 
@@ -117,8 +117,8 @@ class CalendarConnect(BaseModel):
 class TodayRegenerate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    plan_date: Optional[date] = None
-    reason: Optional[Literal["weather_changed", "plans_changed", "not_my_style", "item_unavailable", "manual"]] = None
+    plan_date: date | None = None
+    reason: Literal["weather_changed", "plans_changed", "not_my_style", "item_unavailable", "manual"] | None = None
     force: bool = False
 
 
@@ -133,20 +133,20 @@ class TodayOutfitSwap(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    plan_date: Optional[date] = None
+    plan_date: date | None = None
     slot: Literal["clothing", "shoes", "accessories", "perfume", "hair", "grooming"]
-    from_item_id: Optional[uuid.UUID] = None
-    to_item_id: Optional[uuid.UUID] = None
-    note: Optional[str] = Field(default=None, max_length=400)
+    from_item_id: uuid.UUID | None = None
+    to_item_id: uuid.UUID | None = None
+    note: str | None = Field(default=None, max_length=400)
 
 
 class TodayFeedback(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    plan_date: Optional[date] = None
+    plan_date: date | None = None
     rating: Literal["wore_it", "loved", "not_for_me", "changed_it"]
-    reason: Optional[Literal["too_formal", "too_casual", "wrong_weather", "not_my_style", "uncomfortable", "great_fit", "other"]] = None
-    note: Optional[str] = Field(default=None, max_length=500)
+    reason: Literal["too_formal", "too_casual", "wrong_weather", "not_my_style", "uncomfortable", "great_fit", "other"] | None = None
+    note: str | None = Field(default=None, max_length=500)
 
 
 class ClarificationAnswer(BaseModel):
@@ -154,7 +154,7 @@ class ClarificationAnswer(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    plan_date: Optional[date] = None
+    plan_date: date | None = None
     question_key: str = Field(min_length=1, max_length=48)
     answer: str = Field(min_length=1, max_length=64)
 
@@ -166,8 +166,8 @@ class ItemUnavailable(BaseModel):
 
     item_id: uuid.UUID
     state: Literal[LAUNDRY_STATES]  # type: ignore[valid-type]
-    available_from: Optional[date] = None
-    note: Optional[str] = Field(default=None, max_length=240)
+    available_from: date | None = None
+    note: str | None = Field(default=None, max_length=240)
 
 
 # --- Planner ----------------------------------------------------------------
@@ -176,7 +176,7 @@ class ItemUnavailable(BaseModel):
 class WeekGenerate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    week_start: Optional[date] = None
+    week_start: date | None = None
     repetition_window_days: int = Field(default=7, ge=0, le=30)
     regenerate_locked: bool = False
 
@@ -186,9 +186,9 @@ class DayPatch(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    look_id: Optional[uuid.UUID] = None
-    swap_with_date: Optional[date] = None
-    note: Optional[str] = Field(default=None, max_length=240)
+    look_id: uuid.UUID | None = None
+    swap_with_date: date | None = None
+    note: str | None = Field(default=None, max_length=240)
     regenerate: bool = False
 
 
@@ -204,16 +204,16 @@ class DayLock(BaseModel):
 class NotificationPreferencePatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    enabled: Optional[bool] = None
-    daily_cap: Optional[int] = Field(default=None, ge=0, le=5)
-    quiet_hours_start: Optional[int] = Field(default=None, ge=0, le=23)
-    quiet_hours_end: Optional[int] = Field(default=None, ge=0, le=23)
-    preferred_hour: Optional[int] = Field(default=None, ge=0, le=23)
-    modules: Optional[dict[str, bool]] = None
+    enabled: bool | None = None
+    daily_cap: int | None = Field(default=None, ge=0, le=5)
+    quiet_hours_start: int | None = Field(default=None, ge=0, le=23)
+    quiet_hours_end: int | None = Field(default=None, ge=0, le=23)
+    preferred_hour: int | None = Field(default=None, ge=0, le=23)
+    modules: dict[str, bool] | None = None
 
     @field_validator("modules")
     @classmethod
-    def _known_modules(cls, value: Optional[dict[str, bool]]) -> Optional[dict[str, bool]]:
+    def _known_modules(cls, value: dict[str, bool] | None) -> dict[str, bool] | None:
         if value:
             unknown = set(value) - set(MODULES)
             if unknown:

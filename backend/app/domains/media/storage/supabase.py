@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterable
-from typing import Optional
 
 from app.config import (
     MEDIA_SIGNED_URL_TTL_SECONDS,
@@ -75,7 +74,7 @@ class SupabaseStorage(MediaStorage):
 
     backend_name = "supabase"
 
-    def __init__(self, bucket: Optional[str] = None) -> None:
+    def __init__(self, bucket: str | None = None) -> None:
         self._bucket = bucket or SUPABASE_STORAGE_BUCKET
         if not self._bucket:
             raise StorageMisconfigured(
@@ -163,12 +162,12 @@ class SupabaseStorage(MediaStorage):
 
         return await self._run("exists", _do)
 
-    async def presigned_get_url(self, key: str, ttl_seconds: int) -> Optional[str]:
+    async def presigned_get_url(self, key: str, ttl_seconds: int) -> str | None:
         api = self._bucket_api()
         raw_ttl = ttl_seconds or MEDIA_SIGNED_URL_TTL_SECONDS
         ttl = min(max(raw_ttl, _SIGNED_URL_TTL_MIN_SECONDS), _SIGNED_URL_TTL_MAX_SECONDS)
 
-        def _do() -> Optional[str]:
+        def _do() -> str | None:
             resp = api.create_signed_url(key, ttl)
             if isinstance(resp, dict):
                 signed = resp.get("signedURL") or resp.get("signed_url")

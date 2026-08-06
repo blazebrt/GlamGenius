@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterable
-from typing import Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 
 class StorageError(Exception):
@@ -90,7 +90,7 @@ class MediaStorage(Protocol):
 
     async def exists(self, key: str) -> bool: ...
 
-    async def presigned_get_url(self, key: str, ttl_seconds: int) -> Optional[str]:
+    async def presigned_get_url(self, key: str, ttl_seconds: int) -> str | None:
         """Short-lived signed URL for the caller to fetch bytes directly.
 
         Returns ``None`` when the adapter does not support signed URLs (the

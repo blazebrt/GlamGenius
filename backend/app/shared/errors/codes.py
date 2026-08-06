@@ -3,10 +3,10 @@
 The app switches on these strings, so they are part of the public contract.
 Adding one is fine; changing or removing one is a breaking change.
 """
-from enum import Enum
+from enum import StrEnum
 
 
-class ErrorCode(str, Enum):
+class ErrorCode(StrEnum):
     # --- AI ---
     ANALYSIS_UNAVAILABLE = "ANALYSIS_UNAVAILABLE"
 
@@ -32,7 +32,7 @@ class ErrorCode(str, Enum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
-class AIFailureType(str, Enum):
+class AIFailureType(StrEnum):
     """Why an AI run did not produce a usable, validated result.
 
     Recorded on every failed ``ai_runs`` row so provider problems can be told

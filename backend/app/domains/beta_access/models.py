@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import (
     Boolean,
@@ -35,10 +34,10 @@ class Invite(UUIDPrimaryKey, TimestampMixin, Base):
     max_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     uses_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # UUID of the admin (Supabase user) that issued the invite. Nullable
     # because bootstrap invites are seeded before there is an admin row.
-    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
 
     __table_args__ = (
         Index("ix_invites_code_active", "code", "active"),
@@ -101,10 +100,10 @@ class InviteRegistrationReservation(TimestampMixin, Base):
         String(16), nullable=False, default="active", server_default="active"
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    consumed_at: Mapped[Optional[datetime]] = mapped_column(
+    consumed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    supabase_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    supabase_user_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), nullable=True
     )
 
@@ -145,7 +144,7 @@ class BetaUsageEvent(Base):
     # An opaque key the caller supplies so the same logical operation retried
     # twice does not count twice. NULL is allowed for events without a
     # deduplication key.
-    idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # YYYY-MM for month buckets, YYYY-MM-DD HH for hour buckets. Duplicated
     # from ``created_at`` so a plain COUNT(*) with a WHERE key match is a
     # cheap indexed scan.

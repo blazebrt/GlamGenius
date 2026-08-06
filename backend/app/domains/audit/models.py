@@ -10,7 +10,7 @@ several actions; not a location log.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB
@@ -30,7 +30,7 @@ ACTION_PRIVACY_EXPORTED = "privacy.exported"
 class AuditEvent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "audit_events"
 
-    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("accounts.id", ondelete="SET NULL"),
         nullable=True,
@@ -42,14 +42,14 @@ class AuditEvent(UUIDPrimaryKey, TimestampMixin, Base):
     )
     action: Mapped[str] = mapped_column(String(64), nullable=False)
 
-    subject_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    subject_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    subject_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    subject_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     context: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
     )
-    ip_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    request_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
         Index("ix_audit_events_account_created", "account_id", "created_at"),

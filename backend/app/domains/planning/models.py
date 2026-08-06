@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
@@ -76,11 +76,11 @@ class ExternalIntegration(UUIDPrimaryKey, TimestampMixin, Base):
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="connected", server_default="connected")
     scopes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    credential_ref: Mapped[Optional[str]] = mapped_column(String(200))
-    external_account_label: Mapped[Optional[str]] = mapped_column(String(160))
-    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    last_error: Mapped[Optional[str]] = mapped_column(String(240))
-    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    credential_ref: Mapped[str | None] = mapped_column(String(200))
+    external_account_label: Mapped[str | None] = mapped_column(String(160))
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(240))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("account_id", "kind", "provider", name="uq_integration_account_kind_provider"),
@@ -94,17 +94,17 @@ class CalendarEvent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "calendar_events"
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
-    integration_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("external_integrations.id", ondelete="CASCADE"))
+    integration_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("external_integrations.id", ondelete="CASCADE"))
     external_id: Mapped[str] = mapped_column(String(200), nullable=False)
     dedup_key: Mapped[str] = mapped_column(String(400), nullable=False)
     title: Mapped[str] = mapped_column(String(240), nullable=False)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     all_day: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    location: Mapped[Optional[str]] = mapped_column(String(200))
+    location: Mapped[str | None] = mapped_column(String(200))
     # Inferred from the title, and always overridable by the user.
-    occasion_key: Mapped[Optional[str]] = mapped_column(String(32))
-    dress_code_hint: Mapped[Optional[str]] = mapped_column(String(32))
+    occasion_key: Mapped[str | None] = mapped_column(String(32))
+    dress_code_hint: Mapped[str | None] = mapped_column(String(32))
     inference_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
     user_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", server_default="manual")
@@ -124,14 +124,14 @@ class WeatherSnapshot(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     for_date: Mapped[date] = mapped_column(Date, nullable=False)
-    location: Mapped[Optional[str]] = mapped_column(String(160))
+    location: Mapped[str | None] = mapped_column(String(160))
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", server_default="manual")
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="user_declared", server_default="user_declared")
     condition: Mapped[str] = mapped_column(String(24), nullable=False)
-    temp_min_c: Mapped[Optional[float]] = mapped_column(Float)
-    temp_max_c: Mapped[Optional[float]] = mapped_column(Float)
-    precipitation_chance: Mapped[Optional[int]] = mapped_column(Integer)
-    humidity: Mapped[Optional[int]] = mapped_column(Integer)
+    temp_min_c: Mapped[float | None] = mapped_column(Float)
+    temp_max_c: Mapped[float | None] = mapped_column(Float)
+    precipitation_chance: Mapped[int | None] = mapped_column(Integer)
+    humidity: Mapped[int | None] = mapped_column(Integer)
     raw: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
 
     __table_args__ = (Index("ix_weather_snapshots_account_date", "account_id", "for_date", "created_at"),)
@@ -147,8 +147,8 @@ class DailyPlan(UUIDPrimaryKey, TimestampMixin, Base):
     timezone_name: Mapped[str] = mapped_column(String(48), nullable=False, default="Asia/Kolkata", server_default="Asia/Kolkata")
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="ready", server_default="ready")
     headline: Mapped[str] = mapped_column(String(240), nullable=False, default="", server_default="")
-    look_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("looks.id", ondelete="SET NULL"))
-    weather_snapshot_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("weather_snapshots.id", ondelete="SET NULL"))
+    look_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("looks.id", ondelete="SET NULL"))
+    weather_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("weather_snapshots.id", ondelete="SET NULL"))
     weather_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     event_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
@@ -159,11 +159,11 @@ class DailyPlan(UUIDPrimaryKey, TimestampMixin, Base):
     cache_key: Mapped[str] = mapped_column(String(64), nullable=False)
     used_llm: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     needs_clarification: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    clarification: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB)
+    clarification: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     missing_information: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
-    computed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    computed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("account_id", "plan_date", name="uq_daily_plan_account_date"),
@@ -202,9 +202,9 @@ class DailyPlanAction(UUIDPrimaryKey, TimestampMixin, Base):
     body: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=50, server_default="50")
     relevance: Mapped[str] = mapped_column(String(240), nullable=False, default="", server_default="")
-    inventory_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"))
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    dismissed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    inventory_item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (Index("ix_daily_plan_actions_plan_priority", "plan_id", "priority"),)
 
@@ -218,9 +218,9 @@ class WeeklyPlan(UUIDPrimaryKey, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ready", server_default="ready")
     engine_version: Mapped[str] = mapped_column(String(32), nullable=False, default=PLANNER_VERSION, server_default=PLANNER_VERSION)
     repetition_window_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7, server_default="7")
-    notes: Mapped[Optional[str]] = mapped_column(String(500))
+    notes: Mapped[str | None] = mapped_column(String(500))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
-    generated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("account_id", "week_start", name="uq_weekly_plan_account_week"),
@@ -235,10 +235,10 @@ class WeeklyPlanDay(UUIDPrimaryKey, TimestampMixin, Base):
 
     weekly_plan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("weekly_plans.id", ondelete="CASCADE"), nullable=False)
     plan_date: Mapped[date] = mapped_column(Date, nullable=False)
-    daily_plan_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("daily_plans.id", ondelete="SET NULL"))
+    daily_plan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("daily_plans.id", ondelete="SET NULL"))
     locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    note: Mapped[Optional[str]] = mapped_column(String(240))
+    note: Mapped[str | None] = mapped_column(String(240))
 
     __table_args__ = (
         UniqueConstraint("weekly_plan_id", "plan_date", name="uq_weekly_plan_day"),
@@ -257,11 +257,11 @@ class OutfitSchedule(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     plan_date: Mapped[date] = mapped_column(Date, nullable=False)
-    look_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("looks.id", ondelete="SET NULL"))
+    look_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("looks.id", ondelete="SET NULL"))
     item_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="planned", server_default="planned")
-    worn_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    note: Mapped[Optional[str]] = mapped_column(String(240))
+    worn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(String(240))
 
     __table_args__ = (
         UniqueConstraint("account_id", "plan_date", name="uq_outfit_schedule_account_date"),
@@ -277,8 +277,8 @@ class LaundryStateEvent(UUIDPrimaryKey, TimestampMixin, Base):
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False)
-    available_from: Mapped[Optional[date]] = mapped_column(Date)
-    note: Mapped[Optional[str]] = mapped_column(String(240))
+    available_from: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(String(240))
     actor: Mapped[str] = mapped_column(String(16), nullable=False, default="user", server_default="user")
 
     __table_args__ = (Index("ix_laundry_state_events_item", "account_id", "item_id", "created_at"),)
@@ -320,8 +320,8 @@ class NotificationDelivery(UUIDPrimaryKey, TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued", server_default="queued")
-    suppressed_reason: Mapped[Optional[str]] = mapped_column(String(64))
-    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    suppressed_reason: Mapped[str | None] = mapped_column(String(64))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("account_id", "dedup_hash", name="uq_notification_dedup"),
@@ -339,8 +339,8 @@ class PlanRecalculationEvent(UUIDPrimaryKey, TimestampMixin, Base):
     trigger: Mapped[str] = mapped_column(String(48), nullable=False)
     detail: Mapped[str] = mapped_column(String(400), nullable=False, default="", server_default="")
     changed_keys: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    old_cache_key: Mapped[Optional[str]] = mapped_column(String(64))
-    new_cache_key: Mapped[Optional[str]] = mapped_column(String(64))
+    old_cache_key: Mapped[str | None] = mapped_column(String(64))
+    new_cache_key: Mapped[str | None] = mapped_column(String(64))
     recomputed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
 
     __table_args__ = (Index("ix_plan_recalculation_account_date", "account_id", "plan_date", "created_at"),)

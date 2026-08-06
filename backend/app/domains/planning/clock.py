@@ -15,7 +15,6 @@ dependency.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.shared.database.base import utcnow
@@ -38,7 +37,7 @@ INDIAN_CITIES = {
 }
 
 
-def resolve_timezone(name: Optional[str], city: Optional[str] = None) -> str:
+def resolve_timezone(name: str | None, city: str | None = None) -> str:
     """Pick a timezone from what we actually know about the user.
 
     Order: an explicit timezone, then a recognised city, then India. An
@@ -56,24 +55,24 @@ def resolve_timezone(name: Optional[str], city: Optional[str] = None) -> str:
     return DEFAULT_TIMEZONE
 
 
-def zone(name: Optional[str]) -> ZoneInfo:
+def zone(name: str | None) -> ZoneInfo:
     try:
         return ZoneInfo(name or DEFAULT_TIMEZONE)
     except (ZoneInfoNotFoundError, ValueError, KeyError):
         return ZoneInfo(DEFAULT_TIMEZONE)
 
 
-def local_now(timezone_name: Optional[str], *, moment: Optional[datetime] = None) -> datetime:
+def local_now(timezone_name: str | None, *, moment: datetime | None = None) -> datetime:
     """The current wall-clock time where this person is."""
     return (moment or utcnow()).astimezone(zone(timezone_name))
 
 
-def local_today(timezone_name: Optional[str], *, moment: Optional[datetime] = None) -> date:
+def local_today(timezone_name: str | None, *, moment: datetime | None = None) -> date:
     """The calendar date it is *for them*, which is the only one that matters."""
     return local_now(timezone_name, moment=moment).date()
 
 
-def day_bounds(plan_date: date, timezone_name: Optional[str]) -> tuple[datetime, datetime]:
+def day_bounds(plan_date: date, timezone_name: str | None) -> tuple[datetime, datetime]:
     """The UTC instants a local calendar day starts and ends.
 
     Calendar events are stored as timezone-aware instants, so "which events are

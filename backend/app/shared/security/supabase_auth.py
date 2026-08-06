@@ -7,9 +7,8 @@ never a cached V1 token.
 
 ## What we verify
 
-1. Signature — against either the Supabase JWKS (asymmetric keys, the current
-   Supabase default) or, when JWKS has no matching key, an HS256 shared secret
-   for legacy projects.
+1. Signature — against the Supabase JWKS (asymmetric keys, the current
+   Supabase default).
 2. Issuer — must equal ``SUPABASE_JWT_ISSUER``.
 3. Expiry — the ``exp`` claim must be in the future.
 4. Required claims — ``sub`` must be a valid UUID.
@@ -36,7 +35,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 import jwt
@@ -78,7 +77,7 @@ class SupabaseUser:
     """
 
     id: uuid.UUID
-    email: Optional[str]
+    email: str | None
     is_admin: bool
     raw_claims: dict[str, Any]
 
@@ -100,7 +99,7 @@ class _JWKSCache:
 
     def __init__(self, url: str) -> None:
         self._url = url
-        self._client: Optional[PyJWKClient] = None
+        self._client: PyJWKClient | None = None
         self._built_at: float = 0.0
         self._lock = asyncio.Lock()
 
@@ -133,10 +132,10 @@ class _JWKSCache:
             return self._client
 
 
-_jwks_cache: Optional[_JWKSCache] = None
+_jwks_cache: _JWKSCache | None = None
 
 
-def _get_jwks_cache() -> Optional[_JWKSCache]:
+def _get_jwks_cache() -> _JWKSCache | None:
     global _jwks_cache
     if not SUPABASE_JWKS_URL:
         return None
@@ -174,8 +173,7 @@ async def _decode_with_jwks(token: str, unverified_header: dict[str, Any]) -> di
 async def verify_supabase_token(token: str) -> dict[str, Any]:
     """Decode and validate a Supabase access token. Raises AuthError on failure.
 
-    Order: try JWKS first (asymmetric — current Supabase default). If JWKS
-    fails **and** the token is HS256, try the shared secret. Any other
+    Order: try JWKS (asymmetric — current Supabase default). Any other
     failure returns 401.
     """
     if not token:
@@ -236,7 +234,7 @@ _bearer = HTTPBearer(auto_error=False)
 
 
 async def get_current_supabase_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> SupabaseUser:
     """FastAPI dependency: resolve the caller from a Supabase access token."""
     if credentials is None or not credentials.credentials:
@@ -268,7 +266,7 @@ async def get_current_admin(
     return user
 
 
-def client_ip(request: Request) -> Optional[str]:
+def client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 

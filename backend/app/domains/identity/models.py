@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import DateTime, String
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -38,7 +37,7 @@ class Account(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="active", server_default="active"
     )
-    deletion_requested_at: Mapped[Optional[datetime]] = mapped_column(
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

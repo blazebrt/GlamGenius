@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import date, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -241,7 +241,7 @@ async def analyse_shelf(
 
 
 async def shelf_summary(
-    session: AsyncSession, *, account_id: uuid.UUID, climate: Optional[str] = None
+    session: AsyncSession, *, account_id: uuid.UUID, climate: str | None = None
 ) -> dict[str, Any]:
     context = await shelf.gather(session, account_id=account_id, climate=climate)
     result = shelf.summary(context)
@@ -278,7 +278,7 @@ async def shelf_value_to_recover(session: AsyncSession, *, account_id: uuid.UUID
 
 async def _replace_routines(
     session: AsyncSession, account_id: uuid.UUID, compiled: Sequence[compiler.CompiledRoutine],
-    *, climate: Optional[str], explanation_source: str,
+    *, climate: str | None, explanation_source: str,
 ) -> list[Routine]:
     """Write compiled routines, keeping the version number moving forward."""
     existing = {
@@ -430,7 +430,7 @@ async def _serialize_routine(session: AsyncSession, routine: Routine) -> dict[st
 
 
 async def routines_today(
-    session: AsyncSession, *, account_id: uuid.UUID, on: Optional[date] = None
+    session: AsyncSession, *, account_id: uuid.UUID, on: date | None = None
 ) -> dict[str, Any]:
     """The routines that are actually relevant right now.
 
@@ -704,8 +704,8 @@ async def confirm_ingredients(
 
 async def perfume_recommendation(
     session: AsyncSession, *, account_id: uuid.UUID,
-    occasion_key: Optional[str] = None, weather: Optional[str] = None,
-    time_of_day: Optional[str] = None, season: Optional[str] = None,
+    occasion_key: str | None = None, weather: str | None = None,
+    time_of_day: str | None = None, season: str | None = None,
 ) -> dict[str, Any]:
     context = await shelf.gather(session, account_id=account_id)
     perfumes = context.by_category("perfumes")

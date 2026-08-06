@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ class PushMessage:
     to: str                      # Expo Push Token, format: ExponentPushToken[...]
     title: str
     body: str
-    data: Optional[dict] = None
+    data: dict | None = None
 
 
 @dataclass(frozen=True)

@@ -39,7 +39,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +51,8 @@ class Weather:
     """The subset of weather facts the app actually consumes."""
 
     condition: str          # 'hot', 'humid', 'cold', 'mild', 'rain', 'unknown'
-    temperature_c: Optional[float]
-    humidity_percent: Optional[int]
+    temperature_c: float | None
+    humidity_percent: int | None
     stale: bool = False
 
 
@@ -81,7 +81,7 @@ class NullWeatherProvider:
 # --- Open-Meteo provider (default; no credential) ---------------------------
 
 
-def _classify_condition(temp_c: Optional[float], humidity: Optional[int], precipitation_mm: Optional[float]) -> str:
+def _classify_condition(temp_c: float | None, humidity: int | None, precipitation_mm: float | None) -> str:
     """Bucketise the fetched numbers into the strings the routine
     engine already knows how to interpret ('hot', 'humid', 'cold',
     'mild', 'rain', 'unknown').
@@ -163,7 +163,7 @@ def _get_provider() -> WeatherProvider:
     return NullWeatherProvider()
 
 
-async def get_weather(lat: float, lon: float, provider: Optional[WeatherProvider] = None) -> Weather:
+async def get_weather(lat: float, lon: float, provider: WeatherProvider | None = None) -> Weather:
     """Cached, timeouted weather fetch.
 
     ``provider`` is dependency-injectable so tests can pass a stub.
@@ -190,7 +190,7 @@ async def get_weather(lat: float, lon: float, provider: Optional[WeatherProvider
     return await _refresh(key, provider)
 
 
-async def _refresh(key: tuple[float, float], provider: Optional[WeatherProvider]) -> Weather:
+async def _refresh(key: tuple[float, float], provider: WeatherProvider | None) -> Weather:
     lat, lon = key
     provider = provider or _get_provider()
     result = await provider.fetch(lat, lon)

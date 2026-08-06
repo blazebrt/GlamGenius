@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 from app.domains.recommendation.context import OwnedItem
 from app.domains.recommendation.occasions import OCCASIONS
@@ -35,7 +35,7 @@ RECENT_DAYS = 3
 @dataclass
 class PerfumeCandidate:
     item: OwnedItem
-    family: Optional[str]
+    family: str | None
     score: float
     reasons: list[dict[str, Any]] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
@@ -55,7 +55,7 @@ class PerfumeCandidate:
         }
 
 
-def _matching_rules(factor: str, value: Optional[str]) -> list[Any]:
+def _matching_rules(factor: str, value: str | None) -> list[Any]:
     if not value:
         return []
     return [rule for rule in PERFUME_RULES if rule.factor == factor and rule.match == value]
@@ -64,17 +64,17 @@ def _matching_rules(factor: str, value: Optional[str]) -> list[Any]:
 def recommend(
     perfumes: Sequence[OwnedItem],
     *,
-    occasion_key: Optional[str] = None,
-    weather: Optional[str] = None,
-    time_of_day: Optional[str] = None,
-    season: Optional[str] = None,
-    preferred_style: Optional[str] = None,
+    occasion_key: str | None = None,
+    weather: str | None = None,
+    time_of_day: str | None = None,
+    season: str | None = None,
+    preferred_style: str | None = None,
     recently_used_item_ids: Sequence[str] = (),
-    today: Optional[date] = None,
+    today: date | None = None,
 ) -> dict[str, Any]:
     """Rank owned perfumes for a context. Never invents a bottle."""
     _now = today or date.today()
-    bucket = OCCASION_BUCKET.get(occasion_key or "", None)
+    bucket = OCCASION_BUCKET.get(occasion_key or "")
 
     candidates: list[PerfumeCandidate] = []
     for item in perfumes:

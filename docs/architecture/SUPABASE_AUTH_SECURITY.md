@@ -28,15 +28,12 @@ Implemented in `backend/app/shared/security/supabase_auth.py`.
    and start with `Bearer `. Missing or malformed → `401 UNAUTHORIZED`
    with `code: UNAUTHENTICATED`.
 2. **Token decode.** The JWT header must parse. Unknown `alg` (anything
-   outside `{RS256, ES256, HS256}`) → `401`.
+   outside `{RS256, ES256}`) → `401`.
 3. **Signature.**
    - **RS256 / ES256 (preferred)**: fetched from
      `${SUPABASE_URL}/auth/v1/.well-known/jwks.json`. JWKS is cached in
      memory with a hard TTL (default 10 minutes) and a soft refresh on
      `kid` miss. Refresh has a 5-second network timeout and fails closed.
-   - **HS256 (fallback only)**: verified with `SUPABASE_JWT_SECRET` if
-     JWKS did not return a matching `kid`. This is Supabase's own legacy
-     default; it exists because some projects still ship HS256.
 4. **Issuer.** Must equal `SUPABASE_JWT_ISSUER`, which defaults to
    `${SUPABASE_URL}/auth/v1`.
 5. **Expiry (`exp`).** Rejected with a **0-second** clock skew tolerance.
@@ -118,7 +115,7 @@ Admin actions (invite create, deactivate, view) are written to
 
 | Threat                                           | Mitigation                                                                                                     |
 |--------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
-| Forged JWT with a client-controlled `sub`        | Signature verification against JWKS/HS256. Bad signature → 401.                                                |
+| Forged JWT with a client-controlled `sub`        | Signature verification against JWKS. Bad signature → 401.                                                      |
 | Replay of an expired token                       | `exp` checked with 0 clock skew.                                                                               |
 | Token from a different Supabase project          | Issuer check against `SUPABASE_JWT_ISSUER`.                                                                    |
 | Malicious `kid` pointing at attacker-controlled key | Only JWKS URL derived from the trusted `SUPABASE_JWKS_URL` env is consulted. No `jku`/`x5u` header trusted. |
@@ -139,7 +136,6 @@ Admin actions (invite create, deactivate, view) are written to
 - Missing `sub`.
 - Non-UUID `sub`.
 - Successful RS256 verification (mocked JWKS).
-- Successful HS256 fallback.
 - Cross-account request rejected when the body attempts to override
   `account_id`.
 

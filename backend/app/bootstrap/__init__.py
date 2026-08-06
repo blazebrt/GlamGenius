@@ -729,7 +729,7 @@ ROUTINE_STEP_DEFS: list[tuple[str, int, str, str, str, bool]] = [
 async def seed_routine_templates(session: AsyncSession) -> int:
     """Upsert the existing ``routine_templates`` rows and the new step rows.
 
-    The template table already exists (Package A schema). This seed keeps
+    The template table already exists. This seed keeps
     it aligned with the shipped templates and adds the ordered steps table
     that gives the UI a versioned rendering surface.
     """

@@ -12,13 +12,12 @@ whole class of image-parser exploits, and it needs no new dependency.
 from __future__ import annotations
 
 import struct
-from typing import Optional
 
 from app.config import MEDIA_ALLOWED_MIME, MEDIA_MAX_BYTES
 from app.shared.errors.exceptions import MediaTooLargeError, UnsupportedMediaTypeError
 
 
-def sniff_mime(data: bytes) -> Optional[str]:
+def sniff_mime(data: bytes) -> str | None:
     """The real type, from magic bytes. None when it is not an image we accept."""
     if len(data) < 12:
         return None
@@ -31,7 +30,7 @@ def sniff_mime(data: bytes) -> Optional[str]:
     return None
 
 
-def _png_dimensions(data: bytes) -> Optional[tuple[int, int]]:
+def _png_dimensions(data: bytes) -> tuple[int, int] | None:
     # IHDR is always the first chunk: width and height are two big-endian
     # 32-bit integers at offset 16.
     if len(data) < 24 or data[12:16] != b"IHDR":
@@ -40,7 +39,7 @@ def _png_dimensions(data: bytes) -> Optional[tuple[int, int]]:
     return int(width), int(height)
 
 
-def _jpeg_dimensions(data: bytes) -> Optional[tuple[int, int]]:
+def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
     # Walk the segment markers to the start-of-frame, which carries the size.
     index = 2
     length = len(data)
@@ -62,7 +61,7 @@ def _jpeg_dimensions(data: bytes) -> Optional[tuple[int, int]]:
     return None
 
 
-def _webp_dimensions(data: bytes) -> Optional[tuple[int, int]]:
+def _webp_dimensions(data: bytes) -> tuple[int, int] | None:
     if len(data) < 30:
         return None
     fourcc = data[12:16]
@@ -79,7 +78,7 @@ def _webp_dimensions(data: bytes) -> Optional[tuple[int, int]]:
     return None
 
 
-def read_dimensions(data: bytes, mime: str) -> tuple[Optional[int], Optional[int]]:
+def read_dimensions(data: bytes, mime: str) -> tuple[int | None, int | None]:
     """Best-effort width and height. Never raises — dimensions are optional."""
     try:
         if mime == "image/png":
@@ -95,7 +94,7 @@ def read_dimensions(data: bytes, mime: str) -> tuple[Optional[int], Optional[int
     return result if result else (None, None)
 
 
-def validate_upload(data: bytes, declared_type: Optional[str]) -> tuple[str, int]:
+def validate_upload(data: bytes, declared_type: str | None) -> tuple[str, int]:
     """Check size and type. Returns the sniffed MIME type and byte size.
 
     Raises ``MediaTooLargeError`` or ``UnsupportedMediaTypeError``, both of which

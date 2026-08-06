@@ -18,7 +18,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,14 +44,14 @@ class OwnedItem:
 
     id: uuid.UUID
     category: str
-    subcategory: Optional[str]
+    subcategory: str | None
     display_name: str
-    brand: Optional[str]
+    brand: str | None
     details: dict[str, Any]
     condition: str
     usage_count: int
-    last_used_at: Optional[date]
-    purchase_price: Optional[float]
+    last_used_at: date | None
+    purchase_price: float | None
     currency: str
 
     @property
@@ -76,11 +76,11 @@ class StyleContext:
 
     # --- Resolved constraints ---
     target_formality: int = 3
-    dress_code: Optional[str] = None
-    weather: Optional[str] = None
-    setting: Optional[str] = None
-    comfort_preference: Optional[str] = None
-    optional_budget: Optional[float] = None
+    dress_code: str | None = None
+    weather: str | None = None
+    setting: str | None = None
+    comfort_preference: str | None = None
+    optional_budget: float | None = None
 
     def by_category(self, category: str) -> list[OwnedItem]:
         return [item for item in self.owned if item.category == category]

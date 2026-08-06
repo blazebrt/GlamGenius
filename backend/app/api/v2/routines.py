@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,7 +50,7 @@ async def generate_routines(
 
 @router.get("/routines/today")
 async def routines_today(
-    on: Optional[date] = Query(None, description="Defaults to today in your timezone"),
+    on: date | None = Query(None, description="Defaults to today in your timezone"),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
@@ -133,10 +132,10 @@ async def ingredient_detail(
 
 @router.get("/perfume/recommendation")
 async def perfume_recommendation(
-    occasion_key: Optional[str] = Query(None, max_length=32),
-    weather: Optional[str] = Query(None, max_length=24),
-    time_of_day: Optional[str] = Query(None, max_length=24),
-    season: Optional[str] = Query(None, max_length=24),
+    occasion_key: str | None = Query(None, max_length=32),
+    weather: str | None = Query(None, max_length=24),
+    time_of_day: str | None = Query(None, max_length=24),
+    season: str | None = Query(None, max_length=24),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):

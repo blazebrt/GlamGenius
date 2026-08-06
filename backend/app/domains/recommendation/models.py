@@ -21,7 +21,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -66,18 +66,18 @@ class OccasionRecord(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     occasion_key: Mapped[str] = mapped_column(String(32), nullable=False)
-    title: Mapped[Optional[str]] = mapped_column(String(160))
-    event_date: Mapped[Optional[date]] = mapped_column(Date)
-    time_of_day: Mapped[Optional[str]] = mapped_column(String(24))
-    location: Mapped[Optional[str]] = mapped_column(String(160))
-    setting: Mapped[Optional[str]] = mapped_column(String(16))
-    dress_code: Mapped[Optional[str]] = mapped_column(String(32))
-    weather: Mapped[Optional[str]] = mapped_column(String(24))
-    comfort_preference: Mapped[Optional[str]] = mapped_column(String(24))
-    optional_budget: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    title: Mapped[str | None] = mapped_column(String(160))
+    event_date: Mapped[date | None] = mapped_column(Date)
+    time_of_day: Mapped[str | None] = mapped_column(String(24))
+    location: Mapped[str | None] = mapped_column(String(160))
+    setting: Mapped[str | None] = mapped_column(String(16))
+    dress_code: Mapped[str | None] = mapped_column(String(32))
+    weather: Mapped[str | None] = mapped_column(String(24))
+    comfort_preference: Mapped[str | None] = mapped_column(String(24))
+    optional_budget: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR", server_default="INR")
-    preparation_time: Mapped[Optional[str]] = mapped_column(String(48))
-    notes: Mapped[Optional[str]] = mapped_column(String(500))
+    preparation_time: Mapped[str | None] = mapped_column(String(48))
+    notes: Mapped[str | None] = mapped_column(String(500))
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
@@ -97,7 +97,7 @@ class StyleRequest(UUIDPrimaryKey, TimestampMixin, Base):
     preferred_item_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     answers: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
-    client_mutation_id: Mapped[Optional[str]] = mapped_column(String(80))
+    client_mutation_id: Mapped[str | None] = mapped_column(String(80))
 
     __table_args__ = (
         UniqueConstraint("account_id", "client_mutation_id", name="uq_style_request_client_mutation"),
@@ -111,16 +111,16 @@ class RecommendationRun(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "recommendation_runs"
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
-    style_request_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("style_requests.id", ondelete="CASCADE"))
+    style_request_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("style_requests.id", ondelete="CASCADE"))
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="running", server_default="running")
     engine_version: Mapped[str] = mapped_column(String(32), nullable=False, default=ENGINE_VERSION, server_default=ENGINE_VERSION)
     explanation_source: Mapped[str] = mapped_column(String(24), nullable=False, default="deterministic", server_default="deterministic")
-    ai_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL"))
+    ai_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL"))
     candidates_considered: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    error_code: Mapped[Optional[str]] = mapped_column(String(64))
-    latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (Index("ix_recommendation_runs_account_kind", "account_id", "kind", "created_at"),)
 
@@ -181,12 +181,12 @@ class LookItem(UUIDPrimaryKey, TimestampMixin, Base):
     look_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("looks.id", ondelete="CASCADE"), nullable=False)
     slot: Mapped[str] = mapped_column(String(24), nullable=False)
     ownership: Mapped[str] = mapped_column(String(24), nullable=False)
-    inventory_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"))
+    inventory_item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"))
     display_name: Mapped[str] = mapped_column(String(200), nullable=False)
     role_note: Mapped[str] = mapped_column(String(400), nullable=False, default="", server_default="")
     score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    estimated_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    estimated_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR", server_default="INR")
 
     __table_args__ = (Index("ix_look_items_look_slot", "look_id", "slot", "position"),)
@@ -200,10 +200,10 @@ class LookAdjustment(UUIDPrimaryKey, TimestampMixin, Base):
     look_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("looks.id", ondelete="CASCADE"), nullable=False)
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     adjustment_type: Mapped[str] = mapped_column(String(24), nullable=False)
-    slot: Mapped[Optional[str]] = mapped_column(String(24))
-    from_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("inventory_items.id", ondelete="SET NULL"))
-    to_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("inventory_items.id", ondelete="SET NULL"))
-    reason: Mapped[Optional[str]] = mapped_column(String(400))
+    slot: Mapped[str | None] = mapped_column(String(24))
+    from_item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("inventory_items.id", ondelete="SET NULL"))
+    to_item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("inventory_items.id", ondelete="SET NULL"))
+    reason: Mapped[str | None] = mapped_column(String(400))
     actor: Mapped[str] = mapped_column(String(16), nullable=False, default="user", server_default="user")
 
     __table_args__ = (Index("ix_look_adjustments_look", "look_id", "created_at"),)
@@ -217,9 +217,9 @@ class LookFeedback(UUIDPrimaryKey, TimestampMixin, Base):
     look_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("looks.id", ondelete="CASCADE"), nullable=False)
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     rating: Mapped[str] = mapped_column(String(24), nullable=False)
-    reason: Mapped[Optional[str]] = mapped_column(String(64))
-    note: Mapped[Optional[str]] = mapped_column(String(500))
-    worn_on: Mapped[Optional[date]] = mapped_column(Date)
+    reason: Mapped[str | None] = mapped_column(String(64))
+    note: Mapped[str | None] = mapped_column(String(500))
+    worn_on: Mapped[date | None] = mapped_column(Date)
 
     __table_args__ = (
         UniqueConstraint("look_id", "account_id", name="uq_look_feedback_once"),
@@ -234,31 +234,31 @@ class ShoppingCandidate(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     source: Mapped[str] = mapped_column(String(24), nullable=False)
-    media_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("media_assets.id", ondelete="SET NULL"))
-    ai_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL"))
+    media_asset_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("media_assets.id", ondelete="SET NULL"))
+    ai_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL"))
     category: Mapped[str] = mapped_column(String(32), nullable=False)
-    subcategory: Mapped[Optional[str]] = mapped_column(String(80))
+    subcategory: Mapped[str | None] = mapped_column(String(80))
     display_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    brand: Mapped[Optional[str]] = mapped_column(String(120))
-    colour: Mapped[Optional[str]] = mapped_column(String(80))
-    size: Mapped[Optional[str]] = mapped_column(String(40))
-    fabric: Mapped[Optional[str]] = mapped_column(String(100))
-    fit: Mapped[Optional[str]] = mapped_column(String(80))
-    formality: Mapped[Optional[str]] = mapped_column(String(80))
+    brand: Mapped[str | None] = mapped_column(String(120))
+    colour: Mapped[str | None] = mapped_column(String(80))
+    size: Mapped[str | None] = mapped_column(String(40))
+    fabric: Mapped[str | None] = mapped_column(String(100))
+    fit: Mapped[str | None] = mapped_column(String(80))
+    formality: Mapped[str | None] = mapped_column(String(80))
     occasion_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     season_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    price: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR", server_default="INR")
-    product_url: Mapped[Optional[str]] = mapped_column(String(2048))
-    extraction_confidence: Mapped[Optional[float]] = mapped_column(Float)
+    product_url: Mapped[str | None] = mapped_column(String(2048))
+    extraction_confidence: Mapped[float | None] = mapped_column(Float)
     uncertain_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     verification_state: Mapped[str] = mapped_column(String(24), nullable=False, default="draft", server_default="draft")
-    model_version: Mapped[Optional[str]] = mapped_column(String(64))
-    prompt_version: Mapped[Optional[str]] = mapped_column(String(32))
-    schema_version: Mapped[Optional[str]] = mapped_column(String(32))
+    model_version: Mapped[str | None] = mapped_column(String(64))
+    prompt_version: Mapped[str | None] = mapped_column(String(32))
+    schema_version: Mapped[str | None] = mapped_column(String(32))
     # Retry key. A dropped response on a mobile connection must not cost the
     # user a second run from their allowance.
-    client_mutation_id: Mapped[Optional[str]] = mapped_column(String(80))
+    client_mutation_id: Mapped[str | None] = mapped_column(String(80))
 
     __table_args__ = (
         UniqueConstraint("account_id", "client_mutation_id", name="uq_shopping_candidate_client_mutation"),
@@ -320,7 +320,7 @@ class PurchaseDecision(UUIDPrimaryKey, TimestampMixin, Base):
     evaluation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("purchase_evaluations.id", ondelete="CASCADE"), nullable=False)
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
-    note: Mapped[Optional[str]] = mapped_column(String(500))
+    note: Mapped[str | None] = mapped_column(String(500))
     followed_recommendation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     __table_args__ = (

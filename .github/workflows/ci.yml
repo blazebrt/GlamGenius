@@ -4,7 +4,6 @@
 # (no Gemini key, no S3 credentials, no calendar OAuth client, no push
 # provider, no monitoring DSN, no real Supabase project). Supabase Auth is
 # stubbed in tests by signing JWTs with a test HS256 secret; the backend
-# accepts them because `SUPABASE_JWT_SECRET` in the CI env is that same
 # test secret and no JWKS URL is reachable in CI.
 #
 # GitHub Actions are pinned to full commit SHAs. The tag comment after each
@@ -60,7 +59,6 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-not-a-real-one
       SUPABASE_JWT_ISSUER: https://ci-project.supabase.co/auth/v1
       SUPABASE_JWKS_URL: https://ci-project.supabase.co/auth/v1/.well-known/jwks.json
-      SUPABASE_JWT_SECRET: ci-hs256-jwt-secret-not-a-real-one
       SUPABASE_STORAGE_BUCKET: glamgenius-media
       SUPABASE_ADMIN_USER_IDS: 00000000-0000-0000-0000-000000000001
       GEMINI_API_KEY: ""
@@ -132,6 +130,13 @@ jobs:
       - name: Run Ruff (zero warnings)
         working-directory: backend
         run: ruff check .
+      - name: Block unpinned GitHub Actions
+        run: |
+          if grep -rnE "uses:.*@[m]aster|uses:.*@[m]ain" .github/workflows/; then
+            echo "FAIL: Unpinned GitHub Actions found (using @master or @main)"
+            exit 1
+          fi
+          echo "PASS: No unpinned GitHub Actions found"
 
   backend-release:
     name: Backend release command test
@@ -156,7 +161,6 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-not-a-real-one
       SUPABASE_JWT_ISSUER: https://ci-project.supabase.co/auth/v1
       SUPABASE_JWKS_URL: https://ci-project.supabase.co/auth/v1/.well-known/jwks.json
-      SUPABASE_JWT_SECRET: ci-hs256-jwt-secret-not-a-real-one
       SUPABASE_STORAGE_BUCKET: glamgenius-media
       SUPABASE_ADMIN_USER_IDS: 00000000-0000-0000-0000-000000000001
       GEMINI_API_KEY: "fake-key"
@@ -170,7 +174,7 @@ jobs:
       BETA_STYLE_LIMIT_PER_MONTH: "60"
       BETA_SHOPPING_CHECK_LIMIT_PER_MONTH: "60"
       ALLOWED_ORIGINS: "http://localhost:8081"
-      APP_ENV: "production"
+      APP_ENV: "test"
       PYTHONPATH: ${{ github.workspace }}/backend
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -186,7 +190,7 @@ jobs:
         working-directory: backend
         run: python -m app.release
         env:
-          APP_ENV: production
+          APP_ENV: test
           GEMINI_API_KEY: "fake-key"
           SUPABASE_URL: "https://test.supabase.co"
           SUPABASE_ANON_KEY: "fake-anon-key"
@@ -460,16 +464,16 @@ jobs:
       - name: Load image
         run: docker load < /tmp/glamgenius-backend-ci.tar.gz
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master # v0.30.0
+        uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # v0.30.0
         with:
           image-ref: glamgenius-backend:ci
           format: table
-          exit-code: 0
+          exit-code: 1
           severity: HIGH,CRITICAL
           ignore-unfixed: true
       - name: Generate Trivy JSON report
         if: always()
-        uses: aquasecurity/trivy-action@master # v0.30.0
+        uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # v0.30.0
         with:
           image-ref: glamgenius-backend:ci
           format: json
@@ -529,6 +533,13 @@ jobs:
             exit 1
           fi
           echo "PASS: no payment/billing references"
+      - name: No legacy terminology
+        run: |
+          if grep -rnE "Package [A-Z]|legacy project|temporary compatibility" backend/app/ backend/server.py --include="*.py"; then
+            echo "FAIL: legacy terminology found"
+            exit 1
+          fi
+          echo "PASS: no legacy terminology"
 
   # ---- Focused test gates (run from the full backend suite) ------------------
   # These re-run targeted subsets so failures are immediately attributable.
@@ -556,7 +567,6 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-not-a-real-one
       SUPABASE_JWT_ISSUER: https://ci-project.supabase.co/auth/v1
       SUPABASE_JWKS_URL: https://ci-project.supabase.co/auth/v1/.well-known/jwks.json
-      SUPABASE_JWT_SECRET: ci-hs256-jwt-secret-not-a-real-one
       SUPABASE_STORAGE_BUCKET: glamgenius-media
       SUPABASE_ADMIN_USER_IDS: 00000000-0000-0000-0000-000000000001
       GEMINI_API_KEY: ""
@@ -608,7 +618,6 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-not-a-real-one
       SUPABASE_JWT_ISSUER: https://ci-project.supabase.co/auth/v1
       SUPABASE_JWKS_URL: https://ci-project.supabase.co/auth/v1/.well-known/jwks.json
-      SUPABASE_JWT_SECRET: ci-hs256-jwt-secret-not-a-real-one
       SUPABASE_STORAGE_BUCKET: glamgenius-media
       SUPABASE_ADMIN_USER_IDS: 00000000-0000-0000-0000-000000000001
       GEMINI_API_KEY: ""
@@ -660,7 +669,6 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-not-a-real-one
       SUPABASE_JWT_ISSUER: https://ci-project.supabase.co/auth/v1
       SUPABASE_JWKS_URL: https://ci-project.supabase.co/auth/v1/.well-known/jwks.json
-      SUPABASE_JWT_SECRET: ci-hs256-jwt-secret-not-a-real-one
       SUPABASE_STORAGE_BUCKET: glamgenius-media
       SUPABASE_ADMIN_USER_IDS: 00000000-0000-0000-0000-000000000001
       GEMINI_API_KEY: ""
@@ -712,7 +720,6 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-not-a-real-one
       SUPABASE_JWT_ISSUER: https://ci-project.supabase.co/auth/v1
       SUPABASE_JWKS_URL: https://ci-project.supabase.co/auth/v1/.well-known/jwks.json
-      SUPABASE_JWT_SECRET: ci-hs256-jwt-secret-not-a-real-one
       SUPABASE_STORAGE_BUCKET: glamgenius-media
       SUPABASE_ADMIN_USER_IDS: 00000000-0000-0000-0000-000000000001
       GEMINI_API_KEY: ""

@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from app.domains.routines.ontology import INGREDIENT_BY_KEY, alias_index
 
@@ -55,7 +55,7 @@ class ParsedIngredient:
     display_name: str
     family: str
     matched_text: str
-    position: Optional[int]
+    position: int | None
     confidence: float
     source: str
 
@@ -105,7 +105,7 @@ def _match_in(text: str) -> list[tuple[str, str]]:
     return found
 
 
-def parse_label(text: Optional[str], *, source: str = SOURCE_LABEL) -> list[ParsedIngredient]:
+def parse_label(text: str | None, *, source: str = SOURCE_LABEL) -> list[ParsedIngredient]:
     """Parse a full INCI list. Position in the list is preserved."""
     if not text:
         return []
@@ -133,7 +133,7 @@ def parse_label(text: Optional[str], *, source: str = SOURCE_LABEL) -> list[Pars
     return results
 
 
-def parse_declared(values: Optional[Sequence[str]], *, source: str = SOURCE_USER) -> list[ParsedIngredient]:
+def parse_declared(values: Sequence[str] | None, *, source: str = SOURCE_USER) -> list[ParsedIngredient]:
     """Parse the short list a user typed. Higher confidence, no position."""
     if not values:
         return []
@@ -180,7 +180,7 @@ def families_of(rows: Iterable[ParsedIngredient], *, confirmed_only: bool = Fals
     }
 
 
-def unmatched_terms(text: Optional[str], limit: int = 10) -> list[str]:
+def unmatched_terms(text: str | None, limit: int = 10) -> list[str]:
     """Label entries we could not identify.
 
     Surfaced rather than hidden: "we did not recognise these" is honest, and it

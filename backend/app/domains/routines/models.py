@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
@@ -44,7 +44,7 @@ class Ingredient(UUIDPrimaryKey, TimestampMixin, Base):
 
     key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
-    inci_name: Mapped[Optional[str]] = mapped_column(String(160))
+    inci_name: Mapped[str | None] = mapped_column(String(160))
     family: Mapped[str] = mapped_column(String(48), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     common_use: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
@@ -185,11 +185,11 @@ class ProductIngredient(UUIDPrimaryKey, TimestampMixin, Base):
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     ingredient_key: Mapped[str] = mapped_column(ForeignKey("ingredients.key", ondelete="CASCADE"), nullable=False)
     matched_text: Mapped[str] = mapped_column(String(160), nullable=False, default="", server_default="")
-    position: Mapped[Optional[int]] = mapped_column(Integer)
+    position: Mapped[int | None] = mapped_column(Integer)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0, server_default="1")
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="user_declared", server_default="user_declared")
     needs_confirmation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("item_id", "ingredient_key", name="uq_product_ingredient"),
@@ -207,7 +207,7 @@ class Routine(UUIDPrimaryKey, TimestampMixin, Base):
     label: Mapped[str] = mapped_column(String(80), nullable=False)
     frequency: Mapped[str] = mapped_column(String(80), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
-    climate: Mapped[Optional[str]] = mapped_column(String(24))
+    climate: Mapped[str | None] = mapped_column(String(24))
     engine_version: Mapped[str] = mapped_column(String(24), nullable=False, default=KNOWLEDGE_VERSION, server_default=KNOWLEDGE_VERSION)
     explanation_source: Mapped[str] = mapped_column(String(24), nullable=False, default="deterministic", server_default="deterministic")
     warnings: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
@@ -233,8 +233,8 @@ class RoutineStep(UUIDPrimaryKey, TimestampMixin, Base):
     required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     why: Mapped[str] = mapped_column(Text, nullable=False)
     frequency: Mapped[str] = mapped_column(String(80), nullable=False, default="", server_default="")
-    inventory_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("inventory_items.id", ondelete="SET NULL"))
-    product_name: Mapped[Optional[str]] = mapped_column(String(200))
+    inventory_item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("inventory_items.id", ondelete="SET NULL"))
+    product_name: Mapped[str | None] = mapped_column(String(200))
     safety_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     alternative: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     climate_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
@@ -257,7 +257,7 @@ class RoutineAdherence(UUIDPrimaryKey, TimestampMixin, Base):
     step_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("routine_steps.id", ondelete="CASCADE"), nullable=False)
     done_on: Mapped[date] = mapped_column(Date, nullable=False)
     completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
-    note: Mapped[Optional[str]] = mapped_column(String(240))
+    note: Mapped[str | None] = mapped_column(String(240))
 
     __table_args__ = (
         UniqueConstraint("step_id", "done_on", name="uq_routine_adherence_step_day"),
@@ -279,7 +279,7 @@ class UserReportedObservation(UUIDPrimaryKey, TimestampMixin, Base):
     observed_on: Mapped[date] = mapped_column(Date, nullable=False)
     area: Mapped[str] = mapped_column(String(32), nullable=False)
     note: Mapped[str] = mapped_column(String(500), nullable=False)
-    item_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("inventory_items.id", ondelete="SET NULL"))
+    item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("inventory_items.id", ondelete="SET NULL"))
     routed_to_professional: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     __table_args__ = (Index("ix_user_observations_account_date", "account_id", "observed_on"),)
@@ -298,8 +298,8 @@ class ProductExpiryEvent(UUIDPrimaryKey, TimestampMixin, Base):
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     rule_id: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False)
-    effective_expiry: Mapped[Optional[date]] = mapped_column(Date)
-    days_to_expiry: Mapped[Optional[int]] = mapped_column(Integer)
+    effective_expiry: Mapped[date | None] = mapped_column(Date)
+    days_to_expiry: Mapped[int | None] = mapped_column(Integer)
     detail: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
 
     __table_args__ = (Index("ix_product_expiry_account_item", "account_id", "item_id", "created_at"),)
@@ -314,7 +314,7 @@ class RoutineRecommendationRun(UUIDPrimaryKey, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="succeeded", server_default="succeeded")
     engine_version: Mapped[str] = mapped_column(String(24), nullable=False, default=KNOWLEDGE_VERSION, server_default=KNOWLEDGE_VERSION)
     explanation_source: Mapped[str] = mapped_column(String(24), nullable=False, default="deterministic", server_default="deterministic")
-    ai_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL"))
+    ai_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL"))
     products_considered: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     routines_built: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     warnings_raised: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -337,7 +337,7 @@ class SupplementSafetyFlag(UUIDPrimaryKey, TimestampMixin, Base):
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     flag: Mapped[str] = mapped_column(String(32), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
-    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("item_id", "flag", name="uq_supplement_flag"),
@@ -369,4 +369,4 @@ class HydrationPreference(UUIDPrimaryKey, TimestampMixin, Base):
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     remind_in_hot_weather_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
-    note: Mapped[Optional[str]] = mapped_column(String(240))
+    note: Mapped[str | None] = mapped_column(String(240))

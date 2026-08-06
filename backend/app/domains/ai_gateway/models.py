@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -44,7 +44,7 @@ class AIRun(UUIDPrimaryKey, TimestampMixin, Base):
 
     # Nullable: the signed-out preview has no account, and it still costs money,
     # so it still gets recorded.
-    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("accounts.id", ondelete="SET NULL"),
         nullable=True,
@@ -57,17 +57,17 @@ class AIRun(UUIDPrimaryKey, TimestampMixin, Base):
     schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
 
     status: Mapped[str] = mapped_column(String(16), nullable=False)
-    failure_type: Mapped[Optional[str]] = mapped_column(String(48), nullable=True)
+    failure_type: Mapped[str | None] = mapped_column(String(48), nullable=True)
     # Message only, never a stack trace and never provider credentials.
-    failure_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    failure_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    validation_passed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    validation_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
-    input_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    output_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Numeric, not float — this gets summed into spend reports.
-    estimated_cost_usd: Mapped[Optional[float]] = mapped_column(
+    estimated_cost_usd: Mapped[float | None] = mapped_column(
         Numeric(12, 6), nullable=True
     )
 
@@ -77,8 +77,8 @@ class AIRun(UUIDPrimaryKey, TimestampMixin, Base):
         Boolean, nullable=False, default=False, server_default="false"
     )
 
-    request_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
@@ -104,7 +104,7 @@ class AIRunOutput(UUIDPrimaryKey, TimestampMixin, Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
 
     # The model's own stated confidence, not ours.
-    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     verification_status: Mapped[str] = mapped_column(
         String(24),
         nullable=False,

@@ -25,7 +25,6 @@ Three rules govern what may be added here.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 ONTOLOGY_VERSION = "phase6-v1"
 
@@ -40,7 +39,7 @@ SEVERITIES = (SEVERITY_INFO, SEVERITY_CAUTION, SEVERITY_AVOID)
 class Ingredient:
     key: str
     display_name: str
-    inci_name: Optional[str]
+    inci_name: str | None
     family: str
     summary: str
     aliases: tuple[str, ...] = ()
@@ -74,7 +73,7 @@ FAMILY_ALCOHOL = "drying_alcohol"
 FAMILY_CLAY = "clay"
 
 
-def _ing(key: str, display: str, inci: Optional[str], family: str, summary: str, aliases: tuple[str, ...] = (), common_use: str = "") -> Ingredient:
+def _ing(key: str, display: str, inci: str | None, family: str, summary: str, aliases: tuple[str, ...] = (), common_use: str = "") -> Ingredient:
     return Ingredient(key=key, display_name=display, inci_name=inci, family=family, summary=summary, aliases=aliases, common_use=common_use)
 
 
@@ -364,7 +363,7 @@ PRODUCT_TYPE_SLOTS: dict[str, str] = {
 }
 
 
-def slot_for_product_type(product_type: Optional[str], category: str) -> Optional[str]:
+def slot_for_product_type(product_type: str | None, category: str) -> str | None:
     """Map a user's product-type wording onto a routine slot."""
     if not product_type:
         return None
@@ -457,7 +456,7 @@ FRAGRANCE_FAMILY_ALIASES: dict[str, str] = {
 }
 
 
-def normalise_fragrance_family(value: Optional[str]) -> Optional[str]:
+def normalise_fragrance_family(value: str | None) -> str | None:
     if not value:
         return None
     text = " ".join(str(value).lower().split())

@@ -8,7 +8,7 @@ import hashlib
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import and_, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -52,12 +52,12 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _month_key(dt: Optional[datetime] = None) -> str:
+def _month_key(dt: datetime | None = None) -> str:
     d = dt or _now()
     return f"{d.year:04d}-{d.month:02d}"
 
 
-def _hour_key(dt: Optional[datetime] = None) -> str:
+def _hour_key(dt: datetime | None = None) -> str:
     d = dt or _now()
     return f"{d.year:04d}-{d.month:02d}-{d.day:02d} {d.hour:02d}"
 
@@ -77,9 +77,9 @@ async def create_invite(
     *,
     label: str = "",
     max_uses: int = 1,
-    expires_at: Optional[datetime] = None,
-    created_by: Optional[uuid.UUID] = None,
-    code: Optional[str] = None,
+    expires_at: datetime | None = None,
+    created_by: uuid.UUID | None = None,
+    code: str | None = None,
 ) -> Invite:
     if max_uses < 1:
         raise ValueError("max_uses must be at least 1")
@@ -104,7 +104,7 @@ async def list_invites(session: AsyncSession) -> list[Invite]:
     return list(result.scalars().all())
 
 
-async def deactivate_invite(session: AsyncSession, invite_id: uuid.UUID) -> Optional[Invite]:
+async def deactivate_invite(session: AsyncSession, invite_id: uuid.UUID) -> Invite | None:
     invite = await session.get(Invite, invite_id)
     if invite is None:
         return None
@@ -188,7 +188,7 @@ class InviteReservationError(Exception):
 
     default_code = "invite_invalid"
 
-    def __init__(self, code: Optional[str] = None, message: str = "") -> None:
+    def __init__(self, code: str | None = None, message: str = "") -> None:
         super().__init__(message or "The invite cannot be reserved.")
         self.code = code or self.default_code
         self.message = message or "The invite cannot be reserved."
@@ -230,7 +230,7 @@ async def reserve_invite(
     *,
     code: str,
     email: str,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> tuple[InviteRegistrationReservation, str]:
     """Atomically reserve a spot for ``email`` against invite ``code``.
 
@@ -329,7 +329,7 @@ async def consume_reservation(
     challenge: str,
     email: str,
     supabase_user_id: uuid.UUID,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> Invite:
     """Atomically consume a reservation and redeem the underlying invite.
 
@@ -422,7 +422,7 @@ async def consume_reservation(
 
 
 async def expire_stale_reservations(
-    session: AsyncSession, *, now: Optional[datetime] = None
+    session: AsyncSession, *, now: datetime | None = None
 ) -> int:
     """Mark active reservations whose ``expires_at`` has passed as expired.
 
@@ -516,7 +516,7 @@ async def record_usage(
     *,
     account_id: uuid.UUID,
     feature: str,
-    idempotency_key: Optional[str] = None,
+    idempotency_key: str | None = None,
     quantity: int = 1,
 ) -> None:
     """Append a usage event. Idempotent by ``(account, feature, key)``.

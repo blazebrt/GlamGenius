@@ -41,7 +41,7 @@ async def list_workers(
         {
             "worker_name": w.worker_name,
             "last_heartbeat_at": w.last_heartbeat_at.isoformat(),
-            "last_error": w.last_error,
+            "last_error_summary": w.last_error_summary,
         }
         for w in workers
     ]

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,8 +20,8 @@ async def create(
     session: AsyncSession,
     profile: AppearanceProfile,
     *, key: str, value: Any, source: str, confidence: float, why: str,
-    source_ai_run_id: Optional[uuid.UUID] = None,
-) -> Optional[AttributeObservation]:
+    source_ai_run_id: uuid.UUID | None = None,
+) -> AttributeObservation | None:
     if source not in ALLOWED_SOURCES or source == "user_declared":
         raise ValueError("Observations require an inference or verification source")
     spec = ATTRIBUTE_REGISTRY.get(key)
@@ -81,7 +81,7 @@ def reject(row: AttributeObservation) -> None:
     row.reviewed_at = utcnow()
 
 
-def edit(row: AttributeObservation, value: Any, state: Optional[str] = None) -> None:
+def edit(row: AttributeObservation, value: Any, state: str | None = None) -> None:
     if row.verification_state == "rejected":
         raise ValidationFailedError("A rejected observation is kept unchanged as history.")
     row.proposed_value = validate_attribute(row.key, value)

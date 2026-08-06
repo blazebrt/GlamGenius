@@ -30,7 +30,7 @@ async def test_me_returns_supabase_uuid(app_client, db_clean, registered_supabas
 
 @pytest.mark.asyncio
 async def test_access_register_requires_invite(app_client, db_clean, fake_supabase_user):
-    """Package A/B: registration requires a reservation challenge from
+    """Registration requires a reservation challenge from
     ``/access/reserve``. Calling ``/access/register`` without one is a
     400 with ``registration_challenge_required``."""
     token, _ = fake_supabase_user()

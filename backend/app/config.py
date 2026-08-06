@@ -229,8 +229,22 @@ def validate_production_configuration() -> None:
     if not SUPABASE_JWT_ISSUER:
         raise RuntimeError("CRITICAL: SUPABASE_JWT_ISSUER must be set in production.")
 
-    if not POSTGRES_URL or "localhost" in POSTGRES_URL.lower() or "127.0.0.1" in POSTGRES_URL:
-        raise RuntimeError("CRITICAL: POSTGRES_URL must be a valid remote URL in production.")
+    if not POSTGRES_URL:
+        raise RuntimeError("CRITICAL: POSTGRES_URL must be set in production.")
+    
+    import ipaddress
+    import urllib.parse
+    parsed = urllib.parse.urlparse(POSTGRES_URL)
+    if not parsed.hostname:
+        raise RuntimeError("CRITICAL: POSTGRES_URL must have a valid hostname.")
+    if parsed.hostname.lower() == "localhost":
+        raise RuntimeError("CRITICAL: POSTGRES_URL cannot be localhost in production.")
+    try:
+        ip = ipaddress.ip_address(parsed.hostname)
+        if ip.is_loopback or ip.is_unspecified:
+            raise RuntimeError(f"CRITICAL: POSTGRES_URL cannot be a loopback or unspecified IP ({parsed.hostname}).")
+    except ValueError:
+        pass
 
     if not SUPABASE_STORAGE_BUCKET:
         raise RuntimeError("CRITICAL: SUPABASE_STORAGE_BUCKET must be set in production.")

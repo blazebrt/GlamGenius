@@ -13,7 +13,6 @@ gate.
 from __future__ import annotations
 
 import uuid
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -24,7 +23,7 @@ from app.domains.identity.models import Account
 
 async def get_account(
     session: AsyncSession, supabase_user_id: uuid.UUID
-) -> Optional[Account]:
+) -> Account | None:
     """Return the ``accounts`` row for a Supabase UUID or ``None``.
 
     Never creates. Never mutates. Safe on any protected request.

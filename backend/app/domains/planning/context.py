@@ -17,7 +17,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,7 +65,7 @@ WEAK_MATCH = 0.5
 CLARIFY_BELOW = 0.6
 
 
-def infer_occasion(title: str, *, is_weekend: bool = False) -> tuple[Optional[str], float]:
+def infer_occasion(title: str, *, is_weekend: bool = False) -> tuple[str | None, float]:
     """Guess what kind of event this is, and say how sure we are."""
     text = " ".join((title or "").lower().split())
     if not text:
@@ -83,7 +83,7 @@ def infer_occasion(title: str, *, is_weekend: bool = False) -> tuple[Optional[st
     return None, 0.0
 
 
-def default_occasion_for(plan_date: date, work_context: Optional[str]) -> str:
+def default_occasion_for(plan_date: date, work_context: str | None) -> str:
     """What a day is when nothing on the calendar says otherwise."""
     if clock.is_weekend(plan_date):
         return "everyday"
@@ -101,14 +101,14 @@ def default_occasion_for(plan_date: date, work_context: Optional[str]) -> str:
 class DayEvent:
     """A commitment, as the compiler sees it."""
 
-    id: Optional[uuid.UUID]
+    id: uuid.UUID | None
     title: str
     starts_at: datetime
-    ends_at: Optional[datetime]
+    ends_at: datetime | None
     all_day: bool
-    location: Optional[str]
-    occasion_key: Optional[str]
-    dress_code_hint: Optional[str]
+    location: str | None
+    occasion_key: str | None
+    dress_code_hint: str | None
     confidence: float
     user_confirmed: bool
 
@@ -125,14 +125,14 @@ class DayContext:
     timezone_name: str
     now_local: datetime
 
-    weather: Optional[WeatherReading] = None
-    weather_snapshot_id: Optional[uuid.UUID] = None
-    weather_unavailable_reason: Optional[str] = None
+    weather: WeatherReading | None = None
+    weather_snapshot_id: uuid.UUID | None = None
+    weather_unavailable_reason: str | None = None
 
     events: list[DayEvent] = field(default_factory=list)
     occasion_key: str = "everyday"
     occasion_confidence: float = 1.0
-    dress_code: Optional[str] = None
+    dress_code: str | None = None
 
     owned: list[OwnedItem] = field(default_factory=list)
     unavailable_item_ids: list[uuid.UUID] = field(default_factory=list)
@@ -146,7 +146,7 @@ class DayContext:
     missing_information: list[str] = field(default_factory=list)
 
     @property
-    def primary_event(self) -> Optional[DayEvent]:
+    def primary_event(self) -> DayEvent | None:
         """The commitment that should drive the outfit.
 
         The most formal one, then the earliest — dressing for the 9am standup
@@ -171,7 +171,7 @@ class DayContext:
     def recent_item_ids(self) -> list[uuid.UUID]:
         return list(self.item_last_worn)
 
-    def days_since_worn(self, item_id: uuid.UUID) -> Optional[int]:
+    def days_since_worn(self, item_id: uuid.UUID) -> int | None:
         worn = self.item_last_worn.get(item_id)
         return None if worn is None else (self.plan_date - worn).days
 
@@ -277,7 +277,7 @@ async def day_events(
 
 async def latest_weather(
     session: AsyncSession, account_id: uuid.UUID, plan_date: date
-) -> Optional[WeatherSnapshot]:
+) -> WeatherSnapshot | None:
     return (await session.execute(
         select(WeatherSnapshot)
         .where(WeatherSnapshot.account_id == account_id, WeatherSnapshot.for_date == plan_date)
@@ -290,10 +290,10 @@ async def gather(
     session: AsyncSession,
     *,
     account_id: uuid.UUID,
-    plan_date: Optional[date] = None,
-    timezone_name: Optional[str] = None,
+    plan_date: date | None = None,
+    timezone_name: str | None = None,
     repetition_window_days: int = 7,
-    moment: Optional[datetime] = None,
+    moment: datetime | None = None,
 ) -> DayContext:
     """Build the full picture of one day."""
     attributes = await style_context.confirmed_attributes(session, account_id)

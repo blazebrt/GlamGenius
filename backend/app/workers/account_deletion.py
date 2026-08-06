@@ -53,10 +53,10 @@ async def run_forever() -> None:
                 stmt = insert(WorkerStatus).values(
                     worker_name=worker_name,
                     last_heartbeat_at=func.now(),
-                    last_error=None
+                    last_error_summary=None
                 ).on_conflict_do_update(
                     index_elements=['worker_name'],
-                    set_={"last_heartbeat_at": func.now(), "last_error": None}
+                    set_={"last_heartbeat_at": func.now(), "last_error_summary": None}
                 )
                 await session.execute(stmt)
                 await session.commit()
@@ -68,10 +68,10 @@ async def run_forever() -> None:
                     stmt = insert(WorkerStatus).values(
                         worker_name=worker_name,
                         last_heartbeat_at=func.now(),
-                        last_error=str(e)
+                        last_error_summary=str(e)[:255]
                     ).on_conflict_do_update(
                         index_elements=['worker_name'],
-                        set_={"last_heartbeat_at": func.now(), "last_error": str(e)}
+                        set_={"last_heartbeat_at": func.now(), "last_error_summary": str(e)[:255]}
                     )
                     await error_session.execute(stmt)
                     await error_session.commit()

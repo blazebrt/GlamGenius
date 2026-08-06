@@ -25,7 +25,6 @@ measurement.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 REGISTRY_VERSION = "phase7-v1"
 
@@ -400,7 +399,7 @@ def validate_registry() -> None:
 validate_registry()
 
 
-def get(key: str) -> Optional[MetricDefinition]:
+def get(key: str) -> MetricDefinition | None:
     return METRIC_BY_KEY.get(key)
 
 

@@ -100,3 +100,16 @@ async def test_empty_database_upgrades_and_survives_a_roundtrip(db_clean):
     extra = live_tables - expected
     assert not missing, f"tables missing from live db: {sorted(missing)}"
     assert not extra, f"unexpected tables in live db: {sorted(extra)}"
+
+def test_system_worker_status_schema():
+    table = Base.metadata.tables["system_worker_status"]
+    columns = {col.name: type(col.type).__name__ for col in table.columns}
+    assert "worker_name" in columns
+    assert "last_heartbeat_at" in columns
+    assert "last_error_summary" in columns
+    assert "started_at" in columns
+    assert "last_successful_job_at" in columns
+    assert "last_attempted_job_at" in columns
+    assert "last_error_code" in columns
+    assert "last_error_at" in columns
+    assert "service_version" in columns
