@@ -132,7 +132,7 @@ jobs:
         run: ruff check .
       - name: Block unpinned GitHub Actions
         run: |
-          if grep -rnE "uses:.*@master|uses:.*@main" .github/workflows/; then
+          if grep -rnE "uses:.*@[m]aster|uses:.*@[m]ain" .github/workflows/; then
             echo "FAIL: Unpinned GitHub Actions found (using @master or @main)"
             exit 1
           fi

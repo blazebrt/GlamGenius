@@ -11,13 +11,14 @@ async def test_release_concurrency_blocks(db_clean):
     """
     backend_root = Path(__file__).parent.parent
     
+    import sys
     # Run two release processes concurrently
     proc1 = await asyncio.create_subprocess_exec(
-        "python", "-m", "app.release",
+        sys.executable, "-m", "app.release",
         cwd=backend_root
     )
     proc2 = await asyncio.create_subprocess_exec(
-        "python", "-m", "app.release",
+        sys.executable, "-m", "app.release",
         cwd=backend_root
     )
     

@@ -43,13 +43,13 @@ async def release() -> None:
             logger.info("Running alembic upgrade head...")
             # We run Alembic as a subprocess to keep its env.py logic separate
             # and avoid async engine sharing complexities.
-            result = subprocess.run(["alembic", "upgrade", "head"], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], capture_output=True, text=True)
             if result.returncode != 0:
                 logger.error(f"Alembic upgrade failed:\n{result.stderr}\n{result.stdout}")
                 sys.exit(1)
             
             logger.info("Running alembic check...")
-            result = subprocess.run(["alembic", "check"], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, "-m", "alembic", "check"], capture_output=True, text=True)
             if result.returncode != 0:
                 logger.error(f"Alembic check failed:\n{result.stderr}\n{result.stdout}")
                 sys.exit(1)

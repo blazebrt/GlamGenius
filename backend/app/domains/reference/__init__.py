@@ -6,7 +6,7 @@ every row is global and identifies itself by a natural key so the seed
 bootstrap can upsert safely and idempotently.
 
 This module adds the reference tables
-the seed catalogue completion (Package E) required:
+the seed catalogue completion required:
 
 * ``seed_version_records`` — a small audit trail that says which seed version
   ran when, so operators can trace which release wrote which rows.

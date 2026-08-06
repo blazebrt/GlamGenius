@@ -188,7 +188,7 @@ REGISTRY: dict[str, Classification] = {
     "feature_flags": Classification.NOT_USER_OWNED,
     # --- Operational only ---
     "system_worker_status": Classification.OPERATIONAL,
-    # --- Reference data added by Package E (seed catalogue completion) ---
+    # --- Reference data added by the seed catalogue completion ---
     # Note: ``routine_templates`` and ``perfume_context_rules`` were declared
     # earlier in this dict; the entries below cover only the new tables.
     "seed_version_records": Classification.OPERATIONAL,

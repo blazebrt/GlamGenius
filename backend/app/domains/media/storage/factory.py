@@ -3,7 +3,7 @@
 Production **must** use ``supabase``. The ``local`` adapter is retained for
 unit tests and local development only, and is refused at startup when
 ``APP_ENV=production``. The old Cloud Object Storage adapter and its Python SDK dependency
-were removed as part of the Supabase hardening (Package B).
+were removed as part of the Supabase hardening.
 """
 from __future__ import annotations
 
