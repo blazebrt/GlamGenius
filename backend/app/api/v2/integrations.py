@@ -10,12 +10,13 @@ No access token is accepted, stored or returned by any route here. See
 from __future__ import annotations
 
 import uuid
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.planning import service
 from app.domains.planning import context as context_stage
-from app.domains.planning.providers import PROVIDER_MANUAL, catalogue
+from app.domains.planning import service
+from app.domains.planning.providers import catalogue
 from app.domains.planning.schemas import CalendarConnect, CalendarEventPatch
 from app.shared.database.sql import get_session
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag

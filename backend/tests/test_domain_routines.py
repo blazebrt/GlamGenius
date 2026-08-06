@@ -26,8 +26,6 @@ entry point ``python -m app.bootstrap.reference_data`` uses.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import func, select
-
 from app.bootstrap import main as run_seed
 from app.domains.reference import (
     IngredientContraindicationRule,
@@ -43,7 +41,7 @@ from app.domains.routines.models import (
     RoutineTemplate,
 )
 from app.shared.database.sql import get_sessionmaker
-
+from sqlalchemy import func, select
 
 pytestmark = pytest.mark.asyncio
 

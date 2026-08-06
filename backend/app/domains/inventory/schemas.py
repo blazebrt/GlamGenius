@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -31,9 +31,9 @@ class ItemCreate(BaseModel):
     currency: str = Field(default="INR", min_length=3, max_length=3)
     condition: str = Field(default="good", max_length=24)
     replacement_priority: str = Field(default="none", max_length=24)
-    details: Dict[str, Any] = Field(default_factory=dict)
-    attributes: List[AttributeInput] = Field(default_factory=list, max_length=80)
-    image_ids: List[uuid.UUID] = Field(default_factory=list, max_length=12)
+    details: dict[str, Any] = Field(default_factory=dict)
+    attributes: list[AttributeInput] = Field(default_factory=list, max_length=80)
+    image_ids: list[uuid.UUID] = Field(default_factory=list, max_length=12)
     client_mutation_id: Optional[str] = Field(default=None, max_length=80)
 
     @model_validator(mode="after")
@@ -53,9 +53,9 @@ class ItemPatch(BaseModel):
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
     condition: Optional[str] = Field(default=None, max_length=24)
     replacement_priority: Optional[str] = Field(default=None, max_length=24)
-    details: Dict[str, Any] = Field(default_factory=dict)
-    attributes: List[AttributeInput] = Field(default_factory=list, max_length=80)
-    image_ids: Optional[List[uuid.UUID]] = Field(default=None, max_length=12)
+    details: dict[str, Any] = Field(default_factory=dict)
+    attributes: list[AttributeInput] = Field(default_factory=list, max_length=80)
+    image_ids: Optional[list[uuid.UUID]] = Field(default=None, max_length=12)
 
 
 class UsageCreate(BaseModel):
@@ -98,9 +98,9 @@ class ExtractedInventoryItem(BaseModel):
     display_name: str = Field(min_length=1, max_length=160)
     brand: Optional[str] = Field(default=None, max_length=120)
     confidence: float = Field(ge=0.35, le=1)
-    details: Dict[str, Any] = Field(default_factory=dict)
-    attributes: List[ExtractedAttribute] = Field(default_factory=list, max_length=50)
-    uncertain_fields: List[str] = Field(default_factory=list, max_length=50)
+    details: dict[str, Any] = Field(default_factory=dict)
+    attributes: list[ExtractedAttribute] = Field(default_factory=list, max_length=50)
+    uncertain_fields: list[str] = Field(default_factory=list, max_length=50)
     photo_quality_notes: str = Field(min_length=3, max_length=400)
 
     @model_validator(mode="after")

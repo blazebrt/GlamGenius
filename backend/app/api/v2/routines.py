@@ -16,8 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.recommendation.occasions import OCCASION_KEYS
 from app.domains.routines import service
 from app.domains.routines.schemas import (
-    HydrationPreferencePatch, IngredientCheckRequest, IngredientConfirmRequest,
-    NutritionPreferencePatch, ObservationInput, PerfumeQuery, RoutineGenerateRequest,
+    HydrationPreferencePatch,
+    IngredientCheckRequest,
+    IngredientConfirmRequest,
+    NutritionPreferencePatch,
+    ObservationInput,
+    PerfumeQuery,
+    RoutineGenerateRequest,
     RoutineStepComplete,
 )
 from app.shared.database.sql import get_session

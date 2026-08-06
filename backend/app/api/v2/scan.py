@@ -6,7 +6,7 @@ allowance. Image base64 is never stored.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -34,7 +34,7 @@ class ScanAnalyseRequest(BaseModel):
     idempotency_key: Optional[str] = None
 
 
-def _serialise_scan(scan: Scan) -> Dict[str, Any]:
+def _serialise_scan(scan: Scan) -> dict[str, Any]:
     return {
         "id": str(scan.id),
         "scan_type": scan.scan_type,
@@ -118,8 +118,9 @@ async def analyse_scan(
     # ---- Run the analysis via the AI provider. ----------------------------
     # A provider failure surfaces cleanly here. A failure does NOT record
     # beta usage and does NOT persist an "analysis" row.
-    from app.domains.ai_gateway.providers import gemini as ai_provider
     import json as _json
+
+    from app.domains.ai_gateway.providers import gemini as ai_provider
 
     if not ai_provider.is_configured():
         raise HTTPException(
@@ -187,7 +188,7 @@ async def analyse_scan(
 
     # Parse the provider's JSON leniently — a bad response is a provider
     # failure, not a client error.
-    analysis: Dict[str, Any]
+    analysis: dict[str, Any]
     try:
         text = provider_response.text.strip()
         # Strip Markdown code fences the model sometimes emits.

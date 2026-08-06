@@ -23,13 +23,12 @@ import base64
 import uuid
 
 import pytest
-from sqlalchemy import func, select
-
 from app.domains.consent.models import CONSENT_PHOTO_ANALYSIS, Consent
 from app.domains.profile.models import AttributeObservation
 from app.shared.database.sql import get_sessionmaker
-from tests.conftest import auth, png_bytes
+from sqlalchemy import func, select
 
+from tests.conftest import auth, png_bytes
 
 pytestmark = pytest.mark.asyncio
 

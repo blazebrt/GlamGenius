@@ -28,7 +28,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, Generic, Optional, Type, TypeVar
+from typing import Any, Generic, Optional, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -71,7 +71,7 @@ class AIResult(Generic[T]):
     latency_ms: int
     estimated_cost_usd: Optional[Decimal]
 
-    def provenance(self) -> Dict[str, Any]:
+    def provenance(self) -> dict[str, Any]:
         """The provenance envelope attached to anything shown to the user."""
         return {
             "source": self.provider,
@@ -87,7 +87,7 @@ class AIResult(Generic[T]):
 
 # What to tell the user for each way a run can fail. Keyed by failure type so
 # the message and the recorded reason can never drift apart.
-_FAILURE_PRESENTATION: Dict[AIFailureType, Dict[str, Any]] = {
+_FAILURE_PRESENTATION: dict[AIFailureType, dict[str, Any]] = {
     AIFailureType.PROVIDER_NOT_CONFIGURED: {
         "message": (
             "Photo analysis is temporarily switched off. Nothing was charged to "
@@ -142,7 +142,7 @@ def _estimate_cost(
     return cost.quantize(Decimal("0.000001"))
 
 
-def parse_json(text: str) -> Dict[str, Any]:
+def parse_json(text: str) -> dict[str, Any]:
     """Parse a model's JSON reply, tolerating markdown code fences."""
     clean = (text or "").strip()
     if clean.startswith("```json"):
@@ -214,7 +214,7 @@ async def run_structured(
     feature: str,
     prompt: str,
     system: str,
-    schema: Type[T],
+    schema: type[T],
     prompt_version: str,
     schema_version: str,
     account_id_str: Optional[str] = None,
@@ -228,7 +228,7 @@ async def run_structured(
     """
     started = time.perf_counter()
 
-    base_record: Dict[str, Any] = {
+    base_record: dict[str, Any] = {
         "account_id_str": account_id_str,
         "feature": feature,
         "provider": gemini.PROVIDER_NAME,

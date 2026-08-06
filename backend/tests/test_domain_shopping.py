@@ -23,8 +23,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import func, select
-
 from app.domains.recommendation import roi
 from app.domains.recommendation.models import (
     PurchaseDecision,
@@ -33,8 +31,9 @@ from app.domains.recommendation.models import (
     ShoppingCandidate,
 )
 from app.shared.database.sql import get_sessionmaker
-from tests.conftest import auth
+from sqlalchemy import func, select
 
+from tests.conftest import auth
 
 pytestmark = pytest.mark.asyncio
 

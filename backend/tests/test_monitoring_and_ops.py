@@ -21,10 +21,8 @@ What this protects against
 from __future__ import annotations
 
 import pytest
-
 from app.shared.flags import service as flags
 from app.shared.observability.sentry_privacy import REDACTED, scrub_event
-
 
 pytestmark = pytest.mark.asyncio
 

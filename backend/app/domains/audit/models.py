@@ -10,7 +10,7 @@ several actions; not a location log.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from sqlalchemy import ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB
@@ -45,7 +45,7 @@ class AuditEvent(UUIDPrimaryKey, TimestampMixin, Base):
     subject_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     subject_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
-    context: Mapped[Dict[str, Any]] = mapped_column(
+    context: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
     )
     ip_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

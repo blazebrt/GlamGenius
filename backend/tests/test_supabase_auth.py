@@ -2,16 +2,15 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
+from app.shared.security import supabase_auth
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from fastapi import FastAPI, Depends
+from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
-
-from app.shared.security import supabase_auth
 
 # Generate a temporary RSA keypair for testing
 _private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -41,9 +40,9 @@ def _issue_rs256(
         "iss": iss,
         "aud": aud,
         "role": role,
-        "iat": int((datetime.now(timezone.utc)).timestamp()),
+        "iat": int((datetime.now(UTC)).timestamp()),
         "exp": int(
-            (datetime.now(timezone.utc) + timedelta(seconds=exp_delta_seconds)).timestamp()
+            (datetime.now(UTC) + timedelta(seconds=exp_delta_seconds)).timestamp()
         ),
     }
     if extra:
@@ -196,7 +195,7 @@ async def test_hs256_rejection(probe_app):
         "iss": "https://test.supabase.co/auth/v1",
         "aud": "authenticated",
         "role": "authenticated",
-        "exp": int((datetime.now(timezone.utc) + timedelta(seconds=3600)).timestamp()),
+        "exp": int((datetime.now(UTC) + timedelta(seconds=3600)).timestamp()),
     }
     hs256_token = jwt.encode(payload, "secret", algorithm="HS256")
     resp = await _get(probe_app, {"Authorization": f"Bearer {hs256_token}"})

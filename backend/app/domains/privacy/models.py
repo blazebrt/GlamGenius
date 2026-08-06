@@ -27,7 +27,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
 
-
 # Ordered state machine. Each stage is idempotent; a worker crash between
 # two stages is safe because the next tick picks up at ``state``.
 STATE_REQUESTED = "requested"

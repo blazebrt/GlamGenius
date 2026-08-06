@@ -27,7 +27,7 @@ every run, so old rows keep meaning what they meant.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -87,41 +87,41 @@ class ColorSuggestion(_Block):
 class FashionBlock(_Block):
     # The one hard requirement in this block. Colour advice is the core of what
     # the product promises from a photo; without it there is nothing to show.
-    best_clothing_colors: List[ColorSuggestion] = Field(min_length=1)
-    colors_to_go_easy_on: List[Dict[str, Any]] = Field(default_factory=list)
-    silhouettes_for_you: List[Dict[str, Any]] = Field(default_factory=list)
-    fits_and_proportions: List[str] = Field(default_factory=list)
-    wardrobe_ideas_india: List[Dict[str, Any]] = Field(default_factory=list)
-    current_trends_to_try: List[Dict[str, Any]] = Field(default_factory=list)
+    best_clothing_colors: list[ColorSuggestion] = Field(min_length=1)
+    colors_to_go_easy_on: list[dict[str, Any]] = Field(default_factory=list)
+    silhouettes_for_you: list[dict[str, Any]] = Field(default_factory=list)
+    fits_and_proportions: list[str] = Field(default_factory=list)
+    wardrobe_ideas_india: list[dict[str, Any]] = Field(default_factory=list)
+    current_trends_to_try: list[dict[str, Any]] = Field(default_factory=list)
     metal_and_accessories: Optional[str] = Field(default=None, max_length=512)
-    fabric_texture_tips: List[str] = Field(default_factory=list)
+    fabric_texture_tips: list[str] = Field(default_factory=list)
 
 
 class DailyCareBlock(_Block):
-    morning: List[str] = Field(default_factory=list)
-    evening: List[str] = Field(default_factory=list)
-    weekly: List[str] = Field(default_factory=list)
+    morning: list[str] = Field(default_factory=list)
+    evening: list[str] = Field(default_factory=list)
+    weekly: list[str] = Field(default_factory=list)
     climate_note: Optional[str] = Field(default=None, max_length=512)
 
 
 class CareIngredientsBlock(_Block):
-    for_skin: List[Dict[str, Any]] = Field(default_factory=list)
-    for_hair: List[Dict[str, Any]] = Field(default_factory=list)
-    ingredients_to_go_easy_on: List[Dict[str, Any]] = Field(default_factory=list)
+    for_skin: list[dict[str, Any]] = Field(default_factory=list)
+    for_hair: list[dict[str, Any]] = Field(default_factory=list)
+    ingredients_to_go_easy_on: list[dict[str, Any]] = Field(default_factory=list)
     simple_shopping_rule: Optional[str] = Field(default=None, max_length=512)
 
 
 class NutritionBlock(_Block):
     goal: Optional[str] = Field(default=None, max_length=512)
-    ingredients: List[Dict[str, Any]] = Field(default_factory=list)
-    simple_plate_ideas: List[str] = Field(default_factory=list)
+    ingredients: list[dict[str, Any]] = Field(default_factory=list)
+    simple_plate_ideas: list[str] = Field(default_factory=list)
     hydration: Optional[str] = Field(default=None, max_length=512)
     diet_fit: Optional[str] = Field(default=None, max_length=512)
 
 
 class CoachSummaryBlock(_Block):
     headline: str = Field(min_length=1, max_length=512)
-    top_3_actions_this_week: List[str] = Field(default_factory=list)
+    top_3_actions_this_week: list[str] = Field(default_factory=list)
     recheck_in_days: Optional[int] = Field(default=None, ge=1, le=365)
 
 
@@ -152,13 +152,13 @@ class CoachAnalysis(BaseModel):
     meta: MetaBlock = Field(default_factory=MetaBlock)
     profile: ProfileBlock = Field(default_factory=ProfileBlock)
     wellness_scores: Optional[WellnessScoresBlock] = None
-    observations: List[Observation] = Field(min_length=1)
+    observations: list[Observation] = Field(min_length=1)
     fashion: FashionBlock
-    style: Optional[Dict[str, Any]] = None
+    style: Optional[dict[str, Any]] = None
     daily_care: DailyCareBlock = Field(default_factory=DailyCareBlock)
     care_ingredients: CareIngredientsBlock = Field(default_factory=CareIngredientsBlock)
     nutrition: NutritionBlock = Field(default_factory=NutritionBlock)
-    salon_suggestions: List[Dict[str, Any]] = Field(default_factory=list)
+    salon_suggestions: list[dict[str, Any]] = Field(default_factory=list)
     coach_summary: CoachSummaryBlock
 
 
@@ -168,20 +168,20 @@ class StylePlan(BaseModel):
     model_config = ConfigDict(extra="allow", str_strip_whitespace=True)
 
     headline: str = Field(min_length=1, max_length=512)
-    fashion: Optional[Dict[str, Any]] = None
-    style: Optional[Dict[str, Any]] = None
-    daily_care: Optional[Dict[str, Any]] = None
-    care_ingredients: Optional[Dict[str, Any]] = None
-    nutrition: Optional[Dict[str, Any]] = None
-    salon_suggestions: List[Dict[str, Any]] = Field(default_factory=list)
-    top_3_actions_this_week: List[str] = Field(default_factory=list)
+    fashion: Optional[dict[str, Any]] = None
+    style: Optional[dict[str, Any]] = None
+    daily_care: Optional[dict[str, Any]] = None
+    care_ingredients: Optional[dict[str, Any]] = None
+    nutrition: Optional[dict[str, Any]] = None
+    salon_suggestions: list[dict[str, Any]] = Field(default_factory=list)
+    top_3_actions_this_week: list[str] = Field(default_factory=list)
     disclaimer: str = DISCLAIMER
 
 
 # Values that may be written into the stored user profile. Anything else the
 # model says is shown to the user but not saved, so a one-off odd answer cannot
 # quietly become a permanent "fact" about them.
-PROFILE_VOCABULARY: Dict[str, set[str]] = {
+PROFILE_VOCABULARY: dict[str, set[str]] = {
     "face_shape": {"oval", "round", "square", "heart", "oblong", "diamond"},
     "skin_type_visible": {"oily", "dry", "combination", "normal"},
     "skin_tone": {"fair", "wheatish", "medium", "dusky", "deep"},

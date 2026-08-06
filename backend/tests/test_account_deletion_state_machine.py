@@ -14,20 +14,15 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from typing import List
 
 import pytest
-
 from app.domains.identity import service as identity
 from app.domains.privacy import deletion_service
 from app.domains.privacy.models import (
     STATE_COMPLETE,
     STATE_FAILED_RETRYABLE,
-    STATE_STORAGE_DELETING,
-    AccountDeletionJob,
 )
 from app.shared.database.sql import get_sessionmaker
-
 
 pytestmark = pytest.mark.asyncio
 
@@ -38,7 +33,7 @@ pytestmark = pytest.mark.asyncio
 
 class _FakeSupabaseAdmin:
     def __init__(self) -> None:
-        self.deleted_users: List[str] = []
+        self.deleted_users: list[str] = []
         self.raises: Exception | None = None
 
     class _AuthAdmin:

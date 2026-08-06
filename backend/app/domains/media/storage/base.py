@@ -12,7 +12,8 @@ provider is unreachable right now".
 from __future__ import annotations
 
 import uuid
-from typing import Iterable, Optional, Protocol, runtime_checkable
+from collections.abc import Iterable
+from typing import Optional, Protocol, runtime_checkable
 
 
 class StorageError(Exception):

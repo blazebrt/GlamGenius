@@ -21,26 +21,24 @@ What this protects against
 """
 from __future__ import annotations
 
-import uuid
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
-from sqlalchemy import func, select
-
 from app.bootstrap import run as run_seed
 from app.domains.media.storage import factory as storage_factory
 from app.domains.media.storage.base import StorageUnavailable, account_prefix
-from app.domains.privacy import Classification, REGISTRY
-from app.domains.privacy import deletion_service, export as export_service
+from app.domains.privacy import REGISTRY, Classification, deletion_service
+from app.domains.privacy import export as export_service
 from app.domains.privacy.models import (
     STATE_COMPLETE,
     STATE_FAILED_RETRYABLE,
     AccountDeletionJob,
 )
 from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import func, select
+
 from tests.conftest import auth, png_bytes
 from tests.journey import ok, populate_every_domain
-
 
 pytestmark = pytest.mark.asyncio
 
@@ -49,7 +47,7 @@ class _FakeStorage:
     backend_name = "fake"
 
     def __init__(self) -> None:
-        self.objects: Dict[str, bytes] = {}
+        self.objects: dict[str, bytes] = {}
         self.delete_prefix_error: BaseException | None = None
         self.delete_prefix_calls = 0
 
@@ -97,7 +95,7 @@ def storage():
 @pytest.fixture
 def auth_spy(monkeypatch, storage):
     """Spy on Supabase Auth deletion, recording the state it ran against."""
-    calls: List[Dict[str, Any]] = []
+    calls: list[dict[str, Any]] = []
 
     class _AuthAdmin:
         @staticmethod

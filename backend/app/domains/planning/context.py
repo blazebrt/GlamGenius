@@ -17,27 +17,31 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.planning import clock
 from app.domains.planning.models import (
-    LAUNDRY_CLEAN, LAUNDRY_IN_WASH, LAUNDRY_UNAVAILABLE, CalendarEvent, LaundryStateEvent,
-    OutfitSchedule, WeatherSnapshot,
+    LAUNDRY_IN_WASH,
+    LAUNDRY_UNAVAILABLE,
+    CalendarEvent,
+    LaundryStateEvent,
+    OutfitSchedule,
+    WeatherSnapshot,
 )
 from app.domains.planning.providers import ProviderUnavailable, weather_provider
-from app.domains.planning.providers.base import CalendarEventReading, WeatherReading
+from app.domains.planning.providers.base import WeatherReading
 from app.domains.recommendation import context as style_context
 from app.domains.recommendation.context import OwnedItem
-from app.domains.recommendation.occasions import OCCASIONS, get_occasion
+from app.domains.recommendation.occasions import OCCASIONS
 
 # --- Inferring an occasion from an event title -------------------------------
 # Deliberately conservative. A wrong guess here silently changes what someone
 # wears to work, so a match must be a real word match, and a weak match is
 # reported as low confidence rather than acted on silently.
-EVENT_KEYWORDS: Dict[str, tuple[str, ...]] = {
+EVENT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "interview": ("interview", "hiring panel", "screening round"),
     "wedding": ("wedding", "shaadi", "baraat", "reception", "sangeet", "mehendi", "nikah", "haldi"),
     "festival": ("diwali", "holi", "eid", "pongal", "onam", "navratri", "puja", "pooja", "ganesh", "durga", "christmas", "festival"),
@@ -125,21 +129,21 @@ class DayContext:
     weather_snapshot_id: Optional[uuid.UUID] = None
     weather_unavailable_reason: Optional[str] = None
 
-    events: List[DayEvent] = field(default_factory=list)
+    events: list[DayEvent] = field(default_factory=list)
     occasion_key: str = "everyday"
     occasion_confidence: float = 1.0
     dress_code: Optional[str] = None
 
-    owned: List[OwnedItem] = field(default_factory=list)
-    unavailable_item_ids: List[uuid.UUID] = field(default_factory=list)
+    owned: list[OwnedItem] = field(default_factory=list)
+    unavailable_item_ids: list[uuid.UUID] = field(default_factory=list)
     draft_count: int = 0
 
-    recent_look_ids: List[uuid.UUID] = field(default_factory=list)
-    item_last_worn: Dict[uuid.UUID, date] = field(default_factory=dict)
+    recent_look_ids: list[uuid.UUID] = field(default_factory=list)
+    item_last_worn: dict[uuid.UUID, date] = field(default_factory=dict)
     repetition_window_days: int = 7
 
-    profile: Dict[str, Any] = field(default_factory=dict)
-    missing_information: List[str] = field(default_factory=list)
+    profile: dict[str, Any] = field(default_factory=dict)
+    missing_information: list[str] = field(default_factory=list)
 
     @property
     def primary_event(self) -> Optional[DayEvent]:
@@ -159,12 +163,12 @@ class DayContext:
     def season(self) -> str:
         return clock.season_for(self.plan_date)
 
-    def available_owned(self) -> List[OwnedItem]:
+    def available_owned(self) -> list[OwnedItem]:
         blocked = set(self.unavailable_item_ids)
         return [item for item in self.owned if item.id not in blocked]
 
     @property
-    def recent_item_ids(self) -> List[uuid.UUID]:
+    def recent_item_ids(self) -> list[uuid.UUID]:
         return list(self.item_last_worn)
 
     def days_since_worn(self, item_id: uuid.UUID) -> Optional[int]:
@@ -187,7 +191,7 @@ async def resolve_timezone_for(session: AsyncSession, account_id: uuid.UUID) -> 
     return clock.resolve_timezone(None, city=attributes.get("city"))
 
 
-async def unavailable_items(session: AsyncSession, account_id: uuid.UUID, plan_date: date) -> List[uuid.UUID]:
+async def unavailable_items(session: AsyncSession, account_id: uuid.UUID, plan_date: date) -> list[uuid.UUID]:
     """Items that cannot be worn on this date.
 
     The latest event per item wins. ``available_from`` lets a user say "it is in
@@ -198,10 +202,10 @@ async def unavailable_items(session: AsyncSession, account_id: uuid.UUID, plan_d
         .where(LaundryStateEvent.account_id == account_id)
         .order_by(LaundryStateEvent.item_id, LaundryStateEvent.created_at.desc())
     )).scalars().all()
-    latest: Dict[uuid.UUID, LaundryStateEvent] = {}
+    latest: dict[uuid.UUID, LaundryStateEvent] = {}
     for row in rows:
         latest.setdefault(row.item_id, row)
-    blocked: List[uuid.UUID] = []
+    blocked: list[uuid.UUID] = []
     for item_id, row in latest.items():
         if row.state not in (LAUNDRY_IN_WASH, LAUNDRY_UNAVAILABLE):
             continue
@@ -213,7 +217,7 @@ async def unavailable_items(session: AsyncSession, account_id: uuid.UUID, plan_d
 
 async def recent_wear(
     session: AsyncSession, account_id: uuid.UUID, plan_date: date, window_days: int
-) -> tuple[List[uuid.UUID], Dict[uuid.UUID, date]]:
+) -> tuple[list[uuid.UUID], dict[uuid.UUID, date]]:
     """Looks worn in the window, and when each item was last worn.
 
     The *date* matters, not just the fact. Treating everything worn in the last
@@ -233,8 +237,8 @@ async def recent_wear(
             OutfitSchedule.status.in_(["planned", "worn"]),
         ).order_by(OutfitSchedule.plan_date)
     )).scalars().all()
-    looks: List[uuid.UUID] = []
-    last_worn: Dict[uuid.UUID, date] = {}
+    looks: list[uuid.UUID] = []
+    last_worn: dict[uuid.UUID, date] = {}
     for row in rows:
         if row.look_id and row.look_id not in looks:
             looks.append(row.look_id)
@@ -250,7 +254,7 @@ async def recent_wear(
 
 async def day_events(
     session: AsyncSession, account_id: uuid.UUID, plan_date: date, timezone_name: str
-) -> List[DayEvent]:
+) -> list[DayEvent]:
     start, end = clock.day_bounds(plan_date, timezone_name)
     rows = (await session.execute(
         select(CalendarEvent).where(
@@ -346,7 +350,7 @@ def _resolve_occasion(context: DayContext) -> None:
 
 
 def _note_gaps(context: DayContext) -> None:
-    gaps: List[str] = []
+    gaps: list[str] = []
     if context.weather is None:
         gaps.append(
             context.weather_unavailable_reason
@@ -415,13 +419,13 @@ def cache_key(context: DayContext) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def changed_keys(previous: Dict[str, Any], current: Dict[str, Any]) -> List[str]:
+def changed_keys(previous: dict[str, Any], current: dict[str, Any]) -> list[str]:
     return sorted({key for key in set(previous) | set(current) if previous.get(key) != current.get(key)})
 
 
-def input_rows(context: DayContext) -> List[Dict[str, Any]]:
+def input_rows(context: DayContext) -> list[dict[str, Any]]:
     """The audit trail written to ``daily_plan_inputs``."""
-    rows: List[Dict[str, Any]] = [
+    rows: list[dict[str, Any]] = [
         {"input_type": "date", "input_key": "plan_date", "value": context.plan_date.isoformat(), "source": "derived"},
         {"input_type": "date", "input_key": "timezone", "value": context.timezone_name, "source": "profile_confirmed" if context.profile.get("city") else "default"},
         {"input_type": "date", "input_key": "season", "value": context.season, "source": "derived"},

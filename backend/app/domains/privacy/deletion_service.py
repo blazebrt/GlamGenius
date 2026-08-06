@@ -26,7 +26,7 @@ import os
 import socket
 import uuid
 from datetime import timedelta
-from typing import Optional, Tuple
+from typing import Optional
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -194,7 +194,7 @@ async def claim_next(session: AsyncSession) -> Optional[AccountDeletionJob]:
     return job
 
 
-async def run_job(session: AsyncSession, job: AccountDeletionJob) -> Tuple[str, Optional[str]]:
+async def run_job(session: AsyncSession, job: AccountDeletionJob) -> tuple[str, Optional[str]]:
     """Advance the job one stage. Returns ``(new_state, error_code)``."""
     try:
         if job.state == STATE_REQUESTED or job.state == STATE_STORAGE_LISTING:

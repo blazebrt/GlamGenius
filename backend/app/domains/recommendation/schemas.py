@@ -17,12 +17,17 @@ from __future__ import annotations
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import Any, Dict, List, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domains.recommendation.occasions import (
-    COMFORT_LEVELS, DRESS_CODES, OCCASION_KEYS, SETTINGS, TIMES_OF_DAY, WEATHER_CONDITIONS, get_occasion,
+    COMFORT_LEVELS,
+    DRESS_CODES,
+    SETTINGS,
+    TIMES_OF_DAY,
+    WEATHER_CONDITIONS,
+    get_occasion,
 )
 
 SCHEMA_VERSION_LOOK_EXPLANATION = "look_explanation.v1"
@@ -97,7 +102,7 @@ class StyleForOccasion(BaseModel):
 
     occasion_id: Optional[uuid.UUID] = None
     occasion: Optional[OccasionCreate] = None
-    preferred_item_ids: List[uuid.UUID] = Field(default_factory=list, max_length=12)
+    preferred_item_ids: list[uuid.UUID] = Field(default_factory=list, max_length=12)
     client_mutation_id: Optional[str] = Field(default=None, max_length=80)
 
     @field_validator("occasion")
@@ -113,7 +118,7 @@ class LookRevise(BaseModel):
 
     reason: Optional[Literal["too_formal", "too_casual", "too_warm", "too_cold", "not_my_style", "want_bolder", "want_simpler"]] = None
     note: Optional[str] = Field(default=None, max_length=400)
-    avoid_item_ids: List[uuid.UUID] = Field(default_factory=list, max_length=12)
+    avoid_item_ids: list[uuid.UUID] = Field(default_factory=list, max_length=12)
 
 
 class LookSwapItem(BaseModel):
@@ -151,8 +156,8 @@ class ShoppingItemInput(BaseModel):
     fabric: Optional[str] = Field(default=None, max_length=100)
     fit: Optional[str] = Field(default=None, max_length=80)
     formality: Optional[str] = Field(default=None, max_length=80)
-    occasion_tags: List[str] = Field(default_factory=list, max_length=20)
-    season_tags: List[str] = Field(default_factory=list, max_length=8)
+    occasion_tags: list[str] = Field(default_factory=list, max_length=20)
+    season_tags: list[str] = Field(default_factory=list, max_length=8)
     price: Optional[Decimal] = Field(default=None, ge=0, max_digits=12, decimal_places=2)
     currency: str = Field(default="INR", min_length=3, max_length=3)
     product_url: Optional[str] = Field(default=None, max_length=2048)
@@ -213,11 +218,11 @@ class LookNarrative(_AIBlock):
     why_it_works: str = Field(min_length=10, max_length=700)
     weather_note: str = Field(default="", max_length=400)
     dress_code_note: str = Field(default="", max_length=400)
-    preparation_steps: List[str] = Field(default_factory=list, max_length=8)
+    preparation_steps: list[str] = Field(default_factory=list, max_length=8)
 
     @field_validator("preparation_steps")
     @classmethod
-    def _bounded_steps(cls, value: List[str]) -> List[str]:
+    def _bounded_steps(cls, value: list[str]) -> list[str]:
         return [step.strip()[:200] for step in value if step and step.strip()]
 
 
@@ -226,7 +231,7 @@ class LookExplanationResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    looks: List[LookNarrative] = Field(min_length=1, max_length=3)
+    looks: list[LookNarrative] = Field(min_length=1, max_length=3)
 
 
 class ExtractedShoppingItem(BaseModel):
@@ -243,14 +248,14 @@ class ExtractedShoppingItem(BaseModel):
     fabric: Optional[str] = Field(default=None, max_length=100)
     fit: Optional[str] = Field(default=None, max_length=80)
     formality: Optional[str] = Field(default=None, max_length=80)
-    occasion_tags: List[str] = Field(default_factory=list, max_length=20)
-    season_tags: List[str] = Field(default_factory=list, max_length=8)
+    occasion_tags: list[str] = Field(default_factory=list, max_length=20)
+    season_tags: list[str] = Field(default_factory=list, max_length=8)
     # Price is read only when it is printed on the screenshot. A missing price
     # stays missing; the ROI model has an explicit branch for that.
     price: Optional[Decimal] = Field(default=None, ge=0, max_digits=12, decimal_places=2)
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
     confidence: float = Field(ge=0.35, le=1)
-    uncertain_fields: List[str] = Field(default_factory=list, max_length=30)
+    uncertain_fields: list[str] = Field(default_factory=list, max_length=30)
     photo_quality_notes: str = Field(min_length=3, max_length=400)
 
 

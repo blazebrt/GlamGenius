@@ -1,9 +1,10 @@
 """Controlled Phase 3 inventory taxonomy and detail fields."""
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable
+from collections.abc import Iterable
+from typing import Any
 
-CATEGORIES: Dict[str, str] = {
+CATEGORIES: dict[str, str] = {
     "wardrobe": "Wardrobe",
     "shoes": "Shoes",
     "accessories": "Accessories",
@@ -13,7 +14,7 @@ CATEGORIES: Dict[str, str] = {
     "supplements": "Supplements",
 }
 
-DETAIL_FIELDS: Dict[str, set[str]] = {
+DETAIL_FIELDS: dict[str, set[str]] = {
     "wardrobe": {"colour", "pattern", "fabric", "fit", "size", "season", "occasion", "formality", "laundry_state", "care_instructions"},
     "shoes": {"shoe_type", "colour", "size", "heel_height", "comfort", "occasion", "weather_suitability"},
     "accessories": {"accessory_type", "colour", "metal", "material", "style", "occasion"},
@@ -38,13 +39,13 @@ SUPPLEMENT_DISCLAIMER = (
 )
 
 
-def validate_details(category: str, details: Dict[str, Any]) -> Dict[str, Any]:
+def validate_details(category: str, details: dict[str, Any]) -> dict[str, Any]:
     if category not in CATEGORIES:
         raise ValueError("Choose one of the seven supported inventory categories.")
     unknown = set(details) - DETAIL_FIELDS[category]
     if unknown:
         raise ValueError(f"Unsupported {category} detail: {sorted(unknown)[0]}")
-    cleaned: Dict[str, Any] = {}
+    cleaned: dict[str, Any] = {}
     for key, value in details.items():
         if value is None or value == "":
             cleaned[key] = None
@@ -70,7 +71,7 @@ def normalise_text(value: str | None) -> str:
     return " ".join((value or "").lower().split())
 
 
-def iter_search_values(details: Dict[str, Any]) -> Iterable[tuple[str, Any]]:
+def iter_search_values(details: dict[str, Any]) -> Iterable[tuple[str, Any]]:
     for key, value in details.items():
         if key in SEARCHABLE_ATTRIBUTE_KEYS and value not in (None, "", []):
             yield key, value

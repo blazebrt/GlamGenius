@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.domains.planning.models import LAUNDRY_STATES, MODULES
-from app.domains.recommendation.occasions import DRESS_CODES, OCCASION_KEYS, get_occasion
+from app.domains.recommendation.occasions import DRESS_CODES, get_occasion
 
 WEATHER_CONDITIONS = ("hot", "warm", "mild", "cool", "cold", "humid", "rainy", "windy")
 
@@ -108,7 +108,7 @@ class CalendarConnect(BaseModel):
     provider: str = Field(default="manual", max_length=32)
     credential_ref: Optional[str] = Field(default=None, max_length=200)
     label: Optional[str] = Field(default=None, max_length=160)
-    events: List[CalendarEventInput] = Field(default_factory=list, max_length=200)
+    events: list[CalendarEventInput] = Field(default_factory=list, max_length=200)
 
 
 # --- Today ------------------------------------------------------------------
@@ -209,11 +209,11 @@ class NotificationPreferencePatch(BaseModel):
     quiet_hours_start: Optional[int] = Field(default=None, ge=0, le=23)
     quiet_hours_end: Optional[int] = Field(default=None, ge=0, le=23)
     preferred_hour: Optional[int] = Field(default=None, ge=0, le=23)
-    modules: Optional[Dict[str, bool]] = None
+    modules: Optional[dict[str, bool]] = None
 
     @field_validator("modules")
     @classmethod
-    def _known_modules(cls, value: Optional[Dict[str, bool]]) -> Optional[Dict[str, bool]]:
+    def _known_modules(cls, value: Optional[dict[str, bool]]) -> Optional[dict[str, bool]]:
         if value:
             unknown = set(value) - set(MODULES)
             if unknown:

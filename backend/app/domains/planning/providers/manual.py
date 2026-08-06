@@ -9,13 +9,15 @@ useful to them.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import List, Optional
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.planning.providers.base import (
-    CalendarEventReading, ProviderUnavailable, WeatherReading,
+    CalendarEventReading,
+    ProviderUnavailable,
+    WeatherReading,
 )
 
 PROVIDER_MANUAL = "manual"
@@ -39,8 +41,8 @@ class StoredWeatherProvider:
         return True
 
     async def forecast(
-        self, *, location: Optional[str], dates: List[date], timezone_name: str
-    ) -> List[WeatherReading]:
+        self, *, location: Optional[str], dates: list[date], timezone_name: str
+    ) -> list[WeatherReading]:
         from app.domains.planning.models import WeatherSnapshot
 
         if not dates:
@@ -86,7 +88,7 @@ class StoredCalendarProvider:
 
     async def events(
         self, *, since: datetime, until: datetime, credential_ref: Optional[str] = None
-    ) -> List[CalendarEventReading]:
+    ) -> list[CalendarEventReading]:
         from app.domains.planning.models import CalendarEvent
 
         rows = (await self._session.execute(
@@ -130,8 +132,8 @@ class UnconfiguredProvider:
             reason="not_configured",
         )
 
-    async def forecast(self, **_: object) -> List[WeatherReading]:
+    async def forecast(self, **_: object) -> list[WeatherReading]:
         raise self._unavailable()
 
-    async def events(self, **_: object) -> List[CalendarEventReading]:
+    async def events(self, **_: object) -> list[CalendarEventReading]:
         raise self._unavailable()

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
@@ -40,14 +40,14 @@ class StylePreference(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "style_preferences"
     profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("appearance_profiles.id", ondelete="CASCADE"), nullable=False, unique=True)
     preferred_style: Mapped[Optional[str]] = mapped_column(String(120))
-    favourite_colours: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    disliked_colours: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    brand_preferences: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    favourite_colours: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    disliked_colours: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    brand_preferences: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     formality_preference: Mapped[Optional[str]] = mapped_column(String(120))
     style_experimentation: Mapped[Optional[str]] = mapped_column(String(24))
-    indian_categories: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    western_categories: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    fusion_categories: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    indian_categories: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    western_categories: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    fusion_categories: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
 
 
 class FitPreference(UUIDPrimaryKey, TimestampMixin, Base):
@@ -60,11 +60,11 @@ class FitPreference(UUIDPrimaryKey, TimestampMixin, Base):
     waist_fit: Mapped[Optional[str]] = mapped_column(String(120))
     hip_fit: Mapped[Optional[str]] = mapped_column(String(120))
     preferred_coverage: Mapped[Optional[str]] = mapped_column(String(120))
-    sleeve_preferences: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    neckline_preferences: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    sleeve_preferences: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    neckline_preferences: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     footwear_comfort: Mapped[Optional[str]] = mapped_column(String(120))
-    silhouettes_liked: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    silhouettes_avoided: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    silhouettes_liked: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    silhouettes_avoided: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
 
 
 class LifestyleContext(UUIDPrimaryKey, TimestampMixin, Base):
@@ -77,7 +77,7 @@ class LifestyleContext(UUIDPrimaryKey, TimestampMixin, Base):
     activity_level: Mapped[Optional[str]] = mapped_column(String(80))
     travel_frequency: Mapped[Optional[str]] = mapped_column(String(80))
     budget: Mapped[Optional[str]] = mapped_column(String(80))
-    calendar_patterns: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    calendar_patterns: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
 
 
 class AppearanceGoal(UUIDPrimaryKey, TimestampMixin, Base):
@@ -118,10 +118,10 @@ class OnboardingSession(UUIDPrimaryKey, TimestampMixin, Base):
     profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("appearance_profiles.id", ondelete="CASCADE"), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="in_progress", server_default="in_progress")
     current_step: Mapped[str] = mapped_column(String(48), nullable=False, default="goal", server_default="goal")
-    completed_steps: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    skipped_steps: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    answers: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
-    recommendation_preview: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB)
+    completed_steps: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    skipped_steps: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    answers: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    recommendation_preview: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     __table_args__ = (Index("ix_onboarding_sessions_profile_status", "profile_id", "status", "created_at"),)
 

@@ -21,14 +21,13 @@ import uuid
 from datetime import date, timedelta
 
 import pytest
+from app.bootstrap import run as run_seed
+from app.domains.routines.models import Routine, RoutineAdherence
+from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select
 
-from app.bootstrap import run as run_seed
-from app.domains.routines.models import Routine, RoutineAdherence, RoutineStep
-from app.shared.database.sql import get_sessionmaker
 from tests.conftest import auth
 from tests.journey import ok
-
 
 pytestmark = pytest.mark.asyncio
 

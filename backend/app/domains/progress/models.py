@@ -32,10 +32,19 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from sqlalchemy import (
-    Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -64,7 +73,7 @@ class MetricDefinition(UUIDPrimaryKey, TimestampMixin, Base):
     direction: Mapped[str] = mapped_column(String(24), nullable=False)
     formula: Mapped[str] = mapped_column(Text, nullable=False)
     formula_version: Mapped[str] = mapped_column(String(16), nullable=False)
-    inputs: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    inputs: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     missing_data_behaviour: Mapped[str] = mapped_column(String(48), nullable=False)
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
     update_frequency: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -119,8 +128,8 @@ class MetricEvent(UUIDPrimaryKey, TimestampMixin, Base):
     value: Mapped[Optional[float]] = mapped_column(Float)
     unit: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ok", server_default="ok")
-    inputs: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
-    missing_inputs: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    inputs: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    missing_inputs: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     dedup_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
     __table_args__ = (
@@ -138,7 +147,7 @@ class ProgressSnapshot(UUIDPrimaryKey, TimestampMixin, Base):
     period: Mapped[str] = mapped_column(String(16), nullable=False)
     period_start: Mapped[date] = mapped_column(Date, nullable=False)
     period_end: Mapped[date] = mapped_column(Date, nullable=False)
-    metrics: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     registry_version: Mapped[str] = mapped_column(String(24), nullable=False, default=PROGRESS_VERSION, server_default=PROGRESS_VERSION)
 
     __table_args__ = (
@@ -163,7 +172,7 @@ class ScoreExplanation(UUIDPrimaryKey, TimestampMixin, Base):
     formula_version: Mapped[str] = mapped_column(String(16), nullable=False)
     formula: Mapped[str] = mapped_column(Text, nullable=False)
     plain_english: Mapped[str] = mapped_column(Text, nullable=False)
-    contributing_factors: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    contributing_factors: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
 
     __table_args__ = (Index("ix_score_explanations_event", "metric_event_id"),)
 
@@ -182,8 +191,8 @@ class ComparisonSession(UUIDPrimaryKey, TimestampMixin, Base):
     current_media_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("media_assets.id", ondelete="CASCADE"), nullable=False)
     body_area: Mapped[str] = mapped_column(String(32), nullable=False)
     comparable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    checks: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    blocking_reasons: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    checks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    blocking_reasons: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     days_apart: Mapped[Optional[int]] = mapped_column(Integer)
 
     __table_args__ = (Index("ix_comparison_sessions_account", "account_id", "created_at"),)
@@ -295,7 +304,7 @@ class MemorySource(UUIDPrimaryKey, TimestampMixin, Base):
 
     fact_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("memory_facts.id", ondelete="CASCADE"), nullable=False)
     source: Mapped[str] = mapped_column(String(24), nullable=False)
-    evidence: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (Index("ix_memory_sources_fact", "fact_id", "observed_at"),)
@@ -366,7 +375,7 @@ class Milestone(UUIDPrimaryKey, TimestampMixin, Base):
     label: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     earned_on: Mapped[date] = mapped_column(Date, nullable=False)
-    evidence: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
@@ -389,7 +398,7 @@ class GamificationEvent(UUIDPrimaryKey, TimestampMixin, Base):
     behaviour: Mapped[str] = mapped_column(String(48), nullable=False)
     occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
     subject_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True)
-    detail: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     dedup_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
     __table_args__ = (

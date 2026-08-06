@@ -13,8 +13,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-import time
-from pathlib import Path
 
 from app.domains.privacy import deletion_service
 from app.shared.database.sql import get_sessionmaker
@@ -37,10 +35,12 @@ async def run_forever() -> None:
     factory = get_sessionmaker()
     logger.info("account_deletion_worker_started")
     
-    from app.domains.system.models import WorkerStatus
-    from sqlalchemy.dialects.postgresql import insert
-    from sqlalchemy import func
     import socket
+
+    from sqlalchemy import func
+    from sqlalchemy.dialects.postgresql import insert
+
+    from app.domains.system.models import WorkerStatus
 
     worker_name = f"account_deletion_worker_{socket.gethostname()}"
     

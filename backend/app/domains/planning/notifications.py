@@ -18,14 +18,18 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.planning import clock
 from app.domains.planning.models import (
-    MODULES, DailyPlan, DailyPlanAction, NotificationDelivery, NotificationPreference,
+    MODULES,
+    DailyPlan,
+    DailyPlanAction,
+    NotificationDelivery,
+    NotificationPreference,
 )
 from app.shared.database.base import utcnow
 
@@ -152,7 +156,7 @@ async def queue_for_plan(
     )
 
 
-def serialize_preferences(row: NotificationPreference) -> Dict[str, Any]:
+def serialize_preferences(row: NotificationPreference) -> dict[str, Any]:
     return {
         "enabled": row.enabled,
         "daily_cap": row.daily_cap,
@@ -164,7 +168,7 @@ def serialize_preferences(row: NotificationPreference) -> Dict[str, Any]:
     }
 
 
-def serialize_delivery(row: NotificationDelivery) -> Dict[str, Any]:
+def serialize_delivery(row: NotificationDelivery) -> dict[str, Any]:
     return {
         "id": str(row.id), "plan_date": row.plan_date.isoformat(),
         "notification_key": row.notification_key, "title": row.title, "body": row.body,
@@ -175,7 +179,7 @@ def serialize_delivery(row: NotificationDelivery) -> Dict[str, Any]:
 
 async def recent_deliveries(
     session: AsyncSession, account_id: uuid.UUID, limit: int = 30
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     rows = (await session.execute(
         select(NotificationDelivery)
         .where(NotificationDelivery.account_id == account_id)

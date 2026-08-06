@@ -14,13 +14,20 @@ cannot be completed is reported as incomplete instead of being padded out.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional
 
 from app.domains.recommendation import compatibility as compat
 from app.domains.recommendation.context import OwnedItem, StyleContext
 from app.domains.recommendation.occasions import (
-    SLOT_ACCESSORIES, SLOT_CATEGORY, SLOT_CLOTHING, SLOT_GROOMING, SLOT_HAIR, SLOT_PERFUME, SLOT_SHOES,
+    SLOT_ACCESSORIES,
+    SLOT_CATEGORY,
+    SLOT_CLOTHING,
+    SLOT_GROOMING,
+    SLOT_HAIR,
+    SLOT_PERFUME,
+    SLOT_SHOES,
 )
 
 # --- Garment shape ----------------------------------------------------------
@@ -70,9 +77,9 @@ def garment_shape(item: OwnedItem) -> str:
 class ScoredItem:
     item: OwnedItem
     score: float
-    factors: Dict[str, float] = field(default_factory=dict)
-    reasons: Dict[str, str] = field(default_factory=dict)
-    fit_risks: List[str] = field(default_factory=list)
+    factors: dict[str, float] = field(default_factory=dict)
+    reasons: dict[str, str] = field(default_factory=dict)
+    fit_risks: list[str] = field(default_factory=list)
     excluded_reason: Optional[str] = None
 
     @property
@@ -90,8 +97,8 @@ CONDITION_PENALTY = {"excellent": 1.0, "good": 1.0, "fair": 0.9, "worn": 0.7, "n
 def score_item(item: OwnedItem, context: StyleContext) -> ScoredItem:
     """Score one owned item against the resolved constraints."""
     details = item.details
-    factors: Dict[str, float] = {}
-    reasons: Dict[str, str] = {}
+    factors: dict[str, float] = {}
+    reasons: dict[str, str] = {}
 
     level = compat.item_formality(details)
     factors["formality"], reasons["formality"] = compat.formality_match(level, context.target_formality)
@@ -126,9 +133,9 @@ def _adjust_for_history(scored: ScoredItem, context: StyleContext) -> float:
     return round(score, 4)
 
 
-def filter_candidates(context: StyleContext) -> Dict[str, List[ScoredItem]]:
+def filter_candidates(context: StyleContext) -> dict[str, list[ScoredItem]]:
     """Stage 3: every owned item that could legitimately fill each slot."""
-    buckets: Dict[str, List[ScoredItem]] = {slot: [] for slot in SLOT_CATEGORY}
+    buckets: dict[str, list[ScoredItem]] = {slot: [] for slot in SLOT_CATEGORY}
     for slot, category in SLOT_CATEGORY.items():
         for item in context.by_category(category):
             scored = score_item(item, context)
@@ -158,19 +165,19 @@ class OptionalAddition:
 
 @dataclass
 class OutfitCandidate:
-    clothing: List[ScoredItem] = field(default_factory=list)
+    clothing: list[ScoredItem] = field(default_factory=list)
     shoes: Optional[ScoredItem] = None
-    accessories: List[ScoredItem] = field(default_factory=list)
+    accessories: list[ScoredItem] = field(default_factory=list)
     perfume: Optional[ScoredItem] = None
     hair: Optional[ScoredItem] = None
     grooming: Optional[ScoredItem] = None
-    optional_additions: List[OptionalAddition] = field(default_factory=list)
+    optional_additions: list[OptionalAddition] = field(default_factory=list)
     cohesion_score: float = 0.5
-    cohesion_reasons: List[str] = field(default_factory=list)
+    cohesion_reasons: list[str] = field(default_factory=list)
     total_score: float = 0.0
-    factor_scores: Dict[str, Any] = field(default_factory=dict)
+    factor_scores: dict[str, Any] = field(default_factory=dict)
 
-    def owned_items(self) -> List[ScoredItem]:
+    def owned_items(self) -> list[ScoredItem]:
         rows = list(self.clothing)
         for single in (self.shoes, self.perfume, self.hair, self.grooming):
             if single is not None:
@@ -178,14 +185,14 @@ class OutfitCandidate:
         rows.extend(self.accessories)
         return rows
 
-    def owned_ids(self) -> List[uuid.UUID]:
+    def owned_ids(self) -> list[uuid.UUID]:
         return [row.id for row in self.owned_items()]
 
-    def signature(self) -> Tuple[str, ...]:
+    def signature(self) -> tuple[str, ...]:
         return tuple(sorted(str(item_id) for item_id in self.owned_ids()))
 
     @property
-    def colours(self) -> List[Any]:
+    def colours(self) -> list[Any]:
         return [row.item.colour for row in self.owned_items() if row.item.colour]
 
 
@@ -212,7 +219,7 @@ SHOE_GAP_TEXT = {
 }
 
 
-def _clothing_sets(candidates: Sequence[ScoredItem], limit: int = 6) -> List[List[ScoredItem]]:
+def _clothing_sets(candidates: Sequence[ScoredItem], limit: int = 6) -> list[list[ScoredItem]]:
     """Wearable clothing combinations, best first.
 
     A one-piece stands alone. Otherwise a top is paired with a bottom, and the
@@ -224,7 +231,7 @@ def _clothing_sets(candidates: Sequence[ScoredItem], limit: int = 6) -> List[Lis
     bottoms = [row for row in candidates if row.shape == "bottom"]
     layers = [row for row in candidates if row.shape == "layer"]
 
-    sets: List[List[ScoredItem]] = [[row] for row in one_pieces[:limit]]
+    sets: list[list[ScoredItem]] = [[row] for row in one_pieces[:limit]]
     for top in tops[:limit]:
         for bottom in bottoms[:limit]:
             score, _ = compat.colour_compatibility(top.item.colour, bottom.item.colour)
@@ -244,9 +251,9 @@ def _set_score(rows: Sequence[ScoredItem]) -> float:
     return round(sum(row.score for row in rows) / max(len(rows), 1), 4)
 
 
-def _clothing_gaps(context: StyleContext, chosen: Sequence[ScoredItem]) -> List[OptionalAddition]:
+def _clothing_gaps(context: StyleContext, chosen: Sequence[ScoredItem]) -> list[OptionalAddition]:
     shapes = {row.shape for row in chosen}
-    gaps: List[OptionalAddition] = []
+    gaps: list[OptionalAddition] = []
     target = context.target_formality
     if "one_piece" in shapes:
         return gaps
@@ -259,11 +266,11 @@ def _clothing_gaps(context: StyleContext, chosen: Sequence[ScoredItem]) -> List[
 
 def build_candidates(
     context: StyleContext,
-    buckets: Dict[str, List[ScoredItem]],
+    buckets: dict[str, list[ScoredItem]],
     *,
     exclude_ids: Sequence[uuid.UUID] = (),
     limit: int = 12,
-) -> List[OutfitCandidate]:
+) -> list[OutfitCandidate]:
     """Stage 5: assemble complete looks from the filtered candidates."""
     blocked = set(exclude_ids)
     available = {
@@ -275,8 +282,8 @@ def build_candidates(
     if not clothing_sets:
         clothing_sets = [[]]
 
-    shoe_options: List[Optional[ScoredItem]] = list(available[SLOT_SHOES][:4]) or [None]
-    candidates: List[OutfitCandidate] = []
+    shoe_options: list[Optional[ScoredItem]] = list(available[SLOT_SHOES][:4]) or [None]
+    candidates: list[OutfitCandidate] = []
 
     for clothing in clothing_sets:
         for shoes in shoe_options:
@@ -297,7 +304,7 @@ def build_candidates(
     return candidates[:limit]
 
 
-def _attach_optional_slots(context: StyleContext, available: Dict[str, List[ScoredItem]], candidate: OutfitCandidate) -> None:
+def _attach_optional_slots(context: StyleContext, available: dict[str, list[ScoredItem]], candidate: OutfitCandidate) -> None:
     """Fill the optional slots around a chosen base, best first."""
     base_colours = candidate.colours
     optional = set(context.occasion.optional_slots) | set(context.occasion.required_slots)

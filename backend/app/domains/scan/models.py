@@ -6,10 +6,10 @@ timing. Face photos are analysed then discarded.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from sqlalchemy import ForeignKey, Index, Integer, String
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
@@ -31,7 +31,7 @@ class Scan(UUIDPrimaryKey, TimestampMixin, Base):
     schema_version: Mapped[Optional[str]] = mapped_column(String(48), nullable=True)
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # The structured analysis output. Never contains the input image.
-    analysis: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    analysis: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     failure_reason: Mapped[Optional[str]] = mapped_column(String(400), nullable=True)
 
     __table_args__ = (

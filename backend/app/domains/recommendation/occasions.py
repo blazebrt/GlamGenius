@@ -19,8 +19,7 @@ Each occasion carries:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from dataclasses import dataclass
 
 # --- Look slots -------------------------------------------------------------
 # A look is assembled slot by slot. Required slots must be filled from owned
@@ -32,12 +31,12 @@ SLOT_PERFUME = "perfume"
 SLOT_HAIR = "hair"
 SLOT_GROOMING = "grooming"
 
-ALL_SLOTS: Tuple[str, ...] = (
+ALL_SLOTS: tuple[str, ...] = (
     SLOT_CLOTHING, SLOT_SHOES, SLOT_ACCESSORIES, SLOT_PERFUME, SLOT_HAIR, SLOT_GROOMING,
 )
 
 # Which inventory category can fill each slot.
-SLOT_CATEGORY: Dict[str, str] = {
+SLOT_CATEGORY: dict[str, str] = {
     SLOT_CLOTHING: "wardrobe",
     SLOT_SHOES: "shoes",
     SLOT_ACCESSORIES: "accessories",
@@ -49,7 +48,7 @@ SLOT_CATEGORY: Dict[str, str] = {
 # --- Dress codes ------------------------------------------------------------
 # Mapped to the same 1-5 formality scale as occasions so the two can be compared
 # directly instead of through a lookup table of special cases.
-DRESS_CODES: Dict[str, int] = {
+DRESS_CODES: dict[str, int] = {
     "loungewear": 1,
     "athleisure": 1,
     "casual": 2,
@@ -61,7 +60,7 @@ DRESS_CODES: Dict[str, int] = {
 }
 
 # --- Follow-up questions ----------------------------------------------------
-QUESTION_LABELS: Dict[str, str] = {
+QUESTION_LABELS: dict[str, str] = {
     "date": "Which day is it?",
     "time_of_day": "Roughly what time?",
     "location": "Where is it?",
@@ -85,15 +84,15 @@ class Occasion:
     key: str
     label: str
     formality: int
-    dress_codes: Tuple[str, ...]
-    questions: Tuple[str, ...]
-    required_slots: Tuple[str, ...] = (SLOT_CLOTHING, SLOT_SHOES)
-    optional_slots: Tuple[str, ...] = (SLOT_ACCESSORIES, SLOT_PERFUME, SLOT_HAIR, SLOT_GROOMING)
+    dress_codes: tuple[str, ...]
+    questions: tuple[str, ...]
+    required_slots: tuple[str, ...] = (SLOT_CLOTHING, SLOT_SHOES)
+    optional_slots: tuple[str, ...] = (SLOT_ACCESSORIES, SLOT_PERFUME, SLOT_HAIR, SLOT_GROOMING)
     default_setting: str = "indoor"
     notes: str = ""
 
 
-def _occasion(key: str, label: str, formality: int, dress_codes: Tuple[str, ...], questions: Tuple[str, ...], **kwargs) -> Occasion:
+def _occasion(key: str, label: str, formality: int, dress_codes: tuple[str, ...], questions: tuple[str, ...], **kwargs) -> Occasion:
     return Occasion(key=key, label=label, formality=formality, dress_codes=dress_codes, questions=questions, **kwargs)
 
 
@@ -102,7 +101,7 @@ _STANDARD = ("date", "time_of_day", "location", "setting", "dress_code", "weathe
 _LIGHT = ("date", "time_of_day", "weather", "comfort_preference", "preferred_item_ids")
 
 
-OCCASIONS: Dict[str, Occasion] = {
+OCCASIONS: dict[str, Occasion] = {
     "everyday": _occasion(
         "everyday", "Everyday", 2, ("casual", "smart_casual", "athleisure"),
         ("date", "time_of_day", "setting", "weather", "comfort_preference", "preferred_item_ids"),
@@ -182,7 +181,7 @@ OCCASIONS: Dict[str, Occasion] = {
     ),
 }
 
-OCCASION_KEYS: Tuple[str, ...] = tuple(OCCASIONS)
+OCCASION_KEYS: tuple[str, ...] = tuple(OCCASIONS)
 
 
 def get_occasion(key: str) -> Occasion:
@@ -205,10 +204,10 @@ def dress_code_formality(dress_code: str | None, occasion: Occasion) -> int:
     return occasion.formality
 
 
-def questions_for(key: str) -> List[Dict[str, object]]:
+def questions_for(key: str) -> list[dict[str, object]]:
     """The follow-up questions worth asking for this occasion, in order."""
     occasion = get_occasion(key)
-    options: Dict[str, Tuple[str, ...]] = {
+    options: dict[str, tuple[str, ...]] = {
         "setting": SETTINGS,
         "time_of_day": TIMES_OF_DAY,
         "comfort_preference": COMFORT_LEVELS,
@@ -226,7 +225,7 @@ def questions_for(key: str) -> List[Dict[str, object]]:
     ]
 
 
-def serialize_occasion(occasion: Occasion) -> Dict[str, object]:
+def serialize_occasion(occasion: Occasion) -> dict[str, object]:
     return {
         "key": occasion.key,
         "label": occasion.label,
@@ -241,5 +240,5 @@ def serialize_occasion(occasion: Occasion) -> Dict[str, object]:
     }
 
 
-def catalogue() -> List[Dict[str, object]]:
+def catalogue() -> list[dict[str, object]]:
     return [serialize_occasion(occasion) for occasion in OCCASIONS.values()]

@@ -14,7 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.recommendation import occasions as occasion_catalogue
 from app.domains.recommendation import orchestrator, service
 from app.domains.recommendation.schemas import (
-    LookFeedbackCreate, LookRevise, LookSwapItem, OccasionCreate, OccasionPatch, StyleForOccasion,
+    LookFeedbackCreate,
+    LookRevise,
+    LookSwapItem,
+    OccasionCreate,
+    OccasionPatch,
+    StyleForOccasion,
 )
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import ValidationFailedError

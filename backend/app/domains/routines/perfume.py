@@ -10,16 +10,17 @@ convention — heavier families in cooler weather — it says so in those words.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Optional
 
 from app.domains.recommendation.context import OwnedItem
 from app.domains.recommendation.occasions import OCCASIONS
 from app.domains.routines.ontology import PERFUME_RULES, normalise_fragrance_family
 
 # Occasions grouped onto the buckets the perfume rules speak in.
-OCCASION_BUCKET: Dict[str, str] = {
+OCCASION_BUCKET: dict[str, str] = {
     "office": "office", "conference": "office", "business_meeting": "formal",
     "interview": "formal", "wedding": "festive", "festival": "festive",
     "party": "festive", "birthday": "festive", "date": "formal",
@@ -36,10 +37,10 @@ class PerfumeCandidate:
     item: OwnedItem
     family: Optional[str]
     score: float
-    reasons: List[Dict[str, Any]] = field(default_factory=list)
-    missing: List[str] = field(default_factory=list)
+    reasons: list[dict[str, Any]] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "inventory_item_id": str(self.item.id),
             "display_name": self.item.display_name,
@@ -54,7 +55,7 @@ class PerfumeCandidate:
         }
 
 
-def _matching_rules(factor: str, value: Optional[str]) -> List[Any]:
+def _matching_rules(factor: str, value: Optional[str]) -> list[Any]:
     if not value:
         return []
     return [rule for rule in PERFUME_RULES if rule.factor == factor and rule.match == value]
@@ -70,12 +71,12 @@ def recommend(
     preferred_style: Optional[str] = None,
     recently_used_item_ids: Sequence[str] = (),
     today: Optional[date] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Rank owned perfumes for a context. Never invents a bottle."""
-    now = today or date.today()
+    _now = today or date.today()
     bucket = OCCASION_BUCKET.get(occasion_key or "", None)
 
-    candidates: List[PerfumeCandidate] = []
+    candidates: list[PerfumeCandidate] = []
     for item in perfumes:
         details = item.details or {}
         family = normalise_fragrance_family(details.get("fragrance_family"))
@@ -141,7 +142,7 @@ def recommend(
 
     candidates.sort(key=lambda row: (-row.score, row.item.display_name))
 
-    missing: List[str] = []
+    missing: list[str] = []
     if not weather:
         missing.append("No weather given, so that was not used.")
     if not occasion_key:

@@ -23,14 +23,13 @@ import uuid
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import func, select
-
 from app.domains.beta_access import service as beta
 from app.domains.beta_access.models import Invite, InviteRedemption
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_sessionmaker
-from tests.conftest import auth
+from sqlalchemy import func, select
 
+from tests.conftest import auth
 
 pytestmark = pytest.mark.asyncio
 

@@ -1,5 +1,6 @@
 """CLI: ``python -m app.bootstrap.reference_data``."""
-from app.bootstrap import main
 import asyncio
+
+from app.bootstrap import main
 
 asyncio.run(main())

@@ -36,7 +36,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import FrozenSet, List, Optional
+from typing import Optional
 
 
 class SafetyCategory(str, Enum):
@@ -65,7 +65,7 @@ class SafetyCategory(str, Enum):
 # other category is informational (the caller MAY use it to route to a
 # clarifying disclaimer, e.g. PROFESSIONAL_REFERRAL_REQUIRED renders the
 # "please talk to a doctor" boundary card).
-BLOCKING: FrozenSet[SafetyCategory] = frozenset({
+BLOCKING: frozenset[SafetyCategory] = frozenset({
     SafetyCategory.DIAGNOSIS,
     SafetyCategory.TREATMENT,
     SafetyCategory.DOSAGE,
@@ -159,12 +159,12 @@ _PATTERNS: tuple = (
 )
 
 
-def all_rule_ids() -> List[str]:
+def all_rule_ids() -> list[str]:
     """Every reviewed safety rule id. Used by INGREDIENT_COVERAGE.md tests."""
     return [p.rule_id for p in _PATTERNS]
 
 
-def classify(text: Optional[str]) -> FrozenSet[SafetyCategory]:
+def classify(text: Optional[str]) -> frozenset[SafetyCategory]:
     """Deterministic, additive-only classifier.
 
     Returns the set of categories the text trips. An empty set means the
@@ -192,9 +192,9 @@ def is_blocked_for_display(text: Optional[str]) -> bool:
 
 
 def refine_more_restrictive(
-    deterministic: FrozenSet[SafetyCategory],
-    proposed_extra: FrozenSet[SafetyCategory],
-) -> FrozenSet[SafetyCategory]:
+    deterministic: frozenset[SafetyCategory],
+    proposed_extra: frozenset[SafetyCategory],
+) -> frozenset[SafetyCategory]:
     """Union the two sets. The proposed-extra can only ADD categories.
 
     A model-based second opinion runs against the same text and proposes a
@@ -206,7 +206,7 @@ def refine_more_restrictive(
     return frozenset(deterministic | proposed_extra)
 
 
-def rule_ids_for(text: Optional[str]) -> List[str]:
+def rule_ids_for(text: Optional[str]) -> list[str]:
     """Which specific rule ids fired. For logs and tests; not for users."""
     if not text:
         return []

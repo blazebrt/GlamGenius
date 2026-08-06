@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,7 +31,7 @@ async def record(
     actor_type: str = "user",
     subject_type: Optional[str] = None,
     subject_id: Optional[str] = None,
-    context: Optional[Dict[str, Any]] = None,
+    context: Optional[dict[str, Any]] = None,
     client_ip: Optional[str] = None,
 ) -> AuditEvent:
     """Add an audit event to the caller's transaction.

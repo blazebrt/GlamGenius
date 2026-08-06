@@ -8,7 +8,14 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.inventory import extraction, service
-from app.domains.inventory.schemas import ConditionCreate, DuplicateResolve, ExtractRequest, ItemCreate, ItemPatch, UsageCreate
+from app.domains.inventory.schemas import (
+    ConditionCreate,
+    DuplicateResolve,
+    ExtractRequest,
+    ItemCreate,
+    ItemPatch,
+    UsageCreate,
+)
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import FeatureUnavailableError, ValidationFailedError
 from app.shared.flags import service as flag_service

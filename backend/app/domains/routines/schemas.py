@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from typing import Any, Dict, List, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -42,7 +42,7 @@ class ShelfAnalyseRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    categories: List[Literal[SHELF_CATEGORIES]] = Field(  # type: ignore[valid-type]
+    categories: list[Literal[SHELF_CATEGORIES]] = Field(  # type: ignore[valid-type]
         default_factory=lambda: list(SHELF_CATEGORIES), max_length=2,
     )
     climate: Optional[Literal[CLIMATES]] = None  # type: ignore[valid-type]
@@ -52,7 +52,7 @@ class ShelfAnalyseRequest(BaseModel):
 
     @field_validator("categories")
     @classmethod
-    def _at_least_one(cls, value: List[str]) -> List[str]:
+    def _at_least_one(cls, value: list[str]) -> list[str]:
         if not value:
             raise ValueError("Choose at least one of: beauty, hair.")
         return list(dict.fromkeys(value))
@@ -71,15 +71,15 @@ class IngredientCheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     label_text: Optional[str] = Field(default=None, max_length=8000)
-    ingredients: List[str] = Field(default_factory=list, max_length=60)
-    item_ids: List[uuid.UUID] = Field(default_factory=list, max_length=20)
+    ingredients: list[str] = Field(default_factory=list, max_length=60)
+    item_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
     source: Literal[INGREDIENT_SOURCES] = SOURCE_USER  # type: ignore[valid-type]
     against_owned: bool = True
     explain: bool = False
 
     @field_validator("ingredients")
     @classmethod
-    def _clean(cls, value: List[str]) -> List[str]:
+    def _clean(cls, value: list[str]) -> list[str]:
         return [" ".join(row.split())[:120] for row in value if row and row.strip()]
 
     def has_input(self) -> bool:
@@ -95,7 +95,7 @@ class IngredientConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     item_id: uuid.UUID
-    ingredient_keys: List[str] = Field(min_length=1, max_length=60)
+    ingredient_keys: list[str] = Field(min_length=1, max_length=60)
     confirmed: bool = True
 
 
@@ -105,14 +105,14 @@ class IngredientConfirmRequest(BaseModel):
 class RoutineGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kinds: List[Literal[ROUTINE_KINDS]] = Field(default_factory=list, max_length=5)  # type: ignore[valid-type]
+    kinds: list[Literal[ROUTINE_KINDS]] = Field(default_factory=list, max_length=5)  # type: ignore[valid-type]
     climate: Optional[Literal[CLIMATES]] = None  # type: ignore[valid-type]
     explain: bool = True
     as_of: Optional[date] = None
 
     @field_validator("kinds")
     @classmethod
-    def _dedupe(cls, value: List[str]) -> List[str]:
+    def _dedupe(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(value))
 
 
@@ -164,13 +164,13 @@ class NutritionPreferencePatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     diet: Optional[Literal[DIETS]] = None  # type: ignore[valid-type]
-    avoid_foods: Optional[List[str]] = Field(default=None, max_length=40)
-    focus_nutrients: Optional[List[str]] = Field(default=None, max_length=12)
+    avoid_foods: Optional[list[str]] = Field(default=None, max_length=40)
+    focus_nutrients: Optional[list[str]] = Field(default=None, max_length=12)
     enabled: Optional[bool] = None
 
     @field_validator("focus_nutrients")
     @classmethod
-    def _known(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+    def _known(cls, value: Optional[list[str]]) -> Optional[list[str]]:
         if value is None:
             return None
         unknown = [row for row in value if row not in NUTRIENT_BY_KEY]
@@ -183,7 +183,7 @@ class NutritionPreferencePatch(BaseModel):
 
     @field_validator("avoid_foods")
     @classmethod
-    def _clean_foods(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+    def _clean_foods(cls, value: Optional[list[str]]) -> Optional[list[str]]:
         if value is None:
             return None
         return [" ".join(row.split())[:80] for row in value if row and row.strip()]
@@ -205,7 +205,7 @@ class HydrationPreferencePatch(BaseModel):
 class SupplementFlagAcknowledge(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    flag_ids: List[uuid.UUID] = Field(min_length=1, max_length=50)
+    flag_ids: list[uuid.UUID] = Field(min_length=1, max_length=50)
 
 
 # --- What the model is allowed to return --------------------------------------
@@ -221,23 +221,23 @@ class RoutineNarrative(BaseModel):
 
     kind: str = Field(max_length=24)
     summary: str = Field(max_length=600)
-    step_notes: Dict[str, str] = Field(default_factory=dict)
+    step_notes: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("step_notes")
     @classmethod
-    def _bounded(cls, value: Dict[str, str]) -> Dict[str, str]:
+    def _bounded(cls, value: dict[str, str]) -> dict[str, str]:
         if len(value) > 12:
             raise ValueError("Too many step notes.")
         return {key[:32]: text[:280] for key, text in value.items()}
 
-    def texts(self) -> List[str]:
+    def texts(self) -> list[str]:
         return [self.summary, *self.step_notes.values()]
 
 
 class RoutineExplanationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    routines: List[RoutineNarrative] = Field(default_factory=list, max_length=5)
+    routines: list[RoutineNarrative] = Field(default_factory=list, max_length=5)
 
 
 class IngredientNarrative(BaseModel):
@@ -256,7 +256,7 @@ class IngredientNarrative(BaseModel):
 class IngredientExplanationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    notes: List[IngredientNarrative] = Field(default_factory=list, max_length=12)
+    notes: list[IngredientNarrative] = Field(default_factory=list, max_length=12)
 
 
 __all__ = [

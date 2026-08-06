@@ -32,18 +32,14 @@ the database.
 """
 from __future__ import annotations
 
-import uuid
-from datetime import timedelta
-from typing import List
-
 import pytest
-from sqlalchemy import func, select
-
 from app.bootstrap import run as run_seed
 from app.domains.media.storage import factory as storage_factory
 from app.domains.privacy import deletion_service
 from app.domains.privacy.models import STATE_COMPLETE
 from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import func, select
+
 from tests.conftest import auth
 from tests.journey import (
     JOURNEY_DATE,
@@ -52,7 +48,6 @@ from tests.journey import (
     populate_every_domain,
     register_through_invite,
 )
-
 
 pytestmark = pytest.mark.asyncio
 
@@ -110,7 +105,7 @@ def deletion_spy(monkeypatch, fake_storage):
     moment auth deletion is called.
     """
 
-    calls: List[dict] = []
+    calls: list[dict] = []
 
     class _AuthAdmin:
         @staticmethod

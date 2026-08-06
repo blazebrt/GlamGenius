@@ -1,12 +1,8 @@
 """Liveness and readiness probe tests."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
 import pytest
 from httpx import AsyncClient
-
-from app.bootstrap import SEED_VERSION
 
 pytestmark = pytest.mark.asyncio
 
@@ -17,8 +13,14 @@ async def test_health_ok_during_normal_operation(app_client: AsyncClient):
     assert resp.json()["status"] == "alive"
 
 
-async def test_ready_ok_during_normal_operation(app_client: AsyncClient, db_clean):
-    # db_clean fixture runs migrations and seed, so it should be ready
+async def test_ready_ok_during_normal_operation(app_client: AsyncClient, db_clean, monkeypatch):
+    # In CI, GEMINI_API_KEY is empty and APP_ENV is 'test', so we mock
+    # the AI provider check and production config validation.
+    import app.domains.ai.gemini as gemini_mod
+    monkeypatch.setattr(gemini_mod, "is_configured", lambda: True)
+    import app.api.v2.config as config_mod
+    monkeypatch.setattr(config_mod, "validate_production_configuration", lambda: None)
+
     resp = await app_client.get("/api/v2/ready")
     assert resp.status_code == 200
     body = resp.json()
@@ -31,6 +33,7 @@ async def test_ready_ok_during_normal_operation(app_client: AsyncClient, db_clea
     assert "secret" not in text
     assert "key" not in text
     assert "password" not in text
+
 
 
 async def test_health_ok_during_database_outage(app_client: AsyncClient, monkeypatch):
@@ -84,8 +87,9 @@ async def test_ready_fails_on_alembic_mismatch(app_client: AsyncClient, db_clean
 
 async def test_ready_fails_on_stale_worker_heartbeat(app_client: AsyncClient, db_clean, session, monkeypatch, tmp_path):
     # Create a pending account deletion job
-    from sqlalchemy import text
     import uuid
+
+    from sqlalchemy import text
     # We must seed a valid account_id.
     account_id = uuid.uuid4()
     await session.execute(

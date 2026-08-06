@@ -17,13 +17,14 @@ one applies, and what to do if the product is unavailable.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Optional
 
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.ontology import (
-    HAIR_SLOTS, SEVERITY_AVOID, SEVERITY_CAUTION, SKIN_SLOTS, SLOT_BY_KEY, StepSlot,
+    SLOT_BY_KEY,
 )
 from app.domains.routines.rules import Finding, ShelfProduct
 from app.domains.routines.safety import ROUTINE_DISCLAIMER, narrative_is_safe
@@ -44,7 +45,7 @@ ROUTINE_LABELS = {
 }
 
 # Which slots belong to which routine, and how often each runs.
-ROUTINE_SLOTS: Dict[str, List[str]] = {
+ROUTINE_SLOTS: dict[str, list[str]] = {
     ROUTINE_MORNING: ["cleanser", "toner", "treatment", "eye", "moisturiser", "sunscreen"],
     ROUTINE_EVENING: ["cleanser", "exfoliant", "toner", "treatment", "eye", "moisturiser", "face_oil"],
     ROUTINE_WASH_DAY: ["pre_wash_oil", "shampoo", "scalp_care", "conditioner", "leave_in", "heat_protectant", "styling"],
@@ -89,7 +90,7 @@ class RoutineStep:
     climate_note: str = ""
     is_gap: bool = False
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "slot": self.slot, "label": self.label, "order": self.order,
             "required": self.required, "optional": not self.required,
@@ -106,10 +107,10 @@ class CompiledRoutine:
     kind: str
     label: str
     frequency: str
-    steps: List[RoutineStep] = field(default_factory=list)
-    findings: List[Finding] = field(default_factory=list)
-    climate_notes: List[Dict[str, Any]] = field(default_factory=list)
-    skipped_for_allergy: List[str] = field(default_factory=list)
+    steps: list[RoutineStep] = field(default_factory=list)
+    findings: list[Finding] = field(default_factory=list)
+    climate_notes: list[dict[str, Any]] = field(default_factory=list)
+    skipped_for_allergy: list[str] = field(default_factory=list)
 
     @property
     def owned_step_count(self) -> int:
@@ -119,7 +120,7 @@ class CompiledRoutine:
     def gap_count(self) -> int:
         return sum(1 for step in self.steps if step.is_gap)
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "kind": self.kind, "label": self.label, "frequency": self.frequency,
             "steps": [step.as_dict() for step in self.steps],
@@ -177,7 +178,7 @@ def compile_routine(
         skipped_for_allergy=skipped,
     )
 
-    present_slots: Set[str] = set()
+    present_slots: set[str] = set()
     for slot_key in ROUTINE_SLOTS[kind]:
         spec = SLOT_BY_KEY[slot_key]
         ranked = rules_engine.rank_for_slot(usable, slot_key, today)
@@ -254,13 +255,13 @@ def compile_all(
     allergies: Sequence[str] = (),
     climate: Optional[str] = None,
     today: Optional[date] = None,
-) -> List[CompiledRoutine]:
+) -> list[CompiledRoutine]:
     """Every routine the user has enough products to make sense of.
 
     A routine with no owned steps at all is left out. Showing someone an empty
     wash-day routine when they have recorded no hair products is noise.
     """
-    routines: List[CompiledRoutine] = []
+    routines: list[CompiledRoutine] = []
     for kind in ROUTINE_KINDS:
         source = hair if kind == ROUTINE_WASH_DAY else beauty if kind in (ROUTINE_MORNING, ROUTINE_EVENING) else list(beauty) + list(hair)
         routine = compile_routine(kind, source, allergies=allergies, climate=climate, today=today)

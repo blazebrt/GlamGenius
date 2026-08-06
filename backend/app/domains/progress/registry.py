@@ -24,8 +24,8 @@ measurement.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Optional
 
 REGISTRY_VERSION = "phase7-v1"
 
@@ -51,7 +51,7 @@ FREQUENCY_WEEKLY = "weekly"
 
 # Domains a metric may read from. A metric may not read another metric — see
 # ``validate_registry``. This tuple is the whole allowed vocabulary.
-INPUT_DOMAINS: Tuple[str, ...] = (
+INPUT_DOMAINS: tuple[str, ...] = (
     "inventory", "usage", "looks", "occasions", "routines", "shopping",
     "goals", "self_report", "calendar", "expiry", "planning",
 )
@@ -77,7 +77,7 @@ class MetricDefinition:
     # Bumped whenever the arithmetic changes. Stored on every event, so an old
     # number is always readable against the formula that produced it.
     formula_version: str
-    inputs: Tuple[str, ...]
+    inputs: tuple[str, ...]
     missing_data_behaviour: str
     explanation: str
     update_frequency: str
@@ -86,7 +86,7 @@ class MetricDefinition:
     not_a_measure_of: str
     minimum_inputs: int = 0
 
-    def as_dict(self) -> Dict[str, object]:
+    def as_dict(self) -> dict[str, object]:
         return {
             "key": self.key, "label": self.label, "unit": self.unit,
             "direction": self.direction, "formula": self.formula,
@@ -99,7 +99,7 @@ class MetricDefinition:
         }
 
 
-METRICS: Tuple[MetricDefinition, ...] = (
+METRICS: tuple[MetricDefinition, ...] = (
     MetricDefinition(
         key="wardrobe_readiness",
         label="Wardrobe Readiness",
@@ -353,12 +353,12 @@ METRICS: Tuple[MetricDefinition, ...] = (
     ),
 )
 
-METRIC_BY_KEY: Dict[str, MetricDefinition] = {row.key: row for row in METRICS}
-METRIC_KEYS: Tuple[str, ...] = tuple(row.key for row in METRICS)
+METRIC_BY_KEY: dict[str, MetricDefinition] = {row.key: row for row in METRICS}
+METRIC_KEYS: tuple[str, ...] = tuple(row.key for row in METRICS)
 
 # Words that would signal a metric had drifted into scoring a person rather than
 # measuring their inventory or their own logged behaviour.
-FORBIDDEN_METRIC_WORDS: Tuple[str, ...] = (
+FORBIDDEN_METRIC_WORDS: tuple[str, ...] = (
     "attractive", "attractiveness", "beauty score", "overall score", "total score",
     "glow score", "looks score", "rating out of", "how good you look",
     "better looking", "grade", "rank you",
@@ -404,5 +404,5 @@ def get(key: str) -> Optional[MetricDefinition]:
     return METRIC_BY_KEY.get(key)
 
 
-def all_definitions() -> List[Dict[str, object]]:
+def all_definitions() -> list[dict[str, object]]:
     return [row.as_dict() for row in METRICS]

@@ -27,8 +27,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from decimal import Decimal
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,13 +43,20 @@ from app.domains.recommendation import explanation as explanation_stage
 from app.domains.recommendation import ranking as ranking_stage
 from app.domains.recommendation import roi as roi_stage
 from app.domains.recommendation import service
-from app.domains.recommendation.candidates import OutfitCandidate, ScoredItem
-from app.domains.recommendation.context import OwnedItem, StyleContext
+from app.domains.recommendation.candidates import OutfitCandidate
+from app.domains.recommendation.context import StyleContext
 from app.domains.recommendation.models import (
-    OWNERSHIP_OWNED, Look, LookItem, OccasionRecord, PurchaseEvaluation,
-    PurchaseEvaluationFactor, RecommendationRun, ShoppingCandidate, StyleRequest,
+    OWNERSHIP_OWNED,
+    Look,
+    LookItem,
+    OccasionRecord,
+    PurchaseEvaluation,
+    PurchaseEvaluationFactor,
+    RecommendationRun,
+    ShoppingCandidate,
+    StyleRequest,
 )
-from app.domains.recommendation.occasions import SLOT_CATEGORY, get_occasion
+from app.domains.recommendation.occasions import SLOT_CATEGORY
 from app.domains.recommendation.schemas import LookRevise, LookSwapItem, ShoppingEvaluateRequest
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 
@@ -75,7 +82,7 @@ async def style_for_occasion(
     occasion_record: OccasionRecord,
     preferred_item_ids: Sequence[uuid.UUID] = (),
     client_mutation_id: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run the full styling pipeline and persist everything it produced."""
     started = time.perf_counter()
 
@@ -116,7 +123,7 @@ async def style_for_occasion(
     # Stages 7 and 8. Failure here is survivable by design.
     narratives, ai_run_id, source = await explanation_stage.explain_looks(ranked, context, account_id_str=account_id_str)
 
-    looks: List[Look] = []
+    looks: list[Look] = []
     for index, item in enumerate(ranked, start=1):
         narrative = narratives.get(item.variant)
         if narrative is not None:
@@ -187,7 +194,7 @@ async def _context_for_look(session: AsyncSession, look: Look) -> StyleContext:
     return await context_stage.gather(session, account_id=look.account_id, occasion_record=record)
 
 
-async def _look_item_ids(session: AsyncSession, look: Look) -> List[uuid.UUID]:
+async def _look_item_ids(session: AsyncSession, look: Look) -> list[uuid.UUID]:
     rows = (await session.execute(
         select(LookItem.inventory_item_id).where(LookItem.look_id == look.id, LookItem.inventory_item_id.is_not(None))
     )).scalars().all()
@@ -217,7 +224,7 @@ REVISION_HINTS = {
 
 async def revise_look(
     session: AsyncSession, *, look: Look, body: LookRevise, account_id_str: str
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Rebuild one look, avoiding what the user pushed back on.
 
     A revision does not consume an allowance. It is a correction to something
@@ -290,7 +297,7 @@ async def revise_look(
 # --- Swap one item ----------------------------------------------------------
 
 
-async def swap_item(session: AsyncSession, *, look: Look, body: LookSwapItem) -> Dict[str, Any]:
+async def swap_item(session: AsyncSession, *, look: Look, body: LookSwapItem) -> dict[str, Any]:
     """Replace one slot with a specific owned item the user chose."""
     context = await _context_for_look(session, look)
     category = SLOT_CATEGORY[body.slot]
@@ -371,8 +378,8 @@ async def _rescore_look(session: AsyncSession, look: Look, context: StyleContext
         select(LookItem).where(LookItem.look_id == look.id).order_by(LookItem.position)
     )).scalars().all()
     owned_by_id = {item.id: item for item in context.owned}
-    colours: List[Any] = []
-    scores: List[float] = []
+    colours: list[Any] = []
+    scores: list[float] = []
     for row in rows:
         if row.ownership != OWNERSHIP_OWNED or row.inventory_item_id is None:
             continue
@@ -408,7 +415,7 @@ async def evaluate_purchase(
     account_id: uuid.UUID,
     account_id_str: str,
     body: ShoppingEvaluateRequest,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Read the item if needed, score it, and return Buy, Wait or Skip."""
     started = time.perf_counter()
 
@@ -500,9 +507,9 @@ async def evaluate_purchase(
 
 async def _resolve_shopping_candidate(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, body: ShoppingEvaluateRequest, run_id: uuid.UUID
-) -> tuple[ShoppingCandidate, List[str]]:
+) -> tuple[ShoppingCandidate, list[str]]:
     """Build the candidate row, reading a screenshot when one was sent."""
-    notes: List[str] = []
+    notes: list[str] = []
     if body.media_asset_id is not None:
         # Ownership of the image is checked against the media domain.
         asset = await media_service.get_owned_asset(session, account_id=account_id, asset_id=body.media_asset_id)

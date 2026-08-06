@@ -20,19 +20,17 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import func, select
-
 from app.domains.progress import memory as memory_domain
 from app.domains.recommendation.models import (
-    Look,
     LookAdjustment,
     LookFeedback,
     RecommendationRun,
 )
 from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import func, select
+
 from tests.conftest import auth
 from tests.journey import SEVEN_CATEGORY_ITEMS, ok
-
 
 pytestmark = pytest.mark.asyncio
 

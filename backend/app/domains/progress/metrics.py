@@ -24,10 +24,11 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,7 +39,11 @@ from app.domains.inventory.taxonomy import CATEGORIES
 from app.domains.progress import registry
 from app.domains.progress.models import ProgressGoal
 from app.domains.recommendation.models import (
-    Look, LookItem, OccasionRecord, RecommendationRun, StyleRequest,
+    Look,
+    LookItem,
+    OccasionRecord,
+    RecommendationRun,
+    StyleRequest,
 )
 from app.domains.recommendation.occasions import OCCASIONS
 
@@ -72,8 +77,8 @@ class MetricResult:
     key: str
     value: Optional[float]
     status: str
-    inputs: Dict[str, Any] = field(default_factory=dict)
-    missing_inputs: List[str] = field(default_factory=list)
+    inputs: dict[str, Any] = field(default_factory=dict)
+    missing_inputs: list[str] = field(default_factory=list)
     note: str = ""
 
     @property
@@ -95,7 +100,7 @@ class MetricResult:
         }, sort_keys=True, default=str)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         definition = self.definition
         return {
             "key": self.key,
@@ -125,7 +130,7 @@ def _unavailable(key: str, missing: Sequence[str], note: str) -> MetricResult:
 # --- Shared reads --------------------------------------------------------------
 
 
-async def _items(session: AsyncSession, account_id: uuid.UUID) -> List[InventoryItem]:
+async def _items(session: AsyncSession, account_id: uuid.UUID) -> list[InventoryItem]:
     rows = (await session.execute(
         select(InventoryItem).where(
             InventoryItem.account_id == account_id,
@@ -138,7 +143,7 @@ async def _items(session: AsyncSession, account_id: uuid.UUID) -> List[Inventory
 
 async def _usage_since(
     session: AsyncSession, account_id: uuid.UUID, since: date
-) -> Dict[uuid.UUID, int]:
+) -> dict[uuid.UUID, int]:
     rows = (await session.execute(
         select(ItemUsageEvent.item_id, func.count(ItemUsageEvent.id))
         .join(InventoryItem, InventoryItem.id == ItemUsageEvent.item_id)
@@ -170,7 +175,7 @@ async def wardrobe_readiness(
         )
 
     items = await _items(session, account_id)
-    by_category: Dict[str, int] = {}
+    by_category: dict[str, int] = {}
     for item in items:
         by_category[item.category] = by_category.get(item.category, 0) + 1
 
@@ -266,7 +271,7 @@ async def outfit_variety(
         .where(LookItem.look_id.in_(look_ids), LookItem.inventory_item_id.is_not(None))
     )).all()
 
-    by_look: Dict[uuid.UUID, List[str]] = {}
+    by_look: dict[uuid.UUID, list[str]] = {}
     for look_id, item_id in item_rows:
         by_look.setdefault(look_id, []).append(str(item_id))
 
@@ -529,7 +534,7 @@ async def travel_readiness(
         return _unavailable("travel_readiness", ["planning"], "Tell us how many days the trip is.")
 
     items = await _items(session, account_id)
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for item in items:
         counts[item.category] = counts.get(item.category, 0) + 1
 
@@ -577,7 +582,7 @@ async def seasonal_readiness(
     if not items:
         return _unavailable("seasonal_readiness", ["inventory"], "No clothes catalogued yet.")
 
-    suitable: List[InventoryItem] = []
+    suitable: list[InventoryItem] = []
     for item in items:
         details = await inventory_service.details_for(session, item)
         tags = [str(row).lower() for row in (details.get("season") or [])]
@@ -668,7 +673,7 @@ async def user_reported_confidence(
         )
     )).scalars().all()
 
-    values: List[float] = []
+    values: list[float] = []
     for row in rows:
         try:
             values.append(float(row))
@@ -728,6 +733,6 @@ async def compute(
 
 async def compute_all(
     session: AsyncSession, account_id: uuid.UUID, *, today: Optional[date] = None
-) -> List[MetricResult]:
+) -> list[MetricResult]:
     day = today or date.today()
     return [await COMPUTERS[key](session, account_id, today=day) for key in registry.METRIC_KEYS]

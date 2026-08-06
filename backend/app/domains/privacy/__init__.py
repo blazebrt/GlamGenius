@@ -44,8 +44,6 @@ of ``registry.py`` and ``service.py``.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, Set
-
 
 EXPORT_SCHEMA_VERSION = "1.0"
 
@@ -61,7 +59,7 @@ class Classification(str, Enum):
 # One entry per table. Adding a new table without adding a row here fails
 # ``assert_registry_complete``, which is exercised by
 # ``tests/test_privacy_export_registry.py``.
-REGISTRY: Dict[str, Classification] = {
+REGISTRY: dict[str, Classification] = {
     # --- Identity + lifecycle ---
     "accounts": Classification.INCLUDED,
     # Deletion tombstone; retained after the account is gone.
@@ -211,7 +209,7 @@ def assert_registry_complete() -> None:
     # side effect. Alembic must be able to import it before models load.
     from app.shared.database.registry import Base
 
-    tables: Set[str] = {t.name for t in Base.metadata.sorted_tables}
+    tables: set[str] = {t.name for t in Base.metadata.sorted_tables}
     unclassified = tables - set(REGISTRY.keys())
     stale = set(REGISTRY.keys()) - tables
     problems = []
@@ -230,5 +228,5 @@ def assert_registry_complete() -> None:
         raise AssertionError("\n".join(problems))
 
 
-def included_tables() -> Set[str]:
+def included_tables() -> set[str]:
     return {name for name, kind in REGISTRY.items() if kind == Classification.INCLUDED}

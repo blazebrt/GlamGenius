@@ -36,21 +36,18 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.bootstrap import main as run_seed
 from app.domains.identity import service as identity
 from app.domains.inventory import service as inv
 from app.domains.inventory.models import (
     DuplicateCandidate,
     InventoryEvent,
-    InventoryItem,
     ItemUsageEvent,
     SupplementDetail,
 )
 from app.domains.inventory.schemas import ItemCreate, ItemPatch
 from app.shared.database.sql import get_sessionmaker
-
+from sqlalchemy import select
 
 pytestmark = pytest.mark.asyncio
 

@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any, Optional
 
 from app.domains.ai_gateway import gateway
 from app.domains.recommendation.candidates import OutfitCandidate
@@ -30,8 +31,13 @@ from app.domains.recommendation.context import StyleContext
 from app.domains.recommendation.ranking import RankedLook
 from app.domains.recommendation.roi import Candidate, ROIResult
 from app.domains.recommendation.schemas import (
-    SCHEMA_VERSION_LOOK_EXPLANATION, SCHEMA_VERSION_PURCHASE_EXPLANATION, SCHEMA_VERSION_SHOPPING_ITEM,
-    ExtractedShoppingItem, LookExplanationResponse, PurchaseNarrative, narrative_is_safe,
+    SCHEMA_VERSION_LOOK_EXPLANATION,
+    SCHEMA_VERSION_PURCHASE_EXPLANATION,
+    SCHEMA_VERSION_SHOPPING_ITEM,
+    ExtractedShoppingItem,
+    LookExplanationResponse,
+    PurchaseNarrative,
+    narrative_is_safe,
 )
 from app.shared.errors.exceptions import AnalysisUnavailableError
 
@@ -124,7 +130,7 @@ def _look_prompt(looks: Sequence[RankedLook], context: StyleContext) -> str:
 
 async def explain_looks(
     looks: Sequence[RankedLook], context: StyleContext, *, account_id_str: str
-) -> tuple[Dict[str, Any], Optional[Any], str]:
+) -> tuple[dict[str, Any], Optional[Any], str]:
     """Better wording for looks that already exist.
 
     Returns ``(narratives_by_variant, ai_run_id, source)``. On any failure the
@@ -148,7 +154,7 @@ async def explain_looks(
         logger.info("style_explanation_unavailable failure=%s", exc.extra.get("failure_type"))
         return {}, None, SOURCE_DETERMINISTIC
 
-    narratives: Dict[str, Any] = {}
+    narratives: dict[str, Any] = {}
     for narrative in result.data.looks:
         if narrative.variant not in wanted:
             logger.warning("style_explanation_unknown_variant variant=%s", narrative.variant)

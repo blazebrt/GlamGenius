@@ -22,19 +22,20 @@ the verdict.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional
 
 from app.domains.recommendation import compatibility as compat
 from app.domains.recommendation.candidates import garment_shape, shape_from_parts
 from app.domains.recommendation.context import OwnedItem
 from app.domains.recommendation.models import ROI_VERSION, VERDICT_BUY, VERDICT_SKIP, VERDICT_WAIT
-from app.domains.recommendation.occasions import OCCASIONS, SLOT_CATEGORY
+from app.domains.recommendation.occasions import OCCASIONS
 
 # Factor weights. They do not need to sum to 1 — the score renormalises over
 # whichever factors could actually be scored.
-FACTOR_WEIGHTS: Dict[str, float] = {
+FACTOR_WEIGHTS: dict[str, float] = {
     "new_combinations": 0.22,
     "category_gap": 0.16,
     "duplicate_penalty": 0.16,
@@ -46,7 +47,7 @@ FACTOR_WEIGHTS: Dict[str, float] = {
     "price_context": 0.10,
 }
 
-FACTOR_LABELS: Dict[str, str] = {
+FACTOR_LABELS: dict[str, str] = {
     "new_combinations": "New outfit combinations",
     "category_gap": "Fills a gap",
     "duplicate_penalty": "How different it is from what you own",
@@ -94,7 +95,7 @@ class Candidate:
     price: Optional[Decimal] = None
     currency: str = "INR"
 
-    def as_details(self) -> Dict[str, Any]:
+    def as_details(self) -> dict[str, Any]:
         """The same shape as inventory details, so the shared scorers apply."""
         return {
             "colour": self.colour, "size": self.size, "fabric": self.fabric,
@@ -118,21 +119,21 @@ class ROIResult:
     score: float
     verdict: str
     confidence: float
-    factors: List[Factor]
+    factors: list[Factor]
     new_combinations: int
-    duplicate_item_ids: List[str]
-    alternative_item_ids: List[str]
-    fit_risks: List[str]
-    colour_risks: List[str]
-    climate_notes: List[str]
-    missing_information: List[str]
+    duplicate_item_ids: list[str]
+    alternative_item_ids: list[str]
+    fit_risks: list[str]
+    colour_risks: list[str]
+    climate_notes: list[str]
+    missing_information: list[str]
     version: str = ROI_VERSION
 
 
 # --- Individual factors -----------------------------------------------------
 
 
-def _pairing_slots(category: str) -> List[str]:
+def _pairing_slots(category: str) -> list[str]:
     """Which owned categories a new item would be worn alongside."""
     if category == "wardrobe":
         return ["wardrobe", "shoes", "accessories"]
@@ -143,7 +144,7 @@ def _pairing_slots(category: str) -> List[str]:
     return []
 
 
-def estimate_new_combinations(candidate: Candidate, owned: Sequence[OwnedItem]) -> Tuple[int, List[str]]:
+def estimate_new_combinations(candidate: Candidate, owned: Sequence[OwnedItem]) -> tuple[int, list[str]]:
     """How many workable new outfits this item would actually create.
 
     A pairing counts only when the colours work and the formality is within one
@@ -152,7 +153,7 @@ def estimate_new_combinations(candidate: Candidate, owned: Sequence[OwnedItem]) 
     """
     details = candidate.as_details()
     level = compat.item_formality(details)
-    notes: List[str] = []
+    notes: list[str] = []
 
     def works(other: OwnedItem) -> bool:
         score, _ = compat.colour_compatibility(candidate.colour, other.details.get("colour"))
@@ -232,7 +233,7 @@ def similarity(candidate: Candidate, item: OwnedItem) -> float:
     return round(min(1.0, score), 4)
 
 
-def _category_gap(candidate: Candidate, owned: Sequence[OwnedItem], occasion_key: Optional[str]) -> Tuple[float, str]:
+def _category_gap(candidate: Candidate, owned: Sequence[OwnedItem], occasion_key: Optional[str]) -> tuple[float, str]:
     same = [item for item in owned if item.category == candidate.category]
     if not same:
         return 1.0, f"You have nothing recorded in {candidate.category} yet."
@@ -249,8 +250,8 @@ def _category_gap(candidate: Candidate, owned: Sequence[OwnedItem], occasion_key
     return round(max(0.1, 1.0 - min(len(same), 12) / 12.0), 4), f"You already own {len(same)} things in {candidate.category}."
 
 
-def _colour_factor(candidate: Candidate, owned: Sequence[OwnedItem], favourites: Sequence[str], disliked: Sequence[str]) -> Tuple[float, str, List[str]]:
-    risks: List[str] = []
+def _colour_factor(candidate: Candidate, owned: Sequence[OwnedItem], favourites: Sequence[str], disliked: Sequence[str]) -> tuple[float, str, list[str]]:
+    risks: list[str] = []
     palette, palette_reason = compat.palette_fit(candidate.colour, favourites, disliked)
     if palette == 0.0:
         risks.append(palette_reason)
@@ -267,7 +268,7 @@ def _colour_factor(candidate: Candidate, owned: Sequence[OwnedItem], favourites:
     return combined, f"Averages {average:.2f} against {len(scores)} recorded wardrobe colours. {palette_reason}", risks
 
 
-def _versatility(candidate: Candidate) -> Tuple[float, str]:
+def _versatility(candidate: Candidate) -> tuple[float, str]:
     level = compat.item_formality(candidate.as_details())
     tags = [str(tag).lower() for tag in candidate.occasion_tags]
     if tags:
@@ -278,7 +279,7 @@ def _versatility(candidate: Candidate) -> Tuple[float, str]:
     return round(min(1.0, reach / len(OCCASIONS)) ** 0.5, 4), f"At this formality it would suit around {reach} of the {len(OCCASIONS)} occasions we support."
 
 
-def _expected_use(candidate: Candidate, owned: Sequence[OwnedItem], combinations: int) -> Tuple[float, str]:
+def _expected_use(candidate: Candidate, owned: Sequence[OwnedItem], combinations: int) -> tuple[float, str]:
     same = [item for item in owned if item.category == candidate.category]
     if same:
         used = [item for item in same if item.usage_count > 0]
@@ -288,7 +289,7 @@ def _expected_use(candidate: Candidate, owned: Sequence[OwnedItem], combinations
     return round(min(1.0, combinations / 10.0), 4), f"Estimated from the {combinations} new combinations it would create."
 
 
-def _price_factor(candidate: Candidate, combinations: int) -> Optional[Tuple[float, str]]:
+def _price_factor(candidate: Candidate, combinations: int) -> Optional[tuple[float, str]]:
     """Cost against expected wears. Returns None when no price was supplied."""
     if candidate.price is None:
         return None
@@ -318,13 +319,13 @@ def evaluate(
     occasion_key: Optional[str] = None,
     favourite_colours: Sequence[str] = (),
     disliked_colours: Sequence[str] = (),
-    fit_preferences: Optional[Dict[str, Any]] = None,
+    fit_preferences: Optional[dict[str, Any]] = None,
     climate: Optional[str] = None,
 ) -> ROIResult:
     """Score a purchase and return Buy, Wait or Skip with the full arithmetic."""
     details = candidate.as_details()
-    missing: List[str] = []
-    factors: List[Factor] = []
+    missing: list[str] = []
+    factors: list[Factor] = []
 
     combinations, combination_notes = estimate_new_combinations(candidate, owned)
 

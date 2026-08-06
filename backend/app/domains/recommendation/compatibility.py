@@ -11,7 +11,8 @@ a confident score built on an absent fabric or colour would be a fabrication.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from collections.abc import Iterable, Sequence
+from typing import Any, Optional
 
 from app.domains.recommendation.occasions import DRESS_CODES
 
@@ -24,7 +25,7 @@ NEUTRAL = 0.5
 # this product has recommended since V1 — score as a clash. Degrees keep the
 # classic relationships (monochrome, analogous, triadic, complementary) where
 # they actually fall.
-COLOUR_HUES: Dict[str, int] = {
+COLOUR_HUES: dict[str, int] = {
     "red": 0, "scarlet": 5, "crimson": 348, "cherry": 350, "maroon": 345, "burgundy": 345, "wine": 340,
     "coral": 16, "terracotta": 18, "rust": 20, "peach": 28, "orange": 30, "tangerine": 30, "apricot": 32,
     "amber": 45, "ochre": 42, "mustard": 48, "gold": 50, "saffron": 45, "yellow": 55, "lemon": 58,
@@ -88,7 +89,7 @@ def hue_distance(a: str, b: str) -> int:
     return min(raw, 360 - raw)
 
 
-def colour_compatibility(first: Any, second: Any) -> Tuple[float, str]:
+def colour_compatibility(first: Any, second: Any) -> tuple[float, str]:
     """How well two colours sit together, with the reason in plain English."""
     left, right = normalise_colour(first), normalise_colour(second)
     if left is None or right is None:
@@ -108,7 +109,7 @@ def colour_compatibility(first: Any, second: Any) -> Tuple[float, str]:
     return NEUTRAL, f"{left.title()} and {right} were not scored."
 
 
-def palette_fit(colour: Any, favourites: Sequence[str], disliked: Sequence[str]) -> Tuple[float, str]:
+def palette_fit(colour: Any, favourites: Sequence[str], disliked: Sequence[str]) -> tuple[float, str]:
     """How the user's own stated colour preferences see this colour."""
     normalised = normalise_colour(colour)
     if normalised is None:
@@ -125,7 +126,7 @@ def palette_fit(colour: Any, favourites: Sequence[str], disliked: Sequence[str])
 # --- Formality --------------------------------------------------------------
 # Free-text formality on an item is mapped onto the same 1-5 scale the occasions
 # use, so a wardrobe item and an event can be compared directly.
-FORMALITY_WORDS: Dict[str, int] = {
+FORMALITY_WORDS: dict[str, int] = {
     "loungewear": 1, "sleepwear": 1, "nightwear": 1, "home": 1,
     "sportswear": 1, "activewear": 1, "athleisure": 1, "gym": 1,
     "casual": 2, "everyday": 2, "relaxed": 2, "weekend": 2,
@@ -136,7 +137,7 @@ FORMALITY_WORDS: Dict[str, int] = {
 }
 
 
-def item_formality(details: Dict[str, Any]) -> Optional[int]:
+def item_formality(details: dict[str, Any]) -> Optional[int]:
     """The 1-5 formality of an inventory item, or None when unrecorded."""
     raw = details.get("formality")
     if isinstance(raw, (int, float)) and not isinstance(raw, bool):
@@ -154,7 +155,7 @@ def item_formality(details: Dict[str, Any]) -> Optional[int]:
     return None
 
 
-def formality_match(level: Optional[int], target: int) -> Tuple[float, str]:
+def formality_match(level: Optional[int], target: int) -> tuple[float, str]:
     """How close an item's formality is to what the occasion asks for.
 
     Under-dressing is penalised harder than over-dressing: turning up too casual
@@ -176,7 +177,7 @@ HOT_CONDITIONS = {"hot", "humid", "warm"}
 COLD_CONDITIONS = {"cold", "cool"}
 WET_CONDITIONS = {"rainy", "humid"}
 
-SEASON_FOR_CONDITION: Dict[str, str] = {
+SEASON_FOR_CONDITION: dict[str, str] = {
     "hot": "summer", "warm": "summer", "humid": "monsoon", "rainy": "monsoon",
     "mild": "spring", "windy": "autumn", "cool": "autumn", "cold": "winter",
 }
@@ -196,7 +197,7 @@ def _contains(values: Any, needle: str) -> bool:
     return False
 
 
-def weather_suitability(details: Dict[str, Any], condition: Optional[str]) -> Tuple[float, str]:
+def weather_suitability(details: dict[str, Any], condition: Optional[str]) -> tuple[float, str]:
     """How well an item copes with the expected weather."""
     if not condition:
         return NEUTRAL, "No weather was given, so nothing was ruled in or out on that basis."
@@ -229,7 +230,7 @@ def weather_suitability(details: Dict[str, Any], condition: Optional[str]) -> Tu
 
 # --- Occasion relevance -----------------------------------------------------
 
-def occasion_relevance(details: Dict[str, Any], occasion_key: str, label: str) -> Tuple[float, str]:
+def occasion_relevance(details: dict[str, Any], occasion_key: str, label: str) -> tuple[float, str]:
     """Whether the user themselves tagged this item for this kind of event."""
     tagged = details.get("occasion") or []
     if _contains(tagged, occasion_key.replace("_", " ")) or _contains(tagged, label.lower()):
@@ -241,7 +242,7 @@ def occasion_relevance(details: Dict[str, Any], occasion_key: str, label: str) -
 
 # --- Fit and comfort --------------------------------------------------------
 
-def fit_alignment(details: Dict[str, Any], fit_prefs: Dict[str, Any]) -> Tuple[float, List[str]]:
+def fit_alignment(details: dict[str, Any], fit_prefs: dict[str, Any]) -> tuple[float, list[str]]:
     """How the item sits against the fit preferences the user confirmed.
 
     Returns the score and any concrete fit risks worth telling the user about.
@@ -249,7 +250,7 @@ def fit_alignment(details: Dict[str, Any], fit_prefs: Dict[str, Any]) -> Tuple[f
     preferences they typed themselves.
     """
     score = 0.7
-    risks: List[str] = []
+    risks: list[str] = []
     silhouette = str(details.get("fit") or "").lower()
     avoided = [str(v).lower() for v in (fit_prefs.get("silhouettes_avoided") or [])]
     liked = [str(v).lower() for v in (fit_prefs.get("silhouettes_liked") or [])]
@@ -272,7 +273,7 @@ def fit_alignment(details: Dict[str, Any], fit_prefs: Dict[str, Any]) -> Tuple[f
     return score, risks
 
 
-def comfort_alignment(details: Dict[str, Any], comfort_preference: Optional[str]) -> Tuple[float, str]:
+def comfort_alignment(details: dict[str, Any], comfort_preference: Optional[str]) -> tuple[float, str]:
     """Weigh an item by how comfortable the user said they need to be."""
     if not comfort_preference:
         return NEUTRAL, "No comfort preference given."
@@ -295,7 +296,7 @@ def comfort_alignment(details: Dict[str, Any], comfort_preference: Optional[str]
 # The weights that turn per-factor scores into one item score. They are declared
 # here, in one place, because the report has to document them and the tests
 # assert against them.
-ITEM_WEIGHTS: Dict[str, float] = {
+ITEM_WEIGHTS: dict[str, float] = {
     "formality": 0.28,
     "occasion": 0.20,
     "weather": 0.18,
@@ -305,7 +306,7 @@ ITEM_WEIGHTS: Dict[str, float] = {
 }
 
 
-def weighted(scores: Dict[str, float], weights: Dict[str, float] = ITEM_WEIGHTS) -> float:
+def weighted(scores: dict[str, float], weights: dict[str, float] = ITEM_WEIGHTS) -> float:
     """Weighted mean over whichever factors were actually scored."""
     total = sum(weights[key] for key in scores if key in weights)
     if total <= 0:
@@ -313,13 +314,13 @@ def weighted(scores: Dict[str, float], weights: Dict[str, float] = ITEM_WEIGHTS)
     return round(sum(scores[key] * weights[key] for key in scores if key in weights) / total, 4)
 
 
-def cohesion(colours: Iterable[Any]) -> Tuple[float, List[str]]:
+def cohesion(colours: Iterable[Any]) -> tuple[float, list[str]]:
     """How well a set of colours works as one outfit."""
     values = [value for value in colours if normalise_colour(value) is not None]
     if len(values) < 2:
         return NEUTRAL, ["Not enough recorded colours to judge how the outfit sits together."]
-    scores: List[float] = []
-    reasons: List[str] = []
+    scores: list[float] = []
+    reasons: list[str] = []
     for index, first in enumerate(values):
         for second in values[index + 1:]:
             score, reason = colour_compatibility(first, second)

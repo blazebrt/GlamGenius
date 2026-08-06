@@ -19,10 +19,8 @@ application services, real Alembic-migrated schema, real reference data.
 from __future__ import annotations
 
 import uuid
-from typing import List
 
 import pytest
-
 from app.bootstrap import run as run_seed
 from app.domains.consent import service as consent_service
 from app.domains.consent.models import CONSENT_PHOTO_ANALYSIS
@@ -30,10 +28,10 @@ from app.domains.identity import service as identity
 from app.domains.inventory.models import InventoryItem
 from app.domains.media import service as media_service
 from app.domains.media.storage import factory as storage_factory
-from app.domains.privacy import deletion_service, export as export_service
+from app.domains.privacy import deletion_service
+from app.domains.privacy import export as export_service
 from app.domains.privacy.models import STATE_COMPLETE
 from app.shared.database.sql import get_sessionmaker
-
 
 pytestmark = pytest.mark.asyncio
 
@@ -80,7 +78,7 @@ class _FakeStorage:
 
 class _FakeSupabaseAdmin:
     def __init__(self):
-        self.deleted_users: List[str] = []
+        self.deleted_users: list[str] = []
     class auth:
         pass
 

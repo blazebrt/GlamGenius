@@ -5,26 +5,31 @@ route can report connection status honestly without importing adapters.
 """
 from __future__ import annotations
 
-from typing import Dict, List
-
 from app.domains.planning.providers.base import (
-    CalendarEventReading, CalendarProvider, ProviderUnavailable, WeatherProvider, WeatherReading,
+    CalendarEventReading,
+    CalendarProvider,
+    ProviderUnavailable,
+    WeatherProvider,
+    WeatherReading,
 )
 from app.domains.planning.providers.manual import (
-    PROVIDER_MANUAL, StoredCalendarProvider, StoredWeatherProvider, UnconfiguredProvider,
+    PROVIDER_MANUAL,
+    StoredCalendarProvider,
+    StoredWeatherProvider,
+    UnconfiguredProvider,
 )
 
 # Names a user may pass. `manual` is the one that works today; the others are
 # declared so the API can say "known, not connected" rather than "unknown", and
 # so adding a real adapter is a one-line registry change.
-KNOWN_CALENDAR_PROVIDERS: Dict[str, str] = {
+KNOWN_CALENDAR_PROVIDERS: dict[str, str] = {
     PROVIDER_MANUAL: "Events you add yourself",
     "google": "Google Calendar (not connected in this release)",
     "apple": "Apple Calendar (not connected in this release)",
     "outlook": "Outlook Calendar (not connected in this release)",
 }
 
-KNOWN_WEATHER_PROVIDERS: Dict[str, str] = {
+KNOWN_WEATHER_PROVIDERS: dict[str, str] = {
     PROVIDER_MANUAL: "Weather you enter yourself",
 }
 
@@ -41,7 +46,7 @@ def weather_provider(name: str, session, account_id) -> WeatherProvider:
     return UnconfiguredProvider(name, "weather")
 
 
-def catalogue() -> Dict[str, List[Dict[str, object]]]:
+def catalogue() -> dict[str, list[dict[str, object]]]:
     return {
         "calendar": [
             {"key": key, "label": label, "available": key == PROVIDER_MANUAL}

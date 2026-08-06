@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Sequence
+from datetime import date
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,9 +19,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.inventory.models import InventoryItem
 from app.domains.planning import clock
 from app.domains.planning.models import (
-    LAUNDRY_STATES, CalendarEvent, DailyPlan, DailyPlanAction, ExternalIntegration,
-    LaundryStateEvent, OutfitSchedule, PlanRecalculationEvent, WeatherSnapshot,
-    WeeklyPlan, WeeklyPlanDay,
+    LAUNDRY_STATES,
+    CalendarEvent,
+    DailyPlan,
+    DailyPlanAction,
+    ExternalIntegration,
+    LaundryStateEvent,
+    OutfitSchedule,
+    PlanRecalculationEvent,
+    WeatherSnapshot,
+    WeeklyPlan,
+    WeeklyPlanDay,
 )
 from app.domains.planning.providers import KNOWN_CALENDAR_PROVIDERS, PROVIDER_MANUAL, catalogue
 from app.domains.planning.schemas import CalendarEventInput, WeatherInput
@@ -85,7 +93,7 @@ async def record_weather(session: AsyncSession, account_id: uuid.UUID, body: Wea
     return row
 
 
-def serialize_weather(row: Optional[WeatherSnapshot]) -> Optional[Dict[str, Any]]:
+def serialize_weather(row: Optional[WeatherSnapshot]) -> Optional[dict[str, Any]]:
     if row is None:
         return None
     return {
@@ -120,7 +128,7 @@ async def upsert_event(
     if body.external_id:
         external_id = body.external_id
     else:
-        seed = f"{body.title}|{body.starts_at.isoformat()}".encode("utf-8")
+        seed = f"{body.title}|{body.starts_at.isoformat()}".encode()
         external_id = f"user-{hashlib.sha256(seed).hexdigest()[:24]}"
     dedup_key = f"{provider}:{external_id}:{body.starts_at.isoformat()}"
 
@@ -159,7 +167,7 @@ async def owned_event(session: AsyncSession, account_id: uuid.UUID, event_id: uu
     return row
 
 
-def serialize_event(row: CalendarEvent, timezone_name: str) -> Dict[str, Any]:
+def serialize_event(row: CalendarEvent, timezone_name: str) -> dict[str, Any]:
     return {
         "id": str(row.id), "title": row.title,
         "starts_at": row.starts_at.isoformat(),
@@ -209,7 +217,7 @@ async def connect_calendar(
     return row
 
 
-async def disconnect_calendar(session: AsyncSession, account_id: uuid.UUID) -> List[ExternalIntegration]:
+async def disconnect_calendar(session: AsyncSession, account_id: uuid.UUID) -> list[ExternalIntegration]:
     """Revoke calendar access and stop using anything it gave us.
 
     Disconnecting has to actually mean something. Events sourced from the
@@ -247,7 +255,7 @@ async def disconnect_calendar(session: AsyncSession, account_id: uuid.UUID) -> L
     return list(rows)
 
 
-async def calendar_status(session: AsyncSession, account_id: uuid.UUID) -> Dict[str, Any]:
+async def calendar_status(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     rows = (await session.execute(
         select(ExternalIntegration).where(
             ExternalIntegration.account_id == account_id,
@@ -296,7 +304,7 @@ async def set_item_state(
 # --- Serialisation ----------------------------------------------------------
 
 
-def serialize_action(row: DailyPlanAction) -> Dict[str, Any]:
+def serialize_action(row: DailyPlanAction) -> dict[str, Any]:
     return {
         "id": str(row.id), "module": row.module, "action_type": row.action_type,
         "title": row.title, "body": row.body, "priority": row.priority,
@@ -309,12 +317,12 @@ def serialize_action(row: DailyPlanAction) -> Dict[str, Any]:
 
 async def serialize_plan(
     session: AsyncSession, plan: DailyPlan, *, include_look: bool = True
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     actions = (await session.execute(
         select(DailyPlanAction).where(DailyPlanAction.plan_id == plan.id).order_by(DailyPlanAction.priority)
     )).scalars().all()
 
-    look_payload: Optional[Dict[str, Any]] = None
+    look_payload: Optional[dict[str, Any]] = None
     if include_look and plan.look_id:
         look = await session.get(Look, plan.look_id)
         if look is not None and look.account_id == plan.account_id:
@@ -358,15 +366,15 @@ async def serialize_plan(
     }
 
 
-async def serialize_week(session: AsyncSession, plan: WeeklyPlan) -> Dict[str, Any]:
+async def serialize_week(session: AsyncSession, plan: WeeklyPlan) -> dict[str, Any]:
     rows = (await session.execute(
         select(WeeklyPlanDay).where(WeeklyPlanDay.weekly_plan_id == plan.id).order_by(WeeklyPlanDay.plan_date)
     )).scalars().all()
 
-    days: List[Dict[str, Any]] = []
+    days: list[dict[str, Any]] = []
     for row in rows:
         daily = await session.get(DailyPlan, row.daily_plan_id) if row.daily_plan_id else None
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "plan_date": row.plan_date.isoformat(),
             "weekday": row.plan_date.strftime("%A"),
             "locked": row.locked,
@@ -414,7 +422,7 @@ async def serialize_week(session: AsyncSession, plan: WeeklyPlan) -> Dict[str, A
 
 async def recalculation_history(
     session: AsyncSession, account_id: uuid.UUID, plan_date: date
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     rows = (await session.execute(
         select(PlanRecalculationEvent).where(
             PlanRecalculationEvent.account_id == account_id,
@@ -447,7 +455,7 @@ async def sync_schedule_items(
 
     from app.domains.recommendation.models import OWNERSHIP_OWNED, LookItem
 
-    item_ids: List[str] = []
+    item_ids: list[str] = []
     if look_id is not None:
         rows = (await session.execute(
             select(LookItem.inventory_item_id)

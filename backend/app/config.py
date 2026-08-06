@@ -12,10 +12,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List
 
 from dotenv import load_dotenv
-
 
 # Load the same .env file the rest of the backend uses. Path-anchored so this
 # works from tests, Alembic and Uvicorn alike.
@@ -60,7 +58,7 @@ def _env_float(name: str, default: float) -> float:
         ) from exc
 
 
-def _env_csv(name: str, default: str = "") -> List[str]:
+def _env_csv(name: str, default: str = "") -> list[str]:
     raw = os.environ.get(name)
     if raw is None:
         raw = default

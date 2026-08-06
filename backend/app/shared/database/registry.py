@@ -12,24 +12,16 @@ from app.domains.ai_gateway.models import AIRun, AIRunOutput
 from app.domains.analytics.models import AppEvent
 from app.domains.audit.models import AuditEvent
 from app.domains.beta_access.models import (
+    BetaUsageEvent,
     Invite,
     InviteRedemption,
-    BetaUsageEvent,
 )
 from app.domains.consent.models import Consent
 from app.domains.identity.models import Account
 from app.domains.inventory import models as inventory_models
 from app.domains.media.models import MediaAsset
+from app.domains.planning import models as planning_models
 from app.domains.privacy.models import AccountDeletionJob
-from app.domains.system.models import WorkerStatus
-from app.domains.reference import (
-    IngredientContraindicationRule,
-    IngredientSensitivityRule,
-    InventorySubtypeDefinition,
-    RoutineTemplateStep,
-    SeedVersionRecord,
-    SupplementContextRule,
-)
 from app.domains.profile.models import (
     AppearanceGoal,
     AppearanceProfile,
@@ -42,12 +34,20 @@ from app.domains.profile.models import (
     StylePreference,
     UserConstraint,
 )
-from app.domains.planning import models as planning_models
 from app.domains.progress import models as progress_models
 from app.domains.quiz.models import QuizSubmission
 from app.domains.recommendation import models as recommendation_models
+from app.domains.reference import (
+    IngredientContraindicationRule,
+    IngredientSensitivityRule,
+    InventorySubtypeDefinition,
+    RoutineTemplateStep,
+    SeedVersionRecord,
+    SupplementContextRule,
+)
 from app.domains.routines import models as routines_models
 from app.domains.scan.models import Scan
+from app.domains.system.models import WorkerStatus
 from app.shared.database.base import Base
 from app.shared.flags.models import FeatureFlag
 

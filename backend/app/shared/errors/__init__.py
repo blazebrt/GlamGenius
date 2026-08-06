@@ -1,8 +1,8 @@
 """Structured application errors."""
 from app.shared.errors.codes import ErrorCode
 from app.shared.errors.exceptions import (
-    AppError,
     AnalysisUnavailableError,
+    AppError,
     ConsentRequiredError,
     FeatureUnavailableError,
     MediaTooLargeError,

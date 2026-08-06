@@ -14,9 +14,6 @@ init_sentry()
 
 import logging
 
-from fastapi import FastAPI
-from starlette.middleware.cors import CORSMiddleware
-
 from app.api.v2 import router as v2_router
 from app.config import (
     ALLOWED_ORIGINS,
@@ -30,6 +27,8 @@ from app.shared.database import sql
 from app.shared.errors.handlers import register_error_handlers
 from app.shared.observability.logging import configure_logging
 from app.shared.observability.request_id import RequestIdMiddleware
+from fastapi import FastAPI
+from starlette.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="GlamGenius — Personal Appearance Operating System",

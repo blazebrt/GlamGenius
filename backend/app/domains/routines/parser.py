@@ -20,8 +20,9 @@ inventory.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from typing import Any, Optional
 
 from app.domains.routines.ontology import INGREDIENT_BY_KEY, alias_index
 
@@ -42,7 +43,7 @@ _SOURCE_CONFIDENCE = {
 
 _ALIASES = alias_index()
 # Longest first, so "hyaluronic acid" wins over "acid" and "cleansing oil" over "oil".
-_ALIASES_BY_LENGTH: Tuple[str, ...] = tuple(sorted(_ALIASES, key=len, reverse=True))
+_ALIASES_BY_LENGTH: tuple[str, ...] = tuple(sorted(_ALIASES, key=len, reverse=True))
 
 _SPLIT = re.compile(r"[,;•\n\r\|]+")
 _NOISE = re.compile(r"\((?:[^()]*)\)|\d+(\.\d+)?\s*%|\bmay contain\b|\bci \d+\b", re.IGNORECASE)
@@ -62,7 +63,7 @@ class ParsedIngredient:
     def needs_confirmation(self) -> bool:
         return self.confidence < CONFIRMATION_THRESHOLD
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "ingredient_key": self.key,
             "display_name": self.display_name,
@@ -82,9 +83,9 @@ def _clean(value: str) -> str:
     return " ".join(text.split())
 
 
-def _match_in(text: str) -> List[Tuple[str, str]]:
+def _match_in(text: str) -> list[tuple[str, str]]:
     """Every ingredient alias present in a piece of text, longest first."""
-    found: List[Tuple[str, str]] = []
+    found: list[tuple[str, str]] = []
     seen: set = set()
     remaining = text
     for alias in _ALIASES_BY_LENGTH:
@@ -104,12 +105,12 @@ def _match_in(text: str) -> List[Tuple[str, str]]:
     return found
 
 
-def parse_label(text: Optional[str], *, source: str = SOURCE_LABEL) -> List[ParsedIngredient]:
+def parse_label(text: Optional[str], *, source: str = SOURCE_LABEL) -> list[ParsedIngredient]:
     """Parse a full INCI list. Position in the list is preserved."""
     if not text:
         return []
     base_confidence = _SOURCE_CONFIDENCE.get(source, 0.6)
-    results: List[ParsedIngredient] = []
+    results: list[ParsedIngredient] = []
     seen: set = set()
 
     for position, chunk in enumerate(_SPLIT.split(str(text))):
@@ -132,12 +133,12 @@ def parse_label(text: Optional[str], *, source: str = SOURCE_LABEL) -> List[Pars
     return results
 
 
-def parse_declared(values: Optional[Sequence[str]], *, source: str = SOURCE_USER) -> List[ParsedIngredient]:
+def parse_declared(values: Optional[Sequence[str]], *, source: str = SOURCE_USER) -> list[ParsedIngredient]:
     """Parse the short list a user typed. Higher confidence, no position."""
     if not values:
         return []
     base_confidence = _SOURCE_CONFIDENCE.get(source, 0.9)
-    results: List[ParsedIngredient] = []
+    results: list[ParsedIngredient] = []
     seen: set = set()
     for value in values:
         cleaned = _clean(value)
@@ -158,7 +159,7 @@ def parse_declared(values: Optional[Sequence[str]], *, source: str = SOURCE_USER
     return results
 
 
-def parse_product(details: Dict[str, Any], *, source: str = SOURCE_USER) -> List[ParsedIngredient]:
+def parse_product(details: dict[str, Any], *, source: str = SOURCE_USER) -> list[ParsedIngredient]:
     """Everything we can read from one inventory item's recorded details.
 
     The user's own ``active_ingredients`` list wins over the same ingredient
@@ -166,7 +167,7 @@ def parse_product(details: Dict[str, Any], *, source: str = SOURCE_USER) -> List
     """
     declared = parse_declared(details.get("active_ingredients"), source=source)
     label = parse_label(details.get("ingredients_text"), source=SOURCE_LABEL)
-    by_key: Dict[str, ParsedIngredient] = {row.key: row for row in label}
+    by_key: dict[str, ParsedIngredient] = {row.key: row for row in label}
     for row in declared:
         by_key[row.key] = row
     return sorted(by_key.values(), key=lambda row: (-row.confidence, row.display_name))
@@ -179,7 +180,7 @@ def families_of(rows: Iterable[ParsedIngredient], *, confirmed_only: bool = Fals
     }
 
 
-def unmatched_terms(text: Optional[str], limit: int = 10) -> List[str]:
+def unmatched_terms(text: Optional[str], limit: int = 10) -> list[str]:
     """Label entries we could not identify.
 
     Surfaced rather than hidden: "we did not recognise these" is honest, and it
@@ -187,7 +188,7 @@ def unmatched_terms(text: Optional[str], limit: int = 10) -> List[str]:
     """
     if not text:
         return []
-    out: List[str] = []
+    out: list[str] = []
     for chunk in _SPLIT.split(str(text)):
         cleaned = _clean(chunk)
         if not cleaned or len(cleaned) < 3:

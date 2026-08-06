@@ -23,7 +23,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-
 from app.domains.media import service as media_service
 from app.domains.media.models import MEDIA_STATUS_ACTIVE, MEDIA_STATUS_DELETED
 from app.domains.media.storage import factory as storage_factory
@@ -36,8 +35,8 @@ from app.domains.media.storage.base import (
     account_prefix,
 )
 from app.shared.database.sql import get_sessionmaker
-from tests.conftest import auth, png_bytes
 
+from tests.conftest import auth, png_bytes
 
 pytestmark = pytest.mark.asyncio
 
@@ -564,9 +563,8 @@ async def test_image_associates_with_an_inventory_item(
     assert created.status_code in (200, 201), created.text
     item_id = created.json()["id"]
 
-    from sqlalchemy import select
-
     from app.domains.inventory.models import InventoryItemImage
+    from sqlalchemy import select
 
     factory = get_sessionmaker()
     async with factory() as session:

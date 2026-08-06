@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +45,10 @@ class PushMessage:
 class PushResult:
     sent: int
     failed: int
-    receipts: List[str]          # server-side receipt ids for later delivery check
+    receipts: list[str]          # server-side receipt ids for later delivery check
 
 
-async def send(messages: List[PushMessage]) -> PushResult:
+async def send(messages: list[PushMessage]) -> PushResult:
     """POST a batch of messages to Expo. Returns the receipt ids and counts.
 
     Never raises for a network/provider error — a push failure is not a
@@ -65,7 +65,7 @@ async def send(messages: List[PushMessage]) -> PushResult:
 
     sent = 0
     failed = 0
-    receipts: List[str] = []
+    receipts: list[str] = []
 
     for start in range(0, len(messages), _MAX_PER_REQUEST):
         batch = messages[start : start + _MAX_PER_REQUEST]

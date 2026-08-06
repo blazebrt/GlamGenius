@@ -14,12 +14,10 @@ behavioural assertions belong in the tests that use these helpers.
 from __future__ import annotations
 
 import base64
-import uuid
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 from tests.conftest import auth, png_bytes
-
 
 # A Monday, so the weekly planner's week starts on it.
 JOURNEY_DATE = date(2026, 2, 16)
@@ -28,7 +26,7 @@ JOURNEY_DATE = date(2026, 2, 16)
 # The seven canonical inventory categories, with a valid detail payload each.
 # ``beauty`` is the Beauty Shelf and ``hair`` the Hair Shelf; those are the
 # internal keys for the two shelf categories.
-SEVEN_CATEGORY_ITEMS: List[Dict[str, Any]] = [
+SEVEN_CATEGORY_ITEMS: list[dict[str, Any]] = [
     {
         "category": "wardrobe", "display_name": "Charcoal Blazer", "subcategory": "blazer",
         "brand": "Fable",
@@ -111,7 +109,7 @@ async def register_through_invite(client, fake_supabase_user, *, email: str, adm
     return token, account_id, code
 
 
-async def complete_profile_and_onboarding(client, token) -> Dict[str, Any]:
+async def complete_profile_and_onboarding(client, token) -> dict[str, Any]:
     ok(await client.get("/api/v2/profile", headers=auth(token)))
     ok(await client.patch(
         "/api/v2/profile",
@@ -144,7 +142,7 @@ async def complete_profile_and_onboarding(client, token) -> Dict[str, Any]:
     return status
 
 
-async def grant_photo_consent(client, token) -> Dict[str, Any]:
+async def grant_photo_consent(client, token) -> dict[str, Any]:
     return ok(await client.post(
         "/api/v2/consent",
         headers=auth(token),
@@ -152,9 +150,9 @@ async def grant_photo_consent(client, token) -> Dict[str, Any]:
     ))
 
 
-async def stock_seven_categories(client, token) -> Dict[str, List[str]]:
+async def stock_seven_categories(client, token) -> dict[str, list[str]]:
     """Add at least one item in each of the seven categories."""
-    created: Dict[str, List[str]] = {}
+    created: dict[str, list[str]] = {}
     for body in SEVEN_CATEGORY_ITEMS:
         item = ok(await client.post("/api/v2/inventory/items", headers=auth(token), json=body))
         created.setdefault(body["category"], []).append(item["id"])
@@ -176,7 +174,7 @@ async def upload_inventory_image(client, token, item_id: str) -> str:
     return asset["id"]
 
 
-async def run_scan(client, token, *, scan_type: str = "face") -> Dict[str, Any]:
+async def run_scan(client, token, *, scan_type: str = "face") -> dict[str, Any]:
     image = base64.b64encode(png_bytes()).decode("ascii")
     return ok(await client.post(
         "/api/v2/scan/analyse",
@@ -185,7 +183,7 @@ async def run_scan(client, token, *, scan_type: str = "face") -> Dict[str, Any]:
     ), 201)
 
 
-async def submit_quiz(client, token) -> Dict[str, Any]:
+async def submit_quiz(client, token) -> dict[str, Any]:
     questions = ok(await client.get("/api/v2/quiz/questions", headers=auth(token)))
     answers = {
         question["id"]: question["options"][0]["value"]
@@ -196,7 +194,7 @@ async def submit_quiz(client, token) -> Dict[str, Any]:
     ), 200, 201)
 
 
-async def create_occasion_and_style(client, token) -> Dict[str, Any]:
+async def create_occasion_and_style(client, token) -> dict[str, Any]:
     occasion = ok(await client.post(
         "/api/v2/occasions",
         headers=auth(token),
@@ -215,7 +213,7 @@ async def create_occasion_and_style(client, token) -> Dict[str, Any]:
     return {"occasion": occasion, "styling": styling}
 
 
-async def evaluate_a_purchase(client, token) -> Dict[str, Any]:
+async def evaluate_a_purchase(client, token) -> dict[str, Any]:
     return ok(await client.post(
         "/api/v2/shopping/evaluate",
         headers=auth(token),
@@ -232,7 +230,7 @@ async def evaluate_a_purchase(client, token) -> Dict[str, Any]:
     ))
 
 
-async def plan_the_day(client, token) -> Dict[str, Any]:
+async def plan_the_day(client, token) -> dict[str, Any]:
     ok(await client.post(
         "/api/v2/today/weather",
         headers=auth(token),
@@ -243,7 +241,7 @@ async def plan_the_day(client, token) -> Dict[str, Any]:
         headers=auth(token),
         json={
             "title": "Team review",
-            "starts_at": datetime(2026, 2, 16, 10, 0, tzinfo=timezone.utc).isoformat(),
+            "starts_at": datetime(2026, 2, 16, 10, 0, tzinfo=UTC).isoformat(),
             "occasion_key": "office",
         },
     ))
@@ -258,7 +256,7 @@ async def plan_the_day(client, token) -> Dict[str, Any]:
     return {"today": today, "week": week}
 
 
-async def build_routines(client, token) -> Dict[str, Any]:
+async def build_routines(client, token) -> dict[str, Any]:
     return ok(await client.post(
         "/api/v2/routines/generate",
         headers=auth(token),
@@ -266,7 +264,7 @@ async def build_routines(client, token) -> Dict[str, Any]:
     ))
 
 
-async def set_a_goal(client, token) -> Dict[str, Any]:
+async def set_a_goal(client, token) -> dict[str, Any]:
     return ok(await client.post(
         "/api/v2/goals",
         headers=auth(token),
@@ -281,7 +279,7 @@ async def set_a_goal(client, token) -> Dict[str, Any]:
     ))
 
 
-async def teach_memory_a_fact(client, token) -> Dict[str, Any]:
+async def teach_memory_a_fact(client, token) -> dict[str, Any]:
     """Give feedback, which is how the app learns a controlled-memory fact."""
     return ok(await client.post(
         "/api/v2/memory/feedback",
@@ -294,9 +292,9 @@ async def teach_memory_a_fact(client, token) -> Dict[str, Any]:
     ))
 
 
-async def populate_every_domain(client, token) -> Dict[str, Any]:
+async def populate_every_domain(client, token) -> dict[str, Any]:
     """Walk one account through every active product domain over the API."""
-    created: Dict[str, Any] = {}
+    created: dict[str, Any] = {}
     await complete_profile_and_onboarding(client, token)
     created["consent"] = await grant_photo_consent(client, token)
     created["inventory"] = await stock_seven_categories(client, token)

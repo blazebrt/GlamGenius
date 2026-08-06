@@ -33,16 +33,14 @@ The journey asserts data relationships rather than status codes:
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select
-
 from app.bootstrap import run as run_seed
 from app.domains.consent import service as consent_service
-from app.domains.consent.models import CONSENT_PHOTO_ANALYSIS, Consent
+from app.domains.consent.models import CONSENT_PHOTO_ANALYSIS
 from app.domains.identity import service as identity
-from app.domains.inventory.models import InventoryItem, InventoryEvent, InventoryCategory
+from app.domains.inventory.models import InventoryCategory, InventoryEvent, InventoryItem
 from app.domains.media import service as media_service
 from app.domains.media.storage import factory as storage_factory
 from app.domains.planning.models import (
@@ -53,9 +51,8 @@ from app.domains.planning.models import (
     WeeklyPlan,
     WeeklyPlanDay,
 )
-from app.domains.privacy import deletion_service, export as export_service
-from app.domains.progress import milestones as progress_milestones
-from app.domains.progress import service as progress_service
+from app.domains.privacy import deletion_service
+from app.domains.privacy import export as export_service
 from app.domains.privacy.models import STATE_COMPLETE
 from app.domains.profile.models import (
     AppearanceGoal,
@@ -64,6 +61,8 @@ from app.domains.profile.models import (
     OnboardingSession,
     ProfileAttribute,
 )
+from app.domains.progress import milestones as progress_milestones
+from app.domains.progress import service as progress_service
 from app.domains.progress.models import (
     GoalUpdate,
     MemoryFact,
@@ -92,7 +91,7 @@ from app.domains.routines.models import (
 from app.domains.scan.models import Scan
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_sessionmaker
-
+from sqlalchemy import func, select
 
 pytestmark = pytest.mark.asyncio
 
@@ -521,7 +520,7 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
             external_id="manual-1",
             dedup_key=f"manual-{account_id}-1",
             title="Coffee with Alex",
-            starts_at=datetime.now(timezone.utc),
+            starts_at=datetime.now(UTC),
             provider="manual",
             source="user_declared",
         ))

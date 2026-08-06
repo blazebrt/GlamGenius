@@ -15,19 +15,14 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import func, select
-
 from app.bootstrap import (
     CANONICAL_INVENTORY_CATEGORIES,
-    CONTRAINDICATION_DEFS,
-    _feature_flag_defaults,
-    INVENTORY_SUBTYPES,
-    _metric_definitions,
-    PERFUME_CONTEXT_DEFS,
     ROUTINE_TEMPLATE_DEFS,
     SEED_VERSION,
-    SENSITIVITY_DEFS,
-    SUPPLEMENT_CONTEXT_DEFS,
+    _feature_flag_defaults,
+    _metric_definitions,
+)
+from app.bootstrap import (
     run as run_seed,
 )
 from app.domains.inventory.models import InventoryCategory, InventoryItem
@@ -49,7 +44,7 @@ from app.domains.routines.models import (
 )
 from app.shared.database.sql import get_sessionmaker
 from app.shared.flags.models import FeatureFlag
-
+from sqlalchemy import func, select
 
 pytestmark = pytest.mark.asyncio
 
@@ -255,9 +250,10 @@ async def test_all_seven_inventory_categories_available(db_clean):
 
 async def test_invalid_category_is_rejected_by_fk(db_clean):
     """Category strings that don't exist in ``inventory_categories`` are refused."""
+    import uuid
+
     from app.domains.identity import service as identity
     from sqlalchemy.exc import IntegrityError
-    import uuid
 
     factory = get_sessionmaker()
     async with factory() as session:

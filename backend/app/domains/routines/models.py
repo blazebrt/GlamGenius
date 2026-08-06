@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
@@ -132,7 +132,7 @@ class RoutineTemplate(UUIDPrimaryKey, TimestampMixin, Base):
     kind: Mapped[str] = mapped_column(String(24), nullable=False, unique=True)
     label: Mapped[str] = mapped_column(String(80), nullable=False)
     frequency: Mapped[str] = mapped_column(String(80), nullable=False)
-    slots: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    slots: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     knowledge_version: Mapped[str] = mapped_column(String(24), nullable=False, default=KNOWLEDGE_VERSION, server_default=KNOWLEDGE_VERSION)
 
 
@@ -148,7 +148,7 @@ class PerfumeContextRule(UUIDPrimaryKey, TimestampMixin, Base):
     rule_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     factor: Mapped[str] = mapped_column(String(32), nullable=False)
     match_value: Mapped[str] = mapped_column(String(48), nullable=False)
-    families: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    families: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     note: Mapped[str] = mapped_column(Text, nullable=False)
 
 
@@ -165,7 +165,7 @@ class AppearanceNutritionRule(UUIDPrimaryKey, TimestampMixin, Base):
     nutrient_key: Mapped[str] = mapped_column(String(48), nullable=False)
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
     appearance_context: Mapped[str] = mapped_column(Text, nullable=False)
-    foods: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    foods: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
 
 
@@ -210,9 +210,9 @@ class Routine(UUIDPrimaryKey, TimestampMixin, Base):
     climate: Mapped[Optional[str]] = mapped_column(String(24))
     engine_version: Mapped[str] = mapped_column(String(24), nullable=False, default=KNOWLEDGE_VERSION, server_default=KNOWLEDGE_VERSION)
     explanation_source: Mapped[str] = mapped_column(String(24), nullable=False, default="deterministic", server_default="deterministic")
-    warnings: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    climate_notes: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    skipped_for_allergy: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    warnings: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    climate_notes: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    skipped_for_allergy: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
     __table_args__ = (
@@ -318,7 +318,7 @@ class RoutineRecommendationRun(UUIDPrimaryKey, TimestampMixin, Base):
     products_considered: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     routines_built: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     warnings_raised: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    inputs: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    inputs: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
 
     __table_args__ = (Index("ix_routine_runs_account", "account_id", "created_at"),)
 
@@ -352,8 +352,8 @@ class NutritionPreference(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True)
     diet: Mapped[str] = mapped_column(String(32), nullable=False, default="non_vegetarian", server_default="non_vegetarian")
-    avoid_foods: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-    focus_nutrients: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    avoid_foods: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    focus_nutrients: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
 

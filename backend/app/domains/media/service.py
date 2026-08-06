@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,7 +49,7 @@ from app.shared.validation.media import read_dimensions, validate_upload
 logger = logging.getLogger(__name__)
 
 
-def to_public_dict(asset: MediaAsset) -> Dict[str, Any]:
+def to_public_dict(asset: MediaAsset) -> dict[str, Any]:
     """What a caller is allowed to see.
 
     ``storage_key`` and ``storage_backend`` are deliberately absent — the audit
@@ -228,7 +228,7 @@ async def delete(
 
 async def list_for_account(
     session: AsyncSession, account_id: uuid.UUID, include_deleted: bool = False
-) -> List[MediaAsset]:
+) -> list[MediaAsset]:
     stmt = select(MediaAsset).where(MediaAsset.account_id == account_id)
     if not include_deleted:
         stmt = stmt.where(MediaAsset.status == MEDIA_STATUS_ACTIVE)
@@ -263,7 +263,7 @@ async def delete_all_for_account(
     return removed
 
 
-async def purge_account_storage(account_id: uuid.UUID) -> Tuple[int, List[str]]:
+async def purge_account_storage(account_id: uuid.UUID) -> tuple[int, list[str]]:
     """Delete every object under an account's storage prefix.
 
     Returns ``(removed_count, remaining_keys)``. The deletion state machine

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import text
@@ -18,8 +17,8 @@ from app.config import (
     MEDIA_MAX_BYTES,
     MEDIA_STORAGE_BACKEND,
     REQUIRE_ANALYSIS_CONSENT,
-    SUPABASE_URL,
     SUPABASE_ANON_KEY,
+    SUPABASE_URL,
     validate_production_configuration,
 )
 from app.domains.ai_gateway.providers import gemini

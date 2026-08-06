@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Optional
 
 from app.config import (
     MEDIA_SIGNED_URL_TTL_SECONDS,
@@ -93,7 +94,7 @@ class SupabaseStorage(MediaStorage):
             return await asyncio.wait_for(
                 asyncio.to_thread(fn), timeout=_STORAGE_TIMEOUT_SECONDS
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             logger.warning("supabase_storage_%s_timeout", op)
             raise StorageTimeout(f"supabase_storage_{op}_timeout") from exc
         except (StorageObjectMissing, StorageUnauthorized, StorageMisconfigured,
@@ -186,9 +187,9 @@ class SupabaseStorage(MediaStorage):
         would make account deletion look complete when it is not.
         """
         api = self._bucket_api()
-        found: List[str] = []
+        found: list[str] = []
         # We use a queue so nested prefixes are handled iteratively.
-        queue: List[str] = [prefix.rstrip("/")]
+        queue: list[str] = [prefix.rstrip("/")]
 
         def _list_page(path: str, offset: int) -> list:
             listing = api.list(
