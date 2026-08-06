@@ -21,10 +21,11 @@ async def test_ready_ok_during_normal_operation(app_client: AsyncClient, db_clea
     import app.api.v2.config as config_mod
     monkeypatch.setattr(config_mod, "validate_production_configuration", lambda: None)
     
+    import uuid
+
+    from app.bootstrap import SEED_VERSION
     from app.shared.database.sql import get_sessionmaker
     from sqlalchemy import text
-    from app.bootstrap import SEED_VERSION
-    import uuid
     factory = get_sessionmaker()
     async with factory() as session:
         await session.execute(text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, 'core', :seed, 1, NOW())"), {"id": str(uuid.uuid4()), "seed": SEED_VERSION})
@@ -76,9 +77,10 @@ async def test_ready_fails_during_database_outage(app_client: AsyncClient, monke
 
 async def test_ready_fails_on_seed_mismatch(app_client: AsyncClient, db_clean):
     # Intentionally insert an invalid seed version in the database
+    import uuid
+
     from app.shared.database.sql import get_sessionmaker
     from sqlalchemy import text
-    import uuid
     factory = get_sessionmaker()
     async with factory() as session:
         await session.execute(text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, 'core', 'invalid-version', 1, NOW())"), {"id": str(uuid.uuid4())})

@@ -191,39 +191,7 @@ def test_sentry_is_not_initialised_under_pytest(monkeypatch):
 # Health and readiness
 # ---------------------------------------------------------------------------
 
-async def test_ready_reports_ready_when_postgres_is_up(app_client, db_clean):
-    resp = await app_client.get("/api/v2/ready")
 
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "ready"
-    assert body["components"]["postgres"] == "up"
-    assert "ai_provider" in body["components"]
-    # A readiness payload must never carry credentials.
-    assert "key" not in resp.text.lower() or "api_key" not in resp.text.lower()
-
-
-async def test_ready_reports_not_ready_when_postgres_is_down(app_client, monkeypatch):
-    """An operator pages on this. Reporting ready while the database is
-    unreachable is worse than reporting nothing."""
-    from app.shared.database import sql
-
-    async def _down():
-        return False
-
-    monkeypatch.setattr(sql, "ping", _down)
-
-    resp = await app_client.get("/api/v2/ready")
-
-    assert resp.status_code == 503
-    assert resp.json()["status"] == "not_ready"
-    assert resp.json()["components"]["postgres"] == "down"
-
-
-async def test_ready_needs_no_authentication(app_client, db_clean):
-    """A readiness probe has no token."""
-    resp = await app_client.get("/api/v2/ready")
-    assert resp.status_code == 200
 
 
 async def test_config_publishes_only_client_safe_settings(app_client, db_clean):
