@@ -35,31 +35,86 @@ async def run_forever() -> None:
     factory = get_sessionmaker()
     logger.info("account_deletion_worker_started")
     
+    import os
     import socket
-
     from sqlalchemy import func
     from sqlalchemy.dialects.postgresql import insert
-
     from app.domains.system.models import WorkerStatus
+    from app.shared.database.base import utcnow
+    from sqlalchemy.exc import DBAPIError
 
     worker_name = f"account_deletion_worker_{socket.gethostname()}"
-    
+    started_at = utcnow()
+    service_version = os.environ.get("COMMIT_SHA", os.environ.get("APP_VERSION", "unknown"))
+
     while not stop.is_set():
         did_work = False
         try:
             async with factory() as session:
-                did_work = await deletion_service.process_once(session)
-                
-                stmt = insert(WorkerStatus).values(
-                    worker_name=worker_name,
-                    last_heartbeat_at=func.now(),
-                    last_error_summary=None
-                ).on_conflict_do_update(
-                    index_elements=['worker_name'],
-                    set_={"last_heartbeat_at": func.now(), "last_error_summary": None}
-                )
-                await session.execute(stmt)
-                await session.commit()
+                job = await deletion_service.claim_next(session)
+                if job:
+                    # Heartbeat + mark attempt before processing
+                    stmt = insert(WorkerStatus).values(
+                        worker_name=worker_name,
+                        last_heartbeat_at=func.now(),
+                        started_at=started_at,
+                        service_version=service_version,
+                        last_attempted_job_at=func.now()
+                    ).on_conflict_do_update(
+                        index_elements=['worker_name'],
+                        set_={
+                            "last_heartbeat_at": func.now(),
+                            "last_attempted_job_at": func.now(),
+                            "service_version": service_version
+                        }
+                    )
+                    await session.execute(stmt)
+                    await session.commit()
+
+                    state, err = await deletion_service.run_job(session, job)
+                    did_work = True
+
+                    upd_vals = {
+                        "last_heartbeat_at": func.now(),
+                        "service_version": service_version
+                    }
+                    if err is None:
+                        upd_vals["last_successful_job_at"] = func.now()
+                    else:
+                        upd_vals["last_error_code"] = err
+                        upd_vals["last_error_summary"] = f"Job failed at {state}"
+                        upd_vals["last_error_at"] = func.now()
+
+                    stmt2 = insert(WorkerStatus).values(
+                        worker_name=worker_name,
+                        last_heartbeat_at=func.now(),
+                        started_at=started_at,
+                        service_version=service_version,
+                    ).on_conflict_do_update(
+                        index_elements=['worker_name'],
+                        set_=upd_vals
+                    )
+                    await session.execute(stmt2)
+                    await session.commit()
+                else:
+                    # No job, just heartbeat
+                    stmt = insert(WorkerStatus).values(
+                        worker_name=worker_name,
+                        last_heartbeat_at=func.now(),
+                        started_at=started_at,
+                        service_version=service_version
+                    ).on_conflict_do_update(
+                        index_elements=['worker_name'],
+                        set_={"last_heartbeat_at": func.now(), "service_version": service_version}
+                    )
+                    await session.execute(stmt)
+                    await session.commit()
+                    did_work = False
+
+        except DBAPIError as db_exc:
+            logger.exception("account_deletion_worker_db_error")
+            did_work = False
+            # Can't write to DB if DB is down, just skip this tick
         except Exception as e:  # noqa: BLE001
             logger.exception("account_deletion_worker_tick_failed")
             did_work = False
@@ -68,17 +123,25 @@ async def run_forever() -> None:
                     stmt = insert(WorkerStatus).values(
                         worker_name=worker_name,
                         last_heartbeat_at=func.now(),
-                        last_error_summary=str(e)[:255]
+                        started_at=started_at,
+                        service_version=service_version,
+                        last_error_code="unexpected_worker_error",
+                        last_error_summary="Unexpected worker crash",
+                        last_error_at=func.now()
                     ).on_conflict_do_update(
                         index_elements=['worker_name'],
-                        set_={"last_heartbeat_at": func.now(), "last_error_summary": str(e)[:255]}
+                        set_={
+                            "last_heartbeat_at": func.now(),
+                            "last_error_code": "unexpected_worker_error",
+                            "last_error_summary": "Unexpected worker crash",
+                            "last_error_at": func.now()
+                        }
                     )
                     await error_session.execute(stmt)
                     await error_session.commit()
             except Exception:
                 pass
 
-            did_work = False
         await asyncio.wait(
             [asyncio.create_task(stop.wait())],
             timeout=_POLL_SECONDS_BUSY if did_work else _POLL_SECONDS_IDLE,
