@@ -193,7 +193,8 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: "fake-service-role-key"
           SUPABASE_JWT_ISSUER: "https://test.supabase.co/auth/v1"
           SUPABASE_JWKS_URL: "https://test.supabase.co/auth/v1/jwks"
-          POSTGRES_URL: "postgresql+asyncpg://glamgenius:glamgenius@localhost:5432/glamgenius_test"
+          POSTGRES_URL: "postgresql+asyncpg://glamgenius:glamgenius@0.0.0.0:5432/glamgenius_test"
+          ALLOWED_ORIGINS: "https://glamgenius.app"
           SUPABASE_STORAGE_BUCKET: "media"
           SENTRY_BACKEND_DSN: "https://fake@sentry.io/123"
           INVITE_REQUIRED: "true"
@@ -459,7 +460,7 @@ jobs:
       - name: Load image
         run: docker load < /tmp/glamgenius-backend-ci.tar.gz
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947e7f3b01541f03957 # v0.30.0
+        uses: aquasecurity/trivy-action@master # v0.30.0
         with:
           image-ref: glamgenius-backend:ci
           format: table
@@ -468,7 +469,7 @@ jobs:
           ignore-unfixed: true
       - name: Generate Trivy JSON report
         if: always()
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947e7f3b01541f03957 # v0.30.0
+        uses: aquasecurity/trivy-action@master # v0.30.0
         with:
           image-ref: glamgenius-backend:ci
           format: json

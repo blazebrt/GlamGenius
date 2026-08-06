@@ -1,6 +1,6 @@
 """Beta access: invites, invite redemptions and beta usage events.
 
-**Not billing.** This domain replaces the V1 ``invite_codes`` Mongo collection
+**Not financial.** This domain replaces the V1 ``invite_codes`` Mongo collection
 and the commercial ``FREE_SCANS_PER_MONTH`` / ``INVITE_SCANS_PER_MONTH``
 counters with a single neutral abuse-and-cost control surface.
 
