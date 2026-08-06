@@ -50,7 +50,7 @@
         "expo-camera",
         {
           "cameraPermission": "Allow GlamGenius to access your camera for skin and hair checks",
-          "microphonePermission": "Allow GlamGenius to access your microphone"
+          "recordAudioAndroid": false
         }
       ],
       [
