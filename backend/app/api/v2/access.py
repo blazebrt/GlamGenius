@@ -214,7 +214,7 @@ async def register(
                 },
             )
         try:
-            # Package B fix: create the account row before consuming the
+            # Fix: create the account row before consuming the
             # reservation so the ``invite_redemptions.account_id`` FK to
             # ``accounts.id`` is satisfied at insert time. Both operations
             # run in the same transaction — a subsequent failure rolls the

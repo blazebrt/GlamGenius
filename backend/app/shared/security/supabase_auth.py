@@ -7,9 +7,8 @@ never a cached V1 token.
 
 ## What we verify
 
-1. Signature — against either the Supabase JWKS (asymmetric keys, the current
-   Supabase default) or, when JWKS has no matching key, an HS256 shared secret
-   for legacy projects.
+1. Signature — against the Supabase JWKS (asymmetric keys, the current
+   Supabase default).
 2. Issuer — must equal ``SUPABASE_JWT_ISSUER``.
 3. Expiry — the ``exp`` claim must be in the future.
 4. Required claims — ``sub`` must be a valid UUID.
@@ -174,8 +173,7 @@ async def _decode_with_jwks(token: str, unverified_header: dict[str, Any]) -> di
 async def verify_supabase_token(token: str) -> dict[str, Any]:
     """Decode and validate a Supabase access token. Raises AuthError on failure.
 
-    Order: try JWKS first (asymmetric — current Supabase default). If JWKS
-    fails **and** the token is HS256, try the shared secret. Any other
+    Order: try JWKS (asymmetric — current Supabase default). Any other
     failure returns 401.
     """
     if not token:

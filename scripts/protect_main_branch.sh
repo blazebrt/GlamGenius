@@ -24,7 +24,13 @@ curl -L \
   -d '{
     "required_status_checks": {
       "strict": true,
-      "contexts": []
+      "contexts": [
+        "Backend zero-warning lint",
+        "Backend release command test",
+        "Backend unit + integration",
+        "Container vulnerability scan",
+        "Legacy and payment absence"
+      ]
     },
     "enforce_admins": true,
     "required_pull_request_reviews": {

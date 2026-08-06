@@ -13,7 +13,13 @@ class WorkerStatus(Base, UUIDPrimaryKey, TimestampMixin):
 
     worker_name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     last_heartbeat_at: Mapped[datetime.datetime] = mapped_column(nullable=False)
-    last_error: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    started_at: Mapped[Optional[datetime.datetime]] = mapped_column(nullable=True)
+    last_successful_job_at: Mapped[Optional[datetime.datetime]] = mapped_column(nullable=True)
+    last_attempted_job_at: Mapped[Optional[datetime.datetime]] = mapped_column(nullable=True)
+    last_error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_error_summary: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    last_error_at: Mapped[Optional[datetime.datetime]] = mapped_column(nullable=True)
+    service_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
         Index("idx_worker_status_name", "worker_name"),

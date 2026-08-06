@@ -1,6 +1,6 @@
 """Deterministic end-to-end critical journey — full product surface.
 
-Extends the Package B/C/D journey to walk every active product domain:
+Extends the integration journey to walk every active product domain:
 
     invite → registration → profile → onboarding → consent → seven-category
     inventory + image → scan → quiz → occasion → styling → shopping →

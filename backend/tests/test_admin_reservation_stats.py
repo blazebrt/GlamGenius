@@ -1,4 +1,4 @@
-"""Admin reservation-stats endpoint (§ Package A follow-up).
+"""Admin reservation-stats endpoint.
 
 Verifies that the ``GET /api/v2/access/admin/reservations/stats`` endpoint:
 

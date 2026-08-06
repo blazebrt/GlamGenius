@@ -47,7 +47,7 @@ def get_storage() -> MediaStorage:
     else:
         raise StorageMisconfigured(
             f"MEDIA_STORAGE_BACKEND must be 'supabase' or 'local', got {backend!r}. "
-            "Cloud Object Storage support was removed in Package B."
+            "Cloud Object Storage support was removed."
         )
 
     logger.info("media_storage_backend=%s", _storage.backend_name)

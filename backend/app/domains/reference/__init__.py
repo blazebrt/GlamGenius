@@ -5,7 +5,7 @@ These tables hold the versioned reference data written by
 every row is global and identifies itself by a natural key so the seed
 bootstrap can upsert safely and idempotently.
 
-Package B/C/D shipped the initial seed. This module adds the reference tables
+This module adds the reference tables
 the seed catalogue completion (Package E) required:
 
 * ``seed_version_records`` — a small audit trail that says which seed version
