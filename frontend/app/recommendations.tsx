@@ -25,7 +25,7 @@ export default function RecommendationsScreen() {
         return JSON.parse(planParam);
       }
     } catch {
-      /* ignore bad legacy params */
+      /* ignore invalid JSON params */
     }
     return {};
   }, [latestPlan, planParam]);

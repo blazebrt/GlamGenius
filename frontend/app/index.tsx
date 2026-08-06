@@ -32,7 +32,7 @@ export default function WelcomeScreen() {
 
   const checkExistingUser = async () => {
     try {
-      // Legacy value from before the Supabase cutover — cleared for good.
+      // Clear any orphaned installation identifier.
       await AsyncStorage.removeItem('glamgenius_user_id').catch(() => {});
       if (useUserStore.getState().userId) {
         setTimeout(() => router.replace('/(tabs)/today'), 900);

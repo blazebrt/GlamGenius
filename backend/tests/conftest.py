@@ -1,4 +1,4 @@
-"""Shared test fixtures for the Supabase-cutover backend.
+"""Shared test fixtures for the backend.
 
 The suite runs against a real PostgreSQL database — faking it would not
 verify the migration works, which is one of the acceptance criteria. Point

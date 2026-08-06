@@ -464,6 +464,8 @@ jobs:
           path: /tmp
       - name: Load image
         run: docker load < /tmp/glamgenius-backend-ci.tar.gz
+      - name: Validate Trivy Exceptions
+        run: python scripts/validate_trivy_exceptions.py
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # v0.30.0
         with:
@@ -471,7 +473,7 @@ jobs:
           format: table
           exit-code: 1
           severity: HIGH,CRITICAL
-          ignore-unfixed: true
+          trivyignores: .trivyignore
       - name: Generate Trivy JSON report
         if: always()
         uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # v0.30.0
@@ -498,14 +500,28 @@ jobs:
           path: /tmp
       - name: Load image
         run: docker load < /tmp/glamgenius-backend-ci.tar.gz
-      - name: Install Syft
-        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
-      - name: Generate SBOM (SPDX JSON)
-        run: syft glamgenius-backend:ci -o spdx-json=/tmp/sbom.spdx.json
+      - name: Generate Backend Container SBOM (SPDX JSON)
+        uses: anchore/sbom-action@4d571ad1038a9cc29d676154ef265bc8f90ee315 # v0.17.2
+        with:
+          image: glamgenius-backend:ci
+          format: spdx-json
+          output-file: /tmp/backend-sbom.spdx.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: sbom
-          path: /tmp/sbom.spdx.json
+          name: backend-sbom
+          path: /tmp/backend-sbom.spdx.json
+
+      - name: Generate Frontend Dependency SBOM (CycloneDX JSON)
+        uses: anchore/sbom-action@4d571ad1038a9cc29d676154ef265bc8f90ee315 # v0.17.2
+        with:
+          path: frontend
+          format: cyclonedx-json
+          output-file: /tmp/frontend-sbom.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: frontend-sbom
+          path: /tmp/frontend-sbom.cdx.json
+
 
   # ---- Legacy and payment absence --------------------------------------------
   legacy-absence:

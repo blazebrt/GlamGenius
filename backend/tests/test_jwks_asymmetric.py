@@ -297,6 +297,28 @@ async def test_unsupported_algorithm_is_rejected(rsa_keys, install_jwks):
     with pytest.raises(supabase_auth.AuthError):
         await supabase_auth.verify_supabase_token(token)
 
+@pytest.mark.asyncio
+async def test_hs256_symmetric_signature_is_rejected(rsa_keys, install_jwks):
+    """A token minted with HS256 (symmetric) must be refused, even if the secret matches the JWKS modulus or something."""
+    kp, _ = rsa_keys
+    install_jwks({"kid-1": kp.public_key()})
+    # Mint an HS256 token
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "sub": str(uuid.uuid4()),
+            "aud": "authenticated",
+            "iss": ISSUER,
+            "iat": now,
+            "exp": now + 300,
+        },
+        "some-symmetric-secret",
+        algorithm="HS256",
+        headers={"kid": "kid-1"},
+    )
+    with pytest.raises(supabase_auth.AuthError):
+        await supabase_auth.verify_supabase_token(token)
+
 
 @pytest.mark.asyncio
 async def test_concurrent_unknown_kid_causes_single_refresh(rsa_keys, install_jwks):

@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def _startup() -> None:
-    logger.info("Starting GlamGenius V2 (Supabase cutover)...")
+    logger.info("Starting GlamGenius V2...")
 
     from app.config import validate_production_configuration
     validate_production_configuration()
