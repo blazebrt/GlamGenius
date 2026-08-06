@@ -218,6 +218,12 @@ def validate_production_configuration() -> None:
             "CRITICAL: SUPABASE_JWKS_URL is required in production. "
             "Production tokens must be verified asymmetrically."
         )
+        
+    # Validate JWKS URL format and issuer match
+    import urllib.parse
+    jwks_parsed = urllib.parse.urlparse(SUPABASE_JWKS_URL)
+    if not jwks_parsed.scheme or not jwks_parsed.netloc:
+        raise RuntimeError("CRITICAL: SUPABASE_JWKS_URL is malformed.")
 
     # 2. Critical variables must be set.
     if not SUPABASE_URL or not SUPABASE_ANON_KEY or not SUPABASE_SERVICE_ROLE_KEY:
@@ -225,26 +231,55 @@ def validate_production_configuration() -> None:
             "CRITICAL: SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY "
             "must all be set in production."
         )
+        
+    sb_parsed = urllib.parse.urlparse(SUPABASE_URL)
+    if sb_parsed.scheme != "https":
+        raise RuntimeError("CRITICAL: SUPABASE_URL must be an HTTPS URL.")
+    if not sb_parsed.netloc or "example.com" in sb_parsed.netloc or "placeholder" in sb_parsed.netloc:
+        raise RuntimeError("CRITICAL: SUPABASE_URL cannot be a placeholder or example URL.")
+        
+    if "placeholder" in SUPABASE_ANON_KEY.lower() or "fake" in SUPABASE_ANON_KEY.lower():
+        raise RuntimeError("CRITICAL: SUPABASE_ANON_KEY cannot be a placeholder.")
+    if "placeholder" in SUPABASE_SERVICE_ROLE_KEY.lower() or "fake" in SUPABASE_SERVICE_ROLE_KEY.lower():
+        raise RuntimeError("CRITICAL: SUPABASE_SERVICE_ROLE_KEY cannot be a placeholder.")
 
     if not SUPABASE_JWT_ISSUER:
         raise RuntimeError("CRITICAL: SUPABASE_JWT_ISSUER must be set in production.")
+        
+    iss_parsed = urllib.parse.urlparse(SUPABASE_JWT_ISSUER)
+    if not iss_parsed.scheme or not iss_parsed.netloc:
+        raise RuntimeError("CRITICAL: SUPABASE_JWT_ISSUER is malformed.")
 
     if not POSTGRES_URL:
         raise RuntimeError("CRITICAL: POSTGRES_URL must be set in production.")
     
     import ipaddress
-    import urllib.parse
     parsed = urllib.parse.urlparse(POSTGRES_URL)
+    
+    if parsed.scheme not in ("postgresql", "postgresql+asyncpg", "postgres"):
+        raise RuntimeError(f"CRITICAL: POSTGRES_URL scheme '{parsed.scheme}' is not allowed in production.")
+    
     if not parsed.hostname:
         raise RuntimeError("CRITICAL: POSTGRES_URL must have a valid hostname.")
-    if parsed.hostname.lower() == "localhost":
-        raise RuntimeError("CRITICAL: POSTGRES_URL cannot be localhost in production.")
+    if parsed.hostname.lower() == "localhost" or "placeholder" in parsed.hostname.lower():
+        raise RuntimeError("CRITICAL: POSTGRES_URL cannot be localhost or a placeholder in production.")
+    try:
+        if parsed.port and (parsed.port < 1 or parsed.port > 65535):
+            raise RuntimeError("CRITICAL: POSTGRES_URL has a malformed port.")
+    except ValueError:
+        raise RuntimeError("CRITICAL: POSTGRES_URL has a malformed port.")
+        
     try:
         ip = ipaddress.ip_address(parsed.hostname)
         if ip.is_loopback or ip.is_unspecified:
             raise RuntimeError(f"CRITICAL: POSTGRES_URL cannot be a loopback or unspecified IP ({parsed.hostname}).")
+        if str(ip).startswith("127."):
+             raise RuntimeError(f"CRITICAL: POSTGRES_URL cannot be in 127.0.0.0/8 ({parsed.hostname}).")
     except ValueError:
         pass
+        
+    if parsed.username == "postgres" and parsed.password == "postgres":
+        raise RuntimeError("CRITICAL: POSTGRES_URL cannot use example credentials (postgres:postgres).")
 
     if not SUPABASE_STORAGE_BUCKET:
         raise RuntimeError("CRITICAL: SUPABASE_STORAGE_BUCKET must be set in production.")
@@ -253,8 +288,13 @@ def validate_production_configuration() -> None:
         raise RuntimeError("CRITICAL: GEMINI_API_KEY must be set in production.")
 
     import os
-    if not os.environ.get("SENTRY_BACKEND_DSN", "").strip():
+    sentry_dsn = os.environ.get("SENTRY_BACKEND_DSN", "").strip()
+    if not sentry_dsn:
         raise RuntimeError("CRITICAL: SENTRY_BACKEND_DSN must be set in production.")
+        
+    sentry_parsed = urllib.parse.urlparse(sentry_dsn)
+    if not sentry_parsed.scheme or not sentry_parsed.netloc or not sentry_parsed.username:
+        raise RuntimeError("CRITICAL: SENTRY_BACKEND_DSN format is invalid.")
 
     if not INVITE_REQUIRED:
         raise RuntimeError("CRITICAL: INVITE_REQUIRED=true is mandatory in production.")
@@ -270,6 +310,26 @@ def validate_production_configuration() -> None:
     if ALLOWED_ORIGINS_IS_DEFAULT or not ALLOWED_ORIGINS:
         raise RuntimeError("CRITICAL: ALLOWED_ORIGINS must be set and non-empty in production.")
 
-    if "*" in ALLOWED_ORIGINS or any("localhost" in o.lower() or "127.0.0.1" in o.lower() for o in ALLOWED_ORIGINS):
-        raise RuntimeError("CRITICAL: ALLOWED_ORIGINS cannot contain wildcards or localhost in production.")
+    if "*" in ALLOWED_ORIGINS:
+        raise RuntimeError("CRITICAL: ALLOWED_ORIGINS cannot contain wildcards in production.")
+        
+    for origin in ALLOWED_ORIGINS:
+        o_parsed = urllib.parse.urlparse(origin)
+        if o_parsed.scheme not in ("http", "https") or not o_parsed.netloc:
+            raise RuntimeError(f"CRITICAL: Invalid origin scheme or format: {origin}")
+        if o_parsed.path and o_parsed.path != "/":
+            raise RuntimeError(f"CRITICAL: Origin cannot contain paths: {origin}")
+        if o_parsed.username or o_parsed.password:
+            raise RuntimeError(f"CRITICAL: Origin cannot contain credentials: {origin}")
+        host = o_parsed.hostname.lower() if o_parsed.hostname else ""
+        if host == "localhost" or host == "127.0.0.1":
+            raise RuntimeError(f"CRITICAL: ALLOWED_ORIGINS cannot contain localhost/loopback in production: {origin}")
+            
+    # Validate Admin User IDs
+    import uuid
+    for admin_id in SUPABASE_ADMIN_USER_IDS:
+        try:
+            uuid.UUID(admin_id)
+        except ValueError:
+            raise RuntimeError(f"CRITICAL: Invalid UUID in SUPABASE_ADMIN_USER_IDS: {admin_id}")
 

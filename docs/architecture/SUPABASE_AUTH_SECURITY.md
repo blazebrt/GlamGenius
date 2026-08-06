@@ -126,11 +126,11 @@ Admin actions (invite create, deactivate, view) are written to
 
 ## 8. Test coverage
 
-`backend/tests/test_supabase_auth.py` covers:
+`backend/tests/test_jwks_asymmetric.py` and `backend/tests/test_supabase_auth.py` cover:
 
 - Missing `Authorization` header.
 - Malformed header (`Bearer` with no token, wrong prefix).
-- Invalid signature.
+- Invalid signature and explicit rejection of HS256 / unsigned (none) tokens.
 - Wrong issuer.
 - Expired token.
 - Missing `sub`.

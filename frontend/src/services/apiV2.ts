@@ -1616,7 +1616,7 @@ export const getMilestones = async (): Promise<{
 export const acknowledgeMilestone = async (id: string): Promise<{ acknowledged: boolean }> =>
   (await api.post(`${V2}/milestones/${id}/acknowledge`, {})).data;
 
-// --- Phase 8: support (payments removed with the Supabase cutover) ----------
+// --- Phase 8: support ----------
 
 export const openSupportCase = async (body: {
   category: 'account' | 'bug' | 'content' | 'other';
