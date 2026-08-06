@@ -118,31 +118,28 @@ async def test_ready_fails_on_alembic_mismatch(app_client: AsyncClient, db_clean
                 await session.commit()
 
 
-async def test_ready_fails_on_stale_worker_heartbeat(app_client: AsyncClient, db_clean, monkeypatch, tmp_path):
+async def test_ready_fails_on_stale_worker_heartbeat(app_client: AsyncClient, db_clean, monkeypatch):
     # Create a pending account deletion job
     import uuid
+    import datetime
 
     from app.shared.database.sql import get_sessionmaker
     from sqlalchemy import text
-    # We must seed a valid account_id.
     account_id = uuid.uuid4()
     factory = get_sessionmaker()
     async with factory() as session:
         job_id = uuid.uuid4()
         await session.execute(
-            text("INSERT INTO account_deletion_jobs (id, account_id, state, attempt_count, requested_at, created_at, updated_at) VALUES (:job_id, :id, 'pending', 0, NOW(), NOW(), NOW())"),
+            text("INSERT INTO account_deletion_jobs (id, account_id, state, attempt_count, requested_at, created_at, updated_at) VALUES (:job_id, :id, 'requested', 0, NOW(), NOW(), NOW())"),
             {"job_id": str(job_id), "id": str(account_id)}
         )
+        
+        stale_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=400)
+        await session.execute(
+            text("INSERT INTO system_worker_status (id, worker_name, last_heartbeat_at, created_at, updated_at) VALUES (:wid, 'account_deletion_worker_1', :hb, NOW(), NOW())"),
+            {"wid": str(uuid.uuid4()), "hb": stale_time}
+        )
         await session.commit()
-    
-    # Write directly to /tmp/worker_heartbeat
-    import os
-    import time
-    heartbeat_file = "/tmp/worker_heartbeat"
-    with open(heartbeat_file, "w") as f:
-        f.write("")
-    old_time = time.time() - 400
-    os.utime(heartbeat_file, (old_time, old_time))
     
     resp = await app_client.get("/api/v2/ready")
     assert resp.status_code == 503

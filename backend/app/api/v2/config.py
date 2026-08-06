@@ -129,22 +129,27 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
         is_ready = False
 
     # 5. Alembic head check
-    # Check if alembic_version table exists and has rows
     try:
+        import os
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+        alembic_cfg = Config(os.path.join(backend_dir, "alembic.ini"))
+        alembic_cfg.set_main_option("script_location", os.path.join(backend_dir, "alembic"))
+        script = ScriptDirectory.from_config(alembic_cfg)
+        repo_head = script.get_current_head()
+
         alembic_result = await session.execute(text("SELECT version_num FROM alembic_version"))
         db_alembic_head = alembic_result.scalar()
         components["alembic_head"] = db_alembic_head
         if not db_alembic_head:
             is_ready = False
             components["alembic_status"] = "missing"
+        elif db_alembic_head != repo_head:
+            is_ready = False
+            components["alembic_status"] = f"mismatch: expected {repo_head}"
         else:
-            # We assume if the table is readable, schema is initialized.
-            # Real head matching is done via 'alembic check' in CI. 
-            # In runtime, comparing strictly requires reading the script directory.
-            # But the requirement says "Current Alembic head". Let's fetch the actual head
-            # dynamically or assume the single migration baseline is the head.
-            # Since there is exactly ONE migration file (0001_initial_glamgenius_v2.py),
-            # we can check if it matches the current head or at least exists.
             components["alembic_status"] = "ok"
     except Exception as e:
         components["alembic_status"] = f"error: {e}"
@@ -152,26 +157,30 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
 
     # 6. Worker heartbeat freshness (if deletion jobs exist)
     try:
+        import datetime
         jobs_result = await session.execute(
-            text("SELECT COUNT(*) FROM account_deletion_jobs WHERE state = 'pending'")
+            text("SELECT COUNT(*) FROM account_deletion_jobs WHERE state NOT IN ('complete', 'failed_terminal')")
         )
-        pending_jobs = jobs_result.scalar()
-        if pending_jobs and pending_jobs > 0:
-            import os
-            import time
-            heartbeat_file = "/tmp/worker_heartbeat"
-            if not os.path.exists(heartbeat_file):
+        pending_jobs = jobs_result.scalar() or 0
+        if pending_jobs > 0:
+            worker_result = await session.execute(
+                text("SELECT last_heartbeat_at FROM system_worker_status WHERE worker_name LIKE 'account_deletion_worker_%' ORDER BY last_heartbeat_at DESC LIMIT 1")
+            )
+            last_heartbeat = worker_result.scalar()
+            if not last_heartbeat:
                 components["worker_heartbeat"] = "missing"
                 is_ready = False
             else:
-                mtime = os.path.getmtime(heartbeat_file)
-                if (time.time() - mtime) > 300:
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                last_heartbeat_utc = last_heartbeat.replace(tzinfo=datetime.timezone.utc) if last_heartbeat.tzinfo is None else last_heartbeat.astimezone(datetime.timezone.utc)
+                age = (now_utc - last_heartbeat_utc).total_seconds()
+                if age > 300:
                     components["worker_heartbeat"] = "stale"
                     is_ready = False
                 else:
                     components["worker_heartbeat"] = "fresh"
         else:
-            components["worker_heartbeat"] = "no_pending_deletions"
+            components["worker_heartbeat"] = "idle_no_pending_jobs"
     except Exception as e:
         components["worker_heartbeat"] = f"error: {e}"
         is_ready = False
