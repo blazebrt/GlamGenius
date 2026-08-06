@@ -30,7 +30,7 @@ os.environ.setdefault(
     "V2_FEATURES",
     "v2_scan,v2_quiz,v2_profile,v2_inventory,v2_recommendations,v2_media,"
     "v2_privacy,v2_consent,v2_ai_gateway,v2_progress,v2_routines,v2_today,"
-    "v2_planner,v2_shopping_decisions",
+    "v2_planner,v2_shopping_decisions,v2_onboarding,v2_beta_access",
 )
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("MEDIA_STORAGE_BACKEND", "local")

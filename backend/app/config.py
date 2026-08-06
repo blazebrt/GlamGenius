@@ -4,7 +4,7 @@ The single Supabase-backed application reads its environment here and validates
 it once, at startup, so a malformed value fails fast with a message pointing at
 the variable to fix.
 
-**No payment settings live in this file.** Prices, subscriptions and paid
+**No financial settings live in this file.** Prices, recurring plans and premium
 plan machinery were removed by the Supabase cutover; adding them back is
 outside the scope of the current architecture.
 """

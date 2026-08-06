@@ -16,12 +16,25 @@ async def test_health_ok_during_normal_operation(app_client: AsyncClient):
 async def test_ready_ok_during_normal_operation(app_client: AsyncClient, db_clean, monkeypatch):
     # In CI, GEMINI_API_KEY is empty and APP_ENV is 'test', so we mock
     # the AI provider check and production config validation.
-    import app.domains.ai.gemini as gemini_mod
+    import app.domains.ai_gateway.providers.gemini as gemini_mod
     monkeypatch.setattr(gemini_mod, "is_configured", lambda: True)
     import app.api.v2.config as config_mod
     monkeypatch.setattr(config_mod, "validate_production_configuration", lambda: None)
+    
+    from app.shared.database.sql import get_sessionmaker
+    from sqlalchemy import text
+    from app.bootstrap import SEED_VERSION
+    import uuid
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await session.execute(text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, 'core', :seed, 1, NOW())"), {"id": str(uuid.uuid4()), "seed": SEED_VERSION})
+        await session.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL)"))
+        await session.execute(text("INSERT INTO alembic_version (version_num) VALUES ('dummy_head')"))
+        await session.commit()
 
     resp = await app_client.get("/api/v2/ready")
+    if resp.status_code != 200:
+        print("READY FAILURE:", resp.json())
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ready"
@@ -61,11 +74,15 @@ async def test_ready_fails_during_database_outage(app_client: AsyncClient, monke
     assert resp.json()["components"]["postgres"] == "down"
 
 
-async def test_ready_fails_on_seed_mismatch(app_client: AsyncClient, db_clean, session):
-    # Intentionally change the seed version in the database
+async def test_ready_fails_on_seed_mismatch(app_client: AsyncClient, db_clean):
+    # Intentionally insert an invalid seed version in the database
+    from app.shared.database.sql import get_sessionmaker
     from sqlalchemy import text
-    await session.execute(text("UPDATE seed_version_records SET seed_version = 'invalid-version'"))
-    await session.commit()
+    import uuid
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await session.execute(text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, 'core', 'invalid-version', 1, NOW())"), {"id": str(uuid.uuid4())})
+        await session.commit()
     
     resp = await app_client.get("/api/v2/ready")
     assert resp.status_code == 503
@@ -73,11 +90,14 @@ async def test_ready_fails_on_seed_mismatch(app_client: AsyncClient, db_clean, s
     assert "mismatch" in resp.json()["components"]["seed_version_status"]
 
 
-async def test_ready_fails_on_alembic_mismatch(app_client: AsyncClient, db_clean, session):
+async def test_ready_fails_on_alembic_mismatch(app_client: AsyncClient, db_clean):
     # Intentionally break alembic head
+    from app.shared.database.sql import get_sessionmaker
     from sqlalchemy import text
-    await session.execute(text("DELETE FROM alembic_version"))
-    await session.commit()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await session.execute(text("DELETE FROM alembic_version"))
+        await session.commit()
     
     resp = await app_client.get("/api/v2/ready")
     assert resp.status_code == 503
@@ -85,48 +105,31 @@ async def test_ready_fails_on_alembic_mismatch(app_client: AsyncClient, db_clean
     assert resp.json()["components"]["alembic_status"] == "missing"
 
 
-async def test_ready_fails_on_stale_worker_heartbeat(app_client: AsyncClient, db_clean, session, monkeypatch, tmp_path):
+async def test_ready_fails_on_stale_worker_heartbeat(app_client: AsyncClient, db_clean, monkeypatch, tmp_path):
     # Create a pending account deletion job
     import uuid
 
+    from app.shared.database.sql import get_sessionmaker
     from sqlalchemy import text
     # We must seed a valid account_id.
     account_id = uuid.uuid4()
-    await session.execute(
-        text("INSERT INTO account_deletion_jobs (account_id, state, created_at, updated_at) VALUES (:id, 'pending', NOW(), NOW())"),
-        {"id": str(account_id)}
-    )
-    await session.commit()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        job_id = uuid.uuid4()
+        await session.execute(
+            text("INSERT INTO account_deletion_jobs (id, account_id, state, attempt_count, requested_at, created_at, updated_at) VALUES (:job_id, :id, 'pending', 0, NOW(), NOW(), NOW())"),
+            {"job_id": str(job_id), "id": str(account_id)}
+        )
+        await session.commit()
     
-    # Mock the heartbeat file
-    heartbeat_file = tmp_path / "worker_heartbeat"
-    # Write file and set mtime to older than 300 seconds
-    heartbeat_file.touch()
+    # Write directly to /tmp/worker_heartbeat
     import os
     import time
+    heartbeat_file = "/tmp/worker_heartbeat"
+    with open(heartbeat_file, "w") as f:
+        f.write("")
     old_time = time.time() - 400
     os.utime(heartbeat_file, (old_time, old_time))
-    
-    # Patch config to look at this file
-    import app.api.v2.config
-    monkeypatch.setattr(app.api.v2.config, "os", os)
-    
-    # Let's mock `os.path.exists` to return true for our file, and patch where it gets it?
-    # It's easier to just patch the literal path in the route or monkeypatch `os` module or something.
-    # Since the route hardcodes `/tmp/worker_heartbeat`, we can monkeypatch `os.path.exists` and `os.path.getmtime`.
-    original_exists = os.path.exists
-    def mock_exists(p):
-        if p == "/tmp/worker_heartbeat":
-            return True
-        return original_exists(p)
-    original_getmtime = os.path.getmtime
-    def mock_getmtime(p):
-        if p == "/tmp/worker_heartbeat":
-            return old_time
-        return original_getmtime(p)
-        
-    monkeypatch.setattr("os.path.exists", mock_exists)
-    monkeypatch.setattr("os.path.getmtime", mock_getmtime)
     
     resp = await app_client.get("/api/v2/ready")
     assert resp.status_code == 503
