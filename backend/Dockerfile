@@ -56,7 +56,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl tini \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --upgrade pip setuptools wheel
+RUN pip install --upgrade pip setuptools wheel \
+    && pip uninstall -y pip
 
 # Non-root user. Uid/gid are stable across builds so the mounted media volume
 # keeps consistent ownership between rebuilds.
