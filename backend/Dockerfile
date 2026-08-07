@@ -47,9 +47,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     TMPDIR=/tmp
 
-# Runtime OS dependencies: curl for the container health check that the
-# compose files use, and tini so PID 1 handles signals correctly. Neither
-# ships a compiler.
+# Runtime OS dependencies: tini so PID 1 handles signals correctly.
+# The healthcheck uses the Python standard library.
+# No compiler or build tooling is present in the runtime.
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends tini \
