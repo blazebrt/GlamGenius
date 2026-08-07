@@ -10,10 +10,9 @@ import {
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { api, errorMessage, isRateLimited } from '../src/services/api';
+import { errorMessage, isRateLimited } from '../src/services/api';
 import { styleForOccasion } from '../src/services/apiV2';
 import { notify } from '../src/services/notify';
-import { useUserStore } from '../src/store/userStore';
 import { usePlanStore } from '../src/store/planStore';
 import { COLORS, FONTS, SPACING, RADIUS } from '../src/theme/colors';
 
@@ -28,7 +27,6 @@ const BUDGETS = [
 export default function GetAdviceScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { userId, user } = useUserStore();
   const setLatestPlan = usePlanStore((s) => s.setLatestPlan);
   const [mood, setMood] = useState(MOODS[0]);
   const [occasion, setOccasion] = useState('everyday');

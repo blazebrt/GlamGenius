@@ -5,10 +5,12 @@ import TodayScreen from '../../app/(tabs)/today';
 import * as apiV2 from '../services/apiV2';
 
 jest.mock('expo-router', () => {
-  const react = require('react');
   return {
     useRouter: () => ({ back: jest.fn(), push: jest.fn() }),
-    useFocusEffect: jest.fn((cb) => react.useEffect(cb, [])),
+    useFocusEffect: jest.fn((cb) => {
+      const react = jest.requireActual('react');
+      return react.useEffect(cb, []);
+    }),
   };
 });
 

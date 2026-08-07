@@ -23,7 +23,6 @@ import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../services/supabase';
 import {
-  api,
   isRegistrationRequired,
   setRegistrationRequiredHandler,
   setUnauthorizedHandler,
@@ -372,8 +371,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
         key,
         value: value as string | number | string[],
       }));
-      const res = await patchAppearanceProfile(attributes);
-      const updated = res; // returned object is the AppearanceProfile
+      await patchAppearanceProfile(attributes);
       // We might need to map it back to user profile
       // But the previous code just did: const updated = res.data?.profile ?? res.data;
       // Wait, let's keep the user object updated optimistically, or fetchUser.

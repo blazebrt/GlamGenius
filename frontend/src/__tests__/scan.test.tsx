@@ -1,7 +1,6 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react-native';
+import { render, screen } from '@testing-library/react-native';
 
-import ScanScreen from '../../app/scan';
 import { AnalysisFailedState, LowQualityImageState, ProviderUnavailableState, BetaFeatureUnavailableState } from '../components/TrustStates';
 
 // Mock expo-router
@@ -16,7 +15,7 @@ jest.mock('react-native-safe-area-context', () => ({
 
 // Mock the camera
 jest.mock('expo-camera', () => {
-  const { View } = require('react-native');
+  const { View } = jest.requireActual('react-native');
   return {
     CameraView: (props: any) => <View testID="camera-view" {...props} />,
     useCameraPermissions: () => [{ granted: true }, jest.fn()],

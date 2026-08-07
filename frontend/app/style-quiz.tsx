@@ -10,7 +10,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { api, errorMessage, isRateLimited } from '../src/services/api';
+import { errorMessage, isRateLimited } from '../src/services/api';
 import { getQuizQuestions, submitQuiz } from '../src/services/apiV2';
 import { notify } from '../src/services/notify';
 import { useUserStore } from '../src/store/userStore';
