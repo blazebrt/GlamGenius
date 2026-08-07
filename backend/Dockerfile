@@ -4,7 +4,7 @@
 #
 # What "reproducible" means here:
 #
-#   * pinned base image (python:3.11.10-slim, digest updated by
+#   * pinned base image (python:3.11.15-slim-trixie, digest updated by
 #     scripts/update_service_digests.sh)
 #   * pinned Python dependencies via requirements.txt exact versions
 #   * non-root runtime user
@@ -18,8 +18,7 @@
 # stack — see scripts/verify_clean_environment.sh.
 
 # ---------- Stage 1: builder ------------------------------------------------
-FROM python@sha256:840e180ebcc6e5c8efab209c43f5e40fd2af98cb49db5c7103c90539c56bb30e AS builder
-
+FROM python@sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -40,7 +39,7 @@ RUN pip install --upgrade pip setuptools wheel && \
     pip install --prefix=/install --no-cache-dir -r requirements.txt
 
 # ---------- Stage 2: runtime ------------------------------------------------
-FROM python@sha256:840e180ebcc6e5c8efab209c43f5e40fd2af98cb49db5c7103c90539c56bb30e AS runtime
+FROM python@sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -53,7 +52,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # ships a compiler.
 RUN apt-get update \
     && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends curl tini \
+    && apt-get install -y --no-install-recommends tini \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --upgrade pip setuptools wheel \
@@ -86,6 +85,6 @@ EXPOSE 8000
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8000/health || exit 1
+  CMD python -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').getcode() == 200 else 1)" || exit 1
 
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
