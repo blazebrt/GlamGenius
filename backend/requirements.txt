@@ -1,5 +1,7 @@
-fastapi==0.110.1
+fastapi==0.141.1
 uvicorn==0.25.0
+msgpack>=1.2.1
+setuptools>=78.1.1
 python-dotenv==1.2.2
 aiofiles==25.1.0
 # The [email] extra pulls in email-validator, which pydantic's EmailStr needs.
