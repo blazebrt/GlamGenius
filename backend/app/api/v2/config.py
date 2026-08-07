@@ -132,6 +132,7 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
     try:
         from alembic.config import Config
         from alembic.script import ScriptDirectory
+
         from app.config import _BACKEND_ROOT
 
         alembic_cfg = Config(str(_BACKEND_ROOT / "alembic.ini"))
