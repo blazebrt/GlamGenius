@@ -73,9 +73,9 @@ def test_bad_cors(bad_origin):
     assert "CRITICAL" in res.stderr
 
 def test_missing_jwks():
-    res = run_config_test({"SUPABASE_JWKS_URL": "", "SUPABASE_URL": ""})
+    res = run_config_test({"SUPABASE_JWKS_URL": " "})
     assert res.returncode != 0
-    assert "CRITICAL" in res.stderr
+    assert "JWKS" in res.stderr
 
 def test_bad_supabase_keys():
     res = run_config_test({"SUPABASE_ANON_KEY": "placeholder_key"})

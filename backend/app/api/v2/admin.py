@@ -33,8 +33,9 @@ async def list_workers(
     session: AsyncSession = Depends(get_session),
 ):
     """List system worker statuses. Admin only."""
-    from app.domains.privacy.models import AccountDeletionJob
     from sqlalchemy import func
+
+    from app.domains.privacy.models import AccountDeletionJob
     from app.shared.database.base import utcnow
     
     result = await session.execute(

@@ -1,20 +1,28 @@
-import pytest
-from httpx import AsyncClient
 import uuid
-from sqlalchemy import text
+
+import pytest
 from app.shared.database.sql import get_sessionmaker
-from app.shared.database.base import utcnow
+from httpx import AsyncClient
+from sqlalchemy import text
+
+from tests.conftest import auth
 
 pytestmark = pytest.mark.asyncio
 
-async def test_admin_workers_returns_metrics(admin_client: AsyncClient, db_clean):
+async def test_admin_workers_returns_metrics(
+    app_client: AsyncClient,
+    registered_supabase_user,
+    db_clean,
+):
+    token, _ = await registered_supabase_user(admin=True)
+    
     # Insert some dummy data
     factory = get_sessionmaker()
     async with factory() as session:
         # Create an account to satisfy foreign keys
         account_id = uuid.uuid4()
         await session.execute(
-            text("INSERT INTO accounts (id, email, status, created_at, updated_at) VALUES (:id, 'del@example.com', 'deletion_requested', NOW(), NOW())"),
+            text("INSERT INTO accounts (id, status, created_at, updated_at) VALUES (:id, 'deletion_requested', NOW(), NOW())"),
             {"id": str(account_id)}
         )
         
@@ -25,12 +33,18 @@ async def test_admin_workers_returns_metrics(admin_client: AsyncClient, db_clean
         )
         await session.commit()
     
-    resp = await admin_client.get("/api/v2/admin/workers")
-    if resp.status_code == 404:
-        # Maybe fixture admin_client is not standard, let's just assert it exists
-        pass
-    else:
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "job_metrics" in data
-        assert data["job_metrics"]["pending_jobs"] >= 1
+    resp = await app_client.get("/api/v2/admin/workers", headers=auth(token))
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "job_metrics" in data
+    assert data["job_metrics"]["pending_jobs"] >= 1
+
+async def test_admin_workers_rejects_non_admin(
+    app_client: AsyncClient,
+    registered_supabase_user,
+    db_clean,
+):
+    token, _ = await registered_supabase_user(admin=False)
+    resp = await app_client.get("/api/v2/admin/workers", headers=auth(token))
+    assert resp.status_code == 403
+

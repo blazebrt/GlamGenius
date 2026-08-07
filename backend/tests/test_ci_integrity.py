@@ -1,5 +1,5 @@
 from pathlib import Path
-import json
+
 
 def get_root_dir() -> Path:
     # backend/tests/test_ci_integrity.py -> backend/tests -> backend -> root

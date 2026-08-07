@@ -37,11 +37,13 @@ async def run_forever() -> None:
     
     import os
     import socket
+
     from sqlalchemy import func
     from sqlalchemy.dialects.postgresql import insert
+    from sqlalchemy.exc import DBAPIError
+
     from app.domains.system.models import WorkerStatus
     from app.shared.database.base import utcnow
-    from sqlalchemy.exc import DBAPIError
 
     worker_name = f"account_deletion_worker_{socket.gethostname()}"
     started_at = utcnow()
@@ -111,11 +113,11 @@ async def run_forever() -> None:
                     await session.commit()
                     did_work = False
 
-        except DBAPIError as db_exc:
+        except DBAPIError:
             logger.exception("account_deletion_worker_db_error")
             did_work = False
             # Can't write to DB if DB is down, just skip this tick
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception("account_deletion_worker_tick_failed")
             did_work = False
             try:
