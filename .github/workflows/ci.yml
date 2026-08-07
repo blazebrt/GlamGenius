@@ -494,6 +494,7 @@ jobs:
     needs: docker-build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: docker-image
@@ -501,7 +502,7 @@ jobs:
       - name: Load image
         run: docker load < /tmp/glamgenius-backend-ci.tar.gz
       - name: Generate Backend Container SBOM (SPDX JSON)
-        uses: anchore/sbom-action@4d571ad1038a9cc29d676154ef265bc8f90ee315 # v0.17.2
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.17.2
         with:
           image: glamgenius-backend:ci
           format: spdx-json
@@ -512,7 +513,7 @@ jobs:
           path: /tmp/backend-sbom.spdx.json
 
       - name: Generate Frontend Dependency SBOM (CycloneDX JSON)
-        uses: anchore/sbom-action@4d571ad1038a9cc29d676154ef265bc8f90ee315 # v0.17.2
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.17.2
         with:
           path: frontend
           format: cyclonedx-json

@@ -130,13 +130,13 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
 
     # 5. Alembic head check
     try:
-        import os
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
-        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
-        alembic_cfg = Config(os.path.join(backend_dir, "alembic.ini"))
-        alembic_cfg.set_main_option("script_location", os.path.join(backend_dir, "alembic"))
+        from app.config import _BACKEND_ROOT
+
+        alembic_cfg = Config(str(_BACKEND_ROOT / "alembic.ini"))
+        alembic_cfg.set_main_option("script_location", str(_BACKEND_ROOT / "migrations"))
         script = ScriptDirectory.from_config(alembic_cfg)
         repo_head = script.get_current_head()
 
@@ -171,8 +171,8 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
                 components["worker_heartbeat"] = "missing"
                 is_ready = False
             else:
-                now_utc = datetime.datetime.now(datetime.timezone.utc)
-                last_heartbeat_utc = last_heartbeat.replace(tzinfo=datetime.timezone.utc) if last_heartbeat.tzinfo is None else last_heartbeat.astimezone(datetime.timezone.utc)
+                now_utc = datetime.datetime.now(datetime.UTC)
+                last_heartbeat_utc = last_heartbeat.replace(tzinfo=datetime.UTC) if last_heartbeat.tzinfo is None else last_heartbeat.astimezone(datetime.UTC)
                 age = (now_utc - last_heartbeat_utc).total_seconds()
                 if age > 300:
                     components["worker_heartbeat"] = "stale"

@@ -22,6 +22,7 @@ async def test_ready_ok_during_normal_operation(app_client: AsyncClient, db_clea
     monkeypatch.setattr(config_mod, "validate_production_configuration", lambda: None)
     
     import uuid
+
     from app.shared.database.sql import get_sessionmaker
     from sqlalchemy import text
     
@@ -120,8 +121,8 @@ async def test_ready_fails_on_alembic_mismatch(app_client: AsyncClient, db_clean
 
 async def test_ready_fails_on_stale_worker_heartbeat(app_client: AsyncClient, db_clean, monkeypatch):
     # Create a pending account deletion job
-    import uuid
     import datetime
+    import uuid
 
     from app.shared.database.sql import get_sessionmaker
     from sqlalchemy import text
@@ -134,7 +135,7 @@ async def test_ready_fails_on_stale_worker_heartbeat(app_client: AsyncClient, db
             {"job_id": str(job_id), "id": str(account_id)}
         )
         
-        stale_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=400)
+        stale_time = datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - datetime.timedelta(seconds=400)
         await session.execute(
             text("INSERT INTO system_worker_status (id, worker_name, last_heartbeat_at, created_at, updated_at) VALUES (:wid, 'account_deletion_worker_1', :hb, NOW(), NOW())"),
             {"wid": str(uuid.uuid4()), "hb": stale_time}

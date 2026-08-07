@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
-import { api, errorMessage, isRateLimited } from '../src/services/api';
+import { errorMessage, isRateLimited } from '../src/services/api';
 import { notify } from '../src/services/notify';
 import { useUserStore } from '../src/store/userStore';
 import { usePlanStore } from '../src/store/planStore';
