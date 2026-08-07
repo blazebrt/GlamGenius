@@ -155,24 +155,24 @@ Progress measures useful behaviours (wardrobe utilization, routine consistency, 
 | Supabase/PostgreSQL | REUSE | `backend/app/shared/database`, `backend/app/shared/security/supabase_auth.py` |
 | Auth & Security | REUSE | `backend/app/shared/security` |
 | Consent / Privacy | REUSE | `backend/app/domains/consent` |
-| Appearance Profile | REUSE | `backend/app/domains/profile`, `backend/app/domains/appearance` |
-| Complete Inventory | REUSE | `backend/app/domains/inventory`, `backend/app/domains/closet` |
+| Appearance Profile | REUSE | `backend/app/domains/profile` |
+| Complete Inventory | REUSE | `backend/app/domains/inventory` |
 | AI Gateway | REUSE | `backend/app/domains/ai_gateway` |
 | Structured Failures | REUSE | `backend/app/shared/errors` |
-| Memory Foundation | REUSE | `backend/app/domains/memory` |
+| Memory Foundation | REUSE | `backend/app/domains/progress` |
 | Progress Foundation | REUSE | `backend/app/domains/progress` |
-| Today / Orchestration | EXTEND | `frontend/src/components/today`, `backend/app/domains/dashboard` (requires verification) |
-| Weather / Context | EXTEND | logic already present (requires verification of exact path) |
-| Calendar / Events | EXTEND | `backend/app/domains/calendar`, `backend/app/domains/events` |
+| Today / Orchestration | EXTEND | `frontend/src/components/today`, `backend/app/domains/planning`, `backend/app/api/v2/today.py` |
+| Weather / Context | EXTEND | `backend/app/domains/recommendation/context.py` |
+| Calendar / Events | EXTEND | `backend/app/domains/planning` |
 | Weekly Planner | EXTEND | `backend/app/domains/planning`, `frontend/src/components/planner` |
-| Occasion Styling | EXTEND | requires verification |
-| Shopping / Purchase Eval | EXTEND | `backend/app/domains/commerce` |
+| Occasion Styling | EXTEND | `backend/app/domains/recommendation/occasions.py`, `backend/app/api/v2/style.py` |
+| Shopping / Purchase Eval | EXTEND | `backend/app/domains/recommendation` |
 | Shelf | EXTEND | `backend/app/domains/routines/shelf.py` |
 | Routines | EXTEND | `backend/app/domains/routines` |
 | Ingredient Ontology/Rules| EXTEND | `backend/app/domains/routines` |
 | Nutrition | EXTEND | `backend/app/domains/routines/nutrition.py` |
 | Perfume | EXTEND | `backend/app/domains/routines/perfume.py` |
-| Supplements | EXTEND | requires verification |
+| Supplements | EXTEND | `backend/app/domains/routines`, `backend/app/domains/inventory` |
 | Event Ready Structure | NEW SUBDOMAIN / EXTENSION | TBD |
 | Normalized AQI Context | NEW SUBDOMAIN / EXTENSION | TBD |
 | Care-specific Purchase | NEW SUBDOMAIN / EXTENSION | TBD |
