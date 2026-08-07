@@ -17,10 +17,9 @@ export default function SalonIdeasPlaceholder() {
     <View style={[styles.container, { paddingTop: insets.top }]} testID="salon-ideas-placeholder">
       <ScrollView contentContainerStyle={styles.body}>
         <Text style={styles.label}>OPTIONAL</Text>
-        <Text style={styles.title}>Salon ideas</Text>
+        <Text style={styles.title}>Skin & Hair Maintenance Ideas</Text>
         <Text style={styles.subtitle}>
-          Salon suggestions are being reworked and will return in a later beta.
-          There are no prices and no booking in the app.
+          This section is being reworked for GlamGenius V3. It will provide ideas and reminders for skin and hair maintenance (e.g. haircut timing, grooming maintenance, preparation before events).
         </Text>
       </ScrollView>
     </View>

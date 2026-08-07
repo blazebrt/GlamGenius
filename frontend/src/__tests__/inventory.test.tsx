@@ -19,12 +19,12 @@ const summary: InventorySummary = {
 describe('complete inventory UI', () => {
   it('supports all seven named groups', () => {
     expect(INVENTORY_CATEGORIES).toHaveLength(7);
-    expect(INVENTORY_CATEGORIES.map((key) => CATEGORY_META[key].label)).toEqual(['Wardrobe', 'Shoes', 'Accessories', 'Beauty', 'Hair', 'Perfumes', 'Supplements']);
+    expect(INVENTORY_CATEGORIES.map((key) => CATEGORY_META[key].label)).toEqual(['Wardrobe', 'Shoes', 'Accessories', 'Skin Care', 'Hair', 'Perfumes', 'Supplements']);
   });
 
   it('category controls expose labels, counts and selection actions', () => {
     const press = jest.fn(); render(<CategoryTile category="beauty" count={4} onPress={press} />);
-    fireEvent.press(screen.getByLabelText('Beauty, 4 items')); expect(press).toHaveBeenCalled();
+    fireEvent.press(screen.getByLabelText('Skin Care, 4 items')); expect(press).toHaveBeenCalled();
   });
 
   it('guided sprint gives value without forcing a full catalogue', () => {

@@ -11,6 +11,7 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { api, errorMessage, isRateLimited } from '../src/services/api';
+import { getQuizQuestions, submitQuiz } from '../src/services/apiV2';
 import { notify } from '../src/services/notify';
 import { useUserStore } from '../src/store/userStore';
 import { usePlanStore } from '../src/store/planStore';
@@ -30,8 +31,8 @@ export default function StyleQuizScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.get('/api/v2/quiz/questions');
-        setQuestions(res.data);
+        const res = await getQuizQuestions();
+        setQuestions(res);
       } catch {
         setQuestions([]);
       } finally {
@@ -65,8 +66,8 @@ export default function StyleQuizScreen() {
         occasion: 'everyday',
         budget: 'mid',
       };
-      const res = await api.post('/api/v2/quiz/submit', payload);
-      setLatestPlan(res.data.plan);
+      const res = await submitQuiz(payload);
+      setLatestPlan(res.plan);
       router.push('/recommendations');
     } catch (err: any) {
       console.error('quiz submit failed', err?.response?.status);
