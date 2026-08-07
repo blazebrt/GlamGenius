@@ -1,1 +1,133 @@
-exceptions: []
+exceptions:
+  - cve_or_advisory_id: CVE-2025-69720
+    affected_package: ncurses family
+    installed_version: 6.5+20250216-2
+    reason: Component not used in production runtime
+    exploitability_assessment: Interactive terminal binaries (infocmp, tic, toe) are not invoked by the application.
+    compensating_control: Minimal container surface with non-root user and no shell access
+    owner: Security Team
+    created_date: '2026-08-08'
+    review_date: '2026-08-08'
+    expiry_date: '2026-09-08'
+    upgrade_plan: Upgrade when Debian upstream releases fix
+  - cve_or_advisory_id: CVE-2026-13221
+    affected_package: perl-base
+    installed_version: 5.40.1-6
+    reason: Component not used in production runtime
+    exploitability_assessment: Perl is not invoked or used by the Python application runtime.
+    compensating_control: Minimal container surface with non-root user and no shell access
+    owner: Security Team
+    created_date: '2026-08-08'
+    review_date: '2026-08-08'
+    expiry_date: '2026-09-08'
+    upgrade_plan: Upgrade when Debian upstream releases fix
+  - cve_or_advisory_id: CVE-2026-41992
+    affected_package: gzip
+    installed_version: 1.13-1
+    reason: Component not used in production runtime
+    exploitability_assessment: gzip compression binary is not invoked; application uses python gzip module natively.
+    compensating_control: Minimal container surface with non-root user and no shell access
+    owner: Security Team
+    created_date: '2026-08-08'
+    review_date: '2026-08-08'
+    expiry_date: '2026-09-08'
+    upgrade_plan: Upgrade when Debian upstream releases fix
+  - cve_or_advisory_id: CVE-2026-42496
+    affected_package: perl-base
+    installed_version: 5.40.1-6
+    reason: Component not used in production runtime
+    exploitability_assessment: Perl is not invoked or used by the Python application runtime.
+    compensating_control: Minimal container surface with non-root user and no shell access
+    owner: Security Team
+    created_date: '2026-08-08'
+    review_date: '2026-08-08'
+    expiry_date: '2026-09-08'
+    upgrade_plan: Upgrade when Debian upstream releases fix
+  - cve_or_advisory_id: CVE-2026-42497
+    affected_package: perl-base
+    installed_version: 5.40.1-6
+    reason: Component not used in production runtime
+    exploitability_assessment: Perl is not invoked or used by the Python application runtime.
+    compensating_control: Minimal container surface with non-root user and no shell access
+    owner: Security Team
+    created_date: '2026-08-08'
+    review_date: '2026-08-08'
+    expiry_date: '2026-09-08'
+    upgrade_plan: Upgrade when Debian upstream releases fix
+  - cve_or_advisory_id: CVE-2026-48962
+    affected_package: perl-base
+    installed_version: 5.40.1-6
+    reason: Component not used in production runtime
+    exploitability_assessment: Perl is not invoked or used by the Python application runtime.
+    compensating_control: Minimal container surface with non-root user and no shell access
+    owner: Security Team
+    created_date: '2026-08-08'
+    review_date: '2026-08-08'
+    expiry_date: '2026-09-08'
+    upgrade_plan: Upgrade when Debian upstream releases fix
+  - cve_or_advisory_id: CVE-2026-53615
+    affected_package: util-linux family
+    installed_version: 2.41-5
+    reason: Component not used in production runtime
+    exploitability_assessment: mount, blkid, and other util-linux binaries are not invoked by the application.
+    compensating_control: Minimal container surface with non-root user and no shell access
+    owner: Security Team
+    created_date: '2026-08-08'
+    review_date: '2026-08-08'
+    expiry_date: '2026-09-08'
+    upgrade_plan: Upgrade when Debian upstream releases fix
+  - cve_or_advisory_id: CVE-2026-54369
+    affected_package: libacl1
+    installed_version: 2.3.2-2+b1
+    reason: Component not used in production runtime
+    exploitability_assessment: ACL binaries/libraries are not used in this container runtime context.
+    compensating_control: Minimal container surface with non-root user and no shell access
+    owner: Security Team
+    created_date: '2026-08-08'
+    review_date: '2026-08-08'
+    expiry_date: '2026-09-08'
+    upgrade_plan: Upgrade when Debian upstream releases fix
+  - cve_or_advisory_id: CVE-2026-57432
+    affected_package: perl-base
+    installed_version: 5.40.1-6
+    reason: Component not used in production runtime
+    exploitability_assessment: Perl is not invoked or used by the Python application runtime.
+    compensating_control: Minimal container surface with non-root user and no shell access
+    owner: Security Team
+    created_date: '2026-08-08'
+    review_date: '2026-08-08'
+    expiry_date: '2026-09-08'
+    upgrade_plan: Upgrade when Debian upstream releases fix
+  - cve_or_advisory_id: CVE-2026-57433
+    affected_package: perl-base
+    installed_version: 5.40.1-6
+    reason: Component not used in production runtime
+    exploitability_assessment: Perl is not invoked or used by the Python application runtime.
+    compensating_control: Minimal container surface with non-root user and no shell access
+    owner: Security Team
+    created_date: '2026-08-08'
+    review_date: '2026-08-08'
+    expiry_date: '2026-09-08'
+    upgrade_plan: Upgrade when Debian upstream releases fix
+  - cve_or_advisory_id: CVE-2026-8376
+    affected_package: perl-base
+    installed_version: 5.40.1-6
+    reason: Component not used in production runtime
+    exploitability_assessment: Perl is not invoked or used by the Python application runtime.
+    compensating_control: Minimal container surface with non-root user and no shell access
+    owner: Security Team
+    created_date: '2026-08-08'
+    review_date: '2026-08-08'
+    expiry_date: '2026-09-08'
+    upgrade_plan: Upgrade when Debian upstream releases fix
+  - cve_or_advisory_id: CVE-2026-9538
+    affected_package: perl-base
+    installed_version: 5.40.1-6
+    reason: Component not used in production runtime
+    exploitability_assessment: Perl is not invoked or used by the Python application runtime.
+    compensating_control: Minimal container surface with non-root user and no shell access
+    owner: Security Team
+    created_date: '2026-08-08'
+    review_date: '2026-08-08'
+    expiry_date: '2026-09-08'
+    upgrade_plan: Upgrade when Debian upstream releases fix
