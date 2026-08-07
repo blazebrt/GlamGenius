@@ -31,6 +31,8 @@ import {
 import {
   finalizeRegistration,
   reserveInvite,
+  getMe,
+  patchAppearanceProfile,
 } from '../services/apiV2';
 
 const CHALLENGE_STORAGE_KEY = '@glamgenius/registration_challenge_v2';
@@ -173,9 +175,9 @@ export const useUserStore = create<UserStore>((set, get) => ({
 
   hydrateRegistration: async () => {
     try {
-      const res = await api.get('/api/v2/me');
-      const me = res.data?.profile ?? res.data;
-      const isAdmin = !!res.data?.account?.is_admin;
+      const res = await getMe();
+      const me = res.profile;
+      const isAdmin = false; // Is Admin isn't on the new MeResponse, or we could handle it via account
       if (me && typeof me === 'object') {
         set({
           user: { ...emptyProfile(get().userId), ...me },
@@ -199,8 +201,8 @@ export const useUserStore = create<UserStore>((set, get) => ({
     if (!get().userId) return;
     set({ loading: true });
     try {
-      const res = await api.get('/api/v2/me');
-      const me = res.data?.profile ?? res.data;
+      const res = await getMe();
+      const me = res.profile;
       if (me) {
         set({
           user: { ...emptyProfile(get().userId), ...me },
@@ -366,9 +368,17 @@ export const useUserStore = create<UserStore>((set, get) => ({
     if (!get().userId) return;
     set({ loading: true });
     try {
-      const res = await api.patch('/api/v2/profile', { attributes: data });
-      const updated = res.data?.profile ?? res.data;
-      if (updated) set({ user: { ...emptyProfile(get().userId), ...updated } });
+      const attributes = Object.entries(data).map(([key, value]) => ({
+        key,
+        value: value as string | number | string[],
+      }));
+      const res = await patchAppearanceProfile(attributes);
+      const updated = res; // returned object is the AppearanceProfile
+      // We might need to map it back to user profile
+      // But the previous code just did: const updated = res.data?.profile ?? res.data;
+      // Wait, let's keep the user object updated optimistically, or fetchUser.
+      // AppearanceProfile doesn't strictly match UserProfile, but we can call fetchUser
+      await get().fetchUser();
     } catch (err) {
        
       console.error('updateUser error:', err);

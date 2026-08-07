@@ -11,6 +11,7 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { api, errorMessage, isRateLimited } from '../src/services/api';
+import { styleForOccasion } from '../src/services/apiV2';
 import { notify } from '../src/services/notify';
 import { useUserStore } from '../src/store/userStore';
 import { usePlanStore } from '../src/store/planStore';
@@ -37,20 +38,11 @@ export default function GetAdviceScreen() {
   const submit = async () => {
     setLoading(true);
     try {
-      const res = await api.post('/api/v2/style/occasion', {
-        user_id: userId,
-        mood,
-        occasion,
-        budget_range: budget,
-        diet: user?.diet,
-        city: user?.city,
-        height_cm: user?.height_cm,
-        weight_kg: undefined as number | undefined,
-        body_type: user?.body_type,
-        style_vibe: user?.style_vibe,
-        follow_trends: true,
+      const res = await styleForOccasion({
+        occasion_key: occasion as any,
+        notes: `Mood: ${mood}. Budget: ${budget}.`,
       });
-      setLatestPlan(res.data.plan);
+      setLatestPlan(res);
       router.push('/recommendations');
     } catch (err: any) {
       console.error('style plan failed', err?.response?.status);

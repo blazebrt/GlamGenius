@@ -21,7 +21,7 @@ import { useUserStore } from '../src/store/userStore';
 import { usePlanStore } from '../src/store/planStore';
 import { useConfigStore } from '../src/store/configStore';
 import { classifyFailure, Failure } from '../src/services/failure';
-import { getConsent, setConsent } from '../src/services/apiV2';
+import { getConsent, setConsent, submitScan } from '../src/services/apiV2';
 import {
   AnalysisFailedState,
   BetaFeatureUnavailableState,
@@ -117,18 +117,18 @@ export default function ScanScreen() {
     setFailure(null);
     setLastImage(base64);
     try {
-      const res = await api.post('/api/v2/scan/analyse', {
+      const res = await submitScan({
         image_base64: base64,
         scan_type: scanType,
         city: user?.city,
         diet: user?.diet,
         budget_range: user?.budget_range,
-        height_cm: user?.height_cm,
+        height_cm: user?.height_cm?.toString(),
         body_type: user?.body_type,
         style_vibe: user?.style_vibe,
       });
-      setAnalysis(res.data.analysis);
-      setLatestScan(res.data.analysis);
+      setAnalysis(res.analysis);
+      setLatestScan(res.analysis);
       setPhase('results');
     } catch (err: any) {
       const detail = err?.response?.data?.detail;

@@ -433,6 +433,44 @@ export const saveOnboardingStep = async (
 export const completeOnboarding = async (): Promise<OnboardingStatus> =>
   (await api.post<OnboardingStatus>(`${V2}/onboarding/complete`)).data;
 
+// --- Scan -------------------------------------------------------------------
+
+export interface ScanAnalysisRequest {
+  image_base64: string;
+  scan_type: string;
+  city?: string;
+  diet?: string;
+  budget_range?: string;
+  height_cm?: string;
+  body_type?: string;
+  style_vibe?: string;
+}
+
+export const submitScan = async (body: ScanAnalysisRequest): Promise<{ analysis: any }> =>
+  (await api.post<{ analysis: any }>(`${V2}/scan/analyse`, body)).data;
+
+export const getScanHistory = async (): Promise<any[]> =>
+  (await api.get<any[]>(`${V2}/scan/history`)).data;
+
+// --- Quiz -------------------------------------------------------------------
+
+export interface QuizAnswer {
+  question_id: string;
+  answer: string;
+}
+
+export interface QuizSubmitRequest {
+  answers: QuizAnswer[];
+  occasion: string;
+  budget: string;
+}
+
+export const getQuizQuestions = async (): Promise<any[]> =>
+  (await api.get<any[]>(`${V2}/quiz/questions`)).data;
+
+export const submitQuiz = async (body: QuizSubmitRequest): Promise<{ plan: any }> =>
+  (await api.post<{ plan: any }>(`${V2}/quiz/submit`, body)).data;
+
 // --- Complete appearance inventory ----------------------------------------
 
 export const INVENTORY_CATEGORIES = [

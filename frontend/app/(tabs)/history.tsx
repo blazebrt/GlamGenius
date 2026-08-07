@@ -11,7 +11,7 @@ import {
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { api } from '../../src/services/api';
+import { getScanHistory } from '../../src/services/apiV2';
 import { useUserStore } from '../../src/store/userStore';
 import { COLORS, FONTS, SPACING, RADIUS } from '../../src/theme/colors';
 
@@ -29,8 +29,8 @@ export default function HistoryScreen() {
     }
     setLoading(true);
     try {
-      const h = await api.get('/api/v2/scan/history');
-      setScans(h.data || []);
+      const h = await getScanHistory();
+      setScans(h || []);
     } catch {
       setScans([]);
     } finally {
