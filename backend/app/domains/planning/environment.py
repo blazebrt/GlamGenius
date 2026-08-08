@@ -166,12 +166,6 @@ REGIONAL_SEASON_PROFILES: dict[ClimateRegion, dict[int, str]] = {
     ClimateRegion.NORTH_PLAINS: NORTH_PLAINS_SEASON_PROFILE,
 }
 
-# Backward-compatible season vocabulary for regions without a reviewed
-# profile. It is explicitly low-confidence and must never be presented as
-# region-specific climatology.
-GENERIC_INDIA_FALLBACK = dict(NORTH_PLAINS_SEASON_PROFILE)
-
-
 def _normalise_location(location: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", location.casefold()).split())
 
@@ -322,8 +316,8 @@ def resolve_climate_context(
     """Resolve regional prior and current conditions without conflating them.
 
     Reliable current observed conditions outrank seasonal assumptions for
-    appearance decisions. Regional climatology outranks a generic India-wide
-    fallback. Unknown data remains unknown.
+    appearance decisions. Regional climatology outranks generic nationwide
+    assumptions. Unknown data remains unknown.
     """
     region, region_source = _resolve_climate_region_with_source(location)
     reviewed_profile = REGIONAL_SEASON_PROFILES.get(region)
@@ -331,11 +325,14 @@ def resolve_climate_context(
         calendar_prior = reviewed_profile[for_date.month]
         season_source = "regional_profile"
     else:
-        calendar_prior = GENERIC_INDIA_FALLBACK[for_date.month]
-        season_source = "generic_fallback"
+        # No reviewed profile means no seasonal claim. Never borrow another
+        # region's calendar merely to populate a legacy field.
+        calendar_prior = "unknown"
+        season_source = "unreviewed_region"
 
-    # ``season`` stays backward compatible. Observations deliberately never
-    # rewrite it; actual conditions are represented by daily_regime instead.
+    # ``season`` is a reviewed calendar value or explicit unknown. Observations
+    # deliberately never rewrite it; actual conditions are represented by
+    # daily_regime instead.
     season = calendar_prior
     normalized_condition = normalise_weather_condition(condition)
     temp_band = temperature_band(temp_max_c)
@@ -350,7 +347,7 @@ def resolve_climate_context(
         (
             f"reviewed_profile_{region.value}"
             if reviewed_profile is not None
-            else "generic_india_fallback"
+            else "unreviewed_region"
         ),
     ]
     observed_signals: list[str] = []
@@ -396,9 +393,9 @@ def resolve_climate_context(
     elif reviewed_profile is not None:
         reason = "Reviewed regional calendar prior; current weather is unavailable."
     elif has_observations:
-        reason = "Generic calendar fallback supplemented by current observed conditions."
+        reason = "Regional season is unreviewed; current observed conditions remain available."
     else:
-        reason = "Generic calendar fallback; region-specific profile and current weather are unavailable."
+        reason = "Regional season is unreviewed and current weather is unavailable."
 
     return ClimateContext(
         season=season,

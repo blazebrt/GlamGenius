@@ -91,27 +91,29 @@ The profile is a regional styling/climate prior for the North Indian plains,
 not a scientific declaration for India as a whole.
 
 `REGIONAL_SEASON_PROFILES` is intentionally small and can grow only as new
-profiles are reviewed. Other regions use `season_source=generic_fallback` with
-reduced confidence to preserve the existing season vocabulary required by
-inventory/style code. They never silently borrow the `north_plains` profile.
+profiles are reviewed. Only regions with reviewed entries in
+`REGIONAL_SEASON_PROFILES` receive a seasonal calendar. Unreviewed regions
+expose `season=unknown`, `calendar_prior=unknown`, and
+`season_source=unreviewed_region` rather than borrowing another region's
+calendar.
 
 Examples:
 
-- Chennai → `southeast_peninsula`, generic fallback.
-- Mumbai → `west_coast`, generic fallback.
-- Jaipur → `northwest_arid`, generic fallback.
-- Bengaluru → `deccan_interior`, generic fallback.
-- Unmapped location → `unknown_india`, generic fallback, reduced confidence.
+- Chennai → `southeast_peninsula`, unreviewed season.
+- Mumbai → `west_coast`, unreviewed season.
+- Jaipur → `northwest_arid`, unreviewed season.
+- Bengaluru → `deccan_interior`, unreviewed season.
+- Unmapped location → `unknown_india`, unreviewed season, reduced confidence.
 
 ## ClimateContext contract
 
 The final context separates four concepts that must not be conflated:
 
 - `climate_region`: broad geographic product profile.
-- `calendar_prior`: expected seasonal label from a reviewed regional profile
-  or the labeled generic fallback.
-- `season`: backward-compatible seasonal value exposed to existing code. It is
-  currently the calendar prior and is never rewritten by one day's weather.
+- `calendar_prior`: expected seasonal label from a reviewed regional profile,
+  otherwise explicit `unknown`.
+- `season`: the reviewed calendar value or explicit `unknown`; it is never
+  rewritten by one day's weather.
 - `daily_regime`: what the observed conditions behave like today.
 
 The complete object contains:
@@ -180,13 +182,16 @@ Confidence uses a small deterministic hierarchy rather than fake precision:
 
 - reviewed regional profile plus observations → `0.9`
 - reviewed regional profile without current weather → `0.6`
-- generic fallback plus observations → `0.6`
-- generic fallback without current weather → `0.4`
-- strong conflict between observations and the calendar prior reduces a
-  reviewed result to `0.6` and a fallback result to `0.4`
+- unreviewed region plus observations → `0.6` for the complete environmental
+  context, while seasonal confidence remains unknown
+- unreviewed region without current weather → `0.4` for the complete context
+- strong conflict between observations and a reviewed calendar prior reduces
+  that complete context to `0.6`
 
-The human-readable `reason` identifies whether the result used a reviewed
-profile, generic fallback, missing observations, or conflicting observations.
+The single `confidence` field describes the complete ClimateContext, not a
+claim that current weather validates an unreviewed seasonal calendar. The
+human-readable `reason` identifies reviewed versus unreviewed season state,
+missing observations, or conflicting observations.
 
 ## UV and air quality
 

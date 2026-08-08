@@ -2,6 +2,8 @@ from datetime import date
 
 import pytest
 from app.domains.planning.environment import (
+    NORTH_PLAINS_SEASON_PROFILE,
+    REGIONAL_SEASON_PROFILES,
     ClimateRegion,
     determine_naqi_category,
     normalise_weather_condition,
@@ -88,16 +90,26 @@ def test_city_mapping_takes_precedence_over_broad_state_mapping():
     assert resolve_climate_region("Mangaluru, Karnataka") == ClimateRegion.WEST_COAST
 
 
-def test_non_north_regions_use_labelled_generic_fallback():
+def test_unreviewed_regions_keep_season_unknown():
     context = resolve_climate_context(date(2026, 11, 15), location="Chennai")
     assert context.climate_region == "southeast_peninsula"
-    assert context.season_source == "generic_fallback"
-    assert "generic_india_fallback" in context.signals
+    assert context.calendar_prior == "unknown"
+    assert context.season == "unknown"
+    assert context.season_source == "unreviewed_region"
+    assert "unreviewed_region" in context.signals
     assert not any(signal.startswith("reviewed_profile_") for signal in context.signals)
     assert context.confidence == 0.4
 
 
-def test_chennai_observations_remain_useful_with_generic_season_fallback():
+def test_chennai_december_without_weather_has_no_season_claim():
+    context = resolve_climate_context(date(2026, 12, 15), location="Chennai")
+    assert context.climate_region == ClimateRegion.SOUTHEAST_PENINSULA
+    assert context.calendar_prior == "unknown"
+    assert context.season == "unknown"
+    assert context.season_source == "unreviewed_region"
+
+
+def test_chennai_observations_remain_useful_with_unknown_season():
     context = resolve_climate_context(
         date(2026, 11, 15),
         temp_max_c=29,
@@ -107,7 +119,9 @@ def test_chennai_observations_remain_useful_with_generic_season_fallback():
         precipitation_chance=80,
     )
     assert context.climate_region == "southeast_peninsula"
-    assert context.season_source == "generic_fallback"
+    assert context.calendar_prior == "unknown"
+    assert context.season == "unknown"
+    assert context.season_source == "unreviewed_region"
     assert context.temperature_band == "warm"
     assert context.moisture_regime == "wet"
     assert context.daily_regime == "warm_wet"
@@ -118,10 +132,54 @@ def test_unknown_location_stays_unknown_and_low_confidence():
     context = resolve_climate_context(date(2026, 4, 15), location="Unmapped Place")
     assert context.climate_region == "unknown_india"
     assert context.region_source == "unknown"
-    assert context.season_source == "generic_fallback"
+    assert context.calendar_prior == "unknown"
+    assert context.season == "unknown"
+    assert context.season_source == "unreviewed_region"
     assert context.moisture_regime == "unknown"
     assert context.daily_regime == "unknown"
     assert context.confidence == 0.4
+
+
+@pytest.mark.parametrize(
+    ("location", "expected_region", "for_date"),
+    [
+        ("Mumbai", ClimateRegion.WEST_COAST, date(2026, 8, 15)),
+        ("Bengaluru", ClimateRegion.DECCAN_INTERIOR, date(2026, 1, 15)),
+        ("Shillong", ClimateRegion.NORTHEAST, date(2026, 7, 15)),
+        ("Unmapped Indian location", ClimateRegion.UNKNOWN_INDIA, date(2026, 4, 15)),
+    ],
+)
+def test_unreviewed_region_examples_have_unknown_season(
+    location, expected_region, for_date
+):
+    context = resolve_climate_context(for_date, location=location)
+    assert context.climate_region == expected_region
+    assert context.season == "unknown"
+    assert context.calendar_prior == "unknown"
+    assert context.season_source == "unreviewed_region"
+
+
+def test_every_unreviewed_region_can_never_borrow_north_plains_calendar():
+    locations = {
+        ClimateRegion.NORTHWEST_ARID: "Jaipur",
+        ClimateRegion.WESTERN_HIMALAYA: "Shimla",
+        ClimateRegion.CENTRAL_INDIA: "Bhopal",
+        ClimateRegion.WEST_COAST: "Mumbai",
+        ClimateRegion.EAST_GANGETIC: "Patna",
+        ClimateRegion.NORTHEAST: "Shillong",
+        ClimateRegion.DECCAN_INTERIOR: "Bengaluru",
+        ClimateRegion.SOUTHEAST_PENINSULA: "Chennai",
+        ClimateRegion.ISLANDS: "Port Blair",
+        ClimateRegion.UNKNOWN_INDIA: "Unmapped Indian location",
+    }
+    assert set(REGIONAL_SEASON_PROFILES) == {ClimateRegion.NORTH_PLAINS}
+    for region, location in locations.items():
+        context = resolve_climate_context(date(2026, 4, 15), location=location)
+        assert context.climate_region == region
+        assert context.season == "unknown"
+        assert context.calendar_prior == "unknown"
+        assert context.season_source == "unreviewed_region"
+        assert context.season not in NORTH_PLAINS_SEASON_PROFILE.values()
 
 
 def test_delhi_april_hot_dry_daily_regime():
