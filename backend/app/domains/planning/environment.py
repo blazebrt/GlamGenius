@@ -123,9 +123,8 @@ def resolve_climate_context(
         
     # Observed Weather Must Matter
     # Rain out of season -> transition feeling
-    if precipitation_chance is not None and precipitation_chance > 60:
-        if season == "summer":
-            season = "monsoon"
+    if precipitation_chance is not None and precipitation_chance > 60 and season == "summer":
+        season = "monsoon"
     
     # Heat out of season
     if temp_max_c is not None and temp_max_c >= 35 and season in ("autumn", "winter"):
