@@ -120,6 +120,12 @@ def resolve_climate_context(
     # Location
     if location and any(s in location.lower() for s in ("kerala", "tamil nadu", "karnataka", "andhra", "telangana", "goa", "chennai", "bengaluru", "bangalore", "hyderabad", "kochi", "trivandrum")):
         signals.append("location_south_india")
+        
+    # Observed Weather Must Matter
+    # Rain out of season -> transition feeling
+    if precipitation_chance is not None and precipitation_chance > 60:
+        if season == "summer":
+            season = "monsoon"
     
     # Heat out of season
     if temp_max_c is not None and temp_max_c >= 35 and season in ("autumn", "winter"):

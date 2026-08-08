@@ -50,20 +50,24 @@ def test_resolve_climate_context_base():
     assert ctx.season == "autumn"
 
 def test_resolve_climate_context_south_india():
-    # South India should override winter to autumn
+    # South India should NOT override winter to autumn anymore, but append a signal
     ctx = resolve_climate_context(date(2023, 1, 15), location="Chennai, Tamil Nadu")
-    assert ctx.season == "autumn"
+    assert ctx.season == "winter"
+    assert "location_south_india" in ctx.signals
 
     ctx = resolve_climate_context(date(2023, 1, 15), location="Bengaluru")
-    assert ctx.season == "autumn"
+    assert ctx.season == "winter"
+    assert "location_south_india" in ctx.signals
 
-    # Non-winter stays the same
+    # Non-winter stays the same, signal still appended
     ctx = resolve_climate_context(date(2023, 4, 15), location="Chennai")
     assert ctx.season == "summer"
+    assert "location_south_india" in ctx.signals
 
-    # North India doesn't get overridden
+    # North India doesn't get overridden or signaled
     ctx = resolve_climate_context(date(2023, 1, 15), location="Delhi")
     assert ctx.season == "winter"
+    assert "location_south_india" not in ctx.signals
 
 def test_resolve_climate_context_weather_overrides():
     # Rain in summer -> monsoon
