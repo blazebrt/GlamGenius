@@ -437,7 +437,12 @@ def cache_key(context: DayContext) -> str:
             "min": context.weather.temp_min_c,
             "max": context.weather.temp_max_c,
             "rain": context.weather.precipitation_chance,
+            "humidity": context.weather.humidity,
             "uv_index": context.weather.uv_index,
+        },
+        "climate": {
+            "season": context.climate.season,
+            "signals": sorted(context.climate.signals),
         },
         "air_quality": None if context.air_quality is None else {
             "aqi": context.air_quality.aqi,
@@ -490,6 +495,7 @@ def input_rows(context: DayContext) -> list[dict[str, Any]]:
         {"input_type": "weather", "input_key": "condition", "value": context.weather.condition if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
         {"input_type": "weather", "input_key": "temp_max_c", "value": context.weather.temp_max_c if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
         {"input_type": "weather", "input_key": "precipitation_chance", "value": context.weather.precipitation_chance if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
+        {"input_type": "weather", "input_key": "humidity", "value": context.weather.humidity if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
         {"input_type": "weather", "input_key": "uv_index", "value": context.weather.uv_index if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
         {"input_type": "air_quality", "input_key": "aqi", "value": context.air_quality.aqi if context.air_quality else None, "source": context.air_quality.source if context.air_quality else "unavailable"},
         {"input_type": "air_quality", "input_key": "category", "value": context.air_quality.category if context.air_quality else None, "source": context.air_quality.source if context.air_quality else "unavailable"},

@@ -132,6 +132,7 @@ class WeatherSnapshot(UUIDPrimaryKey, TimestampMixin, Base):
     temp_max_c: Mapped[float | None] = mapped_column(Float)
     precipitation_chance: Mapped[int | None] = mapped_column(Integer)
     humidity: Mapped[int | None] = mapped_column(Integer)
+    uv_index: Mapped[float | None] = mapped_column(Float)
     raw: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
 
     __table_args__ = (Index("ix_weather_snapshots_account_date", "account_id", "for_date", "created_at"),)

@@ -52,7 +52,7 @@ class AirQualityInput(BaseModel):
 
     for_date: date
     aqi: int = Field(ge=0, le=2000)
-    index_system: str = Field(min_length=1, max_length=32)
+    index_system: Literal["india_naqi", "unknown"]
     location: str | None = Field(default=None, max_length=160)
     prominent_pollutant: str | None = Field(default=None, max_length=32)
     pm2_5: float | None = Field(default=None, ge=0)

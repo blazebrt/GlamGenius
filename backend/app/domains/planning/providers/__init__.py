@@ -11,11 +11,14 @@ from app.domains.planning.providers.base import (
     ProviderUnavailable,
     WeatherProvider,
     WeatherReading,
+    AirQualityProvider,
+    AirQualityReading,
 )
 from app.domains.planning.providers.manual import (
     PROVIDER_MANUAL,
     StoredCalendarProvider,
     StoredWeatherProvider,
+    StoredAirQualityProvider,
     UnconfiguredProvider,
 )
 
@@ -46,6 +49,12 @@ def weather_provider(name: str, session, account_id) -> WeatherProvider:
     return UnconfiguredProvider(name, "weather")
 
 
+def air_quality_provider(name: str, session, account_id) -> AirQualityProvider:
+    if name == PROVIDER_MANUAL:
+        return StoredAirQualityProvider(session, account_id)
+    return UnconfiguredProvider(name, "air_quality")
+
+
 def catalogue() -> dict[str, list[dict[str, object]]]:
     return {
         "calendar": [
@@ -64,4 +73,5 @@ __all__ = [
     "WeatherProvider", "WeatherReading", "PROVIDER_MANUAL",
     "KNOWN_CALENDAR_PROVIDERS", "KNOWN_WEATHER_PROVIDERS",
     "calendar_provider", "weather_provider", "catalogue",
+    "AirQualityProvider", "AirQualityReading", "air_quality_provider",
 ]

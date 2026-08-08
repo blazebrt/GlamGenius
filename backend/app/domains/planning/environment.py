@@ -44,6 +44,9 @@ class ClimateContext:
     season: str
     temperature_band: str
     condition: str | None
+    confidence: float
+    signals: list[str]
+    source: str
 
 
 def normalise_weather_condition(condition: str | None) -> str | None:
@@ -98,6 +101,7 @@ def resolve_climate_context(
     precipitation_chance: int | None = None,
 ) -> ClimateContext:
     """Resolve the overarching climate context for a specific day in India."""
+    signals = []
     month = for_date.month
     
     # 1. Base season on Indian calendar months
@@ -109,28 +113,19 @@ def resolve_climate_context(
         season = "monsoon"
     else:  # 10, 11
         season = "autumn"
+        
+    signals.append(f"base_month_{month}")
+    source = "calendar"
 
-    # Location Must Change Reasoning (South peninsular vs rest of India)
-    # South India does not experience true winter.
-    is_south = False
-    if location:
-        loc = location.lower()
-        if any(s in loc for s in ("kerala", "tamil nadu", "karnataka", "andhra", "telangana", "goa", "chennai", "bengaluru", "bangalore", "hyderabad", "kochi", "trivandrum")):
-            is_south = True
-
-    if is_south and season == "winter":
-        season = "autumn"
-
-    # Observed Weather Must Matter
-    # Rain out of season -> transition feeling
-    if precipitation_chance is not None and precipitation_chance > 60:
-        if season == "summer":
-            season = "monsoon"
+    # Location
+    if location and any(s in location.lower() for s in ("kerala", "tamil nadu", "karnataka", "andhra", "telangana", "goa", "chennai", "bengaluru", "bangalore", "hyderabad", "kochi", "trivandrum")):
+        signals.append("location_south_india")
     
     # Heat out of season
-    if temp_max_c is not None and temp_max_c >= 35:
-        if season in ("autumn", "winter"):
-            season = "summer"
+    if temp_max_c is not None and temp_max_c >= 35 and season in ("autumn", "winter"):
+        season = "summer"
+        signals.append("overridden_by_heat")
+        source = "temperature"
 
     # 2. Temperature banding
     if temp_max_c is None:
@@ -151,4 +146,7 @@ def resolve_climate_context(
         season=season,
         temperature_band=temp_band,
         condition=norm_condition,
+        confidence=1.0,
+        signals=signals,
+        source=source,
     )

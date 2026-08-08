@@ -55,6 +55,8 @@ def upgrade() -> None:
     # auditable snapshot relationship that weather already has.
     op.add_column('daily_plans', sa.Column('air_quality_snapshot_id', sa.Uuid(), nullable=True))
     op.create_foreign_key('fk_daily_plans_aqi_snapshot', 'daily_plans', 'air_quality_snapshots', ['air_quality_snapshot_id'], ['id'], ondelete='SET NULL')
+    
+    op.add_column('weather_snapshots', sa.Column('uv_index', sa.Float(), nullable=True))
     # ### end Alembic commands ###
 
 
@@ -64,4 +66,5 @@ def downgrade() -> None:
     op.drop_column('daily_plans', 'air_quality_snapshot_id')
     op.drop_index('ix_air_quality_snapshots_account_date', table_name='air_quality_snapshots')
     op.drop_table('air_quality_snapshots')
+    op.drop_column('weather_snapshots', 'uv_index')
     # ### end Alembic commands ###

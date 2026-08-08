@@ -87,6 +87,7 @@ async def record_weather(session: AsyncSession, account_id: uuid.UUID, body: Wea
         account_id=account_id, for_date=body.for_date, condition=body.condition,
         temp_min_c=body.temp_min_c, temp_max_c=body.temp_max_c,
         precipitation_chance=body.precipitation_chance, humidity=body.humidity,
+        uv_index=body.uv_index,
         location=body.location, provider=PROVIDER_MANUAL, source="user_declared",
     )
     session.add(row)
@@ -101,6 +102,7 @@ def serialize_weather(row: WeatherSnapshot | None) -> dict[str, Any] | None:
         "id": str(row.id), "for_date": row.for_date.isoformat(), "condition": row.condition,
         "temp_min_c": row.temp_min_c, "temp_max_c": row.temp_max_c,
         "precipitation_chance": row.precipitation_chance, "humidity": row.humidity,
+        "uv_index": row.uv_index,
         "location": row.location, "provider": row.provider, "source": row.source,
     }
 
