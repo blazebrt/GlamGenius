@@ -27,9 +27,9 @@ const EXPECTED_IMAGE_SIZE_PATHS = [
   "expo>@expo/metro>metro>image-size",
   "expo>@expo/cli>@expo/metro>metro>image-size",
   "expo>@expo/cli>@expo/metro-config>@expo/metro>metro>image-size",
-  "expo>@expo/metro>metro>metro-config>metro>image-size",
+  "expo>@expo/cli>@expo/metro>metro>metro-config>metro>image-size",
   "expo>@expo/cli>@expo/metro-config>@expo/metro>metro>metro-config>metro>image-size",
-  "expo>@expo/metro>metro>metro-config>metro>metro-config>metro>image-size",
+  "expo>@expo/cli>@expo/metro>metro>metro-config>metro>metro-config>metro>image-size",
   "expo>@expo/cli>@expo/metro-config>@expo/metro>metro>metro-config>metro>metro-config>metro>image-size",
 ];
 

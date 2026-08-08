@@ -11,9 +11,9 @@
         "expo>@expo/metro>metro>image-size",
         "expo>@expo/cli>@expo/metro>metro>image-size",
         "expo>@expo/cli>@expo/metro-config>@expo/metro>metro>image-size",
-        "expo>@expo/metro>metro>metro-config>metro>image-size",
+        "expo>@expo/cli>@expo/metro>metro>metro-config>metro>image-size",
         "expo>@expo/cli>@expo/metro-config>@expo/metro>metro>metro-config>metro>image-size",
-        "expo>@expo/metro>metro>metro-config>metro>metro-config>metro>image-size",
+        "expo>@expo/cli>@expo/metro>metro>metro-config>metro>metro-config>metro>image-size",
         "expo>@expo/cli>@expo/metro-config>@expo/metro>metro>metro-config>metro>metro-config>metro>image-size"
       ],
       "reason": "No patched image-size npm release is currently available; the approved exposure is limited to Expo/Metro build tooling.",
@@ -44,9 +44,9 @@
         "expo>@expo/metro>metro>image-size",
         "expo>@expo/cli>@expo/metro>metro>image-size",
         "expo>@expo/cli>@expo/metro-config>@expo/metro>metro>image-size",
-        "expo>@expo/metro>metro>metro-config>metro>image-size",
+        "expo>@expo/cli>@expo/metro>metro>metro-config>metro>image-size",
         "expo>@expo/cli>@expo/metro-config>@expo/metro>metro>metro-config>metro>image-size",
-        "expo>@expo/metro>metro>metro-config>metro>metro-config>metro>image-size",
+        "expo>@expo/cli>@expo/metro>metro>metro-config>metro>metro-config>metro>image-size",
         "expo>@expo/cli>@expo/metro-config>@expo/metro>metro>metro-config>metro>metro-config>metro>image-size"
       ],
       "reason": "No patched image-size npm release is currently available; the approved exposure is limited to Expo/Metro build tooling.",
