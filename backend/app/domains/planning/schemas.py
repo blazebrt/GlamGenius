@@ -41,6 +41,20 @@ class WeatherInput(BaseModel):
         return self
 
 
+# --- Air Quality ------------------------------------------------------------
+
+
+class AirQualityInput(BaseModel):
+    """What the user says the air quality will do."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    for_date: date
+    aqi: int = Field(ge=0, le=2000)
+    pollutant: str | None = Field(default=None, max_length=32)
+
+
+
 # --- Calendar ---------------------------------------------------------------
 
 

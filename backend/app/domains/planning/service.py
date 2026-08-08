@@ -28,11 +28,12 @@ from app.domains.planning.models import (
     OutfitSchedule,
     PlanRecalculationEvent,
     WeatherSnapshot,
+    AirQualitySnapshot,
     WeeklyPlan,
     WeeklyPlanDay,
 )
 from app.domains.planning.providers import KNOWN_CALENDAR_PROVIDERS, PROVIDER_MANUAL, catalogue
-from app.domains.planning.schemas import CalendarEventInput, WeatherInput
+from app.domains.planning.schemas import CalendarEventInput, WeatherInput, AirQualityInput
 from app.domains.recommendation import service as recommendation_service
 from app.domains.recommendation.models import Look
 from app.shared.database.base import utcnow
@@ -101,6 +102,31 @@ def serialize_weather(row: WeatherSnapshot | None) -> dict[str, Any] | None:
         "temp_min_c": row.temp_min_c, "temp_max_c": row.temp_max_c,
         "precipitation_chance": row.precipitation_chance, "humidity": row.humidity,
         "location": row.location, "provider": row.provider, "source": row.source,
+    }
+
+
+# --- Air Quality ------------------------------------------------------------
+
+
+async def record_air_quality(session: AsyncSession, account_id: uuid.UUID, body: AirQualityInput) -> AirQualitySnapshot:
+    from app.domains.planning.environment import determine_naqi_category
+    row = AirQualitySnapshot(
+        account_id=account_id, for_date=body.for_date, aqi=body.aqi,
+        category=determine_naqi_category(body.aqi), pollutant=body.pollutant,
+        provider=PROVIDER_MANUAL, source="user_declared",
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+def serialize_air_quality(row: AirQualitySnapshot | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "id": str(row.id), "for_date": row.for_date.isoformat(), "aqi": row.aqi,
+        "category": row.category, "pollutant": row.pollutant,
+        "provider": row.provider, "source": row.source,
     }
 
 
@@ -335,6 +361,7 @@ async def serialize_plan(
     )).scalar_one_or_none()
 
     weather = await session.get(WeatherSnapshot, plan.weather_snapshot_id) if plan.weather_snapshot_id else None
+    air_quality = await session.get(AirQualitySnapshot, plan.air_quality_snapshot_id) if plan.air_quality_snapshot_id else None
     primary = [row for row in actions if row.priority <= 40]
     optional = [row for row in actions if row.priority > 40]
 
@@ -352,6 +379,7 @@ async def serialize_plan(
         "version": plan.version,
         "outfit": look_payload,
         "weather": serialize_weather(weather),
+        "air_quality": serialize_air_quality(air_quality),
         "weather_note": plan.weather_note,
         "event_note": plan.event_note,
         # The short list the screen opens with, and the rest underneath it.
@@ -388,6 +416,7 @@ async def serialize_week(session: AsyncSession, plan: WeeklyPlan) -> dict[str, A
             payload.update({
                 "headline": summary["headline"], "status": summary["status"],
                 "confidence": summary["confidence"], "weather": summary["weather"],
+                "air_quality": summary.get("air_quality"),
                 "needs_clarification": summary["needs_clarification"],
                 "owned_items": (summary["outfit"] or {}).get("owned_items", []),
                 "optional_addition_count": (summary["outfit"] or {}).get("optional_addition_count", 0),

@@ -33,6 +33,7 @@ from app.domains.planning.models import (
 )
 from app.domains.planning.providers import ProviderUnavailable, weather_provider
 from app.domains.planning.providers.base import WeatherReading
+from app.domains.planning.environment import AirQualityReading, ClimateContext, resolve_climate_context
 from app.domains.recommendation import context as style_context
 from app.domains.recommendation.context import OwnedItem
 from app.domains.recommendation.occasions import OCCASIONS
@@ -129,6 +130,9 @@ class DayContext:
     weather_snapshot_id: uuid.UUID | None = None
     weather_unavailable_reason: str | None = None
 
+    air_quality: AirQualityReading | None = None
+    air_quality_snapshot_id: uuid.UUID | None = None
+
     events: list[DayEvent] = field(default_factory=list)
     occasion_key: str = "everyday"
     occasion_confidence: float = 1.0
@@ -160,8 +164,14 @@ class DayContext:
         return sorted(self.events, key=rank)[0]
 
     @property
+    def climate(self) -> ClimateContext:
+        condition = self.weather.condition if self.weather else None
+        temp_max_c = self.weather.temp_max_c if self.weather else None
+        return resolve_climate_context(self.plan_date, temp_max_c, condition)
+
+    @property
     def season(self) -> str:
-        return clock.season_for(self.plan_date)
+        return self.climate.season
 
     def available_owned(self) -> list[OwnedItem]:
         blocked = set(self.unavailable_item_ids)
@@ -286,6 +296,18 @@ async def latest_weather(
     )).scalar_one_or_none()
 
 
+async def latest_air_quality(
+    session: AsyncSession, account_id: uuid.UUID, plan_date: date
+) -> AirQualitySnapshot | None:
+    from app.domains.planning.models import AirQualitySnapshot
+    return (await session.execute(
+        select(AirQualitySnapshot)
+        .where(AirQualitySnapshot.account_id == account_id, AirQualitySnapshot.for_date == plan_date)
+        .order_by(AirQualitySnapshot.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+
+
 async def gather(
     session: AsyncSession,
     *,
@@ -323,6 +345,19 @@ async def gather(
     if context.weather is not None:
         snapshot = await latest_weather(session, account_id, target)
         context.weather_snapshot_id = snapshot.id if snapshot else None
+
+    aq_snapshot = await latest_air_quality(session, account_id, target)
+    if aq_snapshot:
+        context.air_quality_snapshot_id = aq_snapshot.id
+        context.air_quality = AirQualityReading(
+            for_date=aq_snapshot.for_date,
+            aqi=aq_snapshot.aqi,
+            category=aq_snapshot.category,
+            pollutant=aq_snapshot.pollutant,
+            provider=aq_snapshot.provider,
+            source=aq_snapshot.source,
+            raw=aq_snapshot.raw,
+        )
 
     _resolve_occasion(context)
     _note_gaps(context)
@@ -392,6 +427,10 @@ def cache_key(context: DayContext) -> str:
             "max": context.weather.temp_max_c,
             "rain": context.weather.precipitation_chance,
         },
+        "air_quality": None if context.air_quality is None else {
+            "aqi": context.air_quality.aqi,
+            "category": context.air_quality.category,
+        },
         "events": sorted(
             f"{event.starts_at.isoformat()}|{event.title}|{event.occasion_key or ''}|{event.dress_code_hint or ''}"
             for event in context.events
@@ -432,6 +471,7 @@ def input_rows(context: DayContext) -> list[dict[str, Any]]:
         {"input_type": "occasion", "input_key": "occasion_key", "value": context.occasion_key, "source": "calendar" if context.events else "derived"},
         {"input_type": "occasion", "input_key": "occasion_confidence", "value": context.occasion_confidence, "source": "derived"},
         {"input_type": "weather", "input_key": "condition", "value": context.weather.condition if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
+        {"input_type": "weather", "input_key": "air_quality_category", "value": context.air_quality.category if context.air_quality else None, "source": context.air_quality.source if context.air_quality else "unavailable"},
         {"input_type": "calendar", "input_key": "event_count", "value": len(context.events), "source": "calendar"},
         {"input_type": "inventory", "input_key": "available_item_count", "value": len(context.available_owned()), "source": "inventory"},
         {"input_type": "inventory", "input_key": "unavailable_item_count", "value": len(context.unavailable_item_ids), "source": "laundry"},
