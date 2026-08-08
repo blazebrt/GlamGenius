@@ -1,249 +1,277 @@
 # V3 Context Engine
 
-**Phase:** V3-01 — Context Foundation (branch `v3/v3-01-context-foundation`, PR #58)
+**Phase:** V3-01 — Context Foundation
+**Branch:** `v3/v3-01-context-foundation`
+**PR:** #58
 
----
+## Purpose and boundary
 
-## Purpose
+The Context Engine produces a deterministic, auditable description of the
+user's day. It persists user-supplied weather and air-quality snapshots,
+normalizes those observations, resolves conservative regional context, and
+records the facts used to compile a daily plan.
 
-The Context Engine is the environmental layer that every GlamGenius expert
-system reads before it acts.  Its contract is simple:
+Three rules are permanent:
 
-> *Produce a trustworthy, deterministic, cache-safe snapshot of the user's day.*
+> Reliable current observed conditions outrank seasonal assumptions for appearance decisions.
 
-GlamGenius does **not** forecast weather or measure air quality.  External
-providers or the user herself supply the raw facts.  The engine's job is:
+> Regional climatology outranks generic India-wide calendar assumptions.
 
-```
-raw input → normalise → record provenance → interpret → derive cache key
-```
+> Unknown data remains unknown.
 
----
+Context does not choose clothing or score fabrics. The product boundary is:
 
-## Architecture
-
-### DayContext
-
-`DayContext` (in `app/domains/planning/context.py`) is the single object passed
-to the compiler.  It aggregates:
-
-| Field | Type | Source |
-|---|---|---|
-| `account_id` | UUID | token |
-| `plan_date` | `date` | query param / today |
-| `timezone_name` | str | profile |
-| `lat`, `lon` | float \| None | profile |
-| `weather` | `WeatherReading \| None` | provider registry |
-| `air_quality` | `AirQualityReading \| None` | provider registry |
-| `events` | list[CalendarEvent] | database |
-| `climate` | `ClimateContext` | `resolve_climate_context()` |
-
-`DayContext.gather(session, account_id, plan_date)` is the single entry point.
-It calls each provider once and composes the snapshot.
-
-### Cache key
-
-`cache_key(ctx)` hashes every field that materially affects recommendations.
-Raw provider payloads are **never** part of the key — only the normalised
-values that reach the compiler:
-
-* plan date + timezone
-* weather condition + temp band + humidity band + UV band
-* AQI category (not the raw integer)
-* `ClimateContext.season` + `observed_signals`
-* event titles + occasion keys
-
-This means:
-- Two fetches returning numerically different AQIs in the same category hit
-  the same cache entry.
-- A `uv_index` change that moves the plan across a UV band invalidates the
-  cache.
-
----
-
-## Provider Registry
-
-Both weather and air-quality use a unified provider abstraction defined in
-`app/domains/planning/providers/`.
-
-```python
-class WeatherProvider(Protocol):
-    name: str
-    async def fetch(self, account_id, for_date) -> WeatherReading | None: ...
-
-class AirQualityProvider(Protocol):
-    name: str
-    async def fetch(self, account_id, for_date) -> AirQualityReading | None: ...
+```text
+Context Engine (environmental facts)
+    ↓
+future Garment/Fabric Intelligence
+    ↓
+future Style Suitability Engine
 ```
 
-`KNOWN_WEATHER_PROVIDERS` and `KNOWN_AIR_QUALITY_PROVIDERS` are registries
-keyed by name string.  `DayContext.gather()` resolves the configured provider
-by name at runtime, making it trivially mockable in tests
-(`fake_provider` fixture).
+## Current environmental providers
 
-### Manual / StoredWeatherProvider
+V3-01 ships only manual, stored providers:
 
-`providers/manual.py` contains `StoredWeatherProvider` and
-`StoredAirQualityProvider`, which read from `WeatherSnapshot` and
-`AirQualitySnapshot` rows written by the user via:
+- `POST /api/v2/today/weather` stores `WeatherSnapshot` rows.
+- `POST /api/v2/today/air-quality` stores `AirQualitySnapshot` rows.
+- `StoredWeatherProvider` and `StoredAirQualityProvider` read the latest
+  snapshot for the requested account and date.
 
-- `POST /api/v2/today/weather`
-- `POST /api/v2/today/air-quality`
+There is no live weather, IMD, or AQI integration. A missing snapshot produces
+no reading; it is never replaced with invented normal weather or good air.
 
-Every reading carries `provenance`:
+Provider readings retain normalized fields plus the stored raw provider
+payload. Raw payloads remain at the provider/snapshot boundary and are not
+copied into `DailyPlanInput` or cache keys.
 
-```python
-{
-  "provider": "manual",
-  "source": "user_declared",
-  "recorded_at": "2026-02-16T08:00:00Z"
-}
+## Regional climate architecture
+
+`ClimateRegion` is a product-level routing enum:
+
+```text
+north_plains
+northwest_arid
+western_himalaya
+central_india
+west_coast
+east_gangetic
+northeast
+deccan_interior
+southeast_peninsula
+islands
+unknown_india
 ```
 
-Provenance propagates all the way to `DayContext.weather.provenance` so the
-compiler can distinguish a user-declared forecast from an inferred default.
+These are conservative GlamGenius product profiles. They do not replace IMD
+meteorological subdivisions and are not a complete climatology database.
 
----
+`resolve_climate_region(location)` uses centralized, reviewed city and state
+alias tables. City matches take precedence over broad state matches, which
+allows a known coastal city to resolve correctly even when its state spans
+more than one climate pattern. Inputs that do not match the small reviewed
+tables resolve to `unknown_india`; the resolver does not guess.
 
-## UV Index — End-to-End Path
+Location comes from the stored weather reading when it is present, otherwise
+from the confirmed profile city.
 
-```
-WeatherInput.uv_index (schema)
-  → service.record_weather()
-  → WeatherSnapshot.uv_index (nullable DB column, migration ee2713cab5de)
-  → StoredWeatherProvider.fetch()
-  → WeatherReading.uv_index
-  → DayContext.weather.uv_index
-  → cache_key() — UV band (≥3 / ≥6 / ≥8 / ≥11)
-  → compiler receives uv_index
-```
+### Reviewed seasonal profiles
 
-`uv_index` is nullable at every layer.  Absence is never silently treated as
-zero — it is absent.
+Only `north_plains` has an explicitly reviewed regional seasonal profile in
+V3-01:
 
----
-
-## Air Quality
-
-### Schema
-
-`AirQualityInput` (validated by Pydantic, `extra="forbid"`):
-
-| Field | Constraint |
+| Months | Calendar prior |
 |---|---|
-| `aqi` | 0 – 2000 |
-| `index_system` | `"india_naqi"` or `"unknown"` |
-| `prominent_pollutant` | optional, max 32 chars |
-| `pm2_5`, `pm10` | optional, non-negative |
+| December–February | `winter` |
+| March–June | `summer` |
+| July–September | `monsoon` |
+| October–November | `autumn` |
 
-Only `india_naqi` is normalised to named categories.
+The profile is a regional styling/climate prior for the North Indian plains,
+not a scientific declaration for India as a whole.
 
-### India NAQI categories
+`REGIONAL_SEASON_PROFILES` is intentionally small and can grow only as new
+profiles are reviewed. Other regions use `season_source=generic_fallback` with
+reduced confidence to preserve the existing season vocabulary required by
+inventory/style code. They never silently borrow the `north_plains` profile.
 
-| AQI range | Category |
+Examples:
+
+- Chennai → `southeast_peninsula`, generic fallback.
+- Mumbai → `west_coast`, generic fallback.
+- Jaipur → `northwest_arid`, generic fallback.
+- Bengaluru → `deccan_interior`, generic fallback.
+- Unmapped location → `unknown_india`, generic fallback, reduced confidence.
+
+## ClimateContext contract
+
+The final context separates four concepts that must not be conflated:
+
+- `climate_region`: broad geographic product profile.
+- `calendar_prior`: expected seasonal label from a reviewed regional profile
+  or the labeled generic fallback.
+- `season`: backward-compatible seasonal value exposed to existing code. It is
+  currently the calendar prior and is never rewritten by one day's weather.
+- `daily_regime`: what the observed conditions behave like today.
+
+The complete object contains:
+
+```text
+season
+calendar_prior
+climate_region
+region_source
+season_source
+temperature_band
+moisture_regime
+daily_regime
+condition
+confidence
+reason
+location
+signals
+observed_signals
+```
+
+### Temperature band
+
+`temp_max_c` remains an observed daily fact:
+
+| Range | Band |
 |---|---|
-| 0 – 50 | Good |
-| 51 – 100 | Satisfactory |
-| 101 – 200 | Moderate |
-| 201 – 300 | Poor |
-| 301 – 400 | Very Poor |
-| 401 + | Severe |
+| missing | `unknown` |
+| below 15°C | `cold` |
+| 15°C to below 25°C | `mild` |
+| 25°C to below 35°C | `warm` |
+| 35°C and above | `hot` |
 
-### Database
+Temperature does not redefine season. A 36°C January day in Delhi remains
+`season=winter`, while producing `temperature_band=hot`, an `unusually_hot`
+observed signal, a hot daily regime, and reduced confidence.
 
-`AirQualitySnapshot` (migration `ee2713cab5de`):
+### Moisture regime
 
-- `account_id`, `for_date` — unique per user-day
-- `aqi`, `index_system`, `prominent_pollutant`, `pm2_5`, `pm10`
-- `source` — always `"user_declared"` for manual entries
+Thresholds are centralized in `environment.py`:
 
----
+- rainy condition or precipitation probability at least 60% → `wet`
+- otherwise humidity at least 70% → `humid`
+- otherwise humidity at most 35% → `dry`
+- other known humidity → `normal`
+- insufficient information → `unknown`
 
-## Climate Context
+Rain never redefines season. Heavy April rain in Delhi remains
+`season=summer`, but the daily regime becomes wet and confidence is reduced.
 
-`resolve_climate_context(plan_date, lat, lon, weather)` in
-`app/domains/planning/environment.py` returns a `ClimateContext`:
+### Daily regime
 
-```python
-@dataclass
-class ClimateContext:
-    season: Season          # calendar-prior season
-    calendar_prior: Season  # unmodified calendar season
-    reason: str             # human-readable explanation
-    confidence: float       # 0.0 – 1.0
-    observed_signals: frozenset[str]  # {"humid", "dry", "rain_likely", "hot"}
+The daily regime combines the independently derived temperature and moisture
+states, for example `cold_dry`, `warm_humid`, `warm_wet`, or `hot_dry`.
+Normal moisture uses the temperature label (`mild`, `warm`, and so on).
+Missing temperature or moisture produces `unknown` rather than an invented
+default.
+
+This field is more useful than season for future appearance decisions. For
+example, Delhi in August at 32°C, 85% humidity, and likely rain remains in its
+monsoon calendar prior and resolves to `warm_wet` from observations.
+
+### Confidence
+
+Confidence uses a small deterministic hierarchy rather than fake precision:
+
+- reviewed regional profile plus observations → `0.9`
+- reviewed regional profile without current weather → `0.6`
+- generic fallback plus observations → `0.6`
+- generic fallback without current weather → `0.4`
+- strong conflict between observations and the calendar prior reduces a
+  reviewed result to `0.6` and a fallback result to `0.4`
+
+The human-readable `reason` identifies whether the result used a reviewed
+profile, generic fallback, missing observations, or conflicting observations.
+
+## UV and air quality
+
+`uv_index` is optional and validated in the range 0–20. Its end-to-end path is:
+
+```text
+WeatherInput
+  → WeatherSnapshot
+  → StoredWeatherProvider
+  → WeatherReading / DayContext.weather
+  → DailyPlanInput and serialized Today response
 ```
 
-### Conservative season rule
+Missing UV remains `None`. Context provides no UV medical advice.
 
-> *One abnormal day's weather must not redefine India's season.*
+Manual AQI accepts 0–2000 and supports the Indian NAQI vocabulary. The stored
+reading preserves AQI, index system, category, prominent pollutant, PM2.5,
+PM10, source, provider, and raw payload. `DailyPlan.air_quality_snapshot_id`
+links the compiled plan to the exact stored snapshot used by Today.
 
-The engine uses calendar priors as the anchor.  Weather signals add
-`observed_signals` (e.g. `"humid"`) that the compiler uses to adjust clothing
-choices, but they do **not** override the season unless the signal is extreme
-and sustained (defined by configurable thresholds, not live forecasts).
+V3-01 records air quality context only. It does not invent an AQI card,
+recommendation, skin rule, hair rule, or clothing rule.
 
-### South India autumn
+## Cache materiality
 
-Regions south of 14 °N skip `winter` and transition from `monsoon` (Oct–Nov
-NE monsoon) directly to `spring`.  The NE monsoon window (Oct 15 – Dec 15)
-is mapped to `autumn` rather than `monsoon` for styling purposes.
+The deterministic daily cache includes normalized values that can materially
+change context:
 
----
+- weather: condition, minimum/maximum temperature, humidity, precipitation
+  probability, and UV
+- climate: region, season, daily regime, temperature band, moisture regime,
+  and material observed signals
+- air quality: AQI, index system, and category
 
-## API Surface (V3-01 additions)
+Raw payload, timestamps, ingestion metadata, JSON key order, and irrelevant
+provider metadata do not participate. PM fields are retained in the reading
+but are not cache-material until a later domain intentionally consumes them.
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/v2/today/weather` | Record user-declared weather; triggers replan |
-| `POST` | `/api/v2/today/air-quality` | Record user-declared AQI; triggers replan |
+## Audit provenance
 
-Both return `{ "weather"/"air_quality": <serialised row>, "plan": <DayResponse> }`.
+`DailyPlanInput` records normalized environmental decisions:
 
----
+- climate region, calendar prior, season, season source, confidence,
+  temperature band, moisture regime, daily regime, reason, observed signals
+- weather condition, minimum/maximum temperature, precipitation, humidity, UV
+- AQI, index system, category, prominent pollutant
 
-## Database Migrations
+The row `source` records whether the input was derived, observed, unavailable,
+user-declared, or resolved from a known city/state. Raw payload is excluded.
 
-All V3-01 schema changes live in a **single** migration:
+## Future garment/fabric boundary
 
-```
-ee2713cab5de — add_air_quality_snapshots_and_system_context
-```
+Future garment suitability needs more than a fabric name. Its inputs may
+include fabric composition, weight, weave or knit, lining, fit, layering role,
+water sensitivity, temperature, humidity, rain, daily regime, UV, event, and
+exposure. Heavy cotton denim and light cotton voile must not receive identical
+thermal or breathability treatment.
 
-It adds:
-- `air_quality_snapshots` table
-- `weather_snapshots.uv_index` nullable column
+No fabric suitability, garment scoring, outfit-ranking change, or rule such as
+`winter → wool` / `summer → cotton` is implemented in V3-01.
 
-The migration is linear (no branch points) and is safe to apply in a
-rolling deployment (all columns are nullable or have defaults).
+The weather provider value object can be extended later with optional
+provider-supplied `feels_like_temperature` and `wind_speed`. V3-01 does not
+fabricate or calculate either value and does not require a database migration
+for them now.
 
----
+## Persistence and migration
 
-## Testing
+Migration `ee2713cab5de` remains directly after `0001`. It creates:
 
-| Test file | What it covers |
-|---|---|
-| `test_domain_planning_environment.py` | `resolve_climate_context` — conservative season rules, observed signals, South India autumn, confidence decay |
-| `test_domain_planning.py` | End-to-end: weather POST, AQI POST, UV range enforcement, plan caching, AQI validation rejections |
+- `air_quality_snapshots`
+- `daily_plans.air_quality_snapshot_id`
+- `weather_snapshots.uv_index`
 
-Run locally:
+The migration is reversible. No migration is required for in-memory
+`ClimateContext` fields.
 
-```bash
-docker compose exec backend pytest tests/test_domain_planning_environment.py \
-    tests/test_domain_planning.py -v
-```
+## Limitations
 
----
-
-## Constraints (permanent)
-
-- **No live third-party weather/AQI API** is called in V3-01.  Provider
-  integration is a future phase.
-- **No production dependency** was added.  The feature uses only packages
-  already in `requirements.txt`.
-- **`package.json` and `yarn.lock` are untouched.**
-- The raw provider payload never enters the cache key.
-
----
-
-*Last updated: V3-01.3 closure (2026-08-08)*
+- no complete climatology database
+- no live IMD, weather, or AQI provider
+- no fine-grained elevation model
+- no feels-like temperature unless a future provider supplies it
+- no wind speed unless a future provider supplies it
+- no fabric suitability engine
+- no Style ranking changes in this phase
+- no medical AQI or UV interpretation
+- only the North Plains seasonal profile has been explicitly reviewed

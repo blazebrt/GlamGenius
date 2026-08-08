@@ -26,7 +26,9 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from app.domains.planning import weather as weather_module
+from app.domains.planning.context import gather
 from app.domains.planning.models import (
+    AirQualitySnapshot,
     CalendarEvent,
     DailyPlan,
     DailyPlanAction,
@@ -426,11 +428,73 @@ async def test_uv_index_range_is_enforced(
     )
     assert resp.status_code == 422
 
+    negative = await app_client.post(
+        "/api/v2/today/weather",
+        headers=auth(token),
+        json={
+            "for_date": TODAY.isoformat(),
+            "condition": "hot",
+            "uv_index": -0.1,
+        },
+    )
+    assert negative.status_code == 422
+
+
+async def test_uv_index_round_trips_through_snapshot_provider_context_and_today(
+    app_client, db_clean, registered_supabase_user, fake_provider
+):
+    token, uid = await registered_supabase_user()
+    await _stock_wardrobe(app_client, token)
+
+    response = await app_client.post(
+        "/api/v2/today/weather",
+        headers=auth(token),
+        json={
+            "for_date": TODAY.isoformat(),
+            "condition": "hot",
+            "temp_max_c": 36,
+            "humidity": 30,
+            "precipitation_chance": 0,
+            "uv_index": 8.5,
+            "location": "Delhi",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["weather"]["uv_index"] == 8.5
+    assert response.json()["plan"]["weather"]["uv_index"] == 8.5
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        snapshot = (await session.execute(
+            select(WeatherSnapshot).where(WeatherSnapshot.account_id == uid)
+        )).scalar_one()
+        context = await gather(session, account_id=uid, plan_date=TODAY)
+    assert snapshot.uv_index == 8.5
+    assert context.weather is not None
+    assert context.weather.uv_index == 8.5
+
+    today = await _get_today(app_client, token)
+    assert today.json()["weather"]["uv_index"] == 8.5
+
+
+async def test_missing_uv_remains_none(
+    app_client, db_clean, registered_supabase_user, fake_provider
+):
+    token, _ = await registered_supabase_user()
+    response = await app_client.post(
+        "/api/v2/today/weather",
+        headers=auth(token),
+        json={"for_date": TODAY.isoformat(), "condition": "mild"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["weather"]["uv_index"] is None
+    assert response.json()["plan"]["weather"]["uv_index"] is None
+
 
 async def test_air_quality_can_be_posted_and_influences_the_day(
     app_client, db_clean, registered_supabase_user, fake_provider
 ):
-    from app.domains.planning.models import AirQualitySnapshot
     token, uid = await registered_supabase_user()
     await _stock_wardrobe(app_client, token)
 
@@ -442,27 +506,39 @@ async def test_air_quality_can_be_posted_and_influences_the_day(
             "aqi": 350,
             "index_system": "india_naqi",
             "prominent_pollutant": "PM2.5",
+            "pm2_5": 141.5,
+            "pm10": 211.25,
         },
     )
 
     assert resp.status_code == 200, resp.text
     recorded = resp.json()["air_quality"]
     assert recorded["aqi"] == 350
+    assert recorded["index_system"] == "india_naqi"
+    assert recorded["category"] == "Very Poor"
     assert recorded["source"] == "user_declared"
     assert recorded["provider"] == "manual"
 
+    posted_plan = resp.json()["plan"]
+    assert posted_plan["air_quality"]["aqi"] == 350
     plan = (await _get_today(app_client, token)).json()
     assert plan["air_quality"]["aqi"] == 350
+    assert plan["air_quality"]["index_system"] == "india_naqi"
     assert plan["air_quality"]["category"] == "Very Poor"
-    assert "air_quality_note" in plan, "a recorded AQI must show up in the plan"
+    assert plan["air_quality"]["provider"] == "manual"
+    assert plan["air_quality"]["source"] == "user_declared"
 
     factory = get_sessionmaker()
     async with factory() as session:
         snapshots = (await session.execute(
             select(AirQualitySnapshot).where(AirQualitySnapshot.account_id == uid)
         )).scalars().all()
+        daily_plan = (await session.execute(
+            select(DailyPlan).where(DailyPlan.account_id == uid)
+        )).scalar_one()
     assert len(snapshots) == 1
     assert snapshots[0].for_date == TODAY
+    assert daily_plan.air_quality_snapshot_id == snapshots[0].id
 
 
 async def test_air_quality_validation_rejects_impossible_aqi(

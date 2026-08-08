@@ -1,22 +1,24 @@
-"""Environmental normalization and interpretation rules.
+"""Deterministic environmental normalization for the planning context.
 
-This module provides deterministic mapping from raw inputs (AQI, temperature,
-seasons) to the categorical values the orchestration engine understands.
-No external API calls are made here.
+This module interprets only facts already supplied by the user or a provider.
+It does not call an external service and it does not make clothing decisions.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
+from enum import StrEnum
 
-from app.domains.recommendation.compatibility import (
-    SEASON_FOR_CONDITION,
-)
+from app.domains.recommendation.compatibility import SEASON_FOR_CONDITION
 
-# --- Air Quality ------------------------------------------------------------
+# --- Air quality -----------------------------------------------------------
 
-def determine_naqi_category(aqi: int | None, index_system: str, existing_category: str | None = None) -> str | None:
-    """Map raw AQI to the Indian National Air Quality Index (NAQI) categories."""
+
+def determine_naqi_category(
+    aqi: int | None, index_system: str, existing_category: str | None = None
+) -> str | None:
+    """Map an Indian NAQI value to its published category vocabulary."""
     if index_system != "india_naqi":
         return existing_category
     if aqi is None or aqi < 0:
@@ -34,38 +36,216 @@ def determine_naqi_category(aqi: int | None, index_system: str, existing_categor
     return "Severe"
 
 
-# --- Climate & Weather ------------------------------------------------------
+# --- Climate regions and reviewed calendar priors -------------------------
 
-@dataclass
+
+class ClimateRegion(StrEnum):
+    """Conservative GlamGenius product climate profiles.
+
+    These profiles are routing categories for product context. They are not a
+    replacement for IMD meteorological subdivisions or a climatology dataset.
+    """
+
+    NORTH_PLAINS = "north_plains"
+    NORTHWEST_ARID = "northwest_arid"
+    WESTERN_HIMALAYA = "western_himalaya"
+    CENTRAL_INDIA = "central_india"
+    WEST_COAST = "west_coast"
+    EAST_GANGETIC = "east_gangetic"
+    NORTHEAST = "northeast"
+    DECCAN_INTERIOR = "deccan_interior"
+    SOUTHEAST_PENINSULA = "southeast_peninsula"
+    ISLANDS = "islands"
+    UNKNOWN_INDIA = "unknown_india"
+
+
+# City aliases take precedence over state aliases. That lets, for example,
+# coastal Mangaluru resolve to west_coast even when the input also says
+# Karnataka. The tables are deliberately small and reviewed, not exhaustive.
+CITY_ALIASES_BY_REGION: dict[ClimateRegion, frozenset[str]] = {
+    ClimateRegion.NORTH_PLAINS: frozenset(
+        {
+            "delhi",
+            "new delhi",
+            "gurgaon",
+            "gurugram",
+            "noida",
+            "ghaziabad",
+            "meerut",
+            "chandigarh",
+            "amritsar",
+            "ludhiana",
+        }
+    ),
+    ClimateRegion.NORTHWEST_ARID: frozenset(
+        {"jaipur", "jodhpur", "jaisalmer", "bikaner", "udaipur", "kota"}
+    ),
+    ClimateRegion.WESTERN_HIMALAYA: frozenset(
+        {"shimla", "srinagar", "manali", "leh", "dehradun", "mussoorie"}
+    ),
+    ClimateRegion.CENTRAL_INDIA: frozenset(
+        {"bhopal", "indore", "gwalior", "jabalpur", "raipur", "nagpur"}
+    ),
+    ClimateRegion.WEST_COAST: frozenset(
+        {
+            "mumbai",
+            "panaji",
+            "goa",
+            "mangaluru",
+            "mangalore",
+            "kochi",
+            "cochin",
+            "thiruvananthapuram",
+            "trivandrum",
+            "kozhikode",
+        }
+    ),
+    ClimateRegion.EAST_GANGETIC: frozenset(
+        {"kolkata", "patna", "ranchi", "varanasi", "gaya"}
+    ),
+    ClimateRegion.NORTHEAST: frozenset(
+        {"guwahati", "shillong", "aizawl", "imphal", "kohima", "agartala", "itanagar", "gangtok"}
+    ),
+    ClimateRegion.DECCAN_INTERIOR: frozenset(
+        {"bengaluru", "bangalore", "hyderabad", "mysuru", "mysore", "pune"}
+    ),
+    ClimateRegion.SOUTHEAST_PENINSULA: frozenset(
+        {"chennai", "puducherry", "pondicherry", "visakhapatnam", "vizag", "vijayawada"}
+    ),
+    ClimateRegion.ISLANDS: frozenset({"port blair", "kavaratti"}),
+}
+
+STATE_ALIASES_BY_REGION: dict[ClimateRegion, frozenset[str]] = {
+    ClimateRegion.NORTH_PLAINS: frozenset({"delhi ncr", "punjab", "haryana"}),
+    ClimateRegion.NORTHWEST_ARID: frozenset({"rajasthan"}),
+    ClimateRegion.WESTERN_HIMALAYA: frozenset(
+        {"himachal pradesh", "uttarakhand", "jammu and kashmir", "jammu kashmir", "ladakh"}
+    ),
+    ClimateRegion.CENTRAL_INDIA: frozenset({"madhya pradesh", "chhattisgarh"}),
+    ClimateRegion.WEST_COAST: frozenset({"goa", "kerala", "coastal karnataka"}),
+    ClimateRegion.EAST_GANGETIC: frozenset({"bihar", "jharkhand", "west bengal"}),
+    ClimateRegion.NORTHEAST: frozenset(
+        {
+            "assam",
+            "meghalaya",
+            "arunachal pradesh",
+            "manipur",
+            "mizoram",
+            "nagaland",
+            "tripura",
+            "sikkim",
+        }
+    ),
+    ClimateRegion.DECCAN_INTERIOR: frozenset({"karnataka", "telangana"}),
+    ClimateRegion.SOUTHEAST_PENINSULA: frozenset(
+        {"tamil nadu", "andhra pradesh", "coastal andhra", "puducherry"}
+    ),
+    ClimateRegion.ISLANDS: frozenset(
+        {"andaman and nicobar", "andaman nicobar", "lakshadweep"}
+    ),
+}
+
+NORTH_PLAINS_SEASON_PROFILE = {
+    1: "winter",
+    2: "winter",
+    3: "summer",
+    4: "summer",
+    5: "summer",
+    6: "summer",
+    7: "monsoon",
+    8: "monsoon",
+    9: "monsoon",
+    10: "autumn",
+    11: "autumn",
+    12: "winter",
+}
+
+# V3-01 has one explicitly reviewed regional calendar. New profiles must be
+# reviewed before being added; enum membership alone never implies expertise.
+REGIONAL_SEASON_PROFILES: dict[ClimateRegion, dict[int, str]] = {
+    ClimateRegion.NORTH_PLAINS: NORTH_PLAINS_SEASON_PROFILE,
+}
+
+# Backward-compatible season vocabulary for regions without a reviewed
+# profile. It is explicitly low-confidence and must never be presented as
+# region-specific climatology.
+GENERIC_INDIA_FALLBACK = dict(NORTH_PLAINS_SEASON_PROFILE)
+
+
+def _normalise_location(location: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", location.casefold()).split())
+
+
+def _matching_region(
+    location: str, aliases_by_region: dict[ClimateRegion, frozenset[str]]
+) -> ClimateRegion | None:
+    padded = f" {_normalise_location(location)} "
+    for region, aliases in aliases_by_region.items():
+        if any(f" {alias} " in padded for alias in aliases):
+            return region
+    return None
+
+
+def _resolve_climate_region_with_source(
+    location: str | None,
+) -> tuple[ClimateRegion, str]:
+    if not location or not location.strip():
+        return ClimateRegion.UNKNOWN_INDIA, "unknown"
+    city_region = _matching_region(location, CITY_ALIASES_BY_REGION)
+    if city_region is not None:
+        return city_region, "known_city"
+    state_region = _matching_region(location, STATE_ALIASES_BY_REGION)
+    if state_region is not None:
+        return state_region, "known_state"
+    return ClimateRegion.UNKNOWN_INDIA, "unknown"
+
+
+def resolve_climate_region(location: str | None) -> ClimateRegion:
+    """Resolve only reviewed city/state aliases; uncertainty stays unknown."""
+    return _resolve_climate_region_with_source(location)[0]
+
+
+# --- Daily observed conditions --------------------------------------------
+
+
+TEMPERATURE_COLD_BELOW_C = 15.0
+TEMPERATURE_MILD_BELOW_C = 25.0
+TEMPERATURE_WARM_BELOW_C = 35.0
+HUMIDITY_DRY_AT_OR_BELOW = 35
+HUMIDITY_HUMID_AT_OR_ABOVE = 70
+PRECIPITATION_WET_AT_OR_ABOVE = 60
+
+
+@dataclass(frozen=True)
 class ClimateContext:
-    """The resolved environmental context for a given day."""
+    """Calendar context and current observations kept as separate concepts."""
 
     season: str
     calendar_prior: str
+    climate_region: ClimateRegion
+    region_source: str
+    season_source: str
     temperature_band: str
+    moisture_regime: str
+    daily_regime: str
     condition: str | None
     confidence: float
-    signals: list[str]
-    source: str
-    reason: str | None
+    reason: str
     location: str | None
+    signals: list[str]
     observed_signals: list[str]
 
 
 def normalise_weather_condition(condition: str | None) -> str | None:
-    """Map raw weather condition text to known orchestration conditions."""
+    """Map free text or legacy season vocabulary to orchestration conditions."""
     if not condition:
         return None
     text = " ".join(condition.lower().split())
-
     if not text:
         return None
-
-    # Known orchestration values
     if text in SEASON_FOR_CONDITION:
         return text
 
-    # Map legacy season vocabulary to expected conditions
     season_to_condition = {
         "summer": "hot",
         "winter": "cold",
@@ -75,8 +255,6 @@ def normalise_weather_condition(condition: str | None) -> str | None:
     }
     if text in season_to_condition:
         return season_to_condition[text]
-
-    # Heuristic partial matches for typical user inputs
     if "rain" in text or "shower" in text or "drizzle" in text:
         return "rainy"
     if "snow" in text or "freez" in text or "ice" in text:
@@ -91,8 +269,46 @@ def normalise_weather_condition(condition: str | None) -> str | None:
         return "cool"
     if "wind" in text or "breez" in text:
         return "windy"
-
     return text
+
+
+def temperature_band(temp_max_c: float | None) -> str:
+    if temp_max_c is None:
+        return "unknown"
+    if temp_max_c < TEMPERATURE_COLD_BELOW_C:
+        return "cold"
+    if temp_max_c < TEMPERATURE_MILD_BELOW_C:
+        return "mild"
+    if temp_max_c < TEMPERATURE_WARM_BELOW_C:
+        return "warm"
+    return "hot"
+
+
+def moisture_regime(
+    humidity: int | None,
+    precipitation_chance: int | None,
+    condition: str | None,
+) -> str:
+    if condition == "rainy" or (
+        precipitation_chance is not None
+        and precipitation_chance >= PRECIPITATION_WET_AT_OR_ABOVE
+    ):
+        return "wet"
+    if humidity is None:
+        return "unknown"
+    if humidity >= HUMIDITY_HUMID_AT_OR_ABOVE:
+        return "humid"
+    if humidity <= HUMIDITY_DRY_AT_OR_BELOW:
+        return "dry"
+    return "normal"
+
+
+def daily_climate_regime(temp_band: str, moisture: str) -> str:
+    if temp_band == "unknown" or moisture == "unknown":
+        return "unknown"
+    if moisture == "normal":
+        return temp_band
+    return f"{temp_band}_{moisture}"
 
 
 def resolve_climate_context(
@@ -103,93 +319,100 @@ def resolve_climate_context(
     humidity: int | None = None,
     precipitation_chance: int | None = None,
 ) -> ClimateContext:
-    """Resolve the overarching climate context for a specific day in India."""
-    signals = []
-    observed_signals = []
-    month = for_date.month
-    
-    # 1. Base season on Indian calendar months
-    if month in (12, 1, 2):
-        calendar_prior = "winter"
-    elif month in (3, 4, 5, 6):
-        calendar_prior = "summer"
-    elif month in (7, 8, 9):
-        calendar_prior = "monsoon"
-    else:  # 10, 11
-        calendar_prior = "autumn"
-        
+    """Resolve regional prior and current conditions without conflating them.
+
+    Reliable current observed conditions outrank seasonal assumptions for
+    appearance decisions. Regional climatology outranks a generic India-wide
+    fallback. Unknown data remains unknown.
+    """
+    region, region_source = _resolve_climate_region_with_source(location)
+    reviewed_profile = REGIONAL_SEASON_PROFILES.get(region)
+    if reviewed_profile is not None:
+        calendar_prior = reviewed_profile[for_date.month]
+        season_source = "regional_profile"
+    else:
+        calendar_prior = GENERIC_INDIA_FALLBACK[for_date.month]
+        season_source = "generic_fallback"
+
+    # ``season`` stays backward compatible. Observations deliberately never
+    # rewrite it; actual conditions are represented by daily_regime instead.
     season = calendar_prior
-    signals.append(f"base_month_{month}")
-    source = "calendar"
-    reason = None
-    confidence = 1.0
+    normalized_condition = normalise_weather_condition(condition)
+    temp_band = temperature_band(temp_max_c)
+    moisture = moisture_regime(
+        humidity, precipitation_chance, normalized_condition
+    )
+    daily_regime = daily_climate_regime(temp_band, moisture)
 
-    # Location
-    is_south = False
-    if location:
-        if any(s in location.lower() for s in ("kerala", "tamil nadu", "karnataka", "andhra", "telangana", "goa", "chennai", "bengaluru", "bangalore", "hyderabad", "kochi", "trivandrum")):
-            signals.append("location_south_india")
-            is_south = True
-    else:
-        confidence -= 0.2
-
-    # Use humidity and precipitation to form observed signals
-    if humidity is not None:
-        if humidity > 70:
-            observed_signals.append("humid")
-        elif humidity < 30:
-            observed_signals.append("dry")
-            
-    if precipitation_chance is not None and precipitation_chance > 60:
+    signals = [
+        f"month_{for_date.month}",
+        f"climate_region_{region.value}",
+        (
+            f"reviewed_profile_{region.value}"
+            if reviewed_profile is not None
+            else "generic_india_fallback"
+        ),
+    ]
+    observed_signals: list[str] = []
+    if temp_band != "unknown":
+        observed_signals.append(temp_band)
+    if humidity is not None and humidity >= HUMIDITY_HUMID_AT_OR_ABOVE:
+        observed_signals.append("humid")
+    elif humidity is not None and humidity <= HUMIDITY_DRY_AT_OR_BELOW:
+        observed_signals.append("dry")
+    rain_signal = normalized_condition == "rainy" or (
+        precipitation_chance is not None
+        and precipitation_chance >= PRECIPITATION_WET_AT_OR_ABOVE
+    )
+    if rain_signal:
         observed_signals.append("rain_likely")
+    if moisture == "wet":
+        observed_signals.append("wet")
 
-    # Use temperature to form observed signals
-    if temp_max_c is not None:
-        if temp_max_c >= 35:
-            observed_signals.append("hot")
-            if season in ("autumn", "winter"):
-                observed_signals.append("unusually_hot")
-                confidence -= 0.3
-                reason = "Conflicting temperature observation for season"
-        elif temp_max_c < 15:
-            observed_signals.append("cool")
-
-    if "rain_likely" in observed_signals and season in ("summer", "winter"):
-        confidence -= 0.3
-        reason = "Conflicting precipitation observation for season"
-
-    if season == "monsoon" and ("rain_likely" in observed_signals or "humid" in observed_signals):
-        confidence = min(1.0, confidence + 0.1)
-        reason = "Observations confirm monsoon prior"
-
-    # South India autumn rain (Northeast monsoon)
-    if is_south and season == "autumn" and ("rain_likely" in observed_signals or "humid" in observed_signals):
-        reason = "southern_post_monsoon_wet_context"
-
-    # 2. Temperature banding
-    if temp_max_c is None:
-        temp_band = "unknown"
-    elif temp_max_c < 15:
-        temp_band = "cold"
-    elif temp_max_c < 25:
-        temp_band = "mild"
-    elif temp_max_c < 35:
-        temp_band = "warm"
+    has_observations = any(
+        value is not None
+        for value in (temp_max_c, normalized_condition, humidity, precipitation_chance)
+    )
+    if reviewed_profile is not None:
+        confidence = 0.9 if has_observations else 0.6
     else:
-        temp_band = "hot"
+        confidence = 0.6 if has_observations else 0.4
 
-    # 3. Resolve normalized condition
-    norm_condition = normalise_weather_condition(condition)
+    conflicts: list[str] = []
+    if temp_band == "hot" and season in {"winter", "autumn"}:
+        observed_signals.append("unusually_hot")
+        conflicts.append("observed heat conflicts with the calendar prior")
+    elif temp_band == "cold" and season in {"summer", "monsoon"}:
+        observed_signals.append("unusually_cold")
+        conflicts.append("observed cold conflicts with the calendar prior")
+    if rain_signal and season in {"summer", "winter"}:
+        conflicts.append("observed rain conflicts with the calendar prior")
+
+    if conflicts:
+        confidence = 0.6 if reviewed_profile is not None else 0.4
+        reason = "; ".join(conflicts).capitalize() + "."
+    elif reviewed_profile is not None and has_observations:
+        reason = "Reviewed regional calendar prior with current observed conditions."
+    elif reviewed_profile is not None:
+        reason = "Reviewed regional calendar prior; current weather is unavailable."
+    elif has_observations:
+        reason = "Generic calendar fallback supplemented by current observed conditions."
+    else:
+        reason = "Generic calendar fallback; region-specific profile and current weather are unavailable."
 
     return ClimateContext(
         season=season,
         calendar_prior=calendar_prior,
+        climate_region=region,
+        region_source=region_source,
+        season_source=season_source,
         temperature_band=temp_band,
-        condition=norm_condition,
-        confidence=round(max(0.0, confidence), 2),
-        signals=signals,
-        source=source,
+        moisture_regime=moisture,
+        daily_regime=daily_regime,
+        condition=normalized_condition,
+        confidence=confidence,
         reason=reason,
         location=location,
+        signals=signals,
         observed_signals=observed_signals,
     )

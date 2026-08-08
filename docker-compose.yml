@@ -45,13 +45,11 @@ services:
     environment:
       POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@postgres:5432/glamgenius_v2
       MEDIA_LOCAL_ROOT: /data/media
-      REPO_ROOT: /repo
       # Supabase URL, keys, JWKS URL and storage bucket come from .env.
     env_file:
       - .env
     volumes:
       - media_data:/data/media
-      - .:/repo:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,11 +73,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_URL: postgresql+asyncpg://glamgenius:glamgenius@postgres:5432/glamgenius_v2
-      REPO_ROOT: /repo
     env_file:
       - .env
-    volumes:
-      - .:/repo:ro
     depends_on:
       postgres:
         condition: service_healthy

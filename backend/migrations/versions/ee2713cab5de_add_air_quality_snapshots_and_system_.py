@@ -1,4 +1,7 @@
-"""Add air_quality_snapshots and system_worker_status
+"""Add V3-01 environmental persistence.
+
+Creates air_quality_snapshots and adds daily_plans.air_quality_snapshot_id
+and weather_snapshots.uv_index.
 
 Revision ID: ee2713cab5de
 Revises: 0001
@@ -39,12 +42,12 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index('ix_air_quality_snapshots_account_date', 'air_quality_snapshots', ['account_id', 'for_date', 'created_at'], unique=False)
-    
-    # We retain the DailyPlan FK as it is actively used to preserve the same 
+
+    # We retain the DailyPlan FK as it is actively used to preserve the same
     # auditable snapshot relationship that weather already has.
     op.add_column('daily_plans', sa.Column('air_quality_snapshot_id', sa.Uuid(), nullable=True))
     op.create_foreign_key('fk_daily_plans_aqi_snapshot', 'daily_plans', 'air_quality_snapshots', ['air_quality_snapshot_id'], ['id'], ondelete='SET NULL')
-    
+
     op.add_column('weather_snapshots', sa.Column('uv_index', sa.Float(), nullable=True))
     # ### end Alembic commands ###
 

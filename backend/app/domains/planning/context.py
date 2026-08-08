@@ -168,7 +168,11 @@ class DayContext:
     def climate(self) -> ClimateContext:
         condition = self.weather.condition if self.weather else None
         temp_max_c = self.weather.temp_max_c if self.weather else None
-        location = self.weather.location if self.weather else self.profile.get("city")
+        location = (
+            self.weather.location
+            if self.weather and self.weather.location
+            else self.profile.get("city")
+        )
         humidity = self.weather.humidity if self.weather else None
         precip = self.weather.precipitation_chance if self.weather else None
         return resolve_climate_context(
@@ -436,17 +440,17 @@ def cache_key(context: DayContext) -> str:
             "uv_index": context.weather.uv_index,
         },
         "climate": {
+            "climate_region": context.climate.climate_region,
             "season": context.climate.season,
-            "signals": sorted(context.climate.signals),
+            "daily_regime": context.climate.daily_regime,
+            "temperature_band": context.climate.temperature_band,
+            "moisture_regime": context.climate.moisture_regime,
             "observed_signals": sorted(context.climate.observed_signals),
         },
         "air_quality": None if context.air_quality is None else {
             "aqi": context.air_quality.aqi,
             "index_system": context.air_quality.index_system,
             "category": context.air_quality.category,
-            "pollutant": context.air_quality.prominent_pollutant,
-            "pm2_5": context.air_quality.pm2_5,
-            "pm10": context.air_quality.pm10,
         },
         "events": sorted(
             f"{event.starts_at.isoformat()}|{event.title}|{event.occasion_key or ''}|{event.dress_code_hint or ''}"
@@ -484,16 +488,26 @@ def input_rows(context: DayContext) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = [
         {"input_type": "date", "input_key": "plan_date", "value": context.plan_date.isoformat(), "source": "derived"},
         {"input_type": "date", "input_key": "timezone", "value": context.timezone_name, "source": "profile_confirmed" if context.profile.get("city") else "default"},
-        {"input_type": "climate", "input_key": "season", "value": context.climate.season, "source": "derived"},
-        {"input_type": "climate", "input_key": "temperature_band", "value": context.climate.temperature_band, "source": "derived"},
+        {"input_type": "climate", "input_key": "climate_region", "value": context.climate.climate_region, "source": context.climate.region_source},
+        {"input_type": "climate", "input_key": "calendar_prior", "value": context.climate.calendar_prior, "source": context.climate.season_source},
+        {"input_type": "climate", "input_key": "season", "value": context.climate.season, "source": context.climate.season_source},
+        {"input_type": "climate", "input_key": "season_source", "value": context.climate.season_source, "source": "derived"},
+        {"input_type": "climate", "input_key": "confidence", "value": context.climate.confidence, "source": "derived"},
+        {"input_type": "climate", "input_key": "temperature_band", "value": context.climate.temperature_band, "source": "observed"},
+        {"input_type": "climate", "input_key": "moisture_regime", "value": context.climate.moisture_regime, "source": "observed"},
+        {"input_type": "climate", "input_key": "daily_regime", "value": context.climate.daily_regime, "source": "observed"},
+        {"input_type": "climate", "input_key": "reason", "value": context.climate.reason, "source": "derived"},
+        {"input_type": "climate", "input_key": "observed_signals", "value": context.climate.observed_signals, "source": "observed"},
         {"input_type": "occasion", "input_key": "occasion_key", "value": context.occasion_key, "source": "calendar" if context.events else "derived"},
         {"input_type": "occasion", "input_key": "occasion_confidence", "value": context.occasion_confidence, "source": "derived"},
         {"input_type": "weather", "input_key": "condition", "value": context.weather.condition if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
+        {"input_type": "weather", "input_key": "temp_min_c", "value": context.weather.temp_min_c if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
         {"input_type": "weather", "input_key": "temp_max_c", "value": context.weather.temp_max_c if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
         {"input_type": "weather", "input_key": "precipitation_chance", "value": context.weather.precipitation_chance if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
         {"input_type": "weather", "input_key": "humidity", "value": context.weather.humidity if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
         {"input_type": "weather", "input_key": "uv_index", "value": context.weather.uv_index if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
         {"input_type": "air_quality", "input_key": "aqi", "value": context.air_quality.aqi if context.air_quality else None, "source": context.air_quality.source if context.air_quality else "unavailable"},
+        {"input_type": "air_quality", "input_key": "index_system", "value": context.air_quality.index_system if context.air_quality else None, "source": context.air_quality.source if context.air_quality else "unavailable"},
         {"input_type": "air_quality", "input_key": "category", "value": context.air_quality.category if context.air_quality else None, "source": context.air_quality.source if context.air_quality else "unavailable"},
         {"input_type": "air_quality", "input_key": "prominent_pollutant", "value": context.air_quality.prominent_pollutant if context.air_quality else None, "source": context.air_quality.source if context.air_quality else "unavailable"},
         {"input_type": "calendar", "input_key": "event_count", "value": len(context.events), "source": "calendar"},

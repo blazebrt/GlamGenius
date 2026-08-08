@@ -113,7 +113,7 @@ class StoredCalendarProvider:
 
 class StoredAirQualityProvider:
     """Air quality the user entered, read back out of ``air_quality_snapshots``.
-    
+
     Similar to StoredWeatherProvider, an explicit user entry overrides external data.
     """
 
@@ -143,7 +143,7 @@ class StoredAirQualityProvider:
         latest: dict[date, AirQualitySnapshot] = {}
         for row in rows:
             latest.setdefault(row.for_date, row)
-            
+
         return [
             AirQualityReading(
                 for_date=row.for_date, aqi=row.aqi, index_system=row.index_system,
@@ -185,6 +185,6 @@ class UnconfiguredProvider:
 
     async def events(self, **_: object) -> list[CalendarEventReading]:
         raise self._unavailable()
-        
+
     async def air_quality(self, **_: object) -> list[AirQualityReading]:
         raise self._unavailable()

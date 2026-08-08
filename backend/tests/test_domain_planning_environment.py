@@ -1,35 +1,30 @@
 from datetime import date
 
+import pytest
 from app.domains.planning.environment import (
+    ClimateRegion,
     determine_naqi_category,
     normalise_weather_condition,
     resolve_climate_context,
+    resolve_climate_region,
 )
 
 
 def test_determine_naqi_category():
-    # Good: 0-50
     assert determine_naqi_category(0, "india_naqi") == "Good"
     assert determine_naqi_category(50, "india_naqi") == "Good"
-    # Satisfactory: 51-100
     assert determine_naqi_category(51, "india_naqi") == "Satisfactory"
     assert determine_naqi_category(100, "india_naqi") == "Satisfactory"
-    # Moderate: 101-200
     assert determine_naqi_category(101, "india_naqi") == "Moderate"
     assert determine_naqi_category(200, "india_naqi") == "Moderate"
-    # Poor: 201-300
     assert determine_naqi_category(201, "india_naqi") == "Poor"
     assert determine_naqi_category(300, "india_naqi") == "Poor"
-    # Very Poor: 301-400
     assert determine_naqi_category(301, "india_naqi") == "Very Poor"
     assert determine_naqi_category(400, "india_naqi") == "Very Poor"
-    # Severe: > 400
     assert determine_naqi_category(401, "india_naqi") == "Severe"
     assert determine_naqi_category(500, "india_naqi") == "Severe"
-
     assert determine_naqi_category(None, "india_naqi") == "unknown"
     assert determine_naqi_category(-1, "india_naqi") == "unknown"
-
     assert determine_naqi_category(50, "unknown", "Custom") == "Custom"
 
 
@@ -41,45 +36,175 @@ def test_normalise_weather_condition():
     assert normalise_weather_condition("Warm breeze") == "warm"
 
 
-def test_resolve_climate_context_base():
-    ctx = resolve_climate_context(date(2023, 1, 15))
-    assert ctx.season == "winter"
-    assert ctx.calendar_prior == "winter"
-    assert ctx.confidence == 0.8  # No location
+@pytest.mark.parametrize(
+    ("for_date", "expected"),
+    [
+        (date(2026, 12, 1), "winter"),
+        (date(2026, 2, 28), "winter"),
+        (date(2026, 3, 1), "summer"),
+        (date(2026, 6, 30), "summer"),
+        (date(2026, 7, 1), "monsoon"),
+        (date(2026, 9, 30), "monsoon"),
+        (date(2026, 10, 1), "autumn"),
+        (date(2026, 11, 30), "autumn"),
+    ],
+)
+def test_north_plains_reviewed_calendar_boundaries(for_date, expected):
+    context = resolve_climate_context(for_date, location="Delhi")
+    assert context.climate_region == ClimateRegion.NORTH_PLAINS
+    assert context.calendar_prior == expected
+    assert context.season == expected
+    assert context.season_source == "regional_profile"
 
-    ctx = resolve_climate_context(date(2023, 4, 15), location="Delhi")
-    assert ctx.season == "summer"
-    assert ctx.confidence == 1.0
 
-def test_resolve_climate_context_south_india():
-    # South India should NOT override winter to autumn anymore
-    ctx = resolve_climate_context(date(2023, 1, 15), location="Chennai, Tamil Nadu")
-    assert ctx.season == "winter"
-    assert "location_south_india" in ctx.signals
-    assert ctx.confidence == 1.0
+@pytest.mark.parametrize(
+    ("month", "expected"),
+    [(12, "winter"), (4, "summer"), (6, "summer"), (8, "monsoon"), (10, "autumn")],
+)
+def test_delhi_month_examples_use_north_plains_profile(month, expected):
+    context = resolve_climate_context(date(2026, month, 15), location="Delhi")
+    assert context.climate_region == "north_plains"
+    assert context.season == expected
 
-    # Autumn rain in South India gets a specific reason
-    ctx = resolve_climate_context(date(2023, 11, 15), location="Chennai", precipitation_chance=80)
-    assert ctx.season == "autumn"
-    assert ctx.reason == "southern_post_monsoon_wet_context"
 
-def test_resolve_climate_context_weather_overrides():
-    # Rain in summer -> no longer overrides season, just adds signal and lowers confidence
-    ctx = resolve_climate_context(date(2023, 4, 15), location="Delhi", precipitation_chance=80)
-    assert ctx.season == "summer"
-    assert "rain_likely" in ctx.observed_signals
-    assert ctx.confidence == 0.7
-    assert ctx.reason == "Conflicting precipitation observation for season"
+@pytest.mark.parametrize(
+    ("location", "expected"),
+    [
+        ("Chennai, Tamil Nadu", ClimateRegion.SOUTHEAST_PENINSULA),
+        ("Mumbai, Maharashtra", ClimateRegion.WEST_COAST),
+        ("Jaipur, Rajasthan", ClimateRegion.NORTHWEST_ARID),
+        ("Bengaluru, Karnataka", ClimateRegion.DECCAN_INTERIOR),
+        ("Shillong, Meghalaya", ClimateRegion.NORTHEAST),
+        ("Port Blair", ClimateRegion.ISLANDS),
+        ("A city not in the reviewed map", ClimateRegion.UNKNOWN_INDIA),
+        (None, ClimateRegion.UNKNOWN_INDIA),
+    ],
+)
+def test_climate_region_resolver_is_deterministic_and_conservative(location, expected):
+    assert resolve_climate_region(location) == expected
 
-    # Heat in winter -> no longer overrides season
-    ctx = resolve_climate_context(date(2023, 1, 15), location="Delhi", temp_max_c=36)
-    assert ctx.season == "winter"
-    assert "unusually_hot" in ctx.observed_signals
-    assert ctx.confidence == 0.7
-    assert ctx.reason == "Conflicting temperature observation for season"
 
-    # Monsoon with rain confirms prior
-    ctx = resolve_climate_context(date(2023, 8, 15), location="Delhi", precipitation_chance=80)
-    assert ctx.season == "monsoon"
-    assert ctx.confidence == 1.0
-    assert ctx.reason == "Observations confirm monsoon prior"
+def test_city_mapping_takes_precedence_over_broad_state_mapping():
+    assert resolve_climate_region("Mangaluru, Karnataka") == ClimateRegion.WEST_COAST
+
+
+def test_non_north_regions_use_labelled_generic_fallback():
+    context = resolve_climate_context(date(2026, 11, 15), location="Chennai")
+    assert context.climate_region == "southeast_peninsula"
+    assert context.season_source == "generic_fallback"
+    assert "generic_india_fallback" in context.signals
+    assert not any(signal.startswith("reviewed_profile_") for signal in context.signals)
+    assert context.confidence == 0.4
+
+
+def test_chennai_observations_remain_useful_with_generic_season_fallback():
+    context = resolve_climate_context(
+        date(2026, 11, 15),
+        temp_max_c=29,
+        condition="rainy",
+        location="Chennai",
+        humidity=85,
+        precipitation_chance=80,
+    )
+    assert context.climate_region == "southeast_peninsula"
+    assert context.season_source == "generic_fallback"
+    assert context.temperature_band == "warm"
+    assert context.moisture_regime == "wet"
+    assert context.daily_regime == "warm_wet"
+    assert context.confidence == 0.6
+
+
+def test_unknown_location_stays_unknown_and_low_confidence():
+    context = resolve_climate_context(date(2026, 4, 15), location="Unmapped Place")
+    assert context.climate_region == "unknown_india"
+    assert context.region_source == "unknown"
+    assert context.season_source == "generic_fallback"
+    assert context.moisture_regime == "unknown"
+    assert context.daily_regime == "unknown"
+    assert context.confidence == 0.4
+
+
+def test_delhi_april_hot_dry_daily_regime():
+    context = resolve_climate_context(
+        date(2026, 4, 15),
+        temp_max_c=38,
+        condition="hot",
+        location="Delhi",
+        humidity=25,
+        precipitation_chance=0,
+    )
+    assert context.season == "summer"
+    assert context.temperature_band == "hot"
+    assert context.moisture_regime == "dry"
+    assert context.daily_regime == "hot_dry"
+    assert context.confidence == 0.9
+
+
+def test_delhi_august_hot_humid_rain_is_warm_wet():
+    context = resolve_climate_context(
+        date(2026, 8, 15),
+        temp_max_c=32,
+        condition="rainy",
+        location="Delhi",
+        humidity=85,
+        precipitation_chance=80,
+    )
+    assert context.season == "monsoon"
+    assert context.temperature_band == "warm"
+    assert context.moisture_regime == "wet"
+    assert context.daily_regime == "warm_wet"
+    assert {"humid", "rain_likely", "wet"}.issubset(context.observed_signals)
+    assert context.confidence == 0.9
+
+
+def test_delhi_january_cold_dry_daily_regime():
+    context = resolve_climate_context(
+        date(2026, 1, 15),
+        temp_max_c=10,
+        condition="cold",
+        location="Delhi",
+        humidity=30,
+        precipitation_chance=0,
+    )
+    assert context.season == "winter"
+    assert context.daily_regime == "cold_dry"
+
+
+def test_hot_january_observation_does_not_rewrite_winter():
+    context = resolve_climate_context(
+        date(2026, 1, 15),
+        temp_max_c=36,
+        condition="hot",
+        location="Delhi",
+        humidity=25,
+        precipitation_chance=0,
+    )
+    assert context.calendar_prior == "winter"
+    assert context.season == "winter"
+    assert context.daily_regime == "hot_dry"
+    assert "unusually_hot" in context.observed_signals
+    assert context.confidence == 0.6
+
+
+def test_rainy_april_observation_does_not_rewrite_summer():
+    context = resolve_climate_context(
+        date(2026, 4, 15),
+        temp_max_c=30,
+        condition="rainy",
+        location="Delhi",
+        humidity=85,
+        precipitation_chance=80,
+    )
+    assert context.calendar_prior == "summer"
+    assert context.season == "summer"
+    assert context.daily_regime == "warm_wet"
+    assert "rain_likely" in context.observed_signals
+    assert context.confidence == 0.6
+
+
+def test_reviewed_profile_without_current_weather_has_moderate_confidence():
+    context = resolve_climate_context(date(2026, 1, 15), location="Delhi")
+    assert context.confidence == 0.6
+    assert context.temperature_band == "unknown"
+    assert context.moisture_regime == "unknown"
+    assert context.daily_regime == "unknown"

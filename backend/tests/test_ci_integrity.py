@@ -1,26 +1,8 @@
-import os
 from pathlib import Path
 
 
 def get_root_dir() -> Path:
-    """Return the repository root.
-
-    In CI the full checkout is flat, so ascending three levels from this file
-    (backend/tests/test_ci_integrity.py) reaches the repo root.
-
-    In Docker only the backend/ directory is mounted at /app, so ascending
-    three levels gives / (the container root).  Allow the caller to override
-    via the REPO_ROOT environment variable so the compose file (or a wrapper
-    script) can pin the correct path without changing this file.
-    """
-    if env := os.environ.get("REPO_ROOT"):
-        return Path(env)
-    # Walk upward until we find the .github sentinel that marks the repo root.
-    candidate = Path(__file__).resolve()
-    for parent in candidate.parents:
-        if (parent / ".github").exists():
-            return parent
-    # Fallback: old three-level heuristic (works in CI flat checkout).
+    # backend/tests/test_ci_integrity.py -> backend/tests -> backend -> root
     return Path(__file__).parent.parent.parent
 
 def test_trivy_exceptions_exists():
