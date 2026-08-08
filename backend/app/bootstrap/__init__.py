@@ -1081,9 +1081,14 @@ async def run(session: AsyncSession) -> dict:
         "progress": await seed_progress(session),
         "feature_flags": await seed_feature_flags(session),
     }
+    # Evidence is global reference data and participates in this same
+    # transaction. Import lazily to keep bootstrap/evidence modules acyclic.
+    from app.domains.evidence.seed import run as run_evidence_seed
+
+    evidence_result = await run_evidence_seed(session)
     await record_seed_version(session, counts)
     await session.commit()
-    return {"seed_version": SEED_VERSION, "counts": counts}
+    return {"seed_version": SEED_VERSION, "counts": counts, "evidence": evidence_result}
 
 
 async def main() -> None:
