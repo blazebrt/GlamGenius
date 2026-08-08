@@ -132,9 +132,31 @@ class WeatherSnapshot(UUIDPrimaryKey, TimestampMixin, Base):
     temp_max_c: Mapped[float | None] = mapped_column(Float)
     precipitation_chance: Mapped[int | None] = mapped_column(Integer)
     humidity: Mapped[int | None] = mapped_column(Integer)
+    uv_index: Mapped[float | None] = mapped_column(Float)
     raw: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
 
     __table_args__ = (Index("ix_weather_snapshots_account_date", "account_id", "for_date", "created_at"),)
+
+
+class AirQualitySnapshot(UUIDPrimaryKey, TimestampMixin, Base):
+    """What the air quality was expected to be for one local day."""
+
+    __tablename__ = "air_quality_snapshots"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    for_date: Mapped[date] = mapped_column(Date, nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", server_default="manual")
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="user_declared", server_default="user_declared")
+    location: Mapped[str | None] = mapped_column(String(128))
+    aqi: Mapped[int] = mapped_column(Integer, nullable=False)
+    index_system: Mapped[str] = mapped_column(String(32), nullable=False)
+    category: Mapped[str | None] = mapped_column(String(32))
+    prominent_pollutant: Mapped[str | None] = mapped_column(String(32))
+    pm2_5: Mapped[float | None] = mapped_column(Float)
+    pm10: Mapped[float | None] = mapped_column(Float)
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+    __table_args__ = (Index("ix_air_quality_snapshots_account_date", "account_id", "for_date", "created_at"),)
 
 
 class DailyPlan(UUIDPrimaryKey, TimestampMixin, Base):
@@ -149,6 +171,7 @@ class DailyPlan(UUIDPrimaryKey, TimestampMixin, Base):
     headline: Mapped[str] = mapped_column(String(240), nullable=False, default="", server_default="")
     look_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("looks.id", ondelete="SET NULL"))
     weather_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("weather_snapshots.id", ondelete="SET NULL"))
+    air_quality_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("air_quality_snapshots.id", ondelete="SET NULL"))
     weather_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     event_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")

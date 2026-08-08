@@ -17,6 +17,7 @@ from app.domains.planning import context as context_stage
 from app.domains.planning.models import DailyPlan
 from app.domains.planning.schemas import (
     ActionComplete,
+    AirQualityInput,
     CalendarEventInput,
     ClarificationAnswer,
     ItemUnavailable,
@@ -211,6 +212,19 @@ async def set_weather(
     plan = await _plan_for(session, current, body.for_date, trigger="weather_changed")
     await session.commit()
     return {"weather": service.serialize_weather(row), "plan": await service.serialize_plan(session, plan)}
+
+
+@router.post("/today/air-quality")
+async def set_air_quality(
+    body: AirQualityInput,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Record the air quality yourself. No outside service required."""
+    row = await service.record_air_quality(session, current.account_id, body)
+    plan = await _plan_for(session, current, body.for_date, trigger="air_quality_changed")
+    await session.commit()
+    return {"air_quality": service.serialize_air_quality(row), "plan": await service.serialize_plan(session, plan)}
 
 
 @router.post("/today/events")

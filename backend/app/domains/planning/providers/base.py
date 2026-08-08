@@ -39,7 +39,25 @@ class WeatherReading:
     temp_max_c: float | None = None
     precipitation_chance: int | None = None   # 0-100
     humidity: int | None = None               # 0-100
+    uv_index: float | None = None
     location: str | None = None
+    provider: str = "manual"
+    source: str = "user_declared"
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AirQualityReading:
+    """Air quality index and categorization for one local day."""
+
+    for_date: date
+    aqi: int
+    index_system: str
+    category: str | None = None
+    location: str | None = None
+    prominent_pollutant: str | None = None
+    pm2_5: float | None = None
+    pm10: float | None = None
     provider: str = "manual"
     source: str = "user_declared"
     raw: dict[str, Any] = field(default_factory=dict)
@@ -96,6 +114,18 @@ class WeatherProvider(Protocol):
     async def forecast(
         self, *, location: str | None, dates: list[date], timezone_name: str
     ) -> list[WeatherReading]:
+        """Readings for the requested local dates. May return fewer than asked."""
+        ...
+
+
+class AirQualityProvider(Protocol):
+    name: str
+
+    def is_configured(self) -> bool: ...
+
+    async def air_quality(
+        self, *, location: str | None, dates: list[date], timezone_name: str
+    ) -> list[AirQualityReading]:
         """Readings for the requested local dates. May return fewer than asked."""
         ...
 

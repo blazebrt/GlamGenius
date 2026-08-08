@@ -20,6 +20,7 @@ from app.domains.inventory.models import InventoryItem
 from app.domains.planning import clock
 from app.domains.planning.models import (
     LAUNDRY_STATES,
+    AirQualitySnapshot,
     CalendarEvent,
     DailyPlan,
     DailyPlanAction,
@@ -32,7 +33,7 @@ from app.domains.planning.models import (
     WeeklyPlanDay,
 )
 from app.domains.planning.providers import KNOWN_CALENDAR_PROVIDERS, PROVIDER_MANUAL, catalogue
-from app.domains.planning.schemas import CalendarEventInput, WeatherInput
+from app.domains.planning.schemas import AirQualityInput, CalendarEventInput, WeatherInput
 from app.domains.recommendation import service as recommendation_service
 from app.domains.recommendation.models import Look
 from app.shared.database.base import utcnow
@@ -86,6 +87,7 @@ async def record_weather(session: AsyncSession, account_id: uuid.UUID, body: Wea
         account_id=account_id, for_date=body.for_date, condition=body.condition,
         temp_min_c=body.temp_min_c, temp_max_c=body.temp_max_c,
         precipitation_chance=body.precipitation_chance, humidity=body.humidity,
+        uv_index=body.uv_index,
         location=body.location, provider=PROVIDER_MANUAL, source="user_declared",
     )
     session.add(row)
@@ -100,7 +102,41 @@ def serialize_weather(row: WeatherSnapshot | None) -> dict[str, Any] | None:
         "id": str(row.id), "for_date": row.for_date.isoformat(), "condition": row.condition,
         "temp_min_c": row.temp_min_c, "temp_max_c": row.temp_max_c,
         "precipitation_chance": row.precipitation_chance, "humidity": row.humidity,
+        "uv_index": row.uv_index,
         "location": row.location, "provider": row.provider, "source": row.source,
+    }
+
+
+# --- Air Quality ------------------------------------------------------------
+
+
+async def record_air_quality(session: AsyncSession, account_id: uuid.UUID, body: AirQualityInput) -> AirQualitySnapshot:
+    from app.domains.planning.environment import determine_naqi_category
+    row = AirQualitySnapshot(
+        account_id=account_id, for_date=body.for_date, aqi=body.aqi,
+        index_system=body.index_system,
+        category=determine_naqi_category(body.aqi, body.index_system),
+        location=body.location,
+        prominent_pollutant=body.prominent_pollutant,
+        pm2_5=body.pm2_5, pm10=body.pm10,
+        provider=PROVIDER_MANUAL, source="user_declared",
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+def serialize_air_quality(row: AirQualitySnapshot | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "id": str(row.id), "for_date": row.for_date.isoformat(), "aqi": row.aqi,
+        "index_system": row.index_system,
+        "category": row.category,
+        "location": row.location,
+        "prominent_pollutant": row.prominent_pollutant,
+        "pm2_5": row.pm2_5, "pm10": row.pm10,
+        "provider": row.provider, "source": row.source,
     }
 
 
@@ -335,6 +371,7 @@ async def serialize_plan(
     )).scalar_one_or_none()
 
     weather = await session.get(WeatherSnapshot, plan.weather_snapshot_id) if plan.weather_snapshot_id else None
+    air_quality = await session.get(AirQualitySnapshot, plan.air_quality_snapshot_id) if plan.air_quality_snapshot_id else None
     primary = [row for row in actions if row.priority <= 40]
     optional = [row for row in actions if row.priority > 40]
 
@@ -352,6 +389,7 @@ async def serialize_plan(
         "version": plan.version,
         "outfit": look_payload,
         "weather": serialize_weather(weather),
+        "air_quality": serialize_air_quality(air_quality),
         "weather_note": plan.weather_note,
         "event_note": plan.event_note,
         # The short list the screen opens with, and the rest underneath it.
@@ -388,6 +426,7 @@ async def serialize_week(session: AsyncSession, plan: WeeklyPlan) -> dict[str, A
             payload.update({
                 "headline": summary["headline"], "status": summary["status"],
                 "confidence": summary["confidence"], "weather": summary["weather"],
+                "air_quality": summary.get("air_quality"),
                 "needs_clarification": summary["needs_clarification"],
                 "owned_items": (summary["outfit"] or {}).get("owned_items", []),
                 "optional_addition_count": (summary["outfit"] or {}).get("optional_addition_count", 0),

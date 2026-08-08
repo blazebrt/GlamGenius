@@ -32,6 +32,7 @@ class WeatherInput(BaseModel):
     temp_max_c: float | None = Field(default=None, ge=-40, le=60)
     precipitation_chance: int | None = Field(default=None, ge=0, le=100)
     humidity: int | None = Field(default=None, ge=0, le=100)
+    uv_index: float | None = Field(default=None, ge=0, le=20)
     location: str | None = Field(default=None, max_length=160)
 
     @model_validator(mode="after")
@@ -39,6 +40,24 @@ class WeatherInput(BaseModel):
         if self.temp_min_c is not None and self.temp_max_c is not None and self.temp_min_c > self.temp_max_c:
             raise ValueError("The lowest temperature cannot be higher than the highest.")
         return self
+
+
+# --- Air Quality ------------------------------------------------------------
+
+
+class AirQualityInput(BaseModel):
+    """What the user says the air quality will do."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    for_date: date
+    aqi: int = Field(ge=0, le=2000)
+    index_system: Literal["india_naqi", "unknown"]
+    location: str | None = Field(default=None, max_length=160)
+    prominent_pollutant: str | None = Field(default=None, max_length=32)
+    pm2_5: float | None = Field(default=None, ge=0)
+    pm10: float | None = Field(default=None, ge=0)
+
 
 
 # --- Calendar ---------------------------------------------------------------

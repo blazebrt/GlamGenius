@@ -142,6 +142,7 @@ REGISTRY: dict[str, Classification] = {
     "weekly_plan_days": Classification.INCLUDED,  # via weekly_plans
     "calendar_events": Classification.INCLUDED,
     "weather_snapshots": Classification.INCLUDED,
+    "air_quality_snapshots": Classification.INCLUDED,
     "plan_recalculation_events": Classification.INCLUDED,
     # --- Routines + safety ---
     "routines": Classification.INCLUDED,

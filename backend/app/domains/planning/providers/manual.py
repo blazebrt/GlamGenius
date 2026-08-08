@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.planning.providers.base import (
+    AirQualityReading,
     CalendarEventReading,
     ProviderUnavailable,
     WeatherReading,
@@ -63,7 +64,9 @@ class StoredWeatherProvider:
                 for_date=row.for_date, condition=row.condition,
                 temp_min_c=row.temp_min_c, temp_max_c=row.temp_max_c,
                 precipitation_chance=row.precipitation_chance, humidity=row.humidity,
+                uv_index=row.uv_index,
                 location=row.location, provider=row.provider, source=row.source,
+                raw=row.raw,
             )
             for row in latest.values()
         ]
@@ -108,6 +111,52 @@ class StoredCalendarProvider:
         ]
 
 
+class StoredAirQualityProvider:
+    """Air quality the user entered, read back out of ``air_quality_snapshots``.
+
+    Similar to StoredWeatherProvider, an explicit user entry overrides external data.
+    """
+
+    name = PROVIDER_MANUAL
+
+    def __init__(self, session: AsyncSession, account_id) -> None:
+        self._session = session
+        self._account_id = account_id
+
+    def is_configured(self) -> bool:
+        return True
+
+    async def air_quality(
+        self, *, location: str | None, dates: list[date], timezone_name: str
+    ) -> list[AirQualityReading]:
+        from app.domains.planning.models import AirQualitySnapshot
+
+        if not dates:
+            return []
+        rows = (await self._session.execute(
+            select(AirQualitySnapshot).where(
+                AirQualitySnapshot.account_id == self._account_id,
+                AirQualitySnapshot.for_date.in_(list(dates)),
+            ).order_by(AirQualitySnapshot.for_date, AirQualitySnapshot.created_at.desc())
+        )).scalars().all()
+
+        latest: dict[date, AirQualitySnapshot] = {}
+        for row in rows:
+            latest.setdefault(row.for_date, row)
+
+        return [
+            AirQualityReading(
+                for_date=row.for_date, aqi=row.aqi, index_system=row.index_system,
+                category=row.category, location=row.location,
+                prominent_pollutant=row.prominent_pollutant,
+                pm2_5=row.pm2_5, pm10=row.pm10,
+                provider=row.provider, source=row.source,
+                raw=row.raw,
+            )
+            for row in latest.values()
+        ]
+
+
 class UnconfiguredProvider:
     """A named seam for a live service that is not wired up.
 
@@ -135,4 +184,7 @@ class UnconfiguredProvider:
         raise self._unavailable()
 
     async def events(self, **_: object) -> list[CalendarEventReading]:
+        raise self._unavailable()
+
+    async def air_quality(self, **_: object) -> list[AirQualityReading]:
         raise self._unavailable()

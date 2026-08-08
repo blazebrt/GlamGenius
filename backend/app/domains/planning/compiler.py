@@ -549,6 +549,7 @@ async def compile_day(
     plan.headline = headline_for(context, ranked)
     plan.look_id = look.id if look is not None else None
     plan.weather_snapshot_id = context.weather_snapshot_id
+    plan.air_quality_snapshot_id = context.air_quality_snapshot_id
     plan.weather_note = ranked.weather_note if ranked else ""
     plan.event_note = (context.primary_event.title if context.primary_event else "")
     plan.confidence = round(min(ranked.confidence if ranked else 0.2, context.occasion_confidence), 4)
