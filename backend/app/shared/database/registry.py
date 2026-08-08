@@ -17,6 +17,7 @@ from app.domains.beta_access.models import (
     InviteRedemption,
 )
 from app.domains.consent.models import Consent
+from app.domains.evidence import models as evidence_models
 from app.domains.identity.models import Account
 from app.domains.inventory import models as inventory_models
 from app.domains.media.models import MediaAsset
@@ -89,4 +90,5 @@ __all__ = [
     "IngredientContraindicationRule",
     "IngredientSensitivityRule",
     "InventorySubtypeDefinition",
+    "evidence_models",
 ]

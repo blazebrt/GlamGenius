@@ -1,12 +1,13 @@
 # V3-02 Evidence & Ingredient Intelligence Foundation
 
-**Status:** architecture audit only (V3-02.0)
+**Status:** V3-02.1 foundation implemented (draft pilot; no runtime consumption)
 **Baseline:** `main` at `53296f8a2cac39ca1cfafb7805a4197c056d5a8d`
 **Branch:** `v3/v3-02-evidence-foundation`
 
-This document records the repository truth at the V3-02 baseline and proposes a
-future evidence contract. It does not add tables, migrations, endpoints,
-dependencies, parsers, safety rules, RAG, or product behaviour.
+This document records the repository truth after the V3-02.1 foundation. Four
+global provenance tables and an idempotent draft pilot are implemented. There
+is no public API, no runtime evidence consumption, no new dependency, and no
+product behaviour change.
 
 ## 1. Executive summary
 
@@ -96,7 +97,7 @@ invent warnings.
 | Perfume context | `PERFUME_RULES` in ontology and `PERFUME_CONTEXT_DEFS` in bootstrap | `perfume_context_rules` | `seed_perfume_context()` | perfume service/API | Curated convention, explicitly not chemistry evidence |
 | Product ingredient matching | parser plus user details | `product_ingredients` | Not global-seeded; created from account products | shelf/rules/ingredient APIs | User-confirmed or draft user fact |
 | Product quality / shopping | recommendation modules and ROI constants | `purchase_evaluations`, factors, decisions | No evidence seed | shopping API | Account-owned evaluation, not verified evidence |
-| EvidenceSource / EvidenceClaim / links / RuleEvidenceLink | **Not implemented in V3-02.0** | None | None | None | Proposed shared provenance architecture only |
+| EvidenceSource / EvidenceClaim / links / RuleEvidenceLink | `backend/app/domains/evidence/` | `evidence_sources`, `evidence_claims`, `evidence_claim_sources`, `rule_evidence_links` | Standard `backend/app/bootstrap/__init__.py` invokes `evidence.seed.run()` | No current runtime consumer | Implemented global foundation; pilot claims remain draft |
 
 ### 3.1 Duplicate and drift risks
 
@@ -207,10 +208,13 @@ value/overlap. Purchase Intelligence owns user-facing purchase decisions.
 Evidence may qualify or support a domain rule; it does not become a god-domain
 containing every domain's behaviour.
 
-## 9. Proposed shared Evidence model (design only)
+## 9. Implemented shared Evidence model (V3-02.1)
 
-The following is a minimum relational contract for V3-02.1. Names are proposed,
-not implemented.
+The following minimum relational contract is implemented by the four global
+tables in `backend/app/domains/evidence/models.py`, with one migration and no
+public API. The approval service is intentionally callable only by internal
+code/tests; production pilot claims are all drafts and therefore remain
+`legacy_curated` when linked to rules.
 
 ### 9.1 EvidenceSource
 
@@ -256,8 +260,9 @@ Required fields:
   `regulatory_context`, `structured_value`, `created_at`, and `updated_at`;
 * `reviewed_at`, `reviewed_by` (or an auditable stable reviewer reference),
   `last_reviewed_at`, `next_review_due_at`, optional `supersedes_claim_id`;
-* `ai_generated` (provenance flag), `drafted_by_run_id` when applicable,
-  with no implication that `ai_generated=false` means approved.
+* `ai_generated` (provenance flag), with no implication that
+  `ai_generated=false` means approved. `drafted_by_run_id` is intentionally
+  omitted: AI runs are account-owned while evidence claims are global.
 
 Constraints/indexes: unique `(claim_key, claim_version)`; foreign-key
 self-reference for supersession; indexes on `(domain, subject_type,
@@ -382,7 +387,7 @@ Rows should be immutable by revision where practical. Superseding a source or
 claim creates a new revision and points back with `supersedes_*`; it does not
 rewrite the historical record. Initial claim selection is simply active,
 approved, not superseded, and jurisdiction/scope compatible. `last_reviewed_at`
-and `next_review_due_at` support staleness reporting; V3-02.0 does not build a
+and `next_review_due_at` support staleness reporting; V3-02.1 does not build a
 scheduler or release selector. A later release/snapshot layer must preserve
 claim IDs, source revisions and domain rule versions when it becomes necessary.
 
@@ -428,9 +433,9 @@ The unsafe shape is random retrieved text followed by an LLM deciding what is
 safe. Semantic search may improve discovery later, but it cannot approve claims,
 replace controlled status, or bypass domain rules. No vector database,
 embeddings, LangChain, LlamaIndex, scraping or live research API belongs in
-V3-02.0.
+V3-02.1.
 
-## 16. V3-02.1 migration strategy (design only)
+## 16. V3-02.1 implementation status
 
 1. Add only EvidenceSource, EvidenceClaim, EvidenceClaimSource and
    RuleEvidenceLink infrastructure, controlled validation and global privacy
@@ -449,28 +454,29 @@ V3-02.0.
    `evidence_status` columns across domains.
 
 No current table is replaced, and no current runtime rule is deleted by this
-strategy.
+implementation. The pilot contains three fixed-accessed-at official source
+records and two AI-generated draft claims; approved production claim count is
+zero. All pilot rule links are unreviewed and therefore report
+`legacy_curated`. Approval lifecycle is exercised only in tests; there is no
+public approval endpoint or EvidenceRelease.
 
-### Proposed exact V3-02.1 files
+### Implemented V3-02.1 files
 
 * `backend/app/domains/evidence/__init__.py`
 * `backend/app/domains/evidence/models.py`
 * `backend/app/domains/evidence/enums.py`
 * `backend/app/domains/evidence/service.py`
-* `backend/app/domains/evidence/schemas.py`
 * `backend/app/shared/database/registry.py` (model registration only)
 * `backend/app/domains/privacy/__init__.py` (global classification)
-* `backend/app/bootstrap/__init__.py` (evidence seed/version hook only)
+* `backend/app/bootstrap/__init__.py` (standard evidence seed/version hook)
+* `backend/app/domains/evidence/seed.py` (draft pilot catalogue)
 * a new Alembic migration under `backend/migrations/versions/`
-* `backend/tests/test_domain_evidence.py`
-* `backend/tests/test_evidence_lifecycle.py`
-* `backend/tests/test_evidence_seed.py`
-* `backend/tests/test_evidence_privacy.py`
-* `backend/tests/test_evidence_parity.py`
+* `backend/tests/test_evidence_foundation.py`
 
-These are proposals, not files created in V3-02.0.
+These files are present on the V3-02.1 branch. No `schemas.py` or repository
+layer was added because there is no public evidence API.
 
-### Proposed V3-02.1 tests
+### Implemented V3-02.1 closure tests
 
 At minimum:
 
@@ -489,16 +495,18 @@ At minimum:
 * existing deterministic rule output is unchanged after pilot links;
 * global evidence rows contain no `account_id`, and private product evidence
   never enters global tables;
-* deterministic/idempotent pilot seed, privacy classification and unchanged
+* deterministic/idempotent pilot seed with stable `rows_written=10`, privacy classification and unchanged
   unknown-ingredient parser behaviour.
 
 ### Pilot data boundary
 
-V3-02.1 must use a small reviewed pilot, not the complete ingredient catalogue:
+V3-02.1 uses a small pilot, not the complete ingredient catalogue:
 approximately 2–4 EvidenceSources, 2–6 EvidenceClaims and 1–3 existing
 deterministic rules linked through RuleEvidenceLink. The exact records and
-authoritative sources require explicit human review before implementation.
-No citation is fabricated for coverage, and existing `evidence_note` strings
+authoritative sources are implemented as DRAFT provenance; human/domain review
+is required before approval or evidence-linked activation.
+The implemented catalogue is 3 sources, 2 claims, 3 claim-source links and 2
+rule links. No citation is fabricated for coverage, and existing `evidence_note` strings
 are not automatically promoted into sources or approved claims.
 
 The parity invariant is mandatory: if a deterministic rule produced output `X`
@@ -533,11 +541,16 @@ routines, Product Check, nutrition, or safety execution.
 7. Decide when an immutable EvidenceRelease/snapshot becomes necessary after a
    domain actually consumes evidence-linked rules.
 
-## 19. V3-02.0 scope and validation
+## 19. V3-02.1 scope and validation
 
-This audit changed documentation only. It created no migration, table, endpoint,
-frontend change, production dependency, RAG/vector component, or runtime rule.
-The required validation for this phase is repository-level:
+V3-02.0 architecture is complete and V3-02.1 implements the four-table global
+provenance foundation. Standard reference bootstrap seeds the draft pilot:
+3 public sources, 2 AI-generated draft claims, 3 claim-source links and 2 draft
+rule links. Approved production claims remain 0; all pilot-linked rules remain
+`legacy_curated`. No recommendation behavior consumes evidence, and there is
+no public approval API, EvidenceRelease, RAG, or runtime rule change. Unknown
+ingredient parser behavior is unchanged. The required validation for this
+phase is repository-level plus migration/test guards:
 
 ```text
 git diff main...HEAD
