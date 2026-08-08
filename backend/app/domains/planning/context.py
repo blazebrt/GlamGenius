@@ -33,7 +33,7 @@ from app.domains.planning.models import (
     OutfitSchedule,
     WeatherSnapshot,
 )
-from app.domains.planning.providers import ProviderUnavailable, weather_provider
+from app.domains.planning.providers import ProviderUnavailable, air_quality_provider, weather_provider
 from app.domains.planning.providers.base import AirQualityReading, WeatherReading
 from app.domains.recommendation import context as style_context
 from app.domains.recommendation.context import OwnedItem
@@ -353,22 +353,17 @@ async def gather(
         snapshot = await latest_weather(session, account_id, target)
         context.weather_snapshot_id = snapshot.id if snapshot else None
 
-    aq_snapshot = await latest_air_quality(session, account_id, target)
-    if aq_snapshot:
-        context.air_quality_snapshot_id = aq_snapshot.id
-        context.air_quality = AirQualityReading(
-            for_date=aq_snapshot.for_date,
-            aqi=aq_snapshot.aqi,
-            index_system=aq_snapshot.index_system,
-            category=aq_snapshot.category,
-            location=aq_snapshot.location,
-            prominent_pollutant=aq_snapshot.prominent_pollutant,
-            pm2_5=aq_snapshot.pm2_5,
-            pm10=aq_snapshot.pm10,
-            provider=aq_snapshot.provider,
-            source=aq_snapshot.source,
-            raw=aq_snapshot.raw,
-        )
+    aq_provider = air_quality_provider("manual", session, account_id)
+    try:
+        aq_readings = await aq_provider.air_quality(location=attributes.get("city"), dates=[target], timezone_name=resolved_tz)
+        if aq_readings:
+            context.air_quality = aq_readings[0]
+            # If the provider fetched it from our snapshot table, wire up the ID for auditing.
+            # In a real provider, this would be None, and that's fine.
+            snapshot = await latest_air_quality(session, account_id, target)
+            context.air_quality_snapshot_id = snapshot.id if snapshot else None
+    except ProviderUnavailable:
+        pass
 
     _resolve_occasion(context)
     _note_gaps(context)
@@ -443,6 +438,7 @@ def cache_key(context: DayContext) -> str:
         "climate": {
             "season": context.climate.season,
             "signals": sorted(context.climate.signals),
+            "observed_signals": sorted(context.climate.observed_signals),
         },
         "air_quality": None if context.air_quality is None else {
             "aqi": context.air_quality.aqi,

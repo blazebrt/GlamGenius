@@ -6,19 +6,19 @@ route can report connection status honestly without importing adapters.
 from __future__ import annotations
 
 from app.domains.planning.providers.base import (
+    AirQualityProvider,
+    AirQualityReading,
     CalendarEventReading,
     CalendarProvider,
     ProviderUnavailable,
     WeatherProvider,
     WeatherReading,
-    AirQualityProvider,
-    AirQualityReading,
 )
 from app.domains.planning.providers.manual import (
     PROVIDER_MANUAL,
+    StoredAirQualityProvider,
     StoredCalendarProvider,
     StoredWeatherProvider,
-    StoredAirQualityProvider,
     UnconfiguredProvider,
 )
 
@@ -34,6 +34,10 @@ KNOWN_CALENDAR_PROVIDERS: dict[str, str] = {
 
 KNOWN_WEATHER_PROVIDERS: dict[str, str] = {
     PROVIDER_MANUAL: "Weather you enter yourself",
+}
+
+KNOWN_AIR_QUALITY_PROVIDERS: dict[str, str] = {
+    PROVIDER_MANUAL: "Air quality you enter yourself",
 }
 
 
@@ -65,13 +69,27 @@ def catalogue() -> dict[str, list[dict[str, object]]]:
             {"key": key, "label": label, "available": key == PROVIDER_MANUAL}
             for key, label in KNOWN_WEATHER_PROVIDERS.items()
         ],
+        "air_quality": [
+            {"key": key, "label": label, "available": key == PROVIDER_MANUAL}
+            for key, label in KNOWN_AIR_QUALITY_PROVIDERS.items()
+        ],
     }
 
 
 __all__ = [
-    "CalendarEventReading", "CalendarProvider", "ProviderUnavailable",
-    "WeatherProvider", "WeatherReading", "PROVIDER_MANUAL",
-    "KNOWN_CALENDAR_PROVIDERS", "KNOWN_WEATHER_PROVIDERS",
-    "calendar_provider", "weather_provider", "catalogue",
-    "AirQualityProvider", "AirQualityReading", "air_quality_provider",
+    "AirQualityProvider",
+    "AirQualityReading",
+    "CalendarEventReading",
+    "CalendarProvider",
+    "KNOWN_AIR_QUALITY_PROVIDERS",
+    "KNOWN_CALENDAR_PROVIDERS",
+    "KNOWN_WEATHER_PROVIDERS",
+    "PROVIDER_MANUAL",
+    "ProviderUnavailable",
+    "WeatherProvider",
+    "WeatherReading",
+    "air_quality_provider",
+    "calendar_provider",
+    "catalogue",
+    "weather_provider",
 ]

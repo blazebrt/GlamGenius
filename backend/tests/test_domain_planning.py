@@ -411,6 +411,98 @@ async def test_unknown_weather_condition_is_rejected(
     assert resp.status_code == 422
 
 
+async def test_uv_index_range_is_enforced(
+    app_client, db_clean, registered_supabase_user, fake_provider
+):
+    token, _ = await registered_supabase_user()
+    resp = await app_client.post(
+        "/api/v2/today/weather",
+        headers=auth(token),
+        json={
+            "for_date": TODAY.isoformat(),
+            "condition": "hot",
+            "uv_index": 25.0,
+        },
+    )
+    assert resp.status_code == 422
+
+
+async def test_air_quality_can_be_posted_and_influences_the_day(
+    app_client, db_clean, registered_supabase_user, fake_provider
+):
+    from app.domains.planning.models import AirQualitySnapshot
+    token, uid = await registered_supabase_user()
+    await _stock_wardrobe(app_client, token)
+
+    resp = await app_client.post(
+        "/api/v2/today/air-quality",
+        headers=auth(token),
+        json={
+            "for_date": TODAY.isoformat(),
+            "aqi": 350,
+            "index_system": "india_naqi",
+            "prominent_pollutant": "PM2.5",
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    recorded = resp.json()["air_quality"]
+    assert recorded["aqi"] == 350
+    assert recorded["source"] == "user_declared"
+    assert recorded["provider"] == "manual"
+
+    plan = (await _get_today(app_client, token)).json()
+    assert plan["air_quality"]["aqi"] == 350
+    assert plan["air_quality"]["category"] == "Very Poor"
+    assert "air_quality_note" in plan, "a recorded AQI must show up in the plan"
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        snapshots = (await session.execute(
+            select(AirQualitySnapshot).where(AirQualitySnapshot.account_id == uid)
+        )).scalars().all()
+    assert len(snapshots) == 1
+    assert snapshots[0].for_date == TODAY
+
+
+async def test_air_quality_validation_rejects_impossible_aqi(
+    app_client, db_clean, registered_supabase_user, fake_provider
+):
+    token, _ = await registered_supabase_user()
+    resp = await app_client.post(
+        "/api/v2/today/air-quality",
+        headers=auth(token),
+        json={
+            "for_date": TODAY.isoformat(),
+            "aqi": -10,
+            "index_system": "india_naqi",
+        },
+    )
+    assert resp.status_code == 422
+
+    resp = await app_client.post(
+        "/api/v2/today/air-quality",
+        headers=auth(token),
+        json={
+            "for_date": TODAY.isoformat(),
+            "aqi": 2500,
+            "index_system": "india_naqi",
+        },
+    )
+    assert resp.status_code == 422
+
+    resp = await app_client.post(
+        "/api/v2/today/air-quality",
+        headers=auth(token),
+        json={
+            "for_date": TODAY.isoformat(),
+            "aqi": 50,
+            "index_system": "us_aqi",
+        },
+    )
+    assert resp.status_code == 422
+
+
 async def test_weather_abstraction_returns_a_typed_record():
     """The rest of the app depends on the shape, not the provider."""
 

@@ -14,10 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.planning.providers.base import (
+    AirQualityReading,
     CalendarEventReading,
     ProviderUnavailable,
     WeatherReading,
-    AirQualityReading,
 )
 
 PROVIDER_MANUAL = "manual"
@@ -66,6 +66,7 @@ class StoredWeatherProvider:
                 precipitation_chance=row.precipitation_chance, humidity=row.humidity,
                 uv_index=row.uv_index,
                 location=row.location, provider=row.provider, source=row.source,
+                raw=row.raw,
             )
             for row in latest.values()
         ]
@@ -150,6 +151,7 @@ class StoredAirQualityProvider:
                 prominent_pollutant=row.prominent_pollutant,
                 pm2_5=row.pm2_5, pm10=row.pm10,
                 provider=row.provider, source=row.source,
+                raw=row.raw,
             )
             for row in latest.values()
         ]

@@ -6,9 +6,8 @@ No external API calls are made here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
-from typing import Any
 
 from app.domains.recommendation.compatibility import (
     SEASON_FOR_CONDITION,
@@ -42,11 +41,15 @@ class ClimateContext:
     """The resolved environmental context for a given day."""
 
     season: str
+    calendar_prior: str
     temperature_band: str
     condition: str | None
     confidence: float
     signals: list[str]
     source: str
+    reason: str | None
+    location: str | None
+    observed_signals: list[str]
 
 
 def normalise_weather_condition(condition: str | None) -> str | None:
@@ -102,35 +105,66 @@ def resolve_climate_context(
 ) -> ClimateContext:
     """Resolve the overarching climate context for a specific day in India."""
     signals = []
+    observed_signals = []
     month = for_date.month
     
     # 1. Base season on Indian calendar months
     if month in (12, 1, 2):
-        season = "winter"
+        calendar_prior = "winter"
     elif month in (3, 4, 5, 6):
-        season = "summer"
+        calendar_prior = "summer"
     elif month in (7, 8, 9):
-        season = "monsoon"
+        calendar_prior = "monsoon"
     else:  # 10, 11
-        season = "autumn"
+        calendar_prior = "autumn"
         
+    season = calendar_prior
     signals.append(f"base_month_{month}")
     source = "calendar"
+    reason = None
+    confidence = 1.0
 
     # Location
-    if location and any(s in location.lower() for s in ("kerala", "tamil nadu", "karnataka", "andhra", "telangana", "goa", "chennai", "bengaluru", "bangalore", "hyderabad", "kochi", "trivandrum")):
-        signals.append("location_south_india")
-        
-    # Observed Weather Must Matter
-    # Rain out of season -> transition feeling
-    if precipitation_chance is not None and precipitation_chance > 60 and season == "summer":
-        season = "monsoon"
-    
-    # Heat out of season
-    if temp_max_c is not None and temp_max_c >= 35 and season in ("autumn", "winter"):
-        season = "summer"
-        signals.append("overridden_by_heat")
-        source = "temperature"
+    is_south = False
+    if location:
+        if any(s in location.lower() for s in ("kerala", "tamil nadu", "karnataka", "andhra", "telangana", "goa", "chennai", "bengaluru", "bangalore", "hyderabad", "kochi", "trivandrum")):
+            signals.append("location_south_india")
+            is_south = True
+    else:
+        confidence -= 0.2
+
+    # Use humidity and precipitation to form observed signals
+    if humidity is not None:
+        if humidity > 70:
+            observed_signals.append("humid")
+        elif humidity < 30:
+            observed_signals.append("dry")
+            
+    if precipitation_chance is not None and precipitation_chance > 60:
+        observed_signals.append("rain_likely")
+
+    # Use temperature to form observed signals
+    if temp_max_c is not None:
+        if temp_max_c >= 35:
+            observed_signals.append("hot")
+            if season in ("autumn", "winter"):
+                observed_signals.append("unusually_hot")
+                confidence -= 0.3
+                reason = "Conflicting temperature observation for season"
+        elif temp_max_c < 15:
+            observed_signals.append("cool")
+
+    if "rain_likely" in observed_signals and season in ("summer", "winter"):
+        confidence -= 0.3
+        reason = "Conflicting precipitation observation for season"
+
+    if season == "monsoon" and ("rain_likely" in observed_signals or "humid" in observed_signals):
+        confidence = min(1.0, confidence + 0.1)
+        reason = "Observations confirm monsoon prior"
+
+    # South India autumn rain (Northeast monsoon)
+    if is_south and season == "autumn" and ("rain_likely" in observed_signals or "humid" in observed_signals):
+        reason = "southern_post_monsoon_wet_context"
 
     # 2. Temperature banding
     if temp_max_c is None:
@@ -149,9 +183,13 @@ def resolve_climate_context(
 
     return ClimateContext(
         season=season,
+        calendar_prior=calendar_prior,
         temperature_band=temp_band,
         condition=norm_condition,
-        confidence=1.0,
+        confidence=round(max(0.0, confidence), 2),
         signals=signals,
         source=source,
+        reason=reason,
+        location=location,
+        observed_signals=observed_signals,
     )

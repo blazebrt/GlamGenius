@@ -10,17 +10,6 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-"""Add air_quality_snapshots and system_worker_status
-
-Revision ID: ee2713cab5de
-Revises: 0001
-Create Date: 2026-08-08 06:52:53.993770
-"""
-from typing import Sequence, Union
-
-from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 revision: str = 'ee2713cab5de'
 down_revision: Union[str, None] = '0001'

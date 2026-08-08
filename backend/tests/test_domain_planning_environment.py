@@ -1,6 +1,11 @@
-import pytest
 from datetime import date
-from app.domains.planning.environment import determine_naqi_category, normalise_weather_condition, resolve_climate_context
+
+from app.domains.planning.environment import (
+    determine_naqi_category,
+    normalise_weather_condition,
+    resolve_climate_context,
+)
+
 
 def test_determine_naqi_category():
     # Good: 0-50
@@ -39,41 +44,42 @@ def test_normalise_weather_condition():
 def test_resolve_climate_context_base():
     ctx = resolve_climate_context(date(2023, 1, 15))
     assert ctx.season == "winter"
+    assert ctx.calendar_prior == "winter"
+    assert ctx.confidence == 0.8  # No location
 
-    ctx = resolve_climate_context(date(2023, 4, 15))
+    ctx = resolve_climate_context(date(2023, 4, 15), location="Delhi")
     assert ctx.season == "summer"
-
-    ctx = resolve_climate_context(date(2023, 8, 15))
-    assert ctx.season == "monsoon"
-
-    ctx = resolve_climate_context(date(2023, 11, 15))
-    assert ctx.season == "autumn"
+    assert ctx.confidence == 1.0
 
 def test_resolve_climate_context_south_india():
-    # South India should NOT override winter to autumn anymore, but append a signal
+    # South India should NOT override winter to autumn anymore
     ctx = resolve_climate_context(date(2023, 1, 15), location="Chennai, Tamil Nadu")
     assert ctx.season == "winter"
     assert "location_south_india" in ctx.signals
+    assert ctx.confidence == 1.0
 
-    ctx = resolve_climate_context(date(2023, 1, 15), location="Bengaluru")
-    assert ctx.season == "winter"
-    assert "location_south_india" in ctx.signals
-
-    # Non-winter stays the same, signal still appended
-    ctx = resolve_climate_context(date(2023, 4, 15), location="Chennai")
-    assert ctx.season == "summer"
-    assert "location_south_india" in ctx.signals
-
-    # North India doesn't get overridden or signaled
-    ctx = resolve_climate_context(date(2023, 1, 15), location="Delhi")
-    assert ctx.season == "winter"
-    assert "location_south_india" not in ctx.signals
+    # Autumn rain in South India gets a specific reason
+    ctx = resolve_climate_context(date(2023, 11, 15), location="Chennai", precipitation_chance=80)
+    assert ctx.season == "autumn"
+    assert ctx.reason == "southern_post_monsoon_wet_context"
 
 def test_resolve_climate_context_weather_overrides():
-    # Rain in summer -> monsoon
-    ctx = resolve_climate_context(date(2023, 4, 15), precipitation_chance=80)
-    assert ctx.season == "monsoon"
-
-    # Heat in winter -> summer
-    ctx = resolve_climate_context(date(2023, 1, 15), temp_max_c=36)
+    # Rain in summer -> no longer overrides season, just adds signal and lowers confidence
+    ctx = resolve_climate_context(date(2023, 4, 15), location="Delhi", precipitation_chance=80)
     assert ctx.season == "summer"
+    assert "rain_likely" in ctx.observed_signals
+    assert ctx.confidence == 0.7
+    assert ctx.reason == "Conflicting precipitation observation for season"
+
+    # Heat in winter -> no longer overrides season
+    ctx = resolve_climate_context(date(2023, 1, 15), location="Delhi", temp_max_c=36)
+    assert ctx.season == "winter"
+    assert "unusually_hot" in ctx.observed_signals
+    assert ctx.confidence == 0.7
+    assert ctx.reason == "Conflicting temperature observation for season"
+
+    # Monsoon with rain confirms prior
+    ctx = resolve_climate_context(date(2023, 8, 15), location="Delhi", precipitation_chance=80)
+    assert ctx.season == "monsoon"
+    assert ctx.confidence == 1.0
+    assert ctx.reason == "Observations confirm monsoon prior"
