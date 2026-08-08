@@ -32,6 +32,7 @@ class WeatherInput(BaseModel):
     temp_max_c: float | None = Field(default=None, ge=-40, le=60)
     precipitation_chance: int | None = Field(default=None, ge=0, le=100)
     humidity: int | None = Field(default=None, ge=0, le=100)
+    uv_index: float | None = Field(default=None, ge=0, le=20)
     location: str | None = Field(default=None, max_length=160)
 
     @model_validator(mode="after")
@@ -51,7 +52,11 @@ class AirQualityInput(BaseModel):
 
     for_date: date
     aqi: int = Field(ge=0, le=2000)
-    pollutant: str | None = Field(default=None, max_length=32)
+    index_system: str = Field(min_length=1, max_length=32)
+    location: str | None = Field(default=None, max_length=160)
+    prominent_pollutant: str | None = Field(default=None, max_length=32)
+    pm2_5: float | None = Field(default=None, ge=0)
+    pm10: float | None = Field(default=None, ge=0)
 
 
 

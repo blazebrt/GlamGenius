@@ -20,6 +20,7 @@ from app.domains.inventory.models import InventoryItem
 from app.domains.planning import clock
 from app.domains.planning.models import (
     LAUNDRY_STATES,
+    AirQualitySnapshot,
     CalendarEvent,
     DailyPlan,
     DailyPlanAction,
@@ -28,12 +29,11 @@ from app.domains.planning.models import (
     OutfitSchedule,
     PlanRecalculationEvent,
     WeatherSnapshot,
-    AirQualitySnapshot,
     WeeklyPlan,
     WeeklyPlanDay,
 )
 from app.domains.planning.providers import KNOWN_CALENDAR_PROVIDERS, PROVIDER_MANUAL, catalogue
-from app.domains.planning.schemas import CalendarEventInput, WeatherInput, AirQualityInput
+from app.domains.planning.schemas import AirQualityInput, CalendarEventInput, WeatherInput
 from app.domains.recommendation import service as recommendation_service
 from app.domains.recommendation.models import Look
 from app.shared.database.base import utcnow
@@ -112,7 +112,11 @@ async def record_air_quality(session: AsyncSession, account_id: uuid.UUID, body:
     from app.domains.planning.environment import determine_naqi_category
     row = AirQualitySnapshot(
         account_id=account_id, for_date=body.for_date, aqi=body.aqi,
-        category=determine_naqi_category(body.aqi), pollutant=body.pollutant,
+        index_system=body.index_system,
+        category=determine_naqi_category(body.aqi, body.index_system),
+        location=body.location,
+        prominent_pollutant=body.prominent_pollutant,
+        pm2_5=body.pm2_5, pm10=body.pm10,
         provider=PROVIDER_MANUAL, source="user_declared",
     )
     session.add(row)
@@ -125,7 +129,11 @@ def serialize_air_quality(row: AirQualitySnapshot | None) -> dict[str, Any] | No
         return None
     return {
         "id": str(row.id), "for_date": row.for_date.isoformat(), "aqi": row.aqi,
-        "category": row.category, "pollutant": row.pollutant,
+        "index_system": row.index_system,
+        "category": row.category,
+        "location": row.location,
+        "prominent_pollutant": row.prominent_pollutant,
+        "pm2_5": row.pm2_5, "pm10": row.pm10,
         "provider": row.provider, "source": row.source,
     }
 

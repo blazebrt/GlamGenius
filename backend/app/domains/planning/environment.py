@@ -11,30 +11,17 @@ from datetime import date
 from typing import Any
 
 from app.domains.recommendation.compatibility import (
-    COLD_CONDITIONS,
-    HOT_CONDITIONS,
     SEASON_FOR_CONDITION,
-    WET_CONDITIONS,
 )
-
 
 # --- Air Quality ------------------------------------------------------------
 
-@dataclass
-class AirQualityReading:
-    """A snapshot of the air quality index and its local interpretation."""
-
-    for_date: date
-    aqi: int
-    category: str
-    pollutant: str | None = None
-    provider: str = "manual"
-    source: str = "user_declared"
-    raw: dict[str, Any] = field(default_factory=dict)
-
-
-def determine_naqi_category(aqi: int) -> str:
+def determine_naqi_category(aqi: int | None, index_system: str, existing_category: str | None = None) -> str | None:
     """Map raw AQI to the Indian National Air Quality Index (NAQI) categories."""
+    if index_system != "india_naqi":
+        return existing_category
+    if aqi is None or aqi < 0:
+        return "unknown"
     if aqi <= 50:
         return "Good"
     if aqi <= 100:
@@ -106,6 +93,9 @@ def resolve_climate_context(
     for_date: date,
     temp_max_c: float | None = None,
     condition: str | None = None,
+    location: str | None = None,
+    humidity: int | None = None,
+    precipitation_chance: int | None = None,
 ) -> ClimateContext:
     """Resolve the overarching climate context for a specific day in India."""
     month = for_date.month
@@ -119,6 +109,28 @@ def resolve_climate_context(
         season = "monsoon"
     else:  # 10, 11
         season = "autumn"
+
+    # Location Must Change Reasoning (South peninsular vs rest of India)
+    # South India does not experience true winter.
+    is_south = False
+    if location:
+        loc = location.lower()
+        if any(s in loc for s in ("kerala", "tamil nadu", "karnataka", "andhra", "telangana", "goa", "chennai", "bengaluru", "bangalore", "hyderabad", "kochi", "trivandrum")):
+            is_south = True
+
+    if is_south and season == "winter":
+        season = "autumn"
+
+    # Observed Weather Must Matter
+    # Rain out of season -> transition feeling
+    if precipitation_chance is not None and precipitation_chance > 60:
+        if season == "summer":
+            season = "monsoon"
+    
+    # Heat out of season
+    if temp_max_c is not None and temp_max_c >= 35:
+        if season in ("autumn", "winter"):
+            season = "summer"
 
     # 2. Temperature banding
     if temp_max_c is None:

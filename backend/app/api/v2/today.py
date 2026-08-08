@@ -17,6 +17,7 @@ from app.domains.planning import context as context_stage
 from app.domains.planning.models import DailyPlan
 from app.domains.planning.schemas import (
     ActionComplete,
+    AirQualityInput,
     CalendarEventInput,
     ClarificationAnswer,
     ItemUnavailable,
@@ -25,7 +26,6 @@ from app.domains.planning.schemas import (
     TodayOutfitSwap,
     TodayRegenerate,
     WeatherInput,
-    AirQualityInput,
 )
 from app.domains.recommendation import orchestrator as recommendation_orchestrator
 from app.domains.recommendation import service as recommendation_service

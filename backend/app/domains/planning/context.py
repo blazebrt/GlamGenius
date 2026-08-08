@@ -23,17 +23,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.planning import clock
+from app.domains.planning.environment import ClimateContext, resolve_climate_context
 from app.domains.planning.models import (
     LAUNDRY_IN_WASH,
     LAUNDRY_UNAVAILABLE,
+    AirQualitySnapshot,
     CalendarEvent,
     LaundryStateEvent,
     OutfitSchedule,
     WeatherSnapshot,
 )
 from app.domains.planning.providers import ProviderUnavailable, weather_provider
-from app.domains.planning.providers.base import WeatherReading
-from app.domains.planning.environment import AirQualityReading, ClimateContext, resolve_climate_context
+from app.domains.planning.providers.base import AirQualityReading, WeatherReading
 from app.domains.recommendation import context as style_context
 from app.domains.recommendation.context import OwnedItem
 from app.domains.recommendation.occasions import OCCASIONS
@@ -167,7 +168,13 @@ class DayContext:
     def climate(self) -> ClimateContext:
         condition = self.weather.condition if self.weather else None
         temp_max_c = self.weather.temp_max_c if self.weather else None
-        return resolve_climate_context(self.plan_date, temp_max_c, condition)
+        location = self.weather.location if self.weather else self.profile.get("city")
+        humidity = self.weather.humidity if self.weather else None
+        precip = self.weather.precipitation_chance if self.weather else None
+        return resolve_climate_context(
+            self.plan_date, temp_max_c, condition,
+            location=location, humidity=humidity, precipitation_chance=precip
+        )
 
     @property
     def season(self) -> str:
@@ -352,8 +359,12 @@ async def gather(
         context.air_quality = AirQualityReading(
             for_date=aq_snapshot.for_date,
             aqi=aq_snapshot.aqi,
+            index_system=aq_snapshot.index_system,
             category=aq_snapshot.category,
-            pollutant=aq_snapshot.pollutant,
+            location=aq_snapshot.location,
+            prominent_pollutant=aq_snapshot.prominent_pollutant,
+            pm2_5=aq_snapshot.pm2_5,
+            pm10=aq_snapshot.pm10,
             provider=aq_snapshot.provider,
             source=aq_snapshot.source,
             raw=aq_snapshot.raw,
@@ -426,10 +437,15 @@ def cache_key(context: DayContext) -> str:
             "min": context.weather.temp_min_c,
             "max": context.weather.temp_max_c,
             "rain": context.weather.precipitation_chance,
+            "uv_index": context.weather.uv_index,
         },
         "air_quality": None if context.air_quality is None else {
             "aqi": context.air_quality.aqi,
+            "index_system": context.air_quality.index_system,
             "category": context.air_quality.category,
+            "pollutant": context.air_quality.prominent_pollutant,
+            "pm2_5": context.air_quality.pm2_5,
+            "pm10": context.air_quality.pm10,
         },
         "events": sorted(
             f"{event.starts_at.isoformat()}|{event.title}|{event.occasion_key or ''}|{event.dress_code_hint or ''}"
@@ -467,11 +483,17 @@ def input_rows(context: DayContext) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = [
         {"input_type": "date", "input_key": "plan_date", "value": context.plan_date.isoformat(), "source": "derived"},
         {"input_type": "date", "input_key": "timezone", "value": context.timezone_name, "source": "profile_confirmed" if context.profile.get("city") else "default"},
-        {"input_type": "date", "input_key": "season", "value": context.season, "source": "derived"},
+        {"input_type": "climate", "input_key": "season", "value": context.climate.season, "source": "derived"},
+        {"input_type": "climate", "input_key": "temperature_band", "value": context.climate.temperature_band, "source": "derived"},
         {"input_type": "occasion", "input_key": "occasion_key", "value": context.occasion_key, "source": "calendar" if context.events else "derived"},
         {"input_type": "occasion", "input_key": "occasion_confidence", "value": context.occasion_confidence, "source": "derived"},
         {"input_type": "weather", "input_key": "condition", "value": context.weather.condition if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
-        {"input_type": "weather", "input_key": "air_quality_category", "value": context.air_quality.category if context.air_quality else None, "source": context.air_quality.source if context.air_quality else "unavailable"},
+        {"input_type": "weather", "input_key": "temp_max_c", "value": context.weather.temp_max_c if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
+        {"input_type": "weather", "input_key": "precipitation_chance", "value": context.weather.precipitation_chance if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
+        {"input_type": "weather", "input_key": "uv_index", "value": context.weather.uv_index if context.weather else None, "source": context.weather.source if context.weather else "unavailable"},
+        {"input_type": "air_quality", "input_key": "aqi", "value": context.air_quality.aqi if context.air_quality else None, "source": context.air_quality.source if context.air_quality else "unavailable"},
+        {"input_type": "air_quality", "input_key": "category", "value": context.air_quality.category if context.air_quality else None, "source": context.air_quality.source if context.air_quality else "unavailable"},
+        {"input_type": "air_quality", "input_key": "prominent_pollutant", "value": context.air_quality.prominent_pollutant if context.air_quality else None, "source": context.air_quality.source if context.air_quality else "unavailable"},
         {"input_type": "calendar", "input_key": "event_count", "value": len(context.events), "source": "calendar"},
         {"input_type": "inventory", "input_key": "available_item_count", "value": len(context.available_owned()), "source": "inventory"},
         {"input_type": "inventory", "input_key": "unavailable_item_count", "value": len(context.unavailable_item_ids), "source": "laundry"},

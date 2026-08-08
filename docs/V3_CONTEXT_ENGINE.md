@@ -19,11 +19,18 @@ The `DayContext` acts as the deterministic snapshot of the user's current enviro
 * Indian seasonal and climate context
 * Air Quality Index (AQI)
 
+#### Climate Normalization
+The engine interprets standard weather and translates it into regional context (e.g., Indian seasons). It features dynamic overrides based on real-time weather:
+* High temperature/humidity forces a transition to `summer` or `monsoon` regardless of the calendar month.
+* South Peninsular India bypasses the `winter` season and transitions directly to `autumn`.
+* Low temperatures forcibly override the season to `winter` when applicable.
+
 ### Air Quality (AQI)
 AQI provides a measure of air quality, primarily focusing on pollutants such as PM2.5 and PM10, which are highly relevant in Indian urban contexts. 
 * Represented via `AirQualitySnapshot` in the database.
 * Exposed via `AirQualityInput` and integrated into the `DayContext`.
 * Serialized alongside the user's plan via the `serialize_air_quality` helper.
+* Normalizes data exclusively for the `india_naqi` system (categories: `good`, `satisfactory`, `moderate`, `poor`, `very_poor`, `severe`). Other systems or negative indices fall back to `unknown`.
 
 ### Provenance & Fallbacks
 The system must gracefully handle missing environmental information. Provenance is tracked to understand whether a specific data point (like AQI or Weather) came from a real-time provider, a historical average, or was missing entirely.
