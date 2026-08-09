@@ -1,9 +1,9 @@
 # V3-03 Skin & Hair Care Intelligence
 
-**Phase:** V3-03.0 architecture and audit only
+**Phase:** V3-03.1 Care Context foundation implementation
 **Baseline requested and audited:** `94dee83d0b36d2a3cef9b02eb8badde00110d464`
 **Branch:** `v3/v3-03-care-intelligence-foundation`
-**Status:** no Care implementation, migration, dependency, frontend, or recommendation change is included in this phase.
+**Status:** Care Context foundation implemented; no recommendation behavior, migration, dependency, frontend, or Evidence activation change is included.
 
 ## 1. Executive summary
 
@@ -30,10 +30,11 @@ Profile infrastructure, not the current ShelfContext source. Care adds no
 second allergy field or matching path.
 
 The permanent design is therefore a fact assembler plus a deterministic Care
-decision layer in front of the existing compiler. V3-03.1 should add only
-account-owned declarative Skin/Hair context, shared Care preferences, privacy
-coverage, a Context adapter, and a reason/confidence contract. It should not
-change recommendation behavior yet.
+decision layer in front of the existing compiler. V3-03.1 now implements only
+account-owned declarative Skin/Hair context, shared Care preferences, registry
+validation, an in-memory CareContext, a read-only Context adapter, exact legacy
+Hair fallback, shelf fact reuse, and structured missing/source contracts. It
+does not change recommendation behavior.
 
 ## 2. V3-03 mission
 
@@ -284,7 +285,7 @@ fields. Unknown is a first-class value and is never converted to a negative.
 
 ## 13. Skin fact taxonomy
 
-The proposed Skin taxonomy is declarative and controlled, not diagnostic. These
+The implemented Skin taxonomy is declarative and controlled, not diagnostic. These
 keys belong in `backend/app/domains/profile/registry.py`, section `care_skin`,
 and persist through the canonical `profile_attributes` table.
 
@@ -620,9 +621,9 @@ reasoning, Product Quality, Home Care, shopping recommendations,
 Nutrition/Supplements signals, and any clinical or diagnostic capability (which
 remains prohibited).
 
-## 36. V3-03.1 proposed scope
+## 36. V3-03.1 implemented scope
 
-V3-03.1 should be deliberately small:
+V3-03.1 deliberately implements only:
 
 1. add controlled Care keys to `backend/app/domains/profile/registry.py`;
 2. reuse `PATCH /api/v2/profile` and `apply_attributes()`;
@@ -637,13 +638,13 @@ V3-03.1 should be deliberately small:
 7. add source/missing-information codes and privacy/export/deletion,
    isolation, and non-diagnostic regression tests.
 
-It must not add a persistent Care model, migration, new Care CRUD API, alter
+It does not add a persistent Care model, migration, new Care CRUD API, alter
 `compile_all()` output, create evidence claims, add shopping, change the
 frontend, or introduce an AI safety decision.
 
-## 37. V3-03.1 exact proposed files
+## 37. V3-03.1 implementation files
 
-These are proposed files only; none are created in V3-03.0:
+These are the implementation and focused-test files for the foundation:
 
 - `backend/app/domains/care/__init__.py` — domain boundary and public contracts.
 - `backend/app/domains/care/schemas.py` — in-memory CareContext/fact contracts;
@@ -655,15 +656,15 @@ These are proposed files only; none are created in V3-03.0:
 - `backend/app/domains/care/reasons.py` — fact-source and missing-information
   codes, not decision confidence.
 - `backend/app/domains/profile/registry.py` — controlled Care keys and choices.
-- `backend/app/api/v2/profile.py` — additive registry `choices` metadata only,
-  if required by the existing endpoint contract.
+- `backend/app/api/v2/profile.py` — additive registry `choices`, `min_items`,
+  and `exclusive_choices` metadata on the existing endpoint.
 - `backend/tests/test_domain_care_context.py` — assembler and isolation.
 - `backend/tests/test_care_profile_attributes.py` — registry, API reuse,
   `not_sure`, precedence, export, and deletion.
 - `backend/tests/test_care_boundaries.py` — context mismatch, observations,
   drafts, unknowns, no diagnosis, no shopping, and no AI safety decisions.
 
-## 38. V3-03.1 proposed migration
+## 38. V3-03.1 migration status
 
 **Migration: NONE.** `AppearanceProfile`, `ProfileAttribute`,
 `ProfileChangeEvent`, and the existing profile export/deletion path already
@@ -675,9 +676,9 @@ justified by measured query/performance evidence, it must behave like
 `profile_id`, derived from canonical `ProfileAttribute`, and without
 independent provenance or version history.
 
-## 39. V3-03.1 proposed tests
+## 39. V3-03.1 implemented test contract
 
-The future test suite must prove:
+The focused suite proves or specifies:
 
 - Care registry keys have exact controlled vocabularies and are not
   AI-observable;
@@ -748,7 +749,7 @@ dependencies.
 6. Customer-facing naming is Skin Care, Hair Care, Care, and Shelf; internal
    `beauty` compatibility remains during V3-03.
 
-## 42. Care ProfileAttribute contract
+## 42. Implemented Care ProfileAttribute contract
 
 Care declarations are not new ORM models. V3-03.1 adds controlled keys to
 `backend/app/domains/profile/registry.py`; values are stored in the existing
@@ -789,9 +790,10 @@ For V3-03.1, every explicit `care_*` fact is usable only when
 or AI-generated candidates remain unusable until explicitly confirmed through
 the user-declaration path.
 
-## 43. CareContext in-memory schema
+## 43. Implemented CareContext in-memory schema
 
-The Care domain owns an in-memory assembly contract, not a persistence table.
+The Care domain owns an implemented in-memory assembly contract, not a
+persistence table.
 `CareContext` may contain:
 
 - Skin and Hair fact maps, shared preferences, and per-fact source/reason data;
@@ -842,7 +844,7 @@ The assembler may normalize a fallback only in memory. It never writes
 `care_hair_*`, changes verification state, promotes an observation, creates a
 `UserConstraint`, or mutates the profile.
 
-## 45. Proposed `build_care_context(...)` service contract
+## 45. Implemented `build_care_context(...)` service contract
 
 The service is an account-scoped assembler and accepts the existing context seam only:
 
@@ -1042,19 +1044,20 @@ behavior.
 
 ## 60. Current backend/package validation
 
-V3-03.0 changes only this document. Therefore the dependency files remain
-unchanged:
+V3-03.1 changes the registry, profile metadata response, Care foundation, and
+focused tests. The dependency files remain unchanged:
 
 - `backend/requirements.txt` unchanged;
 - `frontend/package.json` unchanged;
 - `frontend/yarn.lock` unchanged.
 
-The expected diff is one file: `docs/V3_CARE_INTELLIGENCE.md`.
+The expected implementation diff contains no migration, ORM model, privacy
+registry, routine compiler/rules/service/shelf, frontend, or dependency file.
 
 ## 61. Final recommendation
 
-`V3-03.0 READY FOR FINAL ARCHITECTURE APPROVAL`
+`V3-03.1 READY FOR INDEPENDENT REVIEW`
 
 The authoritative `main` baseline was verified at `94dee83d…`. The
-architecture audit is complete and does not authorize V3-03.1 implementation or
-merge.
+Care Context foundation is implemented without recommendation behavior,
+Evidence activation, or merge.

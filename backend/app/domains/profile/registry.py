@@ -17,6 +17,8 @@ class AttributeSpec:
     label: str
     kind: str = "text"  # text | number | list
     choices: tuple[str, ...] = ()
+    min_items: int | None = None
+    exclusive_choices: tuple[str, ...] = ()
     minimum: float | None = None
     maximum: float | None = None
     ai_observable: bool = False
@@ -50,6 +52,67 @@ ATTRIBUTE_REGISTRY: dict[str, AttributeSpec] = {
     "indian_categories": _spec("indian_categories", "style", "Indian categories", kind="list"),
     "western_categories": _spec("western_categories", "style", "Western categories", kind="list"),
     "fusion_categories": _spec("fusion_categories", "style", "Fusion categories", kind="list"),
+    # Care declarations. These are explicit, non-diagnostic user facts; photo
+    # and AI candidates must remain outside this stable vocabulary.
+    "care_skin_usual_feel": _spec(
+        "care_skin_usual_feel", "care_skin", "Usual skin feel",
+        choices=("comfortable", "often_dry_or_tight", "often_oily", "mixed", "not_sure"),
+    ),
+    "care_skin_sensitivity": _spec(
+        "care_skin_sensitivity", "care_skin", "Skin sensitivity",
+        choices=("rarely_reactive", "sometimes_reactive", "often_reactive", "not_sure"),
+    ),
+    "care_hair_pattern": _spec(
+        "care_hair_pattern", "care_hair", "Hair pattern",
+        choices=("straight", "wavy", "curly", "coily", "not_sure"),
+    ),
+    "care_hair_strand_characteristic": _spec(
+        "care_hair_strand_characteristic", "care_hair", "Hair strand characteristic",
+        choices=("fine", "medium", "coarse", "not_sure"),
+    ),
+    "care_hair_density": _spec(
+        "care_hair_density", "care_hair", "Hair density",
+        choices=("low", "medium", "high", "not_sure"),
+    ),
+    "care_hair_wash_frequency": _spec(
+        "care_hair_wash_frequency", "care_hair", "Hair wash frequency",
+        choices=("daily", "several_times_week", "weekly", "less_than_weekly", "variable", "not_sure"),
+    ),
+    "care_hair_processing": _spec(
+        "care_hair_processing", "care_hair", "Hair processing",
+        kind="list",
+        choices=("none", "not_sure", "coloured", "bleached", "relaxed", "permed_or_texturised"),
+        min_items=1,
+        exclusive_choices=("none", "not_sure"),
+    ),
+    "care_heat_styling_frequency": _spec(
+        "care_heat_styling_frequency", "care_hair", "Heat styling frequency",
+        choices=("never", "occasional", "frequent", "daily", "not_sure"),
+    ),
+    "care_scalp_usual_feel": _spec(
+        "care_scalp_usual_feel", "care_hair", "Usual scalp feel",
+        choices=("comfortable", "often_dry_or_tight", "often_oily", "sometimes_uncomfortable", "not_sure"),
+    ),
+    "care_humidity_frizz_sensitivity": _spec(
+        "care_humidity_frizz_sensitivity", "care_hair", "Humidity/frizz sensitivity",
+        choices=("low", "moderate", "high", "not_sure"),
+    ),
+    "care_hair_styling_preference": _spec(
+        "care_hair_styling_preference", "care_hair", "Hair styling preference",
+        choices=("air_dry", "heat_style", "protective_style", "mixed", "not_sure"),
+    ),
+    "care_routine_effort": _spec(
+        "care_routine_effort", "care_preferences", "Routine effort",
+        choices=("minimal", "balanced", "detailed", "not_sure"),
+    ),
+    "care_fragrance_preference": _spec(
+        "care_fragrance_preference", "care_preferences", "Fragrance preference",
+        choices=("fragrance_free_preferred", "no_preference", "likes_fragrance", "not_sure"),
+    ),
+    "care_event_preparation_effort": _spec(
+        "care_event_preparation_effort", "care_preferences", "Event preparation effort",
+        choices=("minimal", "balanced", "detailed", "not_sure"),
+    ),
     # Fit. Weight is intentionally absent.
     "height_cm": _spec("height_cm", "fit", "Height", kind="number", minimum=100, maximum=250),
     "usual_top_size": _spec("usual_top_size", "fit", "Usual top size"),
@@ -113,16 +176,31 @@ def validate_attribute(key: str, value: Any) -> Any:
     if spec.kind == "list":
         if not isinstance(value, list) or len(value) > 30:
             raise ValueError(f"{spec.label} must be a list of up to 30 items")
-        cleaned = []
+        cleaned: list[str] = []
         for item in value:
             if not isinstance(item, str) or not item.strip() or len(item.strip()) > 100:
                 raise ValueError(f"Every {spec.label.lower()} item must be short text")
-            if item.strip() not in cleaned:
-                cleaned.append(item.strip())
+            candidate = item.strip()
+            if spec.choices:
+                canonical = next((choice for choice in spec.choices if choice.casefold() == candidate.casefold()), None)
+                if canonical is None:
+                    raise ValueError(f"Every {spec.label.lower()} item must be one of: {', '.join(spec.choices)}")
+                candidate = canonical
+            if candidate not in cleaned:
+                cleaned.append(candidate)
+        if spec.choices:
+            if spec.min_items is not None and len(cleaned) < spec.min_items:
+                raise ValueError(f"{spec.label} must contain at least {spec.min_items} item(s)")
+            selected_exclusive = set(cleaned) & set(spec.exclusive_choices)
+            if selected_exclusive and len(cleaned) > 1:
+                raise ValueError(f"{spec.label} sentinel choices are exclusive")
         return cleaned
     if not isinstance(value, str) or not value.strip() or len(value.strip()) > 300:
         raise ValueError(f"{spec.label} must be short text")
     cleaned = value.strip()
-    if spec.choices and cleaned.lower() not in spec.choices:
-        raise ValueError(f"{spec.label} must be one of: {', '.join(spec.choices)}")
+    if spec.choices:
+        canonical = next((choice for choice in spec.choices if choice.casefold() == cleaned.casefold()), None)
+        if canonical is None:
+            raise ValueError(f"{spec.label} must be one of: {', '.join(spec.choices)}")
+        return canonical
     return cleaned
