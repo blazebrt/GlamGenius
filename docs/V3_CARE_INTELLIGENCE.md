@@ -1,6 +1,6 @@
 # V3-03 Skin & Hair Care Intelligence
 
-**Phase:** V3-03.3.1 Safety Activation Invariant + Integration Test Closure
+**Phase:** V3-03.3.2 Stored Ingredient Precedence + Lifecycle Closure
 **Baseline requested and audited:** `fb4ce00073a7276f9831f2b3740f044995eaa785`
 **Branch:** `v3/v3-03-3-care-safety-activation`
 **Status:** Care safety decisions are authoritative on routine generation, stored-routine serving, and Today, with database-backed regression coverage; no schema, dependency, frontend, or Evidence activation change is included.
@@ -1165,4 +1165,18 @@ V3-03.3.1 keeps the same hard blocks, advisories, ranking boundary, engine
 identity, and zero environmental/profile/Event/Evidence behavior. No raw
 Skin/Hair Today fallback remains.
 
-`V3-03.3.1 READY FOR INDEPENDENT REVIEW`
+## 66. V3-03.3.2 Stored Ingredient Precedence + Lifecycle Closure
+
+Runtime ingredient authority is explicit:
+
+`confirmed persisted user fact` > `current product fact` > `unconfirmed persisted extraction candidate`.
+
+The shelf has a shared `build_fresh()` primitive for current Inventory details.
+The runtime `build()` overlay can add stored-only candidates and promote
+confirmed persisted rows, but an unconfirmed stored row cannot overwrite a
+current fact's confidence, source, matched text, or position. Shelf analysis
+reconciles persisted rows against the fresh parse, so stale unconfirmed rows
+are deleted while confirmed rows survive re-analysis. The post-analysis
+summary is built from a refreshed account-scoped context after the write.
+
+`V3-03.3.2 READY FOR FINAL INDEPENDENT REVIEW`

@@ -180,13 +180,20 @@ async def gather(
     )
 
 
-def build(context: ShelfContext, category: str) -> list[ShelfProduct]:
-    """Parse one category of the user's shelf into what the engine reasons over.
+def build_fresh(context: ShelfContext, category: str) -> list[ShelfProduct]:
+    """Parse only the current inventory details for one shelf category."""
+    return rules_engine.build_products(context.owned, category, context.low_use_ids)
 
-    Confirmations already recorded are applied here: an ingredient the user has
-    confirmed is promoted to full confidence, so it starts driving rules.
+
+def build(context: ShelfContext, category: str) -> list[ShelfProduct]:
+    """Parse current details, then overlay persisted ingredient authority.
+
+    Authority is explicit rather than a numeric contest: a confirmed persisted
+    user fact outranks a current product fact, which outranks an unconfirmed
+    persisted extraction candidate. In particular, an old low-confidence row
+    can never downgrade a stronger current detail fact.
     """
-    products = rules_engine.build_products(context.owned, category, context.low_use_ids)
+    products = build_fresh(context, category)
     for product in products:
         stored = context.stored_ingredients.get(product.id, ())
         by_key = {row.key: row for row in product.ingredients}
@@ -205,16 +212,13 @@ def build(context: ShelfContext, category: str) -> list[ShelfProduct]:
                     confidence=row.confidence,
                     source=row.source,
                 ))
-            else:
-                parsed.confidence = row.confidence
-                parsed.source = row.source
-        confirmed = context.confirmed_ingredients.get(product.id)
-        if not confirmed:
-            continue
-        for row in product.ingredients:
-            if row.key in confirmed:
-                row.confidence = 1.0
-                row.source = parser.SOURCE_USER
+                parsed = product.ingredients[-1]
+            if row.confirmed_at is not None:
+                parsed.confidence = 1.0
+                parsed.source = parser.SOURCE_USER
+            # An unconfirmed stored row is only additive when current details
+            # did not contain the ingredient; an existing parsed fact is left
+            # byte-for-byte intact.
     return products
 
 

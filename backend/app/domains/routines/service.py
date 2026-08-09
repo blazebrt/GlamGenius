@@ -223,7 +223,10 @@ async def _store_ingredients(
         item_id = uuid.UUID(product.id)
         existing = {
             row.ingredient_key: row for row in (await session.execute(
-                select(ProductIngredient).where(ProductIngredient.item_id == item_id)
+                select(ProductIngredient).where(
+                    ProductIngredient.account_id == account_id,
+                    ProductIngredient.item_id == item_id,
+                )
             )).scalars().all()
         }
         seen: set = set()
@@ -306,14 +309,18 @@ async def analyse_shelf(
 
     parsed = 0
     for category in body.categories:
-        products = shelf.build(context, category)
+        products = shelf.build_fresh(context, category)
         parsed += await _store_ingredients(session, account_id, products)
         await _store_expiry_events(session, account_id, products, context.today)
 
     supplements = shelf.supplement_flags(context)
     await _store_supplement_flags(session, account_id, supplements)
 
-    result = shelf.summary(context)
+    await session.flush()
+    refreshed = await shelf.gather(
+        session, account_id=account_id, climate=body.climate, today=body.as_of,
+    )
+    result = shelf.summary(refreshed)
     result["analysed_at"] = utcnow().isoformat()
     result["ingredient_rows_written"] = parsed
     result["knowledge_version"] = ONTOLOGY_VERSION

@@ -16,6 +16,7 @@ from app.domains.routines.models import (
     RoutineRecommendationRun,
     RoutineStep,
 )
+from app.shared.database.base import utcnow
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select
 
@@ -85,6 +86,7 @@ async def _stored_ingredient(
             confidence=1.0 if confirmed else confidence,
             source="user_declared" if confirmed else "photo_extracted",
             needs_confirmation=not confirmed,
+            confirmed_at=utcnow() if confirmed else None,
         ))
         await session.commit()
 
@@ -109,6 +111,35 @@ def _force_morning(monkeypatch) -> None:
 
 def _routine(body: dict, kind: str = "morning") -> dict:
     return next(row for row in body["routines"] if row["kind"] == kind)
+
+
+def _shelf_ingredients(body: dict, item_id: str) -> list[dict]:
+    for report in body["reports"].values():
+        for product in report["products"]:
+            if product["inventory_item_id"] == item_id:
+                return product["ingredients"]
+    return []
+
+
+def _shelf_warnings(body: dict, item_id: str | None = None) -> list[dict]:
+    warnings = [
+        warning
+        for report in body["reports"].values()
+        for warning in report["warnings"]
+    ]
+    if item_id is None:
+        return warnings
+    return [warning for warning in warnings if item_id in warning["item_ids"]]
+
+
+async def _analyse_shelf(client, token: str) -> dict:
+    response = await client.post(
+        "/api/v2/shelf/analyse",
+        headers=auth(token),
+        json={"categories": ["beauty"], "as_of": GENERATION_DATE.isoformat()},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 async def test_generation_blocks_expired_required_product_and_persists_audit(
@@ -221,6 +252,95 @@ async def test_generation_unconfirmed_allergen_remains_eligible_and_advisory(
     ]
     assert any(row["rule_id"] == "rule.unconfirmed_ingredient" for row in shelf_warnings)
     assert not any(row["rule_id"] == "rule.user_allergy" for row in shelf_warnings)
+
+
+async def test_current_product_fact_beats_stale_unconfirmed_ingredient(
+    app_client, db_clean, registered_supabase_user, fake_provider
+):
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    await _allergy(app_client, token)
+    item_id = await _product(
+        app_client, token, name="Current Fragrance", active_ingredients=["fragrance"]
+    )
+    await _stored_ingredient(account_id, item_id, confidence=0.55)
+
+    shelf = (await app_client.get("/api/v2/shelf/summary", headers=auth(token))).json()
+    fragrance = next(row for row in _shelf_ingredients(shelf, item_id) if row["ingredient_key"] == "fragrance")
+    assert fragrance["confidence"] == 1.0
+    assert fragrance["source"] == "user_declared"
+    assert fragrance["needs_confirmation"] is False
+    assert any(row["rule_id"] == "rule.user_allergy" for row in _shelf_warnings(shelf, item_id))
+
+    body = await _generate(app_client, token, kinds=["morning"])
+    blocked = [row for row in body["care_safety"]["blocked_products"] if row["inventory_item_id"] == item_id]
+    assert blocked and blocked[0]["reasons"] == ["confirmed_allergy_match"]
+
+
+async def test_stale_unconfirmed_candidate_is_removed_by_fresh_shelf_analysis(
+    app_client, db_clean, registered_supabase_user, fake_provider
+):
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    item_id = await _product(app_client, token, name="Stale Candidate")
+    await _stored_ingredient(account_id, item_id, confidence=0.55)
+
+    before = (await app_client.get("/api/v2/shelf/summary", headers=auth(token))).json()
+    assert any(row["ingredient_key"] == "fragrance" for row in _shelf_ingredients(before, item_id))
+
+    analysed = await _analyse_shelf(app_client, token)
+    assert not any(row["ingredient_key"] == "fragrance" for row in _shelf_ingredients(analysed, item_id))
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        assert await session.scalar(
+            select(ProductIngredient).where(
+                ProductIngredient.account_id == account_id,
+                ProductIngredient.item_id == uuid.UUID(item_id),
+                ProductIngredient.ingredient_key == "fragrance",
+            )
+        ) is None
+    after = (await app_client.get("/api/v2/shelf/summary", headers=auth(token))).json()
+    assert not any(row["ingredient_key"] == "fragrance" for row in _shelf_ingredients(after, item_id))
+
+
+async def test_stored_only_confirmation_survives_reanalysis_and_blocks_allergy(
+    app_client, db_clean, registered_supabase_user, fake_provider
+):
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    await _allergy(app_client, token)
+    item_id = await _product(app_client, token, name="Confirmed Stored Candidate")
+    await _stored_ingredient(account_id, item_id, confidence=0.55)
+
+    confirmed = await app_client.post(
+        "/api/v2/ingredients/confirm", headers=auth(token),
+        json={"item_id": item_id, "ingredient_keys": ["fragrance"], "confirmed": True},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    analysed = await _analyse_shelf(app_client, token)
+    fragrance = next(row for row in _shelf_ingredients(analysed, item_id) if row["ingredient_key"] == "fragrance")
+    assert fragrance["source"] == "user_declared"
+    assert fragrance["confidence"] == 1.0
+    assert fragrance["needs_confirmation"] is False
+    assert any(row["rule_id"] == "rule.user_allergy" for row in _shelf_warnings(analysed, item_id))
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        row = await session.scalar(
+            select(ProductIngredient).where(
+                ProductIngredient.account_id == account_id,
+                ProductIngredient.item_id == uuid.UUID(item_id),
+                ProductIngredient.ingredient_key == "fragrance",
+            )
+        )
+        assert row is not None
+        assert row.confirmed_at is not None
+        assert row.source == "user_declared"
+
+    body = await _generate(app_client, token, kinds=["morning"])
+    blocked = [row for row in body["care_safety"]["blocked_products"] if row["inventory_item_id"] == item_id]
+    assert blocked and blocked[0]["reasons"] == ["confirmed_allergy_match"]
 
 
 async def test_routines_today_hides_stale_expiry_without_writing(
@@ -419,10 +539,13 @@ async def test_account_scoping_keeps_other_account_care_safety_out_of_generation
         app_client, token_b, name="Private Expired Fragrance", expiry=date(2026, 8, 1),
         active_ingredients=["fragrance"],
     )
+    await _stored_ingredient(account_b, private_id)
     await _product(app_client, token_a, name="Account A Moisturiser", expiry=date(2026, 9, 1))
     body = await _generate(app_client, token_a, kinds=["morning"])
     assert private_id not in str(body)
     assert body["care_safety"]["blocked_products"] == []
+    shelf_a = (await app_client.get("/api/v2/shelf/summary", headers=auth(token_a))).json()
+    assert private_id not in str(shelf_a)
 
     factory = get_sessionmaker()
     async with factory() as session:
