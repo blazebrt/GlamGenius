@@ -12,6 +12,8 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.care import decisions as care_decisions
+from app.domains.care import service as care_service
 from app.domains.planning import clock, compiler, notifications, service
 from app.domains.planning import context as context_stage
 from app.domains.planning.models import DailyPlan
@@ -114,7 +116,16 @@ async def swap_today_item(
     # Re-opening Today is then a cache hit and the user's own choice survives;
     # a genuine change (rain, a new meeting) still moves the hash and rebuilds.
     context = await context_stage.gather(session, account_id=current.account_id, plan_date=plan_date)
-    plan.cache_key = context_stage.cache_key(context)
+    care_context = await care_service.build_care_context(
+        session, current.account_id, day_context=context,
+    )
+    decisions = care_decisions.evaluate_care_context(care_context)
+    plan.cache_key = context_stage.cache_key(
+        context,
+        material_extensions={
+            "care_decision_fingerprint": care_decisions.decision_fingerprint(decisions),
+        },
+    )
     plan.version += 1
     await service.mark_worn(session, current.account_id, plan_date, worn=False)
     # The schedule feeds repetition history, so it has to follow the swap.

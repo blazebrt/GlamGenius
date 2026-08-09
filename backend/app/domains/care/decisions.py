@@ -6,6 +6,8 @@ and does not know about SQLAlchemy, providers, HTTP, AI, or Evidence.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import date
@@ -157,6 +159,48 @@ def evaluate_care_context(context: CareContext) -> CareDecisionSet:
     )
 
 
+def decision_fingerprint(decisions: CareDecisionSet) -> str:
+    """Hash the material, deterministic Care decision fields only."""
+    def reason_payload(reason: CareDecisionReason) -> dict[str, str]:
+        return {"code": reason.code.value, "authority": reason.authority.value}
+
+    payload = {
+        "decision_version": decisions.decision_version,
+        "plan_date": decisions.plan_date.isoformat(),
+        "products": [
+            {
+                "item_id": str(row.item_id),
+                "eligible": row.eligible,
+                "blocking_reasons": [reason_payload(reason) for reason in row.blocking_reasons],
+                "advisory_reasons": [reason_payload(reason) for reason in row.advisory_reasons],
+            }
+            for row in sorted(decisions.product_decisions, key=lambda row: str(row.item_id))
+        ],
+        "skin_core_slots": [
+            {
+                "category": row.category,
+                "slot": row.slot,
+                "filled": row.filled,
+                "eligible_item_ids": sorted(str(value) for value in row.eligible_item_ids),
+                "blocked_item_ids": sorted(str(value) for value in row.blocked_item_ids),
+            }
+            for row in sorted(decisions.skin_core_slots, key=lambda row: (row.category, row.slot))
+        ],
+        "hair_core_slots": [
+            {
+                "category": row.category,
+                "slot": row.slot,
+                "filled": row.filled,
+                "eligible_item_ids": sorted(str(value) for value in row.eligible_item_ids),
+                "blocked_item_ids": sorted(str(value) for value in row.blocked_item_ids),
+            }
+            for row in sorted(decisions.hair_core_slots, key=lambda row: (row.category, row.slot))
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 __all__ = [
     "CARE_DECISION_VERSION",
     "CareDecisionAuthority",
@@ -165,5 +209,6 @@ __all__ = [
     "CareDecisionSet",
     "CoreSlotDecision",
     "ProductCareDecision",
+    "decision_fingerprint",
     "evaluate_care_context",
 ]

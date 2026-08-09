@@ -203,20 +203,19 @@ def allergy_findings(products: Sequence[ShelfProduct], allergies: Sequence[str])
     findings: list[Finding] = []
     for product in products:
         match = matches[product.id]
-        hit_keys = set(match.confirmed_ingredient_keys) | set(match.unconfirmed_ingredient_keys)
+        # Low-confidence reads are information to confirm, never an avoid
+        # finding.  Only a confirmed ingredient match can honour the user's
+        # allergy constraint.
+        hit_keys = set(match.confirmed_ingredient_keys)
         hits = [row for row in product.ingredients if row.key in hit_keys]
         if not hits:
             continue
         names = ", ".join(sorted({row.display_name for row in hits}))
-        low_confidence = bool(match.unconfirmed_ingredient_keys) and not match.confirmed_ingredient_keys
         findings.append(Finding(
             rule_id=RULE_ALLERGY,
             severity=SEVERITY_AVOID,
             headline=f"{product.item.display_name} contains {names}",
-            detail=(
-                "You listed this as something to avoid. We have left this product out of your routine."
-                + (" We read this from the label at low confidence, so check the packet." if low_confidence else "")
-            ),
+            detail="You listed this as something to avoid. We have left this product out of your routine.",
             evidence_note="Matched against the allergies you entered on your profile.",
             item_ids=[product.id],
             slot=product.slot,
@@ -228,7 +227,7 @@ def excluded_by_allergy(products: Sequence[ShelfProduct], allergies: Sequence[st
     matches = allergy_product_matches(products, allergies)
     return {
         match.product_id for match in matches
-        if match.confirmed_ingredient_keys or match.unconfirmed_ingredient_keys
+        if match.confirmed_ingredient_keys
     }
 
 

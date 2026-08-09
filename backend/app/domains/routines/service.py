@@ -22,8 +22,11 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.care import decisions as care_decisions
+from app.domains.care import service as care_service
 from app.domains.inventory.models import InventoryItem
 from app.domains.planning import clock
+from app.domains.planning import context as planning_context
 from app.domains.routines import compiler, explanation, nutrition, parser, perfume, shelf
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import (
@@ -60,6 +63,83 @@ from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 
 CONSISTENCY_WINDOW_DAYS = 14
+ROUTINE_ENGINE_VERSION = "care-v3-03.3"
+
+
+async def _current_care_decisions(
+    session: AsyncSession, account_id: uuid.UUID, plan_date: date | None
+):
+    """Assemble the single account-scoped Care safety truth for a day."""
+    day_context = await planning_context.gather(
+        session, account_id=account_id, plan_date=plan_date,
+    )
+    care_context = await care_service.build_care_context(
+        session, account_id, day_context=day_context,
+    )
+    decisions = care_decisions.evaluate_care_context(care_context)
+    return day_context, care_context, decisions
+
+
+def _routine_eligibility(decisions: care_decisions.CareDecisionSet) -> compiler.RoutineEligibility:
+    allergy_blocked = {
+        str(row.item_id)
+        for row in decisions.product_decisions
+        if any(reason.code == care_decisions.CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH
+               for reason in row.blocking_reasons)
+    }
+    return compiler.RoutineEligibility(
+        eligible_item_ids=frozenset(str(value) for value in decisions.eligible_product_ids),
+        allergy_blocked_item_ids=frozenset(allergy_blocked),
+    )
+
+
+def _care_safety_payload(
+    care_context, decisions: care_decisions.CareDecisionSet
+) -> dict[str, Any]:
+    names = {
+        product.item.id: product.item.display_name
+        for product in (*care_context.skin_products, *care_context.hair_products)
+    }
+    blocked = []
+    confirmation = []
+    for decision in decisions.product_decisions:
+        if not decision.eligible:
+            blocked.append({
+                "inventory_item_id": str(decision.item_id),
+                "display_name": names.get(decision.item_id, "Recorded product"),
+                "reasons": [reason.code.value for reason in decision.blocking_reasons],
+            })
+        if any(reason.code == care_decisions.CareDecisionReasonCode.INGREDIENT_CONFIRMATION_NEEDED
+               for reason in decision.advisory_reasons):
+            confirmation.append({
+                "inventory_item_id": str(decision.item_id),
+                "display_name": names.get(decision.item_id, "Recorded product"),
+            })
+    return {
+        "context_version": care_context.context_version,
+        "decision_version": decisions.decision_version,
+        "blocked_products": blocked,
+        "ingredient_confirmation_needed": confirmation,
+    }
+
+
+def _care_run_inputs(day_context, care_context, decisions: care_decisions.CareDecisionSet) -> dict[str, Any]:
+    def count(code: care_decisions.CareDecisionReasonCode) -> int:
+        return sum(
+            1 for row in decisions.product_decisions
+            if any(reason.code == code for reason in (*row.blocking_reasons, *row.advisory_reasons))
+        )
+
+    return {
+        "care_context_version": care_context.context_version,
+        "care_decision_version": decisions.decision_version,
+        "blocked_product_count": len(decisions.blocked_product_ids),
+        "expired_product_count": count(care_decisions.CareDecisionReasonCode.PRODUCT_EXPIRED),
+        "confirmed_allergy_block_count": count(care_decisions.CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH),
+        "ingredient_confirmation_advisory_count": count(care_decisions.CareDecisionReasonCode.INGREDIENT_CONFIRMATION_NEEDED),
+        "weather_snapshot_id": str(day_context.weather_snapshot_id) if day_context.weather_snapshot_id else None,
+        "air_quality_snapshot_id": str(day_context.air_quality_snapshot_id) if day_context.air_quality_snapshot_id else None,
+    }
 
 
 # --- Preferences --------------------------------------------------------------
@@ -306,6 +386,7 @@ async def _replace_routines(
         routine.label = built.label
         routine.frequency = built.frequency
         routine.status = "active"
+        routine.engine_version = ROUTINE_ENGINE_VERSION
         routine.climate = climate
         routine.explanation_source = explanation_source
         routine.warnings = [row.as_dict() for row in built.findings]
@@ -339,14 +420,18 @@ async def generate_routines(
     The compiler decides; the model, if it is reachable and its wording passes
     the safety sweep, only rephrases.
     """
-    context = await shelf.gather(
-        session, account_id=account_id, climate=body.climate, today=body.as_of,
+    day_context, care_context, decisions = await _current_care_decisions(
+        session, account_id, body.as_of,
     )
-    beauty = shelf.build(context, "beauty")
-    hair = shelf.build(context, "hair")
+    beauty = list(care_context.skin_products)
+    hair = list(care_context.hair_products)
+    eligibility = _routine_eligibility(decisions)
+    legacy_attributes = await shelf.shelf_attributes(session, account_id)
+    legacy_climate = body.climate or legacy_attributes.get("climate")
 
     compiled = compiler.compile_all(
-        beauty, hair, allergies=context.allergies, climate=context.climate, today=context.today,
+        beauty, hair, allergies=care_context.allergies, climate=legacy_climate,
+        today=care_context.plan_date, eligibility=eligibility,
     )
     if body.kinds:
         compiled = [row for row in compiled if row.kind in body.kinds]
@@ -356,25 +441,29 @@ async def generate_routines(
     source = explanation.SOURCE_DETERMINISTIC
     if body.explain and compiled:
         narratives, ai_run_id, source = await explanation.explain_routines(
-            compiled, climate=context.climate, account_id_str=account_id_str,
+            compiled, climate=legacy_climate, account_id_str=account_id_str,
         )
 
     stored = await _replace_routines(
-        session, account_id, compiled, climate=context.climate, explanation_source=source,
+        session, account_id, compiled, climate=legacy_climate, explanation_source=source,
     )
 
+    run_inputs = _care_run_inputs(day_context, care_context, decisions)
+
     session.add(RoutineRecommendationRun(
-        account_id=account_id, status="succeeded", explanation_source=source,
+        account_id=account_id, status="succeeded", engine_version=ROUTINE_ENGINE_VERSION,
+        explanation_source=source,
         ai_run_id=ai_run_id, products_considered=len(beauty) + len(hair),
         routines_built=len(compiled),
         warnings_raised=sum(len(row.findings) for row in compiled),
         inputs={
-            "climate": context.climate,
-            "allergies_declared": len(context.allergies),
+            "climate": legacy_climate,
+            "allergies_declared": len(care_context.allergies),
             "beauty_products": len(beauty),
             "hair_products": len(hair),
-            "draft_items_ignored": context.draft_count,
-            "as_of": context.today.isoformat(),
+            "draft_items_ignored": care_context.draft_product_count,
+            "as_of": care_context.plan_date.isoformat(),
+            **run_inputs,
         },
     ))
     await session.flush()
@@ -391,8 +480,9 @@ async def generate_routines(
         "routines": routines,
         "explanation_source": source,
         "knowledge_version": ONTOLOGY_VERSION,
+        "care_safety": _care_safety_payload(care_context, decisions),
         "products_considered": len(beauty) + len(hair),
-        "drafts_ignored": context.draft_count,
+        "drafts_ignored": care_context.draft_product_count,
         "disclaimer": ROUTINE_DISCLAIMER,
         "message": None if compiled else (
             "Nothing to build a routine from yet. Add a face wash, a moisturiser or a shampoo "
@@ -412,6 +502,7 @@ async def _serialize_routine(session: AsyncSession, routine: Routine) -> dict[st
         "frequency": routine.frequency,
         "status": routine.status,
         "version": routine.version,
+        "engine_version": routine.engine_version,
         "explanation_source": routine.explanation_source,
         "warnings": list(routine.warnings or []),
         "climate_notes": list(routine.climate_notes or []),
@@ -441,6 +532,9 @@ async def routines_today(
     today = on or clock.local_today(clock.DEFAULT_TIMEZONE)
     part = clock.part_of_day(clock.local_now(clock.DEFAULT_TIMEZONE))
 
+    _, care_context, decisions = await _current_care_decisions(session, account_id, today)
+    blocked_ids = {str(value) for value in decisions.blocked_product_ids}
+
     rows = (await session.execute(
         select(Routine).where(Routine.account_id == account_id, Routine.status == "active")
     )).scalars().all()
@@ -456,7 +550,21 @@ async def routines_today(
         wanted.append(compiler.ROUTINE_WEEKLY)
         wanted.append(compiler.ROUTINE_WASH_DAY)
 
-    routines = [await _serialize_routine(session, by_kind[kind]) for kind in wanted if kind in by_kind]
+    routines: list[dict[str, Any]] = []
+    refresh_required_kinds: list[str] = []
+    for kind in wanted:
+        routine_row = by_kind.get(kind)
+        if routine_row is None:
+            continue
+        routine = await _serialize_routine(session, routine_row)
+        routine_item_ids = {
+            step["inventory_item_id"] for step in routine["steps"]
+            if step["inventory_item_id"]
+        }
+        if routine_item_ids & blocked_ids:
+            refresh_required_kinds.append(kind)
+            continue
+        routines.append(routine)
 
     done = {
         row.step_id for row in (await session.execute(
@@ -469,11 +577,18 @@ async def routines_today(
         for step in routine["steps"]:
             step["completed_today"] = uuid.UUID(step["id"]) in done
 
+    refresh_required = bool(refresh_required_kinds)
     return {
         "date": today.isoformat(),
         "part_of_day": part,
         "routines": routines,
-        "message": None if routines else "Nothing due right now.",
+        "refresh_required": refresh_required,
+        "refresh_required_kinds": refresh_required_kinds,
+        "care_safety": _care_safety_payload(care_context, decisions),
+        "message": (
+            "Your saved Care routine needs a refresh before we show those steps because one or more product safety facts changed."
+            if refresh_required else (None if routines else "Nothing due right now.")
+        ),
         "disclaimer": ROUTINE_DISCLAIMER,
     }
 
