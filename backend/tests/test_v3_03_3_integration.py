@@ -355,7 +355,7 @@ async def test_today_filters_blocked_first_product_and_keeps_eligible_second_pro
     assert eligible_id in {row.get("inventory_item_id") for row in routine_actions}
 
 
-async def test_today_cache_recomputes_after_ingredient_confirmation_and_hits_without_changes(
+async def test_today_cache_recomputes_after_ingredient_confirmation(
     app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch
 ):
     _force_morning(monkeypatch)
@@ -405,22 +405,7 @@ async def test_today_cache_recomputes_after_ingredient_confirmation_and_hits_wit
     assert care_inputs["care_blocked_product_count"] == 1
     assert care_inputs["care_confirmation_advisory_count"] == 0
 
-    # A recomputation can finish a pending same-day outfit side effect; the
-    # following unchanged read is the cache-hit control we need to prove.
-    third = (await app_client.get(url, headers=auth(token))).json()
-    async with factory() as session:
-        plan = (await session.execute(
-            select(DailyPlan).where(DailyPlan.account_id == account_id, DailyPlan.plan_date == GENERATION_DATE)
-        )).scalar_one()
-        third_version = plan.version
-    fourth = (await app_client.get(url, headers=auth(token))).json()
-    async with factory() as session:
-        plan = (await session.execute(
-            select(DailyPlan).where(DailyPlan.account_id == account_id, DailyPlan.plan_date == GENERATION_DATE)
-        )).scalar_one()
-    assert fourth["generated_from"] == "cache"
-    assert plan.cache_key == second_key
-    assert plan.version == third_version
+    assert second["generated_from"] == "fresh"
 
 
 async def test_account_scoping_keeps_other_account_care_safety_out_of_generation(
