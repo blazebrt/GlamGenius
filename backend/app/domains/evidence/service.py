@@ -1,10 +1,19 @@
 """Small, explicit approval and lookup helpers for evidence provenance."""
 from __future__ import annotations
 
+import uuid
+from dataclasses import dataclass
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.evidence.enums import ClaimSourceRelationship, ReviewStatus, SourceStatus
+from app.domains.evidence.enums import (
+    ClaimSourceRelationship,
+    ClaimStatus,
+    ReviewStatus,
+    RuleEvidenceRelationship,
+    SourceStatus,
+)
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource, RuleEvidenceLink
 
 
@@ -14,6 +23,89 @@ class EvidenceApprovalError(ValueError):
 
 class EvidenceRuleResolutionError(ValueError):
     """Raised when provenance names a rule absent from deterministic code/data."""
+
+
+@dataclass(frozen=True, slots=True)
+class RuleEvidenceAssessment:
+    """Structured, fail-closed provenance diagnostics for one exact rule."""
+
+    provenance_present: bool
+    substantive_support_present: bool
+    behavior_evidence_eligible: bool
+    relationships: tuple[str, ...] = ()
+    claim_ids: tuple[uuid.UUID, ...] = ()
+
+
+async def assess_rule_evidence(
+    session: AsyncSession,
+    *,
+    domain: str,
+    rule_kind: str,
+    rule_id: str,
+    rule_version: str,
+) -> RuleEvidenceAssessment:
+    """Assess exact rule provenance without activating runtime behaviour.
+
+    The assessment reuses rule identity and claim approval validation, but
+    deliberately keeps ``behavior_evidence_eligible`` false until structured
+    scope, jurisdiction, population, and formulation applicability exist.
+    Invalid or incomplete paths fail closed rather than raising.
+    """
+    links = (await session.execute(
+        select(RuleEvidenceLink).where(
+            RuleEvidenceLink.domain == domain,
+            RuleEvidenceLink.rule_kind == rule_kind,
+            RuleEvidenceLink.rule_id == rule_id,
+            RuleEvidenceLink.rule_version == rule_version,
+        )
+    )).scalars().all()
+    if not links:
+        return RuleEvidenceAssessment(False, False, False)
+    try:
+        await assert_rule_exists(
+            session,
+            domain=domain,
+            rule_kind=rule_kind,
+            rule_id=rule_id,
+            rule_version=rule_version,
+        )
+    except EvidenceRuleResolutionError:
+        return RuleEvidenceAssessment(False, False, False)
+
+    valid: list[tuple[RuleEvidenceLink, EvidenceClaim]] = []
+    for link in links:
+        if not link.reviewed_at or not link.reviewed_by:
+            continue
+        claim = await session.get(EvidenceClaim, link.claim_id)
+        if claim is None or claim.review_status in {
+            ReviewStatus.SUPERSEDED.value,
+            ReviewStatus.RETIRED.value,
+        }:
+            continue
+        try:
+            await assert_claim_approvable(session, claim)
+        except EvidenceApprovalError:
+            continue
+        valid.append((link, claim))
+
+    relationships = tuple(sorted({link.relationship for link, _ in valid}))
+    claim_ids = tuple(sorted({claim.id for _, claim in valid}, key=str))
+    substantive = any(
+        link.relationship == RuleEvidenceRelationship.SUPPORTS.value
+        and claim.claim_status == ClaimStatus.SUPPORTED.value
+        for link, claim in valid
+    )
+    return RuleEvidenceAssessment(
+        provenance_present=bool(valid),
+        substantive_support_present=substantive,
+        # Deliberately fail closed until structured scope evaluation exists.
+        behavior_evidence_eligible=False,
+        relationships=relationships,
+        claim_ids=claim_ids,
+    )
+
+
+rule_evidence_assessment = assess_rule_evidence
 
 
 async def assert_rule_exists(

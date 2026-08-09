@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
 import pytest
@@ -9,7 +10,9 @@ from app.domains.evidence.seed import EMA_RETINOID_SOURCE_REF, EVIDENCE_SEED_VER
 from app.domains.evidence.service import (
     EvidenceApprovalError,
     EvidenceRuleResolutionError,
+    RuleEvidenceAssessment,
     assert_claim_approvable,
+    assess_rule_evidence,
     evidence_state_for_rule,
 )
 from app.domains.reference import SeedVersionRecord
@@ -245,3 +248,127 @@ async def test_unknown_parser_input_stays_unmatched():
 
     assert parse_label("not-a-real-cosmetic-ingredient") == []
     assert "not-a-real-cosmetic-ingredient" in unmatched_terms("not-a-real-cosmetic-ingredient")
+
+
+async def _approved_rule_bundle(session, *, relationship="supports", claim_status="supported"):
+    source = _source(source_key=f"test.source.{uuid.uuid4().hex}")
+    claim = _claim(
+        claim_key=f"test.claim.{uuid.uuid4().hex}",
+        review_status="approved", reviewed_by="reviewer",
+        reviewed_at=datetime.now(UTC), claim_status=claim_status,
+        evidence_strength="moderate", strength_rationale="Reviewed rationale.",
+    )
+    session.add_all([source, claim])
+    await session.flush()
+    session.add(EvidenceClaimSource(
+        claim_id=claim.id, source_id=source.id, relationship="supports",
+        reviewed_by="reviewer", reviewed_at=datetime.now(UTC),
+    ))
+    link = RuleEvidenceLink(
+        domain="skin_care", rule_kind="ingredient_compatibility",
+        rule_id="rule.retinoid_bha", rule_version="phase6-v1",
+        claim_id=claim.id, relationship=relationship,
+        reviewed_by="reviewer", reviewed_at=datetime.now(UTC),
+    )
+    session.add(link)
+    await session.commit()
+    return source, claim, link
+
+
+async def test_rule_evidence_assessment_no_link_and_draft_link_fail_closed(db_clean):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        empty = await assess_rule_evidence(
+            session, domain="skin_care", rule_kind="ingredient_compatibility",
+            rule_id="rule.retinoid_bha", rule_version="phase6-v1",
+        )
+        assert empty == RuleEvidenceAssessment(False, False, False)
+        _, _, link = await _approved_rule_bundle(session)
+        link.reviewed_at = None
+        link.reviewed_by = None
+        await session.commit()
+        draft = await assess_rule_evidence(
+            session, domain="skin_care", rule_kind="ingredient_compatibility",
+            rule_id="rule.retinoid_bha", rule_version="phase6-v1",
+        )
+        assert draft.provenance_present is False
+        assert draft.substantive_support_present is False
+        assert draft.behavior_evidence_eligible is False
+
+
+@pytest.mark.parametrize("relationship", ["background", "qualifies", "limits"])
+async def test_non_support_relationships_provide_provenance_but_no_substantive_support(
+    db_clean, relationship
+):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await _approved_rule_bundle(session, relationship=relationship)
+        assessment = await assess_rule_evidence(
+            session, domain="skin_care", rule_kind="ingredient_compatibility",
+            rule_id="rule.retinoid_bha", rule_version="phase6-v1",
+        )
+    assert assessment.provenance_present is True
+    assert assessment.substantive_support_present is False
+    assert assessment.behavior_evidence_eligible is False
+
+
+async def test_supports_supported_claim_has_substantive_support_but_stays_fail_closed(db_clean):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await _approved_rule_bundle(session, relationship="supports", claim_status="supported")
+        assessment = await assess_rule_evidence(
+            session, domain="skin_care", rule_kind="ingredient_compatibility",
+            rule_id="rule.retinoid_bha", rule_version="phase6-v1",
+        )
+    assert assessment.provenance_present is True
+    assert assessment.substantive_support_present is True
+    assert assessment.behavior_evidence_eligible is False
+    assert assessment.relationships == ("supports",)
+
+
+async def test_valid_support_survives_unrelated_draft_link(db_clean):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        _, claim, _ = await _approved_rule_bundle(session)
+        draft_claim = _claim(claim_key=f"test.draft.{uuid.uuid4().hex}")
+        session.add(draft_claim)
+        await session.flush()
+        session.add(RuleEvidenceLink(
+            domain="skin_care", rule_kind="ingredient_compatibility",
+            rule_id="rule.retinoid_bha", rule_version="phase6-v1",
+            claim_id=draft_claim.id, relationship="qualifies",
+        ))
+        await session.commit()
+        assessment = await assess_rule_evidence(
+            session, domain="skin_care", rule_kind="ingredient_compatibility",
+            rule_id="rule.retinoid_bha", rule_version="phase6-v1",
+        )
+    assert assessment.provenance_present is True
+    assert assessment.substantive_support_present is True
+
+
+@pytest.mark.parametrize("review_status", ["retired", "superseded"])
+async def test_retired_or_superseded_claim_fails_closed(db_clean, review_status):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        _, claim, _ = await _approved_rule_bundle(session)
+        claim.review_status = review_status
+        await session.commit()
+        assessment = await assess_rule_evidence(
+            session, domain="skin_care", rule_kind="ingredient_compatibility",
+            rule_id="rule.retinoid_bha", rule_version="phase6-v1",
+        )
+    assert assessment == RuleEvidenceAssessment(False, False, False)
+
+
+async def test_inactive_source_fails_closed(db_clean):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        source, _, _ = await _approved_rule_bundle(session)
+        source.status = "retired"
+        await session.commit()
+        assessment = await assess_rule_evidence(
+            session, domain="skin_care", rule_kind="ingredient_compatibility",
+            rule_id="rule.retinoid_bha", rule_version="phase6-v1",
+        )
+    assert assessment == RuleEvidenceAssessment(False, False, False)

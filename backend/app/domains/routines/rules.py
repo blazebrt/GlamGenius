@@ -115,6 +115,15 @@ class ShelfProduct:
         return None if self.effective_expiry is None else (self.effective_expiry - today).days
 
 
+@dataclass(frozen=True, slots=True)
+class AllergyProductMatch:
+    """One product's allergy hits split by ingredient confirmation state."""
+
+    product_id: str
+    confirmed_ingredient_keys: tuple[str, ...]
+    unconfirmed_ingredient_keys: tuple[str, ...]
+
+
 def build_products(
     items: Sequence[OwnedItem],
     category: str,
@@ -158,22 +167,48 @@ def _allergen_keys(allergies: Sequence[str]) -> dict[str, str]:
     return resolved
 
 
+def allergy_product_matches(
+    products: Sequence[ShelfProduct], allergies: Sequence[str]
+) -> tuple[AllergyProductMatch, ...]:
+    """Expose the canonical allergy parser with confirmation-aware matches."""
+    resolved = _allergen_keys(allergies)
+    if not resolved:
+        return tuple(
+            AllergyProductMatch(product.id, (), ()) for product in products
+        )
+    matches: list[AllergyProductMatch] = []
+    for product in products:
+        confirmed = tuple(sorted({
+            row.key for row in product.ingredients
+            if row.key in resolved and not row.needs_confirmation
+        }))
+        unconfirmed = tuple(sorted({
+            row.key for row in product.ingredients
+            if row.key in resolved and row.needs_confirmation
+        }))
+        matches.append(AllergyProductMatch(product.id, confirmed, unconfirmed))
+    return tuple(matches)
+
+
 def allergy_findings(products: Sequence[ShelfProduct], allergies: Sequence[str]) -> list[Finding]:
     """A user-declared allergen found in a product they own.
 
     This is the only ``avoid`` severity the engine produces, and it is not a
     judgement of any kind — it is the user's own instruction, applied.
     """
-    resolved = _allergen_keys(allergies)
-    if not resolved:
-        return []
+    matches = {
+        row.product_id: row
+        for row in allergy_product_matches(products, allergies)
+    }
     findings: list[Finding] = []
     for product in products:
-        hits = [row for row in product.ingredients if row.key in resolved]
+        match = matches[product.id]
+        hit_keys = set(match.confirmed_ingredient_keys) | set(match.unconfirmed_ingredient_keys)
+        hits = [row for row in product.ingredients if row.key in hit_keys]
         if not hits:
             continue
         names = ", ".join(sorted({row.display_name for row in hits}))
-        low_confidence = all(row.needs_confirmation for row in hits)
+        low_confidence = bool(match.unconfirmed_ingredient_keys) and not match.confirmed_ingredient_keys
         findings.append(Finding(
             rule_id=RULE_ALLERGY,
             severity=SEVERITY_AVOID,
@@ -190,12 +225,10 @@ def allergy_findings(products: Sequence[ShelfProduct], allergies: Sequence[str])
 
 
 def excluded_by_allergy(products: Sequence[ShelfProduct], allergies: Sequence[str]) -> set[str]:
-    resolved = _allergen_keys(allergies)
-    if not resolved:
-        return set()
+    matches = allergy_product_matches(products, allergies)
     return {
-        product.id for product in products
-        if any(row.key in resolved for row in product.ingredients)
+        match.product_id for match in matches
+        if match.confirmed_ingredient_keys or match.unconfirmed_ingredient_keys
     }
 
 

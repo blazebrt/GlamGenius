@@ -1,9 +1,9 @@
 # V3-03 Skin & Hair Care Intelligence
 
-**Phase:** V3-03.1 Care Context foundation implementation
+**Phase:** V3-03.2 Care Decision Safety Foundation
 **Baseline requested and audited:** `94dee83d0b36d2a3cef9b02eb8badde00110d464`
 **Branch:** `v3/v3-03-care-intelligence-foundation`
-**Status:** Care Context foundation implemented; no recommendation behavior, migration, dependency, frontend, or Evidence activation change is included.
+**Status:** Care Context and pure deterministic Care Decision foundation implemented; no routine/API behavior, migration, dependency, frontend, or Evidence activation change is included.
 
 ## 1. Executive summary
 
@@ -1063,9 +1063,43 @@ focused tests. The dependency files remain unchanged:
 The expected implementation diff contains no migration, ORM model, privacy
 registry, routine compiler/rules/service/shelf, frontend, or dependency file.
 
-## 61. Final recommendation
+## 62. V3-03.2 Care Decision Safety Foundation
 
-`V3-03.1 READY FOR INDEPENDENT REVIEW`
+V3-03.2 adds the pure deterministic `CareDecisionSet` boundary at version
+`v3-03.2`. `ProductCareDecision` evaluates only recorded expiry and the
+canonical allergy/ingredient confirmation facts. Expired products are hard
+blocked; confirmed allergy matches are hard blocked; unconfirmed potential
+allergens remain eligible with an ingredient-confirmation advisory; and
+expiring-soon products remain eligible with an informational advisory.
+
+`CoreSlotDecision` derives required Skin and Hair slots from the canonical
+`SKIN_SLOTS` and `HAIR_SLOTS` ontology definitions. A core slot is filled only
+when an eligible owned product fills it. Optional empty slots do not create
+gaps. The engine returns all eligible candidates and performs no ranking,
+winner selection, purchase recommendation, or product minimization.
+
+The engine is pure and does not query Evidence, call a provider, access a
+session, or alter routine/compiler/API output. Care profile facts,
+environment, events, observations, and adherence remain behaviorally inert in
+this phase. No migrations, tables, privacy classifications, or dependencies
+were added.
+
+The reusable routine allergy matcher now exposes confirmed and unconfirmed
+ingredient hits while preserving `allergy_findings()` and
+`excluded_by_allergy()` behavior.
+
+`RuleEvidenceAssessment` is an internal, immutable, fail-closed seam with
+`provenance_present`, `substantive_support_present`, and
+`behavior_evidence_eligible`. Reviewed valid links establish provenance;
+only reviewed `supports` links to supported claims establish substantive
+support; and behavior eligibility remains false until structured scope and
+applicability evaluation exists. Background, qualifies, and limits links never
+count as substantive support. Current production approved claim count remains
+zero, and Evidence does not affect current Care decisions.
+
+## 63. Final recommendation
+
+`V3-03.2 READY FOR INDEPENDENT REVIEW`
 
 The authoritative `main` baseline was verified at `94dee83d…`. The
 Care Context foundation is implemented without recommendation behavior,
