@@ -1,9 +1,9 @@
 # V3-03 Skin & Hair Care Intelligence
 
-**Phase:** V3-03.3.2 Stored Ingredient Precedence + Lifecycle Closure
-**Baseline requested and audited:** `fb4ce00073a7276f9831f2b3740f044995eaa785`
-**Branch:** `v3/v3-03-3-care-safety-activation`
-**Status:** Care safety decisions are authoritative on routine generation, stored-routine serving, and Today, with database-backed regression coverage; no schema, dependency, frontend, or Evidence activation change is included.
+**Phase:** V3-03.4 Minimum-Effective Care Routine Planning Foundation
+**Baseline requested and audited:** `5c486aff6a2efab154686a7f7e7a30081733ceaa`
+**Branch:** `v3/v3-03-4-care-routine-planning`
+**Status:** Pure deterministic Care routine planning is implemented but not activated in routine APIs, stored routines, Today, or `routines_today`; no schema, dependency, frontend, or Evidence change is included.
 
 ## 1. Executive summary
 
@@ -1180,3 +1180,37 @@ are deleted while confirmed rows survive re-analysis. The post-analysis
 summary is built from a refreshed account-scoped context after the write.
 
 `V3-03.3.2 READY FOR FINAL INDEPENDENT REVIEW`
+
+## 67. V3-03.4 Minimum-Effective Care Routine Planning Foundation
+
+V3-03.4 adds a pure `CareRoutinePlan` contract over the existing
+`CareContext` and authoritative `CareDecisionSet`. The planner uses canonical
+`SKIN_SLOTS`, `HAIR_SLOTS`, and `SLOT_BY_KEY` definitions and keeps one global
+active product per slot while retaining other eligible owned products as
+alternatives.
+
+`care_routine_effort` is the only newly activated personalization fact:
+
+- `minimal` activates required slots only;
+- `balanced` activates required slots plus optional slots represented by the
+  user's own usage history (`last_used_at` or `usage_count`);
+- `detailed` activates every optional slot with an eligible owned candidate;
+- missing effort defaults transparently to balanced with
+  `system_default_missing`, while explicit `not_sure` defaults to balanced with
+  `system_default_not_sure`.
+
+Selection is continuity-first: most recent use, then usage count, then a stable
+display-name/UUID fallback. Expiry advisories, low-use status, price, brand,
+remaining percentage, environment, physiology/profile facts, events, Evidence,
+and AI do not influence this plan. Blocked products are excluded; unconfirmed
+ingredient advisories remain eligible. Required slots without an eligible
+candidate remain active gaps, while optional slots without candidates are
+inactive and never gaps.
+
+The immutable plan has a stable SHA-256 fingerprint over plan fields only.
+Account/date mismatches fail before planning. This is a foundation contract;
+V3-03.5 will be the deliberate runtime activation phase. Existing routine
+compiler behavior, API responses, stored rows, Today, and `routines_today`
+remain unchanged.
+
+`V3-03.4 READY FOR INDEPENDENT REVIEW`

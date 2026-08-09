@@ -1,12 +1,32 @@
 """Care Context and deterministic decision contracts."""
 
 from app.domains.care.decisions import CARE_DECISION_VERSION, CareDecisionSet, evaluate_care_context
+from app.domains.care.routine_plan import (
+    CARE_ROUTINE_PLAN_VERSION,
+    CareEffortSource,
+    CareInclusionReason,
+    CareRoutineEffort,
+    CareRoutinePlan,
+    CareSelectionBasis,
+    CareSlotPlan,
+    plan_care_routine,
+    routine_plan_fingerprint,
+)
 from app.domains.care.schemas import CARE_CONTEXT_VERSION, CareContext
 
 __all__ = [
     "CARE_CONTEXT_VERSION",
     "CARE_DECISION_VERSION",
+    "CARE_ROUTINE_PLAN_VERSION",
+    "CareEffortSource",
+    "CareInclusionReason",
     "CareContext",
     "CareDecisionSet",
+    "CareRoutineEffort",
+    "CareRoutinePlan",
+    "CareSelectionBasis",
+    "CareSlotPlan",
     "evaluate_care_context",
+    "plan_care_routine",
+    "routine_plan_fingerprint",
 ]
