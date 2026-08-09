@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
+import pytest
 from app.domains.care.service import _assemble_profile_facts
 
 
@@ -65,3 +66,53 @@ def test_legacy_fallback_is_exact_only_and_processing_has_no_fallback():
     assert "care_hair_pattern" not in facts
     assert facts["care_hair_strand_characteristic"].value == "fine"
     assert any(row.key == "care_hair_processing" and row.reason == "missing" for row in missing)
+
+
+def test_processing_collection_is_immutable_and_unknown_is_preserved():
+    facts, _ = _assemble_profile_facts(
+        {
+            "care_hair_processing": _row(
+                "care_hair_processing", ["coloured", "relaxed"]
+            )
+        },
+        ("care_hair_processing",),
+        area="hair",
+    )
+    value = facts["care_hair_processing"].value
+    assert value == ("coloured", "relaxed")
+    with pytest.raises(AttributeError):
+        value.append("bleached")
+
+    unknown, _ = _assemble_profile_facts(
+        {"care_hair_processing": _row("care_hair_processing", ["not_sure"])},
+        ("care_hair_processing",),
+        area="hair",
+    )
+    assert unknown["care_hair_processing"].value == ("not_sure",)
+    assert unknown["care_hair_processing"].explicit_unknown is True
+
+    none, _ = _assemble_profile_facts(
+        {"care_hair_processing": _row("care_hair_processing", ["none"])},
+        ("care_hair_processing",),
+        area="hair",
+    )
+    assert none["care_hair_processing"].value == ("none",)
+    assert none["care_hair_processing"].explicit_unknown is False
+
+
+def test_source_ai_run_id_does_not_grant_care_trust():
+    row = _row("care_hair_pattern", "curly", source="photo_observed")
+    row.source_ai_run_id = uuid.uuid4()
+    facts, missing = _assemble_profile_facts(
+        {row.key: row}, (row.key,), area="hair"
+    )
+    assert facts == {}
+    assert missing[0].reason == "untrusted"
+
+    trusted = _row("care_hair_pattern", "curly")
+    trusted.source_ai_run_id = uuid.uuid4()
+    facts, missing = _assemble_profile_facts(
+        {trusted.key: trusted}, (trusted.key,), area="hair"
+    )
+    assert facts[trusted.key].value == "curly"
+    assert missing == []

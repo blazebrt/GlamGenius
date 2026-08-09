@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterable
+from types import MappingProxyType
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,11 +56,22 @@ def _normalised_exact(value: Any) -> str | None:
 
 
 def _explicit_unknown(value: Any) -> bool:
-    return value == "not_sure" or value == ["not_sure"]
+    return value == "not_sure" or value in (["not_sure"], ("not_sure",))
+
+
+def _freeze_fact_value(value: Any) -> Any:
+    """Keep canonical Care fact values immutable at the contract boundary."""
+    if isinstance(value, list):
+        return tuple(_freeze_fact_value(item) for item in value)
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze_fact_value(item) for key, item in value.items()})
+    if isinstance(value, set):
+        return frozenset(_freeze_fact_value(item) for item in value)
+    return value
 
 
 def _fact(row: ProfileAttribute, *, fact_source: CareFactSource, value: Any | None = None) -> CareFact:
-    resolved = row.value if value is None else value
+    resolved = _freeze_fact_value(row.value if value is None else value)
     return CareFact(
         key=row.key,
         value=resolved,
@@ -92,7 +104,7 @@ def _legacy_fact(
         return None
     return CareFact(
         key=key,
-        value=value,
+        value=_freeze_fact_value(value),
         fact_source=CareFactSource.LEGACY_PROFILE_CONFIRMED.value,
         record_source=row.source,
         confidence=row.confidence,
@@ -142,8 +154,12 @@ async def build_care_context(
     if day_context.account_id != account_id:
         raise ValueError("DayContext account does not match Care account")
 
-    profile = await profile_service.get_or_create_profile(session, account_id)
-    rows = {row.key: row for row in await profile_service.attributes_for(session, profile.id)}
+    profile = await profile_service.get_profile(session, account_id)
+    rows = (
+        {row.key: row for row in await profile_service.attributes_for(session, profile.id)}
+        if profile is not None
+        else {}
+    )
     skin_facts, missing = _assemble_profile_facts(rows, SKIN_KEYS, area="skin")
     hair_facts, hair_missing = _assemble_profile_facts(rows, HAIR_KEYS, area="hair")
     preference_facts, preference_missing = _assemble_profile_facts(rows, PREFERENCE_KEYS, area="preferences")
@@ -161,8 +177,6 @@ async def build_care_context(
         missing.append(MissingCareFact("environment", "weather", CareMissingReason.ENVIRONMENT_MISSING.value))
     if day_context.air_quality is None:
         missing.append(MissingCareFact("environment", "air_quality", CareMissingReason.ENVIRONMENT_MISSING.value))
-    if primary_event is None:
-        missing.append(MissingCareFact("event", "primary_event", CareMissingReason.MISSING.value))
 
     return CareContext(
         context_version=CARE_CONTEXT_VERSION,

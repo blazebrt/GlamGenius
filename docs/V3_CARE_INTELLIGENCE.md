@@ -632,8 +632,8 @@ V3-03.1 deliberately implements only:
    canonical scalar/list values, order-preserving deduplication, and list
    sentinel exclusivity. A reusable AttributeSpec invariant such as
    `min_items=1`/`allow_empty=false` applies only to list attributes that opt in;
-5. add in-memory CareContext schemas, a DayContext adapter, and a fact
-   assembler using existing shelf boundaries;
+5. add in-memory CareContext schemas, a DayContext adapter, and a read-only
+   fact assembler using existing shelf boundaries;
 6. add legacy Hair candidate precedence and explicit `not_sure` semantics;
 7. add source/missing-information codes and privacy/export/deletion,
    isolation, and non-diagnostic regression tests.
@@ -665,6 +665,15 @@ These are the implementation and focused-test files for the foundation:
   drafts, unknowns, no diagnosis, no shopping, and no AI safety decisions.
 
 ## 38. V3-03.1 migration status
+
+The Care assembler uses the generic read-only `profile_service.get_profile()`
+lookup. A missing profile produces empty fact maps and never creates profile
+persistence; the assembler performs zero database writes. A successful
+database-backed assembly is regression-tested for shelf confirmation and draft
+semantics, ingredient confirmation, allergy flow, environment/event
+projection, and account isolation. A day with no primary event is valid and
+does not emit a missing-event entry. `CareFact.value` freezes collection values
+to immutable tuples, including the `care_hair_processing` list.
 
 **Migration: NONE.** `AppearanceProfile`, `ProfileAttribute`,
 `ProfileChangeEvent`, and the existing profile export/deletion path already

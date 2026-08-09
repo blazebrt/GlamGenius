@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import pytest
-from app.domains.profile.registry import ATTRIBUTE_REGISTRY, validate_attribute
+from app.domains.privacy import deletion_service
+from app.domains.privacy import export as export_service
+from app.domains.profile.models import AppearanceProfile, ProfileAttribute
+from app.domains.profile.registry import ATTRIBUTE_REGISTRY, AttributeSpec, validate_attribute
+from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import func, select
 
 from tests.conftest import auth
 
@@ -55,6 +60,21 @@ def test_uncontrolled_legacy_lists_remain_flexible():
     assert validate_attribute("allergies", ["Latex", "custom ingredient"]) == ["Latex", "custom ingredient"]
 
 
+def test_min_items_applies_to_uncontrolled_lists_too():
+    from app.domains.profile import registry
+
+    key = "_test_uncontrolled_min_items"
+    registry.ATTRIBUTE_REGISTRY[key] = AttributeSpec(
+        key=key, section="test", label="Test list", kind="list", min_items=1
+    )
+    try:
+        with pytest.raises(ValueError):
+            validate_attribute(key, [])
+        assert validate_attribute(key, ["free form"]) == ["free form"]
+    finally:
+        registry.ATTRIBUTE_REGISTRY.pop(key, None)
+
+
 @pytest.mark.asyncio
 async def test_profile_patch_uses_existing_care_write_path(
     app_client, db_clean, registered_supabase_user
@@ -76,3 +96,50 @@ async def test_profile_patch_uses_existing_care_write_path(
     assert processing["choices"] == ["none", "not_sure", "coloured", "bleached", "relaxed", "permed_or_texturised"]
     assert processing["min_items"] == 1
     assert processing["exclusive_choices"] == ["none", "not_sure"]
+
+
+@pytest.mark.asyncio
+async def test_care_attribute_export_and_account_deletion_cascade(
+    app_client, db_clean, registered_supabase_user, media_root, monkeypatch
+):
+    token, account_id = await registered_supabase_user()
+    response = await app_client.patch(
+        "/api/v2/profile",
+        headers=auth(token),
+        json={"attributes": [{"key": "care_hair_pattern", "value": "curly"}]},
+    )
+    assert response.status_code == 200, response.text
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        exported = await export_service.build_export(session, account_id)
+        rows = exported["domains"]["profile"]["attributes"]
+        care = next(row for row in rows if row["key"] == "care_hair_pattern")
+        assert care["value"] == "curly"
+        assert care["source"] == "user_declared"
+        assert care["verification_state"] == "confirmed"
+
+    class _Admin:
+        class auth:
+            class admin:
+                @staticmethod
+                def delete_user(_uid):
+                    return None
+
+    monkeypatch.setattr(deletion_service, "get_supabase_admin", lambda: _Admin())
+    requested = await app_client.delete(
+        "/api/v2/privacy/account", headers=auth(token)
+    )
+    assert requested.status_code == 202
+    async with factory() as session:
+        await deletion_service.drain_all(session)
+        await session.commit()
+
+    async with factory() as session:
+        count = await session.scalar(
+            select(func.count(ProfileAttribute.id)).join(
+                AppearanceProfile,
+                ProfileAttribute.profile_id == AppearanceProfile.id,
+            ).where(AppearanceProfile.account_id == account_id)
+        )
+        assert count == 0

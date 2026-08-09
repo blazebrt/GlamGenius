@@ -188,9 +188,9 @@ def validate_attribute(key: str, value: Any) -> Any:
                 candidate = canonical
             if candidate not in cleaned:
                 cleaned.append(candidate)
+        if spec.min_items is not None and len(cleaned) < spec.min_items:
+            raise ValueError(f"{spec.label} must contain at least {spec.min_items} item(s)")
         if spec.choices:
-            if spec.min_items is not None and len(cleaned) < spec.min_items:
-                raise ValueError(f"{spec.label} must contain at least {spec.min_items} item(s)")
             selected_exclusive = set(cleaned) & set(spec.exclusive_choices)
             if selected_exclusive and len(cleaned) > 1:
                 raise ValueError(f"{spec.label} sentinel choices are exclusive")
