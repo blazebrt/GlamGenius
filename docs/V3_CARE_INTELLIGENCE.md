@@ -17,11 +17,10 @@ for weather, air quality, regional climate, and events.
 The current system is not yet a Care decision engine. Routine compilation reads
 owned products, a free-text allergy list, and a coarse climate string. It does
 not consume the normalized `DayContext`, user-declared Skin/Hair care facts,
-structured observations, event importance/timing, or evidence provenance. Hair
-has first-class slots but not first-class personalization. The local baseline
-also predates the V3-02 Evidence Provenance implementation: there is no
-`backend/app/domains/evidence` package and no approved Evidence claim to
-consume on this baseline.
+structured observations, or event importance/timing. Hair has first-class
+slots but not first-class personalization. V3-02 Evidence Provenance is merged
+at this baseline, but production has zero approved Evidence claims and current
+Care rules remain legacy-curated deterministic rules.
 
 The permanent design is therefore a fact assembler plus a deterministic Care
 decision layer in front of the existing compiler. V3-03.1 should add only
@@ -36,29 +35,21 @@ effective routine, clear safety boundaries, environmental adjustments,
 event-readiness support, low decision fatigue, and high use of owned products.
 It must never diagnose, prescribe treatment, invent ingredients or product
 facts, turn every empty slot into a purchase, or expose an attractiveness
-score. The permanent decision order is:
+score. The permanent owned-first policy hierarchy is:
 
 1. hard safety and expiry exclusions;
-2. user-declared constraints;
-3. current environmental context;
-4. confirmed owned products and confirmed ingredients;
-5. current routine compatibility and load;
-6. effort/preferences;
-7. event context;
-8. approved or legacy-curated rule adjustments;
-9. an unresolved gap only when a genuine required step remains.
+2. confirmed user constraints;
+3. confirmed owned safe, suitable products;
+4. routine simplification and current context (environment, events, effort);
+5. an unresolved required gap only when a genuine core step remains;
+6. Purchase Intelligence later, never as a V3-03 foundation side effect.
 
 ## 3. Current repository truth
-
-The checkout's local `origin/main` was stale at the V3-01 merge commit
-`53296f8a2cac39ca1cfafb7805a4197c056d5a8d`. The requested V3-02 merge object
-was fetched and verified before this branch was rebased, so the authoritative
-audit baseline is `94dee83d0b36d2a3cef9b02eb8badde00110d464`.
 
 The internal inventory key `beauty` and labels such as `Beauty Shelf` are
 legacy compatibility names. The future customer taxonomy is **Skin Care**,
 **Hair Care**, **Care**, **Routine**, and **Shelf**. Renaming the internal key is
-out of scope for V3-03.0.
+out of scope for V3-03.
 
 No new table, migration, API, dependency, frontend file, prompt, RAG layer,
 or recommendation behavior is introduced by this audit.
@@ -286,12 +277,14 @@ fields. Unknown is a first-class value and is never converted to a negative.
 
 ## 13. Skin fact taxonomy
 
-The proposed Skin taxonomy is declarative and controlled, not diagnostic.
+The proposed Skin taxonomy is declarative and controlled, not diagnostic. These
+keys belong in `backend/app/domains/profile/registry.py`, section `care_skin`,
+and persist through the canonical `profile_attributes` table.
 
 | Fact | Controlled values | Source/priority | Consumer |
 | --- | --- | --- | --- |
-| usual skin feel | `comfortable`, `often_dry_or_tight`, `often_oily`, `mixed`, `not_sure` | explicit user declaration; never photo-inferred | routine texture and step minimization |
-| sensitivity tendency | `rarely_reactive`, `sometimes_reactive`, `often_reactive`, `not_sure` | explicit user declaration or explicit update | soft comfort preference; never a diagnosis |
+| `care_skin_usual_feel` | `comfortable`, `often_dry_or_tight`, `often_oily`, `mixed`, `not_sure` | explicit user declaration; never photo-inferred | routine texture and step minimization |
+| `care_skin_sensitivity` | `rarely_reactive`, `sometimes_reactive`, `often_reactive`, `not_sure` | explicit user declaration or explicit update | soft comfort preference; never a diagnosis |
 | fragrance preference | shared Care preference | explicit user declaration | product ranking/filtering |
 | preferred routine effort | shared Care preference | explicit user declaration | minimization only; cannot override safety |
 | known allergy/avoidance | existing account `UserConstraint(kind=allergy)`; matched only when ingredient fact is confirmed | explicit user declaration | hard exclusion |
@@ -305,34 +298,37 @@ appearance facts. They are not silently reinterpreted as Care conditions.
 
 | Fact | Controlled values | Source/priority | Consumer |
 | --- | --- | --- | --- |
-| hair pattern | `straight`, `wavy`, `curly`, `coily`, `not_sure` | explicit declaration | wash/styling fit |
-| strand characteristic | `fine`, `medium`, `coarse`, `not_sure` | explicit declaration | product weight and minimization |
-| density declaration | `low`, `medium`, `high`, `not_sure` | explicit declaration; no photo diagnosis | styling effort only |
-| wash frequency | `daily`, `several_times_week`, `weekly`, `less_than_weekly`, `variable`, `not_sure` | explicit declaration/usage later | wash-day scheduling |
-| chemical processing | `none`, `coloured`, `bleached`, `relaxed`, `permed_or_texturised`, `multiple`, `not_sure` | explicit declaration | gentle sequencing and event prep |
-| heat-styling frequency | `never`, `occasional`, `frequent`, `daily`, `not_sure` | explicit declaration/usage later | heat-protection reminder |
-| usual scalp feel | `comfortable`, `often_dry_or_tight`, `often_oily`, `sometimes_uncomfortable`, `not_sure` | explicit declaration or observation, never diagnosis | comfort-aware simplification |
-| humidity/frizz sensitivity | `low`, `moderate`, `high`, `not_sure` | explicit declaration/observation | environment styling adjustment |
-| styling preference | `air_dry`, `heat_style`, `protective_style`, `mixed`, `not_sure` | explicit declaration | event and effort ranking |
+| `care_hair_pattern` | `straight`, `wavy`, `curly`, `coily`, `not_sure` | explicit declaration; not AI-observable | wash/styling fit |
+| `care_hair_strand_characteristic` | `fine`, `medium`, `coarse`, `not_sure` | explicit declaration; not AI-observable | product weight and minimization |
+| `care_hair_density` | `low`, `medium`, `high`, `not_sure` | explicit declaration; no photo diagnosis | styling effort only |
+| `care_hair_wash_frequency` | `daily`, `several_times_week`, `weekly`, `less_than_weekly`, `variable`, `not_sure` | explicit declaration | wash-day scheduling |
+| `care_hair_processing` | `none`, `coloured`, `bleached`, `relaxed`, `permed_or_texturised`, `multiple`, `not_sure` | explicit declaration | gentle sequencing and event prep |
+| `care_heat_styling_frequency` | `never`, `occasional`, `frequent`, `daily`, `not_sure` | explicit declaration | heat-protection reminder |
+| `care_scalp_usual_feel` | `comfortable`, `often_dry_or_tight`, `often_oily`, `sometimes_uncomfortable`, `not_sure` | explicit declaration or observation, never diagnosis | comfort-aware simplification |
+| `care_humidity_frizz_sensitivity` | `low`, `moderate`, `high`, `not_sure` | explicit declaration | environment styling adjustment |
+| `care_hair_styling_preference` | `air_dry`, `heat_style`, `protective_style`, `mixed`, `not_sure` | explicit declaration | event and effort ranking |
 
-`hair_type`, `hair_texture`, and `hair_density` from the existing Profile may
-be imported only as unconfirmed legacy candidates; they do not silently fill
-these controlled fields.
+`hair_type`, `hair_texture`, and `hair_density` from the existing Profile remain
+legacy Appearance attributes. They are not deleted, renamed, or synchronized
+into Care. A confirmed exact-mappable legacy value may be used in memory only
+when the corresponding `care_hair_*` key is absent; unverified observations and
+unrecognized free text remain missing/unknown. New Care keys are explicitly
+not AI-observable.
 
 ## 15. Shared Care preferences
 
-One account-owned `CarePreference` should hold preferences common to Skin and
-Hair rather than duplicating them in two profile tables:
+Shared Care preferences also belong in canonical `ProfileAttribute` rows under
+section `care_preferences`, rather than a second preference table:
 
-- `routine_effort`: `minimal`, `balanced`, `detailed`, `not_sure`;
-- `fragrance_preference`: `fragrance_free_preferred`, `no_preference`,
+- `care_routine_effort`: `minimal`, `balanced`, `detailed`, `not_sure`;
+- `care_fragrance_preference`: `fragrance_free_preferred`, `no_preference`,
   `likes_fragrance`, `not_sure`;
-- `event_preparation_effort`: `minimal`, `balanced`, `detailed`, `not_sure`;
-- `owned_product_priority`: `use_owned_first`, `balanced`, `not_sure`.
+- `care_event_preparation_effort`: `minimal`, `balanced`, `detailed`, `not_sure`.
 
 These are soft factors. They can remove optional steps or choose among safe
 owned alternatives; they can never override an allergy, expiry exclusion,
-confirmed incompatibility, or a missing safety fact.
+confirmed incompatibility, or a missing safety fact. Owned-first is a hard
+GlamGenius product policy, not a user preference and not a stored attribute.
 
 ## 16. Stable facts vs temporary observations
 
@@ -507,9 +503,8 @@ invent evidence or weather, or override deterministic safety. Existing
 
 | Fact | Owner | Scope | Source | Consumer | Privacy class |
 | --- | --- | --- | --- | --- | --- |
-| Skin profile facts | Care | account | explicit user declaration | Skin decisions | INCLUDED, exportable/deletable |
-| Hair profile facts | Care | account | explicit user declaration | Hair decisions | INCLUDED, exportable/deletable |
-| Shared Care preferences | Care | account | explicit user declaration | both domains | INCLUDED, exportable/deletable |
+| Care ProfileAttribute facts | Profile canonical store | account/profile | explicit user declaration | Care assembler/decisions | existing `profile_attributes`, INCLUDED, exportable/deletable |
+| Legacy Hair appearance attributes | Profile canonical store | account/profile | user/photo candidate | legacy fallback only | existing `profile_attributes`, INCLUDED |
 | User observations | Routines/Care seam | account | verbatim user note | temporary adaptation | INCLUDED, exportable/deletable |
 | Owned products/detail rows | Inventory | account | user or confirmed extraction | shelf/Care | INCLUDED, exportable/deletable |
 | Product ingredients | Routines/Ingredient Intelligence | account link to item | confirmed label/user fact | compatibility | INCLUDED; draft state retained |
@@ -521,7 +516,8 @@ invent evidence or weather, or override deterministic safety. Existing
 | Care decisions/explanations | Care | account snapshot | derived from the above | UI/AI wording | INCLUDED, exportable/deletable |
 
 No secret, token, provider credential, raw photo bytes, or global evidence
-document belongs in an account-owned Care row.
+document belongs in a Care ProfileAttribute. No new privacy registry entries
+are required for V3-03.1 because profile tables are already `INCLUDED`.
 
 ## 32. Versioning/provenance
 
@@ -530,150 +526,153 @@ The minimum independently auditable versions are:
 - `care_engine_version`;
 - `domain_rule_version`;
 - `routine_compiler_version`;
-- `evidence_claim/link version` (when V3-02 is merged);
-- `context_snapshot_id` and normalized context version;
+- `evidence_claim/link version` (V3-02 is merged);
+- `plan_date`, `weather_snapshot_id`, `air_quality_snapshot_id`, and the
+  normalized `ClimateContext` fields. There is no persisted complete
+  `context_snapshot_id` in the current `DayContext` contract;
 - product fact source, verification state, and source/model schema version.
 
 A future recommendation snapshot should preserve input references, rule IDs and
-versions, environment snapshot reference, provenance eligibility state, and
-decision reasons. It must not duplicate global evidence text into every routine
-row.
+versions, the exact current environment references, provenance eligibility
+state, and decision reasons. It must not duplicate global evidence text into
+every routine row. A formal immutable Care/Context snapshot is later work.
 
 ## 33. Decision reason-code contract
 
-Reason codes are stable machine values; AI may only verbalize them. Initial
-codes:
+V3-03.1 establishes only fact-source and missing-information vocabulary; it
+does not pretend that recommendation reasons are already emitted. AI may only
+verbalize deterministic codes. Foundation codes are:
 
-`owned_product`, `required_core_step`, `contextual_step`, `optional_step`,
-`user_preference`, `environment_humidity`, `environment_precipitation`,
-`temperature_context`, `uv_context`, `aqi_context`, `event_context`,
-`compatibility_rule`, `user_declared_allergy`, `expiry`, `unconfirmed_fact`,
-`user_observation`, `routine_load`, `redundant_step`, `temporarily_skip`,
-`missing_information`, `unresolved_gap`, `unknown_not_negative`.
+`confirmed_user_fact`, `legacy_confirmed_fact`, `confirmed_owned_product`,
+`confirmed_ingredient`, `environment_available`, `environment_missing`,
+`event_available`, `event_inferred`, `observation_available`,
+`missing_skin_context`, `missing_hair_context`, `unconfirmed_product`,
+`unconfirmed_ingredient`, `unknown_value`, `missing`.
 
-Each decision should carry the code, source IDs/versions, affected product or
-slot, and a short deterministic explanation. No pseudo-scientific aggregate
-score is exposed.
+Fact-source labels may additionally be represented as
+`care_user_declared`, `legacy_profile_confirmed`, `inventory_confirmed`,
+`ingredient_confirmed`, `user_observation`, `context_observed`,
+`context_normalized`, `event_confirmed`, `event_inferred`, and `missing`.
+
+Later behavior phases may add `required_core_step`, `compatibility_rule`,
+`temporarily_skip`, `redundant_step`, and `unresolved_gap`. No
+pseudo-scientific aggregate score is exposed.
 
 ## 34. Confidence/missing-data policy
 
-Use categorical confidence only when the meaning is deterministic:
-
-- `high`: confirmed user/product fact plus a reviewed deterministic rule and a
-  current Context snapshot where required;
-- `moderate`: confirmed facts with a legacy-curated rule or partial current
-  context;
-- `limited`: missing/unknown profile, unconfirmed product fact, unavailable
-  environment, or inferred event.
+V3-03.1 does not calculate an overall Care confidence. It preserves each
+input's provenance: `ProfileAttribute.source`, `verification_state`, and
+`confidence`; InventoryItem verification/confidence; ProductIngredient
+confirmation; `DayContext.climate.confidence/reason`; and event inference
+confidence. The assembler emits source categories and explicit missing codes.
 
 Unknown remains unknown. Missing hair texture is not straight; missing
 ingredient concentration is not low; missing pregnancy status is not “not
 pregnant.” Low-confidence or draft product facts cannot drive a safety warning.
-Missing context should produce `missing_information`, not a guessed negative.
+Missing context should produce a missing-information code, not a guessed
+negative. A later deterministic decision phase may define categorical decision
+confidence when there is an actual Care decision to evaluate.
 
 ## 35. P0/P1/LATER
 
 ### P0 before invite beta
 
-Account-owned Skin and Hair declarative context; shared Care preferences;
-controlled vocabularies with `not_sure`; privacy export/deletion; a Care fact
-assembler; Context Engine adapter; reason codes; categorical confidence;
-unknown/missing handling; confirmed ingredient and expiry gates; observation
-separation; Hair equal-depth coverage; and an Event Ready seam without a
-behavior change.
+Controlled Care ProfileAttribute declarations; Skin/Hair equal-depth fact
+structure; explicit `not_sure`; existing profile API reuse; Context adapter;
+fact assembler; unknown/missing handling; legacy Hair precedence; existing
+shelf fact reuse; source/reason contract; privacy regression coverage; and
+account isolation.
 
 ### P1
 
 Richer environment/event adjustments, feedback-driven simplification,
 maintenance timing, more reviewed ingredient contexts, and an auditable
-recommendation snapshot.
+recommendation snapshot immediately before adaptive Care behavior is persisted.
 
 ### LATER
 
-Formal evidence releases/retrieval, advanced formulation reasoning, Product
-Quality, Home Care, shopping recommendations, Nutrition/Supplements signals,
-and any clinical or diagnostic capability (which remains prohibited).
+Routine behavior changes, formal evidence activation, advanced formulation
+reasoning, Product Quality, Home Care, shopping recommendations,
+Nutrition/Supplements signals, and any clinical or diagnostic capability (which
+remains prohibited).
 
 ## 36. V3-03.1 proposed scope
 
 V3-03.1 should be deliberately small:
 
-1. add account-owned Skin and Hair context rows with controlled enums;
-2. add one account-owned shared Care preference row;
-3. assemble those rows with existing confirmed inventory, ingredients,
-   observations, and a read-only Context adapter;
-4. add structured reason/confidence/missing-information schemas;
-5. add privacy registry/export/deletion coverage;
-6. add isolation and boundary tests.
+1. add controlled Care keys to `backend/app/domains/profile/registry.py`;
+2. reuse `PATCH /api/v2/profile` and `apply_attributes()`;
+3. expose additive registry `choices` metadata for clients;
+4. add in-memory CareContext schemas, a DayContext adapter, and a fact
+   assembler using existing shelf boundaries;
+5. add legacy Hair candidate precedence and explicit `not_sure` semantics;
+6. add source/missing-information codes and privacy/export/deletion,
+   isolation, and non-diagnostic regression tests.
 
-It must not alter `compile_all()` output, create evidence claims, add shopping,
-change the frontend, or introduce an AI safety decision.
+It must not add a persistent Care model, migration, new Care CRUD API, alter
+`compile_all()` output, create evidence claims, add shopping, change the
+frontend, or introduce an AI safety decision.
 
 ## 37. V3-03.1 exact proposed files
 
 These are proposed files only; none are created in V3-03.0:
 
 - `backend/app/domains/care/__init__.py` — domain boundary and public contracts.
-- `backend/app/domains/care/models.py` — `SkinCareProfile`,
-  `HairCareProfile`, and `CarePreference`.
-- `backend/app/domains/care/schemas.py` — controlled enums, patch/request
-  validation, and explicit `not_sure` values.
-- `backend/app/domains/care/service.py` — account-owned CRUD and
-  `build_care_context(...)`; no recommendation engine.
-- `backend/app/domains/care/context_adapter.py` — read-only projection from
-  `DayContext` and Context snapshots; no weather provider.
-- `backend/app/domains/care/reasons.py` — reason-code and categorical
-  confidence constants.
-- `backend/app/domains/privacy/__init__.py`, `export.py`, and
-  `deletion_service.py` — registry, export, and deletion coverage.
-- `backend/app/shared/database/registry.py` — model registration only.
-- `backend/migrations/versions/<revision>_add_care_context_profiles.py` — one
-  migration for the three account-owned rows; exact revision is assigned by
-  the migration workflow.
-- `backend/tests/test_domain_care_context.py` — isolation, controlled values,
-  assembler, and unknown behavior.
-- `backend/tests/test_care_privacy.py` — export/deletion and global-data
-  separation.
-- `backend/tests/test_care_boundaries.py` — non-diagnosis, AI, safety, purchase,
-  and attractiveness invariants.
+- `backend/app/domains/care/schemas.py` — in-memory CareContext/fact contracts;
+  no persistence models.
+- `backend/app/domains/care/service.py` — `build_care_context()` fact assembly
+  only.
+- `backend/app/domains/care/context_adapter.py` — read-only `DayContext` → Care
+  environment projection.
+- `backend/app/domains/care/reasons.py` — fact-source and missing-information
+  codes, not decision confidence.
+- `backend/app/domains/profile/registry.py` — controlled Care keys and choices.
+- `backend/app/api/v2/profile.py` — additive registry `choices` metadata only,
+  if required by the existing endpoint contract.
+- `backend/tests/test_domain_care_context.py` — assembler and isolation.
+- `backend/tests/test_care_profile_attributes.py` — registry, API reuse,
+  `not_sure`, precedence, export, and deletion.
+- `backend/tests/test_care_boundaries.py` — context mismatch, observations,
+  drafts, unknowns, no diagnosis, no shopping, and no AI safety decisions.
 
 ## 38. V3-03.1 proposed migration
 
-One additive migration should create:
-
-1. `skin_care_profiles`: `id`, `account_id` (unique FK with cascade), nullable
-   enum-backed declaration columns, `source`, `verification_state`,
-   `last_reviewed_at`, `version`, timestamps, and an account index.
-2. `hair_care_profiles`: equivalent account-owned row with Hair declarations.
-3. `care_preferences`: one account-owned row with shared preference enums,
-   source, verification state, version, timestamps, and account index.
-
-All declaration columns are nullable at storage but serialize explicit
-`not_sure` when the user chooses it; absence remains missing. No pregnancy,
-prescribed topical, diagnosis, severity, or generic medical JSON field is
-created. Existing `user_constraints(kind='allergy')` remains the source of
-user-declared allergy data until a separately reviewed sensitive-data design
-earns a dedicated table.
+**Migration: NONE.** `AppearanceProfile`, `ProfileAttribute`,
+`ProfileChangeEvent`, and the existing profile export/deletion path already
+provide account ownership, controlled validation, provenance, and revision
+history. Do not create `skin_care_profiles`, `hair_care_profiles`,
+`care_preferences`, or a generic Care JSON table. If a projection is ever
+justified by measured query/performance evidence, it must behave like
+`StylePreference`, `FitPreference`, or `LifestyleContext`: keyed from
+`profile_id`, derived from canonical `ProfileAttribute`, and without
+independent provenance or version history.
 
 ## 39. V3-03.1 proposed tests
 
 The future test suite must prove:
 
-- Skin/Hair profiles are account-isolated;
-- controlled vocabularies reject invented labels and preserve `not_sure`;
-- unknown never becomes a negative or a diagnosis;
-- existing global rules/evidence are never account-owned;
-- Care profiles export and delete with the account;
-- environment comes from Context Engine and no second weather provider exists;
-- low-confidence/draft ingredient facts cannot drive warnings;
-- observations remain verbatim and only produce temporary, non-diagnostic
-  inputs;
-- Hair has first-class fact coverage;
-- hard constraints outrank effort/preferences;
-- routine effort cannot override safety;
-- no attractiveness score, shopping recommendation, medical claim, or AI safety
-  decision is emitted;
-- current routine output is unchanged by the foundation.
+- Care registry keys have exact controlled vocabularies and are not
+  AI-observable;
+- `PATCH /profile` uses `apply_attributes()` and invalid values are rejected;
+- explicit `value="not_sure"` is stored with `verification_state="confirmed"`;
+- `verification_state="not_sure"` is not treated as confirmed;
+- profile version and `ProfileChangeEvent` update through existing machinery;
+- no new Care table, migration, CRUD API, or privacy classification exists;
+- Care attributes export/delete with ProfileAttribute/account deletion;
+- global Evidence remains `NOT_USER_OWNED`;
+- account A cannot assemble account B facts;
+- mismatched `DayContext.account_id` is rejected and current environment
+  references are reused without a provider;
+- missing weather stays missing and snapshot IDs are preserved;
+- exact-mappable confirmed legacy Hair values are fallback-only;
+- unverified or unrecognized legacy Hair values remain unknown;
+- explicit `care_hair_*` values outrank legacy candidates;
+- observations remain verbatim and do not mutate ProfileAttribute;
+- adherence does not mutate preferences;
+- drafts/unconfirmed ingredients cannot drive safety facts;
+- owned-first remains system policy; no shopping, attractiveness score,
+  diagnosis, or AI safety decision is emitted;
+- current routine output remains byte/structure equivalent.
 
 ## 40. Explicitly deferred work
 
@@ -684,99 +683,109 @@ maintenance timing, Home Care, Nutrition/Supplements integration, Product
 Quality, purchase ranking, RAG, vector search, LLM safety decisions, and new
 dependencies.
 
-## 41. CTO/CPO decisions still required
+## 41. Approved CTO/CPO decisions
 
-1. Approve whether existing generic `UserConstraint` is sufficient for allergy
-   ownership or a separately governed sensitive restriction table is needed.
-2. Approve the controlled vocabularies and whether `not_sure` is rendered as a
-   first-class user choice.
-3. Approve the Event Ready contract and ownership of an eventual `EventCarePlan`.
-4. Approve the evidence activation distinction between provenance presence and
-   behavior eligibility.
-5. Approve whether routine recommendation snapshots are P1 or required before
-   behavior changes.
-6. Confirm customer-facing migration timing from legacy “Beauty Shelf” labels
-   to Skin Care without changing internal compatibility keys.
+1. Allergy remains `UserConstraint(kind="allergy")`; no second sensitive
+   restriction table is needed in V3-03.1. Professional restrictions,
+   pregnancy, and prescribed topical context remain deferred.
+2. `not_sure` is an explicit confirmed user value.
+3. Planning owns Events; Care consumes them through `DayContext`; no
+   `EventCarePlan` persistence is created in V3-03.1.
+4. Evidence provenance presence and behavior eligibility remain separate;
+   implementation waits until Care behavior consumes Evidence.
+5. Recommendation snapshots are P1 and required immediately before meaningful
+   adaptive Care behavior is persisted.
+6. Customer-facing naming is Skin Care, Hair Care, Care, and Shelf; internal
+   `beauty` compatibility remains during V3-03.
 
-## 42. Proposed model detail: SkinCareProfile
+## 42. Care ProfileAttribute contract
 
-| Property | Proposal |
+Care declarations are not new ORM models. V3-03.1 adds controlled keys to
+`backend/app/domains/profile/registry.py`; values are stored in the existing
+`profile_attributes` table through `apply_attributes()`:
+
+| Area | Keys |
 | --- | --- |
-| owner/table | Care domain; `skin_care_profiles` |
-| scope | one account row; account FK cascade; not global |
-| fields | `usual_skin_feel`, `sensitivity_tendency`; `source`, `verification_state`, `version`, `last_reviewed_at`, timestamps |
-| enums | values in section 13; `not_sure` allowed |
-| nullable/required | account required; declarations nullable until asked; explicit `not_sure` is valid |
-| indexes | unique `(account_id)`; no global lookup index |
-| provenance | `user_declared` only for V3-03.1; imported legacy facts remain `unverified` |
-| consumer | Care fact assembler and future Skin decision layer |
-| privacy | `INCLUDED`, exportable and deletable; no AI read unless a user-visible decision requests it |
-| does not represent | disease, diagnosis, severity, treatment, medication, pregnancy, or attractiveness |
+| Skin | `care_skin_usual_feel`, `care_skin_sensitivity` |
+| Hair | `care_hair_pattern`, `care_hair_strand_characteristic`, `care_hair_density`, `care_hair_wash_frequency`, `care_hair_processing`, `care_heat_styling_frequency`, `care_scalp_usual_feel`, `care_humidity_frizz_sensitivity`, `care_hair_styling_preference` |
+| Shared | `care_routine_effort`, `care_fragrance_preference`, `care_event_preparation_effort` |
 
-## 43. Proposed model detail: HairCareProfile
+Each key inherits the canonical `ProfileAttribute` fields for value, source,
+confidence, verification state, review metadata, and `source_ai_run_id`;
+`AppearanceProfile.version` and `ProfileChangeEvent` provide revision history.
+The registry supplies label, section, kind, and controlled `choices` metadata.
+Care keys are not AI-observable, are non-diagnostic, and do not represent
+attractiveness or medical status. `owned_product_priority` is not a profile
+fact: owned-first is a hard product policy.
 
-| Property | Proposal |
-| --- | --- |
-| owner/table | Care domain; `hair_care_profiles` |
-| scope | one account row; account FK cascade; not global |
-| fields | `hair_pattern`, `strand_characteristic`, `density`, `wash_frequency`, `chemical_processing`, `heat_styling_frequency`, `usual_scalp_feel`, `humidity_frizz_sensitivity`, `styling_preference`; source, verification state, version, review/timestamps |
-| enums | values in section 14; `not_sure` allowed |
-| nullable/required | account required; every declaration optional until relevant |
-| indexes | unique `(account_id)` |
-| provenance | explicit user declaration; legacy/photo values are candidates, not confirmed Care facts |
-| consumer | Care fact assembler and future Hair decision layer |
-| privacy | `INCLUDED`, exportable/deletable; AI cannot infer or promote values |
-| does not represent | hair-loss diagnosis, scalp disease, medical severity, or appearance judgment |
+An explicit user selection of `not_sure` is stored as
+`value="not_sure", verification_state="confirmed", source="user_declared"`.
+The literal verification state `not_sure` is never treated as confirmed.
 
-## 44. Proposed model detail: CarePreference
+## 43. CareContext in-memory schema
 
-| Property | Proposal |
-| --- | --- |
-| owner/table | Care domain; `care_preferences` |
-| scope | one account row; account FK cascade; shared by Skin and Hair |
-| fields | `routine_effort`, `fragrance_preference`, `event_preparation_effort`, `owned_product_priority`, source, verification state, version, review/timestamps |
-| enums | values in section 15; `not_sure` allowed |
-| nullable/required | account required; fields nullable until relevant |
-| indexes | unique `(account_id)` |
-| provenance | explicit user declaration; no AI write without confirmation |
-| consumer | ranking/minimization and Event Ready adapter |
-| privacy | `INCLUDED`, exportable/deletable; AI access only as input to an already deterministic explanation |
-| does not represent | medical restrictions, diagnosis, attractiveness, budget, or purchase intent |
+The Care domain owns an in-memory assembly contract, not a persistence table.
+`CareContext` may contain:
+
+- Skin and Hair fact maps, shared preferences, and per-fact source/reason data;
+- verbatim `UserReportedObservation` values and separate adherence summaries;
+- confirmed owned products, draft counts, confirmed ingredients, and low-use
+  facts gathered through the existing shelf boundary;
+- a read-only environment projection from `DayContext`, including weather and
+  air-quality snapshot IDs plus normalized climate fields;
+- the Planning-owned event seam (`primary_event` and relevant event values);
+- explicit missing-information codes.
+
+The environment projection may expose only present values among
+`weather_snapshot_id`, `air_quality_snapshot_id`, `condition`, `temp_min_c`,
+`temp_max_c`, `humidity`, `precipitation_chance`, `uv_index`, `aqi`,
+`aqi_index_system`, `aqi_category`, `climate_region`, `calendar_prior`,
+`season`, `temperature_band`, `moisture_regime`, `daily_regime`,
+`climate_confidence`, and `climate_reason`; it never synthesizes missing data.
+
+It does not persist a Care row, calculate overall Care confidence, choose a
+product, create a routine, call a provider, call AI, or write observations back
+to ProfileAttribute.
+
+## 44. Legacy Hair precedence
+
+For each Care Hair key the assembler applies this strict order:
+
+1. confirmed explicit `care_hair_*` ProfileAttribute;
+2. if absent, an exact-mappable confirmed legacy appearance value in memory;
+3. otherwise missing/unknown.
+
+Legacy `hair_type`, `hair_texture`, and `hair_density` remain legacy appearance
+facts. They are not deleted, renamed, synchronized, or silently copied into
+Care. Unverified photo observations and unrecognized free text never become a
+Care fact, and no nearest-value matching is permitted.
 
 ## 45. Proposed `build_care_context(...)` service contract
 
-The service is an assembler, not a recommendation engine:
+The service is an account-scoped assembler and accepts the existing context seam only:
 
 ```text
-build_care_context(
-    session,
-    account_id,
-    *,
-    day_context: DayContext | None,
-    event_id: UUID | None,
-    as_of: date,
-) -> CareContext
+build_care_context(session, account_id, *, day_context: DayContext) -> CareContext
 ```
 
-`CareContext` contains `skin_context`, `hair_context`, shared `preferences`,
-recent verbatim observations, adherence summary, confirmed owned product
-facts, confirmed ingredient facts, expiry/availability, an environment
-snapshot reference, an optional Event reference, `missing_information`, and
-categorical confidence/reason metadata. It does not choose a product, create a
-routine, emit a gap, call AI, or call a weather provider.
+It must reject a `DayContext` whose `account_id` does not equal `account_id`.
+It consumes `plan_date`, `weather`, `air_quality`, `climate`, `events`,
+`primary_event`, `weather_snapshot_id`, and `air_quality_snapshot_id` from that
+object. It does not independently accept `event_id`, `as_of`, weather/season/
+climate parameters, query another provider, or invent a `context_snapshot_id`.
 
-## 46. Proposed V3-03.1 field-level privacy and provenance
+## 46. V3-03.1 privacy and provenance
 
-All three proposed rows are account-owned and exportable/deletable. Normal
-profile values are not secret, but they may be sensitive in context; access is
-account-authorized and audit logged. AI receives only the minimum fields needed
-to explain a deterministic decision and never writes them directly.
+Care ProfileAttributes use the existing profile privacy ownership, export, and
+deletion behavior; V3-03.1 adds zero privacy classifications. Inventory,
+ingredient, observation, event, and environment facts retain their current
+account ownership and per-input provenance. Global ontology/rule and Evidence
+claim/link rows remain `NOT_USER_OWNED`.
 
-Allergy remains in existing `user_constraints` and is `INCLUDED`; the future
-professional/prescribed/pregnancy context is intentionally **not implemented**
-until necessity, optionality, retention, export, AI access, and deterministic
-safety effects are approved. Global rule/ingredient/evidence rows remain
-`NOT_USER_OWNED`.
+AI may receive only the minimum deterministic facts needed to explain an
+already-made decision and cannot write ProfileAttribute values. Allergy remains
+the existing `UserConstraint(kind="allergy")`; professional, pregnancy, and
+prescribed-topical context remain deferred until separately approved.
 
 ## 47. Proposed evidence activation semantics
 
@@ -821,8 +830,9 @@ The current flow bypasses the Care Fact Set and calls `compile_all()` from a
   disagree between Today and Care.
 - `beauty`/`hair` product role lives in inventory detail, slot mapping, and
   display labels without a separate Care role contract.
-- Profile hair observations and future Hair declarations could diverge unless
-  legacy values remain candidates with provenance.
+- Existing legacy Hair appearance attributes and future Care Hair
+  ProfileAttributes could diverge; explicit Care keys therefore outrank only
+  exact-mappable confirmed legacy candidates, with no silent database sync.
 - `item_expiry_events` (user-declared) and `product_expiry_events` (computed)
   are distinct and must not be conflated.
 - Ontology code and seeded reference tables must remain one source of truth;
@@ -872,10 +882,9 @@ The current flow bypasses the Care Fact Set and calls `compile_all()` from a
 
 There is no dedicated Care preference model. Generic style preferences and
 `LifestyleContext.routine` exist, and `UserConstraint` stores user-declared
-allergies, but routine effort, fragrance preference, minimal-routine choice,
-owned-first preference, and event-preparation effort are not structured Care
-facts. These should not be inferred from adherence or purchase behavior in
-V3-03.0.
+allergies, but the three controlled Care preference keys are not yet structured
+ProfileAttributes. They must not be inferred from adherence or purchase
+behavior. Owned-first is a system policy, not a preference key.
 
 ## 53. Current medical/safety-context coverage
 
