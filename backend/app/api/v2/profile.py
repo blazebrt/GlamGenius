@@ -49,7 +49,18 @@ async def get_attributes(current: CurrentAccount = Depends(get_current_account),
     await session.commit()
     return {
         "attributes": [service.serialize_attribute(row) for row in rows],
-        "registry": [{"key": spec.key, "label": spec.label, "section": spec.section, "kind": spec.kind} for spec in ATTRIBUTE_REGISTRY.values()],
+        "registry": [
+            {
+                "key": spec.key,
+                "label": spec.label,
+                "section": spec.section,
+                "kind": spec.kind,
+                "choices": list(spec.choices) or None,
+                "min_items": spec.min_items,
+                "exclusive_choices": list(spec.exclusive_choices) or None,
+            }
+            for spec in ATTRIBUTE_REGISTRY.values()
+        ],
         "readiness": service.readiness(rows), "weight_required": False,
     }
 

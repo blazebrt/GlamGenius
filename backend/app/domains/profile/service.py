@@ -38,12 +38,25 @@ LIFESTYLE_KEYS = {
 
 
 async def get_or_create_profile(session: AsyncSession, account_id: uuid.UUID) -> AppearanceProfile:
-    row = (await session.execute(select(AppearanceProfile).where(AppearanceProfile.account_id == account_id))).scalar_one_or_none()
+    row = await get_profile(session, account_id)
     if row is None:
         row = AppearanceProfile(account_id=account_id)
         session.add(row)
         await session.flush()
     return row
+
+
+async def get_profile(
+    session: AsyncSession, account_id: uuid.UUID
+) -> AppearanceProfile | None:
+    """Read an account's profile without creating or mutating anything."""
+    return (
+        await session.execute(
+            select(AppearanceProfile).where(
+                AppearanceProfile.account_id == account_id
+            )
+        )
+    ).scalar_one_or_none()
 
 
 async def attributes_for(session: AsyncSession, profile_id: uuid.UUID) -> list[ProfileAttribute]:
