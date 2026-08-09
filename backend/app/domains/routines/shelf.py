@@ -33,7 +33,7 @@ from app.domains.recommendation.context import OwnedItem
 from app.domains.routines import parser
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import ProductIngredient
-from app.domains.routines.ontology import SEVERITY_AVOID, SEVERITY_CAUTION, SLOT_BY_KEY
+from app.domains.routines.ontology import INGREDIENT_BY_KEY, SEVERITY_AVOID, SEVERITY_CAUTION, SLOT_BY_KEY
 from app.domains.routines.rules import Finding, ShelfProduct
 from app.domains.routines.safety import (
     SUPPLEMENT_DISCLAIMER,
@@ -70,6 +70,7 @@ class ShelfContext:
     diet: str | None = None
     # Ingredient confirmations the user has already made, keyed item -> keys.
     confirmed_ingredients: dict[str, set] = field(default_factory=dict)
+    stored_ingredients: dict[str, list[ProductIngredient]] = field(default_factory=dict)
     # Computed once from the stored rows, because Phase 3's low-use rule reads
     # the date an item was catalogued and an OwnedItem does not carry it.
     low_use_ids: set[uuid.UUID] = field(default_factory=set)
@@ -113,6 +114,18 @@ async def _confirmed_ingredient_keys(session: AsyncSession, account_id: uuid.UUI
     out: dict[str, set] = {}
     for item_id, key in rows:
         out.setdefault(str(item_id), set()).add(key)
+    return out
+
+
+async def _stored_ingredients(
+    session: AsyncSession, account_id: uuid.UUID
+) -> dict[str, list[ProductIngredient]]:
+    rows = (await session.execute(
+        select(ProductIngredient).where(ProductIngredient.account_id == account_id)
+    )).scalars().all()
+    out: dict[str, list[ProductIngredient]] = {}
+    for row in rows:
+        out.setdefault(str(row.item_id), []).append(row)
     return out
 
 
@@ -162,6 +175,7 @@ async def gather(
         allergies=[str(row) for row in allergies],
         climate=climate or attributes.get("climate"),
         confirmed_ingredients=await _confirmed_ingredient_keys(session, account_id),
+        stored_ingredients=await _stored_ingredients(session, account_id),
         low_use_ids=low_use_ids,
     )
 
@@ -174,6 +188,26 @@ def build(context: ShelfContext, category: str) -> list[ShelfProduct]:
     """
     products = rules_engine.build_products(context.owned, category, context.low_use_ids)
     for product in products:
+        stored = context.stored_ingredients.get(product.id, ())
+        by_key = {row.key: row for row in product.ingredients}
+        for row in stored:
+            ingredient = INGREDIENT_BY_KEY.get(row.ingredient_key)
+            if ingredient is None:
+                continue
+            parsed = by_key.get(row.ingredient_key)
+            if parsed is None:
+                product.ingredients.append(parser.ParsedIngredient(
+                    key=row.ingredient_key,
+                    display_name=ingredient.display_name,
+                    family=ingredient.family,
+                    matched_text=row.matched_text,
+                    position=row.position,
+                    confidence=row.confidence,
+                    source=row.source,
+                ))
+            else:
+                parsed.confidence = row.confidence
+                parsed.source = row.source
         confirmed = context.confirmed_ingredients.get(product.id)
         if not confirmed:
             continue

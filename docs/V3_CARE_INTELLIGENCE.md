@@ -1,9 +1,9 @@
 # V3-03 Skin & Hair Care Intelligence
 
-**Phase:** V3-03.3 Care Safety Activation
+**Phase:** V3-03.3.1 Safety Activation Invariant + Integration Test Closure
 **Baseline requested and audited:** `fb4ce00073a7276f9831f2b3740f044995eaa785`
 **Branch:** `v3/v3-03-3-care-safety-activation`
-**Status:** Care safety decisions are authoritative on routine generation, stored-routine serving, and Today; no schema, dependency, frontend, or Evidence activation change is included.
+**Status:** Care safety decisions are authoritative on routine generation, stored-routine serving, and Today, with database-backed regression coverage; no schema, dependency, frontend, or Evidence activation change is included.
 
 ## 1. Executive summary
 
@@ -1142,3 +1142,27 @@ warnings, and Evidence. No new table, column, migration, privacy
 classification, dependency, or frontend field was added.
 
 `V3-03.3 IMPLEMENTED — READY FOR INDEPENDENT REVIEW`
+
+## 65. V3-03.3.1 Safety Activation Invariant + Integration Test Closure
+
+The Today Care action path now requires `CareContext` and `CareDecisionSet`.
+There is no production fallback that can independently decide Skin/Hair
+expiry or allergy eligibility, and `_module_material()` always sources Skin and
+Hair routine rows from Care eligibility. Perfume remains on its separate
+inventory path. The legacy expired-product `use_or_replace` branch and its
+contradictory “use it now” copy were removed entirely.
+
+Database-backed regressions now exercise the real account-scoped path through
+`DayContext`, `CareContext`, `CareDecisionSet`, `RoutineEligibility`, compiler,
+persistence, and serialization. Coverage includes expired-only and
+expired-plus-valid routine generation, confirmed and unconfirmed allergen
+behavior, routine audit persistence, the stale stored-routine expiry and
+allergy gates, read-only safety checks, Today expiry/allergy/filtering actions,
+Care decision cache invalidation after ingredient confirmation, cache-hit
+control, DailyPlan Care inputs, and account isolation.
+
+V3-03.3.1 keeps the same hard blocks, advisories, ranking boundary, engine
+identity, and zero environmental/profile/Event/Evidence behavior. No raw
+Skin/Hair Today fallback remains.
+
+`V3-03.3.1 READY FOR INDEPENDENT REVIEW`
