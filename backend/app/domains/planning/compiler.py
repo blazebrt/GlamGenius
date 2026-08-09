@@ -28,6 +28,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.care import decisions as care_decisions
+from app.domains.care import service as care_service
+from app.domains.care.schemas import CareContext
 from app.domains.inventory import service as inventory_service
 from app.domains.planning import clock, notifications
 from app.domains.planning import context as context_stage
@@ -217,24 +220,54 @@ def _outfit_actions(context: DayContext, ranked: ranking_stage.RankedLook | None
     }]
 
 
-def _appearance_action(context: DayContext, expiring: Sequence[dict[str, Any]], low_use: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def _appearance_action(
+    context: DayContext,
+    low_use: Sequence[dict[str, Any]],
+    *,
+    care_context: CareContext,
+    decisions: care_decisions.CareDecisionSet,
+) -> list[dict[str, Any]]:
     """The single most important appearance action, if there is one.
 
     Deliberately one row, not a list. The brief asks for "the most important
     appearance action", and offering five is the same as offering none.
     """
-    if expiring:
-        first = expiring[0]
-        days = first.get("days_to_expiry")
-        when = "has passed its date" if isinstance(days, int) and days < 0 else f"runs out in {days} days"
-        return [{
-            "module": MODULE_SKINCARE if first.get("category") == "beauty" else MODULE_HAIR,
-            "action_type": "use_or_replace", "priority": 20,
-            "title": f"Use or replace {first['display_name']}",
-            "body": f"This {when}. Using it now is better than replacing it later.",
-            "relevance": "Something you own is close to its expiry date.",
-            "inventory_item_id": first.get("id"),
-        }]
+    products = {
+        product.item.id: product
+        for product in (*care_context.skin_products, *care_context.hair_products)
+    }
+    for reason_code, title_prefix, body, relevance in (
+        (
+            care_decisions.CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH,
+            "Keep",
+            "A confirmed ingredient matches something you asked us to avoid, so GlamGenius has left it out.",
+            "This follows an allergy you entered in your profile.",
+        ),
+        (
+            care_decisions.CareDecisionReasonCode.PRODUCT_EXPIRED,
+            "Set aside",
+            "The date recorded for this product has passed, so GlamGenius will not include it in your Care routine.",
+            "The product is past the date recorded for it.",
+        ),
+    ):
+        for decision in decisions.product_decisions:
+            if not any(reason.code == reason_code for reason in decision.blocking_reasons):
+                continue
+            product = products.get(decision.item_id)
+            if product is None:
+                continue
+            module = MODULE_SKINCARE if product.item.category == "beauty" else MODULE_HAIR
+            return [{
+                "module": module,
+                "action_type": "care_safety",
+                "priority": 18 if reason_code == care_decisions.CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH else 19,
+                "title": f"{title_prefix} {product.item.display_name}"
+                + (" out of your routine" if reason_code == care_decisions.CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH else ""),
+                "body": body,
+                "relevance": relevance,
+                "inventory_item_id": str(product.item.id),
+            }]
+
     if context.draft_count:
         return [{
             "module": MODULE_OUTFIT, "action_type": "confirm_drafts", "priority": 20,
@@ -242,6 +275,25 @@ def _appearance_action(context: DayContext, expiring: Sequence[dict[str, Any]], 
             "body": "Drafts from photos are not used in outfits until you confirm them.",
             "relevance": "You have unconfirmed inventory drafts.",
         }]
+
+    for decision in decisions.product_decisions:
+        if not decision.eligible or not any(
+            reason.code == care_decisions.CareDecisionReasonCode.PRODUCT_EXPIRING_SOON
+            for reason in decision.advisory_reasons
+        ):
+            continue
+        product = products.get(decision.item_id)
+        if product is None:
+            continue
+        module = MODULE_SKINCARE if product.item.category == "beauty" else MODULE_HAIR
+        return [{
+            "module": module, "action_type": "care_expiring_soon", "priority": 21,
+            "title": f"Check {product.item.display_name}'s date",
+            "body": "It is getting close to the date recorded for it. Keep it in rotation only if it already fits your routine.",
+            "relevance": "The product is getting close to the date recorded for it.",
+            "inventory_item_id": str(product.item.id),
+        }]
+
     if low_use:
         first = low_use[0]
         return [{
@@ -414,10 +466,15 @@ def clarification_for(context: DayContext) -> dict[str, Any] | None:
 # --- Compilation -------------------------------------------------------------
 
 
-async def _module_material(session: AsyncSession, context: DayContext) -> dict[str, list[dict[str, Any]]]:
+async def _module_material(
+    session: AsyncSession,
+    context: DayContext,
+    *,
+    care_context: CareContext,
+    decisions: care_decisions.CareDecisionSet,
+) -> dict[str, list[dict[str, Any]]]:
     """Read the inventory facts the optional modules need, once."""
     account_id = context.account_id
-    expiring = await inventory_service.expiring_items(session, account_id, days=45)
     low_use = await inventory_service.low_use_items(session, account_id)
     available = {item.id for item in context.available_owned()}
 
@@ -445,11 +502,24 @@ async def _module_material(session: AsyncSession, context: DayContext) -> dict[s
     for _, candidate in rows:
         pending.append({"display_name": candidate.display_name})
 
+    eligible = {row.item_id for row in decisions.product_decisions if row.eligible}
+    care_rows = {
+        "beauty": [
+            {"id": str(product.item.id), "display_name": product.item.display_name, "category": "beauty"}
+            for product in care_context.skin_products
+            if product.item.id in available and product.item.id in eligible
+        ],
+        "hair": [
+            {"id": str(product.item.id), "display_name": product.item.display_name, "category": "hair"}
+            for product in care_context.hair_products
+            if product.item.id in available and product.item.id in eligible
+        ],
+    }
+
     return {
-        "expiring": [row for row in expiring if uuid.UUID(row["id"]) in available],
         "low_use": [row for row in low_use if uuid.UUID(row["id"]) in available],
-        "beauty": owned_rows("beauty"),
-        "hair": owned_rows("hair"),
+        "beauty": care_rows["beauty"],
+        "hair": care_rows["hair"],
         "perfumes": owned_rows("perfumes"),
         "pending_purchases": pending,
     }
@@ -476,7 +546,15 @@ async def compile_day(
 
     The second element of the tuple is True when the plan was recomputed.
     """
-    key = context_stage.cache_key(context)
+    care_context = await care_service.build_care_context(
+        session, context.account_id, day_context=context,
+    )
+    care_decision_set = care_decisions.evaluate_care_context(care_context)
+    care_fingerprint = care_decisions.decision_fingerprint(care_decision_set)
+    key = context_stage.cache_key(
+        context,
+        material_extensions={"care_decision_fingerprint": care_fingerprint},
+    )
     existing = (await session.execute(
         select(DailyPlan).where(
             DailyPlan.account_id == context.account_id,
@@ -566,10 +644,34 @@ async def compile_day(
     for row in context_stage.input_rows(context):
         session.add(DailyPlanInput(plan_id=plan.id, **row))
 
-    material = await _module_material(session, context)
+    care_counts = {
+        "care_context_version": care_context.context_version,
+        "care_decision_version": care_decision_set.decision_version,
+        "care_decision_fingerprint": care_fingerprint,
+        "care_blocked_product_count": len(care_decision_set.blocked_product_ids),
+        "care_confirmation_advisory_count": sum(
+            1 for row in care_decision_set.product_decisions
+            if any(
+                reason.code == care_decisions.CareDecisionReasonCode.INGREDIENT_CONFIRMATION_NEEDED
+                for reason in row.advisory_reasons
+            )
+        ),
+    }
+    for key_name, value in care_counts.items():
+        session.add(DailyPlanInput(
+            plan_id=plan.id, input_type="care", input_key=key_name,
+            value=value, source="derived",
+        ))
+
+    material = await _module_material(
+        session, context, care_context=care_context, decisions=care_decision_set,
+    )
     actions: list[dict[str, Any]] = []
     actions.extend(_outfit_actions(context, ranked))
-    actions.extend(_appearance_action(context, material["expiring"], material["low_use"]))
+    actions.extend(_appearance_action(
+        context, material["low_use"],
+        care_context=care_context, decisions=care_decision_set,
+    ))
     actions.extend(_weather_action(context))
     actions.extend(_event_action(context))
     actions.extend(_routine_actions(context, material["beauty"], material["hair"], material["perfumes"]))

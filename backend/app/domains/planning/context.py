@@ -413,7 +413,9 @@ def _note_gaps(context: DayContext) -> None:
 # --- The cache key ----------------------------------------------------------
 
 
-def cache_key(context: DayContext) -> str:
+def cache_key(
+    context: DayContext, *, material_extensions: dict[str, Any] | None = None
+) -> str:
     """A hash of every input that could change the plan.
 
     Sorted and explicit rather than hashing the object: two contexts that mean
@@ -475,6 +477,8 @@ def cache_key(context: DayContext) -> str:
         "repetition_window": context.repetition_window_days,
         "profile": {key: context.profile.get(key) for key in sorted(context.profile)},
     }
+    if material_extensions:
+        payload["material_extensions"] = material_extensions
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 

@@ -75,6 +75,14 @@ SLOT_SAFETY_NOTES = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class RoutineEligibility:
+    """Adapter carrying an already-made Care eligibility decision."""
+
+    eligible_item_ids: frozenset[str]
+    allergy_blocked_item_ids: frozenset[str] = frozenset()
+
+
 @dataclass
 class RoutineStep:
     slot: str
@@ -162,16 +170,20 @@ def compile_routine(
     allergies: Sequence[str] = (),
     climate: str | None = None,
     today: date | None = None,
+    eligibility: RoutineEligibility | None = None,
 ) -> CompiledRoutine:
     """Build one routine from what the user owns."""
     if kind not in ROUTINE_SLOTS:
         raise ValueError(f"'{kind}' is not a routine we build.")
 
-    blocked = rules_engine.excluded_by_allergy(products, allergies)
-    usable = [product for product in products if product.id not in blocked]
-    skipped = [
-        product.item.display_name for product in products if product.id in blocked
-    ]
+    if eligibility is None:
+        blocked = rules_engine.excluded_by_allergy(products, allergies)
+        usable = [product for product in products if product.id not in blocked]
+        skipped_ids = blocked
+    else:
+        usable = [product for product in products if product.id in eligibility.eligible_item_ids]
+        skipped_ids = set(eligibility.allergy_blocked_item_ids)
+    skipped = [product.item.display_name for product in products if product.id in skipped_ids]
 
     routine = CompiledRoutine(
         kind=kind, label=ROUTINE_LABELS[kind], frequency=ROUTINE_FREQUENCY[kind],
@@ -204,8 +216,22 @@ def compile_routine(
             # phrase "you have " outright, because that is how a diagnosis
             # starts. The ban is blunt on purpose, so this is worded around it
             # rather than the ban being narrowed for one sentence.
-            step.why = f"{spec.why} Nothing is recorded for this step yet."
-            step.alternative = f"Add {GAP_TEXT.get(slot_key, 'something for this step')} you already own, if there is one."
+            blocked_candidates = eligibility is not None and any(
+                product.slot == slot_key and product.id not in eligibility.eligible_item_ids
+                for product in products
+            )
+            if blocked_candidates:
+                step.why = (
+                    f"{spec.why} A product is recorded for this step, but it is not eligible "
+                    "for this routine right now."
+                )
+                step.alternative = (
+                    f"Review that product or add {GAP_TEXT.get(slot_key, 'something for this step')} "
+                    "you already own, if there is one."
+                )
+            else:
+                step.why = f"{spec.why} Nothing is recorded for this step yet."
+                step.alternative = f"Add {GAP_TEXT.get(slot_key, 'something for this step')} you already own, if there is one."
         else:
             # Optional step with nothing owned: leave it out entirely rather
             # than showing an empty row.
@@ -225,6 +251,7 @@ def compile_routine(
     routine.findings = (
         rules_engine.compatibility_findings(in_use)
         + rules_engine.allergy_findings(products, allergies)
+        + rules_engine.unconfirmed_findings(in_use)
     )
 
     _assert_safe(routine)
@@ -255,6 +282,7 @@ def compile_all(
     allergies: Sequence[str] = (),
     climate: str | None = None,
     today: date | None = None,
+    eligibility: RoutineEligibility | None = None,
 ) -> list[CompiledRoutine]:
     """Every routine the user has enough products to make sense of.
 
@@ -264,7 +292,10 @@ def compile_all(
     routines: list[CompiledRoutine] = []
     for kind in ROUTINE_KINDS:
         source = hair if kind == ROUTINE_WASH_DAY else beauty if kind in (ROUTINE_MORNING, ROUTINE_EVENING) else list(beauty) + list(hair)
-        routine = compile_routine(kind, source, allergies=allergies, climate=climate, today=today)
+        routine = compile_routine(
+            kind, source, allergies=allergies, climate=climate, today=today,
+            eligibility=eligibility,
+        )
         if routine.owned_step_count == 0 and routine.gap_count == 0:
             continue
         routines.append(routine)

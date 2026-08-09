@@ -1,9 +1,9 @@
 # V3-03 Skin & Hair Care Intelligence
 
-**Phase:** V3-03.2 Care Decision Safety Foundation
-**Baseline requested and audited:** `94dee83d0b36d2a3cef9b02eb8badde00110d464`
-**Branch:** `v3/v3-03-care-intelligence-foundation`
-**Status:** Care Context and pure deterministic Care Decision foundation implemented; no routine/API behavior, migration, dependency, frontend, or Evidence activation change is included.
+**Phase:** V3-03.3.2 Stored Ingredient Precedence + Lifecycle Closure
+**Baseline requested and audited:** `fb4ce00073a7276f9831f2b3740f044995eaa785`
+**Branch:** `v3/v3-03-3-care-safety-activation`
+**Status:** Care safety decisions are authoritative on routine generation, stored-routine serving, and Today, with database-backed regression coverage; no schema, dependency, frontend, or Evidence activation change is included.
 
 ## 1. Executive summary
 
@@ -918,8 +918,9 @@ Evidence state ────┘                              ▼
                                       Routine compiler / explanation
 ```
 
-The current flow bypasses the Care Fact Set and calls `compile_all()` from a
-`ShelfContext`; the target flow is documented, not implemented.
+V3-03.3 now activates this flow for routine generation and Today safety checks.
+The compiler remains a routines-owned adapter consumer; it does not import Care
+decision types directly.
 
 ## 49. Current duplicate-truth/drift risks
 
@@ -1004,11 +1005,11 @@ owned by Care. That absence is safer than a generic medical JSON field.
 
 ## 54. Current environmental dimensions consumed by Care
 
-The routines engine consumes only an optional coarse `climate` value from the
-request or Profile (`hot`, `humid`, `cold`, `dry`, `rainy`). It does not consume
-the V3-01 `DayContext` dimensions `temperature`, `humidity`, `precipitation`,
-`UV`, `AQI`, `daily_regime`, or confidence. Existing climate notes are static
-rules keyed to `hot`, `humid`, or `cold`, including a hot pre-wash-oil note.
+Routine generation now gathers the V3-01 `DayContext` to assemble the
+account-scoped Care context, but Care eligibility still consumes none of its
+`temperature`, `humidity`, `precipitation`, `UV`, `AQI`, `daily_regime`, or
+confidence dimensions. The request/Profile coarse `climate` value remains a
+legacy compiler-notes input only.
 
 ## 55. Current user-observation behavior
 
@@ -1061,7 +1062,8 @@ focused tests. The dependency files remain unchanged:
 - `frontend/yarn.lock` unchanged.
 
 The expected implementation diff contains no migration, ORM model, privacy
-registry, routine compiler/rules/service/shelf, frontend, or dependency file.
+registry, frontend, or dependency file; V3-03.3 intentionally modifies the
+routine/compiler/planning integration seams.
 
 ## 62. V3-03.2 Care Decision Safety Foundation
 
@@ -1104,3 +1106,77 @@ zero, and Evidence does not affect current Care decisions.
 The authoritative `main` baseline was verified at `94dee83d…`. The
 Care Context foundation is implemented without recommendation behavior,
 Evidence activation, or merge.
+
+## 64. V3-03.3 Care Safety Activation
+
+V3-03.3 activates the V3-03.2 decision set at the existing user-facing Care
+surfaces. Routine generation gathers the authenticated account's `DayContext`,
+builds `CareContext`, evaluates one deterministic `CareDecisionSet`, and passes
+only its eligible product IDs to the existing compiler. Expired and confirmed-
+allergy products are excluded; low-confidence possible allergens remain
+eligible and produce confirmation information rather than an avoid finding.
+Confirmed-allergy skips are tracked separately from expiry blocks, required
+gaps distinguish blocked owned products from absent products, and optional
+blocked products are omitted without becoming shopping gaps. Existing
+`rank_for_slot()` ordering remains unchanged within the eligible set.
+
+Stored routines and recommendation runs now record `care-v3-03.3`; run inputs
+include Care versions, blocked/advisory counts, and current weather/air-quality
+snapshot IDs. Responses add an additive `care_safety` summary. `GET
+/routines/today` builds the current Care decision and omits saved routines that
+would serve a newly blocked product, returning `refresh_required` without
+writing or regenerating anything.
+
+Today fresh compilation uses the same Care decision truth for Skin/Hair cards
+and appearance actions. Expired products use constructive “set aside” copy,
+confirmed allergy blocks use profile-constraint copy, and eligible
+expiring-soon products receive a softer date reminder. The Care decision
+fingerprint is a generic material extension to the existing Today cache key,
+so ingredient confirmation changes invalidate the same-day plan. Daily plan
+inputs record the Care versions, fingerprint, blocked count, and confirmation
+advisory count.
+
+Care eligibility remains independent of humidity, UV, AQI, temperature, season,
+daily regime, profile-personalization facts, events, compatibility ontology
+warnings, and Evidence. No new table, column, migration, privacy
+classification, dependency, or frontend field was added.
+
+`V3-03.3 IMPLEMENTED — READY FOR INDEPENDENT REVIEW`
+
+## 65. V3-03.3.1 Safety Activation Invariant + Integration Test Closure
+
+The Today Care action path now requires `CareContext` and `CareDecisionSet`.
+There is no production fallback that can independently decide Skin/Hair
+expiry or allergy eligibility, and `_module_material()` always sources Skin and
+Hair routine rows from Care eligibility. Perfume remains on its separate
+inventory path. The legacy expired-product `use_or_replace` branch and its
+contradictory “use it now” copy were removed entirely.
+
+Database-backed regressions now exercise the real account-scoped path through
+`DayContext`, `CareContext`, `CareDecisionSet`, `RoutineEligibility`, compiler,
+persistence, and serialization. Coverage includes expired-only and
+expired-plus-valid routine generation, confirmed and unconfirmed allergen
+behavior, routine audit persistence, the stale stored-routine expiry and
+allergy gates, read-only safety checks, Today expiry/allergy/filtering actions,
+Care decision cache invalidation after ingredient confirmation, cache-hit
+control, DailyPlan Care inputs, and account isolation.
+
+V3-03.3.1 keeps the same hard blocks, advisories, ranking boundary, engine
+identity, and zero environmental/profile/Event/Evidence behavior. No raw
+Skin/Hair Today fallback remains.
+
+## 66. V3-03.3.2 Stored Ingredient Precedence + Lifecycle Closure
+
+Runtime ingredient authority is explicit:
+
+`confirmed persisted user fact` > `current product fact` > `unconfirmed persisted extraction candidate`.
+
+The shelf has a shared `build_fresh()` primitive for current Inventory details.
+The runtime `build()` overlay can add stored-only candidates and promote
+confirmed persisted rows, but an unconfirmed stored row cannot overwrite a
+current fact's confidence, source, matched text, or position. Shelf analysis
+reconciles persisted rows against the fresh parse, so stale unconfirmed rows
+are deleted while confirmed rows survive re-analysis. The post-analysis
+summary is built from a refreshed account-scoped context after the write.
+
+`V3-03.3.2 READY FOR FINAL INDEPENDENT REVIEW`

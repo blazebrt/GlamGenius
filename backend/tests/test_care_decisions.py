@@ -1,4 +1,4 @@
-"""Pure V3-03.2 Care safety and core-slot decisions."""
+"""Pure Care safety decisions and V3-03.3 activation contracts."""
 from __future__ import annotations
 
 import uuid
@@ -10,11 +10,13 @@ from app.domains.care.decisions import (
     CARE_DECISION_VERSION,
     CareDecisionAuthority,
     CareDecisionReasonCode,
+    decision_fingerprint,
     evaluate_care_context,
 )
 from app.domains.care.schemas import CareContext, CareEnvironment, CareEvent, CareFact
+from app.domains.planning.context import DayContext, cache_key
 from app.domains.recommendation.context import OwnedItem
-from app.domains.routines import rules
+from app.domains.routines import compiler, rules
 from app.domains.routines.ontology import HAIR_SLOTS, SKIN_SLOTS
 from app.domains.routines.parser import ParsedIngredient
 from app.domains.routines.rules import ShelfProduct
@@ -81,6 +83,16 @@ def _codes(rows):
     return {reason.code for reason in rows}
 
 
+def _eligibility(decisions):
+    return compiler.RoutineEligibility(
+        eligible_item_ids=frozenset(str(value) for value in decisions.eligible_product_ids),
+        allergy_blocked_item_ids=frozenset(
+            str(row.item_id) for row in decisions.product_decisions
+            if CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH in _codes(row.blocking_reasons)
+        ),
+    )
+
+
 def test_expired_skin_and_hair_products_are_blocked_and_leave_core_gaps():
     context = _context(
         _product("beauty", "moisturiser", expiry=date(2026, 8, 11)),
@@ -130,16 +142,16 @@ def test_confirmed_and_unconfirmed_allergen_hits_have_distinct_outcomes():
     assert by_id[unconfirmed.item.id].advisory_reasons[0].authority == CareDecisionAuthority.USER_CONSTRAINT
 
 
-def test_legacy_allergy_findings_and_exclusion_parity_uses_richer_matcher():
+def test_legacy_allergy_findings_and_exclusion_use_confirmed_matches_only():
     confirmed = _product("beauty", "moisturiser", ingredient_key="fragrance")
     unconfirmed = _product("hair", "conditioner", ingredient_key="fragrance", confirmed=False)
     products = (confirmed, unconfirmed)
     findings = rules.allergy_findings(products, ("fragrance",))
     excluded = rules.excluded_by_allergy(products, ("fragrance",))
 
-    assert [row.item_ids for row in findings] == [[confirmed.id], [unconfirmed.id]]
-    assert excluded == {confirmed.id, unconfirmed.id}
-    assert "low confidence" in findings[1].detail
+    assert [row.item_ids for row in findings] == [[confirmed.id]]
+    assert excluded == {confirmed.id}
+    assert [row.item_ids for row in rules.unconfirmed_findings(products)] == [[unconfirmed.id]]
 
 
 def test_core_slots_are_derived_from_ontology_and_optional_absence_is_not_a_gap():
@@ -191,3 +203,73 @@ def test_decisions_are_deterministic_and_immutable():
     assert first == evaluate_care_context(context)
     with pytest.raises((AttributeError, TypeError)):
         first.product_decisions.append(None)
+
+
+def test_compiler_gap_explains_a_blocked_required_product_and_optional_is_omitted():
+    expired = _product("beauty", "moisturiser", expiry=date(2026, 8, 11))
+    optional = _product("beauty", "exfoliant", expiry=date(2026, 8, 11))
+    context = _context(expired, optional)
+    decisions = evaluate_care_context(context)
+    routine = compiler.compile_routine(
+        compiler.ROUTINE_MORNING, [expired, optional], today=context.plan_date,
+        eligibility=_eligibility(decisions),
+    )
+
+    moisturiser = next(row for row in routine.steps if row.slot == "moisturiser")
+    assert moisturiser.is_gap is True
+    assert "not eligible for this routine right now" in moisturiser.why
+    assert "Nothing is recorded" not in moisturiser.why
+    assert all(row.slot != "exfoliant" for row in routine.steps)
+
+
+def test_compiler_keeps_valid_candidate_in_existing_rank_order():
+    expired = _product("beauty", "moisturiser", expiry=date(2026, 8, 11))
+    valid = _product("beauty", "moisturiser", expiry=date(2026, 8, 20))
+    context = _context(expired, valid)
+    routine = compiler.compile_routine(
+        compiler.ROUTINE_MORNING, [expired, valid], today=context.plan_date,
+        eligibility=_eligibility(evaluate_care_context(context)),
+    )
+    moisturiser = next(row for row in routine.steps if row.slot == "moisturiser")
+    assert moisturiser.item_id == str(valid.item.id)
+    assert moisturiser.is_gap is False
+
+
+def test_compiler_confirmed_allergy_skip_is_not_expiry_and_unconfirmed_is_advisory():
+    confirmed = _product("beauty", "cleanser", ingredient_key="fragrance")
+    possible = _product("hair", "conditioner", ingredient_key="fragrance", confirmed=False)
+    context = _context(confirmed, possible, allergies=("fragrance",))
+    decisions = evaluate_care_context(context)
+    routine = compiler.compile_routine(
+        compiler.ROUTINE_MORNING, [confirmed], allergies=context.allergies,
+        today=context.plan_date, eligibility=_eligibility(decisions),
+    )
+    assert routine.skipped_for_allergy == [confirmed.item.display_name]
+    assert any(row.rule_id == rules.RULE_ALLERGY for row in routine.findings)
+
+    wash = compiler.compile_routine(
+        compiler.ROUTINE_WASH_DAY, [possible], allergies=context.allergies,
+        today=context.plan_date, eligibility=_eligibility(decisions),
+    )
+    assert wash.skipped_for_allergy == []
+    assert any(row.rule_id == rules.RULE_UNCONFIRMED for row in wash.findings)
+
+
+def test_decision_fingerprint_changes_when_confirmation_changes_and_cache_extension_is_optional():
+    possible = _product("beauty", "cleanser", ingredient_key="fragrance", confirmed=False)
+    context = _context(possible, allergies=("fragrance",))
+    before = evaluate_care_context(context)
+    confirmed = replace(possible.ingredients[0], confidence=1.0, source="user_declared")
+    after = evaluate_care_context(_context(
+        replace(possible, ingredients=[confirmed]), allergies=("fragrance",)
+    ))
+    assert decision_fingerprint(before) != decision_fingerprint(after)
+
+    day = DayContext(
+        account_id=context.account_id, plan_date=context.plan_date, timezone_name="UTC",
+        now_local=datetime(2026, 8, 12, tzinfo=UTC),
+    )
+    assert cache_key(day) == cache_key(day)
+    assert cache_key(day, material_extensions={"care_decision_fingerprint": decision_fingerprint(before)}) != cache_key(
+        day, material_extensions={"care_decision_fingerprint": decision_fingerprint(after)}
+    )
