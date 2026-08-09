@@ -15,12 +15,18 @@ owned products into five routine shapes. It also has a separate Context Engine
 for weather, air quality, regional climate, and events.
 
 The current system is not yet a Care decision engine. Routine compilation reads
-owned products, a free-text allergy list, and a coarse climate string. It does
+owned products, the confirmed canonical ProfileAttribute `allergies` through
+the existing shelf boundary, and a coarse climate string. It does
 not consume the normalized `DayContext`, user-declared Skin/Hair care facts,
 structured observations, or event importance/timing. Hair has first-class
 slots but not first-class personalization. V3-02 Evidence Provenance is merged
 at this baseline, but production has zero approved Evidence claims and current
 Care rules remain legacy-curated deterministic rules.
+
+The canonical user-entered allergy is ProfileAttribute `allergies`; the
+existing `UserConstraint(kind="allergy")` remains a synchronized projection
+used by the ShelfContext/routine boundary. Care adds no second allergy field or
+matching path.
 
 The permanent design is therefore a fact assembler plus a deterministic Care
 decision layer in front of the existing compiler. V3-03.1 should add only
@@ -256,8 +262,8 @@ does not modify V3-02 code.
 9. There are no structured reason codes or categorical Care confidence values.
 10. There is no recommendation snapshot containing inputs, rules, context
     reference, or provenance.
-11. Existing generic `UserConstraint` is account-owned but can mix allergy and
-    non-medical constraints without a Care-specific privacy contract.
+11. The canonical allergy declaration is ProfileAttribute `allergies`; the
+    existing `UserConstraint(kind="allergy")` is its synchronized projection.
 12. V3-02 provenance exists, but the binary provenance state is not yet strong
     enough for Care behavior: a `background` relationship can count as linked
     without proving behavior eligibility.
@@ -287,7 +293,7 @@ and persist through the canonical `profile_attributes` table.
 | `care_skin_sensitivity` | `rarely_reactive`, `sometimes_reactive`, `often_reactive`, `not_sure` | explicit user declaration or explicit update | soft comfort preference; never a diagnosis |
 | fragrance preference | shared Care preference | explicit user declaration | product ranking/filtering |
 | preferred routine effort | shared Care preference | explicit user declaration | minimization only; cannot override safety |
-| known allergy/avoidance | existing account `UserConstraint(kind=allergy)`; matched only when ingredient fact is confirmed | explicit user declaration | hard exclusion |
+| known allergy/avoidance | canonical `ProfileAttribute("allergies")`; projected to `UserConstraint(kind="allergy")`; matched only through the existing ShelfContext when ingredient fact is confirmed | explicit user declaration | hard exclusion |
 | professional restriction/prescribed topical | not stored in V3-03.1; dedicated sensitive design required | future explicit flow only | future deterministic safety gate |
 | event skin-prep preference | shared event preference, not a skin condition | explicit user declaration/event | Event Care plan |
 
@@ -302,18 +308,24 @@ appearance facts. They are not silently reinterpreted as Care conditions.
 | `care_hair_strand_characteristic` | `fine`, `medium`, `coarse`, `not_sure` | explicit declaration; not AI-observable | product weight and minimization |
 | `care_hair_density` | `low`, `medium`, `high`, `not_sure` | explicit declaration; no photo diagnosis | styling effort only |
 | `care_hair_wash_frequency` | `daily`, `several_times_week`, `weekly`, `less_than_weekly`, `variable`, `not_sure` | explicit declaration | wash-day scheduling |
-| `care_hair_processing` | `none`, `coloured`, `bleached`, `relaxed`, `permed_or_texturised`, `multiple`, `not_sure` | explicit declaration | gentle sequencing and event prep |
+| `care_hair_processing` | controlled list: `['none']`, `['not_sure']`, or one or more of `coloured`, `bleached`, `relaxed`, `permed_or_texturised` | explicit declaration; no legacy fallback | gentle sequencing and event prep |
 | `care_heat_styling_frequency` | `never`, `occasional`, `frequent`, `daily`, `not_sure` | explicit declaration | heat-protection reminder |
-| `care_scalp_usual_feel` | `comfortable`, `often_dry_or_tight`, `often_oily`, `sometimes_uncomfortable`, `not_sure` | explicit declaration or observation, never diagnosis | comfort-aware simplification |
+| `care_scalp_usual_feel` | `comfortable`, `often_dry_or_tight`, `often_oily`, `sometimes_uncomfortable`, `not_sure` | explicit user declaration only; observations remain verbatim | comfort-aware simplification |
 | `care_humidity_frizz_sensitivity` | `low`, `moderate`, `high`, `not_sure` | explicit declaration | environment styling adjustment |
 | `care_hair_styling_preference` | `air_dry`, `heat_style`, `protective_style`, `mixed`, `not_sure` | explicit declaration | event and effort ranking |
 
 `hair_type`, `hair_texture`, and `hair_density` from the existing Profile remain
 legacy Appearance attributes. They are not deleted, renamed, or synchronized
-into Care. A confirmed exact-mappable legacy value may be used in memory only
-when the corresponding `care_hair_*` key is absent; unverified observations and
-unrecognized free text remain missing/unknown. New Care keys are explicitly
-not AI-observable.
+into Care. Only these exact normalized fallback maps are allowed when the
+corresponding `care_hair_*` key is absent: `hair_type` → `care_hair_pattern`
+(`straight`, `wavy`, `curly`, `coily`), `hair_texture` →
+`care_hair_strand_characteristic` (`fine`, `medium`, `coarse`), and
+`hair_density` → `care_hair_density` (`low`, `medium`, `high`). Case and outer
+whitespace may be normalized; synonyms and fuzzy mappings are forbidden.
+Legacy fallback requires `verification_state="confirmed"` and an exact value;
+`not_sure`, rejected, superseded, and unverified candidates are ignored.
+`care_hair_processing` has no legacy fallback. New Care keys are explicitly not
+AI-observable.
 
 ## 15. Shared Care preferences
 
@@ -349,8 +361,9 @@ are not inferred.
 
 ## 17. Hard constraints vs soft preferences
 
-Hard constraints are applied first: user-declared allergy/avoidance matched to a
-confirmed ingredient; expired product; confirmed deterministic incompatibility;
+Hard constraints are applied first: canonical ProfileAttribute `allergies`
+projected through the existing ShelfContext and matched to a confirmed
+ingredient; expired product; confirmed deterministic incompatibility;
 and any future explicitly reviewed professional restriction. Hard constraints
 produce a blocking decision and a reason code.
 
@@ -504,6 +517,8 @@ invent evidence or weather, or override deterministic safety. Existing
 | Fact | Owner | Scope | Source | Consumer | Privacy class |
 | --- | --- | --- | --- | --- | --- |
 | Care ProfileAttribute facts | Profile canonical store | account/profile | explicit user declaration | Care assembler/decisions | existing `profile_attributes`, INCLUDED, exportable/deletable |
+| Allergy declaration | Profile / `ProfileAttribute("allergies")` | account/profile | explicit user declaration | synchronized projection and ShelfContext | existing profile privacy, INCLUDED, exportable/deletable |
+| Allergy projection | `UserConstraint(kind="allergy")` | account | `profile.service.sync_projections()` | existing ShelfContext/deterministic allergy rules | existing `user_constraints`, INCLUDED, exportable/deletable |
 | Legacy Hair appearance attributes | Profile canonical store | account/profile | user/photo candidate | legacy fallback only | existing `profile_attributes`, INCLUDED |
 | User observations | Routines/Care seam | account | verbatim user note | temporary adaptation | INCLUDED, exportable/deletable |
 | Owned products/detail rows | Inventory | account | user or confirmed extraction | shelf/Care | INCLUDED, exportable/deletable |
@@ -573,6 +588,10 @@ Missing context should produce a missing-information code, not a guessed
 negative. A later deterministic decision phase may define categorical decision
 confidence when there is an actual Care decision to evaluate.
 
+These states remain distinct: missing means no usable Care declaration or exact
+legacy fallback; explicit unknown means a confirmed user value of `not_sure`;
+unverified means a candidate exists but has not been confirmed and is unusable.
+
 ## 35. P0/P1/LATER
 
 ### P0 before invite beta
@@ -603,10 +622,13 @@ V3-03.1 should be deliberately small:
 1. add controlled Care keys to `backend/app/domains/profile/registry.py`;
 2. reuse `PATCH /api/v2/profile` and `apply_attributes()`;
 3. expose additive registry `choices` metadata for clients;
-4. add in-memory CareContext schemas, a DayContext adapter, and a fact
+4. generalize the registry validator for controlled list item choices,
+   canonical scalar/list values, order-preserving deduplication, and list
+   sentinel exclusivity;
+5. add in-memory CareContext schemas, a DayContext adapter, and a fact
    assembler using existing shelf boundaries;
-5. add legacy Hair candidate precedence and explicit `not_sure` semantics;
-6. add source/missing-information codes and privacy/export/deletion,
+6. add legacy Hair candidate precedence and explicit `not_sure` semantics;
+7. add source/missing-information codes and privacy/export/deletion,
    isolation, and non-diagnostic regression tests.
 
 It must not add a persistent Care model, migration, new Care CRUD API, alter
@@ -654,8 +676,22 @@ The future test suite must prove:
 - Care registry keys have exact controlled vocabularies and are not
   AI-observable;
 - `PATCH /profile` uses `apply_attributes()` and invalid values are rejected;
+- canonical `ProfileAttribute("allergies")` remains the allergy source and its
+  synchronized `UserConstraint(kind="allergy")` projection stays consistent;
+- Care uses the existing ShelfContext allergy result and creates no duplicate
+  allergy storage or matching engine;
+- explicit `care_*` facts require `source="user_declared"` and
+  `verification_state="confirmed"`; photo, inferred, integration, and
+  AI-generated candidates are ignored;
+- `source_ai_run_id` alone never makes a Care fact trusted;
 - explicit `value="not_sure"` is stored with `verification_state="confirmed"`;
 - `verification_state="not_sure"` is not treated as confirmed;
+- scalar choices canonicalize case-insensitively to the registered value;
+- list choices canonicalize item values, preserve order, deduplicate, reject
+  invalid items, and enforce sentinel exclusivity;
+- `care_hair_processing` accepts `['coloured', 'relaxed']` but rejects
+  `['none', 'coloured']` and `['not_sure', 'bleached']`;
+- existing `style_experimentation` choice behavior remains compatible;
 - profile version and `ProfileChangeEvent` update through existing machinery;
 - no new Care table, migration, CRUD API, or privacy classification exists;
 - Care attributes export/delete with ProfileAttribute/account deletion;
@@ -664,9 +700,11 @@ The future test suite must prove:
 - mismatched `DayContext.account_id` is rejected and current environment
   references are reused without a provider;
 - missing weather stays missing and snapshot IDs are preserved;
-- exact-mappable confirmed legacy Hair values are fallback-only;
-- unverified or unrecognized legacy Hair values remain unknown;
-- explicit `care_hair_*` values outrank legacy candidates;
+- exact legacy Hair maps work only for the three documented families;
+- legacy synonyms/fuzzy values, processing fallbacks, and unverified candidates
+  remain missing/unknown;
+- explicit `care_hair_*` values, including explicit `not_sure`, outrank legacy
+  candidates;
 - observations remain verbatim and do not mutate ProfileAttribute;
 - adherence does not mutate preferences;
 - drafts/unconfirmed ingredients cannot drive safety facts;
@@ -685,9 +723,12 @@ dependencies.
 
 ## 41. Approved CTO/CPO decisions
 
-1. Allergy remains `UserConstraint(kind="allergy")`; no second sensitive
-   restriction table is needed in V3-03.1. Professional restrictions,
-   pregnancy, and prescribed topical context remain deferred.
+1. Allergy remains canonical `ProfileAttribute("allergies")` with its source,
+   provenance, and profile revision history. Existing
+   `UserConstraint(kind="allergy")` remains the synchronized projection used
+   by current query/runtime paths. V3-03.1 creates no additional allergy
+   storage; professional restrictions, pregnancy, and prescribed topical
+   context remain deferred.
 2. `not_sure` is an explicit confirmed user value.
 3. Planning owns Events; Care consumes them through `DayContext`; no
    `EventCarePlan` persistence is created in V3-03.1.
@@ -710,10 +751,19 @@ Care declarations are not new ORM models. V3-03.1 adds controlled keys to
 | Hair | `care_hair_pattern`, `care_hair_strand_characteristic`, `care_hair_density`, `care_hair_wash_frequency`, `care_hair_processing`, `care_heat_styling_frequency`, `care_scalp_usual_feel`, `care_humidity_frizz_sensitivity`, `care_hair_styling_preference` |
 | Shared | `care_routine_effort`, `care_fragrance_preference`, `care_event_preparation_effort` |
 
+All listed keys are controlled scalar choices except
+`care_hair_processing`, whose registry `kind` is `list` with controlled item
+choices and the sentinel invariants described below.
+
 Each key inherits the canonical `ProfileAttribute` fields for value, source,
 confidence, verification state, review metadata, and `source_ai_run_id`;
 `AppearanceProfile.version` and `ProfileChangeEvent` provide revision history.
-The registry supplies label, section, kind, and controlled `choices` metadata.
+The registry supplies label, section, kind, and controlled `choices` metadata,
+including controlled item choices for list attributes. Scalar and list choices
+are canonicalized to the exact registered value and list values are
+deduplicated after canonicalization while preserving user order. Sentinel list
+values `['none']` and `['not_sure']` are mutually exclusive with all other
+values.
 Care keys are not AI-observable, are non-diagnostic, and do not represent
 attractiveness or medical status. `owned_product_priority` is not a profile
 fact: owned-first is a hard product policy.
@@ -721,6 +771,11 @@ fact: owned-first is a hard product policy.
 An explicit user selection of `not_sure` is stored as
 `value="not_sure", verification_state="confirmed", source="user_declared"`.
 The literal verification state `not_sure` is never treated as confirmed.
+For V3-03.1, every explicit `care_*` fact is usable only when
+`source="user_declared"` and `verification_state="confirmed"`. A present
+`source_ai_run_id` does not make a fact trusted; photo, inferred, integration,
+or AI-generated candidates remain unusable until explicitly confirmed through
+the user-declaration path.
 
 ## 43. CareContext in-memory schema
 
@@ -755,10 +810,25 @@ For each Care Hair key the assembler applies this strict order:
 2. if absent, an exact-mappable confirmed legacy appearance value in memory;
 3. otherwise missing/unknown.
 
-Legacy `hair_type`, `hair_texture`, and `hair_density` remain legacy appearance
-facts. They are not deleted, renamed, synchronized, or silently copied into
-Care. Unverified photo observations and unrecognized free text never become a
-Care fact, and no nearest-value matching is permitted.
+The explicit Care value always wins, including confirmed `not_sure`; it must
+not fall back to a legacy value. The only exact normalized legacy maps are:
+
+| Legacy key | Care key | Accepted values |
+| --- | --- | --- |
+| `hair_type` | `care_hair_pattern` | `straight`, `wavy`, `curly`, `coily` |
+| `hair_texture` | `care_hair_strand_characteristic` | `fine`, `medium`, `coarse` |
+| `hair_density` | `care_hair_density` | `low`, `medium`, `high` |
+
+Case and outer whitespace may be normalized. No synonyms, fuzzy matching, or
+lossy mappings such as `thin` → `fine`, `4c` → `coily`, or `wavy-curly` →
+`wavy` are allowed in V3-03.1. Legacy fallback requires
+`verification_state="confirmed"`; unverified, `not_sure` verification state,
+rejected, and superseded candidates remain unusable. There is no legacy
+fallback for `care_hair_processing`, which is a controlled list attribute.
+
+The assembler may normalize a fallback only in memory. It never writes
+`care_hair_*`, changes verification state, promotes an observation, creates a
+`UserConstraint`, or mutates the profile.
 
 ## 45. Proposed `build_care_context(...)` service contract
 
@@ -783,13 +853,18 @@ account ownership and per-input provenance. Global ontology/rule and Evidence
 claim/link rows remain `NOT_USER_OWNED`.
 
 AI may receive only the minimum deterministic facts needed to explain an
-already-made decision and cannot write ProfileAttribute values. Allergy remains
-the existing `UserConstraint(kind="allergy")`; professional, pregnancy, and
-prescribed-topical context remain deferred until separately approved.
+already-made decision and cannot write ProfileAttribute values. The canonical
+allergy owner is ProfileAttribute `allergies`; the existing
+`UserConstraint(kind="allergy")` is its synchronized projection and remains
+valid infrastructure. Care creates no duplicate allergy field or matching
+engine. Professional, pregnancy, and prescribed-topical context remain
+deferred until separately approved.
 
-## 47. Proposed evidence activation semantics
+## 47. Later behavior-phase evidence activation semantics
 
-Future V3-03.1 must introduce a distinction in the evidence-consuming seam:
+A later V3-03 behavior phase, immediately before Evidence affects Care
+behavior, must introduce and enforce the distinction in the evidence-consuming
+seam:
 
 ```text
 provenance_present = approved source/claim/link is attached
@@ -797,7 +872,8 @@ behavior_evidence_eligible = the link relationship and claim status permit
                               this rule to affect behavior
 ```
 
-`background` may make `provenance_present=true` for auditability but must not
+V3-03.1 does not modify Evidence activation. `background` may make
+`provenance_present=true` for auditability but must not
 make `behavior_evidence_eligible=true` for a safety or behavior rule. Only an
 approved claim, an eligible relationship, a live rule version, and a confirmed
 fact set may activate behavior. This is a design requirement only; V3-03.0
@@ -847,7 +923,7 @@ The current flow bypasses the Care Fact Set and calls `compile_all()` from a
 | expiry/opened date | implemented |
 | usage/remaining/low-use | implemented |
 | ingredient text and parsed families | implemented, confidence-aware |
-| user-declared allergies | implemented via generic Profile/UserConstraint |
+| canonical user-declared allergies | implemented via ProfileAttribute `allergies`; `UserConstraint(kind="allergy")` is synchronized projection |
 | usual skin feel | missing |
 | oiliness/dryness tendency | missing |
 | sensitivity tendency | missing |
@@ -881,15 +957,20 @@ The current flow bypasses the Care Fact Set and calls `compile_all()` from a
 ## 52. Current Care preference coverage
 
 There is no dedicated Care preference model. Generic style preferences and
-`LifestyleContext.routine` exist, and `UserConstraint` stores user-declared
-allergies, but the three controlled Care preference keys are not yet structured
-ProfileAttributes. They must not be inferred from adherence or purchase
+`LifestyleContext.routine` exist, and the canonical allergy ProfileAttribute is
+projected to `UserConstraint`, but the three controlled Care preference keys are
+not yet structured ProfileAttributes. They must not be inferred from adherence or purchase
 behavior. Owned-first is a system policy, not a preference key.
 
 ## 53. Current medical/safety-context coverage
 
-The baseline stores user-declared allergies as generic account constraints and
-uses them as a hard product exclusion when the parsed ingredient is confirmed.
+The baseline stores the canonical user-declared allergy value in ProfileAttribute
+`allergies`; `profile.service.sync_projections()` maintains the existing
+`UserConstraint(kind="allergy")` projection. The ShelfContext/routine path reads
+confirmed profile attributes through `shelf_attributes()` and its
+`SHELF_ATTRIBUTES` tuple (including `"allergies"`) and uses the result as a hard product exclusion when the parsed
+ingredient is confirmed. Care reuses that shelf boundary rather than querying
+UserConstraint independently or implementing a second matching engine.
 `safety.py` and `safety_classifier.py` block diagnostic/treatment wording and
 route health-like observations to a professional boundary. No structured
 pregnancy, prescribed topical, professional restriction, or diagnosis field is
