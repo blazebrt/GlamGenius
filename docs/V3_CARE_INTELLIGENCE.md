@@ -1302,3 +1302,27 @@ This persistence foundation is the prerequisite for later wash cadence,
 feedback-driven simplification, and routine-history interpretation. The
 migration refuses ambiguous duplicate slots and refuses a downgrade that
 would silently discard detached history.
+
+## 72. V3-03.8 User-Grounded Hair Wash Cadence
+
+Hair wash cadence determines **when** an already-selected Hair routine is
+relevant. `CareRoutinePlan` continues to determine **what** product is shown.
+The only scheduling authority is the trusted, confirmed canonical
+`care_hair_wash_frequency` Care fact. Durable completed adherence from a
+`wash_day` routine, limited to the `shampoo` or `conditioner` core slots,
+provides the historical anchor; retired routines remain valid history and
+future dates are ignored.
+
+`daily`, `several_times_week`, and `weekly` map deterministically to one-,
+two-, and seven-day intervals. `less_than_weekly`, `variable`, `not_sure`,
+and a missing declaration remain unscheduled rather than being guessed. A
+weekly or several-times-week declaration with no history needs an anchor and
+does not fall back to a calendar weekend. Weekend is no longer Hair wash
+authority; weekly extras retain their existing weekend behavior.
+
+Cadence has its independently auditable `v3-03.8` version and fingerprint.
+It is included in the canonical Today cache key, persisted as additive Care
+audit inputs, and participates in the existing locked-day partial Care
+freshness check. No Hair pattern, scalp, environment, Evidence, AI, product
+selection, inventory-usage, schema, migration, dependency, or frontend signal
+changes wash timing.
