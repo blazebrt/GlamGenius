@@ -39,8 +39,8 @@ env:
 
 jobs:
   # Scope is deliberately tiny: one checkout and one git diff.  It is the
-  # only job that runs before the path-aware PR gates and is also a no-op
-  # full-scope marker for main/manual qualification runs.
+  # only job that runs before the path-aware PR gate and supplies the explicit
+  # full (main/manual), scheduled-audit, or PR merge-base policy.
   scope:
     name: CI scope
     runs-on: ubuntu-latest
@@ -64,8 +64,8 @@ jobs:
       - id: scope
         name: Detect changed paths
         env:
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           EVENT_NAME: ${{ github.event_name }}
         run: bash .github/scripts/detect-ci-scope.sh "$BASE_SHA" "$HEAD_SHA" "$EVENT_NAME"
 
@@ -73,7 +73,7 @@ jobs:
   backend-tests:
     name: Backend unit + integration
     needs: scope
-    if: github.event_name != 'pull_request' || needs.scope.outputs.backend == 'true' || needs.scope.outputs.schema == 'true'
+    if: needs.scope.outputs.backend == 'true' || needs.scope.outputs.schema == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -131,6 +131,31 @@ jobs:
       - name: Alembic check (schema drift)
         working-directory: backend
         run: alembic check
+      - name: Alembic round-trip (schema PR)
+        if: github.event_name == 'pull_request' && needs.scope.outputs.schema == 'true'
+        working-directory: backend
+        run: |
+          alembic downgrade base
+          alembic upgrade head
+          alembic check
+      - name: Install pip-audit for dependency PR
+        if: github.event_name == 'pull_request' && needs.scope.outputs.python_deps == 'true'
+        run: pip install pip-audit==2.7.3
+      - name: Python dependency audit (dependency PR)
+        if: github.event_name == 'pull_request' && needs.scope.outputs.python_deps == 'true'
+        working-directory: backend
+        run: |
+          pip-audit -r requirements.txt \
+            --vulnerability-service osv \
+            --strict \
+            --ignore-vuln PYSEC-2026-1845 \
+            --ignore-vuln PYSEC-2026-161 \
+            --ignore-vuln PYSEC-2026-1941 \
+            --ignore-vuln PYSEC-2026-1943 \
+            --ignore-vuln PYSEC-2026-2280 \
+            --ignore-vuln PYSEC-2026-2281 \
+            --ignore-vuln PYSEC-2026-248 \
+            --ignore-vuln PYSEC-2026-249
       - name: Run Ruff on pull requests
         if: github.event_name == 'pull_request'
         working-directory: backend
@@ -158,7 +183,7 @@ jobs:
   backend-lint:
     name: Backend zero-warning lint
     needs: scope
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && needs.scope.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -185,7 +210,7 @@ jobs:
   backend-release:
     name: Backend release command test
     needs: scope
-    if: github.event_name != 'pull_request' || needs.scope.outputs.release == 'true'
+    if: needs.scope.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -256,7 +281,7 @@ jobs:
   alembic-round-trip:
     name: Alembic round-trip
     needs: scope
-    if: github.event_name != 'pull_request' || needs.scope.outputs.schema == 'true'
+    if: github.event_name != 'pull_request' && needs.scope.outputs.schema == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -299,7 +324,7 @@ jobs:
   frontend-tests:
     name: Frontend Jest + TypeScript + lint
     needs: scope
-    if: github.event_name != 'pull_request' || needs.scope.outputs.frontend == 'true'
+    if: needs.scope.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -323,6 +348,32 @@ jobs:
         working-directory: frontend
         # `--passWithNoTests` is intentionally NOT set.
         run: yarn test --ci --watchAll=false
+      - name: Metro Android bundle (runtime frontend PR)
+        if: github.event_name == 'pull_request' && needs.scope.outputs.mobile == 'true'
+        working-directory: frontend
+        env:
+          EXPO_PUBLIC_BACKEND_URL: http://localhost:8001
+          EXPO_PUBLIC_SUPABASE_URL: https://ci-project.supabase.co
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ci-anon-key-not-a-real-one
+        run: npx expo export --platform android --output-dir /tmp/expo-android
+      - name: Expo web export (runtime frontend PR)
+        if: github.event_name == 'pull_request' && needs.scope.outputs.web == 'true'
+        working-directory: frontend
+        env:
+          EXPO_PUBLIC_BACKEND_URL: http://localhost:8001
+          EXPO_PUBLIC_SUPABASE_URL: https://ci-project.supabase.co
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ci-anon-key-not-a-real-one
+        run: npx expo export --platform web
+      - name: Node dependency audit (dependency PR)
+        if: github.event_name == 'pull_request' && needs.scope.outputs.node_deps == 'true'
+        working-directory: frontend
+        run: |
+          set +e
+          yarn audit --level high --json > /tmp/yarn-audit.json
+          code=$?
+          echo "yarn audit exit code = $code (bitmask: 1=info,2=low,4=moderate,8=high,16=critical)"
+          set -e
+          node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json
 
   # ---- Mobile: Android bundle validation (blocking) ------------------------
   # Verifies the Expo project compiles for Android as a Metro bundle. This is
@@ -331,7 +382,7 @@ jobs:
   mobile-android-bundle:
     name: Mobile Android Metro bundle
     needs: scope
-    if: github.event_name != 'pull_request' || needs.scope.outputs.mobile == 'true'
+    if: github.event_name != 'pull_request' && needs.scope.outputs.mobile == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -362,7 +413,7 @@ jobs:
   expo-export:
     name: Expo web export (shared-code smoke test)
     needs: scope
-    if: github.event_name != 'pull_request' || needs.scope.outputs.web == 'true'
+    if: github.event_name != 'pull_request' && needs.scope.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -390,6 +441,7 @@ jobs:
   secret-scan:
     name: Secret scan
     needs: scope
+    if: github.event_name != 'pull_request' && github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -407,7 +459,7 @@ jobs:
   pip-audit:
     name: Python dependency audit
     needs: scope
-    if: github.event_name != 'pull_request' || needs.scope.outputs.python_deps == 'true'
+    if: github.event_name != 'pull_request' && needs.scope.outputs.python_deps == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -448,7 +500,7 @@ jobs:
   npm-audit:
     name: Node dependency audit
     needs: scope
-    if: github.event_name != 'pull_request' || needs.scope.outputs.node_deps == 'true'
+    if: github.event_name != 'pull_request' && needs.scope.outputs.node_deps == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -480,7 +532,7 @@ jobs:
   docker-build:
     name: Production Docker build
     needs: scope
-    if: github.event_name != 'pull_request' || needs.scope.outputs.container == 'true'
+    if: needs.scope.outputs.container == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -526,7 +578,7 @@ jobs:
   container-scan:
     name: Container vulnerability scan
     needs: [scope, docker-build]
-    if: always() && (github.event_name != 'pull_request' || needs.scope.outputs.container == 'true')
+    if: always() && needs.scope.outputs.container == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -566,7 +618,7 @@ jobs:
   sbom:
     name: SBOM generation
     needs: [scope, docker-build]
-    if: always() && (github.event_name != 'pull_request' || needs.scope.outputs.container == 'true')
+    if: always() && needs.scope.outputs.container == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -604,6 +656,7 @@ jobs:
   legacy-absence:
     name: Legacy and payment absence
     needs: scope
+    if: github.event_name != 'pull_request' && github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -654,7 +707,7 @@ jobs:
   auth-security:
     name: Authentication security
     needs: scope
-    if: github.event_name != 'pull_request' || needs.scope.outputs.security == 'true'
+    if: needs.scope.outputs.security == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -708,7 +761,7 @@ jobs:
   health-readiness:
     name: Health and readiness
     needs: scope
-    if: github.event_name != 'pull_request' || needs.scope.outputs.security == 'true'
+    if: needs.scope.outputs.security == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -762,7 +815,7 @@ jobs:
   account-deletion:
     name: Account-deletion state machine
     needs: scope
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -816,7 +869,7 @@ jobs:
   critical-journey:
     name: Critical journey
     needs: scope
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -867,104 +920,116 @@ jobs:
         working-directory: backend
         run: pytest -q tests/test_critical_journey*.py -v
 
-  # ---- Stable pull-request umbrellas ---------------------------------------
-  # These names are the recommended branch-protection checks.  The expensive
-  # implementation jobs above can be skipped by scope, while these checks
-  # still complete successfully (or fail visibly) on every PR.
-  backend-gate:
-    name: PR backend gate
-    needs: [scope, backend-tests]
+  # ---- Single stable pull-request gate -------------------------------------
+  # The PR gate is the only recommended branch-protection check.  It owns the
+  # lightweight policy work and aggregates every implementation job that can
+  # be required by PR scope.
+  pr-gate:
+    name: PR gate
+    needs: [scope, backend-tests, frontend-tests, backend-release, auth-security, health-readiness, docker-build, container-scan, sbom]
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 10
     steps:
-      - name: Enforce backend result when backend paths changed
+      - name: Enforce scope detection result first
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: |
+          if [[ "$SCOPE_RESULT" != "success" ]]; then
+            echo "Scope detection result is $SCOPE_RESULT; refusing to interpret missing outputs as no work"
+            exit 1
+          fi
+          echo "Scope detection succeeded"
+      - name: Checkout full history for PR policy checks
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: No MongoDB references
+        run: |
+          if grep -rn "mongodb\|MongoClient\|pymongo\|motor" backend/app/ backend/server.py --include="*.py"; then
+            echo "FAIL: MongoDB references found in backend code"
+            exit 1
+          fi
+          echo "PASS: no MongoDB references"
+      - name: No MinIO or S3 compatibility
+        run: |
+          if grep -rn "minio\|MinIO\|boto3\|s3_client\|S3_BUCKET" backend/app/ backend/server.py --include="*.py"; then
+            echo "FAIL: MinIO/S3 references found"
+            exit 1
+          fi
+          echo "PASS: no MinIO/S3 references"
+      - name: No payment or billing code
+        run: |
+          if grep -rn "stripe\|Stripe\|payment_intent\|billing\|subscription" backend/app/ backend/server.py --include="*.py"; then
+            echo "FAIL: payment/billing references found"
+            exit 1
+          fi
+          echo "PASS: no payment/billing references"
+      - name: No legacy terminology
+        run: |
+          if grep -rnE "Package [A-Z]|legacy project|temporary compatibility" backend/app/ backend/server.py --include="*.py"; then
+            echo "FAIL: legacy terminology found"
+            exit 1
+          fi
+          echo "PASS: no legacy terminology"
+      - name: "Workflow policy: immutable action pins"
+        run: |
+          if grep -RInE "uses:[[:space:]]*[^[:space:]]+@(master|main|latest)($|[[:space:]])" .github/workflows/; then
+            echo "FAIL: mutable GitHub Action reference found"
+            exit 1
+          fi
+          if grep -RInE "uses:[[:space:]]*[^[:space:]]+@[0-9A-Fa-f]{40}($|[[:space:]]+#)" .github/workflows/ | wc -l | grep -q '^0$'; then
+            echo "FAIL: no immutable GitHub Action SHA pins found"
+            exit 1
+          fi
+          echo "PASS: GitHub Actions use immutable SHA pins"
+      - name: Enforce all relevant implementation results
         env:
           BACKEND_SCOPE: ${{ needs.scope.outputs.backend }}
           SCHEMA_SCOPE: ${{ needs.scope.outputs.schema }}
-          BACKEND_RESULT: ${{ needs.backend-tests.result }}
-        run: |
-          if [[ "$BACKEND_SCOPE" == "true" || "$SCHEMA_SCOPE" == "true" ]]; then
-            if [[ "$BACKEND_RESULT" != "success" ]]; then
-              echo "Backend scope is relevant and the canonical backend gate result is $BACKEND_RESULT"
-              exit 1
-            fi
-            echo "Backend checks passed"
-          else
-            echo "Backend scope is not relevant; canonical backend checks are not required"
-          fi
-
-  frontend-gate:
-    name: PR frontend gate
-    needs: [scope, frontend-tests, mobile-android-bundle, expo-export]
-    if: always() && github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - name: Enforce frontend results when frontend paths changed
-        env:
           FRONTEND_SCOPE: ${{ needs.scope.outputs.frontend }}
-          MOBILE_SCOPE: ${{ needs.scope.outputs.mobile }}
-          WEB_SCOPE: ${{ needs.scope.outputs.web }}
-          FRONTEND_RESULT: ${{ needs.frontend-tests.result }}
-          MOBILE_RESULT: ${{ needs.mobile-android-bundle.result }}
-          WEB_RESULT: ${{ needs.expo-export.result }}
-        run: |
-          if [[ "$FRONTEND_SCOPE" != "true" ]]; then
-            echo "Frontend scope is not relevant; canonical frontend checks are not required"
-            exit 0
-          fi
-          if [[ "$FRONTEND_RESULT" != "success" ]]; then
-            echo "Frontend canonical gate result is $FRONTEND_RESULT"
-            exit 1
-          fi
-          if [[ "$MOBILE_SCOPE" == "true" && "$MOBILE_RESULT" != "success" ]]; then
-            echo "Mobile bundle gate result is $MOBILE_RESULT"
-            exit 1
-          fi
-          if [[ "$WEB_SCOPE" == "true" && "$WEB_RESULT" != "success" ]]; then
-            echo "Expo web gate result is $WEB_RESULT"
-            exit 1
-          fi
-          echo "Frontend checks passed"
-
-  policy-gate:
-    name: PR policy gate
-    needs: [scope, legacy-absence, secret-scan, pip-audit, npm-audit, docker-build, container-scan, sbom]
-    if: always() && github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - name: Enforce policy and relevant security results
-        env:
-          LEGACY_RESULT: ${{ needs.legacy-absence.result }}
-          SECRET_RESULT: ${{ needs.secret-scan.result }}
           PYTHON_SCOPE: ${{ needs.scope.outputs.python_deps }}
-          PYTHON_RESULT: ${{ needs.pip-audit.result }}
           NODE_SCOPE: ${{ needs.scope.outputs.node_deps }}
-          NODE_RESULT: ${{ needs.npm-audit.result }}
           CONTAINER_SCOPE: ${{ needs.scope.outputs.container }}
-          CONTAINER_RESULT: ${{ needs.container-scan.result }}
+          SECURITY_SCOPE: ${{ needs.scope.outputs.security }}
+          RELEASE_SCOPE: ${{ needs.scope.outputs.release }}
+          BACKEND_RESULT: ${{ needs.backend-tests.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-tests.result }}
+          RELEASE_RESULT: ${{ needs.backend-release.result }}
+          AUTH_RESULT: ${{ needs.auth-security.result }}
+          HEALTH_RESULT: ${{ needs.health-readiness.result }}
+          DOCKER_RESULT: ${{ needs.docker-build.result }}
+          TRIVY_RESULT: ${{ needs.container-scan.result }}
           SBOM_RESULT: ${{ needs.sbom.result }}
         run: |
-          for result in "$LEGACY_RESULT" "$SECRET_RESULT"; do
+          require_success() {
+            local label="$1"
+            local result="$2"
             if [[ "$result" != "success" ]]; then
-              echo "Always-on policy result is $result"
+              echo "$label result is $result"
               exit 1
             fi
-          done
-          if [[ "$PYTHON_SCOPE" == "true" && "$PYTHON_RESULT" != "success" ]]; then
-            echo "Python dependency audit result is $PYTHON_RESULT"
-            exit 1
+          }
+          if [[ "$BACKEND_SCOPE" == "true" || "$SCHEMA_SCOPE" == "true" || "$PYTHON_SCOPE" == "true" ]]; then
+            require_success "Backend canonical job" "$BACKEND_RESULT"
           fi
-          if [[ "$NODE_SCOPE" == "true" && "$NODE_RESULT" != "success" ]]; then
-            echo "Node dependency audit result is $NODE_RESULT"
-            exit 1
+          if [[ "$FRONTEND_SCOPE" == "true" || "$NODE_SCOPE" == "true" ]]; then
+            require_success "Frontend canonical job" "$FRONTEND_RESULT"
           fi
           if [[ "$CONTAINER_SCOPE" == "true" ]]; then
-            if [[ "$CONTAINER_RESULT" != "success" || "$SBOM_RESULT" != "success" ]]; then
-              echo "Container security result: scan=$CONTAINER_RESULT sbom=$SBOM_RESULT"
-              exit 1
-            fi
+            require_success "Docker build" "$DOCKER_RESULT"
+            require_success "Trivy" "$TRIVY_RESULT"
+            require_success "SBOM" "$SBOM_RESULT"
           fi
-          echo "Policy checks passed"
+          if [[ "$SECURITY_SCOPE" == "true" ]]; then
+            require_success "Authentication security" "$AUTH_RESULT"
+            require_success "Health and readiness" "$HEALTH_RESULT"
+          fi
+          if [[ "$RELEASE_SCOPE" == "true" ]]; then
+            require_success "Backend release" "$RELEASE_RESULT"
+          fi
+          echo "PR gate passed: all relevant implementation and policy checks succeeded"

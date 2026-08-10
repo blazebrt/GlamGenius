@@ -1,62 +1,73 @@
 # CI-01 — Free-tier CI optimization
 
-The CI workflow keeps the same blocking commands and immutable action pins,
-but only starts jobs whose inputs can be affected by a pull request. A small
-`scope` job computes the path map from the PR merge base. The three stable
-required checks (`PR backend gate`, `PR frontend gate`, and `PR policy gate`)
-always complete on pull requests, including docs-only changes; they either
-enforce the relevant implementation jobs or report a successful not-applicable
-result.
+The workflow uses one deterministic `scope` job and one stable pull-request
+check named `PR gate`. The gate performs lightweight repository policy checks
+itself and enforces every implementation job that the scope requires.
 
-## Trigger policy
+## Event policy
 
-| Change | Blocking PR work | Intentionally deferred |
+| Event | Scope | Qualification |
 | --- | --- | --- |
-| Backend/application or migration | Backend Alembic upgrade/check, seed, full pytest, invite-required suite, and Ruff | Focused auth/health/account/critical reruns (the canonical suite already covers these) |
-| Frontend source | Frozen Yarn install, TypeScript, zero-warning lint, Jest | Android/Expo smoke exports unless app/native/config or lockfile paths changed |
-| Migration/schema | Backend gate plus Alembic round-trip | — |
-| Python requirements | Backend gate, pip-audit, Docker/Trivy/SBOM | — |
-| Node dependency files | Frontend gate, npm audit, Android/Expo exports | — |
-| Docker/runtime files | Docker build, Trivy, and SBOM | — |
-| Docs only | Secret scan, legacy/policy checks, and the three umbrellas | All dependency, database, container, mobile, and application jobs |
-| Workflow/security policy | Secret/legacy/policy checks plus relevant release/security validation | — |
-| Push to `main`, weekly schedule, or manual dispatch | The complete existing 18-job production qualification matrix | — |
+| Pull request | Merge-base diff of PR base/head | Relevant backend/frontend/container/security/release work only; `PR gate` is the single required check |
+| Push to `main` | All groups true | Full existing 18-job production qualification |
+| Manual dispatch | All groups true | Full existing 18-job production qualification |
+| Weekly schedule | Python and Node dependency groups only | `pip-audit` and Node audit; no weekly application, database, mobile, release, Docker, or SBOM matrix |
 
-`ci.yml` no longer runs a second heavy matrix on feature-branch pushes; pull
-requests are the PR trigger and `main` is the production trigger. A weekly
-scheduled run keeps dependency and container audits fresh. Concurrency still
-cancels stale PR runs and never cancels a `main` run.
+Ordinary backend Care PRs run `CI scope`, the canonical backend job, and `PR
+gate`. Ordinary Expo runtime PRs run `CI scope`, the canonical frontend job,
+and `PR gate`; the frontend job performs one frozen Yarn install followed by
+TypeScript, zero-warning lint, Jest, Android Metro export, and Expo web export.
 
-## Cost model
+## Path-aware PR behavior
 
-The baseline started all 18 jobs for every PR. The optimized active-run counts
-are:
+- Backend/schema scope runs the blocking Alembic upgrade/check, optional
+  schema round-trip, reference-data seed validation, Ruff, full pytest, and
+  invite-required regressions in one Postgres-backed job.
+- Python dependency scope adds the existing strict `pip-audit` policy to that
+  same backend job. The dedicated audit job remains for `main`, manual, and
+  scheduled qualification.
+- Frontend runtime scope includes `frontend/app/**`, `frontend/src/**`, and
+  other runtime directories; it runs both Android and web exports inside the
+  canonical frontend job. Clearly marked test/docs-only frontend paths remain
+  cheaper.
+- Node dependency scope adds the existing Node audit validator to the same
+  frontend job. The dedicated audit job remains for `main`, manual, and
+  scheduled qualification.
+- Container scope runs Docker build → Trivy → SBOM, with the PR gate requiring
+  all three results explicitly.
+- Security/release workflow scope runs the relevant authentication,
+  health/readiness, and release jobs, and the PR gate enforces their results.
+- Secret scanning, legacy/payment absence, and immutable-action policy checks
+  execute inside `PR gate` on pull requests. Their dedicated production jobs
+  remain on `main` and manual full qualification.
 
-| Scenario | Active jobs | Notes |
-| --- | ---: | --- |
-| Backend Care/application change | 7 | One Python install and one Postgres service; Ruff is a named step in the canonical backend job |
-| Frontend source-only change | 7 | One frozen Yarn install; mobile/web exports are scoped to native/config/lockfile changes |
-| Migration/schema change | 8 | Adds the full Alembic round-trip |
-| Python requirements | 11 | Adds dependency audit and container security chain |
-| Node dependency files | 11 | Adds npm audit and mobile/web exports |
-| Dockerfile/runtime image | 9 | Docker build, Trivy, and both SBOM jobs |
-| Docs-only change | 6 | Scope, secret, legacy, and three stable umbrellas |
-| Workflow/security policy | 9 | Policy checks plus release/auth-health validation |
-| `main` push | 19 | Scope marker plus the unchanged 18-job qualification matrix |
+## Active-run model
 
-Before optimization, a backend PR could start seven separate Postgres
-services and eight Python dependency installations (backend tests, lint,
-release, round-trip, and four focused suites). A backend PR now starts one of
-each. A source-only frontend PR falls from three frozen Yarn installs to one.
-Failure diagnostics remain visible: pytest, audit, Trivy, and SBOM artifacts
-are uploaded only by the jobs that run (and reports remain available on
-failure or as the downstream security input requires).
+| Scenario | Active jobs |
+| --- | ---: |
+| Backend Care PR | 3 |
+| Frontend runtime PR | 3 |
+| Migration/schema PR | 3 |
+| Python dependency PR | 6 |
+| Node dependency PR | 3 |
+| Docker PR | 5 |
+| Workflow/security PR | 5 |
+| Docs-only PR | 2 |
+| Weekly schedule | 3 |
+| `main` push/manual dispatch | 19 (scope plus 18 qualification jobs) |
 
-No application source, dependency, schema, migration, frontend, Android,
-Expo, or security policy was weakened. No paid runner, self-hosted runner, or
-mutable action reference was introduced.
+The baseline started all 18 jobs for every PR. A typical backend PR falls from
+seven Postgres startups and eight Python installs to one of each. A frontend
+runtime PR falls from three Yarn installs to one. Dependency/container PRs
+retain the extra security chain only when those inputs can affect it.
 
-The container scope is intentionally limited to the Dockerfile, image build
-inputs, and container policy files. Application-source changes are validated
-by the canonical backend suite; image build and vulnerability qualification
-remain mandatory on `main` and whenever an image input changes.
+Large diagnostics are failure-only with short retention where practical;
+Docker image and release/security artifacts remain available when they are
+downstream inputs or qualification outputs. Job-level timeouts remain in
+place, PR concurrency cancels superseded runs, and `main` is never cancelled.
+
+No application source, dependency, migration, table, column, enum, paid CI
+service, or self-hosted runner was added or changed.
+
+The recommended branch-protection check after this correction is exactly
+`PR gate`.

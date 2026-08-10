@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Emit a path-aware CI scope for the pull-request workflow.  Non-PR events are
-# treated as full qualification runs so pushes to main and manual dispatches
-# cannot accidentally bypass production checks.
-base_sha="${1:?base SHA is required}"
-head_sha="${2:?head SHA is required}"
 event_name="${3:-pull_request}"
 
 emit() {
@@ -18,18 +13,35 @@ emit() {
   fi
 }
 
+if [[ "$event_name" == "schedule" ]]; then
+  # Scheduled qualification is intentionally limited to dependency refreshes.
+  for key in backend schema frontend mobile web container security release; do
+    emit "$key" false
+  done
+  emit python_deps true
+  emit node_deps true
+  exit 0
+fi
+
 if [[ "$event_name" != "pull_request" ]]; then
+  # Push-to-main and manual dispatch are full production qualification events.
   for key in backend schema frontend mobile web python_deps node_deps container security release; do
     emit "$key" true
   done
   exit 0
 fi
 
+base_sha="${1:?base SHA is required for pull_request}"
+head_sha="${2:?head SHA is required for pull_request}"
+
 if [[ -n "${CI_SCOPE_CHANGED_FILES:-}" ]]; then
   # Test hook used by the local scenario harness; CI always uses git diff.
   mapfile -t changed_files < <(printf '%s\n' "$CI_SCOPE_CHANGED_FILES")
 else
-  mapfile -t changed_files < <(git diff --name-only "$base_sha" "$head_sha")
+  # Compare the PR head to its merge-base with the current base tip. This
+  # excludes unrelated changes that landed on main after the feature branch.
+  merge_base="$(git merge-base "$base_sha" "$head_sha")"
+  mapfile -t changed_files < <(git diff --name-only "$merge_base" "$head_sha")
 fi
 
 backend=false
@@ -60,7 +72,22 @@ for path in "${changed_files[@]}"; do
       ;;
   esac
   case "$path" in
-    frontend/app.json|frontend/app.config.*|frontend/android/*|frontend/ios/*|frontend/package.json|frontend/yarn.lock)
+    frontend/app/*|frontend/src/*|frontend/components/*|frontend/hooks/*|frontend/lib/*|frontend/screens/*|frontend/*.tsx|frontend/*.ts|frontend/*.jsx|frontend/*.js|frontend/app.json|frontend/app.config.*|frontend/android/*|frontend/ios/*|frontend/package.json|frontend/yarn.lock)
+      mobile=true
+      web=true
+      ;;
+  esac
+  case "$path" in
+    frontend/*test*|frontend/*spec*|frontend/__tests__/*|frontend/tests/*|frontend/jest.setup.js|frontend/docs/*)
+      frontend=true
+      mobile=false
+      web=false
+      ;;
+  esac
+  case "$path" in
+    shared/*)
+      backend=true
+      frontend=true
       mobile=true
       web=true
       ;;
