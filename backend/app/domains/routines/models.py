@@ -240,7 +240,10 @@ class RoutineStep(UUIDPrimaryKey, TimestampMixin, Base):
     climate_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     is_gap: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
-    __table_args__ = (Index("ix_routine_steps_routine", "routine_id", "position"),)
+    __table_args__ = (
+        UniqueConstraint("routine_id", "slot", name="uq_routine_step_slot"),
+        Index("ix_routine_steps_routine", "routine_id", "position"),
+    )
 
 
 class RoutineAdherence(UUIDPrimaryKey, TimestampMixin, Base):
@@ -254,13 +257,14 @@ class RoutineAdherence(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     routine_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("routines.id", ondelete="CASCADE"), nullable=False)
-    step_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("routine_steps.id", ondelete="CASCADE"), nullable=False)
+    slot: Mapped[str] = mapped_column(String(32), nullable=False)
+    step_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("routine_steps.id", ondelete="SET NULL"))
     done_on: Mapped[date] = mapped_column(Date, nullable=False)
     completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     note: Mapped[str | None] = mapped_column(String(240))
 
     __table_args__ = (
-        UniqueConstraint("step_id", "done_on", name="uq_routine_adherence_step_day"),
+        UniqueConstraint("routine_id", "slot", "done_on", name="uq_routine_adherence_slot_day"),
         Index("ix_routine_adherence_account_date", "account_id", "done_on"),
     )
 

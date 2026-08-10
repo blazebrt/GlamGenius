@@ -425,8 +425,18 @@ async def _replace_routines(
             )
             session.add(routine)
             await session.flush()
+            current_steps: dict[str, RoutineStep] = {}
         else:
-            await session.execute(delete(RoutineStep).where(RoutineStep.routine_id == routine.id))
+            current_rows = (await session.execute(
+                select(RoutineStep).where(RoutineStep.routine_id == routine.id)
+            )).scalars().all()
+            current_steps = {}
+            for current in current_rows:
+                if current.slot in current_steps:
+                    raise ValueError(
+                        f"Routine {routine.kind!r} has duplicate current step slot {current.slot!r}; refusing reconciliation"
+                    )
+                current_steps[current.slot] = current
             routine.version += 1
 
         routine.label = built.label
@@ -440,13 +450,26 @@ async def _replace_routines(
         routine.skipped_for_allergy = built.skipped_for_allergy
 
         for step in built.steps:
-            session.add(RoutineStep(
-                routine_id=routine.id, slot=step.slot, label=step.label, position=step.order,
-                required=step.required, why=step.why, frequency=step.frequency,
-                inventory_item_id=uuid.UUID(step.item_id) if step.item_id else None,
-                product_name=step.product_name, safety_note=step.safety_note,
-                alternative=step.alternative, climate_note=step.climate_note, is_gap=step.is_gap,
-            ))
+            current = current_steps.pop(step.slot, None)
+            if current is None:
+                current = RoutineStep(routine_id=routine.id, slot=step.slot)
+                session.add(current)
+            current.label = step.label
+            current.position = step.order
+            current.required = step.required
+            current.why = step.why
+            current.frequency = step.frequency
+            current.inventory_item_id = uuid.UUID(step.item_id) if step.item_id else None
+            current.product_name = step.product_name
+            current.safety_note = step.safety_note
+            current.alternative = step.alternative
+            current.climate_note = step.climate_note
+            current.is_gap = step.is_gap
+
+        # A removed rendering row is safe to delete: the SET NULL FK keeps its
+        # historical adherence, whose durable identity is routine + slot + day.
+        for removed in current_steps.values():
+            await session.delete(removed)
         stored.append(routine)
 
     # A routine that no longer makes sense — every product for it archived, say —
@@ -679,15 +702,16 @@ async def routines_today(
         routines.append(routine)
 
     done = {
-        row.step_id for row in (await session.execute(
+        (row.routine_id, row.slot) for row in (await session.execute(
             select(RoutineAdherence).where(
                 RoutineAdherence.account_id == account_id, RoutineAdherence.done_on == today,
             )
         )).scalars().all() if row.completed
     }
     for routine in routines:
+        routine_id = uuid.UUID(routine["id"])
         for step in routine["steps"]:
-            step["completed_today"] = uuid.UUID(step["id"]) in done
+            step["completed_today"] = (routine_id, step["slot"]) in done
 
     refresh_required = bool(refresh_required_kinds)
     return {
@@ -721,14 +745,22 @@ async def complete_step(
     done_on = body.done_on or clock.local_today(clock.DEFAULT_TIMEZONE)
     existing = (await session.execute(
         select(RoutineAdherence).where(
-            RoutineAdherence.step_id == step_id, RoutineAdherence.done_on == done_on,
+            RoutineAdherence.account_id == account_id,
+            RoutineAdherence.routine_id == routine.id,
+            RoutineAdherence.slot == step.slot,
+            RoutineAdherence.done_on == done_on,
         )
     )).scalar_one_or_none()
     if existing is None:
         existing = RoutineAdherence(
-            account_id=account_id, routine_id=routine.id, step_id=step_id, done_on=done_on,
+            account_id=account_id, routine_id=routine.id, slot=step.slot,
+            step_id=step_id, done_on=done_on,
         )
         session.add(existing)
+    else:
+        # The UUID is provenance for the current rendering row, never the
+        # logical identity of this historical completion.
+        existing.step_id = step_id
     existing.completed = body.completed
     existing.note = body.note
     await session.flush()
