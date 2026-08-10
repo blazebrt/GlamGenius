@@ -73,7 +73,7 @@ jobs:
   backend-tests:
     name: Backend unit + integration
     needs: scope
-    if: needs.scope.outputs.backend == 'true' || needs.scope.outputs.schema == 'true'
+    if: needs.scope.outputs.backend == 'true' || needs.scope.outputs.schema == 'true' || needs.scope.outputs.python_deps == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -324,7 +324,7 @@ jobs:
   frontend-tests:
     name: Frontend Jest + TypeScript + lint
     needs: scope
-    if: needs.scope.outputs.frontend == 'true'
+    if: needs.scope.outputs.frontend == 'true' || needs.scope.outputs.node_deps == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -578,7 +578,7 @@ jobs:
   container-scan:
     name: Container vulnerability scan
     needs: [scope, docker-build]
-    if: always() && needs.scope.outputs.container == 'true'
+    if: needs.scope.outputs.container == 'true' && needs.docker-build.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -618,7 +618,7 @@ jobs:
   sbom:
     name: SBOM generation
     needs: [scope, docker-build]
-    if: always() && needs.scope.outputs.container == 'true'
+    if: needs.scope.outputs.container == 'true' && needs.docker-build.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

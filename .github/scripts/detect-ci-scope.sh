@@ -67,24 +67,17 @@ for path in "${changed_files[@]}"; do
       ;;
   esac
   case "$path" in
-    frontend/*|shared/*|frontend/package.json|frontend/yarn.lock)
+    frontend/*test*|frontend/*spec*|frontend/__tests__/*|frontend/tests/*|frontend/jest.setup.js|frontend/docs/*)
       frontend=true
       ;;
-  esac
-  case "$path" in
     frontend/app/*|frontend/src/*|frontend/components/*|frontend/hooks/*|frontend/lib/*|frontend/screens/*|frontend/*.tsx|frontend/*.ts|frontend/*.jsx|frontend/*.js|frontend/app.json|frontend/app.config.*|frontend/android/*|frontend/ios/*|frontend/package.json|frontend/yarn.lock)
+      frontend=true
       mobile=true
       web=true
       ;;
-  esac
-  case "$path" in
-    frontend/*test*|frontend/*spec*|frontend/__tests__/*|frontend/tests/*|frontend/jest.setup.js|frontend/docs/*)
+    frontend/*)
       frontend=true
-      mobile=false
-      web=false
       ;;
-  esac
-  case "$path" in
     shared/*)
       backend=true
       frontend=true
@@ -108,6 +101,8 @@ for path in "${changed_files[@]}"; do
       ;;
   esac
   case "$path" in
+    security/node-audit*|security/*audit*|security/pip-audit*|security/requirements*)
+      ;;
     backend/app/config.py|backend/app/auth/*|backend/app/shared/auth*|backend/tests/test_supabase*|backend/tests/test_jwks*|security/*|.github/*)
       security=true
       ;;
