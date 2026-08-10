@@ -1,11 +1,13 @@
 """V3-03.7 database-backed routine identity and adherence regressions."""
 from __future__ import annotations
 
+import uuid
 from datetime import date
 
 import pytest
 from app.bootstrap import run as run_seed
 from app.domains.inventory.models import InventoryItem
+from app.domains.planning import clock
 from app.domains.routines import compiler, service
 from app.domains.routines.models import RoutineAdherence, RoutineStep
 from app.domains.routines.schemas import RoutineStepComplete
@@ -18,6 +20,11 @@ from tests.test_domain_routines_api import _generate, _seeded_shelf
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _force_morning(monkeypatch):
+    monkeypatch.setattr(clock, "part_of_day", lambda _: "morning")
+
+
 def _compiled(*steps: tuple[str, str | None, bool, bool], kind: str = "morning") -> compiler.CompiledRoutine:
     return compiler.CompiledRoutine(
         kind=kind, label=f"{kind.title()} routine", frequency="daily",
@@ -27,6 +34,24 @@ def _compiled(*steps: tuple[str, str | None, bool, bool], kind: str = "morning")
                 why=f"Why {slot}", frequency="daily", item_id=item_id, is_gap=is_gap,
             )
             for position, (slot, item_id, required, is_gap) in enumerate(steps, start=1)
+        ],
+    )
+
+
+def _compiled_from_response(
+    routine: dict, *, without: set[str] | frozenset[str] = frozenset(),
+) -> compiler.CompiledRoutine:
+    return compiler.CompiledRoutine(
+        kind=routine["kind"], label=routine["label"], frequency=routine["frequency"],
+        steps=[
+            compiler.RoutineStep(
+                slot=step["slot"], label=step["label"], order=step["order"],
+                required=step["required"], why=step["why"], frequency=step["frequency"],
+                item_id=step["inventory_item_id"], product_name=step["product_name"],
+                safety_note=step["safety_note"], alternative=step["alternative"],
+                climate_note=step["climate_note"], is_gap=step["is_gap"],
+            )
+            for step in routine["steps"] if step["slot"] not in without
         ],
     )
 
@@ -247,36 +272,77 @@ async def test_optional_slot_removal_and_restore_preserves_history_and_same_day_
 async def test_completed_today_uses_routine_and_slot_not_step_uuid(
     app_client, db_clean, registered_supabase_user, fake_provider,
 ):
-    # This route-level regression exercises the same logical key used by the
-    # service after a routine has been regenerated.
-    token, _ = await registered_supabase_user()
+    # This route-level regression exercises the same logical key after the
+    # current rendering UUID was deleted and recreated.
+    token, account_id = await registered_supabase_user()
     await _seeded_shelf(app_client, token)
-    first = (await _generate(app_client, token)).json()
+    toner_response = await app_client.post(
+        "/api/v2/inventory/items", headers=auth(token), json={
+            "category": "beauty", "display_name": "Established Toner", "subcategory": "toner",
+            "details": {"product_type": "toner", "purpose": "hydration", "routine_position": "tone"},
+        },
+    )
+    assert toner_response.status_code in (200, 201), toner_response.text
+    toner_id = toner_response.json()["id"]
+    factory = get_sessionmaker()
+    async with factory() as session:
+        toner = await session.get(InventoryItem, toner_id)
+        assert toner is not None
+        toner.usage_count = 4
+        await session.commit()
+
+    first = (await _generate(app_client, token, kinds=["morning"])).json()
     morning = next(row for row in first["routines"] if row["kind"] == "morning")
-    cleanser = next(step for step in morning["steps"] if step["slot"] == "cleanser")
+    toner_step = next(step for step in morning["steps"] if step["slot"] == "toner")
+    original_step_id = toner_step["id"]
     done_on = date(2026, 8, 10).isoformat()
     response = await app_client.post(
-        f"/api/v2/routines/steps/{cleanser['id']}/complete",
+        f"/api/v2/routines/steps/{original_step_id}/complete",
         headers=auth(token), json={"done_on": done_on, "completed": True},
     )
     assert response.status_code == 200, response.text
 
-    second = (await _generate(app_client, token)).json()
-    new_morning = next(row for row in second["routines"] if row["kind"] == "morning")
-    new_cleanser = next(step for step in new_morning["steps"] if step["slot"] == "cleanser")
-    assert new_cleanser["id"] == cleanser["id"]
+    removed = _compiled_from_response(morning, without={"toner"})
+    restored = _compiled_from_response(morning)
+    routine_id = uuid.UUID(morning["id"])
+    async with factory() as session:
+        await service._replace_routines(
+            session, account_id, [removed],
+            climate=None, explanation_source="deterministic",
+        )
+        await session.commit()
+
+    async with factory() as session:
+        detached = (await session.execute(
+            select(RoutineAdherence).where(
+                RoutineAdherence.account_id == account_id,
+                RoutineAdherence.slot == "toner",
+                RoutineAdherence.done_on == date.fromisoformat(done_on),
+            )
+        )).scalar_one()
+        assert detached.step_id is None
+
+        await service._replace_routines(
+            session, account_id, [restored],
+            climate=None, explanation_source="deterministic",
+        )
+        await session.commit()
+
+    async with factory() as session:
+        restored_row = (await session.execute(
+            select(RoutineStep).where(
+                RoutineStep.routine_id == routine_id,
+                RoutineStep.slot == "toner",
+            )
+        )).scalar_one()
+        assert restored_row.id != original_step_id
 
     today = (await app_client.get(
         "/api/v2/routines/today?on=2026-08-10", headers=auth(token),
     )).json()
-    returned_morning = next(
-        (row for row in today["routines"] if row["kind"] == "morning"), None,
-    )
-    if returned_morning is not None:
-        returned_cleanser = next(
-            step for step in returned_morning["steps"] if step["slot"] == "cleanser"
-        )
-        assert returned_cleanser["completed_today"] is True
+    returned_morning = next(row for row in today["routines"] if row["kind"] == "morning")
+    returned_toner = next(step for step in returned_morning["steps"] if step["slot"] == "toner")
+    assert returned_toner["completed_today"] is True
 
 
 async def test_completion_does_not_change_inventory_usage(
@@ -298,6 +364,36 @@ async def test_completion_does_not_change_inventory_usage(
     assert item is not None
     assert item.usage_count == 0
     assert item.last_used_at is None
+
+
+async def test_routines_today_keeps_same_slot_scoped_to_routine(
+    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch,
+):
+    monkeypatch.setattr(clock, "part_of_day", lambda _: "afternoon")
+    token, _ = await registered_supabase_user()
+    await _seeded_shelf(app_client, token)
+    generated = (await _generate(app_client, token, kinds=["morning", "evening"])).json()
+    morning = next(row for row in generated["routines"] if row["kind"] == "morning")
+    evening = next(row for row in generated["routines"] if row["kind"] == "evening")
+    morning_cleanser = next(step for step in morning["steps"] if step["slot"] == "cleanser")
+    evening_cleanser = next(step for step in evening["steps"] if step["slot"] == "cleanser")
+    assert morning["id"] != evening["id"]
+
+    done_on = date(2026, 8, 10).isoformat()
+    response = await app_client.post(
+        f"/api/v2/routines/steps/{morning_cleanser['id']}/complete",
+        headers=auth(token), json={"done_on": done_on, "completed": True},
+    )
+    assert response.status_code == 200, response.text
+
+    today = (await app_client.get(
+        "/api/v2/routines/today?on=2026-08-10", headers=auth(token),
+    )).json()
+    returned_morning = next(row for row in today["routines"] if row["kind"] == "morning")
+    returned_evening = next(row for row in today["routines"] if row["kind"] == "evening")
+    assert next(step for step in returned_morning["steps"] if step["slot"] == "cleanser")["completed_today"] is True
+    assert next(step for step in returned_evening["steps"] if step["slot"] == "cleanser")["completed_today"] is False
+    assert morning_cleanser["id"] != evening_cleanser["id"]
 
 
 async def test_same_slot_in_morning_and_evening_isolated(
