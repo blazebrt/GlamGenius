@@ -18,9 +18,11 @@ from app.domains.care.routine_plan import (
 )
 from app.domains.care.schemas import CareContext, CareEnvironment, CareEvent, CareFact
 from app.domains.recommendation.context import OwnedItem
+from app.domains.routines import compiler
 from app.domains.routines.ontology import HAIR_SLOTS, SKIN_SLOTS, slot_for_product_type
 from app.domains.routines.parser import ParsedIngredient
 from app.domains.routines.rules import ShelfProduct
+from app.domains.routines.selection import RoutineSelectionPlan, RoutineSlotDirective
 
 ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000301")
 PLAN_DATE = date(2026, 8, 12)
@@ -107,6 +109,24 @@ def _slot(plan, key: str):
     return next(row for row in (*plan.skin_slots, *plan.hair_slots) if row.slot == key)
 
 
+def _selection(plan) -> RoutineSelectionPlan:
+    return RoutineSelectionPlan(
+        plan_version=plan.plan_version,
+        plan_fingerprint=routine_plan_fingerprint(plan),
+        effort=plan.resolved_effort.value,
+        effort_source=plan.effort_source.value,
+        directives=tuple(
+            RoutineSlotDirective(
+                slot=row.slot, category=row.category, required=row.required,
+                active=row.active,
+                selected_item_id=str(row.selected_item_id) if row.selected_item_id else None,
+                is_gap=row.is_gap,
+            )
+            for row in (*plan.skin_slots, *plan.hair_slots)
+        ),
+    )
+
+
 def test_contract_version_and_ontology_required_slots_are_canonical():
     _, plan = _plan(effort="minimal")
     assert plan.plan_version == CARE_ROUTINE_PLAN_VERSION == "v3-03.4"
@@ -114,6 +134,70 @@ def test_contract_version_and_ontology_required_slots_are_canonical():
     assert tuple(row.slot for row in plan.hair_slots if row.required) == tuple(row.key for row in HAIR_SLOTS if row.required)
     assert _slot(plan, "toner").is_gap is False
     assert _slot(plan, "hair_mask").is_gap is False
+
+
+def test_v3_03_5_compiler_renders_exact_plan_selection_without_ranker(monkeypatch):
+    older = _product("beauty", "moisturiser", "A recently used moisturiser", last_used_at=PLAN_DATE)
+    recovery_favourite = _product(
+        "beauty", "moisturiser", "B expiring moisturiser", expiry=PLAN_DATE,
+        remaining_percent=90, price=999,
+    )
+    context, plan = _plan(older, recovery_favourite, effort="minimal")
+    selected = _slot(plan, "moisturiser")
+    assert selected.selected_item_id == older.item.id
+    projection = _selection(plan)
+    monkeypatch.setattr(
+        compiler.rules_engine, "rank_for_slot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy ranker called")),
+    )
+
+    routine = compiler.compile_routine(
+        compiler.ROUTINE_MORNING, [older, recovery_favourite],
+        today=context.plan_date,
+        eligibility=compiler.RoutineEligibility(
+            eligible_item_ids=frozenset({older.id, recovery_favourite.id}),
+        ),
+        selection_plan=projection,
+    )
+    moisturiser = next(row for row in routine.steps if row.slot == "moisturiser")
+    assert moisturiser.item_id == str(older.item.id)
+
+
+def test_v3_03_5_minimal_projection_omits_owned_optional_slots():
+    products = (
+        _product("beauty", "cleanser", "Cleanser"),
+        _product("beauty", "moisturiser", "Moisturiser"),
+        _product("beauty", "sunscreen", "Sunscreen"),
+        _product("beauty", "toner", "Owned toner"),
+        _product("hair", "shampoo", "Shampoo"),
+        _product("hair", "conditioner", "Conditioner"),
+        _product("hair", "leave-in", "Owned leave-in"),
+    )
+    context, plan = _plan(*products, effort="minimal")
+    compiled = compiler.compile_all(
+        list(context.skin_products), list(context.hair_products),
+        today=context.plan_date,
+        eligibility=compiler.RoutineEligibility(
+            eligible_item_ids=frozenset(product.id for product in products),
+        ),
+        selection_plan=_selection(plan),
+    )
+    slots = {step.slot for routine in compiled for step in routine.steps}
+    assert {"cleanser", "moisturiser", "sunscreen", "shampoo", "conditioner"} <= slots
+    assert "toner" not in slots
+    assert "leave_in" not in slots
+
+
+def test_v3_03_5_active_optional_without_selection_fails_loudly():
+    with pytest.raises(ValueError, match="Active optional"):
+        RoutineSelectionPlan(
+            plan_version="v3-03.4", plan_fingerprint="x", effort="balanced",
+            effort_source="user_declared",
+            directives=(RoutineSlotDirective(
+                slot="toner", category="beauty", required=False,
+                active=True, selected_item_id=None,
+            ),),
+        )
 
 
 def test_minimal_keeps_required_skin_and_hair_only():
@@ -306,4 +390,3 @@ def test_fingerprint_changes_for_plan_fields_but_not_unused_context():
     _, detailed = _plan(product, effort="detailed")
     assert routine_plan_fingerprint(balanced) != routine_plan_fingerprint(detailed)
     assert len(routine_plan_fingerprint(balanced)) == 64
-

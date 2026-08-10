@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.care import decisions as care_decisions
+from app.domains.care import routine_plan as care_routine_plan
 from app.domains.care import service as care_service
 from app.domains.care.schemas import CareContext
 from app.domains.inventory import service as inventory_service
@@ -472,6 +473,7 @@ async def _module_material(
     *,
     care_context: CareContext,
     decisions: care_decisions.CareDecisionSet,
+    care_plan: care_routine_plan.CareRoutinePlan,
 ) -> dict[str, list[dict[str, Any]]]:
     """Read the inventory facts the optional modules need, once."""
     account_id = context.account_id
@@ -503,16 +505,31 @@ async def _module_material(
         pending.append({"display_name": candidate.display_name})
 
     eligible = {row.item_id for row in decisions.product_decisions if row.eligible}
+    products_by_id = {
+        product.item.id: product
+        for product in (*care_context.skin_products, *care_context.hair_products)
+    }
+    active_selected = {
+        row.slot: row.selected_item_id
+        for row in (*care_plan.skin_slots, *care_plan.hair_slots)
+        if row.active and row.selected_item_id is not None
+    }
     care_rows = {
         "beauty": [
-            {"id": str(product.item.id), "display_name": product.item.display_name, "category": "beauty"}
-            for product in care_context.skin_products
-            if product.item.id in available and product.item.id in eligible
+            {"id": str(item_id), "display_name": products_by_id[item_id].item.display_name,
+             "category": "beauty", "slot": slot}
+            for slot, item_id in active_selected.items()
+            if item_id in products_by_id
+            and products_by_id[item_id].item.category == "beauty"
+            and item_id in available and item_id in eligible
         ],
         "hair": [
-            {"id": str(product.item.id), "display_name": product.item.display_name, "category": "hair"}
-            for product in care_context.hair_products
-            if product.item.id in available and product.item.id in eligible
+            {"id": str(item_id), "display_name": products_by_id[item_id].item.display_name,
+             "category": "hair", "slot": slot}
+            for slot, item_id in active_selected.items()
+            if item_id in products_by_id
+            and products_by_id[item_id].item.category == "hair"
+            and item_id in available and item_id in eligible
         ],
     }
 
@@ -550,10 +567,15 @@ async def compile_day(
         session, context.account_id, day_context=context,
     )
     care_decision_set = care_decisions.evaluate_care_context(care_context)
+    care_plan = care_routine_plan.plan_care_routine(care_context, care_decision_set)
     care_fingerprint = care_decisions.decision_fingerprint(care_decision_set)
+    care_plan_fingerprint = care_routine_plan.routine_plan_fingerprint(care_plan)
     key = context_stage.cache_key(
         context,
-        material_extensions={"care_decision_fingerprint": care_fingerprint},
+        material_extensions={
+            "care_decision_fingerprint": care_fingerprint,
+            "care_routine_plan_fingerprint": care_plan_fingerprint,
+        },
     )
     existing = (await session.execute(
         select(DailyPlan).where(
@@ -648,6 +670,10 @@ async def compile_day(
         "care_context_version": care_context.context_version,
         "care_decision_version": care_decision_set.decision_version,
         "care_decision_fingerprint": care_fingerprint,
+        "care_routine_plan_fingerprint": care_plan_fingerprint,
+        "care_routine_plan_version": care_plan.plan_version,
+        "care_routine_effort": care_plan.resolved_effort.value,
+        "care_routine_effort_source": care_plan.effort_source.value,
         "care_blocked_product_count": len(care_decision_set.blocked_product_ids),
         "care_confirmation_advisory_count": sum(
             1 for row in care_decision_set.product_decisions
@@ -665,6 +691,7 @@ async def compile_day(
 
     material = await _module_material(
         session, context, care_context=care_context, decisions=care_decision_set,
+        care_plan=care_plan,
     )
     actions: list[dict[str, Any]] = []
     actions.extend(_outfit_actions(context, ranked))

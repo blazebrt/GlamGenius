@@ -1214,3 +1214,36 @@ compiler behavior, API responses, stored rows, Today, and `routines_today`
 remain unchanged.
 
 `V3-03.4 READY FOR INDEPENDENT REVIEW`
+
+## 68. V3-03.5 Minimum-Effective Care Routine Activation
+
+V3-03.5 makes `CareRoutinePlan` authoritative at runtime. The service layer
+adapts the immutable Care plan into the routines-owned `RoutineSelectionPlan`
+projection; the pure routine compiler renders those directives without
+importing Care dataclasses. Active slots use exactly the plan-selected owned
+item, inactive optional slots are omitted, required gaps retain the existing
+generic gap copy, and contradictions fail loudly. The legacy
+`rank_for_slot()` path remains only for callers that intentionally compile
+without a selection projection.
+
+Routine generation now computes one plan per account/date, stores routines and
+recommendation runs as `care-v3-03.5`, and records the plan version,
+fingerprint, effort/source, active-slot counts, and gap counts in existing JSON
+audit inputs. The same plan drives all routine kinds, so a canonical slot uses
+the same selected product in morning, evening, weekly, wash-day, or event
+compositions where present.
+
+Today Skin/Hair routine actions consume active selected Care items rather than
+the first eligible shelf row. Its material cache key includes both the Care
+safety decision fingerprint and `routine_plan_fingerprint`, so effort changes,
+continuity changes, and optional-slot activation changes recompute the same-day
+plan. Safety actions and advisory copy remain separate from selection.
+
+`routines_today()` compares saved material steps with the current deterministic
+plan and requires refresh for plan drift or pre-03.5 Care routines. It never
+regenerates, persists, increments versions, or creates recommendation runs on
+GET. Climate/environment, Evidence, AI, and new Care science remain outside
+selection; eligibility, selection, and rendering remain separate boundaries.
+
+No schema, migration, dependency, frontend, or public response changes were
+introduced.

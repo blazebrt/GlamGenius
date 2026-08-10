@@ -28,6 +28,7 @@ from app.domains.routines.ontology import (
 )
 from app.domains.routines.rules import Finding, ShelfProduct
 from app.domains.routines.safety import ROUTINE_DISCLAIMER, narrative_is_safe
+from app.domains.routines.selection import RoutineSelectionPlan
 
 ROUTINE_MORNING = "morning"
 ROUTINE_EVENING = "evening"
@@ -171,6 +172,7 @@ def compile_routine(
     climate: str | None = None,
     today: date | None = None,
     eligibility: RoutineEligibility | None = None,
+    selection_plan: RoutineSelectionPlan | None = None,
 ) -> CompiledRoutine:
     """Build one routine from what the user owns."""
     if kind not in ROUTINE_SLOTS:
@@ -191,10 +193,47 @@ def compile_routine(
     )
 
     present_slots: set[str] = set()
+    directives = selection_plan.by_slot if selection_plan is not None else None
     for slot_key in ROUTINE_SLOTS[kind]:
         spec = SLOT_BY_KEY[slot_key]
-        ranked = rules_engine.rank_for_slot(usable, slot_key, today)
-        chosen = ranked[0] if ranked else None
+        directive = directives.get(slot_key) if directives is not None else None
+        if directives is not None and directive is None:
+            raise ValueError(f"Selection plan is missing canonical slot {slot_key!r}")
+
+        chosen = None
+        if directive is not None:
+            if directive.category != spec.category:
+                raise ValueError(f"Selection plan slot {slot_key!r} has the wrong category")
+            if directive.required != spec.required:
+                raise ValueError(f"Selection plan slot {slot_key!r} has the wrong required flag")
+            if not directive.active:
+                # Optional inactive slots are intentionally omitted even when
+                # eligible products exist on the shelf.
+                continue
+            if directive.selected_item_id is not None:
+                chosen = next(
+                    (product for product in products if product.id == directive.selected_item_id),
+                    None,
+                )
+                if chosen is None:
+                    raise ValueError(
+                        f"Selection plan selected item {directive.selected_item_id!r} is absent from products"
+                    )
+                if chosen.slot != slot_key:
+                    raise ValueError(
+                        f"Selection plan selected item {directive.selected_item_id!r} does not belong to slot {slot_key!r}"
+                    )
+                if eligibility is not None and chosen.id not in eligibility.eligible_item_ids:
+                    raise ValueError(
+                        f"Selection plan selected item {directive.selected_item_id!r} is not eligible"
+                    )
+            elif not directive.required:
+                raise ValueError(f"Active optional slot {slot_key!r} has no selected item")
+        else:
+            # Backwards-compatible pure compiler path. Production generation
+            # always supplies a Care-derived selection projection.
+            ranked = rules_engine.rank_for_slot(usable, slot_key, today)
+            chosen = ranked[0] if ranked else None
 
         frequency = "Two or three times a week" if slot_key in OCCASIONAL_SLOTS else routine.frequency
         step = RoutineStep(
@@ -283,6 +322,7 @@ def compile_all(
     climate: str | None = None,
     today: date | None = None,
     eligibility: RoutineEligibility | None = None,
+    selection_plan: RoutineSelectionPlan | None = None,
 ) -> list[CompiledRoutine]:
     """Every routine the user has enough products to make sense of.
 
@@ -294,7 +334,7 @@ def compile_all(
         source = hair if kind == ROUTINE_WASH_DAY else beauty if kind in (ROUTINE_MORNING, ROUTINE_EVENING) else list(beauty) + list(hair)
         routine = compile_routine(
             kind, source, allergies=allergies, climate=climate, today=today,
-            eligibility=eligibility,
+            eligibility=eligibility, selection_plan=selection_plan,
         )
         if routine.owned_step_count == 0 and routine.gap_count == 0:
             continue
