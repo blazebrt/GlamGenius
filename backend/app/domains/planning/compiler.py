@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -76,6 +77,46 @@ REPETITION_PENALTY = 0.35
 # Wearing something again this soon is the thing worth avoiding. Beyond it,
 # rewearing is just how clothes work.
 RECENT_DAYS = 2
+
+
+@dataclass(frozen=True, slots=True)
+class DayCareMaterial:
+    """The immutable Care material shared by Today and pinning paths."""
+
+    care_context: CareContext
+    decisions: care_decisions.CareDecisionSet
+    care_plan: care_routine_plan.CareRoutinePlan
+    decision_fingerprint: str
+    routine_plan_fingerprint: str
+
+
+async def build_day_care_material(
+    session: AsyncSession, context: DayContext,
+) -> DayCareMaterial:
+    """Build the one deterministic Care material object for a planning day."""
+    care_context = await care_service.build_care_context(
+        session, context.account_id, day_context=context,
+    )
+    decisions = care_decisions.evaluate_care_context(care_context)
+    care_plan = care_routine_plan.plan_care_routine(care_context, decisions)
+    return DayCareMaterial(
+        care_context=care_context,
+        decisions=decisions,
+        care_plan=care_plan,
+        decision_fingerprint=care_decisions.decision_fingerprint(decisions),
+        routine_plan_fingerprint=care_routine_plan.routine_plan_fingerprint(care_plan),
+    )
+
+
+def material_cache_key(context: DayContext, material: DayCareMaterial) -> str:
+    """Return the canonical Today key for context plus all Care material."""
+    return context_stage.cache_key(
+        context,
+        material_extensions={
+            "care_decision_fingerprint": material.decision_fingerprint,
+            "care_routine_plan_fingerprint": material.routine_plan_fingerprint,
+        },
+    )
 
 
 # --- Occasion record for the day --------------------------------------------
@@ -563,20 +604,13 @@ async def compile_day(
 
     The second element of the tuple is True when the plan was recomputed.
     """
-    care_context = await care_service.build_care_context(
-        session, context.account_id, day_context=context,
-    )
-    care_decision_set = care_decisions.evaluate_care_context(care_context)
-    care_plan = care_routine_plan.plan_care_routine(care_context, care_decision_set)
-    care_fingerprint = care_decisions.decision_fingerprint(care_decision_set)
-    care_plan_fingerprint = care_routine_plan.routine_plan_fingerprint(care_plan)
-    key = context_stage.cache_key(
-        context,
-        material_extensions={
-            "care_decision_fingerprint": care_fingerprint,
-            "care_routine_plan_fingerprint": care_plan_fingerprint,
-        },
-    )
+    material = await build_day_care_material(session, context)
+    care_context = material.care_context
+    care_decision_set = material.decisions
+    care_plan = material.care_plan
+    care_fingerprint = material.decision_fingerprint
+    care_plan_fingerprint = material.routine_plan_fingerprint
+    key = material_cache_key(context, material)
     existing = (await session.execute(
         select(DailyPlan).where(
             DailyPlan.account_id == context.account_id,

@@ -174,13 +174,13 @@ async def swap_days(
     # Only the outfit changes hands. Each plan keeps its own date, weather and
     # event.
     left_plan.look_id, right_plan.look_id = right_plan.look_id, left_plan.look_id
+    await _swap_schedule(session, account_id, first, second)
     for row in (left_plan, right_plan):
         row.version += 1
         # Pin to the current context so the next Today open is a cache hit and
         # the user's arrangement survives, rather than being rebuilt away.
         row.cache_key = await _pinned_cache_key(session, account_id, row)
 
-    await _swap_schedule(session, account_id, first, second)
     plan.version += 1
     await session.flush()
     return plan
@@ -192,7 +192,8 @@ async def _pinned_cache_key(session: AsyncSession, account_id: uuid.UUID, plan: 
         session, account_id=account_id, plan_date=plan.plan_date,
         timezone_name=plan.timezone_name,
     )
-    return context_stage.cache_key(context)
+    material = await compiler.build_day_care_material(session, context)
+    return compiler.material_cache_key(context, material)
 
 
 async def _swap_schedule(session: AsyncSession, account_id: uuid.UUID, first: date, second: date) -> None:
