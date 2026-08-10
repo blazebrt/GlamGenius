@@ -7,6 +7,8 @@ from datetime import date
 import pytest
 from app.bootstrap import run as run_seed
 from app.domains.planning import clock
+from app.domains.planning import compiler as planning_compiler
+from app.domains.planning import context as context_stage
 from app.domains.planning.models import (
     DailyPlan,
     DailyPlanAction,
@@ -128,6 +130,16 @@ async def _snapshot(account_id: uuid.UUID) -> dict:
         }
 
 
+async def _canonical_key(account_id: uuid.UUID) -> str:
+    factory = get_sessionmaker()
+    async with factory() as session:
+        context = await context_stage.gather(
+            session, account_id=account_id, plan_date=TODAY,
+        )
+        material = await planning_compiler.build_day_care_material(session, context)
+        return planning_compiler.material_cache_key(context, material)
+
+
 async def test_locked_allergy_refresh_preserves_outfit_and_is_stable(
     app_client, db_clean, registered_supabase_user, fake_provider,
 ):
@@ -179,6 +191,7 @@ async def test_locked_care_reversion_refreshes_even_when_full_key_returns_to_a(
     blocked = await _today(app_client, token)
     assert any(row.get("inventory_item_id") == item_id and row["action_type"] == "care_safety" for row in blocked["primary"] + blocked["optional_modules"])
     await _allergy(app_client, token, [])
+    assert await _canonical_key(account_id) == before["cache_key"]
     reverted = await _today(app_client, token)
     after = await _snapshot(account_id)
 
