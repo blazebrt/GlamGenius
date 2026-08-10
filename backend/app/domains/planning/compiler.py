@@ -321,11 +321,11 @@ def _appearance_action(
     Deliberately one row, not a list. The brief asks for "the most important
     appearance action", and offering five is the same as offering none.
     """
-    safety = _care_safety_actions(
-        context, care_context=care_context, decisions=decisions,
+    blocking = _care_blocking_action(
+        care_context=care_context, decisions=decisions,
     )
-    if safety:
-        return safety
+    if blocking:
+        return [blocking]
 
     if context.draft_count:
         return [{
@@ -334,6 +334,12 @@ def _appearance_action(
             "body": "Drafts from photos are not used in outfits until you confirm them.",
             "relevance": "You have unconfirmed inventory drafts.",
         }]
+
+    expiring = _care_expiring_soon_action(
+        care_context=care_context, decisions=decisions,
+    )
+    if expiring:
+        return [expiring]
 
     if low_use:
         first = low_use[0]
@@ -347,13 +353,12 @@ def _appearance_action(
     return []
 
 
-def _care_safety_actions(
-    context: DayContext,
+def _care_blocking_action(
     *,
     care_context: CareContext,
     decisions: care_decisions.CareDecisionSet,
-) -> list[dict[str, Any]]:
-    """Return only the current deterministic Care safety/advisory action."""
+) -> dict[str, Any] | None:
+    """Return the highest-priority hard Care safety action, if any."""
     products = {
         product.item.id: product
         for product in (*care_context.skin_products, *care_context.hair_products)
@@ -379,7 +384,7 @@ def _care_safety_actions(
             if product is None:
                 continue
             module = MODULE_SKINCARE if product.item.category == "beauty" else MODULE_HAIR
-            return [{
+            return {
                 "module": module,
                 "action_type": "care_safety",
                 "priority": 18 if reason_code == care_decisions.CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH else 19,
@@ -388,7 +393,20 @@ def _care_safety_actions(
                 "body": body,
                 "relevance": relevance,
                 "inventory_item_id": str(product.item.id),
-            }]
+            }
+    return None
+
+
+def _care_expiring_soon_action(
+    *,
+    care_context: CareContext,
+    decisions: care_decisions.CareDecisionSet,
+) -> dict[str, Any] | None:
+    """Return the current Care expiry advisory, if any."""
+    products = {
+        product.item.id: product
+        for product in (*care_context.skin_products, *care_context.hair_products)
+    }
 
     for decision in decisions.product_decisions:
         if not decision.eligible or not any(
@@ -400,14 +418,14 @@ def _care_safety_actions(
         if product is None:
             continue
         module = MODULE_SKINCARE if product.item.category == "beauty" else MODULE_HAIR
-        return [{
+        return {
             "module": module, "action_type": "care_expiring_soon", "priority": 21,
             "title": f"Check {product.item.display_name}'s date",
             "body": "It is getting close to the date recorded for it. Keep it in rotation only if it already fits your routine.",
             "relevance": "The product is getting close to the date recorded for it.",
             "inventory_item_id": str(product.item.id),
-        }]
-    return []
+        }
+    return None
 
 
 def _weather_action(context: DayContext) -> list[dict[str, Any]]:
@@ -491,7 +509,14 @@ def _care_today_actions(
     decisions: care_decisions.CareDecisionSet,
 ) -> list[dict[str, Any]]:
     """The complete current Skin/Hair Today action set, and nothing else."""
-    rows = _care_safety_actions(context, care_context=care_context, decisions=decisions)
+    rows: list[dict[str, Any]] = []
+    blocking = _care_blocking_action(care_context=care_context, decisions=decisions)
+    if blocking:
+        rows.append(blocking)
+    else:
+        expiring = _care_expiring_soon_action(care_context=care_context, decisions=decisions)
+        if expiring:
+            rows.append(expiring)
     rows.extend(_care_routine_actions(context, module_material["beauty"], module_material["hair"]))
     return rows
 
