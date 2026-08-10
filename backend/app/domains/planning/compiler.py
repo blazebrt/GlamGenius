@@ -878,24 +878,24 @@ async def compile_day(
             value=value, source="derived",
         ))
 
-    material = await _module_material(
+    module_material = await _module_material(
         session, context, care_context=care_context, decisions=care_decision_set,
         care_plan=care_plan,
     )
     actions: list[dict[str, Any]] = []
     actions.extend(_outfit_actions(context, ranked))
     actions.extend(_appearance_action(
-        context, material["low_use"],
+        context, module_material["low_use"],
         care_context=care_context, decisions=care_decision_set,
     ))
     actions.extend(_weather_action(context))
     actions.extend(_event_action(context))
     actions.extend(_routine_actions(
-        context, material["beauty"], material["hair"], material["perfumes"],
+        context, module_material["beauty"], module_material["hair"], module_material["perfumes"],
         hair_wash_cadence=material.hair_wash_cadence,
     ))
     actions.extend(_wellbeing_actions(context))
-    actions.extend(_shopping_action(context, material["pending_purchases"]))
+    actions.extend(_shopping_action(context, module_material["pending_purchases"]))
 
     for row in actions:
         item_id = row.pop("inventory_item_id", None)
