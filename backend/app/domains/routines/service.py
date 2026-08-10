@@ -22,13 +22,14 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.care import cadence as care_cadence
 from app.domains.care import decisions as care_decisions
 from app.domains.care import routine_plan as care_routine_plan
 from app.domains.care import service as care_service
 from app.domains.inventory.models import InventoryItem
 from app.domains.planning import clock
 from app.domains.planning import context as planning_context
-from app.domains.routines import compiler, explanation, nutrition, parser, perfume, selection, shelf
+from app.domains.routines import adherence, compiler, explanation, nutrition, parser, perfume, selection, shelf
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import (
     HydrationPreference,
@@ -665,6 +666,15 @@ async def routines_today(
 
     _, care_context, decisions = await _current_care_decisions(session, account_id, today)
     care_plan = care_routine_plan.plan_care_routine(care_context, decisions)
+    frequency_fact = care_context.hair_facts.get("care_hair_wash_frequency")
+    last_wash_on = await adherence.last_completed_wash_on(
+        session, account_id=account_id, through=today,
+    )
+    hair_wash_cadence = care_cadence.decide_hair_wash_cadence(
+        frequency_fact.value if frequency_fact is not None else None,
+        plan_date=today,
+        last_wash_on=last_wash_on,
+    )
     blocked_ids = {str(value) for value in decisions.blocked_product_ids}
 
     rows = (await session.execute(
@@ -680,6 +690,7 @@ async def routines_today(
     # Weekly extras surface on a weekend day, which is when people have time.
     if clock.is_weekend(today):
         wanted.append(compiler.ROUTINE_WEEKLY)
+    if hair_wash_cadence.status is care_cadence.HairWashCadenceStatus.DUE:
         wanted.append(compiler.ROUTINE_WASH_DAY)
 
     routines: list[dict[str, Any]] = []
@@ -721,9 +732,14 @@ async def routines_today(
         "refresh_required": refresh_required,
         "refresh_required_kinds": refresh_required_kinds,
         "care_safety": _care_safety_payload(care_context, decisions),
+        "hair_wash_cadence": hair_wash_cadence.as_payload(),
         "message": (
             "Your saved Care routine needs a refresh before we show those steps because its Care plan or safety facts changed."
-            if refresh_required else (None if routines else "Nothing due right now.")
+            if refresh_required else (None if routines else (
+                "Complete a wash routine once and GlamGenius can use that date as the starting point for the wash rhythm you recorded."
+                if hair_wash_cadence.status is care_cadence.HairWashCadenceStatus.NEEDS_ANCHOR
+                else "Nothing due right now."
+            ))
         ),
         "disclaimer": ROUTINE_DISCLAIMER,
     }

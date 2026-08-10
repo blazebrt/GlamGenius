@@ -1,5 +1,6 @@
 """Care Context and deterministic decision contracts."""
 
+from app.domains.care.cadence import CARE_CADENCE_VERSION, HairWashCadenceDecision
 from app.domains.care.decisions import CARE_DECISION_VERSION, CareDecisionSet, evaluate_care_context
 from app.domains.care.routine_plan import (
     CARE_ROUTINE_PLAN_VERSION,
@@ -16,11 +17,13 @@ from app.domains.care.schemas import CARE_CONTEXT_VERSION, CareContext
 
 __all__ = [
     "CARE_CONTEXT_VERSION",
+    "CARE_CADENCE_VERSION",
     "CARE_DECISION_VERSION",
     "CARE_ROUTINE_PLAN_VERSION",
     "CareEffortSource",
     "CareInclusionReason",
     "CareContext",
+    "HairWashCadenceDecision",
     "CareDecisionSet",
     "CareRoutineEffort",
     "CareRoutinePlan",

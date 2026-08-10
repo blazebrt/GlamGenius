@@ -24,6 +24,7 @@ from app.domains.planning.models import (
     CalendarEvent,
     DailyPlan,
     DailyPlanAction,
+    DailyPlanInput,
     ExternalIntegration,
     LaundryStateEvent,
     OutfitSchedule,
@@ -374,6 +375,21 @@ async def serialize_plan(
     air_quality = await session.get(AirQualitySnapshot, plan.air_quality_snapshot_id) if plan.air_quality_snapshot_id else None
     primary = [row for row in actions if row.priority <= 40]
     optional = [row for row in actions if row.priority > 40]
+    cadence_rows = (await session.execute(
+        select(DailyPlanInput.input_key, DailyPlanInput.value)
+        .where(
+            DailyPlanInput.plan_id == plan.id,
+            DailyPlanInput.input_type == "care",
+            DailyPlanInput.input_key.in_((
+                "care_cadence_version", "care_hair_wash_cadence_fingerprint",
+                "care_hair_wash_status", "care_hair_wash_reason",
+                "care_hair_wash_frequency", "care_hair_last_wash_on", "care_hair_next_due_on",
+            )),
+        ).order_by(DailyPlanInput.created_at.desc())
+    )).all()
+    cadence_values: dict[str, Any] = {}
+    for key, value in cadence_rows:
+        cadence_values.setdefault(key, value)
 
     return {
         "plan_date": plan.plan_date.isoformat(),
@@ -398,6 +414,14 @@ async def serialize_plan(
         "needs_clarification": plan.needs_clarification,
         "clarification": plan.clarification,
         "missing_information": plan.missing_information,
+        "hair_wash_cadence": {
+            "version": cadence_values.get("care_cadence_version"),
+            "status": cadence_values.get("care_hair_wash_status"),
+            "reason": cadence_values.get("care_hair_wash_reason"),
+            "declared_frequency": cadence_values.get("care_hair_wash_frequency") or None,
+            "last_wash_on": cadence_values.get("care_hair_last_wash_on") or None,
+            "next_due_on": cadence_values.get("care_hair_next_due_on") or None,
+        },
         "worn": schedule.status == "worn" if schedule else False,
         "computed_at": plan.computed_at.isoformat() if plan.computed_at else None,
         "disclaimer": "Built from what you own and told us. Not medical or diagnostic advice.",

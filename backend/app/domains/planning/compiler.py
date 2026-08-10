@@ -29,6 +29,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.care import cadence as care_cadence
 from app.domains.care import decisions as care_decisions
 from app.domains.care import routine_plan as care_routine_plan
 from app.domains.care import service as care_service
@@ -61,6 +62,7 @@ from app.domains.recommendation import service as recommendation_service
 from app.domains.recommendation.context import StyleContext
 from app.domains.recommendation.models import Look, OccasionRecord
 from app.domains.recommendation.occasions import OCCASIONS, get_occasion
+from app.domains.routines import adherence as routine_adherence
 from app.shared.database.base import utcnow
 
 logger = logging.getLogger(__name__)
@@ -90,6 +92,8 @@ class DayCareMaterial:
     care_plan: care_routine_plan.CareRoutinePlan
     decision_fingerprint: str
     routine_plan_fingerprint: str
+    hair_wash_cadence: care_cadence.HairWashCadenceDecision
+    hair_wash_cadence_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +107,7 @@ class StoredCareFingerprints:
 
     decision_fingerprint: str | None
     routine_plan_fingerprint: str | None
+    hair_wash_cadence_fingerprint: str | None
 
 
 async def stored_care_fingerprints(
@@ -114,7 +119,10 @@ async def stored_care_fingerprints(
         .where(
             DailyPlanInput.plan_id == plan_id,
             DailyPlanInput.input_type == "care",
-            DailyPlanInput.input_key.in_(("care_decision_fingerprint", "care_routine_plan_fingerprint")),
+            DailyPlanInput.input_key.in_((
+                "care_decision_fingerprint", "care_routine_plan_fingerprint",
+                "care_hair_wash_cadence_fingerprint",
+            )),
         )
         .order_by(DailyPlanInput.created_at.desc())
     )).all()
@@ -124,6 +132,7 @@ async def stored_care_fingerprints(
     return StoredCareFingerprints(
         decision_fingerprint=values.get("care_decision_fingerprint"),
         routine_plan_fingerprint=values.get("care_routine_plan_fingerprint"),
+        hair_wash_cadence_fingerprint=values.get("care_hair_wash_cadence_fingerprint"),
     )
 
 
@@ -134,6 +143,7 @@ def care_material_is_current(
     return (
         stored.decision_fingerprint == material.decision_fingerprint
         and stored.routine_plan_fingerprint == material.routine_plan_fingerprint
+        and stored.hair_wash_cadence_fingerprint == material.hair_wash_cadence_fingerprint
     )
 
 
@@ -146,12 +156,23 @@ async def build_day_care_material(
     )
     decisions = care_decisions.evaluate_care_context(care_context)
     care_plan = care_routine_plan.plan_care_routine(care_context, decisions)
+    last_wash_on = await routine_adherence.last_completed_wash_on(
+        session, account_id=context.account_id, through=context.plan_date,
+    )
+    frequency_fact = care_context.hair_facts.get("care_hair_wash_frequency")
+    hair_wash_cadence = care_cadence.decide_hair_wash_cadence(
+        frequency_fact.value if frequency_fact is not None else None,
+        plan_date=context.plan_date,
+        last_wash_on=last_wash_on,
+    )
     return DayCareMaterial(
         care_context=care_context,
         decisions=decisions,
         care_plan=care_plan,
         decision_fingerprint=care_decisions.decision_fingerprint(decisions),
         routine_plan_fingerprint=care_routine_plan.routine_plan_fingerprint(care_plan),
+        hair_wash_cadence=hair_wash_cadence,
+        hair_wash_cadence_fingerprint=care_cadence.hair_wash_cadence_fingerprint(hair_wash_cadence),
     )
 
 
@@ -162,6 +183,7 @@ def material_cache_key(context: DayContext, material: DayCareMaterial) -> str:
         material_extensions={
             "care_decision_fingerprint": material.decision_fingerprint,
             "care_routine_plan_fingerprint": material.routine_plan_fingerprint,
+            "care_hair_wash_cadence_fingerprint": material.hair_wash_cadence_fingerprint,
         },
     )
 
@@ -476,6 +498,8 @@ def _care_routine_actions(
     context: DayContext,
     beauty: Sequence[dict[str, Any]],
     hair: Sequence[dict[str, Any]],
+    *,
+    hair_wash_cadence: care_cadence.HairWashCadenceDecision,
 ) -> list[dict[str, Any]]:
     """Build the current Skin/Hair routine actions from authoritative Care rows."""
     rows: list[dict[str, Any]] = []
@@ -489,13 +513,17 @@ def _care_routine_actions(
             "relevance": "You have this product in your inventory.",
             "inventory_item_id": first.get("id"),
         })
-    if hair and clock.is_weekend(context.plan_date):
+    if hair and hair_wash_cadence.status is care_cadence.HairWashCadenceStatus.DUE:
         first = hair[0]
         rows.append({
             "module": MODULE_HAIR, "action_type": "routine", "priority": 55,
-            "title": f"Weekend hair: {first['display_name']}",
-            "body": "A slower day is a good time for the longer part of your hair routine.",
-            "relevance": "It is the weekend and you own this product.",
+            "title": f"Hair wash routine: {first['display_name']}",
+            "body": "Your wash routine is relevant today based on the wash rhythm you recorded.",
+            "relevance": (
+                "Your recorded wash rhythm is daily."
+                if hair_wash_cadence.reason is care_cadence.HairWashCadenceReason.DAILY_DECLARATION
+                else "Your recorded wash rhythm and last completed wash make this a wash-routine day."
+            ),
             "inventory_item_id": first.get("id"),
         })
     return rows
@@ -507,6 +535,7 @@ def _care_today_actions(
     *,
     care_context: CareContext,
     decisions: care_decisions.CareDecisionSet,
+    hair_wash_cadence: care_cadence.HairWashCadenceDecision,
 ) -> list[dict[str, Any]]:
     """The complete current Skin/Hair Today action set, and nothing else."""
     rows: list[dict[str, Any]] = []
@@ -517,17 +546,29 @@ def _care_today_actions(
         expiring = _care_expiring_soon_action(care_context=care_context, decisions=decisions)
         if expiring:
             rows.append(expiring)
-    rows.extend(_care_routine_actions(context, module_material["beauty"], module_material["hair"]))
+    rows.extend(_care_routine_actions(
+        context, module_material["beauty"], module_material["hair"],
+        hair_wash_cadence=hair_wash_cadence,
+    ))
     return rows
 
 
-def _routine_actions(context: DayContext, beauty: Sequence[dict[str, Any]], hair: Sequence[dict[str, Any]], perfumes: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def _routine_actions(
+    context: DayContext,
+    beauty: Sequence[dict[str, Any]],
+    hair: Sequence[dict[str, Any]],
+    perfumes: Sequence[dict[str, Any]],
+    *,
+    hair_wash_cadence: care_cadence.HairWashCadenceDecision,
+) -> list[dict[str, Any]]:
     """Skincare, hair and perfume — shown only when the user owns the products.
 
     Telling someone to apply a serum they do not own is noise, so these modules
     stay silent until there is something of theirs to point at.
     """
-    rows: list[dict[str, Any]] = _care_routine_actions(context, beauty, hair)
+    rows: list[dict[str, Any]] = _care_routine_actions(
+        context, beauty, hair, hair_wash_cadence=hair_wash_cadence,
+    )
     occasion = OCCASIONS.get(context.occasion_key)
     if perfumes and occasion and occasion.formality >= 3:
         first = perfumes[0]
@@ -849,7 +890,10 @@ async def compile_day(
     ))
     actions.extend(_weather_action(context))
     actions.extend(_event_action(context))
-    actions.extend(_routine_actions(context, material["beauty"], material["hair"], material["perfumes"]))
+    actions.extend(_routine_actions(
+        context, material["beauty"], material["hair"], material["perfumes"],
+        hair_wash_cadence=material.hair_wash_cadence,
+    ))
     actions.extend(_wellbeing_actions(context))
     actions.extend(_shopping_action(context, material["pending_purchases"]))
 
@@ -884,11 +928,19 @@ def care_input_values(material: DayCareMaterial) -> dict[str, Any]:
     care_context = material.care_context
     care_decision_set = material.decisions
     care_plan = material.care_plan
+    cadence = material.hair_wash_cadence
     return {
         "care_context_version": care_context.context_version,
         "care_decision_version": care_decision_set.decision_version,
         "care_decision_fingerprint": material.decision_fingerprint,
         "care_routine_plan_fingerprint": material.routine_plan_fingerprint,
+        "care_cadence_version": cadence.cadence_version,
+        "care_hair_wash_cadence_fingerprint": material.hair_wash_cadence_fingerprint,
+        "care_hair_wash_status": cadence.status.value,
+        "care_hair_wash_reason": cadence.reason.value,
+        "care_hair_wash_frequency": cadence.declared_frequency or "",
+        "care_hair_last_wash_on": cadence.last_wash_on.isoformat() if cadence.last_wash_on else "",
+        "care_hair_next_due_on": cadence.next_due_on.isoformat() if cadence.next_due_on else "",
         "care_routine_plan_version": care_plan.plan_version,
         "care_routine_effort": care_plan.resolved_effort.value,
         "care_routine_effort_source": care_plan.effort_source.value,
@@ -951,7 +1003,7 @@ async def refresh_locked_care_if_needed(
         ))
     for row in _care_today_actions(
         context, module_material, care_context=material.care_context,
-        decisions=material.decisions,
+        decisions=material.decisions, hair_wash_cadence=material.hair_wash_cadence,
     ):
         item_id = row.pop("inventory_item_id", None)
         session.add(DailyPlanAction(
