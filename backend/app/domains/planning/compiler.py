@@ -78,6 +78,8 @@ REPETITION_PENALTY = 0.35
 # rewearing is just how clothes work.
 RECENT_DAYS = 2
 
+CARE_REFRESH_DETAIL = "Care material changed; Skin/Hair actions were refreshed while the locked day was preserved."
+
 
 @dataclass(frozen=True, slots=True)
 class DayCareMaterial:
@@ -88,6 +90,51 @@ class DayCareMaterial:
     care_plan: care_routine_plan.CareRoutinePlan
     decision_fingerprint: str
     routine_plan_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class StoredCareFingerprints:
+    """Persisted Care identity for a DailyPlan.
+
+    Care freshness is intentionally independent from the full-day cache key so
+    a locked plan can refresh Skin/Hair without claiming weather or outfit
+    material is current.
+    """
+
+    decision_fingerprint: str | None
+    routine_plan_fingerprint: str | None
+
+
+async def stored_care_fingerprints(
+    session: AsyncSession, plan_id: uuid.UUID,
+) -> StoredCareFingerprints:
+    """Read the latest persisted Care fingerprints for a DailyPlan."""
+    rows = (await session.execute(
+        select(DailyPlanInput.input_key, DailyPlanInput.value)
+        .where(
+            DailyPlanInput.plan_id == plan_id,
+            DailyPlanInput.input_type == "care",
+            DailyPlanInput.input_key.in_(("care_decision_fingerprint", "care_routine_plan_fingerprint")),
+        )
+        .order_by(DailyPlanInput.created_at.desc())
+    )).all()
+    values: dict[str, str] = {}
+    for key, value in rows:
+        values.setdefault(key, value)
+    return StoredCareFingerprints(
+        decision_fingerprint=values.get("care_decision_fingerprint"),
+        routine_plan_fingerprint=values.get("care_routine_plan_fingerprint"),
+    )
+
+
+def care_material_is_current(
+    stored: StoredCareFingerprints, material: DayCareMaterial,
+) -> bool:
+    """Whether persisted Care represents the material currently being used."""
+    return (
+        stored.decision_fingerprint == material.decision_fingerprint
+        and stored.routine_plan_fingerprint == material.routine_plan_fingerprint
+    )
 
 
 async def build_day_care_material(
@@ -274,6 +321,39 @@ def _appearance_action(
     Deliberately one row, not a list. The brief asks for "the most important
     appearance action", and offering five is the same as offering none.
     """
+    safety = _care_safety_actions(
+        context, care_context=care_context, decisions=decisions,
+    )
+    if safety:
+        return safety
+
+    if context.draft_count:
+        return [{
+            "module": MODULE_OUTFIT, "action_type": "confirm_drafts", "priority": 20,
+            "title": f"Confirm {context.draft_count} item{'s' if context.draft_count > 1 else ''} waiting for you",
+            "body": "Drafts from photos are not used in outfits until you confirm them.",
+            "relevance": "You have unconfirmed inventory drafts.",
+        }]
+
+    if low_use:
+        first = low_use[0]
+        return [{
+            "module": MODULE_OUTFIT, "action_type": "wear_low_use", "priority": 22,
+            "title": f"Give {first['display_name']} a wear",
+            "body": "You have not worn this in a while. It still fits the kind of day you have today.",
+            "relevance": "An item you own is going unused.",
+            "inventory_item_id": first.get("id"),
+        }]
+    return []
+
+
+def _care_safety_actions(
+    context: DayContext,
+    *,
+    care_context: CareContext,
+    decisions: care_decisions.CareDecisionSet,
+) -> list[dict[str, Any]]:
+    """Return only the current deterministic Care safety/advisory action."""
     products = {
         product.item.id: product
         for product in (*care_context.skin_products, *care_context.hair_products)
@@ -310,14 +390,6 @@ def _appearance_action(
                 "inventory_item_id": str(product.item.id),
             }]
 
-    if context.draft_count:
-        return [{
-            "module": MODULE_OUTFIT, "action_type": "confirm_drafts", "priority": 20,
-            "title": f"Confirm {context.draft_count} item{'s' if context.draft_count > 1 else ''} waiting for you",
-            "body": "Drafts from photos are not used in outfits until you confirm them.",
-            "relevance": "You have unconfirmed inventory drafts.",
-        }]
-
     for decision in decisions.product_decisions:
         if not decision.eligible or not any(
             reason.code == care_decisions.CareDecisionReasonCode.PRODUCT_EXPIRING_SOON
@@ -334,16 +406,6 @@ def _appearance_action(
             "body": "It is getting close to the date recorded for it. Keep it in rotation only if it already fits your routine.",
             "relevance": "The product is getting close to the date recorded for it.",
             "inventory_item_id": str(product.item.id),
-        }]
-
-    if low_use:
-        first = low_use[0]
-        return [{
-            "module": MODULE_OUTFIT, "action_type": "wear_low_use", "priority": 22,
-            "title": f"Give {first['display_name']} a wear",
-            "body": "You have not worn this in a while. It still fits the kind of day you have today.",
-            "relevance": "An item you own is going unused.",
-            "inventory_item_id": first.get("id"),
         }]
     return []
 
@@ -392,12 +454,12 @@ def _event_action(context: DayContext) -> list[dict[str, Any]]:
     }]
 
 
-def _routine_actions(context: DayContext, beauty: Sequence[dict[str, Any]], hair: Sequence[dict[str, Any]], perfumes: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Skincare, hair and perfume — shown only when the user owns the products.
-
-    Telling someone to apply a serum they do not own is noise, so these modules
-    stay silent until there is something of theirs to point at.
-    """
+def _care_routine_actions(
+    context: DayContext,
+    beauty: Sequence[dict[str, Any]],
+    hair: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build the current Skin/Hair routine actions from authoritative Care rows."""
     rows: list[dict[str, Any]] = []
     part = clock.part_of_day(context.now_local)
     if beauty and part in ("morning", "afternoon"):
@@ -418,6 +480,29 @@ def _routine_actions(context: DayContext, beauty: Sequence[dict[str, Any]], hair
             "relevance": "It is the weekend and you own this product.",
             "inventory_item_id": first.get("id"),
         })
+    return rows
+
+
+def _care_today_actions(
+    context: DayContext,
+    module_material: dict[str, list[dict[str, Any]]],
+    *,
+    care_context: CareContext,
+    decisions: care_decisions.CareDecisionSet,
+) -> list[dict[str, Any]]:
+    """The complete current Skin/Hair Today action set, and nothing else."""
+    rows = _care_safety_actions(context, care_context=care_context, decisions=decisions)
+    rows.extend(_care_routine_actions(context, module_material["beauty"], module_material["hair"]))
+    return rows
+
+
+def _routine_actions(context: DayContext, beauty: Sequence[dict[str, Any]], hair: Sequence[dict[str, Any]], perfumes: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Skincare, hair and perfume — shown only when the user owns the products.
+
+    Telling someone to apply a serum they do not own is noise, so these modules
+    stay silent until there is something of theirs to point at.
+    """
+    rows: list[dict[str, Any]] = _care_routine_actions(context, beauty, hair)
     occasion = OCCASIONS.get(context.occasion_key)
     if perfumes and occasion and occasion.formality >= 3:
         first = perfumes[0]
@@ -608,8 +693,6 @@ async def compile_day(
     care_context = material.care_context
     care_decision_set = material.decisions
     care_plan = material.care_plan
-    care_fingerprint = material.decision_fingerprint
-    care_plan_fingerprint = material.routine_plan_fingerprint
     key = material_cache_key(context, material)
     existing = (await session.execute(
         select(DailyPlan).where(
@@ -619,10 +702,33 @@ async def compile_day(
     )).scalar_one_or_none()
 
     if existing is not None and not force:
+        # Care freshness is independent from the full-day cache key. Check it
+        # first so a locked A -> B -> A transition cannot be hidden by an old
+        # full key becoming equal again.
+        if existing.locked:
+            refreshed = await refresh_locked_care_if_needed(
+                session, existing, context, material, key, trigger=trigger,
+            )
+            if refreshed:
+                return existing, True
         if existing.cache_key == key and existing.status == "ready":
             existing.generated_from = PLAN_SOURCE_CACHE
             return existing, False
         if existing.locked:
+            # A partial Care refresh deliberately leaves the full-day key
+            # pinned to the locked computation. Once the same current key has
+            # been audited by that refresh, an identical GET is stable rather
+            # than producing a generic locked-context event every time.
+            latest = (await session.execute(
+                select(PlanRecalculationEvent).where(
+                    PlanRecalculationEvent.account_id == context.account_id,
+                    PlanRecalculationEvent.plan_date == context.plan_date,
+                    PlanRecalculationEvent.recomputed.is_(True),
+                ).order_by(PlanRecalculationEvent.created_at.desc()).limit(1)
+            )).scalar_one_or_none()
+            if latest is not None and latest.detail == CARE_REFRESH_DETAIL and latest.new_cache_key == key:
+                existing.generated_from = PLAN_SOURCE_CACHE
+                return existing, False
             # A locked day is the user's decision. Note that context moved, but
             # do not overwrite what they chose.
             session.add(PlanRecalculationEvent(
@@ -700,24 +806,7 @@ async def compile_day(
     for row in context_stage.input_rows(context):
         session.add(DailyPlanInput(plan_id=plan.id, **row))
 
-    care_counts = {
-        "care_context_version": care_context.context_version,
-        "care_decision_version": care_decision_set.decision_version,
-        "care_decision_fingerprint": care_fingerprint,
-        "care_routine_plan_fingerprint": care_plan_fingerprint,
-        "care_routine_plan_version": care_plan.plan_version,
-        "care_routine_effort": care_plan.resolved_effort.value,
-        "care_routine_effort_source": care_plan.effort_source.value,
-        "care_blocked_product_count": len(care_decision_set.blocked_product_ids),
-        "care_confirmation_advisory_count": sum(
-            1 for row in care_decision_set.product_decisions
-            if any(
-                reason.code == care_decisions.CareDecisionReasonCode.INGREDIENT_CONFIRMATION_NEEDED
-                for reason in row.advisory_reasons
-            )
-        ),
-    }
-    for key_name, value in care_counts.items():
+    for key_name, value in care_input_values(material).items():
         session.add(DailyPlanInput(
             plan_id=plan.id, input_type="care", input_key=key_name,
             value=value, source="derived",
@@ -765,6 +854,101 @@ async def compile_day(
     return plan, True
 
 
+def care_input_values(material: DayCareMaterial) -> dict[str, Any]:
+    """Build the canonical audited Care input payload for a planning day."""
+    care_context = material.care_context
+    care_decision_set = material.decisions
+    care_plan = material.care_plan
+    return {
+        "care_context_version": care_context.context_version,
+        "care_decision_version": care_decision_set.decision_version,
+        "care_decision_fingerprint": material.decision_fingerprint,
+        "care_routine_plan_fingerprint": material.routine_plan_fingerprint,
+        "care_routine_plan_version": care_plan.plan_version,
+        "care_routine_effort": care_plan.resolved_effort.value,
+        "care_routine_effort_source": care_plan.effort_source.value,
+        "care_blocked_product_count": len(care_decision_set.blocked_product_ids),
+        "care_confirmation_advisory_count": sum(
+            1 for row in care_decision_set.product_decisions
+            if any(
+                reason.code == care_decisions.CareDecisionReasonCode.INGREDIENT_CONFIRMATION_NEEDED
+                for reason in row.advisory_reasons
+            )
+        ),
+    }
+
+
+async def refresh_locked_care_if_needed(
+    session: AsyncSession,
+    existing: DailyPlan,
+    context: DayContext,
+    material: DayCareMaterial,
+    current_key: str,
+    *,
+    trigger: str,
+) -> bool:
+    """Refresh only Care-owned rows for a locked plan when material changed."""
+    stored = await stored_care_fingerprints(session, existing.id)
+    if care_material_is_current(stored, material):
+        return False
+
+    module_material = await _module_material(
+        session, context, care_context=material.care_context,
+        decisions=material.decisions, care_plan=material.care_plan,
+    )
+    completed_before = await _completed_action_marks_for_modules(
+        session, existing, {MODULE_SKINCARE, MODULE_HAIR},
+    )
+
+    old_actions = (await session.execute(
+        select(DailyPlanAction).where(
+            DailyPlanAction.plan_id == existing.id,
+            DailyPlanAction.module.in_((MODULE_SKINCARE, MODULE_HAIR)),
+        )
+    )).scalars().all()
+    for row in old_actions:
+        await session.delete(row)
+
+    old_inputs = (await session.execute(
+        select(DailyPlanInput).where(
+            DailyPlanInput.plan_id == existing.id,
+            DailyPlanInput.input_type == "care",
+        )
+    )).scalars().all()
+    for row in old_inputs:
+        await session.delete(row)
+    await session.flush()
+
+    for key_name, value in care_input_values(material).items():
+        session.add(DailyPlanInput(
+            plan_id=existing.id, input_type="care", input_key=key_name,
+            value=value, source="derived",
+        ))
+    for row in _care_today_actions(
+        context, module_material, care_context=material.care_context,
+        decisions=material.decisions,
+    ):
+        item_id = row.pop("inventory_item_id", None)
+        session.add(DailyPlanAction(
+            plan_id=existing.id,
+            inventory_item_id=uuid.UUID(item_id) if isinstance(item_id, str) else item_id,
+            completed_at=completed_before.get(
+                (row["module"], row["action_type"], row["title"])
+            ),
+            **row,
+        ))
+
+    existing.version += 1
+    existing.generated_from = PLAN_SOURCE_CACHE
+    session.add(PlanRecalculationEvent(
+        account_id=context.account_id, plan_date=context.plan_date, trigger=trigger,
+        detail=CARE_REFRESH_DETAIL,
+        old_cache_key=existing.cache_key, new_cache_key=current_key, recomputed=True,
+    ))
+    await session.flush()
+    return True
+
+
 async def _completed_action_marks(
     session: AsyncSession, plan: DailyPlan
 ) -> dict[tuple[str, str, str], datetime]:
@@ -774,12 +958,22 @@ async def _completed_action_marks(
     themselves are about to be replaced. Two actions that read identically to
     the user are the same action as far as "I already did that" is concerned.
     """
-    rows = (await session.execute(
-        select(DailyPlanAction).where(
-            DailyPlanAction.plan_id == plan.id,
-            DailyPlanAction.completed_at.is_not(None),
-        )
-    )).scalars().all()
+    return await _completed_action_marks_for_modules(session, plan, None)
+
+
+async def _completed_action_marks_for_modules(
+    session: AsyncSession,
+    plan: DailyPlan,
+    modules: set[str] | None,
+) -> dict[tuple[str, str, str], datetime]:
+    """Carry completion across replacement for all or selected modules."""
+    filters = [
+        DailyPlanAction.plan_id == plan.id,
+        DailyPlanAction.completed_at.is_not(None),
+    ]
+    if modules is not None:
+        filters.append(DailyPlanAction.module.in_(modules))
+    rows = (await session.execute(select(DailyPlanAction).where(*filters))).scalars().all()
     return {
         (row.module, row.action_type, row.title): row.completed_at for row in rows
     }

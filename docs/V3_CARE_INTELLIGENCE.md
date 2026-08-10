@@ -1260,3 +1260,24 @@ fingerprint or freezing future invalidation.
 
 No locked-day semantics, Care selection semantics, version constants, schema,
 dependency, frontend, Evidence, AI, or public response behavior changed.
+
+## 70. V3-03.6 Locked-Day Care Freshness & Safety Override
+
+A locked Today/Planner day suppresses automatic full-day replacement but does
+not suppress current Care material. `CareDecisionSet` and `CareRoutinePlan`
+fingerprints are checked independently from the locked full-day cache key,
+before an ordinary cache hit can short-circuit the request.
+
+When Care material changes, only Skin/Hair Today actions and the Care audit
+inputs are refreshed. Existing completion marks are preserved for equivalent
+actions, the DailyPlan version advances once, and one Care-specific
+recalculation event records the refresh. The locked full-day cache key is
+intentionally not repinned, preventing unrelated stale weather, event, or
+outfit context from being falsely marked current. Those weather/event lock
+semantics remain unchanged and are outside this phase.
+
+Weekly generation now performs the same non-force Care freshness check for a
+locked linked DailyPlan without replacing its weekly row, look, outfit
+schedule, or lock state. Explicit `regenerate_locked=true` and direct planner
+regeneration behavior remain unchanged. No schema, migration, dependency,
+frontend, Evidence, AI, or public response changes are introduced.

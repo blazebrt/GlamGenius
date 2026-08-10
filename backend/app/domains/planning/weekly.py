@@ -75,13 +75,17 @@ async def generate(
 
     for position, plan_date in enumerate(clock.week_dates(week_start)):
         row = existing.get(plan_date)
-        if row is not None and row.locked and not regenerate_locked:
-            continue
-
         context = await context_stage.gather(
             session, account_id=account_id, plan_date=plan_date,
             timezone_name=timezone_name, repetition_window_days=repetition_window_days,
         )
+        if row is not None and row.locked and not regenerate_locked:
+            # A locked weekly day keeps its full-day/outfit decision, but the
+            # linked DailyPlan still performs the non-force Care freshness
+            # check. This intentionally does not replace the weekly row.
+            await compiler.compile_day(session, context=context, force=False, trigger="weekly_generate")
+            continue
+
         daily, _ = await compiler.compile_day(session, context=context, force=True, trigger="weekly_generate")
 
         if row is None:
