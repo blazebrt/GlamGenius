@@ -21,7 +21,9 @@ on:
   push:
     branches:
       - main
-      - 'fix/*'
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,10 +38,44 @@ env:
   NODE_VERSION: "20"
 
 jobs:
+  # Scope is deliberately tiny: one checkout and one git diff.  It is the
+  # only job that runs before the path-aware PR gates and is also a no-op
+  # full-scope marker for main/manual qualification runs.
+  scope:
+    name: CI scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      backend: ${{ steps.scope.outputs.backend }}
+      schema: ${{ steps.scope.outputs.schema }}
+      frontend: ${{ steps.scope.outputs.frontend }}
+      mobile: ${{ steps.scope.outputs.mobile }}
+      web: ${{ steps.scope.outputs.web }}
+      python_deps: ${{ steps.scope.outputs.python_deps }}
+      node_deps: ${{ steps.scope.outputs.node_deps }}
+      container: ${{ steps.scope.outputs.container }}
+      security: ${{ steps.scope.outputs.security }}
+      release: ${{ steps.scope.outputs.release }}
+    steps:
+      - name: Checkout full history for merge-base diff
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - id: scope
+        name: Detect changed paths
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: bash .github/scripts/detect-ci-scope.sh "$BASE_SHA" "$HEAD_SHA" "$EVENT_NAME"
+
   # ---- Backend --------------------------------------------------------------
   backend-tests:
     name: Backend unit + integration
+    needs: scope
+    if: github.event_name != 'pull_request' || needs.scope.outputs.backend == 'true' || needs.scope.outputs.schema == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16-alpine
@@ -95,6 +131,10 @@ jobs:
       - name: Alembic check (schema drift)
         working-directory: backend
         run: alembic check
+      - name: Run Ruff on pull requests
+        if: github.event_name == 'pull_request'
+        working-directory: backend
+        run: ruff check .
       - name: Reference-data seed (idempotent)
         working-directory: backend
         run: |
@@ -117,7 +157,10 @@ jobs:
 
   backend-lint:
     name: Backend zero-warning lint
+    needs: scope
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -141,7 +184,10 @@ jobs:
 
   backend-release:
     name: Backend release command test
+    needs: scope
+    if: github.event_name != 'pull_request' || needs.scope.outputs.release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:16-alpine
@@ -209,7 +255,10 @@ jobs:
   # ---- Alembic round-trip (upgrade → downgrade one → re-upgrade) ------------
   alembic-round-trip:
     name: Alembic round-trip
+    needs: scope
+    if: github.event_name != 'pull_request' || needs.scope.outputs.schema == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
@@ -249,7 +298,10 @@ jobs:
   # ---- Frontend -------------------------------------------------------------
   frontend-tests:
     name: Frontend Jest + TypeScript + lint
+    needs: scope
+    if: github.event_name != 'pull_request' || needs.scope.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -278,7 +330,10 @@ jobs:
   # full APK/AAB build via EAS runs on release cuts, not on every PR.
   mobile-android-bundle:
     name: Mobile Android Metro bundle
+    needs: scope
+    if: github.event_name != 'pull_request' || needs.scope.outputs.mobile == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -306,7 +361,10 @@ jobs:
   # for the full mobile validation matrix.
   expo-export:
     name: Expo web export (shared-code smoke test)
+    needs: scope
+    if: github.event_name != 'pull_request' || needs.scope.outputs.web == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -331,7 +389,9 @@ jobs:
   # ---- Secret scan ---------------------------------------------------------
   secret-scan:
     name: Secret scan
+    needs: scope
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -346,7 +406,10 @@ jobs:
   # (LOW / MEDIUM / UNKNOWN) are recorded in the artifact for backlog triage.
   pip-audit:
     name: Python dependency audit
+    needs: scope
+    if: github.event_name != 'pull_request' || needs.scope.outputs.python_deps == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -369,21 +432,25 @@ jobs:
             --ignore-vuln PYSEC-2026-2281 \
             --ignore-vuln PYSEC-2026-248 \
             --ignore-vuln PYSEC-2026-249
-      - name: Full audit report (informational, uploaded on any run)
-        if: always()
+      - name: Full audit report (failure diagnostics)
+        if: failure()
         working-directory: backend
         run: pip-audit -r requirements.txt --vulnerability-service osv --format=json > /tmp/pip-audit.json || true
       - name: Upload full pip-audit report
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pip-audit-report
           path: /tmp/pip-audit.json
+          retention-days: 7
 
   # ---- Node dependency vulnerability scan ----------------------------------
   npm-audit:
     name: Node dependency audit
+    needs: scope
+    if: github.event_name != 'pull_request' || needs.scope.outputs.node_deps == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -402,16 +469,20 @@ jobs:
           set -e
           node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json
       - name: Upload yarn-audit report
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: yarn-audit-report
           path: /tmp/yarn-audit.json
+          retention-days: 7
 
   # ---- Production Docker build -----------------------------------------------
   docker-build:
     name: Production Docker build
+    needs: scope
+    if: github.event_name != 'pull_request' || needs.scope.outputs.container == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Build production image
@@ -454,8 +525,10 @@ jobs:
   # ---- Container vulnerability scan (Trivy) ----------------------------------
   container-scan:
     name: Container vulnerability scan
-    needs: docker-build
+    needs: [scope, docker-build]
+    if: always() && (github.event_name != 'pull_request' || needs.scope.outputs.container == 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -475,7 +548,7 @@ jobs:
           severity: HIGH,CRITICAL
           trivyignores: .trivyignore
       - name: Generate Trivy JSON report
-        if: always()
+        if: failure()
         uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # v0.30.0
         with:
           image-ref: glamgenius-backend:ci
@@ -483,16 +556,19 @@ jobs:
           output: /tmp/trivy-report.json
           severity: HIGH,CRITICAL
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
+        if: failure()
         with:
           name: trivy-report
           path: /tmp/trivy-report.json
+          retention-days: 7
 
   # ---- SBOM generation -------------------------------------------------------
   sbom:
     name: SBOM generation
-    needs: docker-build
+    needs: [scope, docker-build]
+    if: always() && (github.event_name != 'pull_request' || needs.scope.outputs.container == 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -527,7 +603,9 @@ jobs:
   # ---- Legacy and payment absence --------------------------------------------
   legacy-absence:
     name: Legacy and payment absence
+    needs: scope
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: No MongoDB references
@@ -558,13 +636,27 @@ jobs:
             exit 1
           fi
           echo "PASS: no legacy terminology"
+      - name: "Workflow policy: immutable action pins"
+        run: |
+          if grep -RInE "uses:[[:space:]]*[^[:space:]]+@(master|main|latest)($|[[:space:]])" .github/workflows/; then
+            echo "FAIL: mutable GitHub Action reference found"
+            exit 1
+          fi
+          if grep -RInE "uses:[[:space:]]*[^[:space:]]+@[0-9A-Fa-f]{40}($|[[:space:]]+#)" .github/workflows/ | wc -l | grep -q '^0$'; then
+            echo "FAIL: no immutable GitHub Action SHA pins found"
+            exit 1
+          fi
+          echo "PASS: GitHub Actions use immutable SHA pins"
 
   # ---- Focused test gates (run from the full backend suite) ------------------
   # These re-run targeted subsets so failures are immediately attributable.
 
   auth-security:
     name: Authentication security
+    needs: scope
+    if: github.event_name != 'pull_request' || needs.scope.outputs.security == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
@@ -615,7 +707,10 @@ jobs:
 
   health-readiness:
     name: Health and readiness
+    needs: scope
+    if: github.event_name != 'pull_request' || needs.scope.outputs.security == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
@@ -666,7 +761,10 @@ jobs:
 
   account-deletion:
     name: Account-deletion state machine
+    needs: scope
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
@@ -717,7 +815,10 @@ jobs:
 
   critical-journey:
     name: Critical journey
+    needs: scope
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
@@ -765,3 +866,105 @@ jobs:
       - name: Critical journey tests
         working-directory: backend
         run: pytest -q tests/test_critical_journey*.py -v
+
+  # ---- Stable pull-request umbrellas ---------------------------------------
+  # These names are the recommended branch-protection checks.  The expensive
+  # implementation jobs above can be skipped by scope, while these checks
+  # still complete successfully (or fail visibly) on every PR.
+  backend-gate:
+    name: PR backend gate
+    needs: [scope, backend-tests]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Enforce backend result when backend paths changed
+        env:
+          BACKEND_SCOPE: ${{ needs.scope.outputs.backend }}
+          SCHEMA_SCOPE: ${{ needs.scope.outputs.schema }}
+          BACKEND_RESULT: ${{ needs.backend-tests.result }}
+        run: |
+          if [[ "$BACKEND_SCOPE" == "true" || "$SCHEMA_SCOPE" == "true" ]]; then
+            if [[ "$BACKEND_RESULT" != "success" ]]; then
+              echo "Backend scope is relevant and the canonical backend gate result is $BACKEND_RESULT"
+              exit 1
+            fi
+            echo "Backend checks passed"
+          else
+            echo "Backend scope is not relevant; canonical backend checks are not required"
+          fi
+
+  frontend-gate:
+    name: PR frontend gate
+    needs: [scope, frontend-tests, mobile-android-bundle, expo-export]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Enforce frontend results when frontend paths changed
+        env:
+          FRONTEND_SCOPE: ${{ needs.scope.outputs.frontend }}
+          MOBILE_SCOPE: ${{ needs.scope.outputs.mobile }}
+          WEB_SCOPE: ${{ needs.scope.outputs.web }}
+          FRONTEND_RESULT: ${{ needs.frontend-tests.result }}
+          MOBILE_RESULT: ${{ needs.mobile-android-bundle.result }}
+          WEB_RESULT: ${{ needs.expo-export.result }}
+        run: |
+          if [[ "$FRONTEND_SCOPE" != "true" ]]; then
+            echo "Frontend scope is not relevant; canonical frontend checks are not required"
+            exit 0
+          fi
+          if [[ "$FRONTEND_RESULT" != "success" ]]; then
+            echo "Frontend canonical gate result is $FRONTEND_RESULT"
+            exit 1
+          fi
+          if [[ "$MOBILE_SCOPE" == "true" && "$MOBILE_RESULT" != "success" ]]; then
+            echo "Mobile bundle gate result is $MOBILE_RESULT"
+            exit 1
+          fi
+          if [[ "$WEB_SCOPE" == "true" && "$WEB_RESULT" != "success" ]]; then
+            echo "Expo web gate result is $WEB_RESULT"
+            exit 1
+          fi
+          echo "Frontend checks passed"
+
+  policy-gate:
+    name: PR policy gate
+    needs: [scope, legacy-absence, secret-scan, pip-audit, npm-audit, docker-build, container-scan, sbom]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Enforce policy and relevant security results
+        env:
+          LEGACY_RESULT: ${{ needs.legacy-absence.result }}
+          SECRET_RESULT: ${{ needs.secret-scan.result }}
+          PYTHON_SCOPE: ${{ needs.scope.outputs.python_deps }}
+          PYTHON_RESULT: ${{ needs.pip-audit.result }}
+          NODE_SCOPE: ${{ needs.scope.outputs.node_deps }}
+          NODE_RESULT: ${{ needs.npm-audit.result }}
+          CONTAINER_SCOPE: ${{ needs.scope.outputs.container }}
+          CONTAINER_RESULT: ${{ needs.container-scan.result }}
+          SBOM_RESULT: ${{ needs.sbom.result }}
+        run: |
+          for result in "$LEGACY_RESULT" "$SECRET_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "Always-on policy result is $result"
+              exit 1
+            fi
+          done
+          if [[ "$PYTHON_SCOPE" == "true" && "$PYTHON_RESULT" != "success" ]]; then
+            echo "Python dependency audit result is $PYTHON_RESULT"
+            exit 1
+          fi
+          if [[ "$NODE_SCOPE" == "true" && "$NODE_RESULT" != "success" ]]; then
+            echo "Node dependency audit result is $NODE_RESULT"
+            exit 1
+          fi
+          if [[ "$CONTAINER_SCOPE" == "true" ]]; then
+            if [[ "$CONTAINER_RESULT" != "success" || "$SBOM_RESULT" != "success" ]]; then
+              echo "Container security result: scan=$CONTAINER_RESULT sbom=$SBOM_RESULT"
+              exit 1
+            fi
+          fi
+          echo "Policy checks passed"
