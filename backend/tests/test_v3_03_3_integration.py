@@ -69,6 +69,15 @@ async def _allergy(client, token: str, value: str = "fragrance") -> None:
     assert response.status_code == 200, response.text
 
 
+async def _effort(client, token: str, value: str) -> None:
+    response = await client.patch(
+        "/api/v2/profile",
+        headers=auth(token),
+        json={"attributes": [{"key": "care_routine_effort", "value": value}]},
+    )
+    assert response.status_code == 200, response.text
+
+
 async def _stored_ingredient(
     account_id: uuid.UUID,
     item_id: str,
@@ -169,13 +178,17 @@ async def test_generation_blocks_expired_required_product_and_persists_audit(
         run = (await session.execute(
             select(RoutineRecommendationRun).where(RoutineRecommendationRun.account_id == account_id)
         )).scalar_one()
-    assert stored.engine_version == "care-v3-03.3"
-    assert run.engine_version == "care-v3-03.3"
+    assert stored.engine_version == "care-v3-03.5"
+    assert run.engine_version == "care-v3-03.5"
     for key in (
         "care_context_version", "care_decision_version", "blocked_product_count",
         "expired_product_count", "confirmed_allergy_block_count",
         "ingredient_confirmation_advisory_count", "weather_snapshot_id",
         "air_quality_snapshot_id",
+        "care_routine_plan_version", "care_routine_plan_fingerprint",
+        "care_routine_effort", "care_routine_effort_source",
+        "care_active_skin_slot_count", "care_active_hair_slot_count",
+        "care_skin_gap_count", "care_hair_gap_count",
     ):
         assert key in run.inputs
     assert run.inputs["blocked_product_count"] == 1
@@ -412,6 +425,89 @@ async def test_routines_today_safe_control_returns_saved_routine(
     assert body["routines"]
 
 
+async def test_routines_today_hides_old_engine_and_effort_drift_without_writing(
+    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch
+):
+    _force_morning(monkeypatch)
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    await _effort(app_client, token, "detailed")
+    await _product(app_client, token, name="Owned Toner", product_type="toner")
+    await _generate(app_client, token, kinds=["morning"])
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        routine = (await session.execute(
+            select(Routine).where(Routine.account_id == account_id, Routine.kind == "morning")
+        )).scalar_one()
+        before_version = routine.version
+        before_steps = [row.id for row in (await session.execute(
+            select(RoutineStep).where(RoutineStep.routine_id == routine.id)
+        )).scalars().all()]
+        routine.engine_version = "care-v3-03.3"
+        await session.commit()
+
+    async with factory() as session:
+        old_body = await routines_service.routines_today(
+            session, account_id=account_id, on=GENERATION_DATE
+        )
+        after = await session.get(Routine, routine.id)
+        after_steps = [row.id for row in (await session.execute(
+            select(RoutineStep).where(RoutineStep.routine_id == routine.id)
+        )).scalars().all()]
+    assert old_body["refresh_required"] is True
+    assert "morning" in old_body["refresh_required_kinds"]
+    assert after.version == before_version
+    assert after_steps == before_steps
+
+    async with factory() as session:
+        current = await session.get(Routine, routine.id)
+        current.engine_version = routines_service.ROUTINE_ENGINE_VERSION
+        await session.commit()
+
+    await _effort(app_client, token, "minimal")
+    async with factory() as session:
+        drifted = await routines_service.routines_today(
+            session, account_id=account_id, on=GENERATION_DATE
+        )
+    assert drifted["refresh_required"] is True
+    assert "morning" in drifted["refresh_required_kinds"]
+
+
+async def test_routines_today_hides_continuity_plan_drift_without_writing(
+    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch
+):
+    _force_morning(monkeypatch)
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    first_id = await _product(app_client, token, name="First Cleanser", product_type="cleanser")
+    second_id = await _product(app_client, token, name="Second Cleanser", product_type="cleanser")
+    factory = get_sessionmaker()
+    async with factory() as session:
+        first = await session.get(InventoryItem, uuid.UUID(first_id))
+        first.last_used_at = date(2026, 8, 11)
+        await session.commit()
+    await _generate(app_client, token, kinds=["morning"])
+
+    async with factory() as session:
+        routine = (await session.execute(
+            select(Routine).where(Routine.account_id == account_id, Routine.kind == "morning")
+        )).scalar_one()
+        before_version = routine.version
+        second = await session.get(InventoryItem, uuid.UUID(second_id))
+        second.last_used_at = date(2026, 8, 12)
+        await session.commit()
+
+    async with factory() as session:
+        body = await routines_service.routines_today(
+            session, account_id=account_id, on=GENERATION_DATE
+        )
+        after = await session.get(Routine, routine.id)
+    assert body["refresh_required"] is True
+    assert "morning" in body["refresh_required_kinds"]
+    assert after.version == before_version
+
+
 async def test_routines_today_hides_saved_routine_after_allergy_changes(
     app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch
 ):
@@ -475,6 +571,34 @@ async def test_today_filters_blocked_first_product_and_keeps_eligible_second_pro
     assert eligible_id in {row.get("inventory_item_id") for row in routine_actions}
 
 
+async def test_today_uses_the_care_plan_continuity_selection(
+    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch
+):
+    _force_morning(monkeypatch)
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    continuity_id = await _product(
+        app_client, token, name="Continuity Cleanser", product_type="cleanser",
+    )
+    legacy_value_id = await _product(
+        app_client, token, name="Expiring Cleanser", product_type="cleanser",
+        expiry=date(2026, 8, 20),
+    )
+    factory = get_sessionmaker()
+    async with factory() as session:
+        continuity = await session.get(InventoryItem, uuid.UUID(continuity_id))
+        continuity.last_used_at = date(2026, 8, 11)
+        await session.commit()
+
+    body = (await app_client.get(
+        f"/api/v2/today?plan_date={GENERATION_DATE.isoformat()}", headers=auth(token)
+    )).json()
+    actions = body["primary"] + body["optional_modules"]
+    routine_actions = [row for row in actions if row["action_type"] == "routine"]
+    assert continuity_id in {row.get("inventory_item_id") for row in routine_actions}
+    assert legacy_value_id not in {row.get("inventory_item_id") for row in routine_actions}
+
+
 async def test_today_cache_recomputes_after_ingredient_confirmation(
     app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch
 ):
@@ -519,6 +643,8 @@ async def test_today_cache_recomputes_after_ingredient_confirmation(
     assert set(care_inputs) == {
         "care_context_version", "care_decision_version", "care_decision_fingerprint",
         "care_blocked_product_count", "care_confirmation_advisory_count",
+        "care_routine_plan_fingerprint", "care_routine_plan_version",
+        "care_routine_effort", "care_routine_effort_source",
     }
     assert care_inputs["care_context_version"] == "v3-03.1"
     assert care_inputs["care_decision_version"] == "v3-03.2"
@@ -526,6 +652,79 @@ async def test_today_cache_recomputes_after_ingredient_confirmation(
     assert care_inputs["care_confirmation_advisory_count"] == 0
 
     assert second["generated_from"] == "fresh"
+
+
+async def test_today_cache_recomputes_after_care_effort_change(
+    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch
+):
+    _force_morning(monkeypatch)
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    await _effort(app_client, token, "detailed")
+    toner_id = await _product(app_client, token, name="Owned Toner", product_type="toner")
+    url = f"/api/v2/today?plan_date={GENERATION_DATE.isoformat()}"
+
+    first = (await app_client.get(url, headers=auth(token))).json()
+    first_actions = first["primary"] + first["optional_modules"]
+    assert any(row["action_type"] == "routine" and row.get("inventory_item_id") == toner_id for row in first_actions)
+    factory = get_sessionmaker()
+    async with factory() as session:
+        plan = (await session.execute(
+            select(DailyPlan).where(DailyPlan.account_id == account_id, DailyPlan.plan_date == GENERATION_DATE)
+        )).scalar_one()
+        first_key, first_version = plan.cache_key, plan.version
+
+    await _effort(app_client, token, "minimal")
+    second = (await app_client.get(url, headers=auth(token))).json()
+    async with factory() as session:
+        plan = (await session.execute(
+            select(DailyPlan).where(DailyPlan.account_id == account_id, DailyPlan.plan_date == GENERATION_DATE)
+        )).scalar_one()
+        second_key, second_version = plan.cache_key, plan.version
+    actions = second["primary"] + second["optional_modules"]
+    assert first_key != second_key
+    assert second_version > first_version
+    assert not any(row["action_type"] == "routine" and row.get("inventory_item_id") == toner_id for row in actions)
+
+
+async def test_today_cache_recomputes_after_care_selection_change(
+    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch
+):
+    _force_morning(monkeypatch)
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    first_id = await _product(app_client, token, name="Continuity A", product_type="cleanser")
+    second_id = await _product(app_client, token, name="Continuity B", product_type="cleanser")
+    factory = get_sessionmaker()
+    async with factory() as session:
+        first = await session.get(InventoryItem, uuid.UUID(first_id))
+        first.last_used_at = date(2026, 8, 11)
+        await session.commit()
+    url = f"/api/v2/today?plan_date={GENERATION_DATE.isoformat()}"
+    first_body = (await app_client.get(url, headers=auth(token))).json()
+    first_actions = first_body["primary"] + first_body["optional_modules"]
+    assert any(row["action_type"] == "routine" and row.get("inventory_item_id") == first_id for row in first_actions)
+    async with factory() as session:
+        plan = (await session.execute(
+            select(DailyPlan).where(DailyPlan.account_id == account_id, DailyPlan.plan_date == GENERATION_DATE)
+        )).scalar_one()
+        first_key, first_version = plan.cache_key, plan.version
+        second = await session.get(InventoryItem, uuid.UUID(second_id))
+        second.last_used_at = date(2026, 8, 12)
+        await session.commit()
+
+    second_body = (await app_client.get(url, headers=auth(token))).json()
+    async with factory() as session:
+        plan = (await session.execute(
+            select(DailyPlan).where(DailyPlan.account_id == account_id, DailyPlan.plan_date == GENERATION_DATE)
+        )).scalar_one()
+        second_key, second_version = plan.cache_key, plan.version
+    actions = second_body["primary"] + second_body["optional_modules"]
+    routine_ids = {row.get("inventory_item_id") for row in actions if row["action_type"] == "routine"}
+    assert first_key != second_key
+    assert second_version > first_version
+    assert second_id in routine_ids
+    assert first_id not in routine_ids
 
 
 async def test_account_scoping_keeps_other_account_care_safety_out_of_generation(
