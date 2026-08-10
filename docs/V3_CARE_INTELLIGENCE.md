@@ -1247,3 +1247,16 @@ selection; eligibility, selection, and rendering remain separate boundaries.
 
 No schema, migration, dependency, frontend, or public response changes were
 introduced.
+
+## 69. V3-03.5.1 Canonical Today Cache-Key Closure
+
+Today compilation, Today outfit pinning, and weekly outfit pinning now share
+the Planning-owned `DayCareMaterial` builder and `material_cache_key()`
+authority. The builder performs CareContext assembly, CareDecisionSet
+evaluation, CareRoutinePlan selection, and both material fingerprints exactly
+once per planning path. Pinning therefore preserves the user's arrangement
+against the current full material state without dropping the routine-plan
+fingerprint or freezing future invalidation.
+
+No locked-day semantics, Care selection semantics, version constants, schema,
+dependency, frontend, Evidence, AI, or public response behavior changed.
