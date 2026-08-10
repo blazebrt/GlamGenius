@@ -73,7 +73,7 @@ jobs:
   backend-tests:
     name: Backend unit + integration
     needs: scope
-    if: needs.scope.outputs.backend == 'true' || needs.scope.outputs.schema == 'true' || needs.scope.outputs.python_deps == 'true'
+    if: needs.scope.outputs.backend == 'true' || needs.scope.outputs.schema == 'true' || (github.event_name == 'pull_request' && needs.scope.outputs.python_deps == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -324,7 +324,7 @@ jobs:
   frontend-tests:
     name: Frontend Jest + TypeScript + lint
     needs: scope
-    if: needs.scope.outputs.frontend == 'true' || needs.scope.outputs.node_deps == 'true'
+    if: needs.scope.outputs.frontend == 'true' || (github.event_name == 'pull_request' && needs.scope.outputs.node_deps == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
