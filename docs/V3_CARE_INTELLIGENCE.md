@@ -1281,3 +1281,24 @@ locked linked DailyPlan without replacing its weekly row, look, outfit
 schedule, or lock state. Explicit `regenerate_locked=true` and direct planner
 regeneration behavior remain unchanged. No schema, migration, dependency,
 frontend, Evidence, AI, or public response changes are introduced.
+
+## 71. V3-03.7 Durable Routine Identity & Adherence Preservation
+
+Routine rendering rows are replaceable; adherence history is not. A current
+`RoutineStep` UUID identifies one rendering row, while the durable logical
+identity of a completed step is `routine_id + canonical slot + done_on`.
+Within a routine, `RoutineStep(routine_id, slot)` is unique and regeneration
+reconciles rows by slot, preserving the UUID when the slot survives while
+updating its current material in place.
+
+`RoutineAdherence.slot` is backfilled from the step that recorded the
+completion. Its `step_id` is provenance only: it is nullable and uses
+`ON DELETE SET NULL`, so removing a current optional step keeps the historical
+completion. Recreating that slot can reattach the current step without making
+a duplicate same-day row. Adherence is not inventory usage and completing a
+step does not update inventory usage counters or timestamps.
+
+This persistence foundation is the prerequisite for later wash cadence,
+feedback-driven simplification, and routine-history interpretation. The
+migration refuses ambiguous duplicate slots and refuses a downgrade that
+would silently discard detached history.

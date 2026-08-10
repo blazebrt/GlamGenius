@@ -583,6 +583,7 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
             session.add(RoutineAdherence(
                 account_id=account_id,
                 routine_id=skincare_id,
+                slot=step1.slot,
                 step_id=step_id,
                 done_on=today - timedelta(days=i),
                 completed=True,
