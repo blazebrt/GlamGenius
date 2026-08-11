@@ -6,7 +6,6 @@ from dataclasses import replace
 from datetime import date
 
 import pytest
-from sqlalchemy import func, select
 from app.domains.care.decisions import (
     CareDecisionAuthority,
     CareDecisionReasonCode,
@@ -14,14 +13,17 @@ from app.domains.care.decisions import (
 )
 from app.domains.care.product_preferences import is_effective_user_pause
 from app.domains.care.routine_plan import plan_care_routine
-from app.domains.routines import service as routines_service
 from app.domains.inventory.models import InventoryAttribute, InventoryEvent, InventoryItem
+from app.domains.routines import service as routines_service
 from app.domains.routines.models import RoutineRecommendationRun
 from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import func, select
 
 from tests.conftest import auth
-from tests.test_care_decisions import _context, _product as _pure_product
-from tests.test_v3_03_3_integration import _generate, _product as _db_product, _seed
+from tests.test_care_decisions import _context
+from tests.test_care_decisions import _product as _pure_product
+from tests.test_v3_03_3_integration import _generate, _seed
+from tests.test_v3_03_3_integration import _product as _db_product
 
 
 def test_only_exact_confirmed_user_boolean_is_an_effective_pause():
