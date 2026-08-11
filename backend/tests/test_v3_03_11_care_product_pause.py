@@ -290,7 +290,12 @@ async def test_snapshot_history_adjustment_separation_and_resume_determinism(
     token, account_id = await registered_supabase_user()
     await _seed(app_client)
     item_id = await _db_product(app_client, token, name="Snapshot Cleanser", product_type="cleanser")
-    await _generate(app_client, token)
+    initial = await app_client.post(
+        "/api/v2/routines/generate",
+        headers=auth(token),
+        json={"as_of": "2026-08-12", "explain": False},
+    )
+    assert initial.status_code == 200, initial.text
     factory = get_sessionmaker()
     async with factory() as session:
         run_a = await _latest_run(session, account_id)
