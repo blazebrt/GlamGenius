@@ -1339,3 +1339,20 @@ cache key and does not affect recommendations. AI explanation prose, raw
 observations, raw ingredient label text, prices, and unrelated inventory
 metadata are intentionally excluded. V3-03.9 is the prerequisite for
 feedback-driven adaptive Care.
+
+## V3-03.10 Explicit Feedback-Driven Care Simplification
+
+The user can explicitly ask to make their Care routine simpler. That action
+lowers the canonical `care_routine_effort` ProfileAttribute by exactly one
+tier (`detailed` to `balanced`, or `balanced` to `minimal`). Missing and
+`not_sure` effort resolve as balanced and an explicit request stores minimal.
+Minimal is an idempotent no-op. There is no inferred effort state: adherence
+remains behavior history, observations remain verbatim, and Profile remains
+the preference authority.
+
+The existing Care decision and routine-plan engines remain unchanged. A
+successful request immediately regenerates deterministic routines in one
+transaction, records the explicit ProfileChangeEvent, and stores a separate
+`v3-03.10` `care_adjustment` in the recommendation run alongside the existing
+`v3-03.9` snapshot. The adjustment is trigger metadata and is intentionally
+not part of the snapshot fingerprint.

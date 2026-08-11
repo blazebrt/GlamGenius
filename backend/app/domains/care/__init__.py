@@ -14,6 +14,12 @@ from app.domains.care.routine_plan import (
     routine_plan_fingerprint,
 )
 from app.domains.care.schemas import CARE_CONTEXT_VERSION, CareContext
+from app.domains.care.simplification import (
+    CARE_SIMPLIFICATION_VERSION,
+    CareSimplificationDecision,
+    CareSimplificationStatus,
+    decide_care_simplification,
+)
 from app.domains.care.snapshot import (
     CARE_RECOMMENDATION_SNAPSHOT_VERSION,
     build_care_recommendation_snapshot,
@@ -40,4 +46,8 @@ __all__ = [
     "routine_plan_fingerprint",
     "build_care_recommendation_snapshot",
     "care_recommendation_snapshot_fingerprint",
+    "CARE_SIMPLIFICATION_VERSION",
+    "CareSimplificationDecision",
+    "CareSimplificationStatus",
+    "decide_care_simplification",
 ]
