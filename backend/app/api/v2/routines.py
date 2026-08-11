@@ -48,6 +48,19 @@ async def generate_routines(
     return result
 
 
+@router.post("/routines/simplify")
+async def simplify_routines(
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Apply one explicit, user-authorized Care effort reduction."""
+    result = await service.simplify_care_routine(
+        session, account_id=current.account_id, account_id_str=current.account_id_str,
+    )
+    await session.commit()
+    return result
+
+
 @router.get("/routines/today")
 async def routines_today(
     on: date | None = Query(None, description="Defaults to today in your timezone"),

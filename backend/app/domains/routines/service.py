@@ -26,10 +26,12 @@ from app.domains.care import cadence as care_cadence
 from app.domains.care import decisions as care_decisions
 from app.domains.care import routine_plan as care_routine_plan
 from app.domains.care import service as care_service
+from app.domains.care import simplification as care_simplification
 from app.domains.care import snapshot as care_snapshot
 from app.domains.inventory.models import InventoryItem
 from app.domains.planning import clock
 from app.domains.planning import context as planning_context
+from app.domains.profile import service as profile_service
 from app.domains.routines import adherence, compiler, explanation, nutrition, parser, perfume, selection, shelf
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import (
@@ -484,7 +486,8 @@ async def _replace_routines(
 
 
 async def generate_routines(
-    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, body: RoutineGenerateRequest
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str,
+    body: RoutineGenerateRequest, care_adjustment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build every routine this person has the products for.
 
@@ -536,6 +539,8 @@ async def generate_routines(
     )
 
     run_inputs = _care_run_inputs(day_context, care_context, decisions, care_plan)
+    if care_adjustment is not None:
+        run_inputs["care_adjustment"] = dict(care_adjustment)
 
     session.add(RoutineRecommendationRun(
         account_id=account_id, status="succeeded", engine_version=ROUTINE_ENGINE_VERSION,
@@ -577,6 +582,121 @@ async def generate_routines(
             "you already own and this starts working."
         ),
     }
+
+
+def _effort_payload(plan: care_routine_plan.CareRoutinePlan) -> dict[str, Any]:
+    decision = care_simplification.decide_care_simplification(plan.resolved_effort)
+    return {
+        "resolved": plan.resolved_effort.value,
+        "source": plan.effort_source.value,
+        "can_simplify": decision.target_effort is not None,
+        "next_simpler": decision.target_effort.value if decision.target_effort else None,
+    }
+
+
+def _slot_material(plan: care_routine_plan.CareRoutinePlan) -> tuple[care_routine_plan.CareSlotPlan, ...]:
+    return (*plan.skin_slots, *plan.hair_slots)
+
+
+def _simplification_response(
+    *,
+    decision: care_simplification.CareSimplificationDecision,
+    before: care_routine_plan.CareRoutinePlan,
+    after: care_routine_plan.CareRoutinePlan | None,
+) -> dict[str, Any]:
+    if after is None:
+        return {
+            "simplification_version": care_simplification.CARE_SIMPLIFICATION_VERSION,
+            "changed": False,
+            "status": decision.status.value,
+            "current_effort": decision.current_effort.value,
+            "target_effort": None,
+            "previous_plan_fingerprint": care_routine_plan.routine_plan_fingerprint(before),
+            "new_plan_fingerprint": care_routine_plan.routine_plan_fingerprint(before),
+            "removed_optional_slots": [],
+            "preserved_required_slots": [],
+            "message": "Your routine is already using the minimal effort setting.",
+        }
+
+    before_rows = {(row.category, row.slot): row for row in _slot_material(before)}
+    after_rows = {(row.category, row.slot): row for row in _slot_material(after)}
+    removed = [
+        {
+            "category": row.category,
+            "slot": row.slot,
+            "inventory_item_id": str(row.selected_item_id),
+        }
+        for key, row in before_rows.items()
+        if row.active and not row.required and not after_rows[key].active and row.selected_item_id is not None
+    ]
+    preserved = [
+        {
+            "category": row.category,
+            "slot": row.slot,
+            "inventory_item_id": str(row.selected_item_id) if row.selected_item_id else None,
+        }
+        for row in _slot_material(after)
+        if row.required and row.active
+    ]
+    removed.sort(key=lambda row: (row["category"], row["slot"], row["inventory_item_id"]))
+    preserved.sort(key=lambda row: (row["category"], row["slot"], row["inventory_item_id"] or ""))
+    message = (
+        "Simplified. Your core Care steps stay in place and optional steps were reduced."
+        if removed else
+        "Your routine effort is now set lower. With what you currently use, the visible steps stay the same for now."
+    )
+    return {
+        "simplification_version": care_simplification.CARE_SIMPLIFICATION_VERSION,
+        "changed": True,
+        "status": "applied",
+        "previous_effort": decision.current_effort.value,
+        "new_effort": after.resolved_effort.value,
+        "previous_plan_fingerprint": care_routine_plan.routine_plan_fingerprint(before),
+        "new_plan_fingerprint": care_routine_plan.routine_plan_fingerprint(after),
+        "removed_optional_slots": removed,
+        "preserved_required_slots": preserved,
+        "message": message,
+    }
+
+
+async def simplify_care_routine(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str,
+) -> dict[str, Any]:
+    """Apply one explicit simplification atomically and regenerate routines."""
+    plan_date = clock.local_today(clock.DEFAULT_TIMEZONE)
+    _, care_context, decisions = await _current_care_decisions(session, account_id, plan_date)
+    before = care_routine_plan.plan_care_routine(care_context, decisions)
+    decision = care_simplification.decide_care_simplification(before.resolved_effort)
+    if decision.target_effort is None:
+        return _simplification_response(decision=decision, before=before, after=None)
+
+    profile = await profile_service.get_or_create_profile(session, account_id)
+    await profile_service.apply_attributes(
+        session,
+        profile,
+        [{"key": "care_routine_effort", "value": decision.target_effort.value}],
+        source="user_declared",
+        confidence=1.0,
+        verification_state="confirmed",
+        reason="care_simplification_v3_03_10",
+    )
+    adjustment = {
+        "version": care_simplification.CARE_SIMPLIFICATION_VERSION,
+        "kind": "explicit_simplification",
+        "from_effort": decision.current_effort.value,
+        "to_effort": decision.target_effort.value,
+        "profile_change_reason": "care_simplification_v3_03_10",
+    }
+    await generate_routines(
+        session,
+        account_id=account_id,
+        account_id_str=account_id_str,
+        body=RoutineGenerateRequest(as_of=plan_date, explain=False),
+        care_adjustment=adjustment,
+    )
+    _, after_context, after_decisions = await _current_care_decisions(session, account_id, plan_date)
+    after = care_routine_plan.plan_care_routine(after_context, after_decisions)
+    return _simplification_response(decision=decision, before=before, after=after)
 
 
 async def _serialize_routine(session: AsyncSession, routine: Routine) -> dict[str, Any]:
@@ -1149,6 +1269,9 @@ async def improve_overview(session: AsyncSession, *, account_id: uuid.UUID) -> d
         select(Routine).where(Routine.account_id == account_id, Routine.status == "active")
     )).scalars().all()
     routines = [await _serialize_routine(session, row) for row in rows]
+    plan_date = clock.local_today(clock.DEFAULT_TIMEZONE)
+    _, care_context, care_decisions = await _current_care_decisions(session, account_id, plan_date)
+    care_plan = care_routine_plan.plan_care_routine(care_context, care_decisions)
 
     missing = [
         row for report in summary["reports"].values() for row in report["warnings"]
@@ -1165,5 +1288,6 @@ async def improve_overview(session: AsyncSession, *, account_id: uuid.UUID) -> d
         "low_use": shelf.low_use(context),
         "missing_categories": missing,
         "counts": summary["counts"],
+        "routine_effort": _effort_payload(care_plan),
         "disclaimer": ROUTINE_DISCLAIMER,
     }
