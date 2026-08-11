@@ -26,6 +26,7 @@ from app.domains.care import cadence as care_cadence
 from app.domains.care import decisions as care_decisions
 from app.domains.care import routine_plan as care_routine_plan
 from app.domains.care import service as care_service
+from app.domains.care import snapshot as care_snapshot
 from app.domains.inventory.models import InventoryItem
 from app.domains.planning import clock
 from app.domains.planning import context as planning_context
@@ -509,6 +510,19 @@ async def generate_routines(
     if body.kinds:
         compiled = [row for row in compiled if row.kind in body.kinds]
 
+    # Capture deterministic Care material before any optional AI explanation
+    # and before mutable Routine/RoutineStep rows are reconciled.
+    audit_snapshot = care_snapshot.build_care_recommendation_snapshot(
+        care_context=care_context,
+        decisions=decisions,
+        care_plan=care_plan,
+        compiled_routines=compiled,
+        requested_kinds=body.kinds,
+        legacy_climate=legacy_climate,
+        routine_engine_version=ROUTINE_ENGINE_VERSION,
+        ontology_version=ONTOLOGY_VERSION,
+    )
+
     narratives: dict[str, Any] = {}
     ai_run_id = None
     source = explanation.SOURCE_DETERMINISTIC
@@ -537,6 +551,7 @@ async def generate_routines(
             "draft_items_ignored": care_context.draft_product_count,
             "as_of": care_context.plan_date.isoformat(),
             **run_inputs,
+            "care_snapshot": audit_snapshot,
         },
     ))
     await session.flush()
