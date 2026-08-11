@@ -123,7 +123,10 @@ async def test_detailed_to_balanced_applies_profile_history_and_audit_trigger(
             select(ProfileAttribute).where(ProfileAttribute.profile_id == profile.id, ProfileAttribute.key == "care_routine_effort")
         )).scalar_one()
         event = (await session.execute(
-            select(ProfileChangeEvent).where(ProfileChangeEvent.profile_id == profile.id).order_by(ProfileChangeEvent.created_at.desc())
+            select(ProfileChangeEvent).where(
+                ProfileChangeEvent.profile_id == profile.id,
+                ProfileChangeEvent.attribute_key == "care_routine_effort",
+            ).order_by(ProfileChangeEvent.created_at.desc())
         )).scalar_one()
     assert effort.value == "balanced"
     assert effort.source == "user_declared"
@@ -307,7 +310,11 @@ async def test_simplification_trigger_is_separate_from_snapshot_identity(
     adjustment_run = await _latest_run(account_id)
     adjustment_snapshot = adjustment_run.inputs["care_snapshot"]
     assert "care_adjustment" in adjustment_run.inputs
-    await _db_generate(app_client, token, kinds=[])
+    direct = await app_client.post(
+        "/api/v2/routines/generate", headers=auth(token),
+        json={"kinds": [], "as_of": GENERATION_DATE.isoformat(), "explain": False},
+    )
+    assert direct.status_code == 200, direct.text
     direct_run = await _latest_run(account_id)
     assert "care_adjustment" not in direct_run.inputs
     assert direct_run.inputs["care_snapshot"] == adjustment_snapshot
@@ -322,6 +329,12 @@ async def test_simplification_rollback_leaves_profile_history_and_runs_unchanged
     await _db_seed(app_client)
     await _effort(app_client, token, "balanced")
     factory = get_sessionmaker()
+    async with factory() as session:
+        profile = await session.scalar(select(AppearanceProfile).where(AppearanceProfile.account_id == account_id))
+        baseline_version = profile.version
+        baseline_events = await session.scalar(
+            select(func.count(ProfileChangeEvent.id)).where(ProfileChangeEvent.profile_id == profile.id)
+        )
     original = routines_service.generate_routines
 
     async def fail(*_args, **_kwargs):
@@ -336,7 +349,8 @@ async def test_simplification_rollback_leaves_profile_history_and_runs_unchanged
         await session.rollback()
         profile = await session.scalar(select(AppearanceProfile).where(AppearanceProfile.account_id == account_id))
         assert profile is not None
-        assert await session.scalar(select(ProfileAttribute.value).where(ProfileAttribute.profile_id == profile.id, ProfileAttribute.key == "care_routine_effort")) is None
-        assert await session.scalar(select(func.count(ProfileChangeEvent.id)).where(ProfileChangeEvent.profile_id == profile.id)) == 0
+        assert profile.version == baseline_version
+        assert await session.scalar(select(ProfileAttribute.value).where(ProfileAttribute.profile_id == profile.id, ProfileAttribute.key == "care_routine_effort")) == "balanced"
+        assert await session.scalar(select(func.count(ProfileChangeEvent.id)).where(ProfileChangeEvent.profile_id == profile.id)) == baseline_events
         assert await session.scalar(select(func.count(RoutineRecommendationRun.id)).where(RoutineRecommendationRun.account_id == account_id)) == 0
     monkeypatch.setattr(routines_service, "generate_routines", original)
