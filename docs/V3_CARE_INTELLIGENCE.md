@@ -1326,3 +1326,16 @@ audit inputs, and participates in the existing locked-day partial Care
 freshness check. No Hair pattern, scalp, environment, Evidence, AI, product
 selection, inventory-usage, schema, migration, dependency, or frontend signal
 changes wash timing.
+
+## 73. V3-03.9 Auditable Care Recommendation Snapshot
+
+`RoutineRecommendationRun` is historical, while `Routine` and `RoutineStep`
+are current mutable rendering state. The nested versioned
+`inputs["care_snapshot"]` preserves the exact deterministic Care facts,
+decisions, plan, and emitted routine material used for a generation.
+
+The `v3-03.9` snapshot fingerprint is provenance identity only. It is not a
+cache key and does not affect recommendations. AI explanation prose, raw
+observations, raw ingredient label text, prices, and unrelated inventory
+metadata are intentionally excluded. V3-03.9 is the prerequisite for
+feedback-driven adaptive Care.
