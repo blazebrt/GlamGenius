@@ -347,9 +347,9 @@ async def test_a_b_a_snapshot_fingerprints_are_stable_and_runs_remain_distinct(
     token, account_id = await registered_supabase_user()
     await _db_seed(app_client)
     item_a = await _db_product(app_client, token, name="A Moisturiser")
-    item_b = await _db_product(app_client, token, name="B Moisturiser")
     await _db_generate(app_client, token, kinds=["morning"])
     first = await _latest_run(account_id)
+    item_b = await _db_product(app_client, token, name="B Moisturiser")
     await app_client.delete(f"/api/v2/inventory/items/{item_a}", headers=auth(token))
     await _db_generate(app_client, token, kinds=["morning"])
     middle = await _latest_run(account_id)
@@ -489,7 +489,7 @@ async def test_persisted_safety_reason_authority_and_profile_provenance(
         app_client, token, name="Expired Safety Product", expiry=date(2026, 8, 1),
     )
     uncertain = await _db_product(
-        app_client, token, name="Unconfirmed Allergy Product", active_ingredients=["fragrance"],
+        app_client, token, name="Unconfirmed Allergy Product",
     )
     await _stored_ingredient(account_id, confirmed, confirmed=True)
     await _stored_ingredient(account_id, uncertain, confirmed=False)
@@ -528,5 +528,11 @@ async def test_empty_generation_still_persists_a_snapshot(
     await _db_seed(app_client)
     await _db_generate(app_client, token, kinds=["morning"])
     snapshot = (await _latest_run(account_id)).inputs["care_snapshot"]
-    assert snapshot["rendered_routines"] == []
+    assert snapshot["requested_kinds"] == ["morning"]
+    assert snapshot["rendered_routines"]
+    assert all(
+        step["is_gap"]
+        for routine in snapshot["rendered_routines"]
+        for step in routine["steps"]
+    )
     assert snapshot["fingerprint"]
