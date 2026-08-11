@@ -76,7 +76,12 @@ from app.domains.recommendation.models import (
 from app.domains.recommendation.models import (
     OccasionRecord as Occasion,
 )
-from app.domains.routines.models import Routine, RoutineAdherence, RoutineStep
+from app.domains.routines.models import (
+    Routine,
+    RoutineAdherence,
+    RoutineRecommendationRun,
+    RoutineStep,
+)
 from app.domains.scan.models import Scan
 from app.shared.database.base import utcnow
 
@@ -307,10 +312,20 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         select(RoutineStep).where(RoutineStep.routine_id.in_([r.id for r in routines])),
     ) if routines else []
     adherence = await _fetch(session, select(RoutineAdherence).where(RoutineAdherence.account_id == account_id))
+    recommendation_runs = await _fetch(
+        session,
+        select(RoutineRecommendationRun).where(
+            RoutineRecommendationRun.account_id == account_id,
+        ),
+    )
     return {
         "routines": [_row_dict(r, [c.name for c in Routine.__table__.columns]) for r in routines],
         "steps": [_row_dict(r, [c.name for c in RoutineStep.__table__.columns]) for r in steps],
         "adherence": [_row_dict(r, [c.name for c in RoutineAdherence.__table__.columns]) for r in adherence],
+        "recommendation_runs": [
+            _row_dict(r, [c.name for c in RoutineRecommendationRun.__table__.columns])
+            for r in recommendation_runs
+        ],
     }
 
 
