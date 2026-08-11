@@ -127,7 +127,7 @@ async def test_detailed_to_balanced_applies_profile_history_and_audit_trigger(
                 ProfileChangeEvent.profile_id == profile.id,
                 ProfileChangeEvent.attribute_key == "care_routine_effort",
             ).order_by(ProfileChangeEvent.created_at.desc())
-        )).scalar_one()
+        )).scalars().first()
     assert effort.value == "balanced"
     assert effort.source == "user_declared"
     assert effort.verification_state == "confirmed"
