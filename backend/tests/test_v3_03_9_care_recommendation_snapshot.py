@@ -18,6 +18,7 @@ from app.domains.care.snapshot import (
 )
 from app.domains.inventory.models import InventoryItem
 from app.domains.media.storage import factory as storage_factory
+from app.domains.planning.models import AirQualitySnapshot, WeatherSnapshot
 from app.domains.recommendation.context import OwnedItem
 from app.domains.routines import service as routines_service
 from app.domains.routines.compiler import CompiledRoutine, RoutineStep
@@ -518,6 +519,36 @@ async def test_persisted_safety_reason_authority_and_profile_provenance(
         "verification_state", "profile_attribute_id", "explicit_unknown",
     }
     assert fact["explicit_unknown"] is True
+
+
+@pytest.mark.asyncio
+async def test_persisted_snapshot_keeps_stored_weather_and_aqi_references(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    token, account_id = await registered_supabase_user()
+    await _db_seed(app_client)
+    factory = get_sessionmaker()
+    async with factory() as session:
+        weather = WeatherSnapshot(
+            account_id=account_id, for_date=GENERATION_DATE, location="Delhi",
+            condition="clear", temp_min_c=24.0, temp_max_c=34.0,
+            precipitation_chance=10, humidity=55, uv_index=6.0,
+            provider="manual", source="user_declared", raw={"fixture": "weather"},
+        )
+        air_quality = AirQualitySnapshot(
+            account_id=account_id, for_date=GENERATION_DATE, location="Delhi",
+            aqi=88, index_system="india_naqi", category="Satisfactory",
+            prominent_pollutant="PM10", provider="manual", source="user_declared",
+            raw={"fixture": "aqi"},
+        )
+        session.add_all([weather, air_quality])
+        await session.commit()
+        weather_id, air_quality_id = weather.id, air_quality.id
+
+    await _db_generate(app_client, token, kinds=["morning"])
+    snapshot = (await _latest_run(account_id)).inputs["care_snapshot"]
+    assert snapshot["environment"]["weather_snapshot_id"] == str(weather_id)
+    assert snapshot["environment"]["air_quality_snapshot_id"] == str(air_quality_id)
 
 
 @pytest.mark.asyncio
