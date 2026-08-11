@@ -2,6 +2,7 @@
 
 from app.domains.care.cadence import CARE_CADENCE_VERSION, HairWashCadenceDecision
 from app.domains.care.decisions import CARE_DECISION_VERSION, CareDecisionSet, evaluate_care_context
+from app.domains.care.product_preferences import CARE_PRODUCT_PREFERENCE_VERSION, CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY
 from app.domains.care.routine_plan import (
     CARE_ROUTINE_PLAN_VERSION,
     CareEffortSource,
@@ -30,6 +31,8 @@ __all__ = [
     "CARE_CONTEXT_VERSION",
     "CARE_CADENCE_VERSION",
     "CARE_DECISION_VERSION",
+    "CARE_PRODUCT_PREFERENCE_VERSION",
+    "CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY",
     "CARE_ROUTINE_PLAN_VERSION",
     "CARE_RECOMMENDATION_SNAPSHOT_VERSION",
     "CareEffortSource",

@@ -6,9 +6,14 @@ from collections.abc import Iterable
 from types import MappingProxyType
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.care.context_adapter import project_environment, project_primary_event
+from app.domains.care.product_preferences import (
+    CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
+    is_effective_user_pause,
+)
 from app.domains.care.reasons import CareFactSource, CareMissingReason
 from app.domains.care.schemas import (
     CARE_CONTEXT_VERSION,
@@ -16,6 +21,7 @@ from app.domains.care.schemas import (
     CareFact,
     MissingCareFact,
 )
+from app.domains.inventory.models import InventoryAttribute
 from app.domains.planning.context import DayContext
 from app.domains.profile import service as profile_service
 from app.domains.profile.models import ProfileAttribute
@@ -178,6 +184,24 @@ async def build_care_context(
     if day_context.air_quality is None:
         missing.append(MissingCareFact("environment", "air_quality", CareMissingReason.ENVIRONMENT_MISSING.value))
 
+    skin_products = tuple(shelf.build(shelf_context, "beauty"))
+    hair_products = tuple(shelf.build(shelf_context, "hair"))
+    product_ids = tuple(product.item.id for product in (*skin_products, *hair_products))
+    paused_product_ids: frozenset[uuid.UUID] = frozenset()
+    if product_ids:
+        attribute_rows = (await session.execute(
+            select(InventoryAttribute).where(
+                InventoryAttribute.item_id.in_(product_ids),
+                InventoryAttribute.key == CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
+            )
+        )).scalars().all()
+        paused_product_ids = frozenset(
+            row.item_id for row in attribute_rows
+            if is_effective_user_pause(
+                value=row.value, source=row.source, verification_state=row.verification_state,
+            )
+        )
+
     return CareContext(
         context_version=CARE_CONTEXT_VERSION,
         account_id=account_id,
@@ -188,10 +212,11 @@ async def build_care_context(
         environment=environment,
         primary_event=primary_event,
         allergies=tuple(shelf_context.allergies),
-        skin_products=tuple(shelf.build(shelf_context, "beauty")),
-        hair_products=tuple(shelf.build(shelf_context, "hair")),
+        skin_products=skin_products,
+        hair_products=hair_products,
         draft_product_count=shelf_context.draft_count,
         missing_information=tuple(missing),
+        paused_product_ids=paused_product_ids,
     )
 
 

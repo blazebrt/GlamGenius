@@ -61,6 +61,34 @@ async def simplify_routines(
     return result
 
 
+@router.post("/routines/products/{item_id}/pause")
+async def pause_care_product(
+    item_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Keep an owned Skin/Hair product while excluding it from Care routines."""
+    result = await service.pause_care_product(
+        session, account_id=current.account_id, account_id_str=current.account_id_str, item_id=item_id,
+    )
+    await session.commit()
+    return result
+
+
+@router.post("/routines/products/{item_id}/resume")
+async def resume_care_product(
+    item_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Make an explicitly paused Skin/Hair product eligible for Care again."""
+    result = await service.resume_care_product(
+        session, account_id=current.account_id, account_id_str=current.account_id_str, item_id=item_id,
+    )
+    await session.commit()
+    return result
+
+
 @router.get("/routines/today")
 async def routines_today(
     on: date | None = Query(None, description="Defaults to today in your timezone"),

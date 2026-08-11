@@ -24,11 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.care import cadence as care_cadence
 from app.domains.care import decisions as care_decisions
+from app.domains.care import product_preferences
 from app.domains.care import routine_plan as care_routine_plan
 from app.domains.care import service as care_service
 from app.domains.care import simplification as care_simplification
 from app.domains.care import snapshot as care_snapshot
-from app.domains.inventory.models import InventoryItem
+from app.domains.inventory import service as inventory_service
+from app.domains.inventory.models import InventoryAttribute, InventoryItem
 from app.domains.planning import clock
 from app.domains.planning import context as planning_context
 from app.domains.profile import service as profile_service
@@ -133,7 +135,13 @@ def _care_safety_payload(
     blocked = []
     confirmation = []
     for decision in decisions.product_decisions:
-        if not decision.eligible:
+        safety_reasons = {
+            care_decisions.CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH,
+            care_decisions.CareDecisionReasonCode.PRODUCT_EXPIRED,
+        }
+        if not decision.eligible and any(
+            reason.code in safety_reasons for reason in decision.blocking_reasons
+        ):
             blocked.append({
                 "inventory_item_id": str(decision.item_id),
                 "display_name": names.get(decision.item_id, "Recorded product"),
@@ -697,6 +705,172 @@ async def simplify_care_routine(
     _, after_context, after_decisions = await _current_care_decisions(session, account_id, plan_date)
     after = care_routine_plan.plan_care_routine(after_context, after_decisions)
     return _simplification_response(decision=decision, before=before, after=after)
+
+
+def _customer_category(category: str) -> str:
+    return {"beauty": "skin_care", "hair": "hair_care"}[category]
+
+
+def _changed_slots(
+    before: care_routine_plan.CareRoutinePlan,
+    after: care_routine_plan.CareRoutinePlan,
+) -> list[dict[str, Any]]:
+    before_rows = {(row.category, row.slot): row for row in _slot_material(before)}
+    after_rows = {(row.category, row.slot): row for row in _slot_material(after)}
+    changed: list[dict[str, Any]] = []
+    for key, old in before_rows.items():
+        new = after_rows[key]
+        if (
+            old.active, old.selected_item_id, old.is_gap
+        ) == (
+            new.active, new.selected_item_id, new.is_gap
+        ):
+            continue
+        changed.append({
+            "category": _customer_category(old.category),
+            "slot": old.slot,
+            "previous_item_id": str(old.selected_item_id) if old.selected_item_id else None,
+            "new_item_id": str(new.selected_item_id) if new.selected_item_id else None,
+            "became_gap": new.is_gap,
+        })
+    return sorted(changed, key=lambda row: (row["category"], row["slot"]))
+
+
+async def _care_product_preference(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    account_id_str: str,
+    item_id: uuid.UUID,
+    pause: bool,
+) -> dict[str, Any]:
+    """Apply one explicit Care product pause/resume in the current transaction."""
+    item = await inventory_service.owned_item(session, account_id, item_id)
+    if item.category not in ("beauty", "hair"):
+        raise ValidationFailedError(
+            "Only Skin Care and Hair Care products can be paused from Care routines.",
+            field="item_id",
+        )
+    if item.status != "active" or item.verification_state != "confirmed":
+        raise ValidationFailedError(
+            "Please confirm this product before changing its Care routine preference.",
+            field="item_id",
+        )
+
+    row = (await session.execute(
+        select(InventoryAttribute).where(
+            InventoryAttribute.item_id == item.id,
+            InventoryAttribute.key == product_preferences.CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
+        )
+    )).scalar_one_or_none()
+    effective = row is not None and product_preferences.is_effective_user_pause(
+        value=row.value, source=row.source, verification_state=row.verification_state,
+    )
+    if pause == effective:
+        return {
+            "product_preference_version": product_preferences.CARE_PRODUCT_PREFERENCE_VERSION,
+            "changed": False,
+            "status": "already_paused" if pause else "already_active",
+            "inventory_item_id": str(item.id),
+            "display_name": item.display_name,
+            "category": _customer_category(item.category),
+            "affected_slots": [],
+            "message": "Paused from your Care routine." if pause else "Available to your Care routine again.",
+        }
+
+    plan_date = clock.local_today(clock.DEFAULT_TIMEZONE)
+    _, before_context, before_decisions = await _current_care_decisions(session, account_id, plan_date)
+    before_plan = care_routine_plan.plan_care_routine(before_context, before_decisions)
+    previous_version = item.version
+
+    if pause:
+        if row is None:
+            row = InventoryAttribute(
+                item_id=item.id,
+                key=product_preferences.CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
+                value=True,
+                source="user_declared",
+                confidence=1.0,
+                verification_state="confirmed",
+            )
+            session.add(row)
+        else:
+            row.value = True
+            row.source = "user_declared"
+            row.confidence = 1.0
+            row.verification_state = "confirmed"
+        event_type = "care_routine_paused"
+        from_state, to_state = "active", "paused"
+        status = "paused"
+        message = "Paused from your Care routine. It stays in your inventory."
+        kind = "explicit_product_pause"
+    else:
+        await session.delete(row)
+        event_type = "care_routine_resumed"
+        from_state, to_state = "paused", "active"
+        status = "active"
+        message = "Available to your Care routine again."
+        kind = "explicit_product_resume"
+
+    item.version += 1
+    item.updated_at = utcnow()
+    await inventory_service.record_event(
+        session, item, event_type,
+        {"version": item.version, "from_state": from_state, "to_state": to_state},
+    )
+    # The session deliberately disables autoflush.  Make the preference
+    # visible to the immediately following Care assembly while keeping all
+    # writes inside the caller's transaction.
+    await session.flush()
+    adjustment = {
+        "version": product_preferences.CARE_PRODUCT_PREFERENCE_VERSION,
+        "kind": kind,
+        "item_id": str(item.id),
+        "from_state": from_state,
+        "to_state": to_state,
+    }
+    await generate_routines(
+        session,
+        account_id=account_id,
+        account_id_str=account_id_str,
+        body=RoutineGenerateRequest(as_of=plan_date, explain=False),
+        care_adjustment=adjustment,
+    )
+    _, after_context, after_decisions = await _current_care_decisions(session, account_id, plan_date)
+    after_plan = care_routine_plan.plan_care_routine(after_context, after_decisions)
+    await session.flush()
+    return {
+        "product_preference_version": product_preferences.CARE_PRODUCT_PREFERENCE_VERSION,
+        "changed": True,
+        "status": status,
+        "inventory_item_id": str(item.id),
+        "display_name": item.display_name,
+        "category": _customer_category(item.category),
+        "previous_item_version": previous_version,
+        "new_item_version": item.version,
+        "previous_decision_fingerprint": care_decisions.decision_fingerprint(before_decisions),
+        "new_decision_fingerprint": care_decisions.decision_fingerprint(after_decisions),
+        "previous_plan_fingerprint": care_routine_plan.routine_plan_fingerprint(before_plan),
+        "new_plan_fingerprint": care_routine_plan.routine_plan_fingerprint(after_plan),
+        "affected_slots": _changed_slots(before_plan, after_plan),
+        "message": message,
+    }
+
+
+async def pause_care_product(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
+) -> dict[str, Any]:
+    return await _care_product_preference(
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, pause=True,
+    )
+
+
+async def resume_care_product(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
+) -> dict[str, Any]:
+    return await _care_product_preference(
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, pause=False,
+    )
 
 
 async def _serialize_routine(session: AsyncSession, routine: Routine) -> dict[str, Any]:

@@ -18,7 +18,7 @@ from app.domains.routines import rules as routine_rules
 from app.domains.routines.ontology import HAIR_SLOTS, SKIN_SLOTS
 from app.domains.routines.rules import ShelfProduct
 
-CARE_DECISION_VERSION = "v3-03.2"
+CARE_DECISION_VERSION = "v3-03.11"
 
 
 class CareDecisionReasonCode(StrEnum):
@@ -26,6 +26,7 @@ class CareDecisionReasonCode(StrEnum):
     CONFIRMED_ALLERGY_MATCH = "confirmed_allergy_match"
     INGREDIENT_CONFIRMATION_NEEDED = "ingredient_confirmation_needed"
     PRODUCT_EXPIRING_SOON = "product_expiring_soon"
+    USER_PAUSED_FOR_ROUTINE = "user_paused_for_routine"
 
 
 class CareDecisionAuthority(StrEnum):
@@ -107,6 +108,8 @@ def _product_decision(
         blocking.append(_reason(CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH, CareDecisionAuthority.USER_CONSTRAINT))
     if match.unconfirmed_ingredient_keys:
         advisory.append(_reason(CareDecisionReasonCode.INGREDIENT_CONFIRMATION_NEEDED, CareDecisionAuthority.USER_CONSTRAINT))
+    if product.item.id in context.paused_product_ids:
+        blocking.append(_reason(CareDecisionReasonCode.USER_PAUSED_FOR_ROUTINE, CareDecisionAuthority.USER_CONSTRAINT))
 
     return ProductCareDecision(
         item_id=product.item.id,
