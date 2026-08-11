@@ -649,8 +649,8 @@ async def test_today_cache_recomputes_after_ingredient_confirmation(
         "care_hair_wash_status", "care_hair_wash_reason", "care_hair_wash_frequency",
         "care_hair_last_wash_on", "care_hair_next_due_on",
     }
-    assert care_inputs["care_context_version"] == "v3-03.1"
-    assert care_inputs["care_decision_version"] == "v3-03.2"
+    assert care_inputs["care_context_version"] == "v3-03.11"
+    assert care_inputs["care_decision_version"] == "v3-03.11"
     assert care_inputs["care_blocked_product_count"] == 1
     assert care_inputs["care_confirmation_advisory_count"] == 0
 

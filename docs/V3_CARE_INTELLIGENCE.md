@@ -1356,3 +1356,25 @@ transaction, records the explicit ProfileChangeEvent, and stores a separate
 `v3-03.10` `care_adjustment` in the recommendation run alongside the existing
 `v3-03.9` snapshot. The adjustment is trigger metadata and is intentionally
 not part of the snapshot fingerprint.
+
+## V3-03.11 Explicit Care Product Pause & Resume
+
+A product can remain owned while the user explicitly pauses it from Care
+recommendation eligibility. Pause is a user preference constraint, not a
+safety conclusion. Only a confirmed explicit user pause affects Care;
+observations, adherence, AI, Evidence, environment, physiology, and feedback
+cannot create one automatically.
+
+`CareDecisionSet` owns the exclusion, so required-slot truth and the existing
+`v3-03.4` `CareRoutinePlan` remain internally consistent. Safety reasons remain
+independent: confirmed allergy and hard expiry continue to surface their
+existing safety actions, while a pause-only product does not become a safety
+finding. Pause and resume regenerate deterministic routines immediately and
+are audited through `InventoryEvent` plus `RoutineRecommendationRun`.
+
+The preference is stored as the confirmed `user_declared` boolean
+`care_routine_paused` `InventoryAttribute`. Resume removes the effective
+attribute. The dedicated pause/resume endpoints own the atomic mutation,
+versioning, audit event, idempotency, and `care_adjustment`; generic inventory
+attribute editing cannot write this key. No migration, table, dependency,
+frontend, shopping, cadence, or snapshot-schema change is involved.
