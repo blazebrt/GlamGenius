@@ -205,6 +205,88 @@ async def test_prefer_exclusivity_idempotency_and_unprefer(
 
 
 @pytest.mark.asyncio
+async def test_prefer_existing_target_cleans_conflict_without_target_churn(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    item_a = await _db_product(app_client, token, name="A Cleanser", product_type="cleanser")
+    item_b = await _db_product(app_client, token, name="B Cleanser", product_type="cleanser")
+    await _generate(app_client, token)
+    assert (await app_client.post(f"/api/v2/routines/products/{item_a}/prefer", headers=auth(token))).status_code == 200
+    factory = get_sessionmaker()
+    async with factory() as session:
+        step_before = await _current_step(session, account_id, "cleanser")
+        step_id = step_before.id
+        step_before.inventory_item_id = uuid.UUID(item_b)
+        await session.flush()
+        assert str(step_before.inventory_item_id) == item_b
+        a = await session.get(InventoryItem, uuid.UUID(item_a))
+        b = await session.get(InventoryItem, uuid.UUID(item_b))
+        a_version, b_version = a.version, b.version
+        a_preferred_events = await session.scalar(select(func.count(InventoryEvent.id)).where(
+            InventoryEvent.account_id == account_id,
+            InventoryEvent.item_id == uuid.UUID(item_a),
+            InventoryEvent.event_type == "care_routine_preferred",
+        ))
+        b_clear_events = await session.scalar(select(func.count(InventoryEvent.id)).where(
+            InventoryEvent.account_id == account_id,
+            InventoryEvent.item_id == uuid.UUID(item_b),
+            InventoryEvent.event_type == "care_routine_preference_cleared",
+        ))
+        before_runs = await session.scalar(select(func.count(RoutineRecommendationRun.id)).where(
+            RoutineRecommendationRun.account_id == account_id,
+        ))
+        session.add(InventoryAttribute(
+            item_id=uuid.UUID(item_b), key=CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
+            value=True, source="user_declared", confidence=1.0, verification_state="confirmed",
+        ))
+        await session.commit()
+        preferred_before = (await session.execute(select(InventoryAttribute).where(
+            InventoryAttribute.item_id.in_([uuid.UUID(item_a), uuid.UUID(item_b)]),
+            InventoryAttribute.key == CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
+        ))).scalars().all()
+        assert {str(row.item_id) for row in preferred_before} == {item_a, item_b}
+
+    response = await app_client.post(f"/api/v2/routines/products/{item_a}/prefer", headers=auth(token))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["changed"] is True
+    assert body["status"] == "preferred"
+    async with factory() as session:
+        a = await session.get(InventoryItem, uuid.UUID(item_a))
+        b = await session.get(InventoryItem, uuid.UUID(item_b))
+        assert a.version == a_version
+        assert b.version == b_version + 1
+        assert await session.scalar(select(func.count(InventoryEvent.id)).where(
+            InventoryEvent.account_id == account_id,
+            InventoryEvent.item_id == uuid.UUID(item_a),
+            InventoryEvent.event_type == "care_routine_preferred",
+        )) == a_preferred_events
+        assert await session.scalar(select(func.count(InventoryEvent.id)).where(
+            InventoryEvent.account_id == account_id,
+            InventoryEvent.item_id == uuid.UUID(item_b),
+            InventoryEvent.event_type == "care_routine_preference_cleared",
+        )) == b_clear_events + 1
+        preferred_after = (await session.execute(select(InventoryAttribute).where(
+            InventoryAttribute.item_id.in_([uuid.UUID(item_a), uuid.UUID(item_b)]),
+            InventoryAttribute.key == CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
+        ))).scalars().all()
+        assert {str(row.item_id) for row in preferred_after} == {item_a}
+        assert await session.scalar(select(func.count(RoutineRecommendationRun.id)).where(
+            RoutineRecommendationRun.account_id == account_id,
+        )) == before_runs + 1
+        step_after = await _current_step(session, account_id, "cleanser")
+        assert step_after.id == step_id
+        assert str(step_after.inventory_item_id) == item_a
+        run = await _latest_run(session, account_id)
+        assert run.inputs["care_adjustment"] == {
+            "version": "v3-03.12", "kind": "explicit_product_preference", "item_id": item_a,
+            "slot": "cleanser", "cleared_preferred_item_ids": [item_b],
+        }
+
+
+@pytest.mark.asyncio
 async def test_prefer_rejects_pause_safety_and_generic_patch_without_writes(
     app_client, db_clean, registered_supabase_user,
 ):

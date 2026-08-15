@@ -974,22 +974,23 @@ async def _selection_preference(
     cleared_ids: list[str] = []
     if prefer:
         row = by_item.get(item_id)
-        if row is None:
-            row = InventoryAttribute(
-                item_id=item.id,
-                key=product_preferences.CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
-                value=True, source="user_declared", confidence=1.0, verification_state="confirmed",
+        if not target_effective:
+            if row is None:
+                row = InventoryAttribute(
+                    item_id=item.id,
+                    key=product_preferences.CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
+                    value=True, source="user_declared", confidence=1.0, verification_state="confirmed",
+                )
+                session.add(row)
+            else:
+                row.value = True
+                row.source = "user_declared"
+                row.confidence = 1.0
+                row.verification_state = "confirmed"
+            item.version += 1
+            await inventory_service.record_event(
+                session, item, "care_routine_preferred", {"version": item.version, "slot": product.slot},
             )
-            session.add(row)
-        else:
-            row.value = True
-            row.source = "user_declared"
-            row.confidence = 1.0
-            row.verification_state = "confirmed"
-        item.version += 1
-        await inventory_service.record_event(
-            session, item, "care_routine_preferred", {"version": item.version, "slot": product.slot},
-        )
         for other_id in conflicting_ids:
             other = await session.get(InventoryItem, other_id)
             other_row = by_item[other_id]
