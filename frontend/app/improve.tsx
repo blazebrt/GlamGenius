@@ -18,8 +18,9 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   ConsistencyCard, EmptyModule, ExpiringSection, LowUseSection, RoutineCard, WarningList,
 } from '../src/components/routines/RoutinePieces';
+import { CareExperienceFeedbackSheet } from '../src/components/routines/CareExperienceFeedback';
 import {
-  ImproveOverview, RoutineStep, completeRoutineStep, generateRoutines, getImproveOverview,
+  ImproveOverview, Routine, RoutineStep, completeRoutineStep, generateRoutines, getImproveOverview,
 } from '../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 
@@ -31,6 +32,7 @@ export default function ImproveScreen() {
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(false);
+  const [feedbackTarget, setFeedbackTarget] = useState<{ routine: Routine; step: RoutineStep } | null>(null);
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     if (mode === 'refresh') setRefreshing(true);
@@ -117,7 +119,12 @@ export default function ImproveScreen() {
           <>
             <Text style={styles.section}>Your routines</Text>
             {overview.routines.map((routine) => (
-              <RoutineCard key={routine.id ?? routine.kind} routine={routine} onComplete={(step) => void onComplete(step)} />
+              <RoutineCard
+                key={routine.id ?? routine.kind}
+                routine={routine}
+                onComplete={(step) => void onComplete(step)}
+                onFeedback={(step) => setFeedbackTarget({ routine, step })}
+              />
             ))}
 
             <Text style={styles.section}>How it is going</Text>
@@ -164,6 +171,15 @@ export default function ImproveScreen() {
 
         <Text style={styles.disclaimer}>{overview.disclaimer}</Text>
       </ScrollView>
+      {!!feedbackTarget?.step.id && (
+        <CareExperienceFeedbackSheet
+          open={feedbackTarget !== null}
+          subjectType="routine_step"
+          subjectId={feedbackTarget.step.id}
+          subjectLabel={`${feedbackTarget.routine.label} · ${feedbackTarget.step.label}`}
+          onClose={() => setFeedbackTarget(null)}
+        />
+      )}
     </View>
   );
 }
