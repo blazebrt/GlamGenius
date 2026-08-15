@@ -72,9 +72,10 @@ export function WarningList({ warnings }: { warnings: RuleWarning[] }) {
   );
 }
 
-export function StepRow({ step, onComplete }: {
+export function StepRow({ step, onComplete, onFeedback }: {
   step: RoutineStep;
   onComplete?: (step: RoutineStep) => void;
+  onFeedback?: (step: RoutineStep) => void;
 }) {
   const done = step.completed_today === true;
   return (
@@ -107,6 +108,17 @@ export function StepRow({ step, onComplete }: {
         <Text style={styles.meta}>·</Text>
         <Text style={styles.meta}>{step.required ? 'Worth keeping' : 'Optional'}</Text>
       </View>
+      {!!onFeedback && !!step.id && !step.is_gap && (
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={`Record experience for ${step.label}`}
+          onPress={() => onFeedback(step)}
+          style={styles.feedbackButton}
+        >
+          <Ionicons name="create-outline" size={15} color={COLORS.primary} />
+          <Text style={styles.feedbackText}>Record experience</Text>
+        </TouchableOpacity>
+      )}
       {!!step.safety_note && <Text style={styles.safety}>{step.safety_note}</Text>}
       {!!step.climate_note && <Text style={styles.climate}>{step.climate_note}</Text>}
       {!!step.alternative && <Text style={styles.alternative}>If not: {step.alternative}</Text>}
@@ -114,9 +126,10 @@ export function StepRow({ step, onComplete }: {
   );
 }
 
-export function RoutineCard({ routine, onComplete }: {
+export function RoutineCard({ routine, onComplete, onFeedback }: {
   routine: Routine;
   onComplete?: (step: RoutineStep) => void;
+  onFeedback?: (step: RoutineStep) => void;
 }) {
   return (
     <View style={styles.routine} accessibilityLabel={routine.label}>
@@ -125,7 +138,7 @@ export function RoutineCard({ routine, onComplete }: {
       {!!routine.summary && <Text style={styles.body}>{routine.summary}</Text>}
 
       {routine.steps.map((step) => (
-        <StepRow key={step.id ?? step.slot} step={step} onComplete={onComplete} />
+        <StepRow key={step.id ?? step.slot} step={step} onComplete={onComplete} onFeedback={onFeedback} />
       ))}
 
       {!!routine.skipped_for_allergy.length && (
@@ -301,6 +314,8 @@ const styles = StyleSheet.create({
   why: { fontFamily: FONTS.family.body, color: COLORS.textSecondary, fontSize: 12, lineHeight: 18, marginTop: 5 },
   metaRow: { flexDirection: 'row', gap: 6, marginTop: 4 },
   meta: { fontFamily: FONTS.family.bodyMedium, color: COLORS.textMuted, fontSize: 11 },
+  feedbackButton: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 5, borderWidth: 1, borderColor: COLORS.primaryMuted, borderRadius: RADIUS.full, paddingHorizontal: 11, paddingVertical: 7, marginTop: 9 },
+  feedbackText: { fontFamily: FONTS.family.bodySemibold, color: COLORS.primary, fontSize: 11 },
   safety: { fontFamily: FONTS.family.bodyMedium, color: COLORS.primary, fontSize: 11, lineHeight: 16, marginTop: 5 },
   climate: { fontFamily: FONTS.family.body, color: COLORS.textSecondary, fontSize: 11, lineHeight: 16, marginTop: 4 },
   alternative: { fontFamily: FONTS.family.body, color: COLORS.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4 },

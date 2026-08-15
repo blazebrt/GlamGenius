@@ -1256,6 +1256,48 @@ export interface Routine {
   disclaimer: string;
 }
 
+// Explicit Care experience feedback is a user-owned record. These types are
+// deliberately separate from generic Progress feedback: recording an
+// experience never changes a routine, a recommendation, or a memory.
+export type CareExperienceFeedbackSubjectType = 'product' | 'routine_step';
+export type CareExperienceFeedbackDimension =
+  | 'overall_experience'
+  | 'comfort'
+  | 'ease_of_use'
+  | 'routine_fit';
+export type CareExperienceFeedbackSentiment = 'positive' | 'neutral' | 'negative';
+
+export interface CareExperienceFeedback {
+  id: string;
+  feedback_version: 'v3-03.13';
+  subject_type: CareExperienceFeedbackSubjectType;
+  subject_id: string;
+  routine_kind: RoutineKind | null;
+  routine_slot: string | null;
+  dimension: CareExperienceFeedbackDimension;
+  sentiment: CareExperienceFeedbackSentiment;
+  note: string | null;
+  experienced_on: string;
+  created_at: string | null;
+}
+
+export interface CareExperienceFeedbackRecord extends CareExperienceFeedback {
+  affects_recommendations: false;
+  creates_memory: false;
+  changes_care_safety: false;
+  message: string;
+}
+
+export interface CareExperienceFeedbackInput {
+  subject_type: CareExperienceFeedbackSubjectType;
+  subject_id: string;
+  dimension: CareExperienceFeedbackDimension;
+  sentiment: CareExperienceFeedbackSentiment;
+  note?: string;
+  /** Supported by the server for reviewed backdated workflows, but omitted by the normal UX. */
+  experienced_on?: string;
+}
+
 export interface ShelfProductRow {
   inventory_item_id: string;
   display_name: string;
@@ -1370,6 +1412,30 @@ export const completeRoutineStep = async (
 
 export const getImproveOverview = async (): Promise<ImproveOverview> =>
   (await api.get<ImproveOverview>(`${V2}/routines/improve`)).data;
+
+export const recordCareExperienceFeedback = async (
+  body: CareExperienceFeedbackInput
+): Promise<CareExperienceFeedbackRecord> => {
+  // Do not add a client date. The server owns the canonical local date when
+  // experienced_on is omitted by the normal capture flow.
+  const { experienced_on, ...normal } = body;
+  const payload = experienced_on === undefined ? normal : { ...normal, experienced_on };
+  return (await api.post<CareExperienceFeedbackRecord>(`${V2}/routines/experience-feedback`, payload)).data;
+};
+
+export const listCareExperienceFeedback = async (
+  subject_type: CareExperienceFeedbackSubjectType,
+  subject_id: string,
+  limit = 50,
+): Promise<{ feedback: CareExperienceFeedback[] }> =>
+  (await api.get<{ feedback: CareExperienceFeedback[] }>(`${V2}/routines/experience-feedback`, {
+    params: { subject_type, subject_id, limit },
+  })).data;
+
+export const deleteCareExperienceFeedback = async (
+  feedback_id: string,
+): Promise<{ deleted: true; id: string }> =>
+  (await api.delete<{ deleted: true; id: string }>(`${V2}/routines/experience-feedback/${feedback_id}`)).data;
 
 export const checkIngredients = async (body: {
   label_text?: string; ingredients?: string[]; item_ids?: string[];

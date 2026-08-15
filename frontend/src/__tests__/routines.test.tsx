@@ -101,6 +101,21 @@ describe('Routine steps', () => {
     expect(screen.getByLabelText('Undo: Cleanser')).toBeTruthy();
   });
 
+  it('offers feedback only for a persisted normal step', () => {
+    const onFeedback = jest.fn();
+    render(<StepRow step={step()} onFeedback={onFeedback} />);
+    fireEvent.press(screen.getByLabelText('Record experience for Cleanser'));
+    expect(onFeedback).toHaveBeenCalledWith(expect.objectContaining({ id: 'step-1' }));
+  });
+
+  it('does not offer feedback for a gap or a step without a persisted id', () => {
+    const onFeedback = jest.fn();
+    const { rerender } = render(<StepRow step={step({ is_gap: true })} onFeedback={onFeedback} />);
+    expect(screen.queryByLabelText('Record experience for Cleanser')).toBeNull();
+    rerender(<StepRow step={step({ id: undefined })} onFeedback={onFeedback} />);
+    expect(screen.queryByLabelText('Record experience for Cleanser')).toBeNull();
+  });
+
   it('shows the safety note and the alternative when there is one', () => {
     render(<StepRow step={step({
       safety_note: 'Two or three times a week is plenty.',
