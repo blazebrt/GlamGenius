@@ -21,6 +21,8 @@ What this protects against
 """
 from __future__ import annotations
 
+import uuid
+from datetime import date
 from typing import Any
 
 import pytest
@@ -153,6 +155,151 @@ async def test_export_carries_a_record_from_every_active_domain(
     assert domains["planning"]["daily_plans"]
     assert domains["routines"]["routines"]
     assert domains["progress_and_memory"]["memory_facts"]
+
+
+async def test_routines_export_includes_all_owned_records_and_is_account_scoped(
+    app_client, db_clean, registered_supabase_user, fake_provider, storage
+):
+    """The routines domain exports every included routines-model table."""
+    token_a, account_a, created = await _seeded_account(app_client, registered_supabase_user)
+    beauty_item_id = created["inventory"]["beauty"][0]
+    supplement_item_id = created["inventory"]["supplements"][0]
+    routine_row = created["routines"]["routines"][0]
+    step_row = routine_row["steps"][0]
+    beauty_item_uuid = uuid.UUID(beauty_item_id)
+    supplement_item_uuid = uuid.UUID(supplement_item_id)
+    routine_uuid = uuid.UUID(routine_row["id"])
+    step_uuid = uuid.UUID(step_row["id"])
+
+    observation = ok(await app_client.post(
+        "/api/v2/routines/observations",
+        headers=auth(token_a),
+        json={
+            "observed_on": "2026-08-14",
+            "area": "skin",
+            "note": "A-owned observation must remain verbatim in the export.",
+            "item_id": beauty_item_id,
+        },
+    ))
+    ok(await app_client.patch(
+        "/api/v2/nutrition/preferences",
+        headers=auth(token_a),
+        json={
+            "diet": "vegetarian",
+            "avoid_foods": ["mushrooms"],
+            "focus_nutrients": ["protein"],
+            "enabled": True,
+        },
+    ))
+    ok(await app_client.patch(
+        "/api/v2/nutrition/hydration",
+        headers=auth(token_a),
+        json={
+            "enabled": True,
+            "remind_in_hot_weather_only": False,
+            "note": "A-owned hydration preference.",
+        },
+    ))
+
+    from app.domains.routines.models import (
+        ProductExpiryEvent,
+        ProductIngredient,
+        RoutineAdherence,
+        SupplementSafetyFlag,
+    )
+    from app.shared.database.sql import get_sessionmaker
+    from sqlalchemy import select
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        existing_keys = set((await session.execute(
+            select(ProductIngredient.ingredient_key).where(
+                ProductIngredient.account_id == account_a,
+                ProductIngredient.item_id == beauty_item_uuid,
+            )
+        )).scalars().all())
+        ingredient_key = next(
+            key for key in ("fragrance", "retinol", "vitamin_c", "glycerin")
+            if key not in existing_keys
+        )
+        session.add(ProductIngredient(
+            account_id=account_a,
+            item_id=beauty_item_uuid,
+            ingredient_key=ingredient_key,
+            matched_text="A-owned ingredient",
+            position=1,
+            confidence=1.0,
+            source="user_declared",
+            needs_confirmation=False,
+        ))
+        session.add(ProductExpiryEvent(
+            account_id=account_a,
+            item_id=beauty_item_uuid,
+            rule_id="test.expiry",
+            status="expiring_soon",
+            effective_expiry=date(2026, 8, 20),
+            days_to_expiry=5,
+            detail="A-owned expiry assessment.",
+        ))
+        session.add(SupplementSafetyFlag(
+            account_id=account_a,
+            item_id=supplement_item_uuid,
+            flag="test_flag",
+            message="A-owned supplement safety flag.",
+        ))
+        session.add(RoutineAdherence(
+            account_id=account_a,
+            routine_id=routine_uuid,
+            slot=step_row["slot"],
+            step_id=step_uuid,
+            done_on=date(2026, 2, 16),
+            completed=True,
+            note="A-owned adherence record.",
+        ))
+        await session.commit()
+
+    token_b, account_b = await registered_supabase_user()
+    observation_b = ok(await app_client.post(
+        "/api/v2/routines/observations",
+        headers=auth(token_b),
+        json={
+            "observed_on": "2026-08-14",
+            "area": "hair",
+            "note": "B-owned observation must never appear in A's export.",
+        },
+    ))
+
+    export_a = ok(await app_client.get("/api/v2/privacy/export", headers=auth(token_a)))
+    routines = export_a["domains"]["routines"]
+
+    assert routines["routines"]
+    assert routines["steps"]
+    assert routines["adherence"]
+    assert routines["recommendation_runs"]
+
+    exported_observation = next(row for row in routines["observations"] if row["id"] == observation["id"])
+    assert exported_observation["note"] == "A-owned observation must remain verbatim in the export."
+    assert exported_observation["area"] == "skin"
+    assert exported_observation["observed_on"] == "2026-08-14"
+    assert exported_observation["item_id"] == beauty_item_id
+    assert exported_observation["routed_to_professional"] is False
+    assert exported_observation["created_at"]
+    assert exported_observation["updated_at"]
+
+    assert any(row["item_id"] == beauty_item_id and row["ingredient_key"] == ingredient_key
+               for row in routines["product_ingredients"])
+    assert any(row["item_id"] == beauty_item_id and row["detail"] == "A-owned expiry assessment."
+               for row in routines["product_expiry_events"])
+    assert any(row["item_id"] == supplement_item_id and row["message"] == "A-owned supplement safety flag."
+               for row in routines["supplement_safety_flags"])
+    assert any(row["diet"] == "vegetarian" and row["avoid_foods"] == ["mushrooms"]
+               for row in routines["nutrition_preferences"])
+    assert any(row["enabled"] is True and row["note"] == "A-owned hydration preference."
+               for row in routines["hydration_preferences"])
+
+    assert observation_b["id"] not in export_a.__repr__()
+    assert "B-owned observation must never appear in A's export." not in export_a.__repr__()
+    assert str(account_b) not in export_a.__repr__()
 
 
 async def test_export_covers_all_seven_inventory_categories(
