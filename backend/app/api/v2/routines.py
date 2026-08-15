@@ -89,6 +89,34 @@ async def resume_care_product(
     return result
 
 
+@router.post("/routines/products/{item_id}/prefer")
+async def prefer_care_product(
+    item_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Prefer an owned eligible product for its canonical Care step."""
+    result = await service.prefer_care_product(
+        session, account_id=current.account_id, account_id_str=current.account_id_str, item_id=item_id,
+    )
+    await session.commit()
+    return result
+
+
+@router.post("/routines/products/{item_id}/unprefer")
+async def unprefer_care_product(
+    item_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Clear an explicit product selection preference."""
+    result = await service.unprefer_care_product(
+        session, account_id=current.account_id, account_id_str=current.account_id_str, item_id=item_id,
+    )
+    await session.commit()
+    return result
+
+
 @router.get("/routines/today")
 async def routines_today(
     on: date | None = Query(None, description="Defaults to today in your timezone"),

@@ -10,7 +10,7 @@ from typing import Any
 
 from app.domains.routines.rules import ShelfProduct
 
-CARE_CONTEXT_VERSION = "v3-03.11"
+CARE_CONTEXT_VERSION = "v3-03.12"
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +83,7 @@ class CareContext:
     draft_product_count: int
     missing_information: tuple[MissingCareFact, ...]
     paused_product_ids: frozenset[uuid.UUID] = frozenset()
+    preferred_product_ids: frozenset[uuid.UUID] = frozenset()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "skin_facts", MappingProxyType(dict(self.skin_facts)))
@@ -93,6 +94,7 @@ class CareContext:
         object.__setattr__(self, "hair_products", tuple(self.hair_products))
         object.__setattr__(self, "missing_information", tuple(self.missing_information))
         object.__setattr__(self, "paused_product_ids", frozenset(self.paused_product_ids))
+        object.__setattr__(self, "preferred_product_ids", frozenset(self.preferred_product_ids))
 
 
 __all__ = [

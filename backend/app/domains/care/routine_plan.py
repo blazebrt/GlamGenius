@@ -20,7 +20,7 @@ from app.domains.care.schemas import CareContext
 from app.domains.routines.ontology import HAIR_SLOTS, SKIN_SLOTS, StepSlot
 from app.domains.routines.rules import ShelfProduct
 
-CARE_ROUTINE_PLAN_VERSION = "v3-03.4"
+CARE_ROUTINE_PLAN_VERSION = "v3-03.12"
 
 
 class CareRoutineEffort(StrEnum):
@@ -45,6 +45,7 @@ class CareInclusionReason(StrEnum):
 
 
 class CareSelectionBasis(StrEnum):
+    USER_PREFERRED = "user_preferred"
     RECENT_USE = "recent_use"
     USAGE_COUNT = "usage_count"
     STABLE_FALLBACK = "stable_fallback"
@@ -118,7 +119,7 @@ def _effort(context: CareContext) -> tuple[CareRoutineEffort, CareEffortSource]:
 
 
 def _selection(
-    candidates: tuple[uuid.UUID, ...], products: dict[uuid.UUID, ShelfProduct]
+    candidates: tuple[uuid.UUID, ...], products: dict[uuid.UUID, ShelfProduct],
 ) -> tuple[uuid.UUID, CareSelectionBasis]:
     rows = [products[item_id] for item_id in candidates]
     with_recent = [row for row in rows if row.item.last_used_at is not None]
@@ -143,12 +144,25 @@ def _selection(
     return chosen.item.id, CareSelectionBasis.STABLE_FALLBACK
 
 
+def _selection_with_preference(
+    candidates: tuple[uuid.UUID, ...],
+    products: dict[uuid.UUID, ShelfProduct],
+    preferred_product_ids: frozenset[uuid.UUID],
+) -> tuple[uuid.UUID, CareSelectionBasis]:
+    preferred = tuple(item_id for item_id in candidates if item_id in preferred_product_ids)
+    if preferred:
+        selected, _ = _selection(preferred, products)
+        return selected, CareSelectionBasis.USER_PREFERRED
+    return _selection(candidates, products)
+
+
 def _slot_plan(
     slot: StepSlot,
     *,
     effort: CareRoutineEffort,
     eligible: dict[str, tuple[uuid.UUID, ...]],
     products: dict[uuid.UUID, ShelfProduct],
+    preferred_product_ids: frozenset[uuid.UUID],
 ) -> CareSlotPlan:
     candidates = eligible.get(slot.key, ())
     if slot.required:
@@ -188,7 +202,10 @@ def _slot_plan(
         active = True
         reason = CareInclusionReason.DETAILED_OWNED
 
-    selected, basis = _selection(candidates, products) if candidates else (None, None)
+    selected, basis = (
+        _selection_with_preference(candidates, products, preferred_product_ids)
+        if candidates else (None, None)
+    )
     alternatives = tuple(item_id for item_id in candidates if item_id != selected)
     return CareSlotPlan(
         category=slot.category, slot=slot.key, required=slot.required, active=active,
@@ -227,8 +244,14 @@ def plan_care_routine(context: CareContext, decisions: CareDecisionSet) -> CareR
         plan_date=context.plan_date,
         resolved_effort=effort,
         effort_source=effort_source,
-        skin_slots=tuple(_slot_plan(slot, effort=effort, eligible=canonical, products=products) for slot in SKIN_SLOTS),
-        hair_slots=tuple(_slot_plan(slot, effort=effort, eligible=canonical, products=products) for slot in HAIR_SLOTS),
+        skin_slots=tuple(_slot_plan(
+            slot, effort=effort, eligible=canonical, products=products,
+            preferred_product_ids=context.preferred_product_ids,
+        ) for slot in SKIN_SLOTS),
+        hair_slots=tuple(_slot_plan(
+            slot, effort=effort, eligible=canonical, products=products,
+            preferred_product_ids=context.preferred_product_ids,
+        ) for slot in HAIR_SLOTS),
     )
 
 

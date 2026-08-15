@@ -12,7 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.care.context_adapter import project_environment, project_primary_event
 from app.domains.care.product_preferences import (
     CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
+    CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
     is_effective_user_pause,
+    is_effective_user_preference,
 )
 from app.domains.care.reasons import CareFactSource, CareMissingReason
 from app.domains.care.schemas import (
@@ -188,16 +190,26 @@ async def build_care_context(
     hair_products = tuple(shelf.build(shelf_context, "hair"))
     product_ids = tuple(product.item.id for product in (*skin_products, *hair_products))
     paused_product_ids: frozenset[uuid.UUID] = frozenset()
+    preferred_product_ids: frozenset[uuid.UUID] = frozenset()
     if product_ids:
         attribute_rows = (await session.execute(
             select(InventoryAttribute).where(
                 InventoryAttribute.item_id.in_(product_ids),
-                InventoryAttribute.key == CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
+                InventoryAttribute.key.in_((
+                    CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
+                    CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
+                )),
             )
         )).scalars().all()
         paused_product_ids = frozenset(
             row.item_id for row in attribute_rows
-            if is_effective_user_pause(
+            if row.key == CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY and is_effective_user_pause(
+                value=row.value, source=row.source, verification_state=row.verification_state,
+            )
+        )
+        preferred_product_ids = frozenset(
+            row.item_id for row in attribute_rows
+            if row.key == CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY and is_effective_user_preference(
                 value=row.value, source=row.source, verification_state=row.verification_state,
             )
         )
@@ -217,6 +229,7 @@ async def build_care_context(
         draft_product_count=shelf_context.draft_count,
         missing_information=tuple(missing),
         paused_product_ids=paused_product_ids,
+        preferred_product_ids=preferred_product_ids,
     )
 
 
