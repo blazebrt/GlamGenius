@@ -10,6 +10,7 @@ Cover:
 """
 from __future__ import annotations
 
+import inspect
 import uuid
 from typing import Any
 
@@ -35,7 +36,6 @@ pytestmark = pytest.mark.asyncio
 ROUTINES_MODEL_EXPORT_COLLECTIONS = {
     routines_models.ProductIngredient.__tablename__: "product_ingredients",
     routines_models.Routine.__tablename__: "routines",
-    routines_models.RoutineStep.__tablename__: "steps",
     routines_models.RoutineAdherence.__tablename__: "adherence",
     routines_models.UserReportedObservation.__tablename__: "observations",
     routines_models.ProductExpiryEvent.__tablename__: "product_expiry_events",
@@ -43,6 +43,12 @@ ROUTINES_MODEL_EXPORT_COLLECTIONS = {
     routines_models.SupplementSafetyFlag.__tablename__: "supplement_safety_flags",
     routines_models.NutritionPreference.__tablename__: "nutrition_preferences",
     routines_models.HydrationPreference.__tablename__: "hydration_preferences",
+}
+
+# Routine steps do not carry a direct account_id; they are exported through
+# their account-owned parent routine and are asserted separately below.
+ROUTINES_PARENT_OWNED_EXPORT_COLLECTIONS = {
+    routines_models.RoutineStep.__tablename__: "steps",
 }
 
 
@@ -53,6 +59,15 @@ async def test_registry_classifies_every_orm_table():
 
 async def test_routines_included_models_have_explicit_export_collections(db_clean):
     """Every user-owned routines model has a deliberate export collection."""
+    actual_account_owned_routines_tables = set()
+    for _, cls in inspect.getmembers(routines_models, inspect.isclass):
+        if cls.__module__ != routines_models.__name__:
+            continue
+        table = getattr(cls, "__table__", None)
+        if table is not None and "account_id" in table.c:
+            actual_account_owned_routines_tables.add(table.name)
+
+    assert set(ROUTINES_MODEL_EXPORT_COLLECTIONS) == actual_account_owned_routines_tables
     assert all(REGISTRY[name] == Classification.INCLUDED for name in ROUTINES_MODEL_EXPORT_COLLECTIONS)
 
     factory = get_sessionmaker()
@@ -66,7 +81,11 @@ async def test_routines_included_models_have_explicit_export_collections(db_clea
 
     routines = payload["domains"]["routines"]
     assert set(ROUTINES_MODEL_EXPORT_COLLECTIONS).issubset(set(REGISTRY))
-    assert set(ROUTINES_MODEL_EXPORT_COLLECTIONS.values()) <= set(routines)
+    expected_collections = (
+        set(ROUTINES_MODEL_EXPORT_COLLECTIONS.values())
+        | set(ROUTINES_PARENT_OWNED_EXPORT_COLLECTIONS.values())
+    )
+    assert expected_collections <= set(routines)
 
 
 async def test_registry_covers_all_seven_inventory_categories():
