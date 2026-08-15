@@ -373,7 +373,7 @@ jobs:
           code=$?
           echo "yarn audit exit code = $code (bitmask: 1=info,2=low,4=moderate,8=high,16=critical)"
           set -e
-          node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json
+          node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json ../security/node-audit-false-positives.json
 
   # ---- Mobile: Android bundle validation (blocking) ------------------------
   # Verifies the Expo project compiles for Android as a Metro bundle. This is
@@ -519,7 +519,7 @@ jobs:
           echo "yarn audit exit code = $code (bitmask: 1=info,2=low,4=moderate,8=high,16=critical)"
           # The validator below, rather than Yarn's bitmask, decides the gate.
           set -e
-          node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json
+          node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json ../security/node-audit-false-positives.json
       - name: Upload yarn-audit report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
