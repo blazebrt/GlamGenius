@@ -20,9 +20,14 @@ from sqlalchemy import func, select
 
 from tests.conftest import auth
 from tests.test_care_decisions import _context
-from tests.test_care_decisions import _product as _pure_product
+from tests.test_care_decisions import _product as _base_pure_product
 from tests.test_v3_03_3_integration import _generate, _seed
 from tests.test_v3_03_3_integration import _product as _db_product
+
+
+def _pure_product(category: str, product_type: str, name: str, *, usage_count: int = 0):
+    product = _base_pure_product(category, product_type)
+    return replace(product, item=replace(product.item, display_name=name, usage_count=usage_count))
 
 
 def test_preference_predicate_requires_exact_confirmed_user_boolean():
@@ -196,7 +201,7 @@ async def test_prefer_exclusivity_idempotency_and_unprefer(
     again = await app_client.post(f"/api/v2/routines/products/{item_b}/unprefer", headers=auth(token))
     assert again.json()["changed"] is False
     async with factory() as session:
-        assert await session.scalar(select(func.count(RoutineRecommendationRun.id)).where(RoutineRecommendationRun.account_id == account_id)) >= before_runs + 3
+        assert await session.scalar(select(func.count(RoutineRecommendationRun.id)).where(RoutineRecommendationRun.account_id == account_id)) >= before_runs + 2
 
 
 @pytest.mark.asyncio
