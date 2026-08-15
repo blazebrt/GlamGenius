@@ -100,14 +100,14 @@ export function CareExperienceFeedbackSheet({
     setSaving(true);
     setActionError('');
     try {
-      const result = await recordCareExperienceFeedback({
+      await recordCareExperienceFeedback({
         subject_type: subjectType,
         subject_id: subjectId,
         dimension,
         sentiment,
         ...(note.length > 0 ? { note } : {}),
       });
-      setSavedMessage(result.message || 'Saved. This does not change your routine automatically.');
+      setSavedMessage('Saved. This does not change your routine automatically.');
       setDimension(null);
       setSentiment(null);
       setNote('');

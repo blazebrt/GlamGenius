@@ -14,6 +14,7 @@ import {
   listCareExperienceFeedback,
   recordCareExperienceFeedback,
 } from '../services/apiV2';
+import * as apiV2 from '../services/apiV2';
 
 const entry = {
   id: 'feedback-1',
@@ -54,7 +55,7 @@ describe('Care experience feedback API contract', () => {
 });
 
 describe('CareExperienceFeedbackSheet', () => {
-  const postResult = { ...entry, affects_recommendations: false as const, creates_memory: false as const, changes_care_safety: false as const, message: 'Saved. This does not change your routine automatically.' };
+  const postResult = { ...entry, affects_recommendations: false as const, creates_memory: false as const, changes_care_safety: false as const, message: 'Backend response copy' };
 
   beforeEach(() => {
     jest.spyOn(api, 'get').mockResolvedValue({ data: { feedback: [] } } as any);
@@ -97,7 +98,8 @@ describe('CareExperienceFeedbackSheet', () => {
     fireEvent.press(screen.getByLabelText('Save experience'));
     await waitFor(() => expect(post).toHaveBeenCalled());
     expect(post.mock.calls[0][1]).toEqual({ subject_type: 'product', subject_id: 'product-1', dimension: 'comfort', sentiment: 'negative', note: '  Felt heavier later  ' });
-    expect(screen.getByText(/does not change your routine automatically/)).toBeTruthy();
+    expect(screen.getByText('Saved. This does not change your routine automatically.')).toBeTruthy();
+    expect(screen.queryByText('Backend response copy')).toBeNull();
     expect(await screen.findByText('Comfort · Negative')).toBeTruthy();
     expect(screen.getByText('  Felt heavier later  ')).toBeTruthy();
     expect(screen.getByText('2026-08-15')).toBeTruthy();
@@ -133,6 +135,32 @@ describe('CareExperienceFeedbackSheet', () => {
     fireEvent.press(screen.getByLabelText('Delete experience entry from 2026-08-15'));
     await waitFor(() => expect(del).toHaveBeenCalledWith('/api/v2/routines/experience-feedback/feedback-1'));
     expect(screen.queryByText('Comfort · Negative')).toBeNull();
+  });
+  it('keeps experience capture, history, and deletion separate from existing adaptation and control actions', async () => {
+    const generateRoutines = jest.spyOn(apiV2, 'generateRoutines').mockResolvedValue({} as any);
+    const regenerateToday = jest.spyOn(apiV2, 'regenerateToday').mockResolvedValue({} as any);
+    const completeRoutineStep = jest.spyOn(apiV2, 'completeRoutineStep').mockResolvedValue({} as any);
+    const completePlanAction = jest.spyOn(apiV2, 'completePlanAction').mockResolvedValue({} as any);
+    const sendMemoryFeedback = jest.spyOn(apiV2, 'sendMemoryFeedback').mockResolvedValue({} as any);
+    const post = jest.spyOn(api, 'post').mockResolvedValue({ data: postResult } as any);
+    jest.spyOn(api, 'get').mockResolvedValue({ data: { feedback: [entry] } } as any);
+    const del = jest.spyOn(api, 'delete').mockResolvedValue({ data: { deleted: true, id: entry.id } } as any);
+
+    render(<CareExperienceFeedbackSheet open subjectType="product" subjectId="product-1" subjectLabel="Cloud cleanser" onClose={jest.fn()} />);
+    fireEvent.press(screen.getByLabelText('Comfort'));
+    fireEvent.press(screen.getByLabelText('Negative'));
+    fireEvent.press(screen.getByLabelText('Save experience'));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+
+    fireEvent.press(await screen.findByLabelText('Delete experience entry from 2026-08-15'));
+    await waitFor(() => expect(del).toHaveBeenCalledTimes(1));
+
+    expect(post.mock.calls[0][0]).toBe('/api/v2/routines/experience-feedback');
+    expect(generateRoutines).not.toHaveBeenCalled();
+    expect(regenerateToday).not.toHaveBeenCalled();
+    expect(completeRoutineStep).not.toHaveBeenCalled();
+    expect(completePlanAction).not.toHaveBeenCalled();
+    expect(sendMemoryFeedback).not.toHaveBeenCalled();
   });
 });
 
