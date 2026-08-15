@@ -94,7 +94,7 @@ async def _care_side_effect_state(account_id: uuid.UUID) -> dict[str, object]:
 
 
 async def test_explicit_feedback_is_scoped_taxonomized_and_non_adaptive(
-    app_client, db_clean, registered_supabase_user, fake_provider, storage,
+    app_client, db_clean, registered_supabase_user, fake_provider,
 ):
     token, account_id, created = await _seeded_account(app_client, registered_supabase_user)
     beauty_id = created["inventory"]["beauty"][0]
@@ -152,7 +152,7 @@ async def test_explicit_feedback_is_scoped_taxonomized_and_non_adaptive(
 
 
 async def test_routine_step_provenance_get_delete_and_privacy_are_account_scoped(
-    app_client, db_clean, registered_supabase_user, fake_provider, storage,
+    app_client, db_clean, registered_supabase_user, fake_provider,
 ):
     token_a, account_a, created = await _seeded_account(app_client, registered_supabase_user)
     routine = created["routines"]["routines"][0]
@@ -220,7 +220,7 @@ async def test_routine_step_provenance_get_delete_and_privacy_are_account_scoped
 
 
 async def test_product_cross_account_subject_is_not_revealed(
-    app_client, db_clean, registered_supabase_user, fake_provider, storage,
+    app_client, db_clean, registered_supabase_user, fake_provider,
 ):
     token_a, _, created = await _seeded_account(app_client, registered_supabase_user)
     product_id = created["inventory"]["beauty"][0]
@@ -233,7 +233,7 @@ async def test_product_cross_account_subject_is_not_revealed(
 
 
 async def test_feedback_account_delete_cascades_from_database(
-    app_client, db_clean, registered_supabase_user, fake_provider, storage,
+    app_client, db_clean, registered_supabase_user, fake_provider,
 ):
     token, account_id, created = await _seeded_account(app_client, registered_supabase_user)
     saved = ok(await _post(
