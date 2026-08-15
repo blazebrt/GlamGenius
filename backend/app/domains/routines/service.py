@@ -873,6 +873,203 @@ async def resume_care_product(
     )
 
 
+def _care_product_row(care_context, item_id: uuid.UUID):
+    return next(
+        (
+            product for product in (*care_context.skin_products, *care_context.hair_products)
+            if product.item.id == item_id
+        ),
+        None,
+    )
+
+
+async def _selection_preference(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    account_id_str: str,
+    item_id: uuid.UUID,
+    prefer: bool,
+) -> dict[str, Any]:
+    """Apply an explicit product selection preference atomically."""
+    item = await inventory_service.owned_item(session, account_id, item_id)
+    if item.category not in ("beauty", "hair"):
+        raise ValidationFailedError(
+            "Only Skin Care and Hair Care products can be made preferred.", field="item_id",
+        )
+    if item.status != "active" or item.verification_state != "confirmed":
+        raise ValidationFailedError(
+            "Please confirm this product before making it preferred.", field="item_id",
+        )
+
+    plan_date = clock.local_today(clock.DEFAULT_TIMEZONE)
+    _, before_context, before_decisions = await _current_care_decisions(session, account_id, plan_date)
+    product = _care_product_row(before_context, item_id)
+    if product is None or product.slot is None:
+        raise ValidationFailedError(
+            "This product does not have a confirmed Care routine role yet.", field="item_id",
+        )
+    target_decision = next(
+        (row for row in before_decisions.product_decisions if row.item_id == item_id), None,
+    )
+    if target_decision is None:
+        raise ValidationFailedError(
+            "This product does not have a confirmed Care routine role yet.", field="item_id",
+        )
+    if prefer and item_id in before_context.paused_product_ids:
+        raise ValidationFailedError(
+            "Use this product in your routine again before making it preferred.", field="item_id",
+        )
+    if prefer and not target_decision.eligible:
+        raise ValidationFailedError(
+            "This product is not currently eligible for your Care routine.", field="item_id",
+        )
+
+    rows = (await session.execute(
+        select(InventoryAttribute).where(
+            InventoryAttribute.item_id.in_(
+                product.item.id for product in (*before_context.skin_products, *before_context.hair_products)
+            ),
+            InventoryAttribute.key == product_preferences.CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
+        )
+    )).scalars().all()
+    by_item = {row.item_id: row for row in rows}
+    effective_ids = {
+        row.item_id for row in rows
+        if product_preferences.is_effective_user_preference(
+            value=row.value, source=row.source, verification_state=row.verification_state,
+        )
+    }
+    target_effective = item_id in effective_ids
+    same_slot_ids = {
+        candidate.item.id for candidate in (*before_context.skin_products, *before_context.hair_products)
+        if candidate.slot == product.slot and candidate.item.category == product.item.category
+    }
+    conflicting_ids = sorted((effective_ids & same_slot_ids) - {item_id}, key=str)
+    before_plan = care_routine_plan.plan_care_routine(before_context, before_decisions)
+    before_slot = next(
+        row for row in (*before_plan.skin_slots, *before_plan.hair_slots)
+        if row.category == product.item.category and row.slot == product.slot
+    )
+
+    if prefer and target_effective and not conflicting_ids:
+        return {
+            "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
+            "changed": False, "status": "already_preferred", "inventory_item_id": str(item.id),
+            "display_name": item.display_name, "category": _customer_category(item.category),
+            "slot": product.slot, "cleared_preferred_item_ids": [],
+            "selection_applied": before_slot.active and before_slot.selected_item_id == item.id,
+            "message": "Preferred for this Care step.",
+        }
+    if not prefer and not target_effective:
+        return {
+            "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
+            "changed": False, "status": "already_standard", "inventory_item_id": str(item.id),
+            "display_name": item.display_name, "category": _customer_category(item.category),
+            "slot": product.slot, "cleared_preferred_item_ids": [],
+            "selection_applied": False,
+            "message": "Your routine will use its normal product choice for this step again.",
+        }
+
+    cleared_ids: list[str] = []
+    if prefer:
+        row = by_item.get(item_id)
+        if not target_effective:
+            if row is None:
+                row = InventoryAttribute(
+                    item_id=item.id,
+                    key=product_preferences.CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
+                    value=True, source="user_declared", confidence=1.0, verification_state="confirmed",
+                )
+                session.add(row)
+            else:
+                row.value = True
+                row.source = "user_declared"
+                row.confidence = 1.0
+                row.verification_state = "confirmed"
+            item.version += 1
+            await inventory_service.record_event(
+                session, item, "care_routine_preferred", {"version": item.version, "slot": product.slot},
+            )
+        for other_id in conflicting_ids:
+            other = await session.get(InventoryItem, other_id)
+            other_row = by_item[other_id]
+            await session.delete(other_row)
+            other.version += 1
+            cleared_ids.append(str(other.id))
+            await inventory_service.record_event(
+                session, other, "care_routine_preference_cleared",
+                {"version": other.version, "slot": product.slot, "replaced_by_item_id": str(item.id)},
+            )
+        kind = "explicit_product_preference"
+        message = (
+            "Preferred for this Care step."
+            if before_slot.active else
+            "Preferred for this Care step. It will be used when that step is active."
+        )
+    else:
+        row = by_item[item_id]
+        await session.delete(row)
+        item.version += 1
+        await inventory_service.record_event(
+            session, item, "care_routine_preference_cleared",
+            {"version": item.version, "slot": product.slot},
+        )
+        kind = "explicit_product_preference_clear"
+        message = "Your routine will use its normal product choice for this step again."
+
+    await session.flush()
+    adjustment = {
+        "version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
+        "kind": kind,
+        "item_id": str(item.id),
+        "slot": product.slot,
+        **({"cleared_preferred_item_ids": cleared_ids} if prefer else {}),
+    }
+    await generate_routines(
+        session, account_id=account_id, account_id_str=account_id_str,
+        body=RoutineGenerateRequest(as_of=plan_date, explain=False), care_adjustment=adjustment,
+    )
+    _, after_context, after_decisions = await _current_care_decisions(session, account_id, plan_date)
+    after_plan = care_routine_plan.plan_care_routine(after_context, after_decisions)
+    after_slot = next(
+        row for row in (*after_plan.skin_slots, *after_plan.hair_slots)
+        if row.category == product.item.category and row.slot == product.slot
+    )
+    await session.flush()
+    return {
+        "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
+        "changed": True, "status": "preferred" if prefer else "standard",
+        "inventory_item_id": str(item.id), "display_name": item.display_name,
+        "category": _customer_category(item.category), "slot": product.slot,
+        "cleared_preferred_item_ids": cleared_ids,
+        "previous_selected_item_id": str(before_slot.selected_item_id) if before_slot.selected_item_id else None,
+        "new_selected_item_id": str(after_slot.selected_item_id) if after_slot.selected_item_id else None,
+        "selection_applied": after_slot.selected_item_id == item.id,
+        "previous_decision_fingerprint": care_decisions.decision_fingerprint(before_decisions),
+        "new_decision_fingerprint": care_decisions.decision_fingerprint(after_decisions),
+        "previous_plan_fingerprint": care_routine_plan.routine_plan_fingerprint(before_plan),
+        "new_plan_fingerprint": care_routine_plan.routine_plan_fingerprint(after_plan),
+        "message": message,
+    }
+
+
+async def prefer_care_product(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
+) -> dict[str, Any]:
+    return await _selection_preference(
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, prefer=True,
+    )
+
+
+async def unprefer_care_product(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
+) -> dict[str, Any]:
+    return await _selection_preference(
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, prefer=False,
+    )
+
+
 async def _serialize_routine(session: AsyncSession, routine: Routine) -> dict[str, Any]:
     steps = (await session.execute(
         select(RoutineStep).where(RoutineStep.routine_id == routine.id).order_by(RoutineStep.position)

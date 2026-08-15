@@ -1378,3 +1378,26 @@ attribute. The dedicated pause/resume endpoints own the atomic mutation,
 versioning, audit event, idempotency, and `care_adjustment`; generic inventory
 attribute editing cannot write this key. No migration, table, dependency,
 frontend, shopping, cadence, or snapshot-schema change is involved.
+
+## V3-03.12 Explicit Care Product Preference
+
+The user may explicitly choose a product for a canonical Care step with
+`Use this in my routine`, or return that step to normal continuity selection
+with `Use normal routine choice`. Positive preference is stored as the
+confirmed user-declared `care_routine_preferred` `InventoryAttribute`; it is
+never inferred from adherence, observations, AI, or Evidence.
+
+The hierarchy is strict: safety and eligibility are decided first, explicit
+pause remains an eligibility constraint, explicit preference selects among the
+remaining eligible candidates, and the existing continuity selector remains
+the fallback. Preference cannot activate optional steps, suppress safety, or
+change Hair cadence. Pause and preference are independent, so pausing a
+preferred product preserves the preference and resuming it can restore the
+preferred selection.
+
+V3-03.12 bumps the deterministic Care context and routine-plan contracts and
+the recommendation snapshot to `v3-03.12`. New snapshots contain the trusted,
+sorted `product_preferences` object with `paused_product_ids` and
+`preferred_product_ids`; historical snapshots remain immutable. Preference
+and clear actions are separately audited, idempotent, regenerate routines
+with `explain=false`, and expose trigger-only `care_adjustment` metadata.

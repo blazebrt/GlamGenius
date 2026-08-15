@@ -108,7 +108,7 @@ async def test_detailed_to_balanced_applies_profile_history_and_audit_trigger(
         "to_effort": "balanced",
         "profile_change_reason": "care_simplification_v3_03_10",
     }
-    assert after_snapshot["snapshot_version"] == "v3-03.9"
+    assert after_snapshot["snapshot_version"] == "v3-03.12"
     assert before_snapshot["decisions"]["decision_fingerprint"] == after_snapshot["decisions"]["decision_fingerprint"]
     assert before_snapshot["routine_plan"]["routine_plan_fingerprint"] != after_snapshot["routine_plan"]["routine_plan_fingerprint"]
     assert cleanser in str(after_snapshot)

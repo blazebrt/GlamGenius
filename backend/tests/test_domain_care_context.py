@@ -210,7 +210,7 @@ async def test_successful_assembly_is_account_scoped_and_projects_shelf(
             session, account_a, day_context=_day_context(account_a)
         )
 
-    assert context.context_version == "v3-03.11"
+    assert context.context_version == "v3-03.12"
     assert context.plan_date == _day_context(account_a).plan_date
     assert context.skin_facts["care_skin_usual_feel"].value == "often_dry_or_tight"
     assert context.hair_facts["care_hair_pattern"].value == "curly"

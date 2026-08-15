@@ -20,7 +20,7 @@ from app.domains.care.routine_plan import CareRoutinePlan, routine_plan_fingerpr
 from app.domains.care.schemas import CareContext, CareFact
 from app.domains.routines.compiler import CompiledRoutine
 
-CARE_RECOMMENDATION_SNAPSHOT_VERSION = "v3-03.9"
+CARE_RECOMMENDATION_SNAPSHOT_VERSION = "v3-03.12"
 
 
 def _primitive(value: Any) -> Any:
@@ -275,6 +275,10 @@ def build_care_recommendation_snapshot(
         "rendered_routines": _rendered_payload(compiled_routines),
         "requested_kinds": sorted({str(kind) for kind in (requested_kinds or ())}),
         "legacy_climate": legacy_climate,
+        "product_preferences": {
+            "paused_product_ids": sorted(str(item_id) for item_id in care_context.paused_product_ids),
+            "preferred_product_ids": sorted(str(item_id) for item_id in care_context.preferred_product_ids),
+        },
     }
     snapshot["fingerprint"] = care_recommendation_snapshot_fingerprint(snapshot)
     return snapshot

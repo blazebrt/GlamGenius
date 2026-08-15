@@ -285,8 +285,12 @@ async def test_pause_validation_generic_patch_and_cross_account_ownership(
 
 @pytest.mark.asyncio
 async def test_snapshot_history_adjustment_separation_and_resume_determinism(
-    app_client, db_clean, registered_supabase_user,
+    app_client, db_clean, registered_supabase_user, monkeypatch,
 ):
+    monkeypatch.setattr(
+        "app.domains.routines.service.clock.local_today",
+        lambda *_args, **_kwargs: date(2026, 8, 12),
+    )
     token, account_id = await registered_supabase_user()
     await _seed(app_client)
     item_id = await _db_product(app_client, token, name="Snapshot Cleanser", product_type="cleanser")
@@ -337,7 +341,7 @@ async def test_snapshot_history_adjustment_separation_and_resume_determinism(
             "version": "v3-03.11", "kind": "explicit_product_resume", "item_id": item_id,
             "from_state": "paused", "to_state": "active",
         }
-        assert run_c.inputs["care_snapshot"]["snapshot_version"] == "v3-03.9"
+        assert run_c.inputs["care_snapshot"]["snapshot_version"] == "v3-03.12"
         assert run_c.inputs["care_snapshot"]["fingerprint"] == snapshot_a["fingerprint"]
 
 

@@ -129,7 +129,7 @@ def _selection(plan) -> RoutineSelectionPlan:
 
 def test_contract_version_and_ontology_required_slots_are_canonical():
     _, plan = _plan(effort="minimal")
-    assert plan.plan_version == CARE_ROUTINE_PLAN_VERSION == "v3-03.4"
+    assert plan.plan_version == CARE_ROUTINE_PLAN_VERSION == "v3-03.12"
     assert tuple(row.slot for row in plan.skin_slots if row.required) == tuple(row.key for row in SKIN_SLOTS if row.required)
     assert tuple(row.slot for row in plan.hair_slots if row.required) == tuple(row.key for row in HAIR_SLOTS if row.required)
     assert _slot(plan, "toner").is_gap is False
@@ -191,7 +191,7 @@ def test_v3_03_5_minimal_projection_omits_owned_optional_slots():
 def test_v3_03_5_active_optional_without_selection_fails_loudly():
     with pytest.raises(ValueError, match="Active optional"):
         RoutineSelectionPlan(
-            plan_version="v3-03.4", plan_fingerprint="x", effort="balanced",
+            plan_version="v3-03.12", plan_fingerprint="x", effort="balanced",
             effort_source="user_declared",
             directives=(RoutineSlotDirective(
                 slot="toner", category="beauty", required=False,
