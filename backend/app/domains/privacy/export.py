@@ -77,10 +77,16 @@ from app.domains.recommendation.models import (
     OccasionRecord as Occasion,
 )
 from app.domains.routines.models import (
+    HydrationPreference,
+    NutritionPreference,
+    ProductExpiryEvent,
+    ProductIngredient,
     Routine,
     RoutineAdherence,
     RoutineRecommendationRun,
     RoutineStep,
+    SupplementSafetyFlag,
+    UserReportedObservation,
 )
 from app.domains.scan.models import Scan
 from app.shared.database.base import utcnow
@@ -318,6 +324,30 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
             RoutineRecommendationRun.account_id == account_id,
         ),
     )
+    product_ingredients = await _fetch(
+        session,
+        select(ProductIngredient).where(ProductIngredient.account_id == account_id),
+    )
+    observations = await _fetch(
+        session,
+        select(UserReportedObservation).where(UserReportedObservation.account_id == account_id),
+    )
+    product_expiry_events = await _fetch(
+        session,
+        select(ProductExpiryEvent).where(ProductExpiryEvent.account_id == account_id),
+    )
+    supplement_safety_flags = await _fetch(
+        session,
+        select(SupplementSafetyFlag).where(SupplementSafetyFlag.account_id == account_id),
+    )
+    nutrition_preferences = await _fetch(
+        session,
+        select(NutritionPreference).where(NutritionPreference.account_id == account_id),
+    )
+    hydration_preferences = await _fetch(
+        session,
+        select(HydrationPreference).where(HydrationPreference.account_id == account_id),
+    )
     return {
         "routines": [_row_dict(r, [c.name for c in Routine.__table__.columns]) for r in routines],
         "steps": [_row_dict(r, [c.name for c in RoutineStep.__table__.columns]) for r in steps],
@@ -325,6 +355,30 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         "recommendation_runs": [
             _row_dict(r, [c.name for c in RoutineRecommendationRun.__table__.columns])
             for r in recommendation_runs
+        ],
+        "product_ingredients": [
+            _row_dict(r, [c.name for c in ProductIngredient.__table__.columns])
+            for r in product_ingredients
+        ],
+        "observations": [
+            _row_dict(r, [c.name for c in UserReportedObservation.__table__.columns])
+            for r in observations
+        ],
+        "product_expiry_events": [
+            _row_dict(r, [c.name for c in ProductExpiryEvent.__table__.columns])
+            for r in product_expiry_events
+        ],
+        "supplement_safety_flags": [
+            _row_dict(r, [c.name for c in SupplementSafetyFlag.__table__.columns])
+            for r in supplement_safety_flags
+        ],
+        "nutrition_preferences": [
+            _row_dict(r, [c.name for c in NutritionPreference.__table__.columns])
+            for r in nutrition_preferences
+        ],
+        "hydration_preferences": [
+            _row_dict(r, [c.name for c in HydrationPreference.__table__.columns])
+            for r in hydration_preferences
         ],
     }
 
