@@ -77,6 +77,7 @@ from app.domains.recommendation.models import (
     OccasionRecord as Occasion,
 )
 from app.domains.routines.models import (
+    CareExperienceFeedback,
     HydrationPreference,
     NutritionPreference,
     ProductExpiryEvent,
@@ -348,6 +349,10 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         session,
         select(HydrationPreference).where(HydrationPreference.account_id == account_id),
     )
+    experience_feedback = await _fetch(
+        session,
+        select(CareExperienceFeedback).where(CareExperienceFeedback.account_id == account_id),
+    )
     return {
         "routines": [_row_dict(r, [c.name for c in Routine.__table__.columns]) for r in routines],
         "steps": [_row_dict(r, [c.name for c in RoutineStep.__table__.columns]) for r in steps],
@@ -379,6 +384,10 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         "hydration_preferences": [
             _row_dict(r, [c.name for c in HydrationPreference.__table__.columns])
             for r in hydration_preferences
+        ],
+        "experience_feedback": [
+            _row_dict(r, [c.name for c in CareExperienceFeedback.__table__.columns])
+            for r in experience_feedback
         ],
     }
 

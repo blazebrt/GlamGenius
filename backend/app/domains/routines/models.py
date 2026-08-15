@@ -25,13 +25,29 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
 
 KNOWLEDGE_VERSION = "phase6-v1"
+CARE_EXPERIENCE_FEEDBACK_VERSION = "v3-03.13"
+CARE_EXPERIENCE_FEEDBACK_SUBJECT_TYPES = ("product", "routine_step")
+CARE_EXPERIENCE_FEEDBACK_DIMENSIONS = ("overall_experience", "comfort", "ease_of_use", "routine_fit")
+CARE_EXPERIENCE_FEEDBACK_SENTIMENTS = ("positive", "neutral", "negative")
 
 
 # --- Reviewed reference data -------------------------------------------------
@@ -287,6 +303,38 @@ class UserReportedObservation(UUIDPrimaryKey, TimestampMixin, Base):
     routed_to_professional: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     __table_args__ = (Index("ix_user_observations_account_date", "account_id", "observed_on"),)
+
+
+class CareExperienceFeedback(UUIDPrimaryKey, TimestampMixin, Base):
+    """Explicit, subjective Care experience feedback.
+
+    This is historical user input only.  It is intentionally not connected to
+    an inventory item or routine step by foreign key so that it survives
+    replacement of the current rendering row.
+    """
+
+    __tablename__ = "care_experience_feedback"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    subject_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    dimension: Mapped[str] = mapped_column(String(32), nullable=False)
+    sentiment: Mapped[str] = mapped_column(String(16), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500))
+    experienced_on: Mapped[date] = mapped_column(Date, nullable=False)
+    feedback_version: Mapped[str] = mapped_column(String(16), nullable=False, default=CARE_EXPERIENCE_FEEDBACK_VERSION, server_default=CARE_EXPERIENCE_FEEDBACK_VERSION)
+    routine_kind: Mapped[str | None] = mapped_column(String(24))
+    routine_slot: Mapped[str | None] = mapped_column(String(32))
+
+    __table_args__ = (
+        CheckConstraint("subject_type IN ('product', 'routine_step')", name="ck_care_feedback_subject_type"),
+        CheckConstraint("dimension IN ('overall_experience', 'comfort', 'ease_of_use', 'routine_fit')", name="ck_care_feedback_dimension"),
+        CheckConstraint("sentiment IN ('positive', 'neutral', 'negative')", name="ck_care_feedback_sentiment"),
+        CheckConstraint("feedback_version = 'v3-03.13'", name="ck_care_feedback_version"),
+        CheckConstraint("(subject_type = 'routine_step' AND routine_kind IS NOT NULL AND routine_slot IS NOT NULL) OR (subject_type = 'product' AND routine_kind IS NULL AND routine_slot IS NULL)", name="ck_care_feedback_subject_shape"),
+        Index("ix_care_feedback_account_date_created", "account_id", "experienced_on", "created_at"),
+        Index("ix_care_feedback_account_subject_created", "account_id", "subject_type", "subject_id", "created_at"),
+    )
 
 
 class ProductExpiryEvent(UUIDPrimaryKey, TimestampMixin, Base):

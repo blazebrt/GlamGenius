@@ -149,6 +149,7 @@ REGISTRY: dict[str, Classification] = {
     "routine_steps": Classification.INCLUDED,  # via routines
     "routine_adherence": Classification.INCLUDED,
     "routine_recommendation_runs": Classification.INCLUDED,
+    "care_experience_feedback": Classification.INCLUDED,
     "routine_templates": Classification.NOT_USER_OWNED,
     "ingredients": Classification.NOT_USER_OWNED,
     "ingredient_aliases": Classification.NOT_USER_OWNED,

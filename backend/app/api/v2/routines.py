@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.recommendation.occasions import OCCASION_KEYS
 from app.domains.routines import service
 from app.domains.routines.schemas import (
+    CareExperienceFeedbackInput,
     HydrationPreferencePatch,
     IngredientCheckRequest,
     IngredientConfirmRequest,
@@ -310,3 +311,46 @@ async def list_observations(
     session: AsyncSession = Depends(get_session),
 ):
     return await service.list_observations(session, account_id=current.account_id)
+
+
+# --- Explicit Care experience feedback -----------------------------------------
+
+
+@router.post("/routines/experience-feedback")
+async def record_care_experience_feedback(
+    body: CareExperienceFeedbackInput,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await service.record_care_experience_feedback(
+        session, account_id=current.account_id, body=body,
+    )
+    await session.commit()
+    return result
+
+
+@router.get("/routines/experience-feedback")
+async def list_care_experience_feedback(
+    subject_type: str | None = Query(None, max_length=16),
+    subject_id: uuid.UUID | None = Query(None),
+    limit: int = Query(50, ge=1, le=100),
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    return await service.list_care_experience_feedback(
+        session, account_id=current.account_id, subject_type=subject_type,
+        subject_id=subject_id, limit=limit,
+    )
+
+
+@router.delete("/routines/experience-feedback/{feedback_id}")
+async def delete_care_experience_feedback(
+    feedback_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await service.delete_care_experience_feedback(
+        session, account_id=current.account_id, feedback_id=feedback_id,
+    )
+    await session.commit()
+    return result
