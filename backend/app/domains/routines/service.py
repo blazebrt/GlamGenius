@@ -37,6 +37,8 @@ from app.domains.profile import service as profile_service
 from app.domains.routines import adherence, compiler, explanation, nutrition, parser, perfume, selection, shelf
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import (
+    CARE_EXPERIENCE_FEEDBACK_VERSION,
+    CareExperienceFeedback,
     HydrationPreference,
     NutritionPreference,
     ProductExpiryEvent,
@@ -57,6 +59,7 @@ from app.domains.routines.safety import (
     boundary_for,
 )
 from app.domains.routines.schemas import (
+    CareExperienceFeedbackInput,
     HydrationPreferencePatch,
     IngredientCheckRequest,
     IngredientConfirmRequest,
@@ -1602,6 +1605,116 @@ async def record_observation(
             else "Saved. We keep your note as you wrote it and do not interpret it."
         ),
     }
+
+
+# --- Explicit Care experience feedback --------------------------------------
+
+
+def _serialize_care_experience_feedback(row: CareExperienceFeedback) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "feedback_version": row.feedback_version,
+        "subject_type": row.subject_type,
+        "subject_id": str(row.subject_id),
+        "routine_kind": row.routine_kind,
+        "routine_slot": row.routine_slot,
+        "dimension": row.dimension,
+        "sentiment": row.sentiment,
+        "note": row.note,
+        "experienced_on": row.experienced_on.isoformat(),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+async def _validate_care_feedback_subject(
+    session: AsyncSession, *, account_id: uuid.UUID, body: CareExperienceFeedbackInput
+) -> tuple[str | None, str | None]:
+    """Validate ownership and return durable routine provenance."""
+    if body.subject_type == "product":
+        item = (await session.execute(
+            select(InventoryItem).where(
+                InventoryItem.id == body.subject_id,
+                InventoryItem.account_id == account_id,
+            )
+        )).scalar_one_or_none()
+        if item is None or item.category not in {"beauty", "hair"}:
+            raise NotFoundError("We could not find that Care product in your inventory.")
+        return None, None
+
+    row = (await session.execute(
+        select(RoutineStep, Routine)
+        .join(Routine, Routine.id == RoutineStep.routine_id)
+        .where(RoutineStep.id == body.subject_id, Routine.account_id == account_id)
+    )).first()
+    if row is None:
+        raise NotFoundError("We could not find that routine step.")
+    step, routine = row
+    return routine.kind, step.slot
+
+
+async def record_care_experience_feedback(
+    session: AsyncSession, *, account_id: uuid.UUID, body: CareExperienceFeedbackInput
+) -> dict[str, Any]:
+    """Persist explicit subjective feedback without invoking any Care engine."""
+    experienced_on = body.experienced_on or clock.local_today(clock.DEFAULT_TIMEZONE)
+    if experienced_on > clock.local_today(clock.DEFAULT_TIMEZONE):
+        raise ValidationFailedError("Experience date cannot be in the future.", field="experienced_on")
+
+    routine_kind, routine_slot = await _validate_care_feedback_subject(
+        session, account_id=account_id, body=body,
+    )
+    row = CareExperienceFeedback(
+        account_id=account_id,
+        subject_type=body.subject_type,
+        subject_id=body.subject_id,
+        dimension=body.dimension,
+        sentiment=body.sentiment,
+        note=body.note,
+        experienced_on=experienced_on,
+        feedback_version=CARE_EXPERIENCE_FEEDBACK_VERSION,
+        routine_kind=routine_kind,
+        routine_slot=routine_slot,
+    )
+    session.add(row)
+    await session.flush()
+    payload = _serialize_care_experience_feedback(row)
+    payload.update({
+        "affects_recommendations": False,
+        "creates_memory": False,
+        "changes_care_safety": False,
+        "message": "Saved as your Care experience feedback. This does not change your routine automatically.",
+    })
+    return payload
+
+
+async def list_care_experience_feedback(
+    session: AsyncSession, *, account_id: uuid.UUID, subject_type: str | None = None,
+    subject_id: uuid.UUID | None = None, limit: int = 50,
+) -> dict[str, Any]:
+    if subject_type is not None and subject_type not in {"product", "routine_step"}:
+        raise ValidationFailedError("Unknown feedback subject type.", field="subject_type")
+    bounded_limit = max(1, min(limit, 100))
+    query = select(CareExperienceFeedback).where(CareExperienceFeedback.account_id == account_id)
+    if subject_type is not None:
+        query = query.where(CareExperienceFeedback.subject_type == subject_type)
+    if subject_id is not None:
+        query = query.where(CareExperienceFeedback.subject_id == subject_id)
+    rows = (await session.execute(
+        query.order_by(CareExperienceFeedback.created_at.desc(), CareExperienceFeedback.id.desc()).limit(bounded_limit)
+    )).scalars().all()
+    return {"feedback": [_serialize_care_experience_feedback(row) for row in rows]}
+
+
+async def delete_care_experience_feedback(
+    session: AsyncSession, *, account_id: uuid.UUID, feedback_id: uuid.UUID
+) -> dict[str, Any]:
+    result = await session.execute(delete(CareExperienceFeedback).where(
+        CareExperienceFeedback.id == feedback_id,
+        CareExperienceFeedback.account_id == account_id,
+    ))
+    if result.rowcount != 1:
+        raise NotFoundError("We could not find that Care experience feedback.")
+    return {"deleted": True, "id": str(feedback_id)}
 
 
 async def list_observations(

@@ -43,6 +43,7 @@ ROUTINES_MODEL_EXPORT_COLLECTIONS = {
     routines_models.SupplementSafetyFlag.__tablename__: "supplement_safety_flags",
     routines_models.NutritionPreference.__tablename__: "nutrition_preferences",
     routines_models.HydrationPreference.__tablename__: "hydration_preferences",
+    routines_models.CareExperienceFeedback.__tablename__: "experience_feedback",
 }
 
 # Routine steps do not carry a direct account_id; they are exported through

@@ -32,6 +32,9 @@ INGREDIENT_SOURCES = (SOURCE_USER, SOURCE_LABEL, SOURCE_EXTRACTED)
 CLIMATES = ("hot", "humid", "cold", "dry", "rainy")
 TIMES_OF_DAY = ("morning", "afternoon", "evening", "night")
 SEASONS = ("summer", "monsoon", "winter", "spring", "autumn")
+CARE_EXPERIENCE_FEEDBACK_SUBJECT_TYPES = ("product", "routine_step")
+CARE_EXPERIENCE_FEEDBACK_DIMENSIONS = ("overall_experience", "comfort", "ease_of_use", "routine_fit")
+CARE_EXPERIENCE_FEEDBACK_SENTIMENTS = ("positive", "neutral", "negative")
 
 
 # --- Shelf ------------------------------------------------------------------
@@ -139,6 +142,19 @@ class ObservationInput(BaseModel):
     area: Literal["skin", "hair", "scalp", "nails", "general"] = "general"
     note: str = Field(min_length=1, max_length=500)
     item_id: uuid.UUID | None = None
+
+
+class CareExperienceFeedbackInput(BaseModel):
+    """A structured experience selected explicitly by the user."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    subject_type: Literal[CARE_EXPERIENCE_FEEDBACK_SUBJECT_TYPES]  # type: ignore[valid-type]
+    subject_id: uuid.UUID
+    dimension: Literal[CARE_EXPERIENCE_FEEDBACK_DIMENSIONS]  # type: ignore[valid-type]
+    sentiment: Literal[CARE_EXPERIENCE_FEEDBACK_SENTIMENTS]  # type: ignore[valid-type]
+    experienced_on: date | None = None
+    note: str | None = Field(default=None, max_length=500)
 
 
 # --- Perfume -----------------------------------------------------------------
@@ -270,6 +286,7 @@ __all__ = [
     "RoutineGenerateRequest",
     "RoutineStepComplete",
     "ObservationInput",
+    "CareExperienceFeedbackInput",
     "PerfumeQuery",
     "NutritionPreferencePatch",
     "HydrationPreferencePatch",
