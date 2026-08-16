@@ -5,6 +5,12 @@ accounts, inventory, media and AI-run rows so a source can be reviewed once
 and reused consistently across every user's deterministic rule output.
 """
 
+from app.domains.evidence.applicability import (
+    EVIDENCE_APPLICABILITY_VERSION,
+    ApplicabilityValidationResult,
+    EvidenceApplicability,
+    parse_behavior_applicability,
+)
 from app.domains.evidence.models import (
     EvidenceClaim,
     EvidenceClaimSource,
@@ -12,4 +18,13 @@ from app.domains.evidence.models import (
     RuleEvidenceLink,
 )
 
-__all__ = ["EvidenceSource", "EvidenceClaim", "EvidenceClaimSource", "RuleEvidenceLink"]
+__all__ = [
+    "EvidenceSource",
+    "EvidenceClaim",
+    "EvidenceClaimSource",
+    "RuleEvidenceLink",
+    "EVIDENCE_APPLICABILITY_VERSION",
+    "EvidenceApplicability",
+    "ApplicabilityValidationResult",
+    "parse_behavior_applicability",
+]
