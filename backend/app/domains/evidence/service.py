@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.evidence.applicability import parse_behavior_applicability
+from app.domains.evidence.applicability import EvidenceApplicability, parse_behavior_applicability
 from app.domains.evidence.enums import (
     EVIDENCE_STRENGTHS,
     ClaimSourceRelationship,
@@ -28,6 +28,14 @@ class EvidenceRuleResolutionError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class BehaviorEligibleEvidencePath:
+    """One reviewed, behavior-eligible evidence path and its normalized scope."""
+
+    claim_id: uuid.UUID
+    applicability: EvidenceApplicability
+
+
+@dataclass(frozen=True, slots=True)
 class RuleEvidenceAssessment:
     """Structured, fail-closed provenance diagnostics for one exact rule."""
 
@@ -36,6 +44,7 @@ class RuleEvidenceAssessment:
     behavior_evidence_eligible: bool
     relationships: tuple[str, ...] = ()
     claim_ids: tuple[uuid.UUID, ...] = ()
+    behavior_eligible_paths: tuple[BehaviorEligibleEvidencePath, ...] = ()
 
 
 async def assess_rule_evidence(
@@ -97,7 +106,7 @@ async def assess_rule_evidence(
         and claim.claim_status == ClaimStatus.SUPPORTED.value
         for link, claim in valid
     )
-    behavior_eligible = False
+    behavior_eligible_paths: list[BehaviorEligibleEvidencePath] = []
     for link, claim in valid:
         if link.relationship != RuleEvidenceRelationship.SUPPORTS.value:
             continue
@@ -120,16 +129,28 @@ async def assess_rule_evidence(
             for claim_source, source in source_paths
         ):
             continue
-        if parse_behavior_applicability(claim).valid:
-            behavior_eligible = True
-            break
+        applicability = parse_behavior_applicability(claim)
+        if applicability.valid and applicability.applicability is not None:
+            behavior_eligible_paths.append(
+                BehaviorEligibleEvidencePath(
+                    claim_id=claim.id,
+                    applicability=applicability.applicability,
+                )
+            )
+
+    eligible_by_claim = {
+        path.claim_id: path
+        for path in behavior_eligible_paths
+    }
+    eligible_paths = tuple(sorted(eligible_by_claim.values(), key=lambda path: str(path.claim_id)))
 
     return RuleEvidenceAssessment(
         provenance_present=bool(valid),
         substantive_support_present=substantive,
-        behavior_evidence_eligible=behavior_eligible,
+        behavior_evidence_eligible=bool(eligible_paths),
         relationships=relationships,
         claim_ids=claim_ids,
+        behavior_eligible_paths=eligible_paths,
     )
 
 

@@ -2,6 +2,12 @@
 
 from app.domains.care.cadence import CARE_CADENCE_VERSION, HairWashCadenceDecision
 from app.domains.care.decisions import CARE_DECISION_VERSION, CareDecisionSet, evaluate_care_context
+from app.domains.care.evidence_applicability import (
+    CARE_EVIDENCE_APPLICABILITY_VERSION,
+    CareApplicabilitySignals,
+    CareRuleApplicabilityResult,
+    resolve_care_evidence_applicability,
+)
 from app.domains.care.product_preferences import (
     CARE_PRODUCT_PAUSE_VERSION,
     CARE_PRODUCT_PREFERENCE_VERSION,
@@ -37,6 +43,7 @@ __all__ = [
     "CARE_CONTEXT_VERSION",
     "CARE_CADENCE_VERSION",
     "CARE_DECISION_VERSION",
+    "CARE_EVIDENCE_APPLICABILITY_VERSION",
     "CARE_PRODUCT_PREFERENCE_VERSION",
     "CARE_PRODUCT_PAUSE_VERSION",
     "CARE_PRODUCT_SELECTION_PREFERENCE_VERSION",
@@ -49,11 +56,14 @@ __all__ = [
     "CareContext",
     "HairWashCadenceDecision",
     "CareDecisionSet",
+    "CareApplicabilitySignals",
+    "CareRuleApplicabilityResult",
     "CareRoutineEffort",
     "CareRoutinePlan",
     "CareSelectionBasis",
     "CareSlotPlan",
     "evaluate_care_context",
+    "resolve_care_evidence_applicability",
     "plan_care_routine",
     "routine_plan_fingerprint",
     "build_care_recommendation_snapshot",
