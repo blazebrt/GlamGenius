@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.evidence.applicability import parse_behavior_applicability
 from app.domains.evidence.enums import (
+    EVIDENCE_STRENGTHS,
     ClaimSourceRelationship,
     ClaimStatus,
     ReviewStatus,
@@ -47,8 +49,8 @@ async def assess_rule_evidence(
     """Assess exact rule provenance without activating runtime behaviour.
 
     The assessment reuses rule identity and claim approval validation, but
-    deliberately keeps ``behavior_evidence_eligible`` false until structured
-    scope, jurisdiction, population, and formulation applicability exist.
+    only enables ``behavior_evidence_eligible`` for a complete reviewed
+    support path with validated structured applicability.
     Invalid or incomplete paths fail closed rather than raising.
     """
     links = (await session.execute(
@@ -95,11 +97,37 @@ async def assess_rule_evidence(
         and claim.claim_status == ClaimStatus.SUPPORTED.value
         for link, claim in valid
     )
+    behavior_eligible = False
+    for link, claim in valid:
+        if link.relationship != RuleEvidenceRelationship.SUPPORTS.value:
+            continue
+        if claim.claim_status != ClaimStatus.SUPPORTED.value:
+            continue
+        if claim.evidence_strength not in EVIDENCE_STRENGTHS:
+            continue
+        if not claim.strength_rationale or not claim.strength_rationale.strip():
+            continue
+        source_paths = (await session.execute(
+            select(EvidenceClaimSource, EvidenceSource)
+            .join(EvidenceSource, EvidenceSource.id == EvidenceClaimSource.source_id)
+            .where(EvidenceClaimSource.claim_id == claim.id)
+        )).all()
+        if not any(
+            claim_source.relationship != ClaimSourceRelationship.BACKGROUND.value
+            and claim_source.reviewed_at
+            and claim_source.reviewed_by
+            and source.status == SourceStatus.ACTIVE.value
+            for claim_source, source in source_paths
+        ):
+            continue
+        if parse_behavior_applicability(claim).valid:
+            behavior_eligible = True
+            break
+
     return RuleEvidenceAssessment(
         provenance_present=bool(valid),
         substantive_support_present=substantive,
-        # Deliberately fail closed until structured scope evaluation exists.
-        behavior_evidence_eligible=False,
+        behavior_evidence_eligible=behavior_eligible,
         relationships=relationships,
         claim_ids=claim_ids,
     )
