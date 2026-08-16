@@ -83,7 +83,6 @@ async def _bundle(
     rule_values = {**RULE, "rule_id": rule_id}
     session.add(RuleEvidenceLink(
         **rule_values,
-        rule_id=rule_id,
         claim_id=claim.id,
         relationship=relationship,
         reviewed_at=NOW if rule_reviewed else None,
