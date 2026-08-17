@@ -314,6 +314,22 @@ describe('Today routine strip', () => {
     expect(toJSON()).toBeNull();
   });
 
+  it('renders at most three items and never adds a shopping action or fingerprint', () => {
+    const many: CareGuidance = { ...guidance, items: [
+      ...guidance.items,
+      { ...guidance.items[0], rule_id: 'care.skin.dry_air_moisture_support', title: 'Dry air' },
+      { ...guidance.items[0], rule_id: 'care.hair.frequent_heat_styling_protection', title: 'Heat' },
+      { ...guidance.items[0], rule_id: 'care.extra', title: 'Fourth item' },
+    ] };
+    render(<TodayCareGuidance guidance={many} />);
+    expect(screen.getByText('Sun protection matters today')).toBeTruthy();
+    expect(screen.getByText('Dry air')).toBeTruthy();
+    expect(screen.getByText('Heat')).toBeTruthy();
+    expect(screen.queryByText('Fourth item')).toBeNull();
+    expect(screen.queryByText(/buy|shop|add to basket/i)).toBeNull();
+    expect(screen.queryByText('abc')).toBeNull();
+  });
+
   it('shows progress without a score', () => {
     render(<TodayRoutineCard routine={routine({
       steps: [step({ completed_today: true }), step({ id: 'step-2', slot: 'sunscreen', label: 'Sunscreen', order: 60 })],
