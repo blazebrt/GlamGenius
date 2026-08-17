@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import replace
+from datetime import date
 from uuid import UUID, uuid4
 
 import pytest
@@ -25,23 +26,32 @@ from app.domains.evidence.service import (
     assess_rule_evidence,
 )
 from app.domains.reference import SeedVersionRecord
+from app.domains.routines import compiler
+from app.domains.routines import service as routines_service
+from app.domains.routines.models import RoutineRecommendationRun
 from app.shared.database.sql import get_sessionmaker
-from sqlalchemy import select
+from sqlalchemy import func, select
 
+from tests.conftest import auth
 from tests.test_care_decisions import _context as _base_context
 from tests.test_care_decisions import _product
+from tests.test_v3_03_3_integration import _product as _integration_product
+from tests.test_v3_03_3_integration import _seed as _integration_seed
 
 
 def _fact(key: str, value: str) -> CareFact:
     return CareFact(key, value, "user_declared", "user_declared", 1.0, "confirmed", uuid4(), False)
 
 
-def _context(*, uv_index=None, moisture_regime=None, skin_feel=None, heat_frequency=None, products=()):
+def _context(*, uv_index=None, moisture_regime=None, skin_feel=None, heat_frequency=None, wash_frequency=None, products=()):
     base = _base_context(*products, uv_index=uv_index, moisture_regime=moisture_regime)
+    hair_facts = {"care_heat_styling_frequency": _fact("care_heat_styling_frequency", heat_frequency)} if heat_frequency else {}
+    if wash_frequency:
+        hair_facts["care_hair_wash_frequency"] = _fact("care_hair_wash_frequency", wash_frequency)
     return replace(
         base,
         skin_facts={"care_skin_usual_feel": _fact("care_skin_usual_feel", skin_feel)} if skin_feel else {},
-        hair_facts={"care_heat_styling_frequency": _fact("care_heat_styling_frequency", heat_frequency)} if heat_frequency else {},
+        hair_facts=hair_facts,
     )
 
 
@@ -169,13 +179,31 @@ async def test_heat_trigger_matrix(monkeypatch, frequency, expected):
 @pytest.mark.asyncio
 async def test_guidance_preserves_authority_and_deterministic_order(monkeypatch):
     product = _product("beauty", "moisturiser")
-    context = _context(uv_index=3.0, moisture_regime="dry", skin_feel="often_dry_or_tight", heat_frequency="daily", products=(product,))
+    context = _context(
+        uv_index=3.0,
+        moisture_regime="dry",
+        skin_feel="often_dry_or_tight",
+        heat_frequency="daily",
+        wash_frequency="daily",
+        products=(product,),
+    )
     decisions = evaluate_care_context(context)
     plan = plan_care_routine(context, decisions)
     before_decisions, before_plan = decision_fingerprint(decisions), routine_plan_fingerprint(plan)
     monkeypatch.setattr(guidance, "assess_rule_evidence", _stub_evidence)
     monkeypatch.setattr(guidance, "resolve_care_evidence_applicability", _stub_applicability)
+    wash_frequency = context.hair_facts["care_hair_wash_frequency"].value
+    cadence_before = care_cadence.decide_hair_wash_cadence(
+        wash_frequency,
+        plan_date=context.plan_date,
+        last_wash_on=None,
+    )
     first = await guidance.build_care_guidance(None, care_context=context, care_plan=plan)
+    cadence_after = care_cadence.decide_hair_wash_cadence(
+        wash_frequency,
+        plan_date=context.plan_date,
+        last_wash_on=None,
+    )
     second = await guidance.build_care_guidance(None, care_context=context, care_plan=plan)
     assert [(item.priority, item.rule_id) for item in first.items] == sorted((item.priority, item.rule_id) for item in first.items)
     assert first.fingerprint == second.fingerprint
@@ -183,7 +211,9 @@ async def test_guidance_preserves_authority_and_deterministic_order(monkeypatch)
     assert decision_fingerprint(decisions) == before_decisions
     assert routine_plan_fingerprint(plan) == before_plan
     assert plan.selected_item_ids == tuple(row.selected_item_id for row in (*plan.skin_slots, *plan.hair_slots) if row.selected_item_id)
-    assert care_cadence.decide_hair_wash_cadence("daily", plan_date=context.plan_date, last_wash_on=None) == care_cadence.decide_hair_wash_cadence("daily", plan_date=context.plan_date, last_wash_on=None)
+    assert cadence_before == cadence_after
+    assert cadence_before.as_payload() == cadence_after.as_payload()
+    assert care_cadence.hair_wash_cadence_fingerprint(cadence_before) == care_cadence.hair_wash_cadence_fingerprint(cadence_after)
 
 
 @pytest.mark.asyncio
@@ -220,3 +250,129 @@ async def test_seeded_guidance_rules_are_behavior_eligible_and_pilot_stays_draft
     assert len(links) == 3
     assert all(assessment.provenance_present and assessment.substantive_support_present and assessment.behavior_evidence_eligible for assessment in assessments)
     assert all(claim.review_status == "draft" for claim in pilot)
+
+
+@pytest.mark.asyncio
+async def test_generate_routines_returns_guidance_and_preserves_runtime_authority(
+    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch
+):
+    token, account_id = await registered_supabase_user()
+    await _integration_seed(app_client)
+    await _integration_product(app_client, token, name="Runtime cleanser", product_type="cleanser")
+    await _integration_product(app_client, token, name="Runtime moisturiser", product_type="moisturiser")
+    plan_date = date(2026, 8, 12)
+    factory = get_sessionmaker()
+    async with factory() as session:
+        day_context, gathered_context, _ = await routines_service._current_care_decisions(
+            session, account_id, plan_date,
+        )
+    context = replace(
+        gathered_context,
+        plan_date=plan_date,
+        environment=replace(gathered_context.environment, uv_index=3.0),
+    )
+    decisions = evaluate_care_context(context)
+    plan = plan_care_routine(context, decisions)
+    selection_plan = routines_service._routine_selection_plan(plan)
+    baseline_compiled = compiler.compile_all(
+        context.skin_products,
+        context.hair_products,
+        allergies=context.allergies,
+        climate=None,
+        today=plan_date,
+        eligibility=routines_service._routine_eligibility(decisions),
+        selection_plan=selection_plan,
+    )
+    baseline_morning = next(row for row in baseline_compiled if row.kind == "morning")
+    baseline_steps = {step.slot: step.item_id for step in baseline_morning.steps}
+    baseline_product_ids = {step.item_id for step in baseline_morning.steps if step.item_id}
+
+    async def current_inputs(*_args, **_kwargs):
+        return day_context, context, decisions
+
+    monkeypatch.setattr("app.domains.routines.service._current_care_decisions", current_inputs)
+    response = await app_client.post(
+        "/api/v2/routines/generate",
+        headers=auth(token),
+        json={"kinds": ["morning"], "as_of": plan_date.isoformat(), "explain": False},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    guidance_payload = body["care_guidance"]
+    assert guidance_payload["guidance_version"] == "v3-03.17"
+    assert [item["rule_id"] for item in guidance_payload["items"]] == ["care.skin.uv_protection_uvi_3"]
+    assert plan.selected_item_ids == tuple(row.selected_item_id for row in (*plan.skin_slots, *plan.hair_slots) if row.selected_item_id)
+    morning = next(row for row in body["routines"] if row["kind"] == "morning")
+    runtime_steps = {step["slot"]: step["inventory_item_id"] for step in morning["steps"]}
+    assert runtime_steps == baseline_steps
+    assert {value for value in runtime_steps.values() if value} == baseline_product_ids
+    assert baseline_product_ids
+
+    async with factory() as session:
+        run = (await session.execute(
+            select(RoutineRecommendationRun).where(RoutineRecommendationRun.account_id == account_id)
+        )).scalars().one()
+    snapshot = run.inputs["care_snapshot"]
+    assert snapshot["snapshot_version"] == "v3-03.17"
+    assert snapshot["care_guidance"]["guidance_version"] == "v3-03.17"
+    assert snapshot["care_guidance"]["fingerprint"] == guidance_payload["fingerprint"]
+    assert run.inputs["care_decision_version"] == decisions.decision_version
+    assert run.inputs["care_routine_plan_fingerprint"] == routine_plan_fingerprint(plan)
+    assert decision_fingerprint(decisions) == decision_fingerprint(evaluate_care_context(context))
+
+
+@pytest.mark.asyncio
+async def test_routines_today_serves_fresh_guidance_without_daily_plan_or_cadence_mutation(
+    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch
+):
+    token, account_id = await registered_supabase_user()
+    await _integration_seed(app_client)
+    await _integration_product(app_client, token, name="Today cleanser", product_type="cleanser")
+    await _integration_product(app_client, token, name="Today moisturiser", product_type="moisturiser")
+    plan_date = date(2026, 8, 12)
+    factory = get_sessionmaker()
+    async with factory() as session:
+        day_context, gathered_context, _ = await routines_service._current_care_decisions(
+            session, account_id, plan_date,
+        )
+    context = replace(
+        gathered_context,
+        plan_date=plan_date,
+        environment=replace(gathered_context.environment, uv_index=3.0),
+    )
+    decisions = evaluate_care_context(context)
+
+    async def current_inputs(*_args, **_kwargs):
+        return day_context, context, decisions
+
+    monkeypatch.setattr("app.domains.routines.service._current_care_decisions", current_inputs)
+    response = await app_client.post(
+        "/api/v2/routines/generate",
+        headers=auth(token),
+        json={"kinds": ["morning"], "as_of": plan_date.isoformat(), "explain": False},
+    )
+    assert response.status_code == 200, response.text
+    from app.domains.planning.models import DailyPlan
+    from app.domains.routines.models import RoutineStep
+
+    async with factory() as session:
+        before_steps = {
+            row.slot: (str(row.inventory_item_id) if row.inventory_item_id else None)
+            for row in (await session.execute(select(RoutineStep))).scalars().all()
+        }
+        before_daily_plans = await session.scalar(select(func.count()).select_from(DailyPlan))
+        before_cadence = care_cadence.decide_hair_wash_cadence(
+            None, plan_date=plan_date, last_wash_on=None,
+        )
+        body = await routines_service.routines_today(session, account_id=account_id, on=plan_date)
+        after_daily_plans = await session.scalar(select(func.count()).select_from(DailyPlan))
+        after_steps = {
+            row.slot: (str(row.inventory_item_id) if row.inventory_item_id else None)
+            for row in (await session.execute(select(RoutineStep))).scalars().all()
+        }
+    after_cadence = care_cadence.decide_hair_wash_cadence(None, plan_date=plan_date, last_wash_on=None)
+    assert [item["rule_id"] for item in body["care_guidance"]["items"]] == ["care.skin.uv_protection_uvi_3"]
+    assert body["care_guidance"]["guidance_version"] == "v3-03.17"
+    assert before_cadence == after_cadence
+    assert before_daily_plans == after_daily_plans
+    assert before_steps == after_steps
