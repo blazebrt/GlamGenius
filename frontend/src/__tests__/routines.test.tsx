@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react-native';
+import { View } from 'react-native';
 
 import {
   BoundaryNotice, ConsistencyCard, EmptyModule, ExpiringSection, LowUseSection,
@@ -352,6 +353,34 @@ describe('Today routine strip', () => {
   it('renders nothing for absent or empty at-home care', () => {
     expect(render(<TodayHomeCare homeCare={null} />).toJSON()).toBeNull();
     expect(render(<TodayHomeCare homeCare={{ home_care_version: 'v3-03.18', ruleset_version: 'v3-03.18-r1', fingerprint: 'fp', items: [] }} />).toJSON()).toBeNull();
+  });
+
+  it('keeps closure order and routine completion while hiding internal audit material', () => {
+    const homeCare = {
+      home_care_version: 'v3-03.18', ruleset_version: 'v3-03.18-r1', fingerprint: 'secret-fingerprint',
+      items: [
+        { domain: 'home_care' as const, rule_id: 'care.home.skin_gentle_bathing', rule_version: 'v3-03.18-r1', priority: 10, title: 'Keep showers gentle', body: 'Keep baths short and pat skin dry.', trigger_codes: ['a'], evidence_claim_ids: ['secret-claim'], evidence_applicability_version: 'v3-03.16' },
+        { domain: 'home_care' as const, rule_id: 'care.home.hair_gentle_drying', rule_version: 'v3-03.18-r1', priority: 20, title: 'Dry hair gently after washing', body: 'Avoid rough rubbing.', trigger_codes: ['b'], evidence_claim_ids: ['secret-claim-2'], evidence_applicability_version: 'v3-03.16' },
+      ],
+    };
+    const { toJSON } = render(
+      <View>
+        <TodayCareGuidance guidance={{ ...guidance, items: [
+          ...guidance.items,
+          { ...guidance.items[0], rule_id: 'care.skin.dry_air_moisture_support', title: 'Dry air' },
+          { ...guidance.items[0], rule_id: 'care.hair.frequent_heat_styling_protection', title: 'Heat' },
+        ] }} />
+        <TodayRoutineCard routine={routine()} onComplete={jest.fn()} />
+        <TodayHomeCare homeCare={homeCare} />
+      </View>,
+    );
+    const tree = JSON.stringify(toJSON());
+    expect(tree.indexOf('CARE CONTEXT')).toBeLessThan(tree.indexOf('Morning routine'));
+    expect(tree.indexOf('Morning routine')).toBeLessThan(tree.indexOf('AT-HOME CARE'));
+    expect(tree).not.toContain('secret-fingerprint');
+    expect(tree).not.toContain('secret-claim');
+    expect(tree).not.toMatch(/buy|shop|add product|AI says/i);
+    expect(screen.getByLabelText('Mark done: Cleanser, Gentle Face Wash')).toBeTruthy();
   });
 
   it('shows progress without a score', () => {
