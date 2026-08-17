@@ -21,6 +21,7 @@ from app.domains.evidence import models as evidence_models
 from app.domains.identity.models import Account
 from app.domains.inventory import models as inventory_models
 from app.domains.media.models import MediaAsset
+from app.domains.nutrition import models as nutrition_models
 from app.domains.planning import models as planning_models
 from app.domains.privacy.models import AccountDeletionJob
 from app.domains.profile.models import (
