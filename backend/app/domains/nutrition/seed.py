@@ -3,12 +3,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.evidence.models import EvidenceSource
 from app.domains.nutrition import FOOD_COMPOSITION_METADATA_SEED_VERSION, FOOD_COMPOSITION_SCHEMA_VERSION
-from app.domains.nutrition.models import FoodCompositionDataset, FoodNutrientValue, FoodReferenceItem
+from app.domains.nutrition.models import FoodCompositionDataset
 from app.domains.reference import SeedVersionRecord
 
 FOOD_COMPOSITION_SEED_DOMAIN = "nutrition_food_composition"
@@ -47,8 +47,6 @@ async def run(session: AsyncSession) -> dict[str, int | str]:
         if mismatch:
             raise ValueError(f"food-composition metadata drift: {', '.join(mismatch)}")
 
-    food_items = int((await session.execute(select(func.count()).select_from(FoodReferenceItem))).scalar_one())
-    nutrient_values = int((await session.execute(select(func.count()).select_from(FoodNutrientValue))).scalar_one())
     audit = (await session.execute(
         select(SeedVersionRecord).where(
             SeedVersionRecord.seed_domain == FOOD_COMPOSITION_SEED_DOMAIN,
@@ -66,6 +64,6 @@ async def run(session: AsyncSession) -> dict[str, int | str]:
         raise ValueError("food-composition metadata seed audit drift")
     return {
         "seed_version": FOOD_COMPOSITION_METADATA_SEED_VERSION,
-        "datasets": 1, "food_items": food_items, "nutrient_values": nutrient_values,
+        "datasets": 1, "food_items": 0, "nutrient_values": 0,
         "rows_written": 1,
     }

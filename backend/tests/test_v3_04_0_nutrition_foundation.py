@@ -159,7 +159,7 @@ async def test_model_identities_and_numeric_constraint_are_database_enforced(db_
         dataset = (await session.execute(select(FoodCompositionDataset))).scalar_one()
         item = FoodReferenceItem(dataset_id=dataset.id, source_food_code="TEST-1", canonical_name="Test food")
         session.add(item)
-        await session.flush()
+        await session.commit()
         session.add(FoodReferenceItem(dataset_id=dataset.id, source_food_code="TEST-1", canonical_name="Duplicate"))
         with pytest.raises(IntegrityError):
             await session.commit()
@@ -167,15 +167,36 @@ async def test_model_identities_and_numeric_constraint_are_database_enforced(db_
 
         item = (await session.execute(select(FoodReferenceItem))).scalar_one()
         session.add(FoodNutrientValue(food_id=item.id, nutrient_key="protein", amount=Decimal("1.25"), unit="g", basis="per_100g"))
-        await session.flush()
+        await session.commit()
+        item = (await session.execute(select(FoodReferenceItem))).scalar_one()
         session.add(FoodNutrientValue(food_id=item.id, nutrient_key="protein", amount=Decimal("2"), unit="g", basis="per_100g"))
         with pytest.raises(IntegrityError):
             await session.commit()
         await session.rollback()
 
+        item = (await session.execute(select(FoodReferenceItem))).scalar_one()
         session.add(FoodNutrientValue(food_id=item.id, nutrient_key="iron", amount=Decimal("-0.1"), unit="mg", basis="per_100g"))
         with pytest.raises(IntegrityError):
             await session.commit()
+        await session.rollback()
+
+
+async def test_v3_04_seed_result_stays_zero_after_future_composition_rows(db_clean):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await _seed(session)
+        dataset = (await session.execute(select(FoodCompositionDataset))).scalar_one()
+        item = FoodReferenceItem(dataset_id=dataset.id, source_food_code="FUTURE-1", canonical_name="Future test food")
+        session.add(item)
+        await session.flush()
+        session.add(FoodNutrientValue(food_id=item.id, nutrient_key="protein", amount=Decimal("3"), unit="g", basis="per_100g"))
+        await session.commit()
+
+        result = await run_food_composition_seed(session)
+    assert result == {
+        "seed_version": FOOD_COMPOSITION_METADATA_SEED_VERSION,
+        "datasets": 1, "food_items": 0, "nutrient_values": 0, "rows_written": 1,
+    }
 
 
 async def test_foreign_key_deletes_are_restricted_and_values_cascade(db_clean):
