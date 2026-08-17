@@ -1,0 +1,4 @@
+# V3-04.0 public ICMR-NIN reference identifiers.
+# These are deterministic public dataset/source identifiers, not credentials.
+44598dab08ec312992ec4a99fade8a674693e4de:backend/app/domains/nutrition/seed.py:generic-api-key:16
+44598dab08ec312992ec4a99fade8a674693e4de:backend/app/domains/evidence/nutrition_seed.py:generic-api-key:18
