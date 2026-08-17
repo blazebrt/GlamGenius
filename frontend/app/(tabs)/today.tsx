@@ -15,10 +15,10 @@ import {
   ActionRow, ClarificationCard, MissingInformation, NeedsInventory, OfflineNotice,
   OptionalModules, OutfitCard, StaleNotice, TodayHeader, TodayLoading, isStale,
 } from '../../src/components/today/TodayPieces';
-import { TodayCareGuidance, TodayHomeCare, TodayPerfume, TodayRoutineCard } from '../../src/components/routines/TodayRoutine';
+import { TodayCareGuidance, TodayFood, TodayHomeCare, TodayPerfume, TodayRoutineCard } from '../../src/components/routines/TodayRoutine';
 import {
-  CareGuidance, DailyPlan, HomeCare, LookPiece, PerfumePick, PlanAction, Routine, RoutineStep,
-  answerClarification, completePlanAction, completeRoutineStep,
+  CareGuidance, DailyPlan, HomeCare, LookPiece, NutritionSuggestion, PerfumePick, PlanAction, Routine, RoutineStep,
+  answerClarification, completePlanAction, completeRoutineStep, getNutritionSuggestions,
   getPerfumeRecommendation, getRoutinesToday, getToday, regenerateToday, reportItemUnavailable,
   sendTodayFeedback,
 } from '../../src/services/apiV2';
@@ -38,10 +38,11 @@ export default function TodayScreen() {
   const [careGuidance, setCareGuidance] = useState<CareGuidance | null>(null);
   const [homeCare, setHomeCare] = useState<HomeCare | null>(null);
   const [perfume, setPerfume] = useState<PerfumePick | null>(null);
+  const [food, setFood] = useState<NutritionSuggestion | null>(null);
 
   const loadModules = useCallback(async () => {
-    const [routineResult, perfumeResult] = await Promise.allSettled([
-      getRoutinesToday(), getPerfumeRecommendation(),
+    const [routineResult, perfumeResult, foodResult] = await Promise.allSettled([
+      getRoutinesToday(), getPerfumeRecommendation(), getNutritionSuggestions(),
     ]);
     if (routineResult.status === 'fulfilled') {
       setRoutines(routineResult.value.routines);
@@ -49,6 +50,9 @@ export default function TodayScreen() {
       setHomeCare(routineResult.value.home_care ?? null);
     }
     if (perfumeResult.status === 'fulfilled') setPerfume(perfumeResult.value.recommendations[0] ?? null);
+    if (foodResult.status === 'fulfilled') {
+      setFood(foodResult.value.enabled ? foodResult.value.suggestions[0] ?? null : null);
+    }
   }, []);
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
@@ -175,6 +179,7 @@ export default function TodayScreen() {
         ))}
         <TodayHomeCare homeCare={homeCare} />
         <TodayPerfume pick={perfume} />
+        <TodayFood suggestion={food} />
 
         <MissingInformation plan={plan} />
 
