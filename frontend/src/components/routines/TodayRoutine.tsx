@@ -78,13 +78,13 @@ export function TodayPerfume({ pick }: { pick: PerfumePick | null }) {
 }
 
 export function TodayFood({ suggestion }: { suggestion: NutritionSuggestion | null }) {
-  if (!suggestion || !suggestion.foods.length) return null;
+  if (!suggestion) return null;
   return (
-    <View style={styles.slim} accessibilityLabel={`Food idea: ${suggestion.display_name}`}>
+    <View style={styles.slim} accessibilityLabel={`Food context: ${suggestion.title}`}>
       <Ionicons name="nutrition-outline" size={17} color={COLORS.primary} />
       <View style={{ flex: 1 }}>
-        <Text style={styles.slimTitle}>{suggestion.display_name}</Text>
-        <Text style={styles.slimBody}>{suggestion.foods.slice(0, 3).join(' · ')}</Text>
+        <Text style={styles.slimTitle}>{suggestion.title}</Text>
+        <Text style={styles.slimBody}>{suggestion.body}</Text>
       </View>
     </View>
   );
