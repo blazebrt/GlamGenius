@@ -159,6 +159,31 @@ async def _routine_material(account_id: uuid.UUID) -> tuple[tuple, ...]:
     return tuple((kind, slot, str(item_id) if item_id else None, str(step_id)) for kind, slot, item_id, step_id in rows)
 
 
+def _routine_structure(body: dict) -> tuple[tuple, ...]:
+    return tuple(sorted(
+        (
+            routine["kind"], step["slot"], step["inventory_item_id"],
+            step["is_gap"], step["required"],
+        )
+        for routine in body["routines"] for step in routine["steps"]
+    ))
+
+
+async def _adherence_material(account_id: uuid.UUID) -> tuple[tuple, ...]:
+    factory = get_sessionmaker()
+    async with factory() as session:
+        rows = (await session.execute(
+            select(
+                RoutineAdherence.routine_id, RoutineAdherence.slot,
+                RoutineAdherence.done_on, RoutineAdherence.completed,
+                RoutineAdherence.step_id,
+            )
+            .where(RoutineAdherence.account_id == account_id)
+            .order_by(RoutineAdherence.done_on, RoutineAdherence.slot)
+        )).all()
+    return tuple((str(routine_id), slot, done_on.isoformat(), completed, str(step_id) if step_id else None) for routine_id, slot, done_on, completed, step_id in rows)
+
+
 @pytest.mark.asyncio
 async def test_phase3_closure_golden_path_is_owned_first_safe_contextual_and_auditable(
     app_client, db_clean, registered_supabase_user, fake_provider,
@@ -229,8 +254,9 @@ async def test_phase3_closure_golden_path_is_owned_first_safe_contextual_and_aud
 
 @pytest.mark.asyncio
 async def test_phase3_closure_user_preference_never_overrides_safety(
-    app_client, db_clean, registered_supabase_user, fake_provider,
+    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch,
 ):
+    monkeypatch.setattr(clock, "local_today", lambda *_args, **_kwargs: CLOSURE_DATE)
     scenario = await _golden_scenario(app_client, registered_supabase_user)
     token, account_id, products, initial = scenario["token"], scenario["account_id"], scenario["products"], scenario["body"]
     before = (await _latest_run(account_id)).inputs["care_snapshot"]
@@ -316,8 +342,9 @@ async def test_phase3_closure_behavioral_signals_do_not_silently_change_care(
 
 @pytest.mark.asyncio
 async def test_phase3_closure_simplification_requires_explicit_user_action(
-    app_client, db_clean, registered_supabase_user, fake_provider,
+    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch,
 ):
+    monkeypatch.setattr(clock, "local_today", lambda *_args, **_kwargs: CLOSURE_DATE)
     scenario = await _golden_scenario(app_client, registered_supabase_user)
     token, account_id, products = scenario["token"], scenario["account_id"], scenario["products"]
     before = (await _latest_run(account_id)).inputs["care_snapshot"]
@@ -349,6 +376,7 @@ async def test_phase3_closure_today_refreshes_contextual_advice_without_mutating
     scenario = await _golden_scenario(app_client, registered_supabase_user)
     token, account_id = scenario["token"], scenario["account_id"]
     before_material = await _routine_material(account_id)
+    before_adherence = await _adherence_material(account_id)
     factory = get_sessionmaker()
     async with factory() as session:
         daily_before = await session.scalar(select(func.count()).select_from(DailyPlan).where(DailyPlan.account_id == account_id))
@@ -365,6 +393,7 @@ async def test_phase3_closure_today_refreshes_contextual_advice_without_mutating
     assert "care.home.skin_gentle_bathing" not in home_ids
     assert response.json()["refresh_required"] is False
     assert await _routine_material(account_id) == before_material
+    assert await _adherence_material(account_id) == before_adherence
     async with factory() as session:
         daily_after = await session.scalar(select(func.count()).select_from(DailyPlan).where(DailyPlan.account_id == account_id))
     assert daily_after == daily_before
@@ -416,18 +445,27 @@ async def test_phase3_closure_ai_explanation_cannot_change_deterministic_care(
     token, account_id = scenario["token"], scenario["account_id"]
     deterministic = scenario["body"]
     before = (await _latest_run(account_id)).inputs["care_snapshot"]
+    fake_provider.text = (
+        '{"routines":[{"kind":"morning",'
+        '"summary":"Your morning routine uses the products already selected for you.",'
+        '"step_notes":{"cleanser":"Start with your selected cleanser."}}]}'
+    )
     explained = await _generate(app_client, token, explain=True)
     after = (await _latest_run(account_id)).inputs["care_snapshot"]
+    assert explained["explanation_source"] == "ai_validated"
+    morning_explained = _routine(explained, "morning")
+    assert morning_explained["summary"] == "Your morning routine uses the products already selected for you."
+    assert next(step for step in morning_explained["steps"] if step["slot"] == "cleanser")["plain_english"] == "Start with your selected cleanser."
     assert after["decisions"]["decision_fingerprint"] == before["decisions"]["decision_fingerprint"]
     assert after["routine_plan"]["routine_plan_fingerprint"] == before["routine_plan"]["routine_plan_fingerprint"]
     assert after["hair_wash_cadence"]["fingerprint"] == before["hair_wash_cadence"]["fingerprint"]
     assert after["care_guidance"]["fingerprint"] == before["care_guidance"]["fingerprint"]
     assert after["home_care"]["fingerprint"] == before["home_care"]["fingerprint"]
-    assert after["rendered_routines"] == before["rendered_routines"]
-    assert _selected_ids(explained) == _selected_ids(deterministic)
+    assert _routine_structure(explained) == _routine_structure(deterministic)
     fake_provider.raises = RuntimeError("provider unavailable")
     fallback = await _generate(app_client, token, explain=True)
-    assert _selected_ids(fallback) == _selected_ids(deterministic)
+    assert fallback["explanation_source"] == "deterministic"
+    assert _routine_structure(fallback) == _routine_structure(deterministic)
 
 
 @pytest.mark.asyncio
