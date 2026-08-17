@@ -9,7 +9,7 @@ from app.bootstrap import run as run_seed
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource, RuleEvidenceLink
 from app.domains.evidence.nutrition_seed import (
     DIETARY_GUIDELINES_SOURCE_KEY,
-    IFCT_SOURCE_KEY,
+    IFCT_SOURCE_IDENTIFIER,
     RDA_EAR_SOURCE_KEY,
 )
 from app.domains.nutrition import (
@@ -33,7 +33,7 @@ from sqlalchemy.exc import IntegrityError
 
 pytestmark = pytest.mark.asyncio
 
-SOURCE_KEYS = {IFCT_SOURCE_KEY, DIETARY_GUIDELINES_SOURCE_KEY, RDA_EAR_SOURCE_KEY}
+SOURCE_KEYS = {IFCT_SOURCE_IDENTIFIER, DIETARY_GUIDELINES_SOURCE_KEY, RDA_EAR_SOURCE_KEY}
 
 
 async def _seed(session):
@@ -99,15 +99,15 @@ async def test_authority_source_metadata_is_exact_and_ifct_is_restricted(db_clea
     assert set(rows) == SOURCE_KEYS
     assert all(row.publisher == "ICMR-National Institute of Nutrition" for row in rows.values())
     assert all(row.jurisdiction == "India" for row in rows.values())
-    assert rows[IFCT_SOURCE_KEY].source_type == "government_reference"
+    assert rows[IFCT_SOURCE_IDENTIFIER].source_type == "government_reference"
     assert rows[DIETARY_GUIDELINES_SOURCE_KEY].source_type == "official_guideline"
     assert rows[RDA_EAR_SOURCE_KEY].source_type == "government_reference"
-    assert "metadata/provenance only" in rows[IFCT_SOURCE_KEY].license_or_use_note.lower()
-    assert "permission" in rows[IFCT_SOURCE_KEY].license_or_use_note.lower()
-    assert rows[IFCT_SOURCE_KEY].accessed_at.isoformat() == "2026-08-17T00:00:00+00:00"
-    assert rows[IFCT_SOURCE_KEY].last_reviewed_at.isoformat() == "2026-08-17T00:00:00+00:00"
-    assert dataset.dataset_key == IFCT_SOURCE_KEY
-    assert dataset.source_id == rows[IFCT_SOURCE_KEY].id
+    assert "metadata/provenance only" in rows[IFCT_SOURCE_IDENTIFIER].license_or_use_note.lower()
+    assert "permission" in rows[IFCT_SOURCE_IDENTIFIER].license_or_use_note.lower()
+    assert rows[IFCT_SOURCE_IDENTIFIER].accessed_at.isoformat() == "2026-08-17T00:00:00+00:00"
+    assert rows[IFCT_SOURCE_IDENTIFIER].last_reviewed_at.isoformat() == "2026-08-17T00:00:00+00:00"
+    assert dataset.dataset_key == IFCT_SOURCE_IDENTIFIER
+    assert dataset.source_id == rows[IFCT_SOURCE_IDENTIFIER].id
     assert dataset.schema_version == FOOD_COMPOSITION_SCHEMA_VERSION == "v3-04.0"
     assert dataset.dataset_version == "2017"
     assert dataset.jurisdiction == "India"
@@ -203,7 +203,7 @@ async def test_foreign_key_deletes_are_restricted_and_values_cascade(db_clean):
     factory = get_sessionmaker()
     async with factory() as session:
         await _seed(session)
-        source = (await session.execute(select(EvidenceSource).where(EvidenceSource.source_key == IFCT_SOURCE_KEY))).scalar_one()
+        source = (await session.execute(select(EvidenceSource).where(EvidenceSource.source_key == IFCT_SOURCE_IDENTIFIER))).scalar_one()
         dataset = (await session.execute(select(FoodCompositionDataset))).scalar_one()
         await session.delete(source)
         with pytest.raises(IntegrityError):
@@ -216,6 +216,8 @@ async def test_foreign_key_deletes_are_restricted_and_values_cascade(db_clean):
         await session.flush()
         value = FoodNutrientValue(food_id=item.id, nutrient_key="protein", amount=Decimal("1"), unit="g", basis="per_100g")
         session.add(value)
+        await session.flush()
+        value_id = value.id
         await session.commit()
         await session.delete(dataset)
         with pytest.raises(IntegrityError):
@@ -224,7 +226,7 @@ async def test_foreign_key_deletes_are_restricted_and_values_cascade(db_clean):
         await session.delete(item)
         await session.commit()
         async with factory() as check:
-            assert await check.scalar(select(func.count()).select_from(FoodNutrientValue).where(FoodNutrientValue.id == value.id)) == 0
+            assert await check.scalar(select(func.count()).select_from(FoodNutrientValue).where(FoodNutrientValue.id == value_id)) == 0
 
 
 async def test_new_reference_tables_are_global_and_no_food_dump_is_committed():

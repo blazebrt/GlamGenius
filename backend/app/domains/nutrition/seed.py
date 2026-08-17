@@ -13,20 +13,20 @@ from app.domains.reference import SeedVersionRecord
 
 FOOD_COMPOSITION_SEED_DOMAIN = "nutrition_food_composition"
 FOOD_COMPOSITION_SEED_NOTE = "V3-04.0 IFCT metadata-only composition catalogue"
-IFCT_DATASET_KEY = "icmr_nin.ifct.2017"  # gitleaks:allow -- public dataset identifier, not a secret
+IFCT_DATASET_IDENTIFIER = "icmr_nin.ifct.2017"
 COMPOSITION_SEEDED_AT = datetime(2026, 8, 17, tzinfo=UTC)
 
 
 async def run(session: AsyncSession) -> dict[str, int | str]:
     """Create one restricted dataset metadata row and no food/value rows."""
     source = (await session.execute(
-        select(EvidenceSource).where(EvidenceSource.source_key == IFCT_DATASET_KEY)
+        select(EvidenceSource).where(EvidenceSource.source_key == IFCT_DATASET_IDENTIFIER)
     )).scalar_one_or_none()
     if source is None:
-        raise ValueError(f"required nutrition authority source is missing: {IFCT_DATASET_KEY}")
+        raise ValueError(f"required nutrition authority source is missing: {IFCT_DATASET_IDENTIFIER}")
 
     expected = {
-        "dataset_key": IFCT_DATASET_KEY, "source_id": source.id,
+        "dataset_key": IFCT_DATASET_IDENTIFIER, "source_id": source.id,
         "schema_version": FOOD_COMPOSITION_SCHEMA_VERSION, "dataset_version": "2017",
         "jurisdiction": "India", "rights_status": "restricted_reference",
         "import_status": "metadata_only", "status": "active",
@@ -37,7 +37,7 @@ async def run(session: AsyncSession) -> dict[str, int | str]:
         ),
     }
     dataset = (await session.execute(
-        select(FoodCompositionDataset).where(FoodCompositionDataset.dataset_key == IFCT_DATASET_KEY)
+        select(FoodCompositionDataset).where(FoodCompositionDataset.dataset_key == IFCT_DATASET_IDENTIFIER)
     )).scalar_one_or_none()
     if dataset is None:
         session.add(FoodCompositionDataset(**expected))
