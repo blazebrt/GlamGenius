@@ -15,9 +15,9 @@ import {
   ActionRow, ClarificationCard, MissingInformation, NeedsInventory, OfflineNotice,
   OptionalModules, OutfitCard, StaleNotice, TodayHeader, TodayLoading, isStale,
 } from '../../src/components/today/TodayPieces';
-import { TodayCareGuidance, TodayFood, TodayPerfume, TodayRoutineCard } from '../../src/components/routines/TodayRoutine';
+import { TodayCareGuidance, TodayFood, TodayHomeCare, TodayPerfume, TodayRoutineCard } from '../../src/components/routines/TodayRoutine';
 import {
-  CareGuidance, DailyPlan, LookPiece, NutritionSuggestion, PerfumePick, PlanAction, Routine, RoutineStep,
+  CareGuidance, DailyPlan, HomeCare, LookPiece, NutritionSuggestion, PerfumePick, PlanAction, Routine, RoutineStep,
   answerClarification, completePlanAction, completeRoutineStep, getNutritionSuggestions,
   getPerfumeRecommendation, getRoutinesToday, getToday, regenerateToday, reportItemUnavailable,
   sendTodayFeedback,
@@ -36,6 +36,7 @@ export default function TodayScreen() {
   // a failure to load one must never blank the outfit.
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [careGuidance, setCareGuidance] = useState<CareGuidance | null>(null);
+  const [homeCare, setHomeCare] = useState<HomeCare | null>(null);
   const [perfume, setPerfume] = useState<PerfumePick | null>(null);
   const [food, setFood] = useState<NutritionSuggestion | null>(null);
 
@@ -46,6 +47,7 @@ export default function TodayScreen() {
     if (routineResult.status === 'fulfilled') {
       setRoutines(routineResult.value.routines);
       setCareGuidance(routineResult.value.care_guidance ?? null);
+      setHomeCare(routineResult.value.home_care ?? null);
     }
     if (perfumeResult.status === 'fulfilled') setPerfume(perfumeResult.value.recommendations[0] ?? null);
     if (foodResult.status === 'fulfilled') {
@@ -177,6 +179,7 @@ export default function TodayScreen() {
             onOpen={() => router.push('/improve')}
           />
         ))}
+        <TodayHomeCare homeCare={homeCare} />
         <TodayPerfume pick={perfume} />
         <TodayFood suggestion={food} />
 

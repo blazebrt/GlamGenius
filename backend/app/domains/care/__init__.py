@@ -17,6 +17,15 @@ from app.domains.care.guidance import (
     guidance_fingerprint,
 )
 from app.domains.care.guidance_rules import GUIDANCE_RULES, CareGuidanceRule
+from app.domains.care.home_care import (
+    HOME_CARE_RULESET_VERSION,
+    HOME_CARE_VERSION,
+    HomeCareItem,
+    HomeCareSet,
+    build_home_care,
+    home_care_fingerprint,
+)
+from app.domains.care.home_care_rules import HOME_CARE_RULES, HomeCareRule
 from app.domains.care.product_preferences import (
     CARE_PRODUCT_PAUSE_VERSION,
     CARE_PRODUCT_PREFERENCE_VERSION,
@@ -72,6 +81,12 @@ __all__ = [
     "CareGuidanceSet",
     "CareGuidanceRule",
     "GUIDANCE_RULES",
+    "HOME_CARE_VERSION",
+    "HOME_CARE_RULESET_VERSION",
+    "HOME_CARE_RULES",
+    "HomeCareRule",
+    "HomeCareItem",
+    "HomeCareSet",
     "CareRuleApplicabilityResult",
     "CareRoutineEffort",
     "CareRoutinePlan",
@@ -85,6 +100,8 @@ __all__ = [
     "routine_plan_fingerprint",
     "build_care_recommendation_snapshot",
     "care_recommendation_snapshot_fingerprint",
+    "build_home_care",
+    "home_care_fingerprint",
     "CARE_SIMPLIFICATION_VERSION",
     "CareSimplificationDecision",
     "CareSimplificationStatus",

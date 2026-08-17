@@ -1275,6 +1275,25 @@ export interface CareGuidance {
   items: CareGuidanceItem[];
 }
 
+export interface HomeCareItem {
+  domain: 'home_care';
+  rule_id: string;
+  rule_version: string;
+  priority: number;
+  title: string;
+  body: string;
+  trigger_codes: string[];
+  evidence_claim_ids: string[];
+  evidence_applicability_version: string;
+}
+
+export interface HomeCare {
+  home_care_version: string;
+  ruleset_version: string;
+  fingerprint: string;
+  items: HomeCareItem[];
+}
+
 // Explicit Care experience feedback is a user-owned record. These types are
 // deliberately separate from generic Progress feedback: recording an
 // experience never changes a routine, a recommendation, or a memory.
@@ -1421,7 +1440,7 @@ export const generateRoutines = async (
   (await api.post(`${V2}/routines/generate`, body)).data;
 
 export const getRoutinesToday = async (): Promise<{
-  date: string; part_of_day: string; routines: Routine[]; message: string | null; disclaimer: string; care_guidance: CareGuidance;
+  date: string; part_of_day: string; routines: Routine[]; message: string | null; disclaimer: string; care_guidance: CareGuidance; home_care: HomeCare;
 }> => (await api.get(`${V2}/routines/today`)).data;
 
 export const completeRoutineStep = async (

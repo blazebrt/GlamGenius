@@ -289,7 +289,7 @@ async def test_real_generation_persists_snapshot_and_privacy_export_is_scoped(
     exported = (await app_client.get("/api/v2/privacy/export", headers=auth(token_a))).json()
     rows = exported["domains"]["routines"]["recommendation_runs"]
     row = next(item for item in rows if item["id"] == str(run_a.id))
-    assert row["inputs"]["care_snapshot"]["snapshot_version"] == "v3-03.17"
+    assert row["inputs"]["care_snapshot"]["snapshot_version"] == "v3-03.18"
     assert row["inputs"]["care_snapshot"]["fingerprint"] == snapshot["fingerprint"]
     assert str(run_b.id) not in {item["id"] for item in rows}
     assert item_b not in json.dumps(exported)

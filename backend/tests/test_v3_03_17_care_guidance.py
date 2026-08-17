@@ -313,7 +313,7 @@ async def test_generate_routines_returns_guidance_and_preserves_runtime_authorit
             select(RoutineRecommendationRun).where(RoutineRecommendationRun.account_id == account_id)
         )).scalars().one()
     snapshot = run.inputs["care_snapshot"]
-    assert snapshot["snapshot_version"] == "v3-03.17"
+    assert snapshot["snapshot_version"] == "v3-03.18"
     assert snapshot["care_guidance"]["guidance_version"] == "v3-03.17"
     assert snapshot["care_guidance"]["fingerprint"] == guidance_payload["fingerprint"]
     assert run.inputs["care_decision_version"] == decisions.decision_version

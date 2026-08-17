@@ -12,7 +12,7 @@ import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { CareGuidance, NutritionSuggestion, PerfumePick, Routine, RoutineStep } from '../../services/apiV2';
+import { CareGuidance, HomeCare, NutritionSuggestion, PerfumePick, Routine, RoutineStep } from '../../services/apiV2';
 import { COLORS, FONTS, RADIUS } from '../../theme/colors';
 
 export function TodayRoutineCard({ routine, onComplete, onOpen }: {
@@ -96,6 +96,22 @@ export function TodayCareGuidance({ guidance }: { guidance: CareGuidance | null 
   return (
     <View accessibilityLabel="Care context" style={styles.guidance}>
       <Text style={styles.guidanceLabel}>CARE CONTEXT</Text>
+      {items.map((item) => (
+        <View key={item.rule_id} style={styles.guidanceItem}>
+          <Text style={styles.slimTitle}>{item.title}</Text>
+          <Text style={styles.slimBody}>{item.body}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+export function TodayHomeCare({ homeCare }: { homeCare: HomeCare | null }) {
+  const items = homeCare?.items?.slice(0, 2) ?? [];
+  if (!items.length) return null;
+  return (
+    <View style={styles.guidance} accessibilityLabel="At-home care">
+      <Text style={styles.guidanceLabel}>AT-HOME CARE</Text>
       {items.map((item) => (
         <View key={item.rule_id} style={styles.guidanceItem}>
           <Text style={styles.slimTitle}>{item.title}</Text>

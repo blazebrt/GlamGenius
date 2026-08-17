@@ -15,17 +15,19 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
+from app.domains.care.cadence import HairWashCadenceDecision, decide_hair_wash_cadence, hair_wash_cadence_fingerprint
 from app.domains.care.decisions import CareDecisionSet, decision_fingerprint
 from app.domains.care.guidance import (
     CARE_GUIDANCE_RULESET_VERSION,
     CARE_GUIDANCE_VERSION,
     CareGuidanceSet,
 )
+from app.domains.care.home_care import HomeCareSet
 from app.domains.care.routine_plan import CareRoutinePlan, routine_plan_fingerprint
 from app.domains.care.schemas import CareContext, CareFact
 from app.domains.routines.compiler import CompiledRoutine
 
-CARE_RECOMMENDATION_SNAPSHOT_VERSION = "v3-03.17"
+CARE_RECOMMENDATION_SNAPSHOT_VERSION = "v3-03.18"
 
 
 def _primitive(value: Any) -> Any:
@@ -240,6 +242,8 @@ def build_care_recommendation_snapshot(
     routine_engine_version: str,
     ontology_version: str,
     care_guidance: CareGuidanceSet | None = None,
+    hair_wash_cadence: HairWashCadenceDecision | None = None,
+    home_care: HomeCareSet | None = None,
 ) -> dict[str, Any]:
     """Build the complete, immutable audit material for one generation."""
     contracts = (decisions, care_plan)
@@ -249,6 +253,13 @@ def build_care_recommendation_snapshot(
         raise ValueError("Care snapshot contracts must share plan_date")
 
     care_guidance = care_guidance or CareGuidanceSet(CARE_GUIDANCE_VERSION, CARE_GUIDANCE_RULESET_VERSION)
+    if hair_wash_cadence is None:
+        hair_wash_cadence = decide_hair_wash_cadence(
+            None, plan_date=care_context.plan_date, last_wash_on=None,
+        )
+    if home_care is None:
+        from app.domains.care.home_care import HOME_CARE_RULESET_VERSION, HOME_CARE_VERSION, HomeCareSet
+        home_care = HomeCareSet(HOME_CARE_VERSION, HOME_CARE_RULESET_VERSION)
     products = sorted(
         (*care_context.skin_products, *care_context.hair_products),
         key=lambda row: (row.item.category, row.slot or "", str(row.item.id)),
@@ -280,6 +291,11 @@ def build_care_recommendation_snapshot(
         "decisions": _decision_payload(decisions),
         "routine_plan": _plan_payload(care_plan),
         "care_guidance": care_guidance.audit_payload(),
+        "hair_wash_cadence": {
+            **hair_wash_cadence.as_payload(),
+            "fingerprint": hair_wash_cadence_fingerprint(hair_wash_cadence),
+        },
+        "home_care": home_care.audit_payload(),
         "rendered_routines": _rendered_payload(compiled_routines),
         "requested_kinds": sorted({str(kind) for kind in (requested_kinds or ())}),
         "legacy_climate": legacy_climate,

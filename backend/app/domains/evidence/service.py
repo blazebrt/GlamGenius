@@ -188,8 +188,13 @@ async def assert_rule_exists(
         return
     if rule_kind == "routine_guidance":
         from app.domains.care.guidance_rules import GUIDANCE_RULE_BY_ID
+        from app.domains.care.home_care_rules import HOME_CARE_RULE_BY_ID
 
-        row = GUIDANCE_RULE_BY_ID.get(rule_id)
+        guidance = GUIDANCE_RULE_BY_ID.get(rule_id)
+        home_care = HOME_CARE_RULE_BY_ID.get(rule_id)
+        if guidance is not None and home_care is not None:
+            raise EvidenceRuleResolutionError(f"duplicate routine guidance rule {rule_id}")
+        row = guidance or home_care
         if row is None or row.domain != domain or row.rule_version != rule_version:
             raise EvidenceRuleResolutionError(f"unknown routine guidance rule {rule_id}/{rule_version}")
         return
