@@ -15,7 +15,7 @@ import {
   ActionRow, ClarificationCard, MissingInformation, NeedsInventory, OfflineNotice,
   OptionalModules, OutfitCard, StaleNotice, TodayHeader, TodayLoading, isStale,
 } from '../../src/components/today/TodayPieces';
-import { TodayCareGuidance, TodayFood, TodayHomeCare, TodayPerfume, TodayRoutineCard } from '../../src/components/routines/TodayRoutine';
+import { TodayCareGuidance, TodayHomeCare, TodayPerfume, TodayRoutineCard } from '../../src/components/routines/TodayRoutine';
 import {
   CareGuidance, DailyPlan, HomeCare, LookPiece, PerfumePick, PlanAction, Routine, RoutineStep,
   answerClarification, completePlanAction, completeRoutineStep,
