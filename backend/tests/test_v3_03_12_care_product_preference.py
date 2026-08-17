@@ -157,7 +157,7 @@ async def test_prefer_api_replaces_selected_product_and_preserves_identity(
         run = await _latest_run(session, account_id)
         assert run.inputs["care_adjustment"]["kind"] == "explicit_product_preference"
         snapshot = run.inputs["care_snapshot"]
-        assert snapshot["snapshot_version"] == "v3-03.12"
+        assert snapshot["snapshot_version"] == "v3-03.17"
         assert snapshot["product_preferences"]["preferred_product_ids"] == [item_b]
         assert snapshot["decisions"]["decision_fingerprint"] == response.json()["new_decision_fingerprint"]
 

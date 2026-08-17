@@ -186,6 +186,13 @@ async def assert_rule_exists(
         if domain != "skin_care" or row is None:
             raise EvidenceRuleResolutionError(f"unknown contraindication rule {rule_id}/{rule_version}")
         return
+    if rule_kind == "routine_guidance":
+        from app.domains.care.guidance_rules import GUIDANCE_RULE_BY_ID
+
+        row = GUIDANCE_RULE_BY_ID.get(rule_id)
+        if row is None or row.domain != domain or row.rule_version != rule_version:
+            raise EvidenceRuleResolutionError(f"unknown routine guidance rule {rule_id}/{rule_version}")
+        return
     raise EvidenceRuleResolutionError(f"unsupported evidence rule kind {rule_kind}")
 
 

@@ -12,7 +12,7 @@ import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { NutritionSuggestion, PerfumePick, Routine, RoutineStep } from '../../services/apiV2';
+import { CareGuidance, NutritionSuggestion, PerfumePick, Routine, RoutineStep } from '../../services/apiV2';
 import { COLORS, FONTS, RADIUS } from '../../theme/colors';
 
 export function TodayRoutineCard({ routine, onComplete, onOpen }: {
@@ -90,6 +90,22 @@ export function TodayFood({ suggestion }: { suggestion: NutritionSuggestion | nu
   );
 }
 
+export function TodayCareGuidance({ guidance }: { guidance: CareGuidance | null }) {
+  const items = guidance?.items?.slice(0, 3) ?? [];
+  if (!items.length) return null;
+  return (
+    <View accessibilityLabel="Care context" style={styles.guidance}>
+      <Text style={styles.guidanceLabel}>CARE CONTEXT</Text>
+      {items.map((item) => (
+        <View key={item.rule_id} style={styles.guidanceItem}>
+          <Text style={styles.slimTitle}>{item.title}</Text>
+          <Text style={styles.slimBody}>{item.body}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   card: { backgroundColor: COLORS.card, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, padding: 13, marginTop: 10 },
   head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -101,4 +117,7 @@ const styles = StyleSheet.create({
   slim: { flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: COLORS.card, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, padding: 12, marginTop: 8 },
   slimTitle: { fontFamily: FONTS.family.bodySemibold, color: COLORS.textPrimary, fontSize: 12 },
   slimBody: { fontFamily: FONTS.family.body, color: COLORS.textSecondary, fontSize: 11, marginTop: 1 },
+  guidance: { backgroundColor: COLORS.card, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, padding: 12, marginTop: 10 },
+  guidanceLabel: { fontFamily: FONTS.family.bodySemibold, color: COLORS.primary, fontSize: 10, letterSpacing: 1.1, marginBottom: 4 },
+  guidanceItem: { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 8, marginTop: 8 },
 });

@@ -8,6 +8,15 @@ from app.domains.care.evidence_applicability import (
     CareRuleApplicabilityResult,
     resolve_care_evidence_applicability,
 )
+from app.domains.care.guidance import (
+    CARE_GUIDANCE_RULESET_VERSION,
+    CARE_GUIDANCE_VERSION,
+    CareGuidanceItem,
+    CareGuidanceSet,
+    build_care_guidance,
+    guidance_fingerprint,
+)
+from app.domains.care.guidance_rules import GUIDANCE_RULES, CareGuidanceRule
 from app.domains.care.product_preferences import (
     CARE_PRODUCT_PAUSE_VERSION,
     CARE_PRODUCT_PREFERENCE_VERSION,
@@ -44,6 +53,8 @@ __all__ = [
     "CARE_CADENCE_VERSION",
     "CARE_DECISION_VERSION",
     "CARE_EVIDENCE_APPLICABILITY_VERSION",
+    "CARE_GUIDANCE_VERSION",
+    "CARE_GUIDANCE_RULESET_VERSION",
     "CARE_PRODUCT_PREFERENCE_VERSION",
     "CARE_PRODUCT_PAUSE_VERSION",
     "CARE_PRODUCT_SELECTION_PREFERENCE_VERSION",
@@ -57,6 +68,10 @@ __all__ = [
     "HairWashCadenceDecision",
     "CareDecisionSet",
     "CareApplicabilitySignals",
+    "CareGuidanceItem",
+    "CareGuidanceSet",
+    "CareGuidanceRule",
+    "GUIDANCE_RULES",
     "CareRuleApplicabilityResult",
     "CareRoutineEffort",
     "CareRoutinePlan",
@@ -64,6 +79,8 @@ __all__ = [
     "CareSlotPlan",
     "evaluate_care_context",
     "resolve_care_evidence_applicability",
+    "build_care_guidance",
+    "guidance_fingerprint",
     "plan_care_routine",
     "routine_plan_fingerprint",
     "build_care_recommendation_snapshot",

@@ -56,10 +56,15 @@ async def test_evidence_seed_is_idempotent_and_all_pilot_claims_are_draft(db_cle
         links = (await session.execute(select(RuleEvidenceLink))).scalars().all()
         audit = (await session.execute(select(SeedVersionRecord).where(SeedVersionRecord.seed_domain == "evidence", SeedVersionRecord.seed_version == EVIDENCE_SEED_VERSION))).scalar_one()
     assert first["seed_version"] == EVIDENCE_SEED_VERSION
-    assert (len(sources), len(claims), len(claim_sources), len(links)) == (3, 2, 3, 2)
+    pilot_keys = {"skin.topical_retinoid_pregnancy_regulatory_context", "skin.tretinoin_salicylic_concurrent_irritation_context"}
+    pilot_claims = [claim for claim in claims if claim.claim_key in pilot_keys]
+    pilot_claim_ids = {claim.id for claim in pilot_claims}
+    pilot_sources = [source for source in sources if source.source_key in {EMA_RETINOID_SOURCE_REF, "fda-m006-acne-2021", "fda-tretinoin-nda75264-label"}]
+    pilot_links = [link for link in links if link.rule_kind.startswith("ingredient_")]
+    assert (len(pilot_sources), len(pilot_claims), len([link for link in claim_sources if link.claim_id in pilot_claim_ids]), len(pilot_links)) == (3, 2, 3, 2)
     assert second["sources"] == 3 and second["claims"] == 2 and second["rows_written"] == 10 and audit.rows_written == 10
-    assert all(c.review_status == "draft" and c.ai_generated for c in claims)
-    assert all(link.reviewed_at is None and link.reviewed_by is None for link in links)
+    assert all(c.review_status == "draft" and c.ai_generated for c in pilot_claims)
+    assert all(link.reviewed_at is None and link.reviewed_by is None for link in pilot_links)
 
 
 async def test_evidence_seed_rejects_immutable_source_drift(db_clean):
@@ -91,7 +96,7 @@ async def test_evidence_seed_rejects_claim_source_provenance_drift(db_clean):
     factory = get_sessionmaker()
     async with factory() as session:
         await run_reference_seed(session)
-        claim_source = (await session.execute(select(EvidenceClaimSource))).scalars().first()
+        claim_source = (await session.execute(select(EvidenceClaimSource).join(EvidenceClaim).where(EvidenceClaim.claim_key == "skin.tretinoin_salicylic_concurrent_irritation_context"))).scalars().first()
         claim_source.locator = "tampered locator"
         await session.commit()
     async with factory() as session:
@@ -103,7 +108,7 @@ async def test_evidence_seed_rejects_rule_link_provenance_drift(db_clean):
     factory = get_sessionmaker()
     async with factory() as session:
         await run_reference_seed(session)
-        rule_link = (await session.execute(select(RuleEvidenceLink))).scalars().first()
+        rule_link = (await session.execute(select(RuleEvidenceLink).where(RuleEvidenceLink.rule_kind == "ingredient_compatibility"))).scalars().first()
         rule_link.relationship = "limits"
         await session.commit()
     async with factory() as session:

@@ -5,9 +5,9 @@ import {
   BoundaryNotice, ConsistencyCard, EmptyModule, ExpiringSection, LowUseSection,
   NutritionCard, PerfumeCard, RoutineCard, StepRow, SupplementCard, WarningCard, WarningList,
 } from '../components/routines/RoutinePieces';
-import { TodayFood, TodayPerfume, TodayRoutineCard } from '../components/routines/TodayRoutine';
+import { TodayCareGuidance, TodayFood, TodayPerfume, TodayRoutineCard } from '../components/routines/TodayRoutine';
 import {
-  ExpiringReport, NutritionSuggestion, PerfumePick, Routine, RoutineStep, RuleWarning,
+  CareGuidance, ExpiringReport, NutritionSuggestion, PerfumePick, Routine, RoutineStep, RuleWarning,
   ShelfProductRow, SupplementRow,
 } from '../services/apiV2';
 
@@ -296,6 +296,24 @@ describe('Food context', () => {
 // --- Today ---------------------------------------------------------------------------------------
 
 describe('Today routine strip', () => {
+  const guidance: CareGuidance = {
+    guidance_version: 'v3-03.17', ruleset_version: 'v3-03.17-r1', fingerprint: 'abc',
+    items: [{ domain: 'skin_care', rule_id: 'care.skin.uv_protection_uvi_3', rule_version: 'v3-03.17-r1', priority: 10, title: 'Sun protection matters today', body: 'Use shade and protective clothing.', trigger_codes: ['uv_index_at_or_above_3'], evidence_claim_ids: [], evidence_applicability_version: 'v3-03.16' }],
+  };
+
+  it('shows deterministic care context without an action or evidence identifier', () => {
+    render(<TodayCareGuidance guidance={guidance} />);
+    expect(screen.getByText('CARE CONTEXT')).toBeTruthy();
+    expect(screen.getByText('Sun protection matters today')).toBeTruthy();
+    expect(screen.getByText('Use shade and protective clothing.')).toBeTruthy();
+    expect(screen.queryByText('abc')).toBeNull();
+  });
+
+  it('stays hidden when no guidance is applicable', () => {
+    const { toJSON } = render(<TodayCareGuidance guidance={null} />);
+    expect(toJSON()).toBeNull();
+  });
+
   it('shows progress without a score', () => {
     render(<TodayRoutineCard routine={routine({
       steps: [step({ completed_today: true }), step({ id: 'step-2', slot: 'sunscreen', label: 'Sunscreen', order: 60 })],
