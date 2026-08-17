@@ -13,7 +13,7 @@ from app.domains.reference import SeedVersionRecord
 
 FOOD_COMPOSITION_SEED_DOMAIN = "nutrition_food_composition"
 FOOD_COMPOSITION_SEED_NOTE = "V3-04.0 IFCT metadata-only composition catalogue"
-IFCT_DATASET_KEY = "icmr_nin.ifct.2017"
+IFCT_DATASET_KEY = "icmr_nin.ifct.2017"  # gitleaks:allow -- public dataset identifier, not a secret
 COMPOSITION_SEEDED_AT = datetime(2026, 8, 17, tzinfo=UTC)
 
 

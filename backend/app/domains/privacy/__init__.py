@@ -199,6 +199,11 @@ REGISTRY: dict[str, Classification] = {
     "ingredient_contraindication_rules": Classification.NOT_USER_OWNED,
     "ingredient_sensitivity_rules": Classification.NOT_USER_OWNED,
     "inventory_subtype_definitions": Classification.NOT_USER_OWNED,
+    # Nutrition composition metadata is global reference data; no account
+    # ownership or personal food records are stored in these tables.
+    "food_composition_datasets": Classification.NOT_USER_OWNED,
+    "food_reference_items": Classification.NOT_USER_OWNED,
+    "food_nutrient_values": Classification.NOT_USER_OWNED,
     # Evidence provenance is global release-owned reference data. It must not
     # acquire account, inventory, media, or AI-run ownership relationships.
     "evidence_sources": Classification.NOT_USER_OWNED,

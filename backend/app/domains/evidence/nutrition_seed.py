@@ -15,7 +15,7 @@ NUTRITION_AUTHORITY_SEED_DOMAIN = "evidence_nutrition_authority"
 NUTRITION_AUTHORITY_SEED_NOTE = "V3-04.0 ICMR-NIN authority metadata only"
 NUTRITION_AUTHORITY_ACCESSED_AT = datetime(2026, 8, 17, tzinfo=UTC)
 
-IFCT_SOURCE_KEY = "icmr_nin.ifct.2017"
+IFCT_SOURCE_KEY = "icmr_nin.ifct.2017"  # gitleaks:allow -- public source identifier, not a secret
 DIETARY_GUIDELINES_SOURCE_KEY = "icmr_nin.dietary_guidelines_for_indians.2024"
 RDA_EAR_SOURCE_KEY = "icmr_nin.nutrient_requirements.rda_ear.2020"
 

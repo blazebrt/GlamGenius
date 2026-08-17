@@ -205,7 +205,7 @@ async def test_foreign_key_deletes_are_restricted_and_values_cascade(db_clean):
         await _seed(session)
         source = (await session.execute(select(EvidenceSource).where(EvidenceSource.source_key == IFCT_SOURCE_KEY))).scalar_one()
         dataset = (await session.execute(select(FoodCompositionDataset))).scalar_one()
-        session.delete(source)
+        await session.delete(source)
         with pytest.raises(IntegrityError):
             await session.commit()
         await session.rollback()
@@ -217,11 +217,11 @@ async def test_foreign_key_deletes_are_restricted_and_values_cascade(db_clean):
         value = FoodNutrientValue(food_id=item.id, nutrient_key="protein", amount=Decimal("1"), unit="g", basis="per_100g")
         session.add(value)
         await session.commit()
-        session.delete(dataset)
+        await session.delete(dataset)
         with pytest.raises(IntegrityError):
             await session.commit()
         await session.rollback()
-        session.delete(item)
+        await session.delete(item)
         await session.commit()
         async with factory() as check:
             assert await check.scalar(select(func.count()).select_from(FoodNutrientValue).where(FoodNutrientValue.id == value.id)) == 0
