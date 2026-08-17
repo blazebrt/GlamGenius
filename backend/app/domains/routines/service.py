@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.care import cadence as care_cadence
 from app.domains.care import decisions as care_decisions
+from app.domains.care import guidance as care_guidance
 from app.domains.care import product_preferences
 from app.domains.care import routine_plan as care_routine_plan
 from app.domains.care import service as care_service
@@ -169,6 +170,7 @@ def _care_run_inputs(
     care_context,
     decisions: care_decisions.CareDecisionSet,
     care_plan: care_routine_plan.CareRoutinePlan,
+    guidance: care_guidance.CareGuidanceSet,
 ) -> dict[str, Any]:
     def count(code: care_decisions.CareDecisionReasonCode) -> int:
         return sum(
@@ -191,6 +193,10 @@ def _care_run_inputs(
         "care_active_hair_slot_count": care_plan.active_hair_slot_count,
         "care_skin_gap_count": care_plan.skin_gap_count,
         "care_hair_gap_count": care_plan.hair_gap_count,
+        "care_guidance_version": guidance.guidance_version,
+        "care_guidance_ruleset_version": guidance.ruleset_version,
+        "care_guidance_fingerprint": guidance.fingerprint,
+        "care_guidance_item_count": len(guidance.items),
         "weather_snapshot_id": str(day_context.weather_snapshot_id) if day_context.weather_snapshot_id else None,
         "air_quality_snapshot_id": str(day_context.air_quality_snapshot_id) if day_context.air_quality_snapshot_id else None,
     }
@@ -509,6 +515,9 @@ async def generate_routines(
         session, account_id, body.as_of,
     )
     care_plan = care_routine_plan.plan_care_routine(care_context, decisions)
+    guidance = await care_guidance.build_care_guidance(
+        session, care_context=care_context, care_plan=care_plan,
+    )
     selection_plan = _routine_selection_plan(care_plan)
     beauty = list(care_context.skin_products)
     hair = list(care_context.hair_products)
@@ -535,6 +544,7 @@ async def generate_routines(
         legacy_climate=legacy_climate,
         routine_engine_version=ROUTINE_ENGINE_VERSION,
         ontology_version=ONTOLOGY_VERSION,
+        care_guidance=guidance,
     )
 
     narratives: dict[str, Any] = {}
@@ -549,7 +559,7 @@ async def generate_routines(
         session, account_id, compiled, climate=legacy_climate, explanation_source=source,
     )
 
-    run_inputs = _care_run_inputs(day_context, care_context, decisions, care_plan)
+    run_inputs = _care_run_inputs(day_context, care_context, decisions, care_plan, guidance)
     if care_adjustment is not None:
         run_inputs["care_adjustment"] = dict(care_adjustment)
 
@@ -585,6 +595,7 @@ async def generate_routines(
         "explanation_source": source,
         "knowledge_version": ONTOLOGY_VERSION,
         "care_safety": _care_safety_payload(care_context, decisions),
+        "care_guidance": guidance.as_payload(),
         "products_considered": len(beauty) + len(hair),
         "drafts_ignored": care_context.draft_product_count,
         "disclaimer": ROUTINE_DISCLAIMER,
@@ -1175,6 +1186,9 @@ async def routines_today(
 
     _, care_context, decisions = await _current_care_decisions(session, account_id, today)
     care_plan = care_routine_plan.plan_care_routine(care_context, decisions)
+    guidance = await care_guidance.build_care_guidance(
+        session, care_context=care_context, care_plan=care_plan,
+    )
     frequency_fact = care_context.hair_facts.get("care_hair_wash_frequency")
     last_wash_on = await adherence.last_completed_wash_on(
         session, account_id=account_id, through=today,
@@ -1241,6 +1255,7 @@ async def routines_today(
         "refresh_required": refresh_required,
         "refresh_required_kinds": refresh_required_kinds,
         "care_safety": _care_safety_payload(care_context, decisions),
+        "care_guidance": guidance.as_payload(),
         "hair_wash_cadence": hair_wash_cadence.as_payload(),
         "message": (
             "Your saved Care routine needs a refresh before we show those steps because its Care plan or safety facts changed."

@@ -260,11 +260,13 @@ async def test_pilot_seed_remains_draft_and_ineligible(db_clean):
     async with factory() as session:
         await run_reference_seed(session)
         claims = (await session.execute(select(EvidenceClaim))).scalars().all()
+        pilot_keys = {"skin.topical_retinoid_pregnancy_regulatory_context", "skin.tretinoin_salicylic_concurrent_irritation_context"}
+        pilot_claim_ids = {claim.id for claim in claims if claim.claim_key in pilot_keys}
         assessments = [
             await assess_rule_evidence(session, domain="skin_care", rule_kind=link.rule_kind, rule_id=link.rule_id, rule_version=link.rule_version)
-            for link in (await session.execute(select(RuleEvidenceLink))).scalars().all()
+            for link in (await session.execute(select(RuleEvidenceLink).where(RuleEvidenceLink.claim_id.in_(pilot_claim_ids)))).scalars().all()
         ]
-    assert all(claim.review_status == "draft" for claim in claims)
+    assert all(claim.review_status == "draft" for claim in claims if claim.claim_key in pilot_keys)
     assert all(not assessment.behavior_evidence_eligible for assessment in assessments)
 
 

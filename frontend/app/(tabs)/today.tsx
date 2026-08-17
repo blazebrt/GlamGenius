@@ -15,9 +15,9 @@ import {
   ActionRow, ClarificationCard, MissingInformation, NeedsInventory, OfflineNotice,
   OptionalModules, OutfitCard, StaleNotice, TodayHeader, TodayLoading, isStale,
 } from '../../src/components/today/TodayPieces';
-import { TodayFood, TodayPerfume, TodayRoutineCard } from '../../src/components/routines/TodayRoutine';
+import { TodayCareGuidance, TodayFood, TodayPerfume, TodayRoutineCard } from '../../src/components/routines/TodayRoutine';
 import {
-  DailyPlan, LookPiece, NutritionSuggestion, PerfumePick, PlanAction, Routine, RoutineStep,
+  CareGuidance, DailyPlan, LookPiece, NutritionSuggestion, PerfumePick, PlanAction, Routine, RoutineStep,
   answerClarification, completePlanAction, completeRoutineStep, getNutritionSuggestions,
   getPerfumeRecommendation, getRoutinesToday, getToday, regenerateToday, reportItemUnavailable,
   sendTodayFeedback,
@@ -35,6 +35,7 @@ export default function TodayScreen() {
   // Phase 6 modules. Each stays null until the server has something to say, and
   // a failure to load one must never blank the outfit.
   const [routines, setRoutines] = useState<Routine[]>([]);
+  const [careGuidance, setCareGuidance] = useState<CareGuidance | null>(null);
   const [perfume, setPerfume] = useState<PerfumePick | null>(null);
   const [food, setFood] = useState<NutritionSuggestion | null>(null);
 
@@ -42,7 +43,10 @@ export default function TodayScreen() {
     const [routineResult, perfumeResult, foodResult] = await Promise.allSettled([
       getRoutinesToday(), getPerfumeRecommendation(), getNutritionSuggestions(),
     ]);
-    if (routineResult.status === 'fulfilled') setRoutines(routineResult.value.routines);
+    if (routineResult.status === 'fulfilled') {
+      setRoutines(routineResult.value.routines);
+      setCareGuidance(routineResult.value.care_guidance ?? null);
+    }
     if (perfumeResult.status === 'fulfilled') setPerfume(perfumeResult.value.recommendations[0] ?? null);
     if (foodResult.status === 'fulfilled') {
       // Off unless the user turned it on, and the server says so rather than
@@ -164,6 +168,7 @@ export default function TodayScreen() {
           )}
         </View>
 
+        <TodayCareGuidance guidance={careGuidance} />
         {routines.map((routine) => (
           <TodayRoutineCard
             key={routine.id ?? routine.kind}
