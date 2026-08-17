@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from app.domains.nutrition.evidence_applicability import (
 )
 from app.domains.nutrition.guidance_rules import NUTRITION_GUIDANCE_RULES
 from app.domains.nutrition.models import FoodCompositionDataset, FoodNutrientValue, FoodReferenceItem
+from app.domains.planning.environment import resolve_climate_context
 from app.domains.reference import SeedVersionRecord
 from app.domains.routines import nutrition as legacy_nutrition
 from app.domains.routines import service
@@ -30,6 +32,17 @@ from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select
 
 pytestmark = pytest.mark.asyncio
+
+V3_04_1_CLAIM_KEYS = (
+    "nutrition.food_pattern_balanced_variety",
+    "nutrition.protein_food_first",
+    "nutrition.general_hydration_water",
+)
+V3_04_1_RULE_IDS = (
+    "nutrition.pattern.balanced_variety",
+    "nutrition.pattern.protein_food_first",
+    "nutrition.pattern.hydration_context",
+)
 
 
 async def _seed_account() -> uuid.UUID:
@@ -46,31 +59,69 @@ async def _seed_account() -> uuid.UUID:
     return account_id
 
 
-async def _set_preferences(account_id: uuid.UUID, *, enabled: bool, focus: list[str] | None = None, hydration: bool = False, hot_only: bool = False) -> None:
+async def _set_preferences(
+    account_id: uuid.UUID,
+    *,
+    enabled: bool,
+    focus: list[str] | None = None,
+    hydration: bool = False,
+    hot_only: bool = False,
+    diet: str | None = None,
+    avoid_foods: list[str] | None = None,
+) -> None:
     factory = get_sessionmaker()
     async with factory() as session:
         nutrition = (await session.execute(select(NutritionPreference).where(NutritionPreference.account_id == account_id))).scalar_one()
         water = (await session.execute(select(HydrationPreference).where(HydrationPreference.account_id == account_id))).scalar_one()
         nutrition.enabled = enabled
         nutrition.focus_nutrients = focus or []
+        if diet is not None:
+            nutrition.diet = diet
+        if avoid_foods is not None:
+            nutrition.avoid_foods = avoid_foods
         water.enabled = hydration
         water.remind_in_hot_weather_only = hot_only
         await session.commit()
 
 
-async def _suggestions(account_id: uuid.UUID, *, climate: str = "normal") -> dict:
-    original = service.shelf.gather
+def _canonical_climate(
+    *, temperature_band: str, moisture_regime: str, condition: str | None
+):
+    temperatures = {"hot": 35.0, "warm": 25.0, "mild": 15.0, "cold": 5.0, "unknown": None}
+    humidity = {"humid": 80, "normal": 50, "dry": 20, "unknown": None}[moisture_regime]
+    return resolve_climate_context(
+        date(2026, 8, 18),
+        temp_max_c=temperatures[temperature_band],
+        condition=condition,
+        humidity=humidity,
+    )
+
+
+async def _suggestions(
+    account_id: uuid.UUID,
+    *,
+    temperature_band: str = "warm",
+    moisture_regime: str = "normal",
+    condition: str | None = "normal",
+) -> dict:
+    original = service.planning_context.gather
 
     async def gathered(*args, **kwargs):
-        return SimpleNamespace(climate=climate)
+        return SimpleNamespace(
+            climate=_canonical_climate(
+                temperature_band=temperature_band,
+                moisture_regime=moisture_regime,
+                condition=condition,
+            )
+        )
 
-    service.shelf.gather = gathered
+    service.planning_context.gather = gathered
     try:
         factory = get_sessionmaker()
         async with factory() as session:
             return await service.nutrition_suggestions(session, account_id=account_id)
     finally:
-        service.shelf.gather = original
+        service.planning_context.gather = original
 
 
 def _ids(payload: dict) -> list[str]:
@@ -97,9 +148,44 @@ async def test_real_service_and_api_trigger_matrix_and_legacy_deactivation(db_cl
     await _set_preferences(account_id, enabled=True, hydration=True)
     assert _ids(await _suggestions(account_id)) == ["nutrition.pattern.balanced_variety", "nutrition.pattern.hydration_context"]
     await _set_preferences(account_id, enabled=True, hydration=True, hot_only=True)
-    assert _ids(await _suggestions(account_id, climate="normal")) == ["nutrition.pattern.balanced_variety"]
-    assert _ids(await _suggestions(account_id, climate="humid")) == ["nutrition.pattern.balanced_variety", "nutrition.pattern.hydration_context"]
-    await _set_preferences(account_id, enabled=True, focus=["protein"], hydration=True)
+    assert _ids(await _suggestions(account_id, moisture_regime="normal")) == ["nutrition.pattern.balanced_variety"]
+    assert _ids(await _suggestions(account_id, temperature_band="hot")) == ["nutrition.pattern.balanced_variety", "nutrition.pattern.hydration_context"]
+    assert _ids(await _suggestions(account_id, moisture_regime="humid")) == ["nutrition.pattern.balanced_variety", "nutrition.pattern.hydration_context"]
+    assert _ids(await _suggestions(account_id, condition="hot")) == ["nutrition.pattern.balanced_variety", "nutrition.pattern.hydration_context"]
+    assert _ids(await _suggestions(account_id, condition="humid")) == ["nutrition.pattern.balanced_variety", "nutrition.pattern.hydration_context"]
+    assert _ids(await _suggestions(account_id, temperature_band="unknown", moisture_regime="unknown", condition=None)) == ["nutrition.pattern.balanced_variety"]
+
+    legacy_called = False
+
+    async def legacy_shelf(*args, **kwargs):
+        nonlocal legacy_called
+        legacy_called = True
+        return SimpleNamespace(climate="hot")
+
+    monkeypatch.setattr(service.shelf, "gather", legacy_shelf)
+    assert _ids(await _suggestions(account_id, temperature_band="unknown", moisture_regime="unknown", condition=None)) == ["nutrition.pattern.balanced_variety"]
+    assert not legacy_called
+    await _set_preferences(
+        account_id,
+        enabled=True,
+        focus=["protein"],
+        hydration=True,
+        hot_only=False,
+        diet="vegetarian",
+        avoid_foods=["peanuts"],
+    )
+
+    async with get_sessionmaker()() as session:
+        nutrition = (await session.execute(select(NutritionPreference).where(NutritionPreference.account_id == account_id))).scalar_one()
+        water = (await session.execute(select(HydrationPreference).where(HydrationPreference.account_id == account_id))).scalar_one()
+        preferences_before = {
+            "diet": nutrition.diet,
+            "avoid_foods": list(nutrition.avoid_foods),
+            "focus_nutrients": list(nutrition.focus_nutrients),
+            "nutrition_enabled": nutrition.enabled,
+            "hydration_enabled": water.enabled,
+            "remind_in_hot_weather_only": water.remind_in_hot_weather_only,
+        }
     assert len((await _suggestions(account_id))["suggestions"]) == 3
 
     token, _ = fake_supabase_user(user_id=account_id)
@@ -111,6 +197,19 @@ async def test_real_service_and_api_trigger_matrix_and_legacy_deactivation(db_cl
     assert "evidence_claim_ids" not in str(public) and "source_id" not in str(public) and "applicability" not in str(public)
     repeated = await app_client.get("/api/v2/nutrition/appearance-suggestions", headers={"Authorization": f"Bearer {token}"})
     assert repeated.status_code == 200 and repeated.json() == public
+
+    async with get_sessionmaker()() as session:
+        nutrition = (await session.execute(select(NutritionPreference).where(NutritionPreference.account_id == account_id))).scalar_one()
+        water = (await session.execute(select(HydrationPreference).where(HydrationPreference.account_id == account_id))).scalar_one()
+        preferences_after = {
+            "diet": nutrition.diet,
+            "avoid_foods": list(nutrition.avoid_foods),
+            "focus_nutrients": list(nutrition.focus_nutrients),
+            "nutrition_enabled": nutrition.enabled,
+            "hydration_enabled": water.enabled,
+            "remind_in_hot_weather_only": water.remind_in_hot_weather_only,
+        }
+    assert preferences_after == preferences_before
 
     other_account = uuid.uuid4()
     async with get_sessionmaker()() as session:
@@ -127,16 +226,34 @@ async def test_seed_is_idempotent_and_ifct_remains_metadata_only(db_clean):
         first = await run_seed(session)
         second = await run_seed(session)
         source_count = await session.scalar(select(func.count()).select_from(EvidenceSource).where(EvidenceSource.source_key == SOURCE_KEY))
-        claim_count = await session.scalar(select(func.count()).select_from(EvidenceClaim).where(EvidenceClaim.claim_key.like("nutrition.%")))
-        claim_source_count = await session.scalar(select(func.count()).select_from(EvidenceClaimSource).join(EvidenceClaim).where(EvidenceClaim.claim_key.like("nutrition.%")))
-        link_count = await session.scalar(select(func.count()).select_from(RuleEvidenceLink).where(RuleEvidenceLink.domain == "nutrition", RuleEvidenceLink.rule_kind == "nutrition_context"))
+        claim_rows = (await session.execute(select(EvidenceClaim).where(EvidenceClaim.claim_key.in_(V3_04_1_CLAIM_KEYS), EvidenceClaim.claim_version == 1))).scalars().all()
+        claim_count = await session.scalar(select(func.count()).select_from(EvidenceClaim).where(EvidenceClaim.claim_key.in_(V3_04_1_CLAIM_KEYS), EvidenceClaim.claim_version == 1))
+        claim_source_count = await session.scalar(select(func.count()).select_from(EvidenceClaimSource).join(EvidenceClaim).where(EvidenceClaim.claim_key.in_(V3_04_1_CLAIM_KEYS), EvidenceClaim.claim_version == 1))
+        link_count = await session.scalar(select(func.count()).select_from(RuleEvidenceLink).where(RuleEvidenceLink.domain == "nutrition", RuleEvidenceLink.rule_kind == "nutrition_context", RuleEvidenceLink.rule_id.in_(V3_04_1_RULE_IDS), RuleEvidenceLink.rule_version == "v1"))
+        linked_sources = set((await session.execute(
+            select(EvidenceSource.source_key)
+            .join(EvidenceClaimSource, EvidenceClaimSource.source_id == EvidenceSource.id)
+            .join(EvidenceClaim, EvidenceClaim.id == EvidenceClaimSource.claim_id)
+            .where(EvidenceClaim.claim_key.in_(V3_04_1_CLAIM_KEYS), EvidenceClaim.claim_version == 1)
+        )).scalars().all())
         audit = (await session.execute(select(SeedVersionRecord).where(SeedVersionRecord.seed_domain == SEED_DOMAIN, SeedVersionRecord.seed_version == NUTRITION_GUIDANCE_EVIDENCE_SEED_VERSION))).scalar_one()
         datasets = (await session.execute(select(FoodCompositionDataset))).scalars().all()
         items = (await session.execute(select(FoodReferenceItem))).scalars().all()
         values = (await session.execute(select(FoodNutrientValue))).scalars().all()
     expected = {"seed_version": NUTRITION_GUIDANCE_EVIDENCE_SEED_VERSION, "sources": 0, "claims": 3, "claim_source_links": 3, "rule_links": 3, "rows_written": 9}
     assert first["nutrition_guidance_evidence"] == second["nutrition_guidance_evidence"] == expected
-    assert source_count == 1 and claim_count == claim_source_count == link_count == 3 and audit.rows_written == 9
+    assert source_count == 1 and set(row.claim_key for row in claim_rows) == set(V3_04_1_CLAIM_KEYS)
+    assert claim_count == claim_source_count == link_count == 3 and audit.rows_written == 9
+    assert linked_sources == {SOURCE_KEY} and "icmr_nin.nutrient_requirements.rda_ear.2020" not in linked_sources
+    async with factory() as resolution_session:
+        for rule_id in V3_04_1_RULE_IDS:
+            await assert_rule_exists(
+                resolution_session,
+                domain="nutrition",
+                rule_kind="nutrition_context",
+                rule_id=rule_id,
+                rule_version="v1",
+            )
     assert datasets and datasets[0].rights_status == "restricted_reference" and datasets[0].import_status == "metadata_only"
     assert items == [] and values == []
 
@@ -146,7 +263,12 @@ async def test_evidence_fail_closed_and_exact_resolution(db_clean):
     await _set_preferences(account_id, enabled=True, focus=["protein"], hydration=True)
     factory = get_sessionmaker()
     async with factory() as session:
-        links = (await session.execute(select(RuleEvidenceLink).where(RuleEvidenceLink.domain == "nutrition"))).scalars().all()
+        links = (await session.execute(select(RuleEvidenceLink).where(
+            RuleEvidenceLink.domain == "nutrition",
+            RuleEvidenceLink.rule_kind == "nutrition_context",
+            RuleEvidenceLink.rule_id.in_(V3_04_1_RULE_IDS),
+            RuleEvidenceLink.rule_version == "v1",
+        ))).scalars().all()
         assert len(links) == 3
         removed = next(link for link in links if link.rule_id == "nutrition.pattern.balanced_variety")
         removed_id = removed.rule_id

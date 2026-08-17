@@ -1601,13 +1601,18 @@ async def nutrition_suggestions(
         }
 
     hydration = await hydration_preference(session, account_id)
-    context = await shelf.gather(session, account_id=account_id)
+    day_context = await planning_context.gather(session, account_id=account_id)
+    climate = day_context.climate
     guidance = await build_nutrition_guidance(
         session,
         nutrition_enabled=bool(preference.enabled),
         protein_focus="protein" in (preference.focus_nutrients or []),
         hydration_enabled=bool(hydration.enabled),
-        hot_weather=str(context.climate or "").strip().lower() in {"hot", "humid"},
+        hot_weather=(
+            getattr(climate, "temperature_band", None) == "hot"
+            or getattr(climate, "moisture_regime", None) == "humid"
+            or getattr(climate, "condition", None) in {"hot", "humid"}
+        ),
         hot_weather_only=bool(hydration.remind_in_hot_weather_only),
     )
     payload = public_nutrition_guidance(guidance)
