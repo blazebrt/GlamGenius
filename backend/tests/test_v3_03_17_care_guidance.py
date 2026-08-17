@@ -242,12 +242,19 @@ async def test_guidance_seed_is_idempotent_and_has_exact_reviewed_rows(db_clean)
 @pytest.mark.asyncio
 async def test_seeded_guidance_rules_are_behavior_eligible_and_pilot_stays_draft(db_clean):
     factory = get_sessionmaker()
+    guidance_identities = {
+        (rule.domain, rule.rule_kind, rule.rule_id, rule.rule_version)
+        for rule in GUIDANCE_RULES
+    }
     async with factory() as session:
         await run_reference_seed(session)
-        links = (await session.execute(select(RuleEvidenceLink).where(RuleEvidenceLink.rule_kind == "routine_guidance"))).scalars().all()
+        links = (await session.execute(select(RuleEvidenceLink).where(
+            RuleEvidenceLink.rule_kind == "routine_guidance",
+            RuleEvidenceLink.rule_id.in_([rule.rule_id for rule in GUIDANCE_RULES]),
+        ))).scalars().all()
         assessments = [await assess_rule_evidence(session, domain=link.domain, rule_kind=link.rule_kind, rule_id=link.rule_id, rule_version=link.rule_version) for link in links]
         pilot = (await session.execute(select(EvidenceClaim).where(EvidenceClaim.claim_key.in_(("skin.topical_retinoid_pregnancy_regulatory_context", "skin.tretinoin_salicylic_concurrent_irritation_context"))))).scalars().all()
-    assert len(links) == 3
+    assert {(link.domain, link.rule_kind, link.rule_id, link.rule_version) for link in links} == guidance_identities
     assert all(assessment.provenance_present and assessment.substantive_support_present and assessment.behavior_evidence_eligible for assessment in assessments)
     assert all(claim.review_status == "draft" for claim in pilot)
 

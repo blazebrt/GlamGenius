@@ -49,8 +49,7 @@ HOME_CARE_RULES: tuple[HomeCareRule, ...] = (
         priority=20, title="Dry hair gently after washing",
         body=(
             "Your wash routine is due today. After washing, gently wrap your hair in "
-            "a towel or T-shirt to absorb moisture, or let it air-dry when practical. "
-            "Avoid rough rubbing."
+            "a towel or T-shirt to absorb moisture. Avoid rough rubbing."
         ),
         applicability_signals=CareApplicabilitySignals(
             jurisdictions=(), populations=("general_population",),

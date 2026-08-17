@@ -47,7 +47,7 @@ CLAIM_DEFS: tuple[dict[str, Any], ...] = (
         "claim_key": "home.hair.gentle_drying_after_wash", "claim_version": 1,
         "domain": "home_care", "subject_type": "routine_guidance", "subject_key": "gentle_hair_drying",
         "claim_type": "usage_context",
-        "summary": "After washing, gently absorbing hair moisture with a towel or T-shirt, or allowing hair to air-dry, is recommended instead of rough rubbing.",
+        "summary": "After washing, gently absorbing hair moisture with a towel or T-shirt is recommended instead of rough rubbing.",
         "scope": "General non-diagnostic at-home Hair Care technique. It does not diagnose hair damage, change Hair wash cadence, select products, or recommend a DIY ingredient preparation.",
         "evidence_strength": "moderate",
         "strength_rationale": "Direct dermatologist-reviewed AAD general Hair Care guidance, consumed only when the user's deterministic HairWashCadenceDecision says the wash is due.",

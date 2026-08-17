@@ -11,9 +11,11 @@ from app.domains.care import cadence as care_cadence
 from app.domains.care import home_care
 from app.domains.care.decisions import decision_fingerprint, evaluate_care_context
 from app.domains.care.evidence_applicability import CareRuleApplicabilityResult
+from app.domains.care.guidance_rules import GUIDANCE_RULES
 from app.domains.care.home_care_rules import HOME_CARE_RULES, HOME_CARE_RULESET_VERSION
 from app.domains.care.routine_plan import plan_care_routine, routine_plan_fingerprint
 from app.domains.care.schemas import CareFact
+from app.domains.evidence import home_care_seed
 from app.domains.evidence.applicability import EVIDENCE_APPLICABILITY_VERSION, EvidenceApplicability
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource, RuleEvidenceLink
 from app.domains.evidence.service import (
@@ -21,6 +23,7 @@ from app.domains.evidence.service import (
     EvidenceRuleResolutionError,
     RuleEvidenceAssessment,
     assert_rule_exists,
+    assess_rule_evidence,
 )
 from app.domains.routines import service as routines_service
 from app.domains.routines.models import RoutineRecommendationRun
@@ -130,6 +133,25 @@ async def test_due_hair_home_care_is_evidence_gated_and_does_not_recompute_caden
 
 
 @pytest.mark.asyncio
+async def test_due_hair_home_care_fails_closed_for_evidence_or_applicability(monkeypatch):
+    context = _context()
+    cadence = care_cadence.decide_hair_wash_cadence("daily", plan_date=context.plan_date, last_wash_on=None)
+
+    async def ineligible(*_args, **_kwargs):
+        return RuleEvidenceAssessment(False, False, False)
+
+    monkeypatch.setattr(home_care, "assess_rule_evidence", ineligible)
+    assert not (await home_care.build_home_care(None, care_context=context, hair_wash_cadence=cadence)).items
+
+    monkeypatch.setattr(home_care, "assess_rule_evidence", _eligible)
+    monkeypatch.setattr(
+        home_care, "resolve_care_evidence_applicability",
+        lambda *_args: CareRuleApplicabilityResult(EVIDENCE_APPLICABILITY_VERSION, False, True),
+    )
+    assert not (await home_care.build_home_care(None, care_context=context, hair_wash_cadence=cadence)).items
+
+
+@pytest.mark.asyncio
 async def test_home_care_is_sorted_bounded_deterministic_and_preserves_authority(monkeypatch):
     monkeypatch.setattr(home_care, "assess_rule_evidence", _eligible)
     monkeypatch.setattr(home_care, "resolve_care_evidence_applicability", _applicable)
@@ -163,9 +185,19 @@ def test_registry_has_exactly_two_non_product_rules_and_no_duplicate_identity():
     assert all(not hasattr(row, "selected_item_id") for row in HOME_CARE_RULES)
 
 
+def test_hair_home_care_copy_matches_linked_evidence_boundary():
+    hair_rule = next(row for row in HOME_CARE_RULES if row.rule_id == "care.home.hair_gentle_drying")
+    hair_claim = next(row for row in home_care_seed.CLAIM_DEFS if row["claim_key"] == "home.hair.gentle_drying_after_wash")
+    for text in (hair_rule.body, hair_claim["summary"]):
+        assert "air-dry" not in text.lower()
+        assert "air dry" not in text.lower()
+        assert "towel" in text.lower()
+        assert "t-shirt" in text.lower()
+
+
 @pytest.mark.asyncio
 async def test_exact_home_care_rule_resolution_is_closed_and_preserves_guidance():
-    for rule in HOME_CARE_RULES:
+    for rule in (*GUIDANCE_RULES, *HOME_CARE_RULES):
         await assert_rule_exists(None, domain=rule.domain, rule_kind=rule.rule_kind, rule_id=rule.rule_id, rule_version=rule.rule_version)
     with pytest.raises(EvidenceRuleResolutionError):
         await assert_rule_exists(None, domain="home_care", rule_kind="routine_guidance", rule_id="care.home.third", rule_version=HOME_CARE_RULESET_VERSION)
@@ -186,11 +218,33 @@ async def test_home_care_seed_reuses_sources_and_is_idempotent(db_clean):
         links = (await session.execute(select(EvidenceClaimSource).where(EvidenceClaimSource.claim_id.in_([row.id for row in claims])))).scalars().all()
         rule_links = (await session.execute(select(RuleEvidenceLink).where(RuleEvidenceLink.domain == "home_care"))).scalars().all()
     assert first["home_care_evidence"] == second["home_care_evidence"]
+    assert first["home_care_evidence"] == {
+        "seed_version": home_care_seed.HOME_CARE_EVIDENCE_SEED_VERSION,
+        "sources": 0, "claims": 2, "claim_source_links": 2,
+        "rule_links": 2, "rows_written": 6,
+    }
     assert len(sources) == 2
     assert len(claims) == len(links) == len(rule_links) == 2
     assert {row.claim_key for row in claims} == {"home.skin.gentle_bathing_for_dry_skin", "home.hair.gentle_drying_after_wash"}
     assert all(row.review_status == "approved" and row.claim_status == "supported" and row.ai_generated for row in claims)
     assert all(row.reviewed_by == "repository_review:v3-03.18" and row.reviewed_at for row in claims)
+
+
+@pytest.mark.asyncio
+async def test_seeded_home_care_rules_are_behavior_evidence_eligible(db_clean):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await run_seed(session)
+        assessments = [
+            await assess_rule_evidence(
+                session, domain=rule.domain, rule_kind=rule.rule_kind,
+                rule_id=rule.rule_id, rule_version=rule.rule_version,
+            )
+            for rule in HOME_CARE_RULES
+        ]
+    assert all(assessment.provenance_present for assessment in assessments)
+    assert all(assessment.substantive_support_present for assessment in assessments)
+    assert all(assessment.behavior_evidence_eligible for assessment in assessments)
 
 
 @pytest.mark.asyncio

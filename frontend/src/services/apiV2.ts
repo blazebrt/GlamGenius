@@ -1436,7 +1436,14 @@ export const getShelfValueToRecover = async (): Promise<{
 
 export const generateRoutines = async (
   body: { kinds?: RoutineKind[]; climate?: string; explain?: boolean } = {}
-): Promise<{ routines: Routine[]; explanation_source: ExplanationSource; message: string | null; disclaimer: string }> =>
+): Promise<{
+  routines: Routine[];
+  explanation_source: ExplanationSource;
+  care_guidance: CareGuidance;
+  home_care: HomeCare;
+  message: string | null;
+  disclaimer: string;
+}> =>
   (await api.post(`${V2}/routines/generate`, body)).data;
 
 export const getRoutinesToday = async (): Promise<{
