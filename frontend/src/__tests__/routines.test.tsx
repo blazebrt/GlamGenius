@@ -5,7 +5,7 @@ import {
   BoundaryNotice, ConsistencyCard, EmptyModule, ExpiringSection, LowUseSection,
   NutritionCard, PerfumeCard, RoutineCard, StepRow, SupplementCard, WarningCard, WarningList,
 } from '../components/routines/RoutinePieces';
-import { TodayCareGuidance, TodayFood, TodayPerfume, TodayRoutineCard } from '../components/routines/TodayRoutine';
+import { TodayCareGuidance, TodayFood, TodayHomeCare, TodayPerfume, TodayRoutineCard } from '../components/routines/TodayRoutine';
 import {
   CareGuidance, ExpiringReport, NutritionSuggestion, PerfumePick, Routine, RoutineStep, RuleWarning,
   ShelfProductRow, SupplementRow,
@@ -328,6 +328,30 @@ describe('Today routine strip', () => {
     expect(screen.queryByText('Fourth item')).toBeNull();
     expect(screen.queryByText(/buy|shop|add to basket/i)).toBeNull();
     expect(screen.queryByText('abc')).toBeNull();
+  });
+
+  it('renders at-home care without exposing evidence or purchase actions', () => {
+    const homeCare = {
+      home_care_version: 'v3-03.18', ruleset_version: 'v3-03.18-r1', fingerprint: 'secret-fingerprint',
+      items: [
+        { domain: 'home_care' as const, rule_id: 'care.home.skin_gentle_bathing', rule_version: 'v3-03.18-r1', priority: 10, title: 'Keep showers gentle', body: 'Keep baths short and pat skin dry.', trigger_codes: ['a'], evidence_claim_ids: ['secret-claim'], evidence_applicability_version: 'v3-03.16' },
+        { domain: 'home_care' as const, rule_id: 'care.home.hair_gentle_drying', rule_version: 'v3-03.18-r1', priority: 20, title: 'Dry hair gently after washing', body: 'Avoid rough rubbing.', trigger_codes: ['b'], evidence_claim_ids: ['secret-claim-2'], evidence_applicability_version: 'v3-03.16' },
+        { domain: 'home_care' as const, rule_id: 'care.home.extra', rule_version: 'v3-03.18-r1', priority: 30, title: 'Hidden third item', body: 'This must not render.', trigger_codes: ['c'], evidence_claim_ids: ['secret-claim-3'], evidence_applicability_version: 'v3-03.16' },
+      ],
+    };
+    const { queryByText } = render(<TodayHomeCare homeCare={homeCare} />);
+    expect(screen.getByText('AT-HOME CARE')).toBeTruthy();
+    expect(screen.getByText('Keep showers gentle')).toBeTruthy();
+    expect(screen.getByText('Dry hair gently after washing')).toBeTruthy();
+    expect(queryByText('Hidden third item')).toBeNull();
+    expect(queryByText('secret-fingerprint')).toBeNull();
+    expect(queryByText('secret-claim')).toBeNull();
+    expect(queryByText(/buy|shop|add product|recipe|remedy/i)).toBeNull();
+  });
+
+  it('renders nothing for absent or empty at-home care', () => {
+    expect(render(<TodayHomeCare homeCare={null} />).toJSON()).toBeNull();
+    expect(render(<TodayHomeCare homeCare={{ home_care_version: 'v3-03.18', ruleset_version: 'v3-03.18-r1', fingerprint: 'fp', items: [] }} />).toJSON()).toBeNull();
   });
 
   it('shows progress without a score', () => {

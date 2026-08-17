@@ -341,7 +341,7 @@ async def test_snapshot_history_adjustment_separation_and_resume_determinism(
             "version": "v3-03.11", "kind": "explicit_product_resume", "item_id": item_id,
             "from_state": "paused", "to_state": "active",
         }
-        assert run_c.inputs["care_snapshot"]["snapshot_version"] == "v3-03.17"
+        assert run_c.inputs["care_snapshot"]["snapshot_version"] == "v3-03.18"
         assert run_c.inputs["care_snapshot"]["fingerprint"] == snapshot_a["fingerprint"]
 
 
