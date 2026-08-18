@@ -108,16 +108,50 @@ def test_frozen_taxonomy_rules_versions_and_options() -> None:
     assert NUTRITION_PREFERENCE_TAXONOMY_VERSION == "v3-04.2"
     assert NUTRITION_GUIDANCE_RULESET_VERSION == "v3-04.1-r1"
     assert NUTRITION_EVIDENCE_APPLICABILITY_VERSION == "v3-04.1"
-    assert tuple(row.rule_id for row in NUTRITION_GUIDANCE_RULES) == (
-        "nutrition.pattern.balanced_variety",
-        "nutrition.pattern.protein_food_first",
-        "nutrition.pattern.hydration_context",
+    assert tuple(
+        (row.rule_id, row.rule_version, row.priority, row.title, row.body)
+        for row in NUTRITION_GUIDANCE_RULES
+    ) == (
+        (
+            "nutrition.pattern.balanced_variety",
+            "v1",
+            10,
+            "Build variety into your meals",
+            "A balanced food pattern comes from variety, not one “perfect” food. Keep the mix flexible around the foods and traditions that fit you.",
+        ),
+        (
+            "nutrition.pattern.protein_food_first",
+            "v1",
+            20,
+            "Keep protein food-first",
+            "If protein is something you want to pay attention to, start with ordinary foods that fit your diet rather than treating protein supplements as the default.",
+        ),
+        (
+            "nutrition.pattern.hydration_context",
+            "v1",
+            30,
+            "Keep water in the day",
+            "If you want hydration reminders, keep water part of the day. GlamGenius does not set a litre target or treat hydration as a diagnosis.",
+        ),
     )
     assert len(BALANCED_VARIETY_OPTIONS) == 5
     assert len(PROTEIN_FOOD_OPTIONS) == 10
-    assert [row.option_id for row in (*BALANCED_VARIETY_OPTIONS, *PROTEIN_FOOD_OPTIONS)] == [
-        "variety.vegetables", "variety.fruit", "variety.pulses_legumes", "variety.grains_millets", "variety.nuts_seeds",
-        "protein.dal", "protein.chana", "protein.dahi", "protein.eggs", "protein.soy_foods", "protein.fish", "protein.paneer", "protein.chicken", "protein.rajma", "protein.peanuts",
+    assert [(row.option_id, row.label) for row in (*BALANCED_VARIETY_OPTIONS, *PROTEIN_FOOD_OPTIONS)] == [
+        ("variety.vegetables", "Vegetables"),
+        ("variety.fruit", "Fruit"),
+        ("variety.pulses_legumes", "Pulses / legumes"),
+        ("variety.grains_millets", "Grains / millets"),
+        ("variety.nuts_seeds", "Nuts / seeds"),
+        ("protein.dal", "Dal"),
+        ("protein.chana", "Chana"),
+        ("protein.dahi", "Dahi / curd"),
+        ("protein.eggs", "Eggs"),
+        ("protein.soy_foods", "Soy foods"),
+        ("protein.fish", "Fish"),
+        ("protein.paneer", "Paneer"),
+        ("protein.chicken", "Chicken"),
+        ("protein.rajma", "Rajma"),
+        ("protein.peanuts", "Peanuts"),
     ]
 
 
