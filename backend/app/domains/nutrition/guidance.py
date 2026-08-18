@@ -1,4 +1,4 @@
-"""Deterministic, evidence-gated V3-04.1 guidance."""
+"""Deterministic, evidence-gated V3-04.2 guidance."""
 from __future__ import annotations
 
 import hashlib
@@ -10,12 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.evidence.service import assess_rule_evidence
 from app.domains.nutrition.evidence_applicability import resolve_nutrition_evidence_applicability
+from app.domains.nutrition.food_options import (
+    NUTRITION_FOOD_OPTIONS_VERSION,
+    NutritionFoodOption,
+    options_for_rule,
+)
 from app.domains.nutrition.guidance_rules import (
     NUTRITION_GUIDANCE_RULES,
     NUTRITION_GUIDANCE_RULESET_VERSION,
 )
 
-NUTRITION_GUIDANCE_VERSION = "v3-04.1"
+NUTRITION_GUIDANCE_VERSION = "v3-04.2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +33,7 @@ class NutritionGuidanceItem:
     trigger_codes: tuple[str, ...]
     evidence_claim_ids: tuple[uuid.UUID, ...]
     evidence_applicability_version: str
+    food_options: tuple[NutritionFoodOption, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,13 +51,13 @@ class NutritionGuidanceSet:
 
 
 def nutrition_guidance_fingerprint(guidance: NutritionGuidanceSet) -> str:
-    material = {"guidance_version": guidance.guidance_version, "ruleset_version": guidance.ruleset_version, "items": [
-        {"rule_id": i.rule_id, "rule_version": i.rule_version, "priority": i.priority, "title": i.title, "body": i.body, "trigger_codes": list(i.trigger_codes), "evidence_claim_ids": sorted(map(str, i.evidence_claim_ids)), "evidence_applicability_version": i.evidence_applicability_version} for i in guidance.items
+    material = {"guidance_version": guidance.guidance_version, "ruleset_version": guidance.ruleset_version, "food_options_version": NUTRITION_FOOD_OPTIONS_VERSION, "items": [
+        {"rule_id": i.rule_id, "rule_version": i.rule_version, "priority": i.priority, "title": i.title, "body": i.body, "trigger_codes": list(i.trigger_codes), "evidence_claim_ids": sorted(map(str, i.evidence_claim_ids)), "evidence_applicability_version": i.evidence_applicability_version, "food_option_ids": [option.option_id for option in i.food_options]} for i in guidance.items
     ]}
     return hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
-async def build_nutrition_guidance(session: AsyncSession, *, nutrition_enabled: bool, protein_focus: bool, hydration_enabled: bool, hot_weather: bool, hot_weather_only: bool) -> NutritionGuidanceSet:
+async def build_nutrition_guidance(session: AsyncSession, *, nutrition_enabled: bool, protein_focus: bool, hydration_enabled: bool, hot_weather: bool, hot_weather_only: bool, diet: str | None = None, avoid_foods: tuple[str, ...] | list[str] = ()) -> NutritionGuidanceSet:
     if not nutrition_enabled:
         return NutritionGuidanceSet(NUTRITION_GUIDANCE_VERSION, NUTRITION_GUIDANCE_RULESET_VERSION)
     items: list[NutritionGuidanceItem] = []
@@ -68,12 +74,12 @@ async def build_nutrition_guidance(session: AsyncSession, *, nutrition_enabled: 
         assessment = await assess_rule_evidence(session, domain=rule.domain, rule_kind=rule.rule_kind, rule_id=rule.rule_id, rule_version=rule.rule_version)
         applicability = resolve_nutrition_evidence_applicability(assessment, rule.applicability_signals)
         if applicability.applicable:
-            items.append(NutritionGuidanceItem(rule.rule_id, rule.rule_version, rule.priority, rule.title, rule.body, codes, applicability.matching_claim_ids, applicability.applicability_version))
+            items.append(NutritionGuidanceItem(rule.rule_id, rule.rule_version, rule.priority, rule.title, rule.body, codes, applicability.matching_claim_ids, applicability.applicability_version, options_for_rule(rule.rule_id, diet=diet, avoid_foods=avoid_foods)))
     return NutritionGuidanceSet(NUTRITION_GUIDANCE_VERSION, NUTRITION_GUIDANCE_RULESET_VERSION, tuple(items[:3]))
 
 
 def public_nutrition_guidance(guidance: NutritionGuidanceSet) -> dict:
-    return {"guidance_version": guidance.guidance_version, "ruleset_version": guidance.ruleset_version, "fingerprint": guidance.fingerprint, "suggestions": [{"rule_id": i.rule_id, "rule_version": i.rule_version, "title": i.title, "body": i.body, "trigger_codes": list(i.trigger_codes)} for i in guidance.items]}
+    return {"guidance_version": guidance.guidance_version, "ruleset_version": guidance.ruleset_version, "fingerprint": guidance.fingerprint, "suggestions": [{"rule_id": i.rule_id, "rule_version": i.rule_version, "title": i.title, "body": i.body, "trigger_codes": list(i.trigger_codes), "food_options": [option.label for option in i.food_options]} for i in guidance.items]}
 
 
-__all__ = ["NUTRITION_GUIDANCE_VERSION", "NutritionGuidanceItem", "NutritionGuidanceSet", "build_nutrition_guidance", "nutrition_guidance_fingerprint", "public_nutrition_guidance"]
+__all__ = ["NUTRITION_FOOD_OPTIONS_VERSION", "NUTRITION_GUIDANCE_VERSION", "NutritionGuidanceItem", "NutritionGuidanceSet", "build_nutrition_guidance", "nutrition_guidance_fingerprint", "public_nutrition_guidance"]

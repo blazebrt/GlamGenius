@@ -79,12 +79,15 @@ export function TodayPerfume({ pick }: { pick: PerfumePick | null }) {
 
 export function TodayFood({ suggestion }: { suggestion: NutritionSuggestion | null }) {
   if (!suggestion) return null;
+  const ideas = suggestion.food_options?.slice(0, 3) ?? [];
+  const ideaText = ideas.length ? `Ideas: ${ideas.join(' · ')}` : '';
   return (
-    <View style={styles.slim} accessibilityLabel={`Food context: ${suggestion.title}`}>
+    <View style={styles.slim} accessibilityLabel={`Food context: ${suggestion.title}${ideaText ? `, ${ideaText}` : ''}`}>
       <Ionicons name="nutrition-outline" size={17} color={COLORS.primary} />
       <View style={{ flex: 1 }}>
         <Text style={styles.slimTitle}>{suggestion.title}</Text>
         <Text style={styles.slimBody}>{suggestion.body}</Text>
+        {!!ideaText && <Text style={styles.slimBody}>{ideaText}</Text>}
       </View>
     </View>
   );

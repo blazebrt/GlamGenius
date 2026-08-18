@@ -2,3 +2,6 @@
 # These are deterministic public dataset/source identifiers, not credentials.
 44598dab08ec312992ec4a99fade8a674693e4de:backend/app/domains/nutrition/seed.py:generic-api-key:16
 44598dab08ec312992ec4a99fade8a674693e4de:backend/app/domains/evidence/nutrition_seed.py:generic-api-key:18
+# V3-04.2 public ICMR-NIN dataset identifier used in acceptance coverage.
+# Deterministic public reference identifier, not a credential.
+3c2dd5f3a251f4907980142f00d21ae79f0ff746:backend/tests/test_v3_04_2_food_options.py:generic-api-key:323

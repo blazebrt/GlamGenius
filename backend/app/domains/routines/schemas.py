@@ -17,8 +17,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.domains.nutrition.preferences import SUPPORTED_DIETS, SUPPORTED_FOCUS_KEYS
 from app.domains.routines.compiler import ROUTINE_KINDS
-from app.domains.routines.nutrition import DIETS, NUTRIENT_BY_KEY
 from app.domains.routines.ontology import ALL_SLOTS
 from app.domains.routines.parser import SOURCE_EXTRACTED, SOURCE_LABEL, SOURCE_USER
 
@@ -179,7 +179,7 @@ class NutritionPreferencePatch(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    diet: Literal[DIETS] | None = None  # type: ignore[valid-type]
+    diet: Literal[SUPPORTED_DIETS] | None = None  # type: ignore[valid-type]
     avoid_foods: list[str] | None = Field(default=None, max_length=40)
     focus_nutrients: list[str] | None = Field(default=None, max_length=12)
     enabled: bool | None = None
@@ -189,11 +189,11 @@ class NutritionPreferencePatch(BaseModel):
     def _known(cls, value: list[str] | None) -> list[str] | None:
         if value is None:
             return None
-        unknown = [row for row in value if row not in NUTRIENT_BY_KEY]
+        unknown = [row for row in value if row not in SUPPORTED_FOCUS_KEYS]
         if unknown:
             raise ValueError(
                 f"We have no food context for: {', '.join(unknown)}. "
-                f"Choose from: {', '.join(sorted(NUTRIENT_BY_KEY))}."
+                f"Choose from: {', '.join(sorted(SUPPORTED_FOCUS_KEYS))}."
             )
         return list(dict.fromkeys(value))
 

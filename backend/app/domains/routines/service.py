@@ -32,7 +32,9 @@ from app.domains.care import simplification as care_simplification
 from app.domains.care import snapshot as care_snapshot
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryAttribute, InventoryItem
+from app.domains.nutrition.food_options import NUTRITION_FOOD_OPTIONS_VERSION
 from app.domains.nutrition.guidance import build_nutrition_guidance, public_nutrition_guidance
+from app.domains.nutrition.preferences import diet_label
 from app.domains.planning import clock
 from app.domains.planning import context as planning_context
 from app.domains.profile import service as profile_service
@@ -1607,6 +1609,8 @@ async def nutrition_suggestions(
         session,
         nutrition_enabled=bool(preference.enabled),
         protein_focus="protein" in (preference.focus_nutrients or []),
+        diet=preference.diet,
+        avoid_foods=tuple(preference.avoid_foods or ()),
         hydration_enabled=bool(hydration.enabled),
         hot_weather=(
             getattr(climate, "temperature_band", None) == "hot"
@@ -1616,12 +1620,12 @@ async def nutrition_suggestions(
         hot_weather_only=bool(hydration.remind_in_hot_weather_only),
     )
     payload = public_nutrition_guidance(guidance)
-    diet_labels = {"vegan": "vegan", "vegetarian": "vegetarian", "jain": "Jain", "eggetarian": "eggetarian", "pescatarian": "pescatarian", "non_vegetarian": "non-vegetarian"}
     payload.update({
-        "enabled": True, "diet": preference.diet, "diet_label": diet_labels.get(preference.diet, preference.diet),
+        "enabled": True, "diet": preference.diet, "diet_label": diet_label(preference.diet),
+        "food_options_version": NUTRITION_FOOD_OPTIONS_VERSION,
         "food_first": True, "hydration_enabled": hydration.enabled,
         "disclaimer": NUTRITION_DISCLAIMER,
-        "boundaries": ["food context, not a meal plan", "no nutrient totals or individual targets", "no medical or supplement advice"],
+        "boundaries": ["food context, not a meal plan", "ideas use saved diet and avoid-food preferences", "those preferences are not medical restriction inference", "no nutrient totals or individual targets", "no medical or supplement advice"],
     })
     return payload
 

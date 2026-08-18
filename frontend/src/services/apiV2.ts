@@ -1399,6 +1399,22 @@ export interface NutritionSuggestion {
   title: string;
   body: string;
   trigger_codes: string[];
+  food_options: string[];
+}
+
+export interface NutritionAppearanceResponse {
+  enabled: boolean;
+  diet?: Diet;
+  diet_label?: string;
+  guidance_version?: string;
+  ruleset_version?: string;
+  fingerprint?: string;
+  food_options_version?: string;
+  food_first?: boolean;
+  suggestions: NutritionSuggestion[];
+  boundaries?: string[];
+  disclaimer: string;
+  message?: string;
 }
 
 export interface ImproveOverview {
@@ -1516,12 +1532,8 @@ export const getSupplementsSummary = async (): Promise<{
   disclaimer: string; message: string | null;
 }> => (await api.get(`${V2}/supplements/summary`)).data;
 
-export const getNutritionSuggestions = async (): Promise<{
-  enabled: boolean; diet?: Diet; diet_label?: string;
-  guidance_version?: string; ruleset_version?: string; fingerprint?: string; food_first?: boolean;
-  suggestions: NutritionSuggestion[]; boundaries?: string[];
-  disclaimer: string; message?: string;
-}> => (await api.get(`${V2}/nutrition/appearance-suggestions`)).data;
+export const getNutritionSuggestions = async (): Promise<NutritionAppearanceResponse> =>
+  (await api.get<NutritionAppearanceResponse>(`${V2}/nutrition/appearance-suggestions`)).data;
 
 export const patchNutritionPreferences = async (body: {
   enabled?: boolean; diet?: Diet; focus_nutrients?: string[]; avoid_foods?: string[];

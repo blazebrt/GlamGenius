@@ -272,7 +272,7 @@ describe('Food context', () => {
     rule_id: 'nutrition.pattern.protein_food_first', rule_version: 'v1',
     title: 'Keep protein food-first',
     body: 'Start with ordinary foods that fit your diet.',
-    trigger_codes: ['nutrition_enabled', 'explicit_protein_focus'], ...overrides,
+    trigger_codes: ['nutrition_enabled', 'explicit_protein_focus'], food_options: [], ...overrides,
   });
 
   it('shows concise food-context advice and never a number', () => {
@@ -291,6 +291,13 @@ describe('Food context', () => {
   it('the Today strip stays hidden when food context is off', () => {
     const { toJSON } = render(<TodayFood suggestion={null} />);
     expect(toJSON()).toBeNull();
+  });
+
+  it('shows at most three public food ideas and includes them in accessibility', () => {
+    render(<TodayFood suggestion={suggestion({ food_options: ['Vegetables', 'Fruit', 'Pulses / legumes', 'Hidden'] })} />);
+    expect(screen.getByText('Ideas: Vegetables · Fruit · Pulses / legumes')).toBeTruthy();
+    expect(screen.queryByText('Hidden')).toBeNull();
+    expect(screen.getByLabelText(/Food context:.*Vegetables.*Pulses \/ legumes/)).toBeTruthy();
   });
 });
 
