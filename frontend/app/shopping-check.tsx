@@ -18,11 +18,16 @@ import {
 import { AnalysisFailedState } from '../src/components/TrustStates';
 import { CATEGORY_META } from '../src/components/inventory/InventoryPieces';
 import {
-  INVENTORY_CATEGORIES, InventoryCategory, PurchaseEvaluation,
+  InventoryCategory, PurchaseEvaluation,
   allowanceWasPreserved, evaluateItemDetails, evaluateScreenshot, failureGuidance,
   recordPurchaseDecision, structuredError, uploadMedia,
 } from '../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
+
+/** Categories for the active Style purchase strategy, not the Inventory domain. */
+export const MANUAL_PURCHASE_CATEGORIES: InventoryCategory[] = [
+  'wardrobe', 'shoes', 'accessories',
+];
 
 export default function ShoppingCheckScreen() {
   const router = useRouter();
@@ -118,7 +123,7 @@ export default function ShoppingCheckScreen() {
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>Tell us what it is</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-                  {INVENTORY_CATEGORIES.map((key) => (
+                  {MANUAL_PURCHASE_CATEGORIES.map((key) => (
                     <TouchableOpacity
                       key={key}
                       accessibilityRole="button"

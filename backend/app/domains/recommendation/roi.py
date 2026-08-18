@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from app.domains.purchase.contract import PurchaseStrategyBoundaryError, is_active_style_category
 from app.domains.recommendation import compatibility as compat
 from app.domains.recommendation.candidates import garment_shape, shape_from_parts
 from app.domains.recommendation.context import OwnedItem
@@ -321,6 +322,11 @@ def evaluate(
     climate: str | None = None,
 ) -> ROIResult:
     """Score a purchase and return Buy, Wait or Skip with the full arithmetic."""
+    # This evaluator is the active Style strategy only.  Guard before even
+    # materialising candidate details so non-style categories cannot reach a
+    # Style factor, even when called directly outside the orchestrator.
+    if not is_active_style_category(candidate.category):
+        raise PurchaseStrategyBoundaryError(candidate.category)
     details = candidate.as_details()
     missing: list[str] = []
     factors: list[Factor] = []

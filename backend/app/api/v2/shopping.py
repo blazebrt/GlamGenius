@@ -11,6 +11,10 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.purchase.contract import (
+    PURCHASE_STRATEGY_REGISTRY_VERSION,
+    STYLE_PURCHASE_CATEGORIES,
+)
 from app.domains.recommendation import orchestrator, roi, service
 from app.domains.recommendation.schemas import PurchaseDecisionCreate, ShoppingEvaluateRequest
 from app.shared.database.sql import get_session
@@ -39,6 +43,9 @@ async def get_roi_model():
             {"key": key, "label": roi.FACTOR_LABELS[key], "weight": weight}
             for key, weight in roi.FACTOR_WEIGHTS.items()
         ],
+        "supported_categories": list(STYLE_PURCHASE_CATEGORIES),
+        "strategy": "style_purchase",
+        "purchase_strategy_registry_version": PURCHASE_STRATEGY_REGISTRY_VERSION,
     }
 
 

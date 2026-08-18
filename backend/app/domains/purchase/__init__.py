@@ -1,0 +1,36 @@
+"""Purchase Intelligence policy boundaries.
+
+The purchase domain owns strategy policy and product-quality vocabulary.  The
+existing recommendation domain remains the persistence and implementation home
+for the active Style strategy during V3-05.0.
+"""
+
+from app.domains.purchase.contract import (
+    CARE_PURCHASE_CATEGORIES,
+    FRAGRANCE_PURCHASE_CATEGORIES,
+    PRODUCT_QUALITY_CONTRACT_VERSION,
+    PRODUCT_QUALITY_DIMENSIONS,
+    PURCHASE_CATEGORY_LABELS,
+    PURCHASE_INTELLIGENCE_FOUNDATION_VERSION,
+    PURCHASE_PROHIBITED_CATEGORIES,
+    PURCHASE_STRATEGY_REGISTRY_VERSION,
+    STYLE_PURCHASE_CATEGORIES,
+    PurchaseStrategy,
+    PurchaseStrategyBoundaryError,
+    resolve_purchase_strategy,
+)
+
+__all__ = [
+    "CARE_PURCHASE_CATEGORIES",
+    "FRAGRANCE_PURCHASE_CATEGORIES",
+    "PRODUCT_QUALITY_CONTRACT_VERSION",
+    "PRODUCT_QUALITY_DIMENSIONS",
+    "PURCHASE_CATEGORY_LABELS",
+    "PURCHASE_INTELLIGENCE_FOUNDATION_VERSION",
+    "PURCHASE_PROHIBITED_CATEGORIES",
+    "PURCHASE_STRATEGY_REGISTRY_VERSION",
+    "STYLE_PURCHASE_CATEGORIES",
+    "PurchaseStrategy",
+    "PurchaseStrategyBoundaryError",
+    "resolve_purchase_strategy",
+]
