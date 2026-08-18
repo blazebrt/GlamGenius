@@ -31,8 +31,8 @@ from app.domains.nutrition.schemas import HydrationPreferencePatch, NutritionPre
 from app.domains.routines import models as routines_models
 from app.domains.routines import schemas as routines_schemas
 from app.domains.routines.models import HydrationPreference, NutritionPreference
-from app.shared.database.sql import get_sessionmaker
-from sqlalchemy import func, select
+from app.shared.database.sql import get_engine, get_sessionmaker
+from sqlalchemy import event, func, select
 
 ROOT = Path(__file__).parents[1]
 APP = ROOT / "app"
@@ -47,6 +47,22 @@ RULE_IDS = {
     "nutrition.pattern.protein_food_first",
     "nutrition.pattern.hydration_context",
 }
+
+
+async def _preference_counts(account_id: uuid.UUID) -> tuple[int, int]:
+    factory = get_sessionmaker()
+    async with factory() as session:
+        nutrition_count = await session.scalar(
+            select(func.count()).select_from(NutritionPreference).where(
+                NutritionPreference.account_id == account_id
+            )
+        )
+        hydration_count = await session.scalar(
+            select(func.count()).select_from(HydrationPreference).where(
+                HydrationPreference.account_id == account_id
+            )
+        )
+    return int(nutrition_count or 0), int(hydration_count or 0)
 
 
 def _production_sources() -> dict[Path, str]:
@@ -192,6 +208,22 @@ async def test_database_evidence_ifct_and_public_api_closure(db_clean, app_clien
 
     token, _ = fake_supabase_user(user_id=account_id)
     headers = {"Authorization": f"Bearer {token}"}
+    async with factory() as session:
+        stored_nutrition = (await session.execute(
+            select(NutritionPreference).where(NutritionPreference.account_id == account_id)
+        )).scalar_one()
+        stored_hydration = (await session.execute(
+            select(HydrationPreference).where(HydrationPreference.account_id == account_id)
+        )).scalar_one()
+        before_state = (
+            stored_nutrition.diet,
+            list(stored_nutrition.avoid_foods),
+            list(stored_nutrition.focus_nutrients),
+            stored_nutrition.enabled,
+            stored_hydration.enabled,
+            stored_hydration.remind_in_hot_weather_only,
+            stored_hydration.note,
+        )
     first = await app_client.get("/api/v2/nutrition/appearance-suggestions", headers=headers)
     second = await app_client.get("/api/v2/nutrition/appearance-suggestions", headers=headers)
     assert first.status_code == second.status_code == 200
@@ -203,8 +235,134 @@ async def test_database_evidence_ifct_and_public_api_closure(db_clean, app_clien
     assert {"rule_id", "rule_version", "title", "body", "trigger_codes", "food_options"} <= set(payload["suggestions"][0])
     assert not any(key in str(payload) for key in ("claim_id", "source_id", "option_id", "priority", "compatible_diets", "avoid_aliases"))
 
+    async with factory() as session:
+        stored_nutrition = (await session.execute(
+            select(NutritionPreference).where(NutritionPreference.account_id == account_id)
+        )).scalar_one()
+        stored_hydration = (await session.execute(
+            select(HydrationPreference).where(HydrationPreference.account_id == account_id)
+        )).scalar_one()
+        assert before_state == (
+            stored_nutrition.diet,
+            list(stored_nutrition.avoid_foods),
+            list(stored_nutrition.focus_nutrients),
+            stored_nutrition.enabled,
+            stored_hydration.enabled,
+            stored_hydration.remind_in_hot_weather_only,
+            stored_hydration.note,
+        )
+
+
+@pytest.mark.asyncio
+async def test_fresh_account_gets_are_persistence_free_and_patches_create_rows(
+    db_clean, app_client, fake_supabase_user
+) -> None:
+    account_id = uuid.uuid4()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await run_seed(session)
+        await identity.register_account(session, account_id)
+        await session.commit()
+
+    token, _ = fake_supabase_user(user_id=account_id)
+    headers = {"Authorization": f"Bearer {token}"}
+    assert await _preference_counts(account_id) == (0, 0)
+
+    preference = await app_client.get("/api/v2/nutrition/preferences", headers=headers)
+    hydration = await app_client.get("/api/v2/nutrition/hydration", headers=headers)
+    suggestions = await app_client.get(
+        "/api/v2/nutrition/appearance-suggestions", headers=headers
+    )
+    assert preference.status_code == hydration.status_code == suggestions.status_code == 200
+    assert preference.json() == {
+        "diet": "non_vegetarian",
+        "avoid_foods": [],
+        "focus_nutrients": [],
+        "enabled": False,
+    }
+    assert hydration.json() == {
+        "enabled": False,
+        "remind_in_hot_weather_only": True,
+        "note": None,
+        "no_target": "We do not set a litre target. That would be a health instruction, and this is not that kind of app.",
+    }
+    assert suggestions.json()["enabled"] is False
+    assert suggestions.json()["suggestions"] == []
+    assert await _preference_counts(account_id) == (0, 0)
+
+    repeated = (
+        await app_client.get("/api/v2/nutrition/preferences", headers=headers),
+        await app_client.get("/api/v2/nutrition/hydration", headers=headers),
+        await app_client.get("/api/v2/nutrition/appearance-suggestions", headers=headers),
+    )
+    assert [response.json() for response in repeated] == [
+        preference.json(), hydration.json(), suggestions.json()
+    ]
+    assert await _preference_counts(account_id) == (0, 0)
+
+    patch_nutrition = await app_client.patch(
+        "/api/v2/nutrition/preferences",
+        headers=headers,
+        json={"diet": "vegan", "avoid_foods": ["chana"], "focus_nutrients": ["protein"], "enabled": True},
+    )
+    assert patch_nutrition.status_code == 200
+    assert await _preference_counts(account_id) == (1, 0)
+
+    patch_hydration = await app_client.patch(
+        "/api/v2/nutrition/hydration",
+        headers=headers,
+        json={"enabled": True, "remind_in_hot_weather_only": False},
+    )
+    assert patch_hydration.status_code == 200
+    assert await _preference_counts(account_id) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_public_nutrition_runtime_never_queries_historical_rule_table(
+    db_clean, app_client, fake_supabase_user
+) -> None:
+    account_id = uuid.uuid4()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await run_seed(session)
+        await identity.register_account(session, account_id)
+        session.add(NutritionPreference(account_id=account_id, enabled=True, focus_nutrients=["protein"], diet="vegan"))
+        session.add(HydrationPreference(account_id=account_id, enabled=False))
+        await session.commit()
+
+    token, _ = fake_supabase_user(user_id=account_id)
+    statements: list[str] = []
+
+    def reject_historical_table(conn, cursor, statement, parameters, context, executemany) -> None:
+        if "appearance_nutrition_rules" in statement.casefold():
+            statements.append(statement)
+            raise AssertionError("V3 Nutrition runtime queried the historical rule table")
+
+    engine = get_engine()
+    event.listen(engine.sync_engine, "before_cursor_execute", reject_historical_table)
+    try:
+        response = await app_client.get(
+            "/api/v2/nutrition/appearance-suggestions",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", reject_historical_table)
+
+    assert response.status_code == 200
+    assert response.json()["guidance_version"] == "v3-04.2"
+    assert response.json()["suggestions"]
+    assert statements == []
+
 
 def test_historical_appearance_nutrition_table_is_inert() -> None:
     assert routines_models.AppearanceNutritionRule.__tablename__ == "appearance_nutrition_rules"
     assert "Historical compatibility model; not runtime V3 Nutrition authority." in (APP / "domains" / "routines" / "models.py").read_text(encoding="utf-8")
     assert "AppearanceNutritionRule" not in (NUTRITION / "service.py").read_text(encoding="utf-8")
+    allowed = {
+        APP / "domains" / "routines" / "models.py",
+        APP / "domains" / "privacy" / "__init__.py",
+    }
+    for path, source in _production_sources().items():
+        if path not in allowed:
+            assert "AppearanceNutritionRule" not in source, path
+            assert "appearance_nutrition_rules" not in source, path

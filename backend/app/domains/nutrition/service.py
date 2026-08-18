@@ -24,6 +24,33 @@ async def nutrition_preference(session: AsyncSession, account_id: uuid.UUID) -> 
     row = (await session.execute(
         select(NutritionPreference).where(NutritionPreference.account_id == account_id)
     )).scalar_one_or_none()
+    return row or NutritionPreference(
+        account_id=account_id,
+        diet="non_vegetarian",
+        avoid_foods=[],
+        focus_nutrients=[],
+        enabled=False,
+    )
+
+
+async def hydration_preference(session: AsyncSession, account_id: uuid.UUID) -> HydrationPreference:
+    row = (await session.execute(
+        select(HydrationPreference).where(HydrationPreference.account_id == account_id)
+    )).scalar_one_or_none()
+    return row or HydrationPreference(
+        account_id=account_id,
+        enabled=False,
+        remind_in_hot_weather_only=True,
+        note=None,
+    )
+
+
+async def _ensure_nutrition_preference(
+    session: AsyncSession, account_id: uuid.UUID
+) -> NutritionPreference:
+    row = (await session.execute(
+        select(NutritionPreference).where(NutritionPreference.account_id == account_id)
+    )).scalar_one_or_none()
     if row is None:
         row = NutritionPreference(account_id=account_id)
         session.add(row)
@@ -31,7 +58,9 @@ async def nutrition_preference(session: AsyncSession, account_id: uuid.UUID) -> 
     return row
 
 
-async def hydration_preference(session: AsyncSession, account_id: uuid.UUID) -> HydrationPreference:
+async def _ensure_hydration_preference(
+    session: AsyncSession, account_id: uuid.UUID
+) -> HydrationPreference:
     row = (await session.execute(
         select(HydrationPreference).where(HydrationPreference.account_id == account_id)
     )).scalar_one_or_none()
@@ -45,7 +74,7 @@ async def hydration_preference(session: AsyncSession, account_id: uuid.UUID) -> 
 async def patch_nutrition_preference(
     session: AsyncSession, account_id: uuid.UUID, body: NutritionPreferencePatch
 ) -> dict[str, Any]:
-    row = await nutrition_preference(session, account_id)
+    row = await _ensure_nutrition_preference(session, account_id)
     for field in ("diet", "avoid_foods", "focus_nutrients", "enabled"):
         value = getattr(body, field)
         if value is not None:
@@ -56,7 +85,7 @@ async def patch_nutrition_preference(
 async def patch_hydration_preference(
     session: AsyncSession, account_id: uuid.UUID, body: HydrationPreferencePatch
 ) -> dict[str, Any]:
-    row = await hydration_preference(session, account_id)
+    row = await _ensure_hydration_preference(session, account_id)
     for field in ("enabled", "remind_in_hot_weather_only", "note"):
         value = getattr(body, field)
         if value is not None:
