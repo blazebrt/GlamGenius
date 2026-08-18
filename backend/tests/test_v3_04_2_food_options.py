@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import re
 import uuid
 from pathlib import Path
@@ -67,6 +68,22 @@ async def _set_preferences(
         nutrition.avoid_foods = avoid_foods or []
         water.enabled = hydration
         await session.commit()
+
+
+async def _account_state(account_id: uuid.UUID) -> tuple[tuple, tuple]:
+    factory = get_sessionmaker()
+    async with factory() as session:
+        nutrition = (await session.execute(select(NutritionPreference).where(NutritionPreference.account_id == account_id))).scalar_one()
+        water = (await session.execute(select(HydrationPreference).where(HydrationPreference.account_id == account_id))).scalar_one()
+        preferences = (
+            nutrition.diet, list(nutrition.avoid_foods), list(nutrition.focus_nutrients), nutrition.enabled,
+            water.enabled, water.remind_in_hot_weather_only, water.note,
+        )
+        evidence = tuple(
+            tuple(str(getattr(row, column.name)) for column in RuleEvidenceLink.__table__.columns)
+            for row in (await session.execute(select(RuleEvidenceLink))).scalars().all()
+        )
+    return preferences, tuple(sorted(evidence))
 
 
 def test_taxonomy_is_exact_and_schema_authority_is_migrated() -> None:
@@ -255,7 +272,7 @@ async def test_disabled_guidance_does_not_resolve_options(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_real_api_contract_nonmutation_and_account_isolation(db_clean, app_client, fake_supabase_user) -> None:
+async def test_real_api_contract_and_get_is_read_only(db_clean, app_client, fake_supabase_user) -> None:
     account_a = await _seed_account()
     await _set_preferences(
         account_a, enabled=True, diet="vegan", focus=["protein"],
@@ -264,11 +281,8 @@ async def test_real_api_contract_nonmutation_and_account_isolation(db_clean, app
     token_a, _ = fake_supabase_user(user_id=account_a)
     headers_a = {"Authorization": f"Bearer {token_a}"}
 
+    before_preferences, before_evidence = await _account_state(account_a)
     async with get_sessionmaker()() as session:
-        before_nutrition = (await session.execute(select(NutritionPreference).where(NutritionPreference.account_id == account_a))).scalar_one()
-        before_water = (await session.execute(select(HydrationPreference).where(HydrationPreference.account_id == account_a))).scalar_one()
-        before_preferences = (before_nutrition.diet, list(before_nutrition.avoid_foods), list(before_nutrition.focus_nutrients), before_water.enabled, before_water.remind_in_hot_weather_only, before_water.note)
-        before_evidence = sorted(str(row.id) for row in (await session.execute(select(RuleEvidenceLink))).scalars().all())
         assert await session.scalar(select(func.count()).select_from(FoodReferenceItem)) == 0
         assert await session.scalar(select(func.count()).select_from(FoodNutrientValue)) == 0
 
@@ -288,6 +302,26 @@ async def test_real_api_contract_nonmutation_and_account_isolation(db_clean, app
     repeated = await app_client.get("/api/v2/nutrition/appearance-suggestions", headers=headers_a)
     assert repeated.json() == payload
 
+    # This is intentionally the first DB read after the GETs: no later setup
+    # write may repair a mutation that the read-only proof is meant to catch.
+    after_preferences, after_evidence = await _account_state(account_a)
+    assert after_preferences == before_preferences
+    assert after_evidence == before_evidence
+
+
+@pytest.mark.asyncio
+async def test_real_api_account_isolation(db_clean, app_client, fake_supabase_user) -> None:
+    account_a = await _seed_account()
+    await _set_preferences(account_a, enabled=True, diet="vegan", focus=["protein"], avoid_foods=["chana"])
+    token_a, _ = fake_supabase_user(user_id=account_a)
+    response_a = await app_client.get(
+        "/api/v2/nutrition/appearance-suggestions",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert response_a.status_code == 200
+    protein_a = next(item for item in response_a.json()["suggestions"] if item["rule_id"].endswith("protein_food_first"))
+    assert "Chana" not in protein_a["food_options"]
+
     account_b = await _seed_account()
     await _set_preferences(account_b, enabled=True, diet="non_vegetarian", focus=["protein"], hydration=False)
     token_b, _ = fake_supabase_user(user_id=account_b)
@@ -299,23 +333,46 @@ async def test_real_api_contract_nonmutation_and_account_isolation(db_clean, app
     payload_b = response_b.json()
     protein_b = next(item for item in payload_b["suggestions"] if item["rule_id"].endswith("protein_food_first"))
     assert "Chana" in protein_b["food_options"]
-    assert "Chana" not in protein["food_options"]
-
-    await _set_preferences(account_a, enabled=False, diet="vegan", focus=["protein"], avoid_foods=["chana"], hydration=True)
-    disabled = await app_client.get("/api/v2/nutrition/appearance-suggestions", headers=headers_a)
-    assert disabled.json()["enabled"] is False and disabled.json()["suggestions"] == []
-    await _set_preferences(account_a, enabled=True, diet="vegan", focus=["protein"], avoid_foods=["chana", "unknown term"], hydration=True)
-
-    async with get_sessionmaker()() as session:
-        after_nutrition = (await session.execute(select(NutritionPreference).where(NutritionPreference.account_id == account_a))).scalar_one()
-        after_water = (await session.execute(select(HydrationPreference).where(HydrationPreference.account_id == account_a))).scalar_one()
-        after_evidence = sorted(str(row.id) for row in (await session.execute(select(RuleEvidenceLink))).scalars().all())
-        assert (after_nutrition.diet, list(after_nutrition.avoid_foods), list(after_nutrition.focus_nutrients), after_water.enabled, after_water.remind_in_hot_weather_only, after_water.note) == before_preferences
-        assert after_evidence == before_evidence
 
 
 @pytest.mark.asyncio
-async def test_runtime_metadata_and_safety_boundaries(db_clean) -> None:
+async def test_disabled_response_has_no_options(db_clean, app_client, fake_supabase_user) -> None:
+    account_id = await _seed_account()
+    await _set_preferences(account_id, enabled=False, diet="vegan", focus=["protein"], avoid_foods=["chana"], hydration=True)
+    token, _ = fake_supabase_user(user_id=account_id)
+    response = await app_client.get(
+        "/api/v2/nutrition/appearance-suggestions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+    assert response.json()["suggestions"] == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_response_safety_sweep_uses_actual_copy(db_clean, app_client, fake_supabase_user) -> None:
+    account_id = await _seed_account()
+    await _set_preferences(account_id, enabled=True, diet="vegan", focus=["protein"], hydration=False)
+    token, _ = fake_supabase_user(user_id=account_id)
+    response = await app_client.get(
+        "/api/v2/nutrition/appearance-suggestions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    visible_strings = []
+    for item in payload.get("suggestions", []):
+        visible_strings.extend([item.get("title", ""), item.get("body", "")])
+        visible_strings.extend(item.get("food_options", []))
+    visible_strings.extend(payload.get("boundaries", []))
+    visible_strings.extend([payload.get("disclaimer", ""), payload.get("message", "")])
+    visible = " ".join(value for group in visible_strings for value in (group if isinstance(group, list) else [group]) if isinstance(value, str)).casefold()
+    forbidden = ("deficiency", "diagnosis", "treatment", "cure", "prescription", "therapeutic effect", "high protein", "protein-rich", "best protein source", "grams/day", "mg/day", "litres/day", "calorie target", "weight loss", "weight gain", "bmi")
+    assert not any(re.search(rf"(?<![a-z]){re.escape(term)}(?![a-z])", visible) for term in forbidden)
+
+
+@pytest.mark.asyncio
+async def test_runtime_metadata_and_zero_composition_rows(db_clean) -> None:
     account_id = await _seed_account()
     async with get_sessionmaker()() as session:
         from app.domains.nutrition.models import FoodCompositionDataset
@@ -336,10 +393,16 @@ async def test_runtime_metadata_and_safety_boundaries(db_clean) -> None:
     for name in ("preferences.py", "food_options.py", "guidance.py"):
         source = (nutrition_dir / name).read_text(encoding="utf-8")
         assert "FoodReferenceItem" not in source and "FoodNutrientValue" not in source
-    option_source = " ".join(
-        (nutrition_dir / name).read_text(encoding="utf-8").casefold()
-        for name in ("food_options.py",)
-    )
-    option_source += " ideas use saved diet and avoid-food preferences those preferences are not medical restriction inference"
-    forbidden = ("deficiency", "diagnosis", "treatment", "cure", "prescription", "therapeutic effect", "high protein", "protein-rich", "best protein source", "grams/day", "mg/day", "litres/day", "calorie target", "weight loss", "weight gain", "bmi")
-    assert not any(re.search(rf"(?<![a-z]){re.escape(term)}(?![a-z])", option_source) for term in forbidden)
+
+
+def test_food_option_selection_has_no_observation_care_or_inventory_inputs() -> None:
+    from app.domains.nutrition import food_options, guidance
+
+    builder_parameters = set(inspect.signature(guidance.build_nutrition_guidance).parameters)
+    resolver_parameters = set(inspect.signature(food_options.options_for_rule).parameters)
+    forbidden_parameters = {"observation", "user_reported_observation", "adherence", "routine_adherence", "care", "inventory", "inventory_item"}
+    assert not builder_parameters.intersection(forbidden_parameters)
+    assert not resolver_parameters.intersection(forbidden_parameters)
+    for module in (guidance, food_options):
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert not any(term in source for term in ("UserReportedObservation", "RoutineAdherence", "InventoryItem"))
