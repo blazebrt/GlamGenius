@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.nutrition.food_options import NUTRITION_FOOD_OPTIONS_VERSION
 from app.domains.nutrition.guidance import build_nutrition_guidance, public_nutrition_guidance
 from app.domains.nutrition.preferences import diet_label
-from app.domains.nutrition.safety import NUTRITION_DISCLAIMER
+from app.domains.nutrition.safety import (
+    NUTRITION_BOUNDARIES,
+    NUTRITION_DISCLAIMER,
+    NUTRITION_HYDRATION_NO_TARGET,
+)
 from app.domains.nutrition.schemas import HydrationPreferencePatch, NutritionPreferencePatch
 from app.domains.planning import context as planning_context
 from app.domains.routines.models import HydrationPreference, NutritionPreference
@@ -72,7 +76,7 @@ def serialize_hydration_preference(row: HydrationPreference) -> dict[str, Any]:
         "enabled": row.enabled,
         "remind_in_hot_weather_only": row.remind_in_hot_weather_only,
         "note": row.note,
-        "no_target": "We do not set a litre target. That would be a health instruction, and this is not that kind of app.",
+        "no_target": NUTRITION_HYDRATION_NO_TARGET,
     }
 
 
@@ -112,7 +116,7 @@ async def nutrition_suggestions(
         "food_options_version": NUTRITION_FOOD_OPTIONS_VERSION,
         "food_first": True, "hydration_enabled": hydration.enabled,
         "disclaimer": NUTRITION_DISCLAIMER,
-        "boundaries": ["food context, not a meal plan", "ideas use saved diet and avoid-food preferences", "those preferences are not medical restriction inference", "no nutrient totals or individual targets", "no medical or supplement advice"],
+        "boundaries": list(NUTRITION_BOUNDARIES),
     })
     return payload
 
