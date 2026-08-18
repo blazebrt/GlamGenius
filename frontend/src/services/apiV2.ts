@@ -1395,12 +1395,10 @@ export interface SupplementRow {
 
 export interface NutritionSuggestion {
   rule_id: string;
-  nutrient: string;
-  display_name: string;
-  appearance_context: string;
-  foods: string[];
-  note: string;
-  climate_note?: string;
+  rule_version: string;
+  title: string;
+  body: string;
+  trigger_codes: string[];
 }
 
 export interface ImproveOverview {
@@ -1520,6 +1518,7 @@ export const getSupplementsSummary = async (): Promise<{
 
 export const getNutritionSuggestions = async (): Promise<{
   enabled: boolean; diet?: Diet; diet_label?: string;
+  guidance_version?: string; ruleset_version?: string; fingerprint?: string; food_first?: boolean;
   suggestions: NutritionSuggestion[]; boundaries?: string[];
   disclaimer: string; message?: string;
 }> => (await api.get(`${V2}/nutrition/appearance-suggestions`)).data;

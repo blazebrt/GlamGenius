@@ -198,6 +198,13 @@ async def assert_rule_exists(
         if row is None or row.domain != domain or row.rule_version != rule_version:
             raise EvidenceRuleResolutionError(f"unknown routine guidance rule {rule_id}/{rule_version}")
         return
+    if rule_kind == "nutrition_context":
+        from app.domains.nutrition.guidance_rules import NUTRITION_GUIDANCE_RULE_BY_ID
+
+        row = NUTRITION_GUIDANCE_RULE_BY_ID.get(rule_id)
+        if row is None or row.domain != domain or row.rule_kind != rule_kind or row.rule_version != rule_version:
+            raise EvidenceRuleResolutionError(f"unknown nutrition rule {rule_id}/{rule_version}")
+        return
     raise EvidenceRuleResolutionError(f"unsupported evidence rule kind {rule_kind}")
 
 

@@ -32,10 +32,11 @@ from app.domains.care import simplification as care_simplification
 from app.domains.care import snapshot as care_snapshot
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryAttribute, InventoryItem
+from app.domains.nutrition.guidance import build_nutrition_guidance, public_nutrition_guidance
 from app.domains.planning import clock
 from app.domains.planning import context as planning_context
 from app.domains.profile import service as profile_service
-from app.domains.routines import adherence, compiler, explanation, nutrition, parser, perfume, selection, shelf
+from app.domains.routines import adherence, compiler, explanation, parser, perfume, selection, shelf
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import (
     CARE_EXPERIENCE_FEEDBACK_VERSION,
@@ -1600,23 +1601,28 @@ async def nutrition_suggestions(
         }
 
     hydration = await hydration_preference(session, account_id)
-    context = await shelf.gather(session, account_id=account_id)
-
-    payload = nutrition.suggestions(
-        diet=preference.diet,
-        focus=list(preference.focus_nutrients or []),
-        climate=context.climate,
-        hydration_enabled=hydration.enabled,
+    day_context = await planning_context.gather(session, account_id=account_id)
+    climate = day_context.climate
+    guidance = await build_nutrition_guidance(
+        session,
+        nutrition_enabled=bool(preference.enabled),
+        protein_focus="protein" in (preference.focus_nutrients or []),
+        hydration_enabled=bool(hydration.enabled),
+        hot_weather=(
+            getattr(climate, "temperature_band", None) == "hot"
+            or getattr(climate, "moisture_regime", None) == "humid"
+            or getattr(climate, "condition", None) in {"hot", "humid"}
+        ),
+        hot_weather_only=bool(hydration.remind_in_hot_weather_only),
     )
-    avoid = {row.lower() for row in (preference.avoid_foods or [])}
-    if avoid:
-        for row in payload["suggestions"]:
-            row["foods"] = [
-                food for food in row["foods"]
-                if not any(term in food.lower() for term in avoid)
-            ]
-    payload["enabled"] = True
-    payload["hydration_enabled"] = hydration.enabled
+    payload = public_nutrition_guidance(guidance)
+    diet_labels = {"vegan": "vegan", "vegetarian": "vegetarian", "jain": "Jain", "eggetarian": "eggetarian", "pescatarian": "pescatarian", "non_vegetarian": "non-vegetarian"}
+    payload.update({
+        "enabled": True, "diet": preference.diet, "diet_label": diet_labels.get(preference.diet, preference.diet),
+        "food_first": True, "hydration_enabled": hydration.enabled,
+        "disclaimer": NUTRITION_DISCLAIMER,
+        "boundaries": ["food context, not a meal plan", "no nutrient totals or individual targets", "no medical or supplement advice"],
+    })
     return payload
 
 

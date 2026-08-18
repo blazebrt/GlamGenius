@@ -51,8 +51,6 @@ export default function TodayScreen() {
     }
     if (perfumeResult.status === 'fulfilled') setPerfume(perfumeResult.value.recommendations[0] ?? null);
     if (foodResult.status === 'fulfilled') {
-      // Off unless the user turned it on, and the server says so rather than
-      // the client guessing.
       setFood(foodResult.value.enabled ? foodResult.value.suggestions[0] ?? null : null);
     }
   }, []);

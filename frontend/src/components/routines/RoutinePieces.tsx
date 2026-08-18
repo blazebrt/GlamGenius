@@ -254,23 +254,10 @@ export function BoundaryNotice({ message }: { message: string }) {
 }
 
 export function NutritionCard({ suggestion }: { suggestion: NutritionSuggestion }) {
-  if (!suggestion.foods.length) {
-    // Every source excluded by this diet. Say so rather than dropping it.
-    return (
-      <View style={styles.card} accessibilityLabel={suggestion.display_name}>
-        <Text style={styles.cardTitle}>{suggestion.display_name}</Text>
-        <Text style={styles.body}>{suggestion.appearance_context}</Text>
-        <Text style={styles.evidence}>{suggestion.note}</Text>
-      </View>
-    );
-  }
   return (
-    <View style={styles.card} accessibilityLabel={suggestion.display_name}>
-      <Text style={styles.cardTitle}>{suggestion.display_name}</Text>
-      <Text style={styles.body}>{suggestion.appearance_context}</Text>
-      <Text style={styles.foods}>{suggestion.foods.join(' · ')}</Text>
-      {!!suggestion.note && <Text style={styles.evidence}>{suggestion.note}</Text>}
-      {!!suggestion.climate_note && <Text style={styles.climate}>{suggestion.climate_note}</Text>}
+    <View style={styles.card} accessibilityLabel={suggestion.title}>
+      <Text style={styles.cardTitle}>{suggestion.title}</Text>
+      <Text style={styles.body}>{suggestion.body}</Text>
     </View>
   );
 }

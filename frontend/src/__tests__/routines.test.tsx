@@ -269,23 +269,23 @@ describe('Supplements', () => {
 
 describe('Food context', () => {
   const suggestion = (overrides: Partial<NutritionSuggestion> = {}): NutritionSuggestion => ({
-    rule_id: 'nutrition.protein', nutrient: 'protein', display_name: 'Protein',
-    appearance_context: 'Hair and nails are largely protein.',
-    foods: ['dal — moong, masoor, toor', 'paneer', 'curd or dahi'],
-    note: 'Spread across meals is the usual suggestion.', ...overrides,
+    rule_id: 'nutrition.pattern.protein_food_first', rule_version: 'v1',
+    title: 'Keep protein food-first',
+    body: 'Start with ordinary foods that fit your diet.',
+    trigger_codes: ['nutrition_enabled', 'explicit_protein_focus'], ...overrides,
   });
 
-  it('shows Indian foods and never a number', () => {
+  it('shows concise food-context advice and never a number', () => {
     render(<NutritionCard suggestion={suggestion()} />);
-    expect(screen.getByText(/dal — moong, masoor, toor · paneer · curd or dahi/)).toBeTruthy();
+    expect(screen.getByText('Keep protein food-first')).toBeTruthy();
+    expect(screen.getByText(/Start with ordinary foods/)).toBeTruthy();
     expect(screen.queryByText(/calorie|kcal|grams per day/i)).toBeNull();
   });
 
-  it('a nutrient with no sources left for this diet says so rather than vanishing', () => {
-    render(<NutritionCard suggestion={suggestion({
-      foods: [], note: 'The common sources we list are all outside a vegan diet. A dietitian can help.',
-    })} />);
-    expect(screen.getByText(/A dietitian can help/)).toBeTruthy();
+  it('renders only the public title and body fields', () => {
+    render(<NutritionCard suggestion={suggestion()} />);
+    expect(screen.queryByText(/nutrition\.pattern/)).toBeNull();
+    expect(screen.queryByText(/explicit_protein_focus/)).toBeNull();
   });
 
   it('the Today strip stays hidden when food context is off', () => {
