@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import uuid
 from pathlib import Path
 
 import pytest
 from app.domains.inventory.models import InventoryAttribute, InventoryItem
+from app.domains.media.models import MediaAsset
 from app.domains.purchase.candidate_truth import (
     CARE_CANDIDATE_DETAIL_KEYS,
     resolve_care_slot,
@@ -69,6 +72,14 @@ async def _counts(account_id):
                 RecommendationEntitlement.feature == "shopping_evaluation",
             )),
         }
+
+
+async def _candidate(candidate_id):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        return await session.scalar(
+            select(ShoppingCandidate).where(ShoppingCandidate.id == candidate_id)
+        )
 
 
 def test_versions_and_exact_prospective_detail_subset():
@@ -158,6 +169,69 @@ async def test_manual_skin_capture_is_truth_only(app_client, db_clean, registere
 
 
 @pytest.mark.asyncio
+async def test_manual_candidate_corrections_are_applied_and_durable(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    initial = {
+        **CARE_ITEM,
+        "display_name": "Original",
+        "brand": "Original Brand",
+        "subcategory": "cleanser",
+        "details": {"product_type": "cleanser", "purpose": "Original purpose"},
+    }
+    created = await app_client.post(
+        "/api/v2/shopping/candidates/inspect", headers=auth(token),
+        json={"source": "manual", "item": initial, "client_mutation_id": "manual-correction"},
+    )
+    assert created.status_code == 200, created.text
+    candidate_id = created.json()["candidate"]["id"]
+    corrected_details = {
+        "product_type": "serum",
+        "size": "A very long validated Care size description that exceeds forty characters",
+        "purpose": "Corrected purpose",
+        "ingredients_text": "Water, Niacinamide",
+        "active_ingredients": ["niacinamide"],
+    }
+    corrected = await app_client.post(
+        f"/api/v2/shopping/candidates/{candidate_id}/confirm", headers=auth(token),
+        json={
+            "display_name": "Corrected",
+            "brand": "Corrected Brand",
+            "subcategory": "serum",
+            "details": corrected_details,
+            "price": "1299.00",
+            "currency": "usd",
+            "product_url": "https://example.invalid/corrected",
+        },
+    )
+    assert corrected.status_code == 200, corrected.text
+    body = corrected.json()
+    assert body["candidate"]["id"] == candidate_id
+    assert body["candidate"]["category"] == "beauty"
+    assert body["candidate"]["display_name"] == "Corrected"
+    assert body["candidate"]["brand"] == "Corrected Brand"
+    assert body["candidate"]["subcategory"] == "serum"
+    assert body["candidate"]["details"] == corrected_details
+    assert body["candidate"]["price"] == 1299.0
+    assert body["candidate"]["currency"] == "USD"
+    assert body["candidate"]["product_url"] == "https://example.invalid/corrected"
+    assert body["candidate"]["verification_state"] == "user_declared"
+    assert body["facts_trusted"] is True
+    assert body["review_required"] is False
+    persisted = await _candidate(uuid.UUID(candidate_id))
+    assert persisted.size is None
+    assert persisted.details["size"] == corrected_details["size"]
+
+    fetched = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}", headers=auth(token),
+    )
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["candidate"] == body["candidate"]
+    assert (await _counts(account_id))["candidates"] == 1
+
+
+@pytest.mark.asyncio
 async def test_manual_hair_capture_uses_canonical_slot(app_client, db_clean, registered_supabase_user):
     token, account_id = await registered_supabase_user()
     item = {
@@ -233,6 +307,34 @@ async def test_ai_draft_stays_untrusted_at_high_confidence_and_confirm_preserves
     assert body["candidate"]["model_version"] == fake_provider.model
     assert body["candidate"]["prompt_version"] == "v3-05.1"
     assert body["candidate"]["schema_version"] == "v3-05.1"
+    provenance = {
+        key: body["candidate"][key]
+        for key in ("ai_run_id", "extraction_confidence", "model_version", "prompt_version", "schema_version")
+    }
+    second = await app_client.post(
+        f"/api/v2/shopping/candidates/{candidate_id}/confirm", headers=auth(token),
+        json={
+            "display_name": "Second Correction",
+            "brand": "Second Brand",
+            "subcategory": "serum",
+            "details": {
+                "product_type": "serum",
+                "size": "A second long validated Care size description beyond forty characters",
+                "purpose": "Second corrected purpose",
+                "ingredients_text": "Water, Niacinamide",
+                "active_ingredients": ["niacinamide"],
+            },
+        },
+    )
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+    assert second_body["candidate"]["verification_state"] == "confirmed"
+    assert second_body["candidate"]["display_name"] == "Second Correction"
+    assert second_body["candidate"]["brand"] == "Second Brand"
+    assert second_body["candidate"]["details"]["size"].startswith("A second long")
+    assert {key: second_body["candidate"][key] for key in provenance} == provenance
+    persisted = await _candidate(uuid.UUID(candidate_id))
+    assert persisted.size is None
     assert (await _counts(account_id))["inventory"] == 0
 
 
@@ -297,6 +399,82 @@ async def test_screenshot_idempotency_checks_media_before_second_extraction(
     assert different.json()["detail"]["field"] == "client_mutation_id"
     assert fake_provider.calls == calls
     assert (await _counts(account_id))["candidates"] == 1
+
+
+@pytest.mark.asyncio
+async def test_media_replay_cannot_cross_into_care_candidate_inspection(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    token, account_id = await registered_supabase_user()
+    categories = (
+        ("wardrobe", "Use the active Style purchase check"),
+        ("perfumes", "fragrance-specific"),
+        ("supplements", "does not recommend whether to buy supplements"),
+    )
+    before = await _counts(account_id)
+    for index, (category, boundary) in enumerate(categories):
+        factory = get_sessionmaker()
+        media_asset_id = uuid.uuid4()
+        async with factory() as session:
+            session.add(MediaAsset(
+                id=media_asset_id,
+                account_id=account_id,
+                storage_backend="local",
+                storage_key=f"media/{account_id}/{media_asset_id}.png",
+                content_type="image/png",
+                byte_size=1,
+                sha256=hashlib.sha256(b"x").hexdigest(),
+                purpose="photo_analysis",
+            ))
+            session.add(ShoppingCandidate(
+                account_id=account_id,
+                source="photo_extracted",
+                media_asset_id=media_asset_id,
+                category=category,
+                display_name=f"Existing {category}",
+                details={},
+                client_mutation_id=f"shared-key-{index}",
+            ))
+            await session.commit()
+        response = await app_client.post(
+            "/api/v2/shopping/candidates/inspect", headers=auth(token),
+            json={
+                "source": "screenshot",
+                "media_asset_id": str(media_asset_id),
+                "client_mutation_id": f"shared-key-{index}",
+            },
+        )
+        assert response.status_code == 422, response.text
+        assert boundary.lower() in response.json()["detail"]["message"].lower()
+        assert "candidate" not in response.json().get("candidate", {})
+    after = await _counts(account_id)
+    assert after["candidates"] == before["candidates"] + len(categories)
+    for key in ("runs", "evaluations", "factors", "decisions", "entitlement"):
+        assert after[key] == before[key]
+    assert fake_provider.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_long_care_size_stays_out_of_legacy_style_column(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    long_size = "A validated Care size value intentionally longer than forty characters"
+    item = {
+        **CARE_ITEM,
+        "details": {"product_type": "cleanser", "size": long_size, "purpose": "Daily cleansing"},
+    }
+    response = await app_client.post(
+        "/api/v2/shopping/candidates/inspect", headers=auth(token),
+        json={"source": "manual", "item": item, "client_mutation_id": "long-care-size"},
+    )
+    assert response.status_code == 200, response.text
+    candidate_id = response.json()["candidate"]["id"]
+    assert response.json()["candidate"]["details"]["size"] == long_size
+    persisted = await _candidate(uuid.UUID(candidate_id))
+    assert persisted.details["size"] == long_size
+    assert persisted.size is None
+    assert persisted.account_id == account_id
 
 
 @pytest.mark.asyncio

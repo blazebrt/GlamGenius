@@ -70,6 +70,30 @@ def _screenshot_identity_matches(row: ShoppingCandidate, media_asset_id: uuid.UU
     return row.media_asset_id == media_asset_id
 
 
+def _apply_candidate_corrections(
+    row: ShoppingCandidate, body: CarePurchaseCandidateConfirm
+) -> None:
+    """Apply explicit review corrections without changing candidate category."""
+    fields = body.model_fields_set
+    if "display_name" in fields and body.display_name is not None:
+        row.display_name = body.display_name
+    if "brand" in fields:
+        row.brand = body.brand
+    if "subcategory" in fields:
+        row.subcategory = body.subcategory
+    if "details" in fields and body.details is not None:
+        row.details = validate_care_candidate_details(row.category, body.details)
+    if "price" in fields:
+        row.price = body.price
+    if "currency" in fields and body.currency is not None:
+        row.currency = body.currency.upper()
+    if "product_url" in fields:
+        row.product_url = body.product_url
+    # Care facts belong only in the V3-05.1 JSONB container.  This clears any
+    # legacy value on rows created by an earlier implementation as well.
+    row.size = None
+
+
 async def _candidate_for_key(
     session: AsyncSession, account_id: uuid.UUID, client_mutation_id: str | None
 ) -> ShoppingCandidate | None:
@@ -97,6 +121,7 @@ async def inspect_purchase_candidate(
     if existing is not None:
         if body.media_asset_id is not None:
             if _screenshot_identity_matches(existing, body.media_asset_id):
+                _require_care(existing.category)
                 return existing
         elif body.item is not None and _manual_identity_matches(existing, body.item):
             return existing
@@ -112,7 +137,6 @@ async def inspect_purchase_candidate(
             subcategory=body.item.subcategory,
             display_name=body.item.display_name,
             brand=body.item.brand,
-            size=details.get("size"),
             details=details,
             price=body.item.price,
             currency=body.item.currency.upper(),
@@ -162,7 +186,6 @@ async def inspect_purchase_candidate(
         subcategory=extracted.subcategory,
         display_name=extracted.display_name,
         brand=extracted.brand,
-        size=details.get("size"),
         details=details,
         price=extracted.price,
         currency=(extracted.currency or "INR").upper(),
@@ -205,28 +228,9 @@ async def confirm_care_purchase_candidate(
 ) -> ShoppingCandidate:
     row = await owned_purchase_candidate(session, account_id, candidate_id)
     _require_care(row.category)
-    # Manual candidates are already explicit user authority and do not need a
-    # redundant confirmation transition.
-    if row.verification_state == "user_declared":
-        return row
-
-    if body.details is not None:
-        row.details = validate_care_candidate_details(row.category, body.details)
-        row.size = row.details.get("size")
-    fields = body.model_fields_set
-    if "display_name" in fields and body.display_name is not None:
-        row.display_name = body.display_name
-    if "brand" in fields:
-        row.brand = body.brand
-    if "subcategory" in fields:
-        row.subcategory = body.subcategory
-    if "price" in fields:
-        row.price = body.price
-    if "currency" in fields and body.currency is not None:
-        row.currency = body.currency.upper()
-    if "product_url" in fields:
-        row.product_url = body.product_url
-    row.verification_state = "confirmed"
+    _apply_candidate_corrections(row, body)
+    if row.verification_state == "draft":
+        row.verification_state = "confirmed"
     row.uncertain_fields = []
     row.updated_at = utcnow()
     await session.flush()
