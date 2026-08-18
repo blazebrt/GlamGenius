@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.inventory.models import InventoryItem
 from app.domains.media import service as media_service
 from app.domains.media.models import MEDIA_PURPOSE_INVENTORY
+from app.domains.purchase.contract import boundary_message, resolve_purchase_strategy
 from app.domains.recommendation import candidates as candidate_stage
 from app.domains.recommendation import compatibility as compat
 from app.domains.recommendation import context as context_stage
@@ -429,9 +430,22 @@ async def evaluate_purchase(
         payload["replayed"] = True
         return payload
 
-    run = await service.start_run(session, account_id, kind="shopping_evaluation")
+    # Resolve the strategy before any shopping run, candidate persistence,
+    # entitlement, AI explanation, or ROI work.  Screenshot extraction is the
+    # one deliberate exception: its gateway provenance may be recorded before
+    # the category is known.
+    candidate_row, extraction_notes = await _resolve_shopping_candidate(
+        session, account_id=account_id, account_id_str=account_id_str, body=body
+    )
+    strategy = resolve_purchase_strategy(candidate_row.category)
+    if strategy is None or strategy.state != "active" or strategy.key != "style_purchase":
+        raise ValidationFailedError(
+            boundary_message(candidate_row.category, strategy), field="item.category"
+        )
 
-    candidate_row, extraction_notes = await _resolve_shopping_candidate(session, account_id=account_id, account_id_str=account_id_str, body=body, run_id=run.id)
+    run = await service.start_run(session, account_id, kind="shopping_evaluation")
+    session.add(candidate_row)
+    await session.flush()
 
     owned, drafts = await context_stage.confirmed_inventory(session, account_id)
     attributes = await context_stage.confirmed_attributes(session, account_id)
@@ -506,7 +520,7 @@ async def evaluate_purchase(
 
 
 async def _resolve_shopping_candidate(
-    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, body: ShoppingEvaluateRequest, run_id: uuid.UUID
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, body: ShoppingEvaluateRequest
 ) -> tuple[ShoppingCandidate, list[str]]:
     """Build the candidate row, reading a screenshot when one was sent."""
     notes: list[str] = []
@@ -553,6 +567,4 @@ async def _resolve_shopping_candidate(
             product_url=body.product_url or item.product_url,
             verification_state="user_declared", client_mutation_id=body.client_mutation_id,
         )
-    session.add(row)
-    await session.flush()
     return row, notes
