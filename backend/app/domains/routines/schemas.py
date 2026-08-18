@@ -17,7 +17,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.domains.nutrition.preferences import SUPPORTED_DIETS, SUPPORTED_FOCUS_KEYS
+from app.domains.nutrition.schemas import HydrationPreferencePatch, NutritionPreferencePatch
 from app.domains.routines.compiler import ROUTINE_KINDS
 from app.domains.routines.ontology import ALL_SLOTS
 from app.domains.routines.parser import SOURCE_EXTRACTED, SOURCE_LABEL, SOURCE_USER
@@ -169,50 +169,6 @@ class PerfumeQuery(BaseModel):
     weather: Literal[CLIMATES] | None = None  # type: ignore[valid-type]
     time_of_day: Literal[TIMES_OF_DAY] | None = None  # type: ignore[valid-type]
     season: Literal[SEASONS] | None = None  # type: ignore[valid-type]
-
-
-# --- Nutrition and hydration --------------------------------------------------
-
-
-class NutritionPreferencePatch(BaseModel):
-    """What this person eats. A constraint on suggestions, not a suggestion."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    diet: Literal[SUPPORTED_DIETS] | None = None  # type: ignore[valid-type]
-    avoid_foods: list[str] | None = Field(default=None, max_length=40)
-    focus_nutrients: list[str] | None = Field(default=None, max_length=12)
-    enabled: bool | None = None
-
-    @field_validator("focus_nutrients")
-    @classmethod
-    def _known(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
-            return None
-        unknown = [row for row in value if row not in SUPPORTED_FOCUS_KEYS]
-        if unknown:
-            raise ValueError(
-                f"We have no food context for: {', '.join(unknown)}. "
-                f"Choose from: {', '.join(sorted(SUPPORTED_FOCUS_KEYS))}."
-            )
-        return list(dict.fromkeys(value))
-
-    @field_validator("avoid_foods")
-    @classmethod
-    def _clean_foods(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
-            return None
-        return [" ".join(row.split())[:80] for row in value if row and row.strip()]
-
-
-class HydrationPreferencePatch(BaseModel):
-    """Hydration reminders. No target volume — that would be a health instruction."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool | None = None
-    remind_in_hot_weather_only: bool | None = None
-    note: str | None = Field(default=None, max_length=240)
 
 
 # --- Supplements --------------------------------------------------------------

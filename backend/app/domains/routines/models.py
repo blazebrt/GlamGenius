@@ -4,9 +4,10 @@ Two kinds of table live here, and the difference matters.
 
 **Reviewed reference data** — ``ingredients``, ``ingredient_aliases``,
 ``ingredient_rules``, ``compatibility_rules``, ``contraindication_rules``,
-``routine_templates``, ``perfume_context_rules``, ``appearance_nutrition_rules``.
+``routine_templates``, ``perfume_context_rules``, and the historical
+``appearance_nutrition_rules`` compatibility table.
 These have no ``account_id``. They are the written-down, human-reviewed body of
-what the engine knows, seeded from ``ontology.py`` and ``nutrition.py``. Every
+what the engine knows, seeded from reviewed domain seed modules. Every
 warning the product shows carries the ``rule_id`` of a row in one of them, which
 is what makes "no invented safety rules" checkable rather than merely promised.
 
@@ -169,11 +170,7 @@ class PerfumeContextRule(UUIDPrimaryKey, TimestampMixin, Base):
 
 
 class AppearanceNutritionRule(UUIDPrimaryKey, TimestampMixin, Base):
-    """A nutrient, what it is associated with, and everyday Indian foods.
-
-    Association only. No amounts, no targets, and nothing that would let the
-    product claim someone is short of anything.
-    """
+    """Historical compatibility model; not runtime V3 Nutrition authority."""
 
     __tablename__ = "appearance_nutrition_rules"
 

@@ -1,6 +1,8 @@
 """V3-04.0 authority, rights, and empty-composition foundation tests."""
 from __future__ import annotations
 
+import importlib
+import uuid
 from decimal import Decimal
 from pathlib import Path
 
@@ -13,11 +15,13 @@ from app.domains.evidence.nutrition_seed import (
     RDA_EAR_SOURCE_KEY,
 )
 from app.domains.evidence.nutrition_seed import run as run_nutrition_authority_seed
+from app.domains.identity import service as identity
 from app.domains.nutrition import (
     FOOD_COMPOSITION_METADATA_SEED_VERSION,
     FOOD_COMPOSITION_SCHEMA_VERSION,
     NUTRITION_AUTHORITY_EVIDENCE_SEED_VERSION,
 )
+from app.domains.nutrition import service as nutrition_service
 from app.domains.nutrition.models import FoodCompositionDataset, FoodNutrientValue, FoodReferenceItem
 from app.domains.nutrition.rights import (
     FoodCompositionImportNotAllowed,
@@ -26,7 +30,7 @@ from app.domains.nutrition.rights import (
 )
 from app.domains.nutrition.seed import run as run_food_composition_seed
 from app.domains.reference import SeedVersionRecord
-from app.domains.routines import nutrition as legacy_nutrition
+from app.domains.routines.models import HydrationPreference, NutritionPreference
 from app.shared.database.registry import Base
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select
@@ -248,14 +252,25 @@ async def test_new_reference_tables_are_global_and_no_food_dump_is_committed():
     assert not any(path.suffix.lower() in {".csv", ".json", ".sql"} for path in nutrition_dir.rglob("*"))
 
 
-async def test_legacy_nutrition_authority_and_output_path_are_untouched():
+async def test_legacy_nutrition_module_is_removed_and_first_class_path_is_authority(db_clean, app_client, fake_supabase_user):
     source = Path(__file__).parents[1] / "app" / "domains" / "routines" / "nutrition.py"
-    text = source.read_text(encoding="utf-8")
-    assert "FoodCompositionDataset" not in text
-    assert "FoodReferenceItem" not in text
-    assert "FoodNutrientValue" not in text
-    payload = legacy_nutrition.suggestions(diet="vegetarian", focus=["protein"], hydration_enabled=False)
-    assert payload["diet"] == "vegetarian"
-    assert payload["suggestions"][0]["rule_id"] == "nutrition.protein"
-    assert "eggs" not in payload["suggestions"][0]["foods"]
-    assert payload["food_first"] is True
+    assert not source.exists()
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.domains.routines.nutrition")
+    assert callable(nutrition_service.nutrition_suggestions)
+
+    account_id = uuid.uuid4()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await run_seed(session)
+        await identity.register_account(session, account_id)
+        session.add(NutritionPreference(account_id=account_id))
+        session.add(HydrationPreference(account_id=account_id))
+        await session.commit()
+    token, _ = fake_supabase_user(user_id=account_id)
+    response = await app_client.get(
+        "/api/v2/nutrition/appearance-suggestions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["suggestions"] == []
