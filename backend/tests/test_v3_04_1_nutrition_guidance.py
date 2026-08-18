@@ -17,6 +17,7 @@ from app.domains.evidence.nutrition_guidance_seed import (
 )
 from app.domains.evidence.service import EvidenceRuleResolutionError, RuleEvidenceAssessment, assert_rule_exists
 from app.domains.identity import service as identity
+from app.domains.nutrition import service
 from app.domains.nutrition.evidence_applicability import (
     NutritionApplicabilitySignals,
     resolve_nutrition_evidence_applicability,
@@ -25,8 +26,7 @@ from app.domains.nutrition.guidance_rules import NUTRITION_GUIDANCE_RULES
 from app.domains.nutrition.models import FoodCompositionDataset, FoodNutrientValue, FoodReferenceItem
 from app.domains.planning.environment import resolve_climate_context
 from app.domains.reference import SeedVersionRecord
-from app.domains.routines import nutrition as legacy_nutrition
-from app.domains.routines import service
+from app.domains.routines import shelf
 from app.domains.routines.models import HydrationPreference, NutritionPreference
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select
@@ -131,10 +131,8 @@ def _ids(payload: dict) -> list[str]:
 async def test_real_service_and_api_trigger_matrix_and_legacy_deactivation(db_clean, monkeypatch, app_client, fake_supabase_user):
     account_id = await _seed_account()
 
-    def forbidden(*args, **kwargs):
-        raise AssertionError("legacy nutrition engine must not execute")
-
-    monkeypatch.setattr(legacy_nutrition, "suggestions", forbidden)
+    with pytest.raises(ModuleNotFoundError):
+        __import__("app.domains.routines.nutrition")
     await _set_preferences(account_id, enabled=False)
     assert (await _suggestions(account_id))["suggestions"] == []
     await _set_preferences(account_id, enabled=True)
@@ -162,7 +160,7 @@ async def test_real_service_and_api_trigger_matrix_and_legacy_deactivation(db_cl
         legacy_called = True
         return SimpleNamespace(climate="hot")
 
-    monkeypatch.setattr(service.shelf, "gather", legacy_shelf)
+    monkeypatch.setattr(shelf, "gather", legacy_shelf)
     assert _ids(await _suggestions(account_id, temperature_band="unknown", moisture_regime="unknown", condition=None)) == ["nutrition.pattern.balanced_variety"]
     assert not legacy_called
     await _set_preferences(

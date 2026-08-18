@@ -29,6 +29,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.domains.nutrition.safety import NUTRITION_DISCLAIMER  # noqa: F401
+
 PROFESSIONAL_BOUNDARY = (
     "This is outside what GlamGenius can help with. We track what you own and how you use it — "
     "we are not able to look at symptoms, conditions or medicines. Please talk to a doctor, "
@@ -44,12 +46,6 @@ SUPPLEMENT_DISCLAIMER = (
 # diagnosing anything" — trips the banned-term sweep below, and weakening the
 # sweep so a disclaimer can pass would weaken it for everything else. The
 # promise is the same; the wording just avoids naming what it rules out.
-NUTRITION_DISCLAIMER = (
-    "General food context related to appearance. Not a diet plan, nothing here counts or "
-    "totals what you eat, and it is not a way of working out what is wrong. "
-    "Talk to a doctor or dietitian for anything health-related."
-)
-
 ROUTINE_DISCLAIMER = (
     "A routine built from products you told us you own. Not medical advice, and not a treatment plan."
 )

@@ -32,9 +32,6 @@ from app.domains.care import simplification as care_simplification
 from app.domains.care import snapshot as care_snapshot
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryAttribute, InventoryItem
-from app.domains.nutrition.food_options import NUTRITION_FOOD_OPTIONS_VERSION
-from app.domains.nutrition.guidance import build_nutrition_guidance, public_nutrition_guidance
-from app.domains.nutrition.preferences import diet_label
 from app.domains.planning import clock
 from app.domains.planning import context as planning_context
 from app.domains.profile import service as profile_service
@@ -43,8 +40,6 @@ from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import (
     CARE_EXPERIENCE_FEEDBACK_VERSION,
     CareExperienceFeedback,
-    HydrationPreference,
-    NutritionPreference,
     ProductExpiryEvent,
     ProductIngredient,
     Routine,
@@ -57,17 +52,14 @@ from app.domains.routines.models import (
 from app.domains.routines.ontology import INGREDIENT_BY_KEY, ONTOLOGY_VERSION
 from app.domains.routines.rules import ShelfProduct
 from app.domains.routines.safety import (
-    NUTRITION_DISCLAIMER,
     PROFESSIONAL_BOUNDARY,
     ROUTINE_DISCLAIMER,
     boundary_for,
 )
 from app.domains.routines.schemas import (
     CareExperienceFeedbackInput,
-    HydrationPreferencePatch,
     IngredientCheckRequest,
     IngredientConfirmRequest,
-    NutritionPreferencePatch,
     ObservationInput,
     RoutineGenerateRequest,
     RoutineStepComplete,
@@ -225,71 +217,6 @@ def _care_run_inputs(
         "home_care_item_count": len(home_care_set.items),
         "weather_snapshot_id": str(day_context.weather_snapshot_id) if day_context.weather_snapshot_id else None,
         "air_quality_snapshot_id": str(day_context.air_quality_snapshot_id) if day_context.air_quality_snapshot_id else None,
-    }
-
-
-# --- Preferences --------------------------------------------------------------
-
-
-async def nutrition_preference(session: AsyncSession, account_id: uuid.UUID) -> NutritionPreference:
-    row = (await session.execute(
-        select(NutritionPreference).where(NutritionPreference.account_id == account_id)
-    )).scalar_one_or_none()
-    if row is None:
-        # Off by default. Food context is opt-in — nobody gets nutrition
-        # suggestions because they catalogued a moisturiser.
-        row = NutritionPreference(account_id=account_id)
-        session.add(row)
-        await session.flush()
-    return row
-
-
-async def hydration_preference(session: AsyncSession, account_id: uuid.UUID) -> HydrationPreference:
-    row = (await session.execute(
-        select(HydrationPreference).where(HydrationPreference.account_id == account_id)
-    )).scalar_one_or_none()
-    if row is None:
-        row = HydrationPreference(account_id=account_id)
-        session.add(row)
-        await session.flush()
-    return row
-
-
-async def patch_nutrition_preference(
-    session: AsyncSession, account_id: uuid.UUID, body: NutritionPreferencePatch
-) -> dict[str, Any]:
-    row = await nutrition_preference(session, account_id)
-    for field in ("diet", "avoid_foods", "focus_nutrients", "enabled"):
-        value = getattr(body, field)
-        if value is not None:
-            setattr(row, field, value)
-    return serialize_nutrition_preference(row)
-
-
-async def patch_hydration_preference(
-    session: AsyncSession, account_id: uuid.UUID, body: HydrationPreferencePatch
-) -> dict[str, Any]:
-    row = await hydration_preference(session, account_id)
-    for field in ("enabled", "remind_in_hot_weather_only", "note"):
-        value = getattr(body, field)
-        if value is not None:
-            setattr(row, field, value)
-    return serialize_hydration_preference(row)
-
-
-def serialize_nutrition_preference(row: NutritionPreference) -> dict[str, Any]:
-    return {
-        "diet": row.diet, "avoid_foods": list(row.avoid_foods or []),
-        "focus_nutrients": list(row.focus_nutrients or []), "enabled": row.enabled,
-    }
-
-
-def serialize_hydration_preference(row: HydrationPreference) -> dict[str, Any]:
-    return {
-        "enabled": row.enabled,
-        "remind_in_hot_weather_only": row.remind_in_hot_weather_only,
-        "note": row.note,
-        "no_target": "We do not set a litre target. That would be a health instruction, and this is not that kind of app.",
     }
 
 
@@ -1580,54 +1507,6 @@ def supplement_question(text: str) -> dict[str, Any]:
             "message": "We track supplements as inventory — name, brand, dates and how often you take them.",
         }
     return boundary.as_dict()
-
-
-# --- Nutrition -------------------------------------------------------------------
-
-
-async def nutrition_suggestions(
-    session: AsyncSession, *, account_id: uuid.UUID
-) -> dict[str, Any]:
-    """Appearance-related food context, filtered to what this person eats.
-
-    Off unless the user turned it on. Nobody gets food suggestions because they
-    catalogued a shampoo.
-    """
-    preference = await nutrition_preference(session, account_id)
-    if not preference.enabled:
-        return {
-            "enabled": False,
-            "suggestions": [],
-            "message": "Food suggestions are off. You can turn them on if you want them.",
-            "disclaimer": NUTRITION_DISCLAIMER,
-        }
-
-    hydration = await hydration_preference(session, account_id)
-    day_context = await planning_context.gather(session, account_id=account_id)
-    climate = day_context.climate
-    guidance = await build_nutrition_guidance(
-        session,
-        nutrition_enabled=bool(preference.enabled),
-        protein_focus="protein" in (preference.focus_nutrients or []),
-        diet=preference.diet,
-        avoid_foods=tuple(preference.avoid_foods or ()),
-        hydration_enabled=bool(hydration.enabled),
-        hot_weather=(
-            getattr(climate, "temperature_band", None) == "hot"
-            or getattr(climate, "moisture_regime", None) == "humid"
-            or getattr(climate, "condition", None) in {"hot", "humid"}
-        ),
-        hot_weather_only=bool(hydration.remind_in_hot_weather_only),
-    )
-    payload = public_nutrition_guidance(guidance)
-    payload.update({
-        "enabled": True, "diet": preference.diet, "diet_label": diet_label(preference.diet),
-        "food_options_version": NUTRITION_FOOD_OPTIONS_VERSION,
-        "food_first": True, "hydration_enabled": hydration.enabled,
-        "disclaimer": NUTRITION_DISCLAIMER,
-        "boundaries": ["food context, not a meal plan", "ideas use saved diet and avoid-food preferences", "those preferences are not medical restriction inference", "no nutrient totals or individual targets", "no medical or supplement advice"],
-    })
-    return payload
 
 
 # --- Observations -----------------------------------------------------------------

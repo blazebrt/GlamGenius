@@ -26,8 +26,8 @@ from app.domains.nutrition.preferences import (
     SUPPORTED_FOCUS_KEYS,
     diet_label,
 )
+from app.domains.nutrition.schemas import NutritionPreferencePatch
 from app.domains.routines.models import HydrationPreference, NutritionPreference
-from app.domains.routines.schemas import NutritionPreferencePatch
 from app.shared.database.sql import get_sessionmaker
 from pydantic import ValidationError
 from sqlalchemy import func, select

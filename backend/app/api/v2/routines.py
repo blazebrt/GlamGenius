@@ -12,14 +12,14 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.nutrition import service as nutrition_service
+from app.domains.nutrition.schemas import HydrationPreferencePatch, NutritionPreferencePatch
 from app.domains.recommendation.occasions import OCCASION_KEYS
 from app.domains.routines import service
 from app.domains.routines.schemas import (
     CareExperienceFeedbackInput,
-    HydrationPreferencePatch,
     IngredientCheckRequest,
     IngredientConfirmRequest,
-    NutritionPreferencePatch,
     ObservationInput,
     PerfumeQuery,
     RoutineGenerateRequest,
@@ -245,7 +245,7 @@ async def nutrition_suggestions(
     session: AsyncSession = Depends(get_session),
 ):
     """Appearance-related food context, filtered to what you eat."""
-    return await service.nutrition_suggestions(session, account_id=current.account_id)
+    return await nutrition_service.nutrition_suggestions(session, account_id=current.account_id)
 
 
 @router.get("/nutrition/preferences")
@@ -253,9 +253,9 @@ async def get_nutrition_preferences(
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    row = await service.nutrition_preference(session, current.account_id)
+    row = await nutrition_service.nutrition_preference(session, current.account_id)
     await session.commit()
-    return service.serialize_nutrition_preference(row)
+    return nutrition_service.serialize_nutrition_preference(row)
 
 
 @router.patch("/nutrition/preferences")
@@ -264,7 +264,7 @@ async def patch_nutrition_preferences(
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await service.patch_nutrition_preference(session, current.account_id, body)
+    result = await nutrition_service.patch_nutrition_preference(session, current.account_id, body)
     await session.commit()
     return result
 
@@ -274,9 +274,9 @@ async def get_hydration_preferences(
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    row = await service.hydration_preference(session, current.account_id)
+    row = await nutrition_service.hydration_preference(session, current.account_id)
     await session.commit()
-    return service.serialize_hydration_preference(row)
+    return nutrition_service.serialize_hydration_preference(row)
 
 
 @router.patch("/nutrition/hydration")
@@ -285,7 +285,7 @@ async def patch_hydration_preferences(
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await service.patch_hydration_preference(session, current.account_id, body)
+    result = await nutrition_service.patch_hydration_preference(session, current.account_id, body)
     await session.commit()
     return result
 

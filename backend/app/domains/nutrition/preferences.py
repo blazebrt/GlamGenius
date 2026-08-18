@@ -54,9 +54,6 @@ def normalize_diet(value: str | None) -> str:
     return normalized if normalized in SUPPORTED_DIETS else normalized
 
 
-normalise_diet = normalize_diet
-
-
 def diet_label(value: str | None) -> str:
     return _DIET_LABELS.get(value or "", value or "non-vegetarian")
 
@@ -68,5 +65,4 @@ __all__ = [
     "SUPPORTED_FOCUS_KEYS",
     "diet_label",
     "normalize_diet",
-    "normalise_diet",
 ]

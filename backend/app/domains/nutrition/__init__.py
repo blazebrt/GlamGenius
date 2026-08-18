@@ -1,7 +1,12 @@
-"""Nutrition authority and food-composition provenance foundation.
+"""Nutrition owns opt-in deterministic guidance and preference-safe food context.
 
-This domain owns global reference metadata and the future food-composition
-storage contract. It deliberately does not own user recommendations.
+It also owns preference taxonomy, food-composition provenance metadata, and the
+composition rights gate. Evidence owns source provenance, claims, and rule
+support; Planning owns normalized environment context.
+
+Nutrition does not provide diagnosis, therapeutic diets, deficiency assessment,
+IFCT values while rights remain restricted, RDA/EAR/TUL calculations,
+supplement prescriptions, AI decisions, shopping, or meal planning.
 """
 
 from app.domains.nutrition.models import FoodCompositionDataset, FoodNutrientValue, FoodReferenceItem
