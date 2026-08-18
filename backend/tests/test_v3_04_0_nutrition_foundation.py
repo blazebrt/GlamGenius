@@ -12,6 +12,7 @@ from app.domains.evidence.nutrition_seed import (
     IFCT_SOURCE_IDENTIFIER,
     RDA_EAR_SOURCE_KEY,
 )
+from app.domains.evidence.nutrition_seed import run as run_nutrition_authority_seed
 from app.domains.nutrition import (
     FOOD_COMPOSITION_METADATA_SEED_VERSION,
     FOOD_COMPOSITION_SCHEMA_VERSION,
@@ -51,15 +52,6 @@ async def test_bootstrap_seeds_exact_authority_and_empty_composition(db_clean):
         datasets = (await session.execute(select(FoodCompositionDataset))).scalars().all()
         items = (await session.execute(select(FoodReferenceItem))).scalars().all()
         values = (await session.execute(select(FoodNutrientValue))).scalars().all()
-        authority_sources = {source.id for source in sources}
-        linked_claims = (await session.execute(
-            select(EvidenceClaimSource).where(EvidenceClaimSource.source_id.in_(authority_sources))
-        )).scalars().all()
-        linked_rules = (await session.execute(
-            select(RuleEvidenceLink).join(EvidenceClaim, RuleEvidenceLink.claim_id == EvidenceClaim.id)
-            .join(EvidenceClaimSource, EvidenceClaimSource.claim_id == EvidenceClaim.id)
-            .where(EvidenceClaimSource.source_id.in_(authority_sources))
-        )).scalars().all()
         audits = (await session.execute(
             select(SeedVersionRecord).where(
                 SeedVersionRecord.seed_version.in_((
@@ -80,10 +72,29 @@ async def test_bootstrap_seeds_exact_authority_and_empty_composition(db_clean):
     assert len(sources) == 3
     assert len(datasets) == 1
     assert items == [] and values == []
-    assert linked_claims == [] and linked_rules == []
     assert {(row.seed_domain, row.rows_written) for row in audits} == {
         ("evidence_nutrition_authority", 3), ("nutrition_food_composition", 1),
     }
+
+
+async def test_nutrition_authority_seed_alone_creates_no_claims_or_links(db_clean):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        result = await run_nutrition_authority_seed(session)
+        sources = (await session.execute(
+            select(EvidenceSource).where(EvidenceSource.source_key.in_(SOURCE_KEYS))
+        )).scalars().all()
+        claim_count = await session.scalar(select(func.count()).select_from(EvidenceClaim))
+        claim_source_count = await session.scalar(select(func.count()).select_from(EvidenceClaimSource))
+        rule_link_count = await session.scalar(select(func.count()).select_from(RuleEvidenceLink))
+
+    assert result == {
+        "seed_version": NUTRITION_AUTHORITY_EVIDENCE_SEED_VERSION,
+        "sources": 3, "claims": 0, "claim_source_links": 0,
+        "rule_links": 0, "rows_written": 3,
+    }
+    assert {row.source_key for row in sources} == SOURCE_KEYS
+    assert claim_count == claim_source_count == rule_link_count == 0
 
 
 async def test_authority_source_metadata_is_exact_and_ifct_is_restricted(db_clean):
