@@ -11,9 +11,14 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.purchase import service as purchase_service
 from app.domains.purchase.contract import (
     PURCHASE_STRATEGY_REGISTRY_VERSION,
     STYLE_PURCHASE_CATEGORIES,
+)
+from app.domains.purchase.schemas import (
+    CarePurchaseCandidateConfirm,
+    PurchaseCandidateInspectRequest,
 )
 from app.domains.recommendation import orchestrator, roi, service
 from app.domains.recommendation.schemas import PurchaseDecisionCreate, ShoppingEvaluateRequest
@@ -21,6 +26,52 @@ from app.shared.database.sql import get_session
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_shopping_decisions"))])
+
+
+@router.post("/shopping/candidates/inspect")
+async def inspect_purchase_candidate(
+    body: PurchaseCandidateInspectRequest,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Capture prospective Care facts without running a purchase evaluation."""
+    row = await purchase_service.inspect_purchase_candidate(
+        session,
+        account_id=current.account_id,
+        account_id_str=current.account_id_str,
+        body=body,
+    )
+    await session.commit()
+    return purchase_service.serialize_purchase_candidate(row)
+
+
+@router.get("/shopping/candidates/{candidate_id}")
+async def get_purchase_candidate(
+    candidate_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    row = await purchase_service.owned_purchase_candidate(
+        session, current.account_id, candidate_id
+    )
+    return purchase_service.serialize_purchase_candidate(row)
+
+
+@router.post("/shopping/candidates/{candidate_id}/confirm")
+async def confirm_purchase_candidate(
+    candidate_id: uuid.UUID,
+    body: CarePurchaseCandidateConfirm,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    row = await purchase_service.confirm_care_purchase_candidate(
+        session,
+        account_id=current.account_id,
+        candidate_id=candidate_id,
+        body=body,
+    )
+    await session.commit()
+    return purchase_service.serialize_purchase_candidate(row)
 
 
 @router.get("/shopping/roi-model")

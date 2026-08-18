@@ -440,6 +440,7 @@ def serialize_candidate(row: ShoppingCandidate) -> dict[str, Any]:
         "id": str(row.id), "source": row.source, "category": row.category, "subcategory": row.subcategory,
         "display_name": row.display_name, "brand": row.brand, "colour": row.colour, "size": row.size,
         "fabric": row.fabric, "fit": row.fit, "formality": row.formality,
+        "details": row.details,
         "occasion_tags": row.occasion_tags, "season_tags": row.season_tags,
         "price": float(row.price) if row.price is not None else None, "currency": row.currency,
         "product_url": row.product_url, "extraction_confidence": row.extraction_confidence,
