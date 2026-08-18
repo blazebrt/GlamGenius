@@ -320,7 +320,14 @@ async def test_account_isolation_and_noncare_boundaries(
             json={"source":"manual", "item":{"category":category, "display_name":"Not Care"}},
         )
         assert response.status_code == 422
-        assert "candidate" in response.json()["detail"]["message"].lower() or category in response.json()["detail"]["message"].lower()
+        message = response.json()["detail"]["message"].lower()
+        assert message
+        if category in {"wardrobe", "shoes", "accessories"}:
+            assert "style purchase" in message
+        elif category == "perfumes":
+            assert "fragrance-specific" in message
+        else:
+            assert "does not recommend whether to buy supplements" in message
     assert (await _counts(owner_id))["candidates"] == 1
 
 
