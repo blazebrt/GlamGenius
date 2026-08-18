@@ -57,6 +57,7 @@ async def _set_preferences(
     focus: list[str] | None = None,
     avoid_foods: list[str] | None = None,
     hydration: bool = False,
+    hot_weather_only: bool = True,
 ) -> None:
     factory = get_sessionmaker()
     async with factory() as session:
@@ -67,6 +68,7 @@ async def _set_preferences(
         nutrition.focus_nutrients = focus or []
         nutrition.avoid_foods = avoid_foods or []
         water.enabled = hydration
+        water.remind_in_hot_weather_only = hot_weather_only
         await session.commit()
 
 
@@ -276,7 +278,7 @@ async def test_real_api_contract_and_get_is_read_only(db_clean, app_client, fake
     account_a = await _seed_account()
     await _set_preferences(
         account_a, enabled=True, diet="vegan", focus=["protein"],
-        avoid_foods=["chana", "unknown term"], hydration=True,
+        avoid_foods=["chana", "unknown term"], hydration=True, hot_weather_only=False,
     )
     token_a, _ = fake_supabase_user(user_id=account_a)
     headers_a = {"Authorization": f"Bearer {token_a}"}
