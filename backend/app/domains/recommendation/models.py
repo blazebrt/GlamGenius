@@ -250,6 +250,10 @@ class ShoppingCandidate(UUIDPrimaryKey, TimestampMixin, Base):
     price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR", server_default="INR")
     product_url: Mapped[str | None] = mapped_column(String(2048))
+    # Category-specific prospective-product facts.  This is deliberately a
+    # single container: ShoppingCandidate remains the one purchase candidate
+    # persistence family and never becomes inventory.
+    details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     extraction_confidence: Mapped[float | None] = mapped_column(Float)
     uncertain_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     verification_state: Mapped[str] = mapped_column(String(24), nullable=False, default="draft", server_default="draft")
