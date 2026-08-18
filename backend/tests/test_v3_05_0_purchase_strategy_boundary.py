@@ -146,7 +146,7 @@ async def test_inactive_and_prohibited_manual_categories_fail_before_side_effect
     )
     assert response.status_code == 422, response.text
     detail = response.json()["detail"]
-    assert detail["code"] == "validation_failed"
+    assert detail["code"] == "VALIDATION_FAILED"
     assert detail["retryable"] is False
     assert detail["field"] == "item.category"
     assert detail["message"]
