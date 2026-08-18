@@ -520,7 +520,12 @@ async def save_decision(session: AsyncSession, evaluation: PurchaseEvaluation, d
 
 
 async def replayed_evaluation(
-    session: AsyncSession, account_id: uuid.UUID, client_mutation_id: str | None
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    client_mutation_id: str | None,
+    *,
+    expected_category: str | None = None,
+    expected_media_asset_id: uuid.UUID | None = None,
 ) -> PurchaseEvaluation | None:
     """The evaluation a previous send of this request already produced.
 
@@ -539,6 +544,22 @@ async def replayed_evaluation(
     )).scalar_one_or_none()
     if candidate is None:
         return None
+    # A retry key identifies one purchase request, not an account-wide alias.
+    # Validate the stable request identity before returning any old verdict.
+    manual_identity_matches = (
+        expected_category is None
+        or candidate.category == expected_category
+        and candidate.media_asset_id is None
+    )
+    screenshot_identity_matches = (
+        expected_media_asset_id is None
+        or candidate.media_asset_id == expected_media_asset_id
+    )
+    if not manual_identity_matches or not screenshot_identity_matches:
+        raise ValidationFailedError(
+            "This request key was already used for a different shopping check.",
+            field="client_mutation_id",
+        )
     return (await session.execute(
         select(PurchaseEvaluation)
         .where(

@@ -420,8 +420,26 @@ async def evaluate_purchase(
     """Read the item if needed, score it, and return Buy, Wait or Skip."""
     started = time.perf_counter()
 
-    # A retry must return the original verdict, not score the item again.
-    replay = await service.replayed_evaluation(session, account_id, body.client_mutation_id)
+    # Manual categories are already trusted request facts.  Apply their
+    # strategy boundary before replay lookup so an old Style result cannot be
+    # returned for a reused key carrying an inactive/prohibited category.
+    manual_request = body.media_asset_id is None and body.item is not None
+    if manual_request:
+        manual_strategy = resolve_purchase_strategy(body.item.category)
+        if manual_strategy is None or manual_strategy.state != "active" or manual_strategy.key != "style_purchase":
+            raise ValidationFailedError(
+                boundary_message(body.item.category, manual_strategy), field="item.category"
+            )
+
+    # A retry must return the original verdict, not score the item again.  The
+    # replay helper also validates the stable identity of this request.
+    replay = await service.replayed_evaluation(
+        session,
+        account_id,
+        body.client_mutation_id,
+        expected_category=body.item.category if manual_request else None,
+        expected_media_asset_id=body.media_asset_id,
+    )
     if replay is not None:
         payload = await service.serialize_evaluation(session, replay)
         payload["entitlement"] = service.serialize_entitlement(

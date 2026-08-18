@@ -1,6 +1,9 @@
 """Authoritative V3-05.0 purchase strategy and quality-contract coverage."""
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 from app.domains.purchase.contract import (
     CARE_PURCHASE_CATEGORIES,
@@ -26,10 +29,24 @@ from app.domains.recommendation.models import (
     ShoppingCandidate,
 )
 from app.domains.recommendation.schemas import ExtractedShoppingItem
+from app.shared.database.registry import Base
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select
 
 from tests.conftest import auth
+
+LINEN_SHIRT = {
+    "category": "wardrobe",
+    "display_name": "Ivory Linen Shirt",
+    "brand": "Fable",
+    "subcategory": "shirt",
+    "colour": "ivory",
+    "fabric": "linen",
+    "fit": "relaxed",
+    "formality": "smart_casual",
+    "occasion_tags": ["work", "casual_day"],
+    "season_tags": ["summer"],
+}
 
 
 def test_contract_versions_categories_labels_and_quality_dimensions_are_frozen():
@@ -127,6 +144,126 @@ async def _counts(uid):
         }
 
 
+async def _evaluate_style(client, token, *, mutation_id: str):
+    return await client.post(
+        "/api/v2/shopping/evaluate",
+        headers=auth(token),
+        json={
+            "source": "manual",
+            "item": dict(LINEN_SHIRT),
+            "currency": "INR",
+            "client_mutation_id": mutation_id,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_valid_style_replay_returns_same_evaluation_without_side_effects(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    token, uid = await registered_supabase_user()
+    first = await _evaluate_style(app_client, token, mutation_id="v3-05-replay")
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    before = await _counts(uid)
+
+    replay = await _evaluate_style(app_client, token, mutation_id="v3-05-replay")
+    assert replay.status_code == 200, replay.text
+    replay_body = replay.json()
+    assert replay_body["id"] == first_body["id"]
+    assert replay_body["replayed"] is True
+    assert await _counts(uid) == before
+
+
+@pytest.mark.parametrize("category", ["beauty", "hair", "perfumes", "supplements"])
+@pytest.mark.asyncio
+async def test_unsupported_manual_same_key_cannot_replay_style_result(
+    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch, category,
+):
+    token, uid = await registered_supabase_user()
+    first = await _evaluate_style(app_client, token, mutation_id="v3-05-policy-bypass")
+    assert first.status_code == 200, first.text
+    before = await _counts(uid)
+
+    def unexpected_roi(*args, **kwargs):
+        raise AssertionError("unsupported purchase category invoked Style ROI")
+
+    monkeypatch.setattr(roi, "evaluate", unexpected_roi)
+    response = await app_client.post(
+        "/api/v2/shopping/evaluate",
+        headers=auth(token),
+        json={
+            "source": "manual",
+            "item": {"category": category, "display_name": "Unsupported product"},
+            "client_mutation_id": "v3-05-policy-bypass",
+        },
+    )
+    assert response.status_code == 422, response.text
+    body = response.json()
+    assert "verdict" not in body
+    assert "appearance_roi" not in body
+    message = body["detail"]["message"]
+    if category in {"beauty", "hair"}:
+        assert "Skin Care" in message and "Hair Care" in message
+    elif category == "perfumes":
+        assert "fragrance-specific" in message
+    else:
+        assert "does not recommend whether to buy supplements" in message
+    assert await _counts(uid) == before
+
+
+@pytest.mark.asyncio
+async def test_different_screenshot_cannot_replay_old_style_result(
+    app_client, db_clean, registered_supabase_user, monkeypatch, media_root,
+):
+    from tests.conftest import png_bytes
+
+    token, uid = await registered_supabase_user()
+    assets = []
+    for name in ("product-a.png", "product-b.png"):
+        uploaded = await app_client.post(
+            "/api/v2/media/upload",
+            headers=auth(token),
+            files={"file": (name, png_bytes(), "image/png")},
+        )
+        assert uploaded.status_code in (200, 201), uploaded.text
+        assets.append(uploaded.json()["id"])
+
+    extraction_calls = 0
+
+    async def extract_style(*args, **kwargs):
+        nonlocal extraction_calls
+        extraction_calls += 1
+        return (
+            ExtractedShoppingItem(
+                category="wardrobe", display_name="Linen shirt", confidence=0.95,
+                photo_quality_notes="The item is readable.",
+            ),
+            None, "fake-model", "v3-test", "v3-test",
+        )
+
+    monkeypatch.setattr(explanation_stage, "extract_shopping_item", extract_style)
+    first = await app_client.post(
+        "/api/v2/shopping/evaluate",
+        headers=auth(token),
+        json={"source": "screenshot", "media_asset_id": assets[0], "client_mutation_id": "v3-05-photo"},
+    )
+    assert first.status_code == 200, first.text
+    before = await _counts(uid)
+
+    second = await app_client.post(
+        "/api/v2/shopping/evaluate",
+        headers=auth(token),
+        json={"source": "screenshot", "media_asset_id": assets[1], "client_mutation_id": "v3-05-photo"},
+    )
+    assert second.status_code == 422, second.text
+    assert second.json()["detail"]["field"] == "client_mutation_id"
+    assert "different shopping check" in second.json()["detail"]["message"]
+    assert "verdict" not in second.json()
+    assert extraction_calls == 1
+    assert await _counts(uid) == before
+
+
 @pytest.mark.parametrize("category", ["beauty", "hair", "perfumes", "supplements"])
 @pytest.mark.asyncio
 async def test_inactive_and_prohibited_manual_categories_fail_before_side_effects(
@@ -193,3 +330,37 @@ async def test_screenshot_inactive_category_fails_before_purchase_persistence(
     assert "Skin Care" in response.json()["detail"]["message"]
     after = await _counts(uid)
     assert after == before
+
+
+def test_purchase_metadata_has_one_persistence_engine():
+    purchase_tables = {
+        table.name
+        for table in Base.metadata.tables.values()
+        if "purchase" in table.name or table.name == "shopping_candidates"
+    }
+    assert purchase_tables == {
+        "shopping_candidates",
+        "purchase_evaluations",
+        "purchase_evaluation_factors",
+        "purchase_decisions",
+    }
+
+
+def test_purchase_runtime_has_no_sales_or_merchant_imports():
+    runtime_root = Path(__file__).parents[1] / "app" / "domains" / "purchase"
+    banned = {
+        "payments", "payment", "billing", "checkout", "affiliate", "merchant",
+        "marketplace", "cart", "amazon", "flipkart", "nykaa",
+    }
+    for path in runtime_root.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imported_names = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_names.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_names.append(node.module)
+        assert not any(
+            any(term in name.lower().split(".") for term in banned)
+            for name in imported_names
+        ), path
