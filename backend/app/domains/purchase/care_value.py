@@ -51,8 +51,10 @@ def _decimal(value: Any) -> Decimal | None:
         return None
 
 
-def _public_decimal(value: Decimal | None) -> float | None:
-    return float(value) if value is not None else None
+def _public_decimal(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    return format(value.quantize(Decimal("0.01")), "f")
 
 
 def _json_value(value: Any) -> Any:
@@ -134,6 +136,12 @@ class CarePurchaseValueContext:
 
     def as_dict(self) -> dict[str, Any]:
         assessment_category = self.category
+        if assessment_category == "beauty":
+            category_label = "Skin Care"
+        elif assessment_category == "hair":
+            category_label = "Hair Care"
+        else:
+            raise ValueError("Care value context category must be beauty or hair.")
         return {
             "care_purchase_value_version": self.value_version,
             "care_purchase_value_schema_version": self.schema_version,
@@ -141,7 +149,7 @@ class CarePurchaseValueContext:
             "account_id": str(self.account_id),
             "candidate_id": str(self.candidate_id),
             "category": assessment_category,
-            "category_label": "Skin Care" if assessment_category == "beauty" else "Hair Care",
+            "category_label": category_label,
             "plan_date": self.plan_date.isoformat(),
             "candidate_truth_version": self.candidate_truth_version,
             "care_purchase_assessment_version": self.care_purchase_assessment_version,
@@ -164,6 +172,12 @@ def project_care_purchase_value(
     candidate_truth_version: str = "v3-05.1",
 ) -> CarePurchaseValueContext:
     """Project value context from existing assessment and inventory estimates."""
+    category = _value(assessment, "category")
+    if category not in {"beauty", "hair"}:
+        raise ValueError("Care value context category must be beauty or hair.")
+    for key in ("account_id", "candidate_id", "plan_date", "assessment_fingerprint"):
+        if _value(assessment, key) in (None, ""):
+            raise ValueError(f"Care value context requires usable {key}.")
     rows = tuple(sorted((_recovery_row(row) for row in recovery_rows), key=lambda row: row["owned_item_id"]))
     price = _decimal(candidate_price)
     candidate_spend = {
@@ -220,6 +234,17 @@ def project_care_purchase_value(
         "status": recovery_status,
         "items": [_strip_internal(row) for row in rows],
     }
+    recovery_material = [
+        {
+            "owned_item_id": row["owned_item_id"],
+            "metric_version": row["metric_version"],
+            "estimated_value": row["_estimated_decimal"],
+            "currency": row["currency"],
+            "missing_inputs": row["missing_inputs"],
+            "inputs": row["inputs"],
+        }
+        for row in rows
+    ]
     value_context = {
         "status": financial_status,
         "candidate_spend": candidate_spend,
@@ -244,7 +269,7 @@ def project_care_purchase_value(
         "candidate_currency": candidate_currency,
         "role_context": role,
         "redundancy_context": redundancy,
-        "recovery": recovery,
+        "recovery": recovery_material,
         "currency_context": currency_context,
         "estimated_recoverable_total": total,
     }
