@@ -489,27 +489,32 @@ async def test_real_metadata_edits_do_not_change_assessment(
     first = await app_client.get(path, headers=auth(token))
     assert first.status_code == 200, first.text
 
-    corrected = await app_client.post(
-        f"/api/v2/shopping/candidates/{candidate_id}/confirm",
-        headers=auth(token),
-        json={
-            "price": "999.00",
-            "currency": "USD",
-            "product_url": "https://example.test/new",
-            "details": {
-                "product_type": "cleanser",
-                "active_ingredients": ["Niacinamide"],
-                "purpose": "barrier support",
-            },
+    baseline = first.json()
+
+    async def assert_metadata_edit(payload):
+        corrected = await app_client.post(
+            f"/api/v2/shopping/candidates/{candidate_id}/confirm",
+            headers=auth(token),
+            json=payload,
+        )
+        assert corrected.status_code == 200, corrected.text
+        current = await app_client.get(path, headers=auth(token))
+        assert current.status_code == 200, current.text
+        current_body = current.json()
+        assert current_body["assessment_fingerprint"] == baseline["assessment_fingerprint"]
+        for key in ("role_utility", "redundancy", "compatibility"):
+            assert current_body["dimensions"][key] == baseline["dimensions"][key]
+        assert current_body["user_constraints"] == baseline["user_constraints"]
+        assert current_body["dimensions"]["evidence_support"]["status"] == "not_assessed"
+        assert current_body["dimensions"]["value_context"]["status"] == "not_assessed"
+
+    await assert_metadata_edit({"price": "999.00"})
+    await assert_metadata_edit({"currency": "USD"})
+    await assert_metadata_edit({"product_url": "https://example.test/new"})
+    await assert_metadata_edit({
+        "details": {
+            "product_type": "cleanser",
+            "active_ingredients": ["Niacinamide"],
+            "purpose": "barrier support",
         },
-    )
-    assert corrected.status_code == 200, corrected.text
-    second = await app_client.get(path, headers=auth(token))
-    assert second.status_code == 200, second.text
-    first_body, second_body = first.json(), second.json()
-    assert second_body["assessment_fingerprint"] == first_body["assessment_fingerprint"]
-    for key in ("role_utility", "redundancy", "compatibility"):
-        assert second_body["dimensions"][key] == first_body["dimensions"][key]
-    assert second_body["user_constraints"] == first_body["user_constraints"]
-    assert second_body["dimensions"]["evidence_support"]["status"] == "not_assessed"
-    assert second_body["dimensions"]["value_context"]["status"] == "not_assessed"
+    })
