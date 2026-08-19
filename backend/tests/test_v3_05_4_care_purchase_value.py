@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
+
 from app.bootstrap import seed_inventory_categories
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import (
