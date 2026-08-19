@@ -126,6 +126,23 @@ async def project_care_purchase_value(
     )
 
 
+@router.get("/shopping/candidates/{candidate_id}/care-verdict")
+async def project_care_purchase_verdict(
+    candidate_id: uuid.UUID,
+    on: date | None = Query(None, description="Verdict date; defaults to the account's local day"),
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Return a recomputable deterministic Care Buy/Wait/Skip policy result."""
+    return await purchase_service.care_purchase_verdict(
+        session,
+        account_id=current.account_id,
+        account_id_str=current.account_id_str,
+        candidate_id=candidate_id,
+        plan_date=on,
+    )
+
+
 @router.get("/shopping/roi-model")
 async def get_roi_model():
     """The Appearance ROI formula, in the open.
