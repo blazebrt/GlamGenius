@@ -2,17 +2,24 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.care import decisions as care_decisions
+from app.domains.care import routine_plan as care_routine_plan
+from app.domains.care import service as care_service
 from app.domains.media import service as media_service
+from app.domains.planning import context as planning_context
 from app.domains.purchase import extraction
 from app.domains.purchase.candidate_truth import (
+    build_care_candidate_truth,
     serialize_care_candidate_truth,
     validate_care_candidate_details,
 )
+from app.domains.purchase.care_assessment import assess_care_purchase
 from app.domains.purchase.contract import (
     boundary_message,
     resolve_purchase_strategy,
@@ -219,6 +226,40 @@ async def owned_purchase_candidate(
     return row
 
 
+async def care_purchase_assessment(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    account_id_str: str,
+    candidate_id: uuid.UUID,
+    plan_date: date | None = None,
+) -> dict[str, Any]:
+    """Build a read-only deterministic assessment beside current Care state."""
+    del account_id_str
+    row = await owned_purchase_candidate(session, account_id, candidate_id)
+    _require_care(row.category)
+    truth = build_care_candidate_truth(row)
+    if not truth.facts_trusted:
+        raise ValidationFailedError(
+            "Review and confirm the product details first so GlamGenius does not act on an unverified label read.",
+            field="verification_state",
+        )
+
+    # Draft rejection intentionally precedes every expensive Care assembly.
+    day_context = await planning_context.gather(
+        session, account_id=account_id, plan_date=plan_date
+    )
+    care_context = await care_service.build_care_context(
+        session, account_id, day_context=day_context
+    )
+    decision_set = care_decisions.evaluate_care_context(care_context)
+    routine_plan = care_routine_plan.plan_care_routine(care_context, decision_set)
+    assessment = assess_care_purchase(
+        truth, care_context, decision_set, routine_plan
+    )
+    return assessment.as_dict()
+
+
 async def confirm_care_purchase_candidate(
     session: AsyncSession,
     *,
@@ -264,6 +305,7 @@ owned_candidate = owned_purchase_candidate
 
 
 __all__ = [
+    "care_purchase_assessment",
     "confirm_care_purchase_candidate",
     "inspect_candidate",
     "inspect_purchase_candidate",

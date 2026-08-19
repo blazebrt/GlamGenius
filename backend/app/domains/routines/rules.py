@@ -167,6 +167,11 @@ def _allergen_keys(allergies: Sequence[str]) -> dict[str, str]:
     return resolved
 
 
+def declared_allergy_ingredient_keys(allergies: Sequence[str]) -> frozenset[str]:
+    """Return canonical ingredient keys for the user's declared avoids."""
+    return frozenset(_allergen_keys(allergies))
+
+
 def allergy_product_matches(
     products: Sequence[ShelfProduct], allergies: Sequence[str]
 ) -> tuple[AllergyProductMatch, ...]:
@@ -269,7 +274,18 @@ def _rule_applies(rule: CompatibilityRule, first: ShelfProduct, second: ShelfPro
     reported separately as something to confirm, never as a warning — a wrong
     warning is worse than a missing one.
     """
-    left, right = first.confirmed_families, second.confirmed_families
+    return compatibility_rule_applies_to_families(
+        rule, first.confirmed_families, second.confirmed_families
+    )
+
+
+def compatibility_rule_applies_to_families(
+    rule: CompatibilityRule,
+    left_families: Iterable[str],
+    right_families: Iterable[str],
+) -> bool:
+    """Apply one reviewed rule to two confirmed ingredient-family sets."""
+    left, right = set(left_families), set(right_families)
     if rule.family_a == rule.family_b:
         # A same-family rule needs the family in both products.
         return rule.family_a in left and rule.family_b in right
