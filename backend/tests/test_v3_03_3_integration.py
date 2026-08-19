@@ -378,9 +378,9 @@ async def test_routines_today_hides_stale_expiry_without_writing(
             select(Routine).where(Routine.account_id == account_id, Routine.kind == "morning")
         )).scalar_one()
         before_version = routine.version
-        before_steps = [row.id for row in (await session.execute(
+        before_steps = {row.id for row in (await session.execute(
             select(RoutineStep).where(RoutineStep.routine_id == routine.id)
-        )).scalars().all()]
+        )).scalars().all()}
         before_runs = await session.scalar(
             select(func.count()).select_from(RoutineRecommendationRun).where(
                 RoutineRecommendationRun.account_id == account_id
@@ -390,9 +390,9 @@ async def test_routines_today_hides_stale_expiry_without_writing(
             session, account_id=account_id, on=GENERATION_DATE
         )
         after = await session.get(Routine, routine.id)
-        after_steps = [row.id for row in (await session.execute(
+        after_steps = {row.id for row in (await session.execute(
             select(RoutineStep).where(RoutineStep.routine_id == routine.id)
-        )).scalars().all()]
+        )).scalars().all()}
         after_runs = await session.scalar(
             select(func.count()).select_from(RoutineRecommendationRun).where(
                 RoutineRecommendationRun.account_id == account_id
@@ -441,9 +441,9 @@ async def test_routines_today_hides_old_engine_and_effort_drift_without_writing(
             select(Routine).where(Routine.account_id == account_id, Routine.kind == "morning")
         )).scalar_one()
         before_version = routine.version
-        before_steps = [row.id for row in (await session.execute(
+        before_steps = {row.id for row in (await session.execute(
             select(RoutineStep).where(RoutineStep.routine_id == routine.id)
-        )).scalars().all()]
+        )).scalars().all()}
         routine.engine_version = "care-v3-03.3"
         await session.commit()
 
@@ -452,9 +452,9 @@ async def test_routines_today_hides_old_engine_and_effort_drift_without_writing(
             session, account_id=account_id, on=GENERATION_DATE
         )
         after = await session.get(Routine, routine.id)
-        after_steps = [row.id for row in (await session.execute(
+        after_steps = {row.id for row in (await session.execute(
             select(RoutineStep).where(RoutineStep.routine_id == routine.id)
-        )).scalars().all()]
+        )).scalars().all()}
     assert old_body["refresh_required"] is True
     assert "morning" in old_body["refresh_required_kinds"]
     assert after.version == before_version
