@@ -1,7 +1,7 @@
 """The closed V3-05 purchase strategy and product-quality contract.
 
-This is policy, not a second purchase engine.  Existing Style ROI and purchase
-persistence remain authoritative for the one active strategy.
+This is a routing and policy registry, not an independent purchase engine.
+Style and Care each retain their own domain-specific execution paths.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Literal
 
 PURCHASE_INTELLIGENCE_FOUNDATION_VERSION = "v3-05.0"
-PURCHASE_STRATEGY_REGISTRY_VERSION = "v3-05.0"
+PURCHASE_STRATEGY_REGISTRY_VERSION = "v3-05.6"
 PRODUCT_QUALITY_CONTRACT_VERSION = "v3-05.0"
 PURCHASE_CANDIDATE_TRUTH_VERSION = "v3-05.1"
 CARE_PURCHASE_CANDIDATE_SCHEMA_VERSION = "v3-05.1"
@@ -58,7 +58,7 @@ class PurchaseStrategy:
 
 PURCHASE_STRATEGY_REGISTRY = (
     PurchaseStrategy("style_purchase", STYLE_PURCHASE_CATEGORIES, "active", "Style purchase"),
-    PurchaseStrategy("care_purchase", CARE_PURCHASE_CATEGORIES, "inactive", "Care purchase"),
+    PurchaseStrategy("care_purchase", CARE_PURCHASE_CATEGORIES, "active", "Care purchase"),
     PurchaseStrategy("fragrance_purchase", FRAGRANCE_PURCHASE_CATEGORIES, "inactive", "Fragrance purchase"),
     PurchaseStrategy("supplement_purchase", PURCHASE_PROHIBITED_CATEGORIES, "prohibited", "Supplement purchase"),
 )
@@ -107,9 +107,9 @@ def boundary_message(category: str, strategy: PurchaseStrategy | None = None) ->
         return "Perfume requires fragrance-specific overlap and use context, so the Style purchase model will not be used."
     if strategy is not None and strategy.key == "care_purchase":
         return (
-            "This purchase check currently uses style-specific rules for wardrobe, shoes and accessories. "
-            "Skin Care and Hair Care require product-specific ingredient, routine and redundancy checks, "
-            "so GlamGenius will not judge them using wardrobe rules."
+            "Skin Care and Hair Care are handled through GlamGenius's dedicated Care purchase flow, "
+            "which considers product, routine, evidence and owned-value context. The Style purchase check "
+            "does not evaluate them."
         )
     return "This purchase category is not supported by a trusted purchase strategy."
 
@@ -117,6 +117,11 @@ def boundary_message(category: str, strategy: PurchaseStrategy | None = None) ->
 def is_active_style_category(category: str) -> bool:
     strategy = resolve_purchase_strategy(category)
     return strategy is not None and strategy.key == "style_purchase" and strategy.state == "active"
+
+
+def is_active_care_category(category: str) -> bool:
+    strategy = resolve_purchase_strategy(category)
+    return strategy is not None and strategy.key == "care_purchase" and strategy.state == "active"
 
 
 # Public immutable aliases make the registry auditable without exposing its

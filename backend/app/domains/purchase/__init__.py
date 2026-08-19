@@ -1,8 +1,7 @@
-"""Purchase Intelligence policy boundaries.
+"""Purchase strategy policy boundaries and product-quality vocabulary.
 
-The purchase domain owns strategy policy and product-quality vocabulary.  The
-existing recommendation domain remains the persistence and implementation home
-for the active Style strategy during V3-05.0.
+Style and Care use separate execution paths; this package exposes their shared
+routing contract without creating a second purchase engine.
 """
 
 from app.domains.purchase.contract import (
@@ -27,6 +26,7 @@ from app.domains.purchase.contract import (
     STYLE_PURCHASE_CATEGORIES,
     PurchaseStrategy,
     PurchaseStrategyBoundaryError,
+    is_active_care_category,
     resolve_purchase_strategy,
 )
 
@@ -52,5 +52,6 @@ __all__ = [
     "STYLE_PURCHASE_CATEGORIES",
     "PurchaseStrategy",
     "PurchaseStrategyBoundaryError",
+    "is_active_care_category",
     "resolve_purchase_strategy",
 ]

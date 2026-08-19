@@ -51,7 +51,7 @@ LINEN_SHIRT = {
 
 def test_contract_versions_categories_labels_and_quality_dimensions_are_frozen():
     assert PURCHASE_INTELLIGENCE_FOUNDATION_VERSION == "v3-05.0"
-    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.0"
+    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.6"
     assert PRODUCT_QUALITY_CONTRACT_VERSION == "v3-05.0"
     assert STYLE_PURCHASE_CATEGORIES == ("wardrobe", "shoes", "accessories")
     assert CARE_PURCHASE_CATEGORIES == ("beauty", "hair")
@@ -74,8 +74,8 @@ def test_contract_versions_categories_labels_and_quality_dimensions_are_frozen()
 def test_strategy_registry_is_exact_and_unknown_fails_closed():
     expected = {
         "wardrobe": ("style_purchase", "active"), "shoes": ("style_purchase", "active"),
-        "accessories": ("style_purchase", "active"), "beauty": ("care_purchase", "inactive"),
-        "hair": ("care_purchase", "inactive"), "perfumes": ("fragrance_purchase", "inactive"),
+        "accessories": ("style_purchase", "active"), "beauty": ("care_purchase", "active"),
+        "hair": ("care_purchase", "active"), "perfumes": ("fragrance_purchase", "inactive"),
         "supplements": ("supplement_purchase", "prohibited"),
     }
     assert {category: (resolve_purchase_strategy(category).key, resolve_purchase_strategy(category).state)
@@ -123,7 +123,7 @@ async def test_roi_model_publishes_style_scope_only(app_client, db_clean, regist
     body = response.json()
     assert body["supported_categories"] == ["wardrobe", "shoes", "accessories"]
     assert body["strategy"] == "style_purchase"
-    assert body["purchase_strategy_registry_version"] == "v3-05.0"
+    assert body["purchase_strategy_registry_version"] == "v3-05.6"
     assert body["formula"].startswith("roi = sum(factor value")
     assert {row["key"] for row in body["factors"]} == set(roi.FACTOR_WEIGHTS)
 

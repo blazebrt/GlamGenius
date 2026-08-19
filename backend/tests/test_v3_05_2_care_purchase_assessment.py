@@ -150,11 +150,11 @@ def test_versions_and_frozen_strategy():
     assert CARE_PURCHASE_ASSESSMENT_VERSION == "v3-05.2"
     assert CARE_PURCHASE_ASSESSMENT_SCHEMA_VERSION == "v3-05.2"
     assert PURCHASE_INTELLIGENCE_FOUNDATION_VERSION == "v3-05.0"
-    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.0"
+    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.6"
     assert PRODUCT_QUALITY_CONTRACT_VERSION == "v3-05.0"
     assert PURCHASE_CANDIDATE_TRUTH_VERSION == "v3-05.1"
     assert CARE_PURCHASE_CANDIDATE_SCHEMA_VERSION == "v3-05.1"
-    assert resolve_purchase_strategy("beauty").state == "inactive"
+    assert resolve_purchase_strategy("beauty").state == "active"
 
 
 def test_required_gap_covered_optional_and_redundancy_statuses():
