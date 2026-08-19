@@ -420,9 +420,10 @@ async def evaluate_purchase(
     """Read the item if needed, score it, and return Buy, Wait or Skip."""
     started = time.perf_counter()
 
-    # Manual categories are already trusted request facts.  Apply their
-    # strategy boundary before replay lookup so an old Style result cannot be
-    # returned for a reused key carrying an inactive/prohibited category.
+    # Manual categories are already trusted request facts. Apply their strategy
+    # boundary before replay lookup so a reused key can never replay an old
+    # Style result for active Care, inactive Fragrance, prohibited Supplements,
+    # or unknown categories outside the Style evaluator.
     manual_request = body.media_asset_id is None and body.item is not None
     if manual_request:
         manual_strategy = resolve_purchase_strategy(body.item.category)

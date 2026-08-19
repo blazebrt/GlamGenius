@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.purchase import service as purchase_service
 from app.domains.purchase.contract import (
+    PURCHASE_CATEGORY_LABELS,
+    PURCHASE_STRATEGY_REGISTRY,
     PURCHASE_STRATEGY_REGISTRY_VERSION,
     STYLE_PURCHASE_CATEGORIES,
 )
@@ -27,6 +29,27 @@ from app.shared.database.sql import get_session
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_shopping_decisions"))])
+
+
+@router.get("/shopping/strategies")
+async def get_purchase_strategies():
+    """Return the deterministic purchase-strategy discovery contract."""
+    return {
+        "purchase_strategy_registry_version": PURCHASE_STRATEGY_REGISTRY_VERSION,
+        "strategies": [
+            {
+                "key": strategy.key,
+                "label": strategy.label,
+                "state": strategy.state,
+                "categories": [
+                    {"key": category, "label": PURCHASE_CATEGORY_LABELS[category]}
+                    for category in strategy.categories
+                    if category in PURCHASE_CATEGORY_LABELS
+                ],
+            }
+            for strategy in PURCHASE_STRATEGY_REGISTRY
+        ],
+    }
 
 
 @router.post("/shopping/candidates/inspect")

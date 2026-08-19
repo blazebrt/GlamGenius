@@ -186,14 +186,14 @@ def test_versions_registry_and_boundary_are_frozen():
     assert CARE_PURCHASE_VERDICT_VERSION == "v3-05.5"
     assert CARE_PURCHASE_VERDICT_SCHEMA_VERSION == "v3-05.5"
     assert PURCHASE_INTELLIGENCE_FOUNDATION_VERSION == "v3-05.0"
-    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.0"
+    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.6"
     assert PRODUCT_QUALITY_CONTRACT_VERSION == "v3-05.0"
     assert CARE_PURCHASE_CANDIDATE_SCHEMA_VERSION == "v3-05.1"
     assert CARE_PURCHASE_ASSESSMENT_VERSION == "v3-05.2"
     assert CARE_PURCHASE_EVIDENCE_VERSION == "v3-05.3"
     assert CARE_PURCHASE_VALUE_VERSION == "v3-05.4"
-    assert resolve_purchase_strategy("beauty").state == "inactive"
-    assert resolve_purchase_strategy("hair").state == "inactive"
+    assert resolve_purchase_strategy("beauty").state == "active"
+    assert resolve_purchase_strategy("hair").state == "active"
 
 
 def test_required_skin_gap_buys_without_efficacy_or_score():
