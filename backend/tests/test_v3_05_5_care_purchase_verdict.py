@@ -11,7 +11,7 @@ import pytest
 from app.bootstrap import seed_inventory_categories
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource, RuleEvidenceLink
 from app.domains.inventory.models import InventoryAttribute, InventoryItem, InventoryValueEvent, ItemUsageEvent
-from app.domains.purchase.care_verdict import project_care_purchase_verdict
+from app.domains.purchase.care_verdict import EXPLANATIONS, HEADLINES, project_care_purchase_verdict
 from app.domains.purchase.contract import (
     CARE_PURCHASE_ASSESSMENT_SCHEMA_VERSION,
     CARE_PURCHASE_ASSESSMENT_VERSION,
@@ -79,12 +79,12 @@ def _assessment(
                 "eligible_owned_same_slot_count": count,
                 "selected_owned_item_id": selected,
             },
-            "user_constraints": {"status": user_status, "matched_ingredient_keys": []},
             "compatibility": {
                 "status": compatibility_status,
                 "findings": compatibility_findings or [],
             },
         },
+        "user_constraints": {"status": user_status, "matched_ingredient_keys": []},
     }
 
 
@@ -174,6 +174,16 @@ def test_required_hair_gap_buys():
     body = _project(_assessment(category="hair"))
     assert body["verdict"] == "buy"
     assert body["category_label"] == "Hair Care"
+
+
+def test_canonical_top_level_user_constraints_are_required():
+    assessment = _assessment()
+    assert _project(assessment)["verdict"] == "buy"
+
+    nested_only = copy.deepcopy(assessment)
+    nested_only["dimensions"]["user_constraints"] = nested_only.pop("user_constraints")
+    with pytest.raises(ValueError):
+        _project(nested_only)
 
 
 def test_user_constraint_always_skips():
@@ -309,7 +319,56 @@ def test_version_and_impossible_state_fail_closed():
         _project(impossible)
 
 
-def test_fingerprints_are_deterministic_material_and_copy_invariant():
+@pytest.mark.parametrize(
+    ("target", "field"),
+    (
+        ("assessment", "care_purchase_assessment_schema_version"),
+        ("evidence", "care_purchase_evidence_schema_version"),
+        ("value", "care_purchase_value_schema_version"),
+    ),
+)
+def test_future_authority_schema_fails_closed(target, field):
+    assessment = _assessment()
+    evidence = _evidence(assessment)
+    value = _value(assessment)
+    {"assessment": assessment, "evidence": evidence, "value": value}[target][field] = "future"
+    with pytest.raises(ValueError):
+        _project(assessment, evidence, value)
+
+
+@pytest.mark.parametrize(
+    ("target", "path"),
+    (
+        ("evidence", ("evidence_support", "status")),
+        ("evidence", ("ingredient_utility", "status")),
+        ("value", ("value_context", "status")),
+        ("value", ("value_context", "candidate_spend", "status")),
+        ("value", ("value_context", "owned_value_recovery", "status")),
+        ("value", ("value_context", "currency_context", "status")),
+    ),
+)
+def test_unknown_authority_status_fails_closed(target, path):
+    assessment = _assessment()
+    evidence = _evidence(assessment)
+    value = _value(assessment)
+    current = {"evidence": evidence, "value": value}[target]
+    for key in path[:-1]:
+        current = current[key]
+    current[path[-1]] = "future"
+    with pytest.raises(ValueError):
+        _project(assessment, evidence, value)
+
+
+@pytest.mark.parametrize("section", ("evidence_support", "ingredient_utility"))
+def test_malformed_evidence_finding_fails_closed(section):
+    assessment = _assessment()
+    evidence = _evidence(assessment)
+    evidence[section]["findings"] = ["not-a-mapping"]
+    with pytest.raises(ValueError):
+        _project(assessment, evidence)
+
+
+def test_fingerprints_are_deterministic_material_and_copy_invariant(monkeypatch):
     assessment = _assessment()
     evidence = _evidence(assessment)
     value = _value(assessment)
@@ -325,10 +384,24 @@ def test_fingerprints_are_deterministic_material_and_copy_invariant():
     assert _project(assessment, changed_evidence, value)["decision_fingerprint"] != first["decision_fingerprint"]
     changed_value = _value(assessment, fingerprint="changed-value")
     assert _project(assessment, evidence, changed_value)["decision_fingerprint"] != first["decision_fingerprint"]
-    evidence_copy = _evidence(assessment, status="reviewed_support_available", findings=[{"claim_status": "supported", "claim_summary": "copy A"}])
-    evidence_copy["projection_fingerprint"] = evidence["projection_fingerprint"]
-    evidence_copy["evidence_support"]["findings"][0]["claim_summary"] = "copy B"
-    assert _project(assessment, evidence_copy, value)["decision_fingerprint"] == first["decision_fingerprint"]
+    monkeypatch.setitem(HEADLINES, "buy", "Copy-only alternate headline.")
+    monkeypatch.setitem(
+        EXPLANATIONS,
+        "required_gap_no_owned_alternative",
+        "Copy-only alternate explanation.",
+    )
+    copy_only = _project(assessment, evidence, value)
+    for key in (
+        "verdict",
+        "primary_reason_code",
+        "reason_codes",
+        "supporting_reason_codes",
+        "decision_context",
+        "decision_fingerprint",
+    ):
+        assert copy_only[key] == first[key]
+    assert copy_only["headline"] != first["headline"]
+    assert copy_only["explanation"] != first["explanation"]
 
 
 def test_policy_module_has_no_runtime_boundary_imports():

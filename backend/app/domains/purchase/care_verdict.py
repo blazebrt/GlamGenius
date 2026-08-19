@@ -16,8 +16,11 @@ from decimal import Decimal
 from typing import Any
 
 from app.domains.purchase.contract import (
+    CARE_PURCHASE_ASSESSMENT_SCHEMA_VERSION,
     CARE_PURCHASE_ASSESSMENT_VERSION,
+    CARE_PURCHASE_EVIDENCE_SCHEMA_VERSION,
     CARE_PURCHASE_EVIDENCE_VERSION,
+    CARE_PURCHASE_VALUE_SCHEMA_VERSION,
     CARE_PURCHASE_VALUE_VERSION,
     CARE_PURCHASE_VERDICT_SCHEMA_VERSION,
     CARE_PURCHASE_VERDICT_VERSION,
@@ -77,6 +80,30 @@ _RECOVERY_STATES = {
     "low_use_recovery_estimated",
     "low_use_recovery_partially_estimated",
     "low_use_recovery_unquantified",
+}
+_EVIDENCE_SUPPORT_STATES = {
+    "reviewed_support_available",
+    "reviewed_support_partial",
+    "no_applicable_reviewed_support",
+    "insufficient_candidate_information",
+}
+_INGREDIENT_UTILITY_STATES = {
+    "reviewed_utility_available",
+    "reviewed_utility_partial",
+    "not_established_from_existing_evidence",
+    "insufficient_candidate_information",
+}
+_FINANCIAL_CONTEXT_STATES = {
+    "financial_context_available",
+    "financial_context_partial",
+    "financial_context_unavailable",
+}
+_CANDIDATE_SPEND_STATES = {"recorded", "missing"}
+_CURRENCY_STATES = {
+    "same_currency_context",
+    "candidate_price_missing",
+    "no_quantified_recovery",
+    "mixed_currency_no_conversion",
 }
 
 
@@ -139,15 +166,18 @@ def _nested(mapping: Mapping[str, Any], *keys: str, default: Any = None) -> Any:
 def _authority_identity(
     assessment: Mapping[str, Any], evidence: Mapping[str, Any], value: Mapping[str, Any]
 ) -> tuple[str, str, str, date, str, str, str]:
-    assessment_version = assessment.get("care_purchase_assessment_version", assessment.get("assessment_version"))
-    evidence_version = evidence.get("care_purchase_evidence_version", evidence.get("evidence_version"))
-    value_version = value.get("care_purchase_value_version", value.get("value_version"))
-    if assessment_version != CARE_PURCHASE_ASSESSMENT_VERSION:
+    if assessment.get("care_purchase_assessment_version") != CARE_PURCHASE_ASSESSMENT_VERSION:
         raise ValueError("Unsupported Care assessment authority version.")
-    if evidence_version != CARE_PURCHASE_EVIDENCE_VERSION:
+    if assessment.get("care_purchase_assessment_schema_version") != CARE_PURCHASE_ASSESSMENT_SCHEMA_VERSION:
+        raise ValueError("Unsupported Care assessment authority schema version.")
+    if evidence.get("care_purchase_evidence_version") != CARE_PURCHASE_EVIDENCE_VERSION:
         raise ValueError("Unsupported Care Evidence authority version.")
-    if value_version != CARE_PURCHASE_VALUE_VERSION:
+    if evidence.get("care_purchase_evidence_schema_version") != CARE_PURCHASE_EVIDENCE_SCHEMA_VERSION:
+        raise ValueError("Unsupported Care Evidence authority schema version.")
+    if value.get("care_purchase_value_version") != CARE_PURCHASE_VALUE_VERSION:
         raise ValueError("Unsupported Care value authority version.")
+    if value.get("care_purchase_value_schema_version") != CARE_PURCHASE_VALUE_SCHEMA_VERSION:
+        raise ValueError("Unsupported Care value authority schema version.")
 
     account_id = _required_text(assessment.get("account_id"), "assessment.account_id")
     candidate_id = _required_text(assessment.get("candidate_id"), "assessment.candidate_id")
@@ -183,8 +213,8 @@ def _validate_assessment(assessment: Mapping[str, Any]) -> tuple[dict[str, Any],
         raise ValueError("Care assessment dimensions are required.")
     role = dimensions.get("role_utility")
     redundancy = dimensions.get("redundancy")
-    constraints = dimensions.get("user_constraints")
     compatibility = dimensions.get("compatibility")
+    constraints = assessment.get("user_constraints")
     if not all(isinstance(item, Mapping) for item in (role, redundancy, constraints, compatibility)):
         raise ValueError("Care assessment dimensions are malformed.")
     role = dict(role)
@@ -245,8 +275,20 @@ def _evidence_findings(evidence: Mapping[str, Any]) -> tuple[Mapping[str, Any], 
     ):
         if not isinstance(path, (list, tuple)):
             raise ValueError("Care Evidence findings are malformed.")
-        rows.extend(row for row in path if isinstance(row, Mapping))
+        for row in path:
+            if not isinstance(row, Mapping):
+                raise ValueError("Care Evidence finding is malformed.")
+            rows.append(row)
     return tuple(rows)
+
+
+def _known_status(value: Any, *, states: set[str], label: str) -> str:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} is malformed.")
+    status = value.get("status")
+    if status not in states:
+        raise ValueError(f"Unexpected {label}.")
+    return str(status)
 
 
 def _decision_fingerprint(material: Mapping[str, Any]) -> str:
@@ -333,12 +375,37 @@ def project_care_purchase_verdict(
     compatibility_status = compatibility["status"]
     caution_count = sum(1 for finding in compatibility.get("findings", ()) if finding.get("severity") == "caution")
     info_count = sum(1 for finding in compatibility.get("findings", ()) if finding.get("severity") == "info")
-    evidence_support_status = _nested(evidence_data, "evidence_support", "status")
-    utility_status = _nested(evidence_data, "ingredient_utility", "status")
-    candidate_spend_status = _nested(value_data, "value_context", "candidate_spend", "status")
-    recovery_status = _nested(value_data, "value_context", "owned_value_recovery", "status")
-    currency_status = _nested(value_data, "value_context", "currency_context", "status")
-    value_status = _nested(value_data, "value_context", "status")
+    evidence_support_status = _known_status(
+        evidence_data.get("evidence_support"),
+        states=_EVIDENCE_SUPPORT_STATES,
+        label="Care Evidence support status",
+    )
+    utility_status = _known_status(
+        evidence_data.get("ingredient_utility"),
+        states=_INGREDIENT_UTILITY_STATES,
+        label="Care ingredient-utility status",
+    )
+    value_context = value_data.get("value_context")
+    value_status = _known_status(
+        value_context,
+        states=_FINANCIAL_CONTEXT_STATES,
+        label="Care financial-context status",
+    )
+    candidate_spend_status = _known_status(
+        _nested(value_context, "candidate_spend"),
+        states=_CANDIDATE_SPEND_STATES,
+        label="Care candidate-spend status",
+    )
+    recovery_status = _known_status(
+        _nested(value_context, "owned_value_recovery"),
+        states={"no_low_use_eligible_owned_same_slot", *_RECOVERY_STATES},
+        label="Care owned-value-recovery status",
+    )
+    currency_status = _known_status(
+        _nested(value_context, "currency_context"),
+        states=_CURRENCY_STATES,
+        label="Care currency-context status",
+    )
     conflict = any(finding.get("claim_status") == "conflicting" for finding in evidence_findings)
     supporting: list[str] = []
     if evidence_support_status not in {None, "no_applicable_reviewed_support", "not_established_from_existing_evidence"}:
