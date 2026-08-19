@@ -8,6 +8,7 @@ import pytest
 from app.domains.care.decisions import evaluate_care_context
 from app.domains.care.routine_plan import plan_care_routine
 from app.domains.care.schemas import CARE_CONTEXT_VERSION, CareContext, CareEnvironment
+from app.domains.inventory.models import InventoryAttribute, InventoryItem
 from app.domains.purchase.candidate_truth import CarePurchaseCandidateTruth
 from app.domains.purchase.care_assessment import assess_care_purchase
 from app.domains.purchase.contract import (
@@ -21,9 +22,19 @@ from app.domains.purchase.contract import (
     resolve_purchase_strategy,
 )
 from app.domains.recommendation.context import OwnedItem
-from app.domains.recommendation.models import ShoppingCandidate
+from app.domains.recommendation.models import (
+    PurchaseDecision,
+    PurchaseEvaluation,
+    PurchaseEvaluationFactor,
+    RecommendationEntitlement,
+    RecommendationRun,
+    ShoppingCandidate,
+)
 from app.domains.routines import rules
+from app.domains.routines.models import Routine, RoutineStep
 from app.domains.routines.ontology import COMPATIBILITY_RULES, INGREDIENT_BY_KEY
+from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import func, select
 
 from tests.conftest import auth
 
@@ -65,9 +76,10 @@ def _owned(
     product_type: str = "cleanser",
     display_name: str = "Owned cleanser",
     details: dict | None = None,
+    item_id: uuid.UUID | None = None,
 ) -> OwnedItem:
     return OwnedItem(
-        id=uuid.uuid4(), category=category, subcategory=None,
+        id=item_id or uuid.uuid4(), category=category, subcategory=None,
         display_name=display_name, brand="Owned Brand",
         details=details or {"product_type": product_type}, condition="good",
         usage_count=1, last_used_at=None, purchase_price=None, currency="INR",
@@ -106,6 +118,32 @@ def _assess(truth: CarePurchaseCandidateTruth, context: CareContext):
     decisions = evaluate_care_context(context)
     plan = plan_care_routine(context, decisions)
     return assess_care_purchase(truth, context, decisions, plan)
+
+
+async def _runtime_counts(account_id: uuid.UUID) -> dict[str, int | None]:
+    factory = get_sessionmaker()
+    async with factory() as session:
+        return {
+            "candidates": await session.scalar(select(func.count(ShoppingCandidate.id)).where(ShoppingCandidate.account_id == account_id)),
+            "inventory": await session.scalar(select(func.count(InventoryItem.id)).where(InventoryItem.account_id == account_id)),
+            "attributes": await session.scalar(select(func.count(InventoryAttribute.id)).join(InventoryItem).where(InventoryItem.account_id == account_id)),
+            "runs": await session.scalar(select(func.count(RecommendationRun.id)).where(RecommendationRun.account_id == account_id)),
+            "evaluations": await session.scalar(select(func.count(PurchaseEvaluation.id)).where(PurchaseEvaluation.account_id == account_id)),
+            "factors": await session.scalar(select(func.count(PurchaseEvaluationFactor.id)).join(PurchaseEvaluation).where(PurchaseEvaluation.account_id == account_id)),
+            "decisions": await session.scalar(select(func.count(PurchaseDecision.id)).where(PurchaseDecision.account_id == account_id)),
+            "routines": await session.scalar(select(func.count(Routine.id)).where(Routine.account_id == account_id)),
+            "steps": await session.scalar(select(func.count(RoutineStep.id)).join(Routine).where(Routine.account_id == account_id)),
+            "entitlement_used": await session.scalar(select(RecommendationEntitlement.used).where(
+                RecommendationEntitlement.account_id == account_id,
+                RecommendationEntitlement.feature == "shopping_evaluation",
+            )),
+        }
+
+
+async def _candidate_updated_at(candidate_id: uuid.UUID):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        return await session.scalar(select(ShoppingCandidate.updated_at).where(ShoppingCandidate.id == candidate_id))
 
 
 def test_versions_and_frozen_strategy():
@@ -256,6 +294,67 @@ def test_fingerprint_is_material_only_and_payload_has_no_verdict_or_score():
     assert _assess(same_facts, context).assessment_fingerprint == first.assessment_fingerprint
 
 
+def test_purpose_is_metadata_only_but_unknown_terms_are_material():
+    candidate_id = uuid.uuid4()
+    purpose_only = _assess(
+        _truth(candidate_id=candidate_id, missing=("purpose",)), _context()
+    )
+    complete = _assess(_truth(candidate_id=candidate_id), _context())
+    assert purpose_only.identity_confidence["status"] == "trusted"
+    assert purpose_only.identity_confidence["missing_information"] == []
+    assert purpose_only.assessment_fingerprint == complete.assessment_fingerprint
+
+    unknown = _assess(
+        _truth(
+            candidate_id=candidate_id,
+            recognised=("niacinamide",),
+            missing=("unrecognised_ingredient:mystery-label-term",),
+        ),
+        _context(),
+    )
+    recognised = _assess(
+        _truth(candidate_id=candidate_id, recognised=("niacinamide",)), _context()
+    )
+    assert unknown.identity_confidence["status"] == "trusted_with_missing_information"
+    assert unknown.identity_confidence["missing_information"] == [
+        "unrecognised_ingredient:mystery-label-term"
+    ]
+    assert unknown.compatibility["coverage"] != recognised.compatibility["coverage"]
+    assert unknown.assessment_fingerprint != recognised.assessment_fingerprint
+
+
+def test_same_slot_overlap_is_fingerprint_material():
+    candidate_id = uuid.uuid4()
+    owned_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    glycerin = _assess(
+        _truth(candidate_id=candidate_id, recognised=("niacinamide",)),
+        _context((_owned(
+            details={"product_type": "cleanser", "active_ingredients": ["Glycerin"]},
+            item_id=owned_id,
+        ),)),
+    )
+    niacinamide = _assess(
+        _truth(candidate_id=candidate_id, recognised=("niacinamide",)),
+        _context((_owned(
+            details={"product_type": "cleanser", "active_ingredients": ["Niacinamide"]},
+            item_id=owned_id,
+        ),)),
+    )
+    assert glycerin.role_utility == niacinamide.role_utility
+    assert glycerin.redundancy["status"] == niacinamide.redundancy["status"]
+    assert glycerin.redundancy["eligible_owned_same_slot"] == niacinamide.redundancy[
+        "eligible_owned_same_slot"
+    ]
+    assert glycerin.same_slot_ingredient_overlap != niacinamide.same_slot_ingredient_overlap
+    assert glycerin.assessment_fingerprint != niacinamide.assessment_fingerprint
+
+
+def test_category_and_slot_contract_is_fail_closed():
+    malformed = _truth(category="hair", slot="cleanser")
+    with pytest.raises(ValueError, match="slot"):
+        _assess(malformed, _context())
+
+
 def test_generic_rule_helpers_preserve_canonical_outputs():
     assert rules.declared_allergy_ingredient_keys(("niacinamide",)) == frozenset({"niacinamide"})
     for rule in COMPATIBILITY_RULES:
@@ -291,7 +390,7 @@ async def test_draft_candidate_rejected_before_care_assembly(
 
 @pytest.mark.asyncio
 async def test_real_assessment_is_read_only_and_account_scoped(
-    app_client, db_clean, registered_supabase_user,
+    app_client, db_clean, registered_supabase_user, monkeypatch,
 ):
     token, account_id = await registered_supabase_user()
     intruder_token, _ = await registered_supabase_user()
@@ -308,8 +407,18 @@ async def test_real_assessment_is_read_only_and_account_scoped(
     )
     assert created.status_code == 200, created.text
     candidate_id = created.json()["candidate"]["id"]
-    before = await app_client.get(
-        f"/api/v2/shopping/candidates/{candidate_id}", headers=auth(token)
+    before_counts = await _runtime_counts(account_id)
+    before_updated_at = await _candidate_updated_at(uuid.UUID(candidate_id))
+    extraction_calls = 0
+
+    async def unexpected_extraction(*args, **kwargs):
+        nonlocal extraction_calls
+        extraction_calls += 1
+        raise AssertionError("assessment must not invoke candidate extraction")
+
+    monkeypatch.setattr(
+        "app.domains.purchase.service.extraction.extract_purchase_candidate",
+        unexpected_extraction,
     )
     first = await app_client.get(
         f"/api/v2/shopping/candidates/{candidate_id}/care-assessment?on=2026-08-19",
@@ -325,12 +434,81 @@ async def test_real_assessment_is_read_only_and_account_scoped(
     assert first.json()["dimensions"]["redundancy"]["eligible_owned_same_slot_count"] == 0
     assert "boundary" in first.json()
     assert "verdict" not in first.json()
-    after = await app_client.get(
-        f"/api/v2/shopping/candidates/{candidate_id}", headers=auth(token)
+    after_counts = await _runtime_counts(account_id)
+    after_updated_at = await _candidate_updated_at(uuid.UUID(candidate_id))
+    assert after_counts == before_counts
+    assert after_updated_at == before_updated_at
+    assert extraction_calls == 0
+
+    inactive = await app_client.post(
+        "/api/v2/shopping/evaluate",
+        headers=auth(token),
+        json={
+            "source": "manual",
+            "item": {"category": "beauty", "display_name": "Not a verdict"},
+            "client_mutation_id": "v3-05-2-care-inactive",
+        },
     )
-    assert before.json()["candidate"] == after.json()["candidate"]
+    assert inactive.status_code == 422, inactive.text
+    assert "verdict" not in inactive.json()
+    assert "purchase_evaluations" not in str(inactive.json()).lower()
     assert (await app_client.get(
         f"/api/v2/shopping/candidates/{candidate_id}/care-assessment",
         headers=auth(intruder_token),
     )).status_code == 404
     assert account_id
+
+
+@pytest.mark.asyncio
+async def test_real_metadata_edits_do_not_change_assessment(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _ = await registered_supabase_user()
+    created = await app_client.post(
+        "/api/v2/shopping/candidates/inspect", headers=auth(token),
+        json={
+            "source": "manual",
+            "item": {
+                "category": "beauty",
+                "display_name": "Metadata invariant cleanser",
+                "price": "100.00",
+                "currency": "INR",
+                "product_url": "https://example.test/old",
+                "details": {
+                    "product_type": "cleanser",
+                    "active_ingredients": ["Niacinamide"],
+                    "purpose": "hydration",
+                },
+            },
+            "client_mutation_id": "v3-05-2-metadata",
+        },
+    )
+    assert created.status_code == 200, created.text
+    candidate_id = created.json()["candidate"]["id"]
+    path = f"/api/v2/shopping/candidates/{candidate_id}/care-assessment?on=2026-08-19"
+    first = await app_client.get(path, headers=auth(token))
+    assert first.status_code == 200, first.text
+
+    corrected = await app_client.post(
+        f"/api/v2/shopping/candidates/{candidate_id}/confirm",
+        headers=auth(token),
+        json={
+            "price": "999.00",
+            "currency": "USD",
+            "product_url": "https://example.test/new",
+            "details": {
+                "product_type": "cleanser",
+                "active_ingredients": ["Niacinamide"],
+                "purpose": "barrier support",
+            },
+        },
+    )
+    assert corrected.status_code == 200, corrected.text
+    second = await app_client.get(path, headers=auth(token))
+    assert second.status_code == 200, second.text
+    first_body, second_body = first.json(), second.json()
+    assert second_body["assessment_fingerprint"] == first_body["assessment_fingerprint"]
+    for key in ("role_utility", "redundancy", "compatibility", "user_constraints"):
+        assert second_body["dimensions"][key] == first_body["dimensions"][key]
+    assert second_body["dimensions"]["evidence_support"]["status"] == "not_assessed"
+    assert second_body["dimensions"]["value_context"]["status"] == "not_assessed"

@@ -23,7 +23,11 @@ from app.domains.purchase.contract import (
     CARE_PURCHASE_ASSESSMENT_VERSION,
 )
 from app.domains.routines import rules
-from app.domains.routines.ontology import COMPATIBILITY_RULES, INGREDIENT_BY_KEY
+from app.domains.routines.ontology import (
+    COMPATIBILITY_RULES,
+    INGREDIENT_BY_KEY,
+    SLOT_BY_KEY,
+)
 
 BOUNDARY = (
     "This assessment explains the candidate's role, owned alternatives and "
@@ -97,6 +101,21 @@ def _product_payload(product) -> dict[str, Any]:
 def _slot_plan(plan: CareRoutinePlan, category: str, slot: str):
     rows = plan.skin_slots if category == "beauty" else plan.hair_slots
     return next((row for row in rows if row.slot == slot), None)
+
+
+def _assessment_relevant_missing_information(
+    truth: CarePurchaseCandidateTruth,
+) -> tuple[str, ...]:
+    """Keep only missing facts that can affect this assessment.
+
+    Candidate Truth intentionally records marketing-purpose completeness.  That
+    metadata is not an authority for Care role, safety, or compatibility and is
+    therefore excluded here while every other missing-information marker stays
+    visible and material.
+    """
+    return tuple(
+        value for value in truth.missing_information if value != "purpose"
+    )
 
 
 def _owned_same_slot(
@@ -255,10 +274,13 @@ def _fingerprint_material(
     context: CareContext,
     decisions: CareDecisionSet,
     plan: CareRoutinePlan,
+    identity_status: str,
+    missing_information: tuple[str, ...],
     role_utility: Mapping[str, Any],
     redundancy: Mapping[str, Any],
     constraints: Mapping[str, Any],
     compatibility: Mapping[str, Any],
+    overlap: tuple[Mapping[str, Any], ...],
 ) -> str:
     payload = {
         "assessment_version": CARE_PURCHASE_ASSESSMENT_VERSION,
@@ -270,6 +292,10 @@ def _fingerprint_material(
         },
         "care_slot": truth.care_slot,
         "verification_state": truth.verification_state,
+        "identity_confidence": {
+            "status": identity_status,
+            "missing_information": sorted(missing_information),
+        },
         "plan_date": context.plan_date.isoformat(),
         "care_context_version": context.context_version,
         "care_decision_fingerprint": decision_fingerprint(decisions),
@@ -280,7 +306,16 @@ def _fingerprint_material(
             "status": redundancy.get("status"),
             "selected_owned_item_id": redundancy.get("selected_owned_item_id"),
             "eligible": sorted(row["owned_item_id"] for row in redundancy.get("eligible_owned_same_slot", [])),
-            "blocked": sorted(row["owned_item_id"] for row in redundancy.get("blocked_owned_same_slot", [])),
+            "blocked": [
+                {
+                    "owned_item_id": row["owned_item_id"],
+                    "reason_codes": sorted(row.get("reason_codes", [])),
+                }
+                for row in sorted(
+                    redundancy.get("blocked_owned_same_slot", []),
+                    key=lambda row: row["owned_item_id"],
+                )
+            ],
         },
         "user_constraints": {
             "status": constraints.get("status"),
@@ -288,9 +323,30 @@ def _fingerprint_material(
         },
         "compatibility": {
             "status": compatibility.get("status"),
-            "rule_ids": sorted(row["rule_id"] for row in compatibility.get("findings", [])),
+            "coverage": compatibility.get("coverage"),
+            "findings": [
+                {
+                    "rule_id": row["rule_id"],
+                    "severity": row["severity"],
+                    "owned_item_id": row["owned_item_id"],
+                }
+                for row in sorted(
+                    compatibility.get("findings", []),
+                    key=lambda row: (row["rule_id"], row["owned_item_id"]),
+                )
+            ],
             "compared_owned_item_ids": sorted(compatibility.get("compared_owned_item_ids", [])),
         },
+        "same_slot_ingredient_overlap": [
+            {
+                "ingredient_key": row["ingredient_key"],
+                "owned_item_ids": sorted(row.get("owned_item_ids", [])),
+            }
+            for row in sorted(
+                overlap,
+                key=lambda row: row["ingredient_key"],
+            )
+        ],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -305,21 +361,28 @@ def assess_care_purchase(
     """Assess one trusted candidate beside authoritative owned Care state."""
     if not truth.facts_trusted:
         raise ValueError("Only trusted Care candidate facts can be assessed.")
+    if truth.category not in {"beauty", "hair"}:
+        raise ValueError("Care purchase assessment category must be beauty or hair.")
+    if truth.care_slot is not None:
+        slot = SLOT_BY_KEY.get(truth.care_slot)
+        if slot is None or slot.category != truth.category:
+            raise ValueError("Care candidate slot does not match its category.")
     if context.account_id != decisions.account_id or context.account_id != plan.account_id:
         raise ValueError("Care assessment authorities must share one account.")
     if context.plan_date != decisions.plan_date or context.plan_date != plan.plan_date:
         raise ValueError("Care assessment authorities must share one plan date.")
 
+    missing_information = _assessment_relevant_missing_information(truth)
     identity_status = (
         "trusted_with_missing_information"
-        if truth.missing_information
+        if missing_information
         else "trusted"
     )
     identity = {
         "status": identity_status,
         "verification_state": truth.verification_state,
         "facts_trusted": True,
-        "missing_information": list(truth.missing_information),
+        "missing_information": list(missing_information),
     }
     eligible, blocked, slot_plan = _owned_same_slot(truth, context, decisions, plan)
     if truth.care_slot is None or slot_plan is None:
@@ -365,7 +428,17 @@ def assess_care_purchase(
     constraints = _user_constraints(truth, context)
     compatibility = _compatibility(truth, context, plan)
     fingerprint = _fingerprint_material(
-        truth, context, decisions, plan, role, redundancy, constraints, compatibility
+        truth,
+        context,
+        decisions,
+        plan,
+        identity_status,
+        missing_information,
+        role,
+        redundancy,
+        constraints,
+        compatibility,
+        overlap,
     )
     return CarePurchaseAssessment(
         assessment_version=CARE_PURCHASE_ASSESSMENT_VERSION,
