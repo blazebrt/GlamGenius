@@ -7,8 +7,15 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from sqlalchemy import func, select
 from app.domains.inventory import service as inventory_service
-from app.domains.inventory.models import BeautyProductDetail, InventoryItem
+from app.domains.inventory.models import (
+    BeautyProductDetail,
+    InventoryAttribute,
+    InventoryItem,
+    InventoryValueEvent,
+    ItemUsageEvent,
+)
 from app.domains.purchase import service as purchase_service
 from app.domains.purchase.care_value import (
     project_care_purchase_value,
@@ -27,7 +34,15 @@ from app.domains.purchase.contract import (
     PURCHASE_STRATEGY_REGISTRY_VERSION,
     resolve_purchase_strategy,
 )
-from app.domains.recommendation.models import ShoppingCandidate
+from app.domains.recommendation.models import (
+    PurchaseDecision,
+    PurchaseEvaluation,
+    PurchaseEvaluationFactor,
+    RecommendationEntitlement,
+    RecommendationRun,
+    ShoppingCandidate,
+)
+from app.domains.routines.models import Routine, RoutineStep
 from app.shared.database.sql import get_sessionmaker
 
 from tests.conftest import auth
@@ -63,6 +78,128 @@ def _recovery(item_id: str = "22222222-2222-2222-2222-222222222222", *, value=42
         "inputs": {"purchase_price": 1000 if value is not None else None, "remaining_estimate": 0.8},
         "explanation": "Estimated Value to Recover; never exact.",
     }
+
+
+async def _seed_runtime_records(
+    account_id: uuid.UUID,
+    *,
+    item_specs: tuple[dict, ...] = (),
+    price: Decimal | None = Decimal("1299.00"),
+    category: str = "beauty",
+    product_type: str = "cleanser",
+) -> tuple[uuid.UUID, tuple[uuid.UUID, ...]]:
+    """Seed one trusted candidate and real owned Care products for API tests."""
+    candidate_id = uuid.uuid4()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        session.add(
+            ShoppingCandidate(
+                id=candidate_id,
+                account_id=account_id,
+                source="manual",
+                category=category,
+                display_name="Runtime candidate cleanser",
+                details={
+                    "product_type": product_type,
+                    "purpose": "cleanse",
+                    "active_ingredients": ["Niacinamide"],
+                },
+                verification_state="confirmed",
+                price=price,
+                currency="INR",
+            )
+        )
+        item_ids: list[uuid.UUID] = []
+        for index, spec in enumerate(item_specs):
+            item_id = spec.get("id", uuid.uuid4())
+            item_ids.append(item_id)
+            session.add(
+                InventoryItem(
+                    id=item_id,
+                    account_id=account_id,
+                    category=category,
+                    subcategory=spec.get("slot", product_type),
+                    display_name=spec.get("display_name", f"Owned Care item {index}"),
+                    status=spec.get("status", "active"),
+                    verification_state="confirmed",
+                    purchase_price=spec.get("purchase_price", Decimal("1000.00")),
+                    currency=spec.get("currency", "INR"),
+                    usage_count=spec.get("usage_count", 0),
+                    last_used_at=spec.get("last_used_at", date(2026, 1, 1)),
+                    condition=spec.get("condition", "good"),
+                    created_at=datetime(2026, 1, 1),
+                )
+            )
+            await session.flush()
+            session.add(
+                BeautyProductDetail(
+                    item_id=item_id,
+                    product_type=spec.get("slot", product_type),
+                    purpose="cleanse",
+                    remaining_percent=spec.get("remaining_percent", 80),
+                    expiry_date=spec.get("expiry_date"),
+                    ingredients_text="Niacinamide",
+                )
+            )
+        await session.commit()
+    return candidate_id, tuple(item_ids)
+
+
+async def _runtime_counts(account_id: uuid.UUID) -> dict[str, object]:
+    factory = get_sessionmaker()
+    async with factory() as session:
+        entitlement = await session.scalar(
+            select(RecommendationEntitlement).where(
+                RecommendationEntitlement.account_id == account_id,
+                RecommendationEntitlement.feature == "shopping_evaluation",
+            )
+        )
+        return {
+            "candidates": await session.scalar(
+                select(func.count(ShoppingCandidate.id)).where(ShoppingCandidate.account_id == account_id)
+            ),
+            "inventory": await session.scalar(
+                select(func.count(InventoryItem.id)).where(InventoryItem.account_id == account_id)
+            ),
+            "attributes": await session.scalar(
+                select(func.count(InventoryAttribute.id)).join(InventoryItem).where(InventoryItem.account_id == account_id)
+            ),
+            "value_events": await session.scalar(
+                select(func.count(InventoryValueEvent.id)).join(InventoryItem).where(InventoryItem.account_id == account_id)
+            ),
+            "usage_events": await session.scalar(
+                select(func.count(ItemUsageEvent.id)).join(InventoryItem).where(InventoryItem.account_id == account_id)
+            ),
+            "runs": await session.scalar(
+                select(func.count(RecommendationRun.id)).where(RecommendationRun.account_id == account_id)
+            ),
+            "evaluations": await session.scalar(
+                select(func.count(PurchaseEvaluation.id)).where(PurchaseEvaluation.account_id == account_id)
+            ),
+            "factors": await session.scalar(
+                select(func.count(PurchaseEvaluationFactor.id)).join(PurchaseEvaluation).where(PurchaseEvaluation.account_id == account_id)
+            ),
+            "decisions": await session.scalar(
+                select(func.count(PurchaseDecision.id)).where(PurchaseDecision.account_id == account_id)
+            ),
+            "routines": await session.scalar(
+                select(func.count(Routine.id)).where(Routine.account_id == account_id)
+            ),
+            "steps": await session.scalar(
+                select(func.count(RoutineStep.id)).join(Routine).where(Routine.account_id == account_id)
+            ),
+            "entitlement": None
+            if entitlement is None
+            else (entitlement.included, entitlement.used, entitlement.period_key),
+        }
+
+
+async def _candidate_updated_at(candidate_id: uuid.UUID):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        return await session.scalar(
+            select(ShoppingCandidate.updated_at).where(ShoppingCandidate.id == candidate_id)
+        )
 
 
 def test_versions_and_care_strategy_remain_frozen():
@@ -325,3 +462,265 @@ async def test_runtime_low_use_recovery_uses_canonical_inventory_authority(
     assert row["missing_inputs"] == expected["missing_inputs"]
     assert row["inputs"] == expected["inputs"]
     assert row["estimated_value"] == format(Decimal(str(expected["estimated_value"])).quantize(Decimal("0.01")), "f")
+
+
+@pytest.mark.asyncio
+async def test_runtime_regular_use_is_assessment_eligible_but_not_recovery(
+    app_client, db_clean, registered_supabase_user
+):
+    token, account_id = await registered_supabase_user()
+    candidate_id, (item_id,) = await _seed_runtime_records(
+        account_id,
+        item_specs=(
+            {
+                "usage_count": 3,
+                "last_used_at": date(2026, 8, 10),
+                "display_name": "Regularly used cleanser",
+            },
+        ),
+    )
+    assessment = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-assessment?on=2026-08-19",
+        headers=auth(token),
+    )
+    assert assessment.status_code == 200, assessment.text
+    eligible = assessment.json()["dimensions"]["redundancy"]["eligible_owned_same_slot"]
+    assert str(item_id) in {row["owned_item_id"] for row in eligible}
+
+    response = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-value?on=2026-08-19",
+        headers=auth(token),
+    )
+    assert response.status_code == 200, response.text
+    recovery = response.json()["value_context"]["owned_value_recovery"]
+    assert recovery["status"] == "no_low_use_eligible_owned_same_slot"
+    assert str(item_id) not in {row["owned_item_id"] for row in recovery["items"]}
+
+
+@pytest.mark.asyncio
+async def test_runtime_blocked_low_use_never_becomes_recovery(
+    app_client, db_clean, registered_supabase_user
+):
+    token, account_id = await registered_supabase_user()
+    candidate_id, (item_id,) = await _seed_runtime_records(
+        account_id,
+        item_specs=(
+            {
+                "expiry_date": date(2026, 8, 18),
+                "display_name": "Expired cleanser",
+            },
+        ),
+    )
+    assessment = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-assessment?on=2026-08-19",
+        headers=auth(token),
+    )
+    assert assessment.status_code == 200, assessment.text
+    redundancy = assessment.json()["dimensions"]["redundancy"]
+    assert str(item_id) in {row["owned_item_id"] for row in redundancy["blocked_owned_same_slot"]}
+    assert str(item_id) not in {row["owned_item_id"] for row in redundancy["eligible_owned_same_slot"]}
+
+    response = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-value?on=2026-08-19",
+        headers=auth(token),
+    )
+    assert response.status_code == 200, response.text
+    recovery = response.json()["value_context"]["owned_value_recovery"]
+    assert str(item_id) not in {row["owned_item_id"] for row in recovery["items"]}
+
+
+@pytest.mark.asyncio
+async def test_runtime_wrong_slot_is_not_value_recovery(
+    app_client, db_clean, registered_supabase_user
+):
+    token, account_id = await registered_supabase_user()
+    candidate_id, (item_id,) = await _seed_runtime_records(
+        account_id,
+        item_specs=({"slot": "serum", "display_name": "Owned serum"},),
+    )
+    assessment = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-assessment?on=2026-08-19",
+        headers=auth(token),
+    )
+    assert assessment.status_code == 200, assessment.text
+    redundancy = assessment.json()["dimensions"]["redundancy"]
+    assert str(item_id) not in {row["owned_item_id"] for row in redundancy["eligible_owned_same_slot"]}
+
+    response = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-value?on=2026-08-19",
+        headers=auth(token),
+    )
+    assert response.status_code == 200, response.text
+    recovery = response.json()["value_context"]["owned_value_recovery"]
+    assert str(item_id) not in {row["owned_item_id"] for row in recovery["items"]}
+
+
+@pytest.mark.asyncio
+async def test_runtime_missing_owned_price_is_unquantified(
+    app_client, db_clean, registered_supabase_user
+):
+    token, account_id = await registered_supabase_user()
+    candidate_id, (item_id,) = await _seed_runtime_records(
+        account_id,
+        item_specs=({"purchase_price": None, "display_name": "Price-less cleanser"},),
+    )
+    response = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-value?on=2026-08-19",
+        headers=auth(token),
+    )
+    assert response.status_code == 200, response.text
+    recovery = response.json()["value_context"]["owned_value_recovery"]
+    assert recovery["status"] == "low_use_recovery_unquantified"
+    row = next(row for row in recovery["items"] if row["owned_item_id"] == str(item_id))
+    assert row["estimated_value"] is None
+    assert "purchase_price" in row["missing_inputs"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_explicit_plan_date_reaches_inventory_authorities(
+    app_client, db_clean, registered_supabase_user, monkeypatch
+):
+    token, account_id = await registered_supabase_user()
+    candidate_id, _ = await _seed_runtime_records(account_id)
+    requested = date(2026, 8, 19)
+    low_use_dates: list[date | None] = []
+    value_dates: list[date | None] = []
+    original_low_use = inventory_service.is_low_use
+    original_value = inventory_service.value_to_recover
+
+    def low_use_spy(item, today=None):
+        low_use_dates.append(today)
+        return original_low_use(item, today=today)
+
+    def value_spy(item, details, today=None):
+        value_dates.append(today)
+        return original_value(item, details, today=today)
+
+    monkeypatch.setattr(inventory_service, "is_low_use", low_use_spy)
+    monkeypatch.setattr(inventory_service, "value_to_recover", value_spy)
+    response = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-value?on={requested.isoformat()}",
+        headers=auth(token),
+    )
+    assert response.status_code == 200, response.text
+    assert requested in low_use_dates
+    assert value_dates and all(value_date == requested for value_date in value_dates)
+
+
+@pytest.mark.asyncio
+async def test_runtime_value_is_account_isolated(
+    app_client, db_clean, registered_supabase_user
+):
+    token_a, account_a = await registered_supabase_user()
+    token_b, _ = await registered_supabase_user()
+    candidate_id, _ = await _seed_runtime_records(account_a)
+    response = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-value?on=2026-08-19",
+        headers=auth(token_b),
+    )
+    assert response.status_code == 404
+    assert "1299" not in response.text
+    assert "Owned" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_runtime_value_gets_are_read_only_and_deterministic(
+    app_client, db_clean, registered_supabase_user
+):
+    token, account_id = await registered_supabase_user()
+    candidate_id, _ = await _seed_runtime_records(account_id)
+    before_counts = await _runtime_counts(account_id)
+    before_updated_at = await _candidate_updated_at(candidate_id)
+    path = f"/api/v2/shopping/candidates/{candidate_id}/care-value?on=2026-08-19"
+    first = await app_client.get(path, headers=auth(token))
+    second = await app_client.get(path, headers=auth(token))
+    assert first.status_code == second.status_code == 200, first.text
+    assert first.json() == second.json()
+    assert first.json()["value_fingerprint"] == second.json()["value_fingerprint"]
+    after_counts = await _runtime_counts(account_id)
+    assert after_counts == before_counts
+    assert await _candidate_updated_at(candidate_id) == before_updated_at
+    assert after_counts["value_events"] == before_counts["value_events"]
+    assert after_counts["entitlement"] == before_counts["entitlement"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_value_does_not_invoke_ai_or_candidate_extraction(
+    app_client, db_clean, registered_supabase_user, monkeypatch
+):
+    token, account_id = await registered_supabase_user()
+    candidate_id, _ = await _seed_runtime_records(account_id)
+    calls = {"extraction": 0, "ai": 0}
+
+    async def extraction_spy(*args, **kwargs):
+        calls["extraction"] += 1
+        raise AssertionError("Care value projection must not extract candidates")
+
+    async def ai_spy(*args, **kwargs):
+        calls["ai"] += 1
+        raise AssertionError("Care value projection must not call the AI gateway")
+
+    monkeypatch.setattr("app.domains.purchase.extraction.extract_purchase_candidate", extraction_spy)
+    monkeypatch.setattr("app.domains.ai_gateway.gateway.run_structured", ai_spy)
+    response = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-value?on=2026-08-19",
+        headers=auth(token),
+    )
+    assert response.status_code == 200, response.text
+    assert calls == {"extraction": 0, "ai": 0}
+
+
+@pytest.mark.asyncio
+async def test_runtime_metadata_only_candidate_correction_preserves_value_fingerprint(
+    app_client, db_clean, registered_supabase_user
+):
+    token, account_id = await registered_supabase_user()
+    candidate_id, _ = await _seed_runtime_records(account_id)
+    path = f"/api/v2/shopping/candidates/{candidate_id}/care-value?on=2026-08-19"
+    before = await app_client.get(path, headers=auth(token))
+    assert before.status_code == 200, before.text
+    before_body = before.json()
+    corrected = await app_client.post(
+        f"/api/v2/shopping/candidates/{candidate_id}/confirm",
+        headers=auth(token),
+        json={
+            "brand": "Changed brand",
+            "product_url": "https://example.test/product",
+            "details": {
+                "product_type": "cleanser",
+                "purpose": "gentle cleanse updated",
+                "active_ingredients": ["Niacinamide"],
+            },
+        },
+    )
+    assert corrected.status_code == 200, corrected.text
+    after = await app_client.get(path, headers=auth(token))
+    assert after.status_code == 200, after.text
+    assert after.json()["value_fingerprint"] == before_body["value_fingerprint"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_care_evaluate_remains_inactive_and_side_effect_free(
+    app_client, db_clean, registered_supabase_user
+):
+    token, account_id = await registered_supabase_user()
+    candidate_id, _ = await _seed_runtime_records(account_id)
+    value = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-value?on=2026-08-19",
+        headers=auth(token),
+    )
+    assert value.status_code == 200, value.text
+    before = await _runtime_counts(account_id)
+    for category in ("beauty", "hair"):
+        response = await app_client.post(
+            "/api/v2/shopping/evaluate",
+            headers=auth(token),
+            json={
+                "source": "manual",
+                "item": {"category": category, "display_name": "Inactive Care candidate"},
+                "client_mutation_id": f"v3-05-4-inactive-{category}",
+            },
+        )
+        assert response.status_code == 422, response.text
+        assert "verdict" not in response.json()
+    assert await _runtime_counts(account_id) == before
