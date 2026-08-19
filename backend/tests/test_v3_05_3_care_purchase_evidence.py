@@ -114,6 +114,23 @@ def _reviewed_path(
     )
 
 
+def _utility_path(*, claim_status: str = "supported") -> IngredientUtilityPath:
+    return IngredientUtilityPath(
+        ingredient_key="niacinamide",
+        ingredient_family="niacinamide",
+        claim_id=uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+        claim_key="skin.reviewed.niacinamide.utility",
+        claim_version=1,
+        claim_summary="Reviewed general ingredient context.",
+        claim_scope="Ingredient-level context only; not product efficacy.",
+        claim_type="usage_context",
+        evidence_strength="moderate",
+        claim_status=claim_status,
+        applicability={"use": "skin_care"},
+        sources=(_reviewed_path().sources[0],),
+    )
+
+
 def test_versions_strategy_and_boundary_are_frozen():
     assert CARE_PURCHASE_EVIDENCE_VERSION == "v3-05.3"
     assert CARE_PURCHASE_EVIDENCE_SCHEMA_VERSION == "v3-05.3"
@@ -192,15 +209,7 @@ def test_known_ingredient_is_not_evidence_and_ontology_note_is_not_authority():
 
 
 def test_explicit_ingredient_path_and_unknown_label_boundaries():
-    utility_path = IngredientUtilityPath(
-        ingredient_key="niacinamide", ingredient_family="niacinamide",
-        claim_id=uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
-        claim_key="skin.reviewed.niacinamide.utility", claim_version=1,
-        claim_summary="Reviewed general ingredient context.",
-        claim_scope="Ingredient-level context only; not product efficacy.",
-        claim_type="usage_context", evidence_strength="moderate", claim_status="supported",
-        applicability={"use": "skin_care"}, sources=(_reviewed_path().sources[0],),
-    )
+    utility_path = _utility_path()
     supported = project_care_purchase_evidence(
         _assessment(), ingredient_evidence=(utility_path,), candidate_truth=SimpleNamespace(
             recognised_ingredient_keys=("niacinamide",),
@@ -208,6 +217,7 @@ def test_explicit_ingredient_path_and_unknown_label_boundaries():
     ).as_dict()
     assert supported["ingredient_utility"]["status"] == "reviewed_utility_available"
     assert supported["ingredient_utility"]["findings"][0]["claim_key"] == "skin.reviewed.niacinamide.utility"
+    assert supported["ingredient_utility"]["findings"][0]["substantive_support"] is True
 
     unknown = project_care_purchase_evidence(
         _assessment(missing=("unrecognised_ingredient:mystery-label",)),
@@ -289,20 +299,43 @@ def test_source_order_is_canonical_for_payload_and_fingerprint():
 
 
 def test_one_shot_ingredient_evidence_matches_tuple_projection():
-    utility_path = IngredientUtilityPath(
-        ingredient_key="niacinamide", ingredient_family="niacinamide",
-        claim_id=uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
-        claim_key="skin.reviewed.niacinamide.utility", claim_version=1,
-        claim_summary="Reviewed general ingredient context.",
-        claim_scope="Ingredient-level context only; not product efficacy.",
-        claim_type="usage_context", evidence_strength="moderate", claim_status="supported",
-        applicability={"use": "skin_care"}, sources=(_reviewed_path().sources[0],),
-    )
+    utility_path = _utility_path()
     truth = SimpleNamespace(recognised_ingredient_keys=("niacinamide",))
     tuple_result = project_care_purchase_evidence(_assessment(), ingredient_evidence=(utility_path,), candidate_truth=truth).as_dict()
     generator_result = project_care_purchase_evidence(_assessment(), ingredient_evidence=(path for path in (utility_path,)), candidate_truth=truth).as_dict()
     assert generator_result["ingredient_utility"]["findings"] == tuple_result["ingredient_utility"]["findings"]
     assert generator_result["projection_fingerprint"] == tuple_result["projection_fingerprint"]
+
+
+@pytest.mark.parametrize("claim_status", ("qualified", "conflicting", "unsupported"))
+def test_non_supported_ingredient_context_never_becomes_positive_utility(claim_status):
+    body = project_care_purchase_evidence(
+        _assessment(),
+        ingredient_evidence=(_utility_path(claim_status=claim_status),),
+        candidate_truth=SimpleNamespace(recognised_ingredient_keys=("niacinamide",)),
+    ).as_dict()
+    assert body["ingredient_utility"]["status"] == "not_established_from_existing_evidence"
+    assert body["ingredient_utility"]["findings"][0]["substantive_support"] is False
+
+
+def test_mixed_ingredient_context_is_partial_and_remains_visible():
+    body = project_care_purchase_evidence(
+        _assessment(),
+        ingredient_evidence=(_utility_path(), _utility_path(claim_status="qualified")),
+        candidate_truth=SimpleNamespace(recognised_ingredient_keys=("niacinamide",)),
+    ).as_dict()
+    assert body["ingredient_utility"]["status"] == "reviewed_utility_partial"
+    assert sorted(row["substantive_support"] for row in body["ingredient_utility"]["findings"]) == [False, True]
+
+
+def test_supported_ingredient_context_with_unknown_term_is_partial():
+    body = project_care_purchase_evidence(
+        _assessment(missing=("unrecognised_ingredient:mystery-term",)),
+        ingredient_evidence=(_utility_path(),),
+        candidate_truth=SimpleNamespace(recognised_ingredient_keys=("niacinamide",)),
+    ).as_dict()
+    assert body["ingredient_utility"]["status"] == "reviewed_utility_partial"
+    assert body["ingredient_utility"]["unknown_ingredient_terms"] == ["mystery-term"]
 
 
 async def _runtime_counts(account_id: uuid.UUID) -> dict[str, int | bool | None]:

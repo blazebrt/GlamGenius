@@ -229,10 +229,7 @@ def _utility_finding(path: Any) -> dict[str, Any]:
         "evidence_strength": _path_value(path, "evidence_strength"),
         "claim_status": _path_value(path, "claim_status"),
         "applicability": _json_value(_path_value(path, "applicability")),
-        "substantive_support": (
-            _path_value(path, "relationship") == "supports"
-            and _path_value(path, "claim_status") == "supported"
-        ),
+        "substantive_support": _path_value(path, "claim_status") == "supported",
         "sources": _sources(path),
     }
 
@@ -367,9 +364,21 @@ def project_care_purchase_evidence(
     if not recognised:
         utility_status = INSUFFICIENT_CANDIDATE_INFORMATION
     else:
-        utility_findings = [_utility_finding(path) for path in utility_paths]
-        if utility_findings:
-            utility_status = REVIEWED_UTILITY_PARTIAL if missing else REVIEWED_UTILITY_AVAILABLE
+        supported_utility_paths = tuple(
+            path
+            for path in utility_paths
+            if _path_value(path, "claim_status") == "supported"
+        )
+        has_context_only_paths = bool(utility_paths) and not all(
+            _path_value(path, "claim_status") == "supported"
+            for path in utility_paths
+        )
+        if supported_utility_paths:
+            utility_status = (
+                REVIEWED_UTILITY_PARTIAL
+                if missing or has_context_only_paths
+                else REVIEWED_UTILITY_AVAILABLE
+            )
         else:
             utility_status = NOT_ESTABLISHED_FROM_EXISTING_EVIDENCE
     unknown = sorted(
