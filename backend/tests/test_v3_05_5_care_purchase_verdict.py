@@ -95,8 +95,10 @@ def _evidence(
     utility_status: str = "not_established_from_existing_evidence",
     findings: list[dict] | None = None,
     utility_findings: list[dict] | None = None,
+    reviewed_context: bool | None = None,
     fingerprint: str = "evidence-fingerprint",
 ) -> dict:
+    support_findings = findings or []
     return {
         "care_purchase_evidence_version": CARE_PURCHASE_EVIDENCE_VERSION,
         "care_purchase_evidence_schema_version": CARE_PURCHASE_EVIDENCE_SCHEMA_VERSION,
@@ -106,7 +108,11 @@ def _evidence(
         "plan_date": assessment["plan_date"],
         "assessment_fingerprint": assessment["assessment_fingerprint"],
         "projection_fingerprint": fingerprint,
-        "evidence_support": {"status": status, "findings": findings or []},
+        "evidence_support": {
+            "status": status,
+            "reviewed_context": bool(support_findings) if reviewed_context is None else reviewed_context,
+            "findings": support_findings,
+        },
         "ingredient_utility": {"status": utility_status, "findings": utility_findings or []},
     }
 
@@ -236,6 +242,47 @@ def test_conflicting_evidence_waits_unsupported_and_qualified_do_not():
         assert body["verdict"] == "buy"
 
 
+def test_reviewed_evidence_context_uses_canonical_boolean():
+    assessment = _assessment()
+    insufficient = _evidence(
+        assessment,
+        status="insufficient_candidate_information",
+        reviewed_context=False,
+    )
+    assert "reviewed_evidence_context_available" not in _project(
+        assessment, insufficient
+    )["supporting_reason_codes"]
+
+    contextual = _evidence(
+        assessment,
+        status="no_applicable_reviewed_support",
+        findings=[{"claim_status": "qualified", "claim_key": "claim.context"}],
+        reviewed_context=True,
+    )
+    body = _project(assessment, contextual)
+    assert body["verdict"] == "buy"
+    assert "reviewed_evidence_context_available" in body["supporting_reason_codes"]
+
+
+@pytest.mark.parametrize(
+    ("reviewed_context", "findings"),
+    (
+        (False, [{"claim_status": "qualified"}]),
+        (True, []),
+        ("true", []),
+    ),
+)
+def test_malformed_reviewed_evidence_context_fails_closed(reviewed_context, findings):
+    assessment = _assessment()
+    evidence = _evidence(
+        assessment,
+        reviewed_context=reviewed_context,
+        findings=findings,
+    )
+    with pytest.raises(ValueError):
+        _project(assessment, evidence)
+
+
 def test_known_ingredient_without_utility_mapping_does_not_block_buy():
     body = _project(_assessment(), _evidence(_assessment()))
     assert body["verdict"] == "buy"
@@ -267,6 +314,130 @@ def test_price_recovery_and_currency_gates():
     assert mixed["primary_reason_code"] == "mixed_currency_no_conversion"
 
 
+@pytest.mark.parametrize(
+    ("financial_status", "price_status", "recovery_status", "currency_status"),
+    (
+        (
+            "financial_context_unavailable",
+            "recorded",
+            "no_low_use_eligible_owned_same_slot",
+            "no_quantified_recovery",
+        ),
+        (
+            "financial_context_available",
+            "missing",
+            "no_low_use_eligible_owned_same_slot",
+            "candidate_price_missing",
+        ),
+        (
+            "financial_context_available",
+            "recorded",
+            "no_low_use_eligible_owned_same_slot",
+            "candidate_price_missing",
+        ),
+        (
+            "financial_context_available",
+            "recorded",
+            "low_use_recovery_estimated",
+            "no_quantified_recovery",
+        ),
+        (
+            "financial_context_available",
+            "recorded",
+            "low_use_recovery_unquantified",
+            "no_quantified_recovery",
+        ),
+        (
+            "financial_context_available",
+            "recorded",
+            "no_low_use_eligible_owned_same_slot",
+            "same_currency_context",
+        ),
+    ),
+)
+def test_malformed_value_authority_fails_closed(
+    financial_status, price_status, recovery_status, currency_status
+):
+    assessment = _assessment()
+    value = _value(
+        assessment,
+        financial_status=financial_status,
+        price_status=price_status,
+        recovery_status=recovery_status,
+        currency_status=currency_status,
+    )
+    with pytest.raises(ValueError):
+        _project(assessment, value=value)
+
+
+@pytest.mark.parametrize(
+    ("financial_status", "price_status", "recovery_status", "currency_status", "verdict"),
+    (
+        (
+            "financial_context_available",
+            "recorded",
+            "no_low_use_eligible_owned_same_slot",
+            "no_quantified_recovery",
+            "buy",
+        ),
+        (
+            "financial_context_available",
+            "recorded",
+            "low_use_recovery_estimated",
+            "same_currency_context",
+            "wait",
+        ),
+        (
+            "financial_context_partial",
+            "recorded",
+            "low_use_recovery_partially_estimated",
+            "same_currency_context",
+            "wait",
+        ),
+        (
+            "financial_context_partial",
+            "recorded",
+            "low_use_recovery_unquantified",
+            "no_quantified_recovery",
+            "wait",
+        ),
+        (
+            "financial_context_unavailable",
+            "missing",
+            "no_low_use_eligible_owned_same_slot",
+            "candidate_price_missing",
+            "wait",
+        ),
+        (
+            "financial_context_partial",
+            "missing",
+            "low_use_recovery_estimated",
+            "candidate_price_missing",
+            "wait",
+        ),
+        (
+            "financial_context_unavailable",
+            "missing",
+            "low_use_recovery_unquantified",
+            "candidate_price_missing",
+            "wait",
+        ),
+    ),
+)
+def test_canonical_value_authority_combinations_are_accepted(
+    financial_status, price_status, recovery_status, currency_status, verdict
+):
+    assessment = _assessment()
+    value = _value(
+        assessment,
+        financial_status=financial_status,
+        price_status=price_status,
+        recovery_status=recovery_status,
+        currency_status=currency_status,
+    )
+    assert _project(assessment, value=value)["verdict"] == verdict
+
+
 def test_price_magnitude_does_not_create_affordability_judgment():
     assessment = _assessment()
     low = _project(assessment, value=_value(assessment, amount="100.00", fingerprint="value-low"))
@@ -288,8 +459,39 @@ def test_redundancy_policy_states():
     assert _project(optional_owned)["primary_reason_code"] == "optional_role_already_owned"
     optional_unowned = _assessment(role_status="optional_role_not_required", required=False, is_gap=False)
     assert _project(optional_unowned)["primary_reason_code"] == "optional_role_not_required"
+    unresolved = _assessment(
+        role_status="role_unresolved",
+        required=False,
+        is_gap=False,
+        redundancy_status="role_unresolved",
+    )
+    assert _project(unresolved)["primary_reason_code"] == "care_role_unresolved"
     blocked_gap = _assessment()
     assert _project(blocked_gap)["verdict"] == "buy"
+
+
+@pytest.mark.parametrize(
+    ("role_status", "required", "is_gap", "redundancy_status", "count", "selected"),
+    (
+        ("optional_role_not_required", False, False, "role_unresolved", 0, None),
+        ("addresses_required_gap", True, True, "role_unresolved", 0, None),
+        ("role_unresolved", False, False, "none_eligible_owned_same_slot", 0, None),
+        ("addresses_required_gap", True, True, "none_eligible_owned_same_slot", 0, "item-a"),
+    ),
+)
+def test_role_and_redundancy_pairing_fails_closed(
+    role_status, required, is_gap, redundancy_status, count, selected
+):
+    assessment = _assessment(
+        role_status=role_status,
+        required=required,
+        is_gap=is_gap,
+        redundancy_status=redundancy_status,
+        count=count,
+        selected=selected,
+    )
+    with pytest.raises(ValueError):
+        _project(assessment)
 
 
 @pytest.mark.parametrize(

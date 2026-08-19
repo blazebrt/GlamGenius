@@ -105,6 +105,7 @@ _CURRENCY_STATES = {
     "no_quantified_recovery",
     "mixed_currency_no_conversion",
 }
+_NO_RECOVERY = "no_low_use_eligible_owned_same_slot"
 
 
 def _json_value(value: Any) -> Any:
@@ -231,6 +232,8 @@ def _validate_assessment(assessment: Mapping[str, Any]) -> tuple[dict[str, Any],
         raise ValueError("Unexpected Care user-constraint state.")
     if compatibility.get("status") not in _COMPATIBILITY_STATES:
         raise ValueError("Unexpected Care compatibility state.")
+    if (role_status == "role_unresolved") != (redundancy_status == "role_unresolved"):
+        raise ValueError("Care role and redundancy states are inconsistent.")
     try:
         count = int(redundancy.get("eligible_owned_same_slot_count", 0))
     except (TypeError, ValueError) as exc:
@@ -246,6 +249,8 @@ def _validate_assessment(assessment: Mapping[str, Any]) -> tuple[dict[str, Any],
     if not expected_counts[redundancy_status](count):
         raise ValueError("Care redundancy state and count are inconsistent.")
     selected = redundancy.get("selected_owned_item_id")
+    if redundancy_status == "none_eligible_owned_same_slot" and selected is not None:
+        raise ValueError("Empty Care redundancy state cannot have a selected item.")
     if role_status == "addresses_required_gap" and (
         role.get("required") is not True or role.get("is_gap") is not True or count != 0 or selected is not None
     ):
@@ -289,6 +294,82 @@ def _known_status(value: Any, *, states: set[str], label: str) -> str:
     if status not in states:
         raise ValueError(f"Unexpected {label}.")
     return str(status)
+
+
+def _validate_evidence_authority(evidence: Mapping[str, Any]) -> tuple[str, str, bool]:
+    evidence_support = evidence.get("evidence_support")
+    evidence_support_status = _known_status(
+        evidence_support,
+        states=_EVIDENCE_SUPPORT_STATES,
+        label="Care Evidence support status",
+    )
+    reviewed_context = evidence_support.get("reviewed_context")
+    if not isinstance(reviewed_context, bool):
+        raise ValueError("Care Evidence reviewed_context must be a boolean.")
+    support_findings = evidence_support.get("findings")
+    if not isinstance(support_findings, (list, tuple)):
+        raise ValueError("Care Evidence findings are malformed.")
+    if reviewed_context != bool(support_findings):
+        raise ValueError("Care Evidence reviewed_context and findings are inconsistent.")
+    utility_status = _known_status(
+        evidence.get("ingredient_utility"),
+        states=_INGREDIENT_UTILITY_STATES,
+        label="Care ingredient-utility status",
+    )
+    return evidence_support_status, utility_status, reviewed_context
+
+
+def _validate_value_authority(value: Mapping[str, Any]) -> tuple[str, str, str, str]:
+    value_context = value.get("value_context")
+    financial_status = _known_status(
+        value_context,
+        states=_FINANCIAL_CONTEXT_STATES,
+        label="Care financial-context status",
+    )
+    candidate_spend_status = _known_status(
+        _nested(value_context, "candidate_spend"),
+        states=_CANDIDATE_SPEND_STATES,
+        label="Care candidate-spend status",
+    )
+    recovery_status = _known_status(
+        _nested(value_context, "owned_value_recovery"),
+        states={_NO_RECOVERY, *_RECOVERY_STATES},
+        label="Care owned-value-recovery status",
+    )
+    currency_status = _known_status(
+        _nested(value_context, "currency_context"),
+        states=_CURRENCY_STATES,
+        label="Care currency-context status",
+    )
+
+    if candidate_spend_status == "missing":
+        if currency_status != "candidate_price_missing":
+            raise ValueError("Missing candidate spend requires candidate-price-missing currency context.")
+    elif currency_status == "candidate_price_missing":
+        raise ValueError("Recorded candidate spend cannot have candidate-price-missing currency context.")
+
+    expected = {
+        _NO_RECOVERY: {
+            "recorded": ("financial_context_available", {"no_quantified_recovery"}),
+            "missing": ("financial_context_unavailable", {"candidate_price_missing"}),
+        },
+        "low_use_recovery_estimated": {
+            "recorded": ("financial_context_available", {"same_currency_context", "mixed_currency_no_conversion"}),
+            "missing": ("financial_context_partial", {"candidate_price_missing"}),
+        },
+        "low_use_recovery_partially_estimated": {
+            "recorded": ("financial_context_partial", {"same_currency_context", "mixed_currency_no_conversion"}),
+            "missing": ("financial_context_partial", {"candidate_price_missing"}),
+        },
+        "low_use_recovery_unquantified": {
+            "recorded": ("financial_context_partial", {"no_quantified_recovery"}),
+            "missing": ("financial_context_unavailable", {"candidate_price_missing"}),
+        },
+    }
+    expected_financial, expected_currency = expected[recovery_status][candidate_spend_status]
+    if financial_status != expected_financial or currency_status not in expected_currency:
+        raise ValueError("Care Value authority states are inconsistent.")
+    return financial_status, candidate_spend_status, recovery_status, currency_status
 
 
 def _decision_fingerprint(material: Mapping[str, Any]) -> str:
@@ -375,40 +456,11 @@ def project_care_purchase_verdict(
     compatibility_status = compatibility["status"]
     caution_count = sum(1 for finding in compatibility.get("findings", ()) if finding.get("severity") == "caution")
     info_count = sum(1 for finding in compatibility.get("findings", ()) if finding.get("severity") == "info")
-    evidence_support_status = _known_status(
-        evidence_data.get("evidence_support"),
-        states=_EVIDENCE_SUPPORT_STATES,
-        label="Care Evidence support status",
-    )
-    utility_status = _known_status(
-        evidence_data.get("ingredient_utility"),
-        states=_INGREDIENT_UTILITY_STATES,
-        label="Care ingredient-utility status",
-    )
-    value_context = value_data.get("value_context")
-    value_status = _known_status(
-        value_context,
-        states=_FINANCIAL_CONTEXT_STATES,
-        label="Care financial-context status",
-    )
-    candidate_spend_status = _known_status(
-        _nested(value_context, "candidate_spend"),
-        states=_CANDIDATE_SPEND_STATES,
-        label="Care candidate-spend status",
-    )
-    recovery_status = _known_status(
-        _nested(value_context, "owned_value_recovery"),
-        states={"no_low_use_eligible_owned_same_slot", *_RECOVERY_STATES},
-        label="Care owned-value-recovery status",
-    )
-    currency_status = _known_status(
-        _nested(value_context, "currency_context"),
-        states=_CURRENCY_STATES,
-        label="Care currency-context status",
-    )
+    evidence_support_status, utility_status, reviewed_context = _validate_evidence_authority(evidence_data)
+    value_status, candidate_spend_status, recovery_status, currency_status = _validate_value_authority(value_data)
     conflict = any(finding.get("claim_status") == "conflicting" for finding in evidence_findings)
     supporting: list[str] = []
-    if evidence_support_status not in {None, "no_applicable_reviewed_support", "not_established_from_existing_evidence"}:
+    if reviewed_context:
         supporting.append("reviewed_evidence_context_available")
     if utility_status in {"reviewed_utility_available", "reviewed_utility_partial"}:
         supporting.append("reviewed_utility_context_available")
