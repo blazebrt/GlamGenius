@@ -7,8 +7,9 @@ whether it earns its place in what they already own.
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.purchase import service as purchase_service
@@ -72,6 +73,23 @@ async def confirm_purchase_candidate(
     )
     await session.commit()
     return purchase_service.serialize_purchase_candidate(row)
+
+
+@router.get("/shopping/candidates/{candidate_id}/care-assessment")
+async def assess_care_purchase_candidate(
+    candidate_id: uuid.UUID,
+    on: date | None = Query(None, description="Assessment date; defaults to the account's local day"),
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Read-only deterministic Care purchase assessment; no verdict is emitted."""
+    return await purchase_service.care_purchase_assessment(
+        session,
+        account_id=current.account_id,
+        account_id_str=current.account_id_str,
+        candidate_id=candidate_id,
+        plan_date=on,
+    )
 
 
 @router.get("/shopping/roi-model")
