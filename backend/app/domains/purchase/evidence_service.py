@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy import select
@@ -116,6 +117,7 @@ async def resolve_care_purchase_evidence(
     account_id_str: str,
     candidate_id: uuid.UUID,
     plan_date,
+    assessment: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the recomputable V3-05.3 projection without writes or entitlements."""
     from app.domains.purchase import service as purchase_service
@@ -128,13 +130,14 @@ async def resolve_care_purchase_evidence(
             "Review and confirm the product details first so GlamGenius does not act on an unverified label read.",
             field="verification_state",
         )
-    assessment = await purchase_service.care_purchase_assessment(
-        session,
-        account_id=account_id,
-        account_id_str=account_id_str,
-        candidate_id=candidate_id,
-        plan_date=plan_date,
-    )
+    if assessment is None:
+        assessment = await purchase_service.care_purchase_assessment(
+            session,
+            account_id=account_id,
+            account_id_str=account_id_str,
+            candidate_id=candidate_id,
+            plan_date=plan_date,
+        )
     findings = list(
         assessment.get("dimensions", {}).get("compatibility", {}).get("findings", ())
     )

@@ -875,6 +875,13 @@ export interface ShoppingCandidate {
   subcategory: string | null;
   display_name: string;
   brand: string | null;
+  details?: {
+    product_type?: string | null;
+    size?: string | null;
+    purpose?: string | null;
+    ingredients_text?: string | null;
+    active_ingredients?: string[];
+  };
   colour: string | null;
   size: string | null;
   fabric: string | null;
@@ -942,6 +949,70 @@ export interface ShoppingItemInput {
   product_url?: string;
 }
 
+export type PurchaseStrategyState = 'active' | 'inactive' | 'prohibited';
+export type PurchaseStrategyKey = 'style_purchase' | 'care_purchase' | 'fragrance_purchase' | 'supplement_purchase';
+
+export interface PurchaseStrategyCategory {
+  key: InventoryCategory;
+  label: string;
+}
+
+export interface PurchaseStrategy {
+  key: PurchaseStrategyKey;
+  label: string;
+  state: PurchaseStrategyState;
+  categories: PurchaseStrategyCategory[];
+}
+
+export interface PurchaseStrategiesResponse {
+  purchase_strategy_registry_version: string;
+  strategies: PurchaseStrategy[];
+}
+
+export interface CarePurchaseItemInput {
+  category: 'beauty' | 'hair';
+  display_name: string;
+  brand?: string;
+  details?: {
+    product_type?: string;
+    size?: string;
+    purpose?: string;
+    ingredients_text?: string;
+    active_ingredients?: string[];
+  };
+  price?: number;
+  currency?: string;
+  product_url?: string;
+}
+
+export interface CareCandidateInspection {
+  candidate_truth_version: string;
+  care_purchase_candidate_schema_version: string;
+  candidate: ShoppingCandidate;
+  review_required: boolean;
+  facts_trusted: boolean;
+  care_slot: string | null;
+  missing_information: string[];
+  recognised_ingredient_keys: string[];
+  recognised_ingredient_families: string[];
+  note: string;
+}
+
+export interface CarePurchaseCheck {
+  care_purchase_check_version: 'v3-05.7';
+  strategy: 'care_purchase';
+  candidate_truth: CareCandidateInspection;
+  assessment: Record<string, any>;
+  evidence: Record<string, any>;
+  value: Record<string, any>;
+  verdict: {
+    verdict: Verdict;
+    headline: string;
+    explanation: string;
+    [key: string]: any;
+  };
+}
+
 export const getROIModel = async (): Promise<{
   version: string; formula: string; note: string;
   thresholds: { buy: number; wait: number }; overrides: string[];
@@ -961,6 +1032,26 @@ export const evaluateItemDetails = async (
   (await api.post<PurchaseEvaluation>(`${V2}/shopping/evaluate`, {
     item, source: 'manual', occasion_key, price,
   })).data;
+
+export const getPurchaseStrategies = async (): Promise<PurchaseStrategiesResponse> =>
+  (await api.get<PurchaseStrategiesResponse>(`${V2}/shopping/strategies`)).data;
+
+export const inspectPurchaseCandidate = async (body: {
+  source: 'manual' | 'screenshot' | 'item_photo';
+  item?: CarePurchaseItemInput;
+  media_asset_id?: string;
+  client_mutation_id?: string;
+}): Promise<CareCandidateInspection> =>
+  (await api.post<CareCandidateInspection>(`${V2}/shopping/candidates/inspect`, body)).data;
+
+export const confirmPurchaseCandidate = async (
+  id: string,
+  body: Partial<Omit<CarePurchaseItemInput, 'category' | 'display_name'>> & { display_name?: string },
+): Promise<CareCandidateInspection> =>
+  (await api.post<CareCandidateInspection>(`${V2}/shopping/candidates/${id}/confirm`, body)).data;
+
+export const getCarePurchaseCheck = async (id: string, on?: string): Promise<CarePurchaseCheck> =>
+  (await api.get<CarePurchaseCheck>(`${V2}/shopping/candidates/${id}/care-check`, { params: on ? { on } : undefined })).data;
 
 export const getEvaluation = async (id: string): Promise<PurchaseEvaluation> =>
   (await api.get<PurchaseEvaluation>(`${V2}/shopping/evaluations/${id}`)).data;

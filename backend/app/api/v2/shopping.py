@@ -166,6 +166,25 @@ async def project_care_purchase_verdict(
     )
 
 
+@router.get("/shopping/candidates/{candidate_id}/care-check")
+async def get_care_purchase_check(
+    candidate_id: uuid.UUID,
+    on: date | None = Query(None, description="Check date; defaults to the account's local day"),
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Compose the trusted Care Purchase customer read model without writes."""
+    from app.domains.purchase.check_service import resolve_care_purchase_check
+
+    return await resolve_care_purchase_check(
+        session,
+        account_id=current.account_id,
+        account_id_str=current.account_id_str,
+        candidate_id=candidate_id,
+        plan_date=on,
+    )
+
+
 @router.get("/shopping/roi-model")
 async def get_roi_model():
     """The Appearance ROI formula, in the open.

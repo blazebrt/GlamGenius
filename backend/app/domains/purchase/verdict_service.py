@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
@@ -22,6 +23,9 @@ async def resolve_care_purchase_verdict(
     account_id_str: str,
     candidate_id: uuid.UUID,
     plan_date: date | None,
+    assessment: Mapping[str, Any] | None = None,
+    evidence: Mapping[str, Any] | None = None,
+    value: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve one current-context Care verdict without creating any rows."""
     candidate = await purchase_service.owned_purchase_candidate(
@@ -35,30 +39,35 @@ async def resolve_care_purchase_verdict(
             field="verification_state",
         )
 
-    assessment = await purchase_service.care_purchase_assessment(
-        session,
-        account_id=account_id,
-        account_id_str=account_id_str,
-        candidate_id=candidate_id,
-        plan_date=plan_date,
-    )
+    if assessment is None:
+        assessment = await purchase_service.care_purchase_assessment(
+            session,
+            account_id=account_id,
+            account_id_str=account_id_str,
+            candidate_id=candidate_id,
+            plan_date=plan_date,
+        )
     canonical_date = assessment["plan_date"]
     if isinstance(canonical_date, str):
         canonical_date = date.fromisoformat(canonical_date)
-    evidence = await resolve_care_purchase_evidence(
-        session,
-        account_id=account_id,
-        account_id_str=account_id_str,
-        candidate_id=candidate_id,
-        plan_date=canonical_date,
-    )
-    value = await resolve_care_purchase_value(
-        session,
-        account_id=account_id,
-        account_id_str=account_id_str,
-        candidate_id=candidate_id,
-        plan_date=canonical_date,
-    )
+    if evidence is None:
+        evidence = await resolve_care_purchase_evidence(
+            session,
+            account_id=account_id,
+            account_id_str=account_id_str,
+            candidate_id=candidate_id,
+            plan_date=canonical_date,
+            assessment=assessment,
+        )
+    if value is None:
+        value = await resolve_care_purchase_value(
+            session,
+            account_id=account_id,
+            account_id_str=account_id_str,
+            candidate_id=candidate_id,
+            plan_date=canonical_date,
+            assessment=assessment,
+        )
     return project_care_purchase_verdict(assessment, evidence, value).as_dict()
 
 
