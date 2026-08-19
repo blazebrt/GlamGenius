@@ -280,6 +280,26 @@ async def care_purchase_evidence(
     )
 
 
+async def care_purchase_value(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    account_id_str: str,
+    candidate_id: uuid.UUID,
+    plan_date: date | None = None,
+) -> dict[str, Any]:
+    """Project read-only Care financial context beside the canonical assessment."""
+    from app.domains.purchase.value_service import resolve_care_purchase_value
+
+    return await resolve_care_purchase_value(
+        session,
+        account_id=account_id,
+        account_id_str=account_id_str,
+        candidate_id=candidate_id,
+        plan_date=plan_date,
+    )
+
+
 async def confirm_care_purchase_candidate(
     session: AsyncSession,
     *,
@@ -327,6 +347,7 @@ owned_candidate = owned_purchase_candidate
 __all__ = [
     "care_purchase_evidence",
     "care_purchase_assessment",
+    "care_purchase_value",
     "confirm_care_purchase_candidate",
     "inspect_candidate",
     "inspect_purchase_candidate",
