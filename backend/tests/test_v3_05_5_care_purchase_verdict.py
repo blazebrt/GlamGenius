@@ -336,10 +336,30 @@ def test_price_recovery_and_currency_gates():
     assert body["primary_reason_code"] == "candidate_price_missing"
     zero = _project(assessment, value=_value(assessment, amount="0.00"))
     assert zero["verdict"] == "buy"
-    for recovery in ("low_use_recovery_estimated", "low_use_recovery_partially_estimated", "low_use_recovery_unquantified"):
+
+    estimated = _project(
+        assessment,
+        value=_value(assessment, recovery_status="low_use_recovery_estimated"),
+    )
+    assert estimated["verdict"] == "wait"
+    assert estimated["primary_reason_code"] == "owned_value_to_recover_first"
+
+    for recovery in (
+        "low_use_recovery_partially_estimated",
+        "low_use_recovery_unquantified",
+    ):
         body = _project(assessment, value=_value(assessment, recovery_status=recovery))
-        assert body["primary_reason_code"] == "owned_value_to_recover_first"
-    mixed = _project(assessment, value=_value(assessment, currency_status="mixed_currency_no_conversion"))
+        assert body["verdict"] == "wait"
+        assert body["primary_reason_code"] == "financial_context_incomplete"
+
+    mixed = _project(
+        assessment,
+        value=_value(
+            assessment,
+            recovery_status="low_use_recovery_estimated",
+            currency_status="mixed_currency_no_conversion",
+        ),
+    )
     assert mixed["primary_reason_code"] == "mixed_currency_no_conversion"
 
 
