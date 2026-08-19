@@ -508,7 +508,8 @@ async def test_real_metadata_edits_do_not_change_assessment(
     assert second.status_code == 200, second.text
     first_body, second_body = first.json(), second.json()
     assert second_body["assessment_fingerprint"] == first_body["assessment_fingerprint"]
-    for key in ("role_utility", "redundancy", "compatibility", "user_constraints"):
+    for key in ("role_utility", "redundancy", "compatibility"):
         assert second_body["dimensions"][key] == first_body["dimensions"][key]
+    assert second_body["user_constraints"] == first_body["user_constraints"]
     assert second_body["dimensions"]["evidence_support"]["status"] == "not_assessed"
     assert second_body["dimensions"]["value_context"]["status"] == "not_assessed"
