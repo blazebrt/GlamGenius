@@ -122,11 +122,40 @@ def _value(
     *,
     price_status: str = "recorded",
     recovery_status: str = "no_low_use_eligible_owned_same_slot",
-    currency_status: str = "no_quantified_recovery",
-    financial_status: str = "financial_context_available",
+    currency_status: str | None = None,
+    financial_status: str | None = None,
     amount: str = "1299.00",
     fingerprint: str = "value-fingerprint",
 ) -> dict:
+    if currency_status is None:
+        if price_status == "missing":
+            currency_status = "candidate_price_missing"
+        elif recovery_status in {
+            "low_use_recovery_estimated",
+            "low_use_recovery_partially_estimated",
+        }:
+            currency_status = "same_currency_context"
+        else:
+            currency_status = "no_quantified_recovery"
+
+    if financial_status is None:
+        if price_status == "missing":
+            financial_status = (
+                "financial_context_partial"
+                if recovery_status in {
+                    "low_use_recovery_estimated",
+                    "low_use_recovery_partially_estimated",
+                }
+                else "financial_context_unavailable"
+            )
+        elif recovery_status in {
+            "low_use_recovery_partially_estimated",
+            "low_use_recovery_unquantified",
+        }:
+            financial_status = "financial_context_partial"
+        else:
+            financial_status = "financial_context_available"
+
     return {
         "care_purchase_value_version": CARE_PURCHASE_VALUE_VERSION,
         "care_purchase_value_schema_version": CARE_PURCHASE_VALUE_SCHEMA_VERSION,
