@@ -7,8 +7,6 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select
-
 from app.bootstrap import seed_inventory_categories
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import (
@@ -46,6 +44,7 @@ from app.domains.recommendation.models import (
 )
 from app.domains.routines.models import Routine, RoutineStep
 from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import func, select
 
 from tests.conftest import auth
 
