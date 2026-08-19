@@ -8,12 +8,13 @@ const check = (verdict: 'buy' | 'wait' | 'skip' = 'wait'): CarePurchaseCheck => 
   care_purchase_check_version: 'v3-05.7', strategy: 'care_purchase',
   candidate_truth: {
     candidate_truth_version: 'v3-05.1', care_purchase_candidate_schema_version: 'v3-05.1',
-    candidate: { id: 'candidate-1', source: 'manual', category: 'beauty', subcategory: null, display_name: 'Daily cleanser', brand: 'Example', details: { product_type: 'cleanser', ingredients_text: 'glycerin' }, colour: null, size: null, fabric: null, fit: null, formality: null, occasion_tags: [], season_tags: [], price: 499, currency: 'INR', product_url: null, extraction_confidence: null, uncertain_fields: [], verification_state: 'user_declared', media_asset_id: null, in_inventory: false, note: 'Considering only', created_at: null },
+    candidate: { id: 'candidate-1', source: 'manual', category: 'beauty', subcategory: null, display_name: 'Daily cleanser', brand: 'Example', details: { product_type: 'cleanser', ingredients_text: 'glycerin' }, price: 499, currency: 'INR', product_url: null, extraction_confidence: null, uncertain_fields: [], verification_state: 'user_declared', media_asset_id: null, ai_run_id: null, model_version: null, prompt_version: null, schema_version: null, in_inventory: false },
     review_required: false, facts_trusted: true, care_slot: 'cleanser', missing_information: [], recognised_ingredient_keys: ['glycerin'], recognised_ingredient_families: ['humectant'], note: 'Considering only',
   },
-  assessment: { dimensions: { role_utility: { status: 'addresses_required_gap', care_slot: 'cleanser' }, redundancy: { eligible_owned_same_slot: [{ owned_item_id: 'owned-1', display_name: 'Current cleanser' }] }, compatibility: { findings: [] }, identity_confidence: { missing_information: [] } } },
-  evidence: { evidence_support: { findings: [] } }, value: { value_context: { owned_value_recovery: { items: [] } } },
-  verdict: { verdict, headline: verdict === 'wait' ? 'Hold this one for now.' : 'This fills a real gap.', explanation: 'A clear current-context explanation.' },
+  assessment: { assessment_fingerprint: 'assessment-1', dimensions: { role_utility: { status: 'addresses_required_gap', care_slot: 'cleanser' }, redundancy: { eligible_owned_same_slot: [{ owned_item_id: 'owned-1', display_name: 'Current cleanser' }] }, compatibility: { findings: [] }, identity_confidence: { missing_information: [] } } },
+  evidence: { assessment_fingerprint: 'assessment-1', evidence_support: { findings: [] } },
+  value: { assessment_fingerprint: 'assessment-1', value_fingerprint: 'value-1', value_context: { owned_value_recovery: { items: [] } } },
+  verdict: { assessment_fingerprint: 'assessment-1', value_fingerprint: 'value-1', verdict, headline: verdict === 'wait' ? 'Hold this one for now.' : 'This fills a real gap.', explanation: 'A clear current-context explanation.', primary_reason_code: 'candidate_price_missing', reason_codes: ['candidate_price_missing'], supporting_reason_codes: [], decision_context: {} },
 });
 
 describe('Care purchase customer experience', () => {

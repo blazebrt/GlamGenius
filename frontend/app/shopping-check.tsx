@@ -1,5 +1,5 @@
 /** The single customer destination for Style and Care purchase checks. */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,7 +15,7 @@ import { AnalysisFailedState } from '../src/components/TrustStates';
 import {
   CareCandidateInspection, CarePurchaseCheck, CarePurchaseItemInput, InventoryCategory,
   PurchaseEvaluation, PurchaseStrategy, confirmPurchaseCandidate, evaluateItemDetails,
-  evaluateScreenshot, failureGuidance, getCarePurchaseCheck, getPurchaseStrategies,
+  allowanceWasPreserved, evaluateScreenshot, failureGuidance, getCarePurchaseCheck, getPurchaseStrategies,
   inspectPurchaseCandidate, recordPurchaseDecision, structuredError, uploadMedia,
 } from '../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
@@ -40,23 +40,28 @@ export default function ShoppingCheckScreen() {
   const [editingCare, setEditingCare] = useState(false);
   const [error, setError] = useState<any>(null);
 
-  useEffect(() => {
-    let mounted = true;
-    void getPurchaseStrategies().then((response) => {
-      if (!mounted) return;
+  const loadPurchaseStrategies = useCallback(async () => {
+    setError(null);
+    setStrategies([]);
+    setCategory(null);
+    try {
+      const response = await getPurchaseStrategies();
       const active = response.strategies.flatMap((strategy) => strategy.state === 'active' ? strategy.categories : []);
       setStrategies(response.strategies);
       setCategory(active[0]?.key || null);
-    }).catch((err) => { if (mounted) setError(err); });
-    return () => { mounted = false; };
+    } catch (err) {
+      setError(err);
+    }
   }, []);
+
+  useEffect(() => { void loadPurchaseStrategies(); }, [loadPurchaseStrategies]);
 
   const activeCategories = useMemo(
     () => strategies.flatMap((strategy) => strategy.state === 'active' ? strategy.categories : []),
     [strategies],
   );
   const selectedStrategy = strategies.find((strategy) => strategy.categories.some((row) => row.key === category));
-  const isCare = selectedStrategy?.key === 'care_purchase' && (category === 'beauty' || category === 'hair');
+  const isCare = selectedStrategy?.key === 'care_purchase';
 
   const clearError = () => setError(null);
   const reset = () => {
@@ -140,7 +145,7 @@ export default function ShoppingCheckScreen() {
         <Text style={styles.topTitle}>Should I buy this?</Text><View style={{ width: 24 }} />
       </View>
       <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 48 }} keyboardShouldPersistTaps="handled">
-        {!!error && <AnalysisFailedState message={structuredError(error)?.message || 'We could not check that just now.'} guidance={failureGuidance(error)} allowancePreserved={false} retryable={structuredError(error)?.retryable !== false} onRetry={() => void (isCare ? (careCandidate ? confirmCare() : fromDetails()) : (manual ? fromDetails() : fromScreenshot()))} onDismiss={clearError} />}
+        {!!error && <AnalysisFailedState message={structuredError(error)?.message || 'We could not check that just now.'} guidance={failureGuidance(error)} allowancePreserved={allowanceWasPreserved(error)} retryable={structuredError(error)?.retryable !== false} onRetry={() => void (!strategies.length ? loadPurchaseStrategies() : (isCare ? (careCandidate ? confirmCare() : fromDetails()) : (manual ? fromDetails() : fromScreenshot())))} onDismiss={clearError} />}
 
         {!evaluation && !careCheck && !careCandidate && (
           <>
