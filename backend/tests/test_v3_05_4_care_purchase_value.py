@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
+from app.bootstrap import seed_inventory_categories
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import (
     BeautyProductDetail,
@@ -92,6 +93,7 @@ async def _seed_runtime_records(
     candidate_id = uuid.uuid4()
     factory = get_sessionmaker()
     async with factory() as session:
+        await seed_inventory_categories(session)
         session.add(
             ShoppingCandidate(
                 id=candidate_id,
@@ -342,6 +344,7 @@ async def test_runtime_draft_fails_before_assessment_or_inventory(
     candidate_id = uuid.uuid4()
     factory = get_sessionmaker()
     async with factory() as session:
+        await seed_inventory_categories(session)
         session.add(
             ShoppingCandidate(
                 id=candidate_id,
@@ -391,6 +394,7 @@ async def test_runtime_low_use_recovery_uses_canonical_inventory_authority(
     item_id = uuid.uuid4()
     factory = get_sessionmaker()
     async with factory() as session:
+        await seed_inventory_categories(session)
         session.add(
             ShoppingCandidate(
                 id=candidate_id,
