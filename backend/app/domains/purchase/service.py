@@ -260,6 +260,26 @@ async def care_purchase_assessment(
     return assessment.as_dict()
 
 
+async def care_purchase_evidence(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    account_id_str: str,
+    candidate_id: uuid.UUID,
+    plan_date: date | None = None,
+) -> dict[str, Any]:
+    """Project existing reviewed Evidence beside the canonical Care assessment."""
+    from app.domains.purchase.evidence_service import resolve_care_purchase_evidence
+
+    return await resolve_care_purchase_evidence(
+        session,
+        account_id=account_id,
+        account_id_str=account_id_str,
+        candidate_id=candidate_id,
+        plan_date=plan_date,
+    )
+
+
 async def confirm_care_purchase_candidate(
     session: AsyncSession,
     *,
@@ -305,6 +325,7 @@ owned_candidate = owned_purchase_candidate
 
 
 __all__ = [
+    "care_purchase_evidence",
     "care_purchase_assessment",
     "confirm_care_purchase_candidate",
     "inspect_candidate",
