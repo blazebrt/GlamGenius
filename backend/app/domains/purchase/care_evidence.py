@@ -138,7 +138,10 @@ def _assessment_value(assessment: Any, key: str, default: Any = None) -> Any:
 def _json_value(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {str(key): _json_value(value[key]) for key in sorted(value, key=str)}
-    if isinstance(value, (list, tuple, set, frozenset)):
+    if isinstance(value, (set, frozenset)):
+        values = [_json_value(item) for item in value]
+        return sorted(values, key=_canonical)
+    if isinstance(value, (list, tuple)):
         return [_json_value(item) for item in value]
     if isinstance(value, (uuid.UUID, date, datetime)):
         return str(value)
@@ -169,6 +172,21 @@ def _source(source: Any, *, relationship: str | None = None, locator: str | None
     return row
 
 
+def _source_sort_key(source: Mapping[str, Any]) -> tuple[str, str, str, str]:
+    return tuple(
+        str(source.get(key) or "")
+        for key in ("source_key", "source_id", "relationship", "locator")
+    )
+
+
+def _sources(path: Any) -> list[dict[str, Any]]:
+    sources = [
+        _source(source)
+        for source in (_path_value(path, "sources", ()) or ())
+    ]
+    return sorted(sources, key=_source_sort_key)
+
+
 def _path_value(path: Any, key: str, default: Any = None) -> Any:
     return _value(path, key, default)
 
@@ -189,10 +207,11 @@ def _finding(path: Any) -> dict[str, Any]:
         "evidence_strength": _path_value(path, "evidence_strength"),
         "claim_status": _path_value(path, "claim_status"),
         "applicability": _json_value(_path_value(path, "applicability")),
-        "sources": [
-            _source(source)
-            for source in (_path_value(path, "sources", ()) or ())
-        ],
+        "substantive_support": (
+            _path_value(path, "relationship") == "supports"
+            and _path_value(path, "claim_status") == "supported"
+        ),
+        "sources": _sources(path),
     }
 
 
@@ -210,10 +229,11 @@ def _utility_finding(path: Any) -> dict[str, Any]:
         "evidence_strength": _path_value(path, "evidence_strength"),
         "claim_status": _path_value(path, "claim_status"),
         "applicability": _json_value(_path_value(path, "applicability")),
-        "sources": [
-            _source(source)
-            for source in (_path_value(path, "sources", ()) or ())
-        ],
+        "substantive_support": (
+            _path_value(path, "relationship") == "supports"
+            and _path_value(path, "claim_status") == "supported"
+        ),
+        "sources": _sources(path),
     }
 
 
@@ -271,6 +291,7 @@ def project_care_purchase_evidence(
     findings = _compatibility_findings(assessment)
     missing = _identity_missing(assessment)
     paths = tuple(rule_evidence)
+    utility_paths = tuple(ingredient_evidence)
     path_by_rule: dict[str, list[Any]] = {}
     for path in paths:
         rule_id = _path_value(path, "rule_id")
@@ -279,15 +300,15 @@ def project_care_purchase_evidence(
 
     projected_findings: list[dict[str, Any]] = []
     unsupported: list[dict[str, Any]] = []
-    partial_path = False
+    substantive_by_rule: dict[str, bool] = {}
     for finding in findings:
         rule_id = finding.get("rule_id")
         matches = path_by_rule.get(str(rule_id), []) if rule_id else []
         if matches:
             projected_findings.extend(_finding(path) for path in matches)
-            partial_path = partial_path or any(
-                _path_value(path, "relationship") != "supports"
-                or _path_value(path, "claim_status") != "supported"
+            substantive_by_rule[str(rule_id)] = any(
+                _path_value(path, "relationship") == "supports"
+                and _path_value(path, "claim_status") == "supported"
                 for path in matches
             )
         else:
@@ -297,11 +318,19 @@ def project_care_purchase_evidence(
                 "rule_id": rule_id,
             })
 
+    substantive_count = sum(substantive_by_rule.values())
+    coverage_complete = bool(findings) and all(
+        substantive_by_rule.get(str(finding.get("rule_id")), False)
+        for finding in findings
+    )
+    material_context = any(
+        row.get("substantive_support") is False for row in projected_findings
+    )
     if missing and not projected_findings:
         support_status = INSUFFICIENT_CANDIDATE_INFORMATION
-    elif not findings:
+    elif not findings or not substantive_count:
         support_status = NO_APPLICABLE_REVIEWED_SUPPORT
-    elif (unsupported or partial_path) and projected_findings:
+    elif not coverage_complete or unsupported or material_context:
         support_status = REVIEWED_SUPPORT_PARTIAL
     elif projected_findings:
         support_status = REVIEWED_SUPPORT_AVAILABLE
@@ -311,9 +340,16 @@ def project_care_purchase_evidence(
     evidence_support = {
         "status": support_status,
         "authority": "first_class_reviewed_evidence",
+        "substantive_support": substantive_count > 0,
+        "reviewed_context": bool(projected_findings),
         "findings": sorted(
             projected_findings,
-            key=lambda row: (str(row.get("rule_id")), str(row.get("claim_key")), str(row.get("claim_id"))),
+            key=lambda row: (
+                str(row.get("rule_id")),
+                str(row.get("claim_key")),
+                str(row.get("claim_id")),
+                _canonical(row),
+            ),
         ),
         "unsupported": sorted(
             unsupported,
@@ -331,32 +367,40 @@ def project_care_purchase_evidence(
     if not recognised:
         utility_status = INSUFFICIENT_CANDIDATE_INFORMATION
     else:
-        utility_paths = tuple(ingredient_evidence)
         utility_findings = [_utility_finding(path) for path in utility_paths]
         if utility_findings:
             utility_status = REVIEWED_UTILITY_PARTIAL if missing else REVIEWED_UTILITY_AVAILABLE
         else:
             utility_status = NOT_ESTABLISHED_FROM_EXISTING_EVIDENCE
-    unknown = sorted(value for value in missing if value.startswith("unrecognised_ingredient:"))
+    unknown = sorted(
+        value.split(":", 1)[1]
+        for value in missing
+        if value.startswith("unrecognised_ingredient:")
+    )
     ingredient_utility = {
         "status": utility_status,
         "authority": "first_class_reviewed_evidence",
         "recognised_ingredient_keys": recognised,
         "unknown_ingredient_terms": unknown,
         "findings": sorted(
-            [_utility_finding(path) for path in ingredient_evidence],
-            key=lambda row: (str(row.get("ingredient_key")), str(row.get("ingredient_family")), str(row.get("claim_key"))),
+            [_utility_finding(path) for path in utility_paths],
+            key=lambda row: (
+                str(row.get("ingredient_key")),
+                str(row.get("ingredient_family")),
+                str(row.get("claim_key")),
+                _canonical(row),
+            ),
         ),
         "unsupported": sorted(
-            [
-                {
-                    "reason_code": "unknown_ingredient_term",
-                    "term": value.split(":", 1)[1],
-                }
+                [
+                    {
+                        "reason_code": "unknown_ingredient_term",
+                        "term": value,
+                    }
                 for value in unknown
             ],
             key=lambda row: row["term"],
-        ) + ([{"reason_code": "no_explicit_ingredient_evidence_mapping"}] if not ingredient_evidence and recognised else []),
+        ) + ([{"reason_code": "no_explicit_ingredient_evidence_mapping"}] if not utility_paths and recognised else []),
     }
 
     value_context = {

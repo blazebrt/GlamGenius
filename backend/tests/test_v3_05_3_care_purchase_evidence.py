@@ -77,12 +77,18 @@ def _assessment(*, fingerprint: str = "assessment-a", missing: tuple[str, ...] =
     }
 
 
-def _reviewed_path(*, claim_key: str = "skin.reviewed.compatibility") -> ReviewedEvidencePath:
+def _reviewed_path(
+    *,
+    claim_key: str = "skin.reviewed.compatibility",
+    relationship: str = "supports",
+    claim_status: str = "supported",
+    sources=None,
+) -> ReviewedEvidencePath:
     return ReviewedEvidencePath(
         rule_id="rule.retinoid_bha",
         rule_kind="ingredient_compatibility",
         rule_version="phase6-v1",
-        relationship="supports",
+        relationship=relationship,
         claim_id=uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"),
         claim_key=claim_key,
         claim_version=1,
@@ -90,7 +96,7 @@ def _reviewed_path(*, claim_key: str = "skin.reviewed.compatibility") -> Reviewe
         claim_scope="General context only; not a product efficacy claim.",
         claim_type="compatibility_context",
         evidence_strength="moderate",
-        claim_status="supported",
+        claim_status=claim_status,
         applicability={"behavior_applicability": {"schema_version": "v3-03.15"}},
         sources=(
             {
@@ -104,7 +110,7 @@ def _reviewed_path(*, claim_key: str = "skin.reviewed.compatibility") -> Reviewe
                 "relationship": "supports",
                 "locator": "exact reviewed locator",
             },
-        ),
+        ) if sources is None else tuple(sources),
     )
 
 
@@ -130,6 +136,8 @@ def test_reviewed_rule_evidence_is_projected_without_product_claims():
     )
     body = result.as_dict()
     assert body["evidence_support"]["status"] == "reviewed_support_available"
+    assert body["evidence_support"]["substantive_support"] is True
+    assert body["evidence_support"]["reviewed_context"] is True
     finding = body["evidence_support"]["findings"][0]
     assert finding["rule_id"] == "rule.retinoid_bha"
     assert finding["claim_key"] == "skin.reviewed.compatibility"
@@ -205,7 +213,7 @@ def test_explicit_ingredient_path_and_unknown_label_boundaries():
         _assessment(missing=("unrecognised_ingredient:mystery-label",)),
         candidate_truth=SimpleNamespace(recognised_ingredient_keys=("niacinamide",)),
     ).as_dict()
-    assert unknown["ingredient_utility"]["unknown_ingredient_terms"] == ["unrecognised_ingredient:mystery-label"]
+    assert unknown["ingredient_utility"]["unknown_ingredient_terms"] == ["mystery-label"]
     assert unknown["ingredient_utility"]["status"] == "not_established_from_existing_evidence"
     assert unknown["ingredient_utility"]["unsupported"] == [
         {"reason_code": "unknown_ingredient_term", "term": "mystery-label"},
@@ -232,6 +240,69 @@ def test_pure_import_boundary_is_explicit():
     text = source.read_text(encoding="utf-8").lower()
     for forbidden in ("sqlalchemy", "fastapi", "ai_gateway", "payments", "billing", "checkout", "affiliate", "merchant", "amazon", "flipkart", "nykaa"):
         assert forbidden not in text
+
+
+@pytest.mark.parametrize(
+    ("relationship", "claim_status"),
+    (
+        ("qualifies", "supported"),
+        ("limits", "supported"),
+        ("background", "supported"),
+        ("supports", "qualified"),
+        ("supports", "conflicting"),
+        ("supports", "unsupported"),
+    ),
+)
+def test_reviewed_context_never_becomes_positive_support(relationship, claim_status):
+    body = project_care_purchase_evidence(
+        _assessment(),
+        rule_evidence=(_reviewed_path(relationship=relationship, claim_status=claim_status),),
+        candidate_truth=SimpleNamespace(recognised_ingredient_keys=("retinol",)),
+    ).as_dict()
+    assert body["evidence_support"]["status"] == "no_applicable_reviewed_support"
+    assert body["evidence_support"]["substantive_support"] is False
+    assert body["evidence_support"]["reviewed_context"] is True
+    assert body["evidence_support"]["findings"][0]["substantive_support"] is False
+
+
+def test_source_order_is_canonical_for_payload_and_fingerprint():
+    source_a = {
+        "source_id": uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
+        "source_key": "reviewed.source.a",
+        "title": "A",
+        "publisher": "Authority",
+        "source_type": "consensus",
+        "publication_date": date(2024, 1, 1),
+        "canonical_url": "https://example.test/a",
+        "relationship": "supports",
+        "locator": "a",
+    }
+    source_b = {**source_a, "source_id": uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"), "source_key": "reviewed.source.b", "title": "B", "canonical_url": "https://example.test/b", "locator": "b"}
+    first = project_care_purchase_evidence(
+        _assessment(), rule_evidence=(_reviewed_path(sources=(source_a, source_b)),), candidate_truth=SimpleNamespace(recognised_ingredient_keys=("retinol",))
+    ).as_dict()
+    second = project_care_purchase_evidence(
+        _assessment(), rule_evidence=(_reviewed_path(sources=(source_b, source_a)),), candidate_truth=SimpleNamespace(recognised_ingredient_keys=("retinol",))
+    ).as_dict()
+    assert first["evidence_support"] == second["evidence_support"]
+    assert first["projection_fingerprint"] == second["projection_fingerprint"]
+
+
+def test_one_shot_ingredient_evidence_matches_tuple_projection():
+    utility_path = IngredientUtilityPath(
+        ingredient_key="niacinamide", ingredient_family="niacinamide",
+        claim_id=uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+        claim_key="skin.reviewed.niacinamide.utility", claim_version=1,
+        claim_summary="Reviewed general ingredient context.",
+        claim_scope="Ingredient-level context only; not product efficacy.",
+        claim_type="usage_context", evidence_strength="moderate", claim_status="supported",
+        applicability={"use": "skin_care"}, sources=(_reviewed_path().sources[0],),
+    )
+    truth = SimpleNamespace(recognised_ingredient_keys=("niacinamide",))
+    tuple_result = project_care_purchase_evidence(_assessment(), ingredient_evidence=(utility_path,), candidate_truth=truth).as_dict()
+    generator_result = project_care_purchase_evidence(_assessment(), ingredient_evidence=(path for path in (utility_path,)), candidate_truth=truth).as_dict()
+    assert generator_result["ingredient_utility"]["findings"] == tuple_result["ingredient_utility"]["findings"]
+    assert generator_result["projection_fingerprint"] == tuple_result["projection_fingerprint"]
 
 
 async def _runtime_counts(account_id: uuid.UUID) -> dict[str, int | bool | None]:

@@ -63,6 +63,12 @@ async def _reviewed_rule_paths(
                 select(EvidenceClaimSource, EvidenceSource)
                 .join(EvidenceSource, EvidenceSource.id == EvidenceClaimSource.source_id)
                 .where(EvidenceClaimSource.claim_id == claim.id)
+                .order_by(
+                    EvidenceSource.source_key,
+                    EvidenceSource.id,
+                    EvidenceClaimSource.relationship,
+                    EvidenceClaimSource.locator,
+                )
             )).all()
             sources = tuple(
                 {
