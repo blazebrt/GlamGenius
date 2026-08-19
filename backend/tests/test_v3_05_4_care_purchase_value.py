@@ -585,8 +585,26 @@ async def test_runtime_explicit_plan_date_reaches_inventory_authorities(
     app_client, db_clean, registered_supabase_user, monkeypatch
 ):
     token, account_id = await registered_supabase_user()
-    candidate_id, _ = await _seed_runtime_records(account_id)
+    candidate_id, (item_id,) = await _seed_runtime_records(
+        account_id,
+        item_specs=(
+            {
+                "display_name": "Date propagation cleanser",
+                "usage_count": 0,
+                "last_used_at": date(2026, 1, 1),
+                "purchase_price": Decimal("1000.00"),
+                "remaining_percent": 80,
+            },
+        ),
+    )
     requested = date(2026, 8, 19)
+    assessment = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-assessment?on={requested.isoformat()}",
+        headers=auth(token),
+    )
+    assert assessment.status_code == 200, assessment.text
+    eligible = assessment.json()["dimensions"]["redundancy"]["eligible_owned_same_slot"]
+    assert str(item_id) in {row["owned_item_id"] for row in eligible}
     low_use_dates: list[date | None] = []
     value_dates: list[date | None] = []
     original_low_use = inventory_service.is_low_use
@@ -609,6 +627,8 @@ async def test_runtime_explicit_plan_date_reaches_inventory_authorities(
     assert response.status_code == 200, response.text
     assert requested in low_use_dates
     assert value_dates and all(value_date == requested for value_date in value_dates)
+    recovery_items = response.json()["value_context"]["owned_value_recovery"]["items"]
+    assert str(item_id) in {row["owned_item_id"] for row in recovery_items}
 
 
 @pytest.mark.asyncio
