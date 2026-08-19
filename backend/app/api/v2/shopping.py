@@ -92,6 +92,23 @@ async def assess_care_purchase_candidate(
     )
 
 
+@router.get("/shopping/candidates/{candidate_id}/care-evidence")
+async def project_care_purchase_evidence(
+    candidate_id: uuid.UUID,
+    on: date | None = Query(None, description="Projection date; defaults to the account's local day"),
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Read-only projection of first-class reviewed Care Evidence."""
+    return await purchase_service.care_purchase_evidence(
+        session,
+        account_id=current.account_id,
+        account_id_str=current.account_id_str,
+        candidate_id=candidate_id,
+        plan_date=on,
+    )
+
+
 @router.get("/shopping/roi-model")
 async def get_roi_model():
     """The Appearance ROI formula, in the open.
