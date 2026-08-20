@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import select, text
+
 from app.domains.purchase import (
     CARE_PURCHASE_ASSESSMENT_VERSION,
     CARE_PURCHASE_CANDIDATE_SCHEMA_VERSION,
