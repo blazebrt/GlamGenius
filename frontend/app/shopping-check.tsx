@@ -162,7 +162,7 @@ export default function ShoppingCheckScreen() {
         price: price.trim() ? Number(price) : null,
         currency: careCandidate.candidate.currency,
       };
-      const confirmed = await confirmPurchaseCandidate(careCandidate.candidate.id, correction);
+      const confirmed = await confirmPurchaseCandidate(careCandidate.candidate.id, correction) as CareCandidateInspection;
       setCareCandidate(confirmed); setEditingCare(false); setCareCheck(await getCarePurchaseCheck(confirmed.candidate.id));
     } catch (err) { setError(err); } finally { setBusy(false); }
   };

@@ -62,6 +62,7 @@ const styles = StyleSheet.create({
   noteCenter: { fontFamily: FONTS.family.body, fontSize: 11, lineHeight: 16, color: COLORS.textMuted, textAlign: 'center', marginVertical: SPACING.sm },
   verdict: { borderRadius: RADIUS.xl, padding: SPACING.lg, marginBottom: SPACING.md },
   verdictLabel: { fontFamily: FONTS.family.heading, fontSize: 28 },
+  verdictBlurb: { fontFamily: FONTS.family.bodyMedium, fontSize: 14, color: COLORS.textPrimary, marginTop: 6 },
   row: { flexDirection: 'row', gap: 8, marginTop: SPACING.md },
   primary: { alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, borderRadius: RADIUS.full, paddingHorizontal: 16, paddingVertical: 12, flex: 1 },
   primaryText: { fontFamily: FONTS.family.bodySemibold, fontSize: 13, color: COLORS.white },
