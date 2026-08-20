@@ -122,6 +122,7 @@ async def save_care_decision(
         row.note = note
         row.followed_recommendation = followed
     await session.flush()
+    await session.refresh(row)
     return row
 
 
