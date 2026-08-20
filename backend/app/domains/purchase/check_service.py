@@ -14,6 +14,7 @@ from app.domains.purchase.candidate_truth import (
     serialize_care_candidate_truth,
 )
 from app.domains.purchase.contract import CARE_PURCHASE_CHECK_VERSION
+from app.domains.purchase.decision_memory import current_purchase_decision, serialize_purchase_decision
 from app.domains.purchase.evidence_service import resolve_care_purchase_evidence
 from app.domains.purchase.value_service import resolve_care_purchase_value
 from app.domains.purchase.verdict_service import resolve_care_purchase_verdict
@@ -134,6 +135,13 @@ async def resolve_care_purchase_check(
     if verdict.get("value_fingerprint") != value.get("value_fingerprint"):
         raise RuntimeError("Care verdict Value fingerprint diverged from the Value projection.")
 
+    decision = await current_purchase_decision(
+        session,
+        account_id=account_id,
+        candidate_id=candidate.id,
+        strategy_key="care_purchase",
+    )
+
     return {
         "care_purchase_check_version": CARE_PURCHASE_CHECK_VERSION,
         "strategy": "care_purchase",
@@ -142,6 +150,7 @@ async def resolve_care_purchase_check(
         "evidence": evidence,
         "value": value,
         "verdict": verdict,
+        "decision": serialize_purchase_decision(decision) if decision else None,
     }
 
 

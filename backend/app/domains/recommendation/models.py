@@ -35,6 +35,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -321,8 +322,14 @@ class PurchaseDecision(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "purchase_decisions"
 
-    evaluation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("purchase_evaluations.id", ondelete="CASCADE"), nullable=False)
+    evaluation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("purchase_evaluations.id", ondelete="CASCADE"), nullable=True)
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    candidate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shopping_candidates.id", ondelete="CASCADE"), nullable=False)
+    strategy_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    recommendation_verdict: Mapped[str] = mapped_column(String(8), nullable=False)
+    recommendation_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    recommendation_fingerprint: Mapped[str | None] = mapped_column(String(128))
+    recommendation_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
     note: Mapped[str | None] = mapped_column(String(500))
     followed_recommendation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
@@ -330,6 +337,15 @@ class PurchaseDecision(UUIDPrimaryKey, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("evaluation_id", "account_id", name="uq_purchase_decision_once"),
         Index("ix_purchase_decisions_account", "account_id", "created_at"),
+        Index("ix_purchase_decisions_account_candidate_updated", "account_id", "candidate_id", "updated_at"),
+        Index(
+            "uq_purchase_decision_candidate_strategy",
+            "account_id",
+            "candidate_id",
+            "strategy_key",
+            unique=True,
+            postgresql_where=text("evaluation_id IS NULL"),
+        ),
     )
 
 

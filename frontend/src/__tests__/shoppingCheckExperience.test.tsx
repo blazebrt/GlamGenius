@@ -19,6 +19,8 @@ jest.mock('../services/apiV2', () => {
     getPurchaseStrategies: jest.fn(),
     inspectPurchaseCandidate: jest.fn(),
     getCarePurchaseCheck: jest.fn(),
+    recordCarePurchaseDecision: jest.fn(),
+    recordPurchaseDecision: jest.fn(),
     confirmPurchaseCandidate: jest.fn(),
     evaluateItemDetails: jest.fn(),
     evaluateScreenshot: jest.fn(),
@@ -53,7 +55,7 @@ const candidate = (trusted: boolean, price: number | null = 499, brand: string |
 
 const careCheck = (): CarePurchaseCheck => ({
   care_purchase_check_version: 'v3-05.7', strategy: 'care_purchase', candidate_truth: candidate(true),
-  assessment: { assessment_fingerprint: 'assessment-1', dimensions: { role_utility: { status: 'addresses_required_gap', care_slot: 'cleanser' }, redundancy: { eligible_owned_same_slot: [] }, compatibility: { findings: [] }, identity_confidence: { missing_information: [] } } },
+  assessment: { plan_date: '2026-08-20', assessment_fingerprint: 'assessment-1', dimensions: { role_utility: { status: 'addresses_required_gap', care_slot: 'cleanser' }, redundancy: { eligible_owned_same_slot: [] }, compatibility: { findings: [] }, identity_confidence: { missing_information: [] } } },
   evidence: { assessment_fingerprint: 'assessment-1', evidence_support: { findings: [] } },
   value: { assessment_fingerprint: 'assessment-1', value_fingerprint: 'value-1', value_context: { owned_value_recovery: { items: [] } } },
   verdict: { assessment_fingerprint: 'assessment-1', value_fingerprint: 'value-1', verdict: 'wait', headline: 'Hold this one for now.', explanation: 'A clear current-context explanation.', primary_reason_code: 'candidate_price_missing', reason_codes: ['candidate_price_missing'], supporting_reason_codes: [], decision_context: {} },
@@ -95,6 +97,77 @@ describe('ShoppingCheckScreen strategy and Care flows', () => {
     expect(mockedApi.inspectPurchaseCandidate).toHaveBeenCalled();
     expect(mockedApi.evaluateItemDetails).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Care verdict: Wait')).toBeTruthy();
+  });
+
+  it('persists Care decisions through the candidate endpoint and selects only the server response', async () => {
+    mockedApi.inspectPurchaseCandidate.mockResolvedValue(candidate(true));
+    mockedApi.recordCarePurchaseDecision.mockResolvedValue({
+      purchase_decision_memory_version: 'v3-05.8', id: 'decision-1', candidate_id: 'candidate-1',
+      strategy: 'care_purchase', evaluation_id: null,
+      recommendation_at_decision: { verdict: 'wait', version: 'v3-05.5', fingerprint: 'fp-1' },
+      decision: 'waiting', note: null, followed_recommendation: true, created_at: '2026-08-20T00:00:00Z', updated_at: '2026-08-20T00:00:00Z',
+    });
+    render(<ShoppingCheckScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Skin Care')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Skin Care'));
+    fireEvent.press(screen.getByLabelText('Enter the details myself'));
+    fireEvent.changeText(screen.getByLabelText('Product name'), 'Daily cleanser');
+    fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(screen.getByLabelText('Care verdict: Wait')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('I am waiting'));
+    await waitFor(() => expect(mockedApi.recordCarePurchaseDecision).toHaveBeenCalledWith('candidate-1', 'waiting', undefined, '2026-08-20'));
+    expect(screen.getByLabelText('I am waiting').props.accessibilityState.selected).toBe(true);
+    expect(mockedApi.recordPurchaseDecision).not.toHaveBeenCalled();
+  });
+
+  it('retries the failed Care decision save rather than refreshing the check', async () => {
+    mockedApi.inspectPurchaseCandidate.mockResolvedValue(candidate(true));
+    mockedApi.recordCarePurchaseDecision
+      .mockRejectedValueOnce(new Error('decision save failed'))
+      .mockResolvedValueOnce({
+        purchase_decision_memory_version: 'v3-05.8', id: 'decision-1', candidate_id: 'candidate-1',
+        strategy: 'care_purchase', evaluation_id: null,
+        recommendation_at_decision: { verdict: 'wait', version: 'v3-05.5', fingerprint: 'fp-1' },
+        decision: 'waiting', note: null, followed_recommendation: true, created_at: '2026-08-20T00:00:00Z', updated_at: '2026-08-20T00:00:00Z',
+      });
+    render(<ShoppingCheckScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Skin Care')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Skin Care'));
+    fireEvent.press(screen.getByLabelText('Enter the details myself'));
+    fireEvent.changeText(screen.getByLabelText('Product name'), 'Daily cleanser');
+    fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(screen.getByLabelText('Care verdict: Wait')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('I am waiting'));
+    await waitFor(() => expect(screen.getByTestId('state-analysis-failed')).toBeTruthy());
+    expect(screen.getByLabelText('I am waiting').props.accessibilityState.selected).toBe(false);
+    fireEvent.press(screen.getByTestId('retry'));
+    await waitFor(() => expect(mockedApi.recordCarePurchaseDecision).toHaveBeenCalledTimes(2));
+    expect(mockedApi.recordCarePurchaseDecision.mock.calls[1]).toEqual(['candidate-1', 'waiting', undefined, '2026-08-20']);
+    expect(mockedApi.getCarePurchaseCheck).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByLabelText('I am waiting').props.accessibilityState.selected).toBe(true));
+    expect(mockedApi.confirmPurchaseCandidate).not.toHaveBeenCalled();
+  });
+
+  it('suppresses a second Care decision submission while the first is in flight', async () => {
+    mockedApi.inspectPurchaseCandidate.mockResolvedValue(candidate(true));
+    let resolveSave!: (value: unknown) => void;
+    mockedApi.recordCarePurchaseDecision.mockReturnValue(new Promise((resolve) => { resolveSave = resolve; }) as never);
+    render(<ShoppingCheckScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Skin Care')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Skin Care'));
+    fireEvent.press(screen.getByLabelText('Enter the details myself'));
+    fireEvent.changeText(screen.getByLabelText('Product name'), 'Daily cleanser');
+    fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(screen.getByLabelText('Care verdict: Wait')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('I am waiting'));
+    fireEvent.press(screen.getByLabelText('I am waiting'));
+    expect(mockedApi.recordCarePurchaseDecision).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('I am waiting').props.accessibilityState.disabled).toBe(true);
+    resolveSave({
+      purchase_decision_memory_version: 'v3-05.8', id: 'decision-1', candidate_id: 'candidate-1', strategy: 'care_purchase', evaluation_id: null,
+      recommendation_at_decision: { verdict: 'wait', version: 'v3-05.5', fingerprint: 'fp-1' }, decision: 'waiting', note: null, followed_recommendation: true,
+      created_at: '2026-08-20T00:00:00Z', updated_at: '2026-08-20T00:00:00Z',
+    });
   });
 
   it('keeps a draft screenshot candidate in review until confirmation', async () => {

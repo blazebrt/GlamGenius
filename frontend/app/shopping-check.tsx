@@ -16,7 +16,7 @@ import {
   CareCandidateConfirmInput, CareCandidateInspection, CarePurchaseCheck, CarePurchaseItemInput, InventoryCategory,
   PurchaseEvaluation, PurchaseStrategy, confirmPurchaseCandidate, evaluateItemDetails,
   allowanceWasPreserved, evaluateScreenshot, failureGuidance, getCarePurchaseCheck, getPurchaseStrategies,
-  inspectPurchaseCandidate, recordPurchaseDecision, structuredError, uploadMedia,
+  inspectPurchaseCandidate, recordCarePurchaseDecision, recordPurchaseDecision, structuredError, uploadMedia,
 } from '../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 
@@ -37,6 +37,8 @@ export default function ShoppingCheckScreen() {
   const [evaluation, setEvaluation] = useState<PurchaseEvaluation | null>(null);
   const [careCandidate, setCareCandidate] = useState<CareCandidateInspection | null>(null);
   const [careCheck, setCareCheck] = useState<CarePurchaseCheck | null>(null);
+  const [pendingCareDecision, setPendingCareDecision] = useState<'bought' | 'waiting' | 'skipped' | null>(null);
+  const [careDecisionBusy, setCareDecisionBusy] = useState(false);
   const [editingCare, setEditingCare] = useState(false);
   const [error, setError] = useState<any>(null);
 
@@ -65,7 +67,7 @@ export default function ShoppingCheckScreen() {
 
   const clearError = () => setError(null);
   const reset = () => {
-    setEvaluation(null); setCareCandidate(null); setCareCheck(null); setEditingCare(false); setName(''); setBrand('');
+    setEvaluation(null); setCareCandidate(null); setCareCheck(null); setPendingCareDecision(null); setCareDecisionBusy(false); setEditingCare(false); setName(''); setBrand('');
     setProductType(''); setIngredients(''); setSize(''); setColour(''); setPrice(''); setError(null);
   };
 
@@ -139,6 +141,23 @@ export default function ShoppingCheckScreen() {
     try { setEvaluation(await recordPurchaseDecision(evaluation.id, decision)); } catch (err) { setError(err); }
   };
 
+  const decideCare = async (decision: 'bought' | 'waiting' | 'skipped') => {
+    if (!careCandidate || !careCheck || careDecisionBusy) return;
+    setPendingCareDecision(decision); setCareDecisionBusy(true); clearError();
+    try {
+      const saved = await recordCarePurchaseDecision(careCandidate.candidate.id, decision, undefined, careCheck.assessment.plan_date);
+      setCareCheck((current) => current ? { ...current, decision: saved } : current);
+      setPendingCareDecision(null);
+    } catch (err) { setError(err); } finally { setCareDecisionBusy(false); }
+  };
+
+  const retry = () => {
+    if (!strategies.length) return void loadPurchaseStrategies();
+    if (pendingCareDecision && careCandidate && careCheck) return void decideCare(pendingCareDecision);
+    if (isCare) return void (careCandidate ? confirmCare() : fromDetails());
+    return void (manual ? fromDetails() : fromScreenshot());
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.top}>
@@ -146,7 +165,7 @@ export default function ShoppingCheckScreen() {
         <Text style={styles.topTitle}>Should I buy this?</Text><View style={{ width: 24 }} />
       </View>
       <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 48 }} keyboardShouldPersistTaps="handled">
-        {!!error && <AnalysisFailedState message={structuredError(error)?.message || 'We could not check that just now.'} guidance={failureGuidance(error)} allowancePreserved={allowanceWasPreserved(error)} retryable={structuredError(error)?.retryable !== false} onRetry={() => void (!strategies.length ? loadPurchaseStrategies() : (isCare ? (careCandidate ? confirmCare() : fromDetails()) : (manual ? fromDetails() : fromScreenshot())))} onDismiss={clearError} />}
+        {!!error && <AnalysisFailedState message={structuredError(error)?.message || 'We could not check that just now.'} guidance={failureGuidance(error)} allowancePreserved={allowanceWasPreserved(error)} retryable={structuredError(error)?.retryable !== false} onRetry={retry} onDismiss={() => { setPendingCareDecision(null); clearError(); }} />}
 
         {!evaluation && !careCheck && !careCandidate && (
           <>
@@ -192,7 +211,7 @@ export default function ShoppingCheckScreen() {
             <TouchableOpacity accessibilityRole="button" accessibilityLabel="Save corrected product facts" onPress={() => void confirmCare()} style={styles.primary}><Text style={styles.primaryText}>Confirm corrections</Text></TouchableOpacity>
           </View>
         )}
-        {careCheck && <CarePurchaseResult check={careCheck} onReset={reset} />}
+        {careCheck && <CarePurchaseResult check={careCheck} onReset={reset} busy={careDecisionBusy} onDecide={(value) => void decideCare(value)} />}
         {evaluation && <>
           <VerdictCard evaluation={evaluation} />{evaluation.candidate && <ExtractedItemReview candidate={evaluation.candidate} />}
           <NewCombinations count={evaluation.new_combinations} /><ROIBreakdown roi={evaluation.appearance_roi} /><OwnedComparisons similar={evaluation.similar_owned_products} alternatives={evaluation.existing_alternatives} /><RiskNotes evaluation={evaluation} />

@@ -250,6 +250,15 @@ async def test_decision_is_recorded_against_the_evaluation(
     token, uid = await registered_supabase_user()
     evaluation = (await _evaluate(app_client, token, price="2400.00")).json()
 
+    factory = get_sessionmaker()
+    async with factory() as session:
+        used_before = await session.scalar(
+            select(RecommendationEntitlement.used).where(
+                RecommendationEntitlement.account_id == uid,
+                RecommendationEntitlement.feature == "shopping_evaluation",
+            )
+        )
+
     resp = await app_client.post(
         f"/api/v2/shopping/evaluations/{evaluation['id']}/decision",
         headers=auth(token),
@@ -261,13 +270,31 @@ async def test_decision_is_recorded_against_the_evaluation(
     assert decision["decision"] == "skipped"
     assert decision["note"] == "Already have two of these."
 
-    factory = get_sessionmaker()
     async with factory() as session:
         rows = (await session.execute(
             select(PurchaseDecision).where(PurchaseDecision.account_id == uid)
         )).scalars().all()
+        used_after = await session.scalar(
+            select(RecommendationEntitlement.used).where(
+                RecommendationEntitlement.account_id == uid,
+                RecommendationEntitlement.feature == "shopping_evaluation",
+            )
+        )
+    assert used_after == used_before
     assert len(rows) == 1
     assert str(rows[0].evaluation_id) == evaluation["id"]
+    assert rows[0].candidate_id
+    assert rows[0].strategy_key == "style_purchase"
+    assert rows[0].recommendation_verdict == evaluation["verdict"]
+    assert rows[0].recommendation_version == evaluation["appearance_roi"]["version"]
+    assert rows[0].recommendation_fingerprint is None
+    assert rows[0].recommendation_snapshot == {
+        "strategy": "style_purchase",
+        "evaluation_id": evaluation["id"],
+        "verdict": evaluation["verdict"],
+        "roi_version": evaluation["appearance_roi"]["version"],
+        "roi_score": evaluation["appearance_roi"]["score"],
+    }
 
 
 async def test_decision_records_whether_the_advice_was_followed(

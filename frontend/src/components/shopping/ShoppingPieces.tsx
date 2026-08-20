@@ -195,8 +195,8 @@ export function RiskNotes({ evaluation }: { evaluation: PurchaseEvaluation }) {
   );
 }
 
-export function DecisionActions({ current, onDecide }: {
-  current?: string | null; onDecide: (decision: 'bought' | 'waiting' | 'skipped') => void;
+export function DecisionActions({ current, onDecide, busy = false }: {
+  current?: string | null; onDecide: (decision: 'bought' | 'waiting' | 'skipped') => void; busy?: boolean;
 }) {
   return (
     <View style={styles.card} accessibilityLabel="Save your decision">
@@ -210,9 +210,10 @@ export function DecisionActions({ current, onDecide }: {
               key={option.key}
               accessibilityRole="button"
               accessibilityLabel={option.label}
-              accessibilityState={{ selected: active }}
+              accessibilityState={{ selected: active, disabled: busy }}
+              disabled={busy}
               onPress={() => onDecide(option.key)}
-              style={[styles.outline, active && styles.outlineActive]}
+              style={[styles.outline, active && styles.outlineActive, busy && styles.disabled]}
             >
               <Text style={[styles.outlineText, active && styles.outlineTextActive]}>{option.label}</Text>
             </TouchableOpacity>

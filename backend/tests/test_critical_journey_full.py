@@ -433,6 +433,17 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
         session.add(PurchaseDecision(
             evaluation_id=evaluation.id,
             account_id=account_id,
+            candidate_id=candidate.id,
+            strategy_key="style_purchase",
+            recommendation_verdict=evaluation.verdict,
+            recommendation_version=evaluation.roi_version,
+            recommendation_snapshot={
+                "strategy": "style_purchase",
+                "evaluation_id": str(evaluation.id),
+                "verdict": evaluation.verdict,
+                "roi_version": evaluation.roi_version,
+                "roi_score": evaluation.roi_score,
+            },
             decision="did_not_buy",
             followed_recommendation=True,
         ))

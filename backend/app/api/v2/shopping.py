@@ -12,6 +12,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.purchase import decision_memory
 from app.domains.purchase import service as purchase_service
 from app.domains.purchase.contract import (
     PURCHASE_CATEGORY_LABELS,
@@ -183,6 +184,56 @@ async def get_care_purchase_check(
         candidate_id=candidate_id,
         plan_date=on,
     )
+
+
+@router.post("/shopping/candidates/{candidate_id}/decision")
+async def record_care_decision(
+    candidate_id: uuid.UUID,
+    body: PurchaseDecisionCreate,
+    on: date | None = Query(None, description="Decision date; defaults to the account's local day"),
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Persist one customer Care outcome from the canonical V3-05.7 check."""
+    from app.domains.purchase.check_service import resolve_care_purchase_check
+
+    check = await resolve_care_purchase_check(
+        session,
+        account_id=current.account_id,
+        account_id_str=current.account_id_str,
+        candidate_id=candidate_id,
+        plan_date=on,
+    )
+    row = await decision_memory.save_care_decision(
+        session,
+        account_id=current.account_id,
+        candidate_id=candidate_id,
+        check=check,
+        decision=body.decision,
+        note=body.note,
+    )
+    payload = decision_memory.serialize_purchase_decision(row)
+    await session.commit()
+    return payload
+
+
+@router.get("/shopping/candidates/{candidate_id}/decision")
+async def get_purchase_decision_memory(
+    candidate_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Read the latest shared decision memory without choosing a strategy."""
+    await purchase_service.owned_purchase_candidate(session, current.account_id, candidate_id)
+    row = await decision_memory.current_purchase_decision(
+        session,
+        account_id=current.account_id,
+        candidate_id=candidate_id,
+    )
+    return {
+        "purchase_decision_memory_version": decision_memory.PURCHASE_DECISION_MEMORY_VERSION,
+        "decision": decision_memory.serialize_purchase_decision(row) if row else None,
+    }
 
 
 @router.get("/shopping/roi-model")

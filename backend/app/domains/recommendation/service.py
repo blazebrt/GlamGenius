@@ -507,14 +507,33 @@ VERDICT_TO_DECISION = {"buy": "bought", "wait": "waiting", "skip": "skipped"}
 
 
 async def save_decision(session: AsyncSession, evaluation: PurchaseEvaluation, decision: str, note: str | None) -> PurchaseDecision:
+    from app.domains.purchase.decision_memory import style_recommendation_snapshot
+
     row = (await session.execute(
         select(PurchaseDecision).where(PurchaseDecision.evaluation_id == evaluation.id, PurchaseDecision.account_id == evaluation.account_id)
     )).scalar_one_or_none()
     followed = VERDICT_TO_DECISION.get(evaluation.verdict) == decision
     if row is None:
-        row = PurchaseDecision(evaluation_id=evaluation.id, account_id=evaluation.account_id, decision=decision, note=note, followed_recommendation=followed)
+        row = PurchaseDecision(
+            evaluation_id=evaluation.id,
+            account_id=evaluation.account_id,
+            candidate_id=evaluation.candidate_id,
+            strategy_key="style_purchase",
+            recommendation_verdict=evaluation.verdict,
+            recommendation_version=evaluation.roi_version,
+            recommendation_fingerprint=None,
+            recommendation_snapshot=style_recommendation_snapshot(evaluation),
+            decision=decision,
+            note=note,
+            followed_recommendation=followed,
+        )
         session.add(row)
     else:
+        row.candidate_id = evaluation.candidate_id
+        row.strategy_key = "style_purchase"
+        row.recommendation_verdict = evaluation.verdict
+        row.recommendation_version = evaluation.roi_version
+        row.recommendation_snapshot = style_recommendation_snapshot(evaluation)
         row.decision, row.note, row.followed_recommendation = decision, note, followed
     await session.flush()
     return row
