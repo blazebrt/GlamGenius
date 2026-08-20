@@ -15,6 +15,7 @@ from app.domains.purchase import (
     PURCHASE_INTELLIGENCE_FOUNDATION_VERSION,
     PURCHASE_STRATEGY_REGISTRY_VERSION,
 )
+
 from tests.conftest import auth
 from tests.test_v3_05_7_care_purchase_experience import (
     _care_read_only_counts,
