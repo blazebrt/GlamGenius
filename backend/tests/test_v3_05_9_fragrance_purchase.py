@@ -366,8 +366,8 @@ async def test_fragrance_decision_memory_is_candidate_backed_idempotent_and_side
     memory = saved.json()
     assert memory["strategy"] == "fragrance_purchase"
     assert memory["evaluation_id"] is None
-    assert memory["recommendation_version"] == "v3-05.9"
-    assert memory["recommendation_fingerprint"] == check.json()["verdict"]["decision_fingerprint"]
+    assert memory["recommendation_at_decision"]["version"] == "v3-05.9"
+    assert memory["recommendation_at_decision"]["fingerprint"] == check.json()["verdict"]["decision_fingerprint"]
     assert memory["recommendation_snapshot"]["strategy"] == "fragrance_purchase"
     repeated = await app_client.post(
         f"/api/v2/shopping/candidates/{candidate_id}/decision", headers=auth(token),
