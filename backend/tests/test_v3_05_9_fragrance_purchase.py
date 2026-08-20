@@ -1,6 +1,7 @@
 """V3-05.9 Fragrance Purchase strategy contract and deterministic policy."""
 from __future__ import annotations
 
+import asyncio
 import uuid
 from decimal import Decimal
 from types import SimpleNamespace
@@ -30,7 +31,15 @@ from app.domains.purchase.fragrance_truth import (
 )
 from app.domains.purchase.schemas import CarePurchaseCandidateConfirm, ExtractedFragranceCandidate
 from app.domains.purchase.service import _apply_candidate_corrections
-from app.domains.recommendation.models import ShoppingCandidate
+from app.domains.recommendation.models import (
+    PurchaseDecision,
+    PurchaseEvaluation,
+    PurchaseEvaluationFactor,
+    RecommendationEntitlement,
+    RecommendationInput,
+    RecommendationRun,
+    ShoppingCandidate,
+)
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select
 
@@ -246,6 +255,26 @@ async def _count_model(model, account_id: uuid.UUID) -> int:
         return int(await session.scalar(select(func.count(model.id)).where(model.account_id == account_id)))
 
 
+async def _fragrance_side_effect_counts(account_id: uuid.UUID) -> dict[str, int | tuple[int, int] | None]:
+    factory = get_sessionmaker()
+    async with factory() as session:
+        entitlement = await session.scalar(
+            select(RecommendationEntitlement).where(
+                RecommendationEntitlement.account_id == account_id,
+                RecommendationEntitlement.feature == "shopping_evaluation",
+            )
+        )
+        return {
+            "evaluations": int(await session.scalar(select(func.count(PurchaseEvaluation.id)).where(PurchaseEvaluation.account_id == account_id))),
+            "factors": int(await session.scalar(select(func.count(PurchaseEvaluationFactor.id)).join(PurchaseEvaluation).where(PurchaseEvaluation.account_id == account_id))),
+            "runs": int(await session.scalar(select(func.count(RecommendationRun.id)).where(RecommendationRun.account_id == account_id))),
+            "inputs": int(await session.scalar(select(func.count(RecommendationInput.id)).join(RecommendationRun).where(RecommendationRun.account_id == account_id))),
+            "decisions": int(await session.scalar(select(func.count(PurchaseDecision.id)).where(PurchaseDecision.account_id == account_id))),
+            "entitlement": None if entitlement is None else (entitlement.included, entitlement.used),
+            "inventory": int(await session.scalar(select(func.count(InventoryItem.id)).where(InventoryItem.account_id == account_id))),
+        }
+
+
 def _perfume_extraction(name: str = "Rain Garden", *, category: str = "perfumes", price: int | None = 1200) -> str:
     details = '{"fragrance_family":"woody","concentration":"EDP"}' if category == "perfumes" else "{}"
     return (
@@ -313,3 +342,70 @@ async def test_fragrance_screenshot_rejects_wrong_category_and_requires_confirma
     check = await app_client.get(f"/api/v2/shopping/candidates/{candidate_id}/fragrance-check", headers=auth(token))
     assert check.status_code == 200, check.text
     assert check.json()["verdict"]["primary_reason_code"] == "candidate_price_missing"
+
+
+@pytest.mark.asyncio
+async def test_fragrance_decision_memory_is_candidate_backed_idempotent_and_side_effect_free(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    inspected = await app_client.post(
+        "/api/v2/shopping/candidates/inspect", headers=auth(token),
+        json={"source": "manual", "item": _fragrance_item()},
+    )
+    assert inspected.status_code == 200, inspected.text
+    candidate_id = inspected.json()["candidate"]["id"]
+    before = await _fragrance_side_effect_counts(account_id)
+    check = await app_client.get(f"/api/v2/shopping/candidates/{candidate_id}/fragrance-check", headers=auth(token))
+    assert check.status_code == 200, check.text
+    saved = await app_client.post(
+        f"/api/v2/shopping/candidates/{candidate_id}/decision", headers=auth(token),
+        json={"decision": "waiting"},
+    )
+    assert saved.status_code == 200, saved.text
+    memory = saved.json()
+    assert memory["strategy"] == "fragrance_purchase"
+    assert memory["evaluation_id"] is None
+    assert memory["recommendation_version"] == "v3-05.9"
+    assert memory["recommendation_fingerprint"] == check.json()["verdict"]["decision_fingerprint"]
+    assert memory["recommendation_snapshot"]["strategy"] == "fragrance_purchase"
+    repeated = await app_client.post(
+        f"/api/v2/shopping/candidates/{candidate_id}/decision", headers=auth(token),
+        json={"decision": "bought"},
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["id"] == memory["id"]
+    after = await _fragrance_side_effect_counts(account_id)
+    for key in ("evaluations", "factors", "runs", "inputs", "inventory", "entitlement"):
+        assert after[key] == before[key]
+    assert after["decisions"] == before["decisions"] + 1
+
+
+@pytest.mark.asyncio
+async def test_fragrance_concurrent_first_decisions_leave_one_memory_row(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    inspected = await app_client.post(
+        "/api/v2/shopping/candidates/inspect", headers=auth(token),
+        json={"source": "manual", "item": _fragrance_item("Concurrent Rain")},
+    )
+    assert inspected.status_code == 200, inspected.text
+    candidate_id = inspected.json()["candidate"]["id"]
+
+    async def save(decision: str):
+        return await app_client.post(
+            f"/api/v2/shopping/candidates/{candidate_id}/decision", headers=auth(token),
+            json={"decision": decision},
+        )
+
+    responses = await asyncio.gather(save("waiting"), save("skipped"))
+    assert all(response.status_code == 200 for response in responses), [response.text for response in responses]
+    factory = get_sessionmaker()
+    async with factory() as session:
+        rows = (await session.execute(select(PurchaseDecision).where(
+            PurchaseDecision.account_id == account_id,
+            PurchaseDecision.candidate_id == uuid.UUID(candidate_id),
+            PurchaseDecision.strategy_key == "fragrance_purchase",
+        ))).scalars().all()
+    assert len(rows) == 1
