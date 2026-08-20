@@ -1160,6 +1160,27 @@ export interface CarePurchaseCheck {
   evidence: CareEvidence;
   value: CareValue;
   verdict: CareVerdict;
+  decision?: PurchaseDecisionMemory | null;
+}
+
+export type PurchaseDecisionValue = 'bought' | 'waiting' | 'skipped';
+
+export interface PurchaseDecisionMemory {
+  purchase_decision_memory_version: 'v3-05.8';
+  id: string;
+  candidate_id: string;
+  strategy: 'style_purchase' | 'care_purchase';
+  evaluation_id: string | null;
+  recommendation_at_decision: {
+    verdict: Verdict;
+    version: string;
+    fingerprint: string | null;
+  };
+  decision: PurchaseDecisionValue;
+  note: string | null;
+  followed_recommendation: boolean;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export const getROIModel = async (): Promise<{
@@ -1202,11 +1223,19 @@ export const confirmPurchaseCandidate = async (
 export const getCarePurchaseCheck = async (id: string, on?: string): Promise<CarePurchaseCheck> =>
   (await api.get<CarePurchaseCheck>(`${V2}/shopping/candidates/${id}/care-check`, { params: on ? { on } : undefined })).data;
 
+export const recordCarePurchaseDecision = async (
+  id: string, decision: PurchaseDecisionValue, note?: string, on?: string
+): Promise<PurchaseDecisionMemory> =>
+  (await api.post<PurchaseDecisionMemory>(`${V2}/shopping/candidates/${id}/decision`, { decision, note }, { params: on ? { on } : undefined })).data;
+
+export const getPurchaseDecision = async (id: string): Promise<{ purchase_decision_memory_version: 'v3-05.8'; decision: PurchaseDecisionMemory | null }> =>
+  (await api.get(`${V2}/shopping/candidates/${id}/decision`)).data;
+
 export const getEvaluation = async (id: string): Promise<PurchaseEvaluation> =>
   (await api.get<PurchaseEvaluation>(`${V2}/shopping/evaluations/${id}`)).data;
 
 export const recordPurchaseDecision = async (
-  id: string, decision: 'bought' | 'waiting' | 'skipped', note?: string
+  id: string, decision: PurchaseDecisionValue, note?: string
 ): Promise<PurchaseEvaluation> =>
   (await api.post<PurchaseEvaluation>(`${V2}/shopping/evaluations/${id}/decision`, { decision, note })).data;
 

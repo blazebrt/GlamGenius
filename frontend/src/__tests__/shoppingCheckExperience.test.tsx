@@ -19,6 +19,7 @@ jest.mock('../services/apiV2', () => {
     getPurchaseStrategies: jest.fn(),
     inspectPurchaseCandidate: jest.fn(),
     getCarePurchaseCheck: jest.fn(),
+    recordCarePurchaseDecision: jest.fn(),
     confirmPurchaseCandidate: jest.fn(),
     evaluateItemDetails: jest.fn(),
     evaluateScreenshot: jest.fn(),
@@ -95,6 +96,27 @@ describe('ShoppingCheckScreen strategy and Care flows', () => {
     expect(mockedApi.inspectPurchaseCandidate).toHaveBeenCalled();
     expect(mockedApi.evaluateItemDetails).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Care verdict: Wait')).toBeTruthy();
+  });
+
+  it('persists Care decisions through the candidate endpoint and selects only the server response', async () => {
+    mockedApi.inspectPurchaseCandidate.mockResolvedValue(candidate(true));
+    mockedApi.recordCarePurchaseDecision.mockResolvedValue({
+      purchase_decision_memory_version: 'v3-05.8', id: 'decision-1', candidate_id: 'candidate-1',
+      strategy: 'care_purchase', evaluation_id: null,
+      recommendation_at_decision: { verdict: 'wait', version: 'v3-05.5', fingerprint: 'fp-1' },
+      decision: 'waiting', note: null, followed_recommendation: true, created_at: '2026-08-20T00:00:00Z', updated_at: '2026-08-20T00:00:00Z',
+    });
+    render(<ShoppingCheckScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Skin Care')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Skin Care'));
+    fireEvent.press(screen.getByLabelText('Enter the details myself'));
+    fireEvent.changeText(screen.getByLabelText('Product name'), 'Daily cleanser');
+    fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(screen.getByLabelText('Care verdict: Wait')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('I am waiting'));
+    await waitFor(() => expect(mockedApi.recordCarePurchaseDecision).toHaveBeenCalledWith('candidate-1', 'waiting'));
+    expect(screen.getByLabelText('I am waiting').props.accessibilityState.selected).toBe(true);
+    expect(mockedApi.recordPurchaseDecision).not.toHaveBeenCalled();
   });
 
   it('keeps a draft screenshot candidate in review until confirmation', async () => {

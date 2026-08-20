@@ -16,7 +16,7 @@ import {
   CareCandidateConfirmInput, CareCandidateInspection, CarePurchaseCheck, CarePurchaseItemInput, InventoryCategory,
   PurchaseEvaluation, PurchaseStrategy, confirmPurchaseCandidate, evaluateItemDetails,
   allowanceWasPreserved, evaluateScreenshot, failureGuidance, getCarePurchaseCheck, getPurchaseStrategies,
-  inspectPurchaseCandidate, recordPurchaseDecision, structuredError, uploadMedia,
+  inspectPurchaseCandidate, recordCarePurchaseDecision, recordPurchaseDecision, structuredError, uploadMedia,
 } from '../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 
@@ -139,6 +139,15 @@ export default function ShoppingCheckScreen() {
     try { setEvaluation(await recordPurchaseDecision(evaluation.id, decision)); } catch (err) { setError(err); }
   };
 
+  const decideCare = async (decision: 'bought' | 'waiting' | 'skipped') => {
+    if (!careCandidate || !careCheck) return;
+    setBusy(true); clearError();
+    try {
+      const saved = await recordCarePurchaseDecision(careCandidate.candidate.id, decision);
+      setCareCheck((current) => current ? { ...current, decision: saved } : current);
+    } catch (err) { setError(err); } finally { setBusy(false); }
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.top}>
@@ -192,7 +201,7 @@ export default function ShoppingCheckScreen() {
             <TouchableOpacity accessibilityRole="button" accessibilityLabel="Save corrected product facts" onPress={() => void confirmCare()} style={styles.primary}><Text style={styles.primaryText}>Confirm corrections</Text></TouchableOpacity>
           </View>
         )}
-        {careCheck && <CarePurchaseResult check={careCheck} onReset={reset} />}
+        {careCheck && <CarePurchaseResult check={careCheck} onReset={reset} onDecide={(value) => void decideCare(value)} />}
         {evaluation && <>
           <VerdictCard evaluation={evaluation} />{evaluation.candidate && <ExtractedItemReview candidate={evaluation.candidate} />}
           <NewCombinations count={evaluation.new_combinations} /><ROIBreakdown roi={evaluation.appearance_roi} /><OwnedComparisons similar={evaluation.similar_owned_products} alternatives={evaluation.existing_alternatives} /><RiskNotes evaluation={evaluation} />

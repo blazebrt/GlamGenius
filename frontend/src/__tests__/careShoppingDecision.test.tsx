@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen } from '@testing-library/react-native';
 
 import { CarePurchaseCheck } from '../services/apiV2';
 import { CarePurchaseResult, formatCareMissingInformation } from '../components/shopping/CareShoppingPieces';
@@ -15,6 +15,7 @@ const check = (verdict: 'buy' | 'wait' | 'skip' = 'wait'): CarePurchaseCheck => 
   evidence: { assessment_fingerprint: 'assessment-1', evidence_support: { findings: [] } },
   value: { assessment_fingerprint: 'assessment-1', value_fingerprint: 'value-1', value_context: { owned_value_recovery: { items: [] } } },
   verdict: { assessment_fingerprint: 'assessment-1', value_fingerprint: 'value-1', verdict, headline: verdict === 'wait' ? 'Hold this one for now.' : 'This fills a real gap.', explanation: 'A clear current-context explanation.', primary_reason_code: 'candidate_price_missing', reason_codes: ['candidate_price_missing'], supporting_reason_codes: [], decision_context: {} },
+  decision: null,
 });
 
 describe('Care purchase customer experience', () => {
@@ -40,5 +41,12 @@ describe('Care purchase customer experience', () => {
     render(<CarePurchaseResult check={check('buy')} onReset={reset} />);
     expect(screen.getByText(/candidate remains separate from your inventory/i)).toBeTruthy();
     expect(screen.getByLabelText('Check something else')).toBeTruthy();
+  });
+
+  it('reuses the generic decision actions and reports the server-selected state', () => {
+    const decide = jest.fn();
+    render(<CarePurchaseResult check={check()} onReset={() => undefined} onDecide={decide} />);
+    fireEvent.press(screen.getByLabelText('I am waiting'));
+    expect(decide).toHaveBeenCalledWith('waiting');
   });
 });

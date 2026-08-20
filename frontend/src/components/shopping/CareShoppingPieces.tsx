@@ -5,6 +5,7 @@ import {
   CareCandidateInspection, CareCompatibilityFinding, CareEvidenceFinding, CarePurchaseCheck,
   CareValueRecoveryItem,
 } from '../../services/apiV2';
+import { DecisionActions } from './ShoppingPieces';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 
 const VERDICT_COPY = {
@@ -174,12 +175,21 @@ export function CareWhy({ check }: { check: CarePurchaseCheck }) {
   );
 }
 
-export function CarePurchaseResult({ check, onReset }: { check: CarePurchaseCheck; onReset: () => void }) {
+export function CarePurchaseResult({
+  check,
+  onReset,
+  onDecide,
+}: {
+  check: CarePurchaseCheck;
+  onReset: () => void;
+  onDecide?: (decision: 'bought' | 'waiting' | 'skipped') => void;
+}) {
   return (
     <>
       <CareVerdictCard check={check} />
       <CareWhy check={check} />
       <Text style={styles.noteCenter}>This candidate remains separate from your inventory.</Text>
+      {onDecide && <DecisionActions current={check.decision?.decision} onDecide={onDecide} />}
       <TouchableOpacity accessibilityRole="button" accessibilityLabel="Check something else" onPress={onReset}>
         <Text style={styles.link}>Check something else</Text>
       </TouchableOpacity>
