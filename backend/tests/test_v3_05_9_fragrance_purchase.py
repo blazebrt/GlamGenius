@@ -25,6 +25,7 @@ from app.domains.purchase.fragrance_truth import (
     build_fragrance_candidate_truth,
     validate_fragrance_candidate_details,
 )
+from app.domains.purchase.schemas import ExtractedFragranceCandidate
 
 
 def _candidate(*, price=Decimal("1200"), **details):
@@ -78,6 +79,20 @@ def test_candidate_truth_reuses_family_ontology_and_rejects_owned_only_fields():
         raise AssertionError("owned-only remaining_percent must not be accepted on a candidate")
 
 
+def test_extraction_accepts_visible_facts_only_and_rejects_customer_intent():
+    base = {
+        "category": "perfumes", "display_name": "Rain Garden", "confidence": 0.9,
+        "photo_quality_notes": "clear label",
+    }
+    for key, value in (("occasion", ["office"]), ("season", ["summer"]), ("longevity_user_reported", "8 hours")):
+        try:
+            ExtractedFragranceCandidate(**{**base, "details": {key: value}})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"extraction must reject customer field {key}")
+
+
 def test_exact_and_price_precedence():
     candidate = _candidate(fragrance_family="woody")
     exact = _owned(name="Rain Garden", brand="House", remaining=40)
@@ -101,9 +116,9 @@ def test_first_fragrance_and_context_coverage_are_owned_first():
     owner = _owned(occasion=["office"], season=["summer"])
     result = evaluate_fragrance_purchase(candidate=_candidate(occasion=["office"], season=["summer"]), owned=[owner])
     assert result["primary_reason_code"] == "declared_use_already_covered"
-    result = evaluate_fragrance_purchase(candidate=_candidate(occasion=["festive"]), owned=[_owned(occasion=[])])
+    result = evaluate_fragrance_purchase(candidate=_candidate(occasion=["festival"]), owned=[_owned(occasion=[])])
     assert result["primary_reason_code"] == "owned_context_incomplete"
-    result = evaluate_fragrance_purchase(candidate=_candidate(occasion=["festive"]), owned=[_owned(occasion=["office"])])
+    result = evaluate_fragrance_purchase(candidate=_candidate(occasion=["festival"]), owned=[_owned(occasion=["office"])])
     assert result["primary_reason_code"] == "declared_use_gap"
 
 
@@ -117,3 +132,38 @@ def test_family_overlap_is_supporting_only_and_fingerprint_is_order_stable():
     assert one["primary_reason_code"] == "intended_use_missing"
     assert one["decision_fingerprint"] == two["decision_fingerprint"]
     assert one["supporting_reason_codes"] == ["same_family_owned"]
+
+
+def test_context_covering_owned_options_are_not_same_family_shortcuts():
+    candidate = _candidate(fragrance_family="woody", occasion=["office"])
+    covering = _owned(name="Floral A", family="floral", occasion=["office"])
+    family_only = _owned(name="Woody B", family="woody", occasion=["party"])
+    result = evaluate_fragrance_purchase(candidate=candidate, owned=[family_only, covering])
+    assert result["primary_reason_code"] == "declared_use_already_covered"
+    assert [item["display_name"] for item in result["owned_options_to_use_first"]] == ["Floral A"]
+    assert [item["display_name"] for item in result["same_family_owned"]] == ["Woody B"]
+
+
+def test_context_fingerprint_canonicalises_declared_list_order():
+    owned = [_owned(name="Floral A", family="floral", season=["summer"], occasion=["office"])]
+    first_candidate = _candidate(occasion=["office", "party"], season=["winter", "summer"])
+    candidate_fields = vars(first_candidate).copy()
+    candidate_fields["details"] = {"occasion": ["party", "office"], "season": ["summer", "winter"]}
+    second_candidate = SimpleNamespace(**candidate_fields)
+    first = evaluate_fragrance_purchase(candidate=first_candidate, owned=owned)
+    second = evaluate_fragrance_purchase(candidate=second_candidate, owned=owned)
+    assert first["decision_fingerprint"] == second["decision_fingerprint"]
+
+
+def test_context_vocab_and_customer_copy_fail_closed():
+    try:
+        evaluate_fragrance_purchase(candidate=_candidate(occasion=["ofice"]), owned=[])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unsupported occasion must be rejected")
+    exact_unknown = _owned(name="Rain Garden", brand="House", remaining=None)
+    result = evaluate_fragrance_purchase(candidate=_candidate(fragrance_family="woody"), owned=[exact_unknown])
+    assert result["primary_reason_code"] == "exact_bottle_available"
+    assert "plenty left" not in result["explanation"]
+    assert "market" not in result["explanation"]

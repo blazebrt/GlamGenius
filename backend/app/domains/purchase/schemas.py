@@ -8,7 +8,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domains.purchase.candidate_truth import validate_care_candidate_details
-from app.domains.purchase.fragrance_truth import validate_fragrance_candidate_details
+from app.domains.purchase.fragrance_truth import (
+    validate_fragrance_candidate_details,
+    validate_fragrance_extraction_details,
+)
 
 AnyPurchaseCategory = Literal[
     "wardrobe", "shoes", "accessories", "beauty", "hair", "perfumes", "supplements"
@@ -112,7 +115,7 @@ class ExtractedFragranceCandidate(BaseModel):
 
     @model_validator(mode="after")
     def _visible_fragrance_details(self):
-        self.details = validate_fragrance_candidate_details(self.details)
+        self.details = validate_fragrance_extraction_details(self.details)
         return self
 
 

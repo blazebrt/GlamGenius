@@ -12,12 +12,29 @@ from app.domains.purchase.contract import (
     PURCHASE_CATEGORY_LABELS,
 )
 from app.domains.recommendation.models import ShoppingCandidate
+from app.domains.recommendation.occasions import OCCASION_KEYS
 from app.domains.routines.ontology import normalise_fragrance_family
 
 FRAGRANCE_CANDIDATE_DETAIL_KEYS = frozenset({
     "fragrance_family", "concentration", "season", "occasion", "longevity_user_reported",
 })
 FRAGRANCE_OWNED_ONLY_KEYS = frozenset({"usage_frequency", "remaining_percent"})
+FRAGRANCE_SEASON_KEYS: tuple[str, ...] = ("spring", "summer", "monsoon", "autumn", "winter")
+FRAGRANCE_EXTRACTION_DETAIL_KEYS = frozenset({"fragrance_family", "concentration"})
+
+
+def _canonical_context_values(key: str, value: Any) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{key} must be a list of supported keys.")
+    allowed = set(OCCASION_KEYS if key == "occasion" else FRAGRANCE_SEASON_KEYS)
+    cleaned = []
+    for item in value:
+        candidate = item.strip().casefold()
+        if candidate not in allowed:
+            raise ValueError(f"Unsupported Fragrance {key}: {item}")
+        if candidate not in cleaned:
+            cleaned.append(candidate)
+    return cleaned
 
 
 def validate_fragrance_candidate_details(details: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -30,14 +47,24 @@ def validate_fragrance_candidate_details(details: Mapping[str, Any] | None) -> d
         if value is None or value == "":
             cleaned[key] = None
         elif key in {"season", "occasion"}:
-            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-                raise ValueError(f"{key} must be a list of text values.")
-            cleaned[key] = [item.strip()[:120] for item in value if item.strip()][:30]
+            cleaned[key] = _canonical_context_values(key, value)[:30]
         elif isinstance(value, str):
             cleaned[key] = value.strip()[:4000]
         else:
             cleaned[key] = value
     return cleaned
+
+
+def validate_fragrance_extraction_details(details: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Validate only visible perfume facts returned by the extraction model."""
+    incoming = dict(details or {})
+    unknown = set(incoming) - FRAGRANCE_EXTRACTION_DETAIL_KEYS
+    if unknown:
+        raise ValueError(f"Unsupported Fragrance extraction detail: {sorted(unknown)[0]}")
+    return {
+        key: (None if value is None or value == "" else str(value).strip()[:4000])
+        for key, value in incoming.items()
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,9 +147,12 @@ def serialize_fragrance_candidate_truth(candidate: ShoppingCandidate) -> dict[st
 
 __all__ = [
     "FRAGRANCE_CANDIDATE_DETAIL_KEYS",
+    "FRAGRANCE_EXTRACTION_DETAIL_KEYS",
     "FRAGRANCE_OWNED_ONLY_KEYS",
+    "FRAGRANCE_SEASON_KEYS",
     "FragrancePurchaseCandidateTruth",
     "build_fragrance_candidate_truth",
     "serialize_fragrance_candidate_truth",
     "validate_fragrance_candidate_details",
+    "validate_fragrance_extraction_details",
 ]

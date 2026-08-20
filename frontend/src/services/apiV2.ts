@@ -960,6 +960,10 @@ export interface PurchaseStrategy {
 export interface PurchaseStrategiesResponse {
   purchase_strategy_registry_version: string;
   strategies: PurchaseStrategy[];
+  fragrance_context_options?: {
+    occasions: { key: string; label: string }[];
+    seasons: { key: string; label: string }[];
+  };
 }
 
 export interface CarePurchaseItemInput {

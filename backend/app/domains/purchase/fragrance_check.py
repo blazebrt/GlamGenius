@@ -116,8 +116,8 @@ def _explanation(reason: str) -> str:
     return {
         "candidate_untrusted": "Review and confirm the visible fragrance facts before deciding.",
         "multiple_exact_bottles_owned": "You already have more than one bottle of this exact fragrance.",
-        "exact_bottle_available": "You already have this fragrance with plenty left to use.",
-        "candidate_price_missing": "The candidate price is not recorded, so this cannot be compared safely.",
+        "exact_bottle_available": "You already have this fragrance recorded, so use your current bottle first.",
+        "candidate_price_missing": "The price is not recorded yet, so we’ll pause rather than guess.",
         "exact_replacement_ready": "Your confirmed exact bottle is nearly empty, so this can replace it.",
         "first_fragrance_gap": "You do not have a fragrance recorded yet, so this fills a real category gap.",
         "intended_use_missing": "Tell us where or when you would reach for this before deciding.",
@@ -146,6 +146,19 @@ def evaluate_fragrance_purchase(
     covered = occasion_coverage["covered"] + season_coverage["covered"]
     unknown = occasion_coverage["unknown"] + season_coverage["unknown"]
     uncovered = occasion_coverage["uncovered"] + season_coverage["uncovered"]
+    context_by_id = {
+        str(row.item.id): row
+        for value in occasions
+        for row in owned
+        if any(_norm(item) == _norm(value) for item in (row.detail.occasion or []))
+    }
+    context_by_id.update({
+        str(row.item.id): row
+        for value in seasons
+        for row in owned
+        if any(_norm(item) == _norm(value) for item in (row.detail.season or []))
+    })
+    context_covering = [context_by_id[key] for key in sorted(context_by_id)]
     replacement_gap = bool(exact) and all(row.detail.remaining_percent is not None and row.detail.remaining_percent <= 15 for row in exact)
     if not truth.facts_trusted:
         verdict, reason = "wait", "candidate_untrusted"
@@ -169,7 +182,14 @@ def evaluate_fragrance_purchase(
         verdict, reason = "wait", "declared_use_already_covered"
     material = {
         "candidate_id": str(candidate.id),
-        "candidate": {"display_name": candidate.display_name, "brand": candidate.brand, "details": details, "price": candidate_price, "currency": candidate.currency},
+        "candidate": {
+            "display_name": _norm(candidate.display_name),
+            "brand": _norm(candidate.brand),
+            "family": truth.normalized_fragrance_family,
+            "concentration": details.get("concentration"),
+            "price": candidate_price,
+            "currency": (candidate.currency or "").upper(),
+        },
         "exact_owned": [{"id": str(row.item.id), "name": row.item.display_name, "brand": row.item.brand, "remaining_percent": row.detail.remaining_percent} for row in exact],
         "intended_use": {"occasion": sorted(occasions), "season": sorted(seasons)},
         "coverage": {"covered": sorted(covered), "unknown": sorted(unknown), "uncovered": sorted(uncovered)},
@@ -192,7 +212,7 @@ def evaluate_fragrance_purchase(
         "normalised_candidate_family": truth.normalized_fragrance_family,
         "same_family_owned": [row.as_dict() for row in same_family],
         "replacement_gap": replacement_gap,
-        "owned_options_to_use_first": [row.as_dict() for row in (exact if exact else same_family)],
+        "owned_options_to_use_first": [row.as_dict() for row in (exact if exact else context_covering)],
         "missing_information": list(truth.missing_information) + (["draft_owned_context"] if draft_count else []),
     }
 

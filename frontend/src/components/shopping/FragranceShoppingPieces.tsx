@@ -18,6 +18,7 @@ export function FragranceCandidateReview({
       {!!candidate.brand && <Text style={styles.body}>{candidate.brand}</Text>}
       {!!candidate.details.fragrance_family && <Text style={styles.fact}>Family: {candidate.details.fragrance_family}</Text>}
       {!!candidate.details.concentration && <Text style={styles.fact}>Concentration: {candidate.details.concentration}</Text>}
+      {candidate.price != null && <Text style={styles.fact}>Price: {candidate.price} {candidate.currency}</Text>}
       <Text style={styles.note}>Check the visible facts before continuing. This candidate is not in your inventory.</Text>
       {!inspection.facts_trusted && <View style={styles.row}><TouchableOpacity accessibilityRole="button" accessibilityLabel="Confirm Fragrance facts" onPress={onConfirm} style={styles.primary}><Text style={styles.primaryText}>Confirm facts</Text></TouchableOpacity><TouchableOpacity accessibilityRole="button" accessibilityLabel="Correct Fragrance facts" onPress={onCorrect} style={styles.outline}><Text style={styles.outlineText}>Correct</Text></TouchableOpacity></View>}
       {inspection.facts_trusted && <TouchableOpacity accessibilityRole="button" accessibilityLabel="Check Fragrance purchase" onPress={onConfirm} style={styles.primary}><Text style={styles.primaryText}>Check it</Text></TouchableOpacity>}
@@ -30,6 +31,7 @@ export function FragranceShoppingResult({
 }: { check: FragrancePurchaseCheck; onReset: () => void; onDecide: (decision: 'bought' | 'waiting' | 'skipped') => void; busy?: boolean }) {
   const verdict = check.verdict;
   const context = check.collection_context;
+  const missingInformation = check.verdict.missing_information || check.candidate_truth.missing_information;
   return (
     <>
       <View style={[styles.verdict, { backgroundColor: verdictColor(verdict.verdict) + '20' }]} accessibilityLabel={`Fragrance verdict: ${verdict.verdict[0].toUpperCase()}${verdict.verdict.slice(1)}`}>
@@ -45,6 +47,7 @@ export function FragranceShoppingResult({
       </View>
       {!!context.owned_options_to_use_first.length && <View style={styles.card} accessibilityLabel="Owned fragrance alternatives"><Text style={styles.title}>What you already own</Text>{context.owned_options_to_use_first.map((item) => <Text key={item.owned_item_id} style={styles.fact}>{item.display_name}{item.brand ? ` · ${item.brand}` : ''}{item.remaining_percent != null ? ` · ${item.remaining_percent}% left` : ''}</Text>)}</View>}
       {!!context.same_family_owned.length && <View style={styles.card} accessibilityLabel="Same family supporting information"><Text style={styles.title}>Same-family context</Text><Text style={styles.note}>This is supporting context only; family overlap does not decide the result.</Text>{context.same_family_owned.map((item) => <Text key={item.owned_item_id} style={styles.fact}>{item.display_name}</Text>)}</View>}
+      {!!missingInformation.length && <View style={styles.card} accessibilityLabel="Missing fragrance information"><Text style={styles.title}>Still to confirm</Text>{missingInformation.map((item) => <Text key={item} style={styles.fact}>{item === 'draft_owned_context' ? 'Some perfume entries still need confirmation before they can count as owned.' : item.replace(/_/g, ' ')}</Text>)}</View>}
       <Text style={styles.noteCenter}>This candidate remains separate from your inventory. Buying it does not add an inventory item.</Text>
       <DecisionActions current={check.decision?.decision} onDecide={onDecide} busy={busy} />
       <TouchableOpacity accessibilityRole="button" accessibilityLabel="Check something else" onPress={onReset}><Text style={styles.link}>Check something else</Text></TouchableOpacity>

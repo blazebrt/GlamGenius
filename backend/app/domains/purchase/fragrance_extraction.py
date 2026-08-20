@@ -26,8 +26,9 @@ def prompt() -> str:
 category=perfumes, display_name, brand, subcategory, fragrance_family and
 concentration only when explicitly visible, price, currency, confidence,
 uncertain_fields, and photo_quality_notes. Details may contain only
-fragrance_family, concentration, and customer-declared fields if visibly stated;
-do not infer season or occasion. Never return a recommendation."""
+fragrance_family and concentration. Do not return occasion, season, longevity,
+usage, remaining quantity, chemistry, or performance context. Never return a
+recommendation."""
 
 
 async def extract_fragrance_candidate(

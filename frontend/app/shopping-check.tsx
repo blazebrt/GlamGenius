@@ -31,11 +31,13 @@ export default function ShoppingCheckScreen() {
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
   const [productType, setProductType] = useState('');
+  const [concentration, setConcentration] = useState('');
   const [ingredients, setIngredients] = useState('');
   const [size, setSize] = useState('');
   const [colour, setColour] = useState('');
-  const [intendedOccasion, setIntendedOccasion] = useState('');
-  const [intendedSeason, setIntendedSeason] = useState('');
+  const [intendedOccasions, setIntendedOccasions] = useState<string[]>([]);
+  const [intendedSeasons, setIntendedSeasons] = useState<string[]>([]);
+  const [fragranceOptions, setFragranceOptions] = useState<{ occasions: { key: string; label: string }[]; seasons: { key: string; label: string }[] }>({ occasions: [], seasons: [] });
   const [price, setPrice] = useState('');
   const [evaluation, setEvaluation] = useState<PurchaseEvaluation | null>(null);
   const [careCandidate, setCareCandidate] = useState<CareCandidateInspection | null>(null);
@@ -56,6 +58,7 @@ export default function ShoppingCheckScreen() {
       const response = await getPurchaseStrategies();
       const active = response.strategies.flatMap((strategy) => strategy.state === 'active' ? strategy.categories : []);
       setStrategies(response.strategies);
+      setFragranceOptions(response.fragrance_context_options || { occasions: [], seasons: [] });
       setCategory(active[0]?.key || null);
     } catch (err) {
       setError(err);
@@ -73,9 +76,12 @@ export default function ShoppingCheckScreen() {
   const isFragrance = selectedStrategy?.key === 'fragrance_purchase';
 
   const clearError = () => setError(null);
+  const toggleContext = (values: string[], setValues: (next: string[]) => void, key: string) => {
+    setValues(values.includes(key) ? values.filter((value) => value !== key) : [...values, key]);
+  };
   const reset = () => {
     setEvaluation(null); setCareCandidate(null); setCareCheck(null); setFragranceCandidate(null); setFragranceCheck(null); setPendingCareDecision(null); setCareDecisionBusy(false); setEditingCare(false); setEditingFragrance(false); setName(''); setBrand('');
-    setProductType(''); setIngredients(''); setSize(''); setColour(''); setIntendedOccasion(''); setIntendedSeason(''); setPrice(''); setError(null);
+    setProductType(''); setConcentration(''); setIngredients(''); setSize(''); setColour(''); setIntendedOccasions([]); setIntendedSeasons([]); setPrice(''); setError(null);
   };
 
   const inspectCare = async (body: Parameters<typeof inspectPurchaseCandidate>[0]) => {
@@ -100,8 +106,9 @@ export default function ShoppingCheckScreen() {
       setFragranceCandidate(result);
       setName(result.candidate.display_name); setBrand(result.candidate.brand || '');
       setProductType(result.candidate.details?.fragrance_family || '');
-      setIntendedOccasion((result.candidate.details?.occasion || []).join(', '));
-      setIntendedSeason((result.candidate.details?.season || []).join(', '));
+      setConcentration(result.candidate.details?.concentration || '');
+      setIntendedOccasions(result.candidate.details?.occasion || []);
+      setIntendedSeasons(result.candidate.details?.season || []);
       setPrice(result.candidate.price == null ? '' : String(result.candidate.price));
       if (result.facts_trusted) setFragranceCheck(await getFragrancePurchaseCheck(result.candidate.id));
     } catch (err) { setError(err); } finally { setBusy(false); }
@@ -135,7 +142,7 @@ export default function ShoppingCheckScreen() {
     if (isFragrance) {
       const item: FragrancePurchaseItemInput = {
         category: 'perfumes', display_name: name.trim(), brand: brand.trim() || undefined,
-        details: { fragrance_family: productType.trim() || undefined, occasion: intendedOccasion.split(',').map((value) => value.trim()).filter(Boolean), season: intendedSeason.split(',').map((value) => value.trim()).filter(Boolean) },
+        details: { fragrance_family: productType.trim() || undefined, concentration: concentration.trim() || undefined, occasion: intendedOccasions, season: intendedSeasons },
         price: price ? Number(price) : undefined,
       };
       await inspectFragrance({ source: 'manual', item, expected_category: 'perfumes' });
@@ -175,7 +182,7 @@ export default function ShoppingCheckScreen() {
       const confirmed = await confirmPurchaseCandidate(fragranceCandidate.candidate.id, {
         display_name: name.trim() || fragranceCandidate.candidate.display_name,
         brand: brand.trim() || null,
-        details: { fragrance_family: productType.trim() || null, occasion: intendedOccasion.split(',').map((value) => value.trim()).filter(Boolean), season: intendedSeason.split(',').map((value) => value.trim()).filter(Boolean) },
+        details: { fragrance_family: productType.trim() || null, concentration: concentration.trim() || null, occasion: intendedOccasions, season: intendedSeasons },
         price: price.trim() ? Number(price) : null,
         currency: fragranceCandidate.candidate.currency,
       });
@@ -250,8 +257,9 @@ export default function ShoppingCheckScreen() {
                 </> : isFragrance ? <>
                   <Text style={styles.label}>Brand · optional</Text><TextInput accessibilityLabel="Product brand" value={brand} onChangeText={setBrand} placeholder="Brand" placeholderTextColor={COLORS.textMuted} style={styles.input} />
                   <Text style={styles.label}>Fragrance family · optional</Text><TextInput accessibilityLabel="Fragrance family" value={productType} onChangeText={setProductType} placeholder="Floral, woody, fresh" placeholderTextColor={COLORS.textMuted} style={styles.input} />
-                  <Text style={styles.label}>Where would you reach for this? · optional</Text><TextInput accessibilityLabel="Intended occasions" value={intendedOccasion} onChangeText={setIntendedOccasion} placeholder="Office, festive" placeholderTextColor={COLORS.textMuted} style={styles.input} />
-                  <Text style={styles.label}>Season you have in mind · optional</Text><TextInput accessibilityLabel="Intended seasons" value={intendedSeason} onChangeText={setIntendedSeason} placeholder="Summer, monsoon" placeholderTextColor={COLORS.textMuted} style={styles.input} />
+                  <Text style={styles.label}>Concentration · optional</Text><TextInput accessibilityLabel="Fragrance concentration" value={concentration} onChangeText={setConcentration} placeholder="EDP, EDT" placeholderTextColor={COLORS.textMuted} style={styles.input} />
+                  <Text style={styles.label}>Where would you reach for this? · optional</Text><View style={styles.optionRow}>{fragranceOptions.occasions.map((option) => <TouchableOpacity key={option.key} accessibilityRole="button" accessibilityLabel={`Occasion ${option.label}`} accessibilityState={{ selected: intendedOccasions.includes(option.key) }} onPress={() => toggleContext(intendedOccasions, setIntendedOccasions, option.key)} style={[styles.option, intendedOccasions.includes(option.key) && styles.optionActive]}><Text style={[styles.optionText, intendedOccasions.includes(option.key) && styles.optionTextActive]}>{option.label}</Text></TouchableOpacity>)}</View>
+                  <Text style={styles.label}>Season you have in mind · optional</Text><View style={styles.optionRow}>{fragranceOptions.seasons.map((option) => <TouchableOpacity key={option.key} accessibilityRole="button" accessibilityLabel={`Season ${option.label}`} accessibilityState={{ selected: intendedSeasons.includes(option.key) }} onPress={() => toggleContext(intendedSeasons, setIntendedSeasons, option.key)} style={[styles.option, intendedSeasons.includes(option.key) && styles.optionActive]}><Text style={[styles.optionText, intendedSeasons.includes(option.key) && styles.optionTextActive]}>{option.label}</Text></TouchableOpacity>)}</View>
                 </> : <>
                   <Text style={styles.label}>Colour · optional</Text><TextInput accessibilityLabel="Item colour" value={colour} onChangeText={setColour} placeholder="Olive green" placeholderTextColor={COLORS.textMuted} style={styles.input} />
                 </>}
@@ -284,8 +292,9 @@ export default function ShoppingCheckScreen() {
             <Text style={styles.label}>Product name</Text><TextInput accessibilityLabel="Corrected fragrance name" value={name} onChangeText={setName} style={styles.input} />
             <Text style={styles.label}>Brand</Text><TextInput accessibilityLabel="Corrected fragrance brand" value={brand} onChangeText={setBrand} style={styles.input} />
             <Text style={styles.label}>Fragrance family</Text><TextInput accessibilityLabel="Corrected fragrance family" value={productType} onChangeText={setProductType} style={styles.input} />
-            <Text style={styles.label}>Intended occasions</Text><TextInput accessibilityLabel="Corrected intended occasions" value={intendedOccasion} onChangeText={setIntendedOccasion} style={styles.input} />
-            <Text style={styles.label}>Intended seasons</Text><TextInput accessibilityLabel="Corrected intended seasons" value={intendedSeason} onChangeText={setIntendedSeason} style={styles.input} />
+            <Text style={styles.label}>Concentration</Text><TextInput accessibilityLabel="Corrected fragrance concentration" value={concentration} onChangeText={setConcentration} style={styles.input} />
+            <Text style={styles.label}>Intended occasions</Text><View style={styles.optionRow}>{fragranceOptions.occasions.map((option) => <TouchableOpacity key={option.key} accessibilityRole="button" accessibilityLabel={`Corrected occasion ${option.label}`} accessibilityState={{ selected: intendedOccasions.includes(option.key) }} onPress={() => toggleContext(intendedOccasions, setIntendedOccasions, option.key)} style={[styles.option, intendedOccasions.includes(option.key) && styles.optionActive]}><Text style={[styles.optionText, intendedOccasions.includes(option.key) && styles.optionTextActive]}>{option.label}</Text></TouchableOpacity>)}</View>
+            <Text style={styles.label}>Intended seasons</Text><View style={styles.optionRow}>{fragranceOptions.seasons.map((option) => <TouchableOpacity key={option.key} accessibilityRole="button" accessibilityLabel={`Corrected season ${option.label}`} accessibilityState={{ selected: intendedSeasons.includes(option.key) }} onPress={() => toggleContext(intendedSeasons, setIntendedSeasons, option.key)} style={[styles.option, intendedSeasons.includes(option.key) && styles.optionActive]}><Text style={[styles.optionText, intendedSeasons.includes(option.key) && styles.optionTextActive]}>{option.label}</Text></TouchableOpacity>)}</View>
             <Text style={styles.label}>Price</Text><TextInput accessibilityLabel="Corrected fragrance price" value={price} onChangeText={setPrice} keyboardType="numeric" style={styles.input} />
             <TouchableOpacity accessibilityRole="button" accessibilityLabel="Save corrected fragrance facts" onPress={() => void confirmFragrance()} style={styles.primary}><Text style={styles.primaryText}>Confirm corrections</Text></TouchableOpacity>
           </View>
@@ -304,5 +313,5 @@ export default function ShoppingCheckScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.backgroundSecondary }, top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: SPACING.lg, paddingVertical: 12 }, topTitle: { fontFamily: FONTS.family.bodySemibold, color: COLORS.textPrimary },
-  card: { backgroundColor: COLORS.card, borderRadius: RADIUS.xl, padding: SPACING.lg, borderWidth: 1, borderColor: COLORS.border, marginBottom: SPACING.md }, cardTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary, marginBottom: 8 }, eyebrow: { fontFamily: FONTS.family.bodySemibold, color: COLORS.accent, fontSize: 10, letterSpacing: 1.2, textTransform: 'uppercase' }, title: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary, marginTop: 4 }, body: { fontFamily: FONTS.family.body, fontSize: 13, lineHeight: 19, color: COLORS.textSecondary, marginTop: 6 }, chipRow: { gap: 8, paddingRight: SPACING.md, paddingVertical: 10 }, chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: RADIUS.full, backgroundColor: COLORS.backgroundSecondary, borderWidth: 1, borderColor: COLORS.border }, chipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary }, chipText: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textSecondary }, chipTextActive: { color: COLORS.white }, label: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.textPrimary, marginTop: SPACING.md, marginBottom: 5 }, input: { backgroundColor: COLORS.background, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 14, paddingVertical: 11, fontFamily: FONTS.family.body, fontSize: 14, color: COLORS.textPrimary }, multiline: { minHeight: 76, textAlignVertical: 'top' }, hint: { fontFamily: FONTS.family.body, fontSize: 11, lineHeight: 16, color: COLORS.textMuted, marginTop: 8, textAlign: 'center' }, warn: { fontFamily: FONTS.family.bodyMedium, fontSize: 12, lineHeight: 18, color: COLORS.warning, marginTop: 7 }, primary: { alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, borderRadius: RADIUS.full, paddingVertical: 14, marginTop: SPACING.lg }, primaryText: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.white }, disabled: { opacity: 0.5 }, link: { fontFamily: FONTS.family.bodySemibold, fontSize: 13, color: COLORS.primary, textAlign: 'center', marginTop: SPACING.md },
+  card: { backgroundColor: COLORS.card, borderRadius: RADIUS.xl, padding: SPACING.lg, borderWidth: 1, borderColor: COLORS.border, marginBottom: SPACING.md }, cardTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary, marginBottom: 8 }, eyebrow: { fontFamily: FONTS.family.bodySemibold, color: COLORS.accent, fontSize: 10, letterSpacing: 1.2, textTransform: 'uppercase' }, title: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary, marginTop: 4 }, body: { fontFamily: FONTS.family.body, fontSize: 13, lineHeight: 19, color: COLORS.textSecondary, marginTop: 6 }, chipRow: { gap: 8, paddingRight: SPACING.md, paddingVertical: 10 }, chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: RADIUS.full, backgroundColor: COLORS.backgroundSecondary, borderWidth: 1, borderColor: COLORS.border }, chipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary }, chipText: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textSecondary }, chipTextActive: { color: COLORS.white }, optionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 }, option: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: RADIUS.full, backgroundColor: COLORS.backgroundSecondary, borderWidth: 1, borderColor: COLORS.border }, optionActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary }, optionText: { fontFamily: FONTS.family.body, fontSize: 11, color: COLORS.textSecondary }, optionTextActive: { color: COLORS.white }, label: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.textPrimary, marginTop: SPACING.md, marginBottom: 5 }, input: { backgroundColor: COLORS.background, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 14, paddingVertical: 11, fontFamily: FONTS.family.body, fontSize: 14, color: COLORS.textPrimary }, multiline: { minHeight: 76, textAlignVertical: 'top' }, hint: { fontFamily: FONTS.family.body, fontSize: 11, lineHeight: 16, color: COLORS.textMuted, marginTop: 8, textAlign: 'center' }, warn: { fontFamily: FONTS.family.bodyMedium, fontSize: 12, lineHeight: 16, color: COLORS.warning, marginTop: 7 }, primary: { alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, borderRadius: RADIUS.full, paddingVertical: 14, marginTop: SPACING.lg }, primaryText: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.white }, disabled: { opacity: 0.5 }, link: { fontFamily: FONTS.family.bodySemibold, fontSize: 13, color: COLORS.primary, textAlign: 'center', marginTop: SPACING.md },
 });

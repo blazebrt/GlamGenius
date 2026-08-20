@@ -21,11 +21,13 @@ from app.domains.purchase.contract import (
     STYLE_PURCHASE_CATEGORIES,
     resolve_purchase_strategy,
 )
+from app.domains.purchase.fragrance_truth import FRAGRANCE_SEASON_KEYS
 from app.domains.purchase.schemas import (
     CarePurchaseCandidateConfirm,
     PurchaseCandidateInspectRequest,
 )
 from app.domains.recommendation import orchestrator, roi, service
+from app.domains.recommendation.occasions import OCCASION_KEYS, OCCASIONS
 from app.domains.recommendation.schemas import PurchaseDecisionCreate, ShoppingEvaluateRequest
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import ValidationFailedError
@@ -39,6 +41,10 @@ async def get_purchase_strategies():
     """Return the deterministic purchase-strategy discovery contract."""
     return {
         "purchase_strategy_registry_version": PURCHASE_STRATEGY_REGISTRY_VERSION,
+        "fragrance_context_options": {
+            "occasions": [{"key": key, "label": OCCASIONS[key].label} for key in OCCASION_KEYS],
+            "seasons": [{"key": key, "label": key.title()} for key in FRAGRANCE_SEASON_KEYS],
+        },
         "strategies": [
             {
                 "key": strategy.key,
