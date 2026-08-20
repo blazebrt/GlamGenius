@@ -268,6 +268,18 @@ async def test_decision_is_recorded_against_the_evaluation(
         )).scalars().all()
     assert len(rows) == 1
     assert str(rows[0].evaluation_id) == evaluation["id"]
+    assert rows[0].candidate_id
+    assert rows[0].strategy_key == "style_purchase"
+    assert rows[0].recommendation_verdict == evaluation["verdict"]
+    assert rows[0].recommendation_version == evaluation["appearance_roi"]["version"]
+    assert rows[0].recommendation_fingerprint is None
+    assert rows[0].recommendation_snapshot == {
+        "strategy": "style_purchase",
+        "evaluation_id": evaluation["id"],
+        "verdict": evaluation["verdict"],
+        "roi_version": evaluation["appearance_roi"]["version"],
+        "roi_score": evaluation["appearance_roi"]["score"],
+    }
 
 
 async def test_decision_records_whether_the_advice_was_followed(

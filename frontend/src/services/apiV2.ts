@@ -1053,7 +1053,7 @@ export interface CareAssessment {
   account_id?: string;
   candidate_id?: string;
   category?: 'beauty' | 'hair';
-  plan_date?: string;
+  plan_date: string;
   assessment_fingerprint: string;
   dimensions: {
     identity_confidence?: CareAssessmentDimension;

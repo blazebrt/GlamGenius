@@ -10,8 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.purchase.contract import (
     CARE_PURCHASE_VERDICT_VERSION,
     PURCHASE_DECISION_MEMORY_VERSION,
+    is_active_care_category,
 )
-from app.domains.recommendation.models import PurchaseDecision, PurchaseEvaluation
+from app.domains.recommendation.models import PurchaseDecision, PurchaseEvaluation, ShoppingCandidate
+from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 
 
 def serialize_purchase_decision(row: PurchaseDecision) -> dict[str, Any]:
@@ -75,6 +77,21 @@ async def save_care_decision(
     note: str | None,
 ) -> PurchaseDecision:
     """Upsert one current Care memory row from one canonical check."""
+    candidate = (await session.execute(
+        select(ShoppingCandidate)
+        .where(
+            ShoppingCandidate.id == candidate_id,
+            ShoppingCandidate.account_id == account_id,
+        )
+        .with_for_update()
+    )).scalar_one_or_none()
+    if candidate is None:
+        raise NotFoundError("We could not find that shopping item.")
+    if not is_active_care_category(candidate.category):
+        raise ValidationFailedError(
+            "This candidate is not eligible for the active Care purchase strategy.",
+            field="category",
+        )
     verdict = check["verdict"]
     verdict_key = verdict["verdict"]
     row = await current_purchase_decision(

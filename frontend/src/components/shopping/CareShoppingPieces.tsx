@@ -179,17 +179,19 @@ export function CarePurchaseResult({
   check,
   onReset,
   onDecide,
+  busy = false,
 }: {
   check: CarePurchaseCheck;
   onReset: () => void;
   onDecide?: (decision: 'bought' | 'waiting' | 'skipped') => void;
+  busy?: boolean;
 }) {
   return (
     <>
       <CareVerdictCard check={check} />
       <CareWhy check={check} />
       <Text style={styles.noteCenter}>This candidate remains separate from your inventory.</Text>
-      {onDecide && <DecisionActions current={check.decision?.decision} onDecide={onDecide} />}
+      {onDecide && <DecisionActions current={check.decision?.decision} onDecide={onDecide} busy={busy} />}
       <TouchableOpacity accessibilityRole="button" accessibilityLabel="Check something else" onPress={onReset}>
         <Text style={styles.link}>Check something else</Text>
       </TouchableOpacity>
