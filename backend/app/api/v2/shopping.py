@@ -212,8 +212,9 @@ async def record_care_decision(
         decision=body.decision,
         note=body.note,
     )
+    payload = decision_memory.serialize_purchase_decision(row)
     await session.commit()
-    return decision_memory.serialize_purchase_decision(row)
+    return payload
 
 
 @router.get("/shopping/candidates/{candidate_id}/decision")
