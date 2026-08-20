@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
@@ -22,6 +23,7 @@ async def resolve_care_purchase_value(
     account_id_str: str,
     candidate_id: uuid.UUID,
     plan_date: date | None,
+    assessment: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve only account-owned, eligible low-use Care recovery rows."""
     from app.domains.purchase import service as purchase_service
@@ -37,13 +39,14 @@ async def resolve_care_purchase_value(
             field="verification_state",
         )
 
-    assessment = await purchase_service.care_purchase_assessment(
-        session,
-        account_id=account_id,
-        account_id_str=account_id_str,
-        candidate_id=candidate_id,
-        plan_date=plan_date,
-    )
+    if assessment is None:
+        assessment = await purchase_service.care_purchase_assessment(
+            session,
+            account_id=account_id,
+            account_id_str=account_id_str,
+            candidate_id=candidate_id,
+            plan_date=plan_date,
+        )
     canonical_date = assessment["plan_date"]
     if isinstance(canonical_date, str):
         canonical_date = date.fromisoformat(canonical_date)

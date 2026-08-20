@@ -942,6 +942,226 @@ export interface ShoppingItemInput {
   product_url?: string;
 }
 
+export type PurchaseStrategyState = 'active' | 'inactive' | 'prohibited';
+export type PurchaseStrategyKey = 'style_purchase' | 'care_purchase' | 'fragrance_purchase' | 'supplement_purchase';
+
+export interface PurchaseStrategyCategory {
+  key: InventoryCategory;
+  label: string;
+}
+
+export interface PurchaseStrategy {
+  key: PurchaseStrategyKey;
+  label: string;
+  state: PurchaseStrategyState;
+  categories: PurchaseStrategyCategory[];
+}
+
+export interface PurchaseStrategiesResponse {
+  purchase_strategy_registry_version: string;
+  strategies: PurchaseStrategy[];
+}
+
+export interface CarePurchaseItemInput {
+  category: 'beauty' | 'hair';
+  display_name: string;
+  brand?: string;
+  details?: CareCandidateDetails;
+  price?: number;
+  currency?: string;
+  product_url?: string;
+}
+
+export interface CareCandidateDetails {
+  product_type?: string | null;
+  size?: string | null;
+  purpose?: string | null;
+  ingredients_text?: string | null;
+  active_ingredients?: string[];
+}
+
+export interface CareCandidateConfirmInput {
+  display_name?: string | null;
+  brand?: string | null;
+  subcategory?: string | null;
+  details?: CareCandidateDetails | null;
+  price?: number | null;
+  currency?: string | null;
+  product_url?: string | null;
+}
+
+export interface CareCandidate {
+  id: string;
+  source: string;
+  category: 'beauty' | 'hair';
+  subcategory: string | null;
+  display_name: string;
+  brand: string | null;
+  details: CareCandidateDetails;
+  price: number | null;
+  currency: string;
+  product_url: string | null;
+  media_asset_id: string | null;
+  verification_state: string;
+  uncertain_fields: string[];
+  extraction_confidence: number | null;
+  ai_run_id: string | null;
+  model_version: string | null;
+  prompt_version: string | null;
+  schema_version: string | null;
+  in_inventory: false;
+}
+
+export interface CareCandidateInspection {
+  candidate_truth_version: string;
+  care_purchase_candidate_schema_version: string;
+  candidate: CareCandidate;
+  review_required: boolean;
+  facts_trusted: boolean;
+  care_slot: string | null;
+  missing_information: string[];
+  recognised_ingredient_keys: string[];
+  recognised_ingredient_families: string[];
+  note: string;
+}
+
+export interface CareAssessmentDimension {
+  status?: string;
+  care_slot?: string | null;
+  required?: boolean;
+  is_gap?: boolean;
+  missing_information?: string[];
+  eligible_owned_same_slot_count?: number;
+  selected_owned_item_id?: string | null;
+  eligible_owned_same_slot?: { owned_item_id: string; display_name: string; brand?: string | null }[];
+  findings?: CareCompatibilityFinding[];
+  [key: string]: unknown;
+}
+
+export interface CareCompatibilityFinding {
+  rule_id?: string;
+  severity?: string;
+  headline?: string;
+  guidance?: string;
+  owned_item_display_name?: string | null;
+  [key: string]: unknown;
+}
+
+export interface CareAssessment {
+  assessment_version?: string;
+  schema_version?: string;
+  account_id?: string;
+  candidate_id?: string;
+  category?: 'beauty' | 'hair';
+  plan_date?: string;
+  assessment_fingerprint: string;
+  dimensions: {
+    identity_confidence?: CareAssessmentDimension;
+    role_utility?: CareAssessmentDimension;
+    redundancy?: CareAssessmentDimension;
+    compatibility?: CareAssessmentDimension;
+    [key: string]: CareAssessmentDimension | undefined;
+  };
+  user_constraints?: CareAssessmentDimension;
+  [key: string]: unknown;
+}
+
+export interface CareEvidenceSource {
+  source_id?: string;
+  title?: string | null;
+  publisher?: string | null;
+  [key: string]: unknown;
+}
+
+export interface CareEvidenceFinding {
+  claim_key?: string;
+  claim_summary?: string;
+  evidence_strength?: string | null;
+  claim_status?: string | null;
+  sources: CareEvidenceSource[];
+  [key: string]: unknown;
+}
+
+export interface CareEvidence {
+  account_id?: string;
+  candidate_id?: string;
+  category?: 'beauty' | 'hair';
+  plan_date?: string;
+  assessment_fingerprint: string;
+  evidence_support: {
+    status?: string;
+    reviewed_context?: boolean;
+    findings: CareEvidenceFinding[];
+    [key: string]: unknown;
+  };
+  ingredient_utility?: {
+    status?: string;
+    findings: CareEvidenceFinding[];
+    [key: string]: unknown;
+  };
+  projection_fingerprint?: string;
+  [key: string]: unknown;
+}
+
+export interface CareValueRecoveryItem {
+  owned_item_id: string;
+  display_name?: string;
+  estimated_value?: string | number | null;
+  currency?: string | null;
+  explanation?: string | null;
+  [key: string]: unknown;
+}
+
+export interface CareValue {
+  account_id?: string;
+  candidate_id?: string;
+  category?: 'beauty' | 'hair';
+  plan_date?: string;
+  assessment_fingerprint: string;
+  value_context: {
+    status?: string;
+    candidate_spend?: { status?: string; [key: string]: unknown };
+    owned_value_recovery?: { status?: string; items: CareValueRecoveryItem[]; [key: string]: unknown };
+    currency_context?: { status?: string; [key: string]: unknown };
+    [key: string]: unknown;
+  };
+  value_fingerprint: string;
+  [key: string]: unknown;
+}
+
+export interface CareVerdict {
+  account_id?: string;
+  candidate_id?: string;
+  category?: 'beauty' | 'hair';
+  plan_date?: string;
+  assessment_fingerprint: string;
+  evidence_projection_fingerprint?: string;
+  value_fingerprint: string;
+  verdict: Verdict;
+  headline: string;
+  explanation: string;
+  primary_reason_code: string;
+  reason_codes: string[];
+  supporting_reason_codes: string[];
+  decision_context: {
+    candidate_spend_status?: string;
+    owned_value_recovery_status?: string;
+    currency_context_status?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface CarePurchaseCheck {
+  care_purchase_check_version: 'v3-05.7';
+  strategy: 'care_purchase';
+  candidate_truth: CareCandidateInspection;
+  assessment: CareAssessment;
+  evidence: CareEvidence;
+  value: CareValue;
+  verdict: CareVerdict;
+}
+
 export const getROIModel = async (): Promise<{
   version: string; formula: string; note: string;
   thresholds: { buy: number; wait: number }; overrides: string[];
@@ -961,6 +1181,26 @@ export const evaluateItemDetails = async (
   (await api.post<PurchaseEvaluation>(`${V2}/shopping/evaluate`, {
     item, source: 'manual', occasion_key, price,
   })).data;
+
+export const getPurchaseStrategies = async (): Promise<PurchaseStrategiesResponse> =>
+  (await api.get<PurchaseStrategiesResponse>(`${V2}/shopping/strategies`)).data;
+
+export const inspectPurchaseCandidate = async (body: {
+  source: 'manual' | 'screenshot' | 'item_photo';
+  item?: CarePurchaseItemInput;
+  media_asset_id?: string;
+  client_mutation_id?: string;
+}): Promise<CareCandidateInspection> =>
+  (await api.post<CareCandidateInspection>(`${V2}/shopping/candidates/inspect`, body)).data;
+
+export const confirmPurchaseCandidate = async (
+  id: string,
+  body: CareCandidateConfirmInput,
+): Promise<CareCandidateInspection> =>
+  (await api.post<CareCandidateInspection>(`${V2}/shopping/candidates/${id}/confirm`, body)).data;
+
+export const getCarePurchaseCheck = async (id: string, on?: string): Promise<CarePurchaseCheck> =>
+  (await api.get<CarePurchaseCheck>(`${V2}/shopping/candidates/${id}/care-check`, { params: on ? { on } : undefined })).data;
 
 export const getEvaluation = async (id: string): Promise<PurchaseEvaluation> =>
   (await api.get<PurchaseEvaluation>(`${V2}/shopping/evaluations/${id}`)).data;

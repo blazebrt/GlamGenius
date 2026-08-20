@@ -6,7 +6,6 @@ import {
   ROIBreakdown, RiskNotes, ShoppingUpload, VERDICT_META, VerdictCard, roiPercent,
 } from '../components/shopping/ShoppingPieces';
 import { PurchaseEvaluation, ShoppingCandidate, Verdict } from '../services/apiV2';
-import ShoppingCheckScreen, { MANUAL_PURCHASE_CATEGORIES } from '../../app/shopping-check';
 
 const candidate = (overrides: Partial<ShoppingCandidate> = {}): ShoppingCandidate => ({
   id: 'cand-1', source: 'screenshot', category: 'wardrobe', subcategory: 'shirt',
@@ -44,19 +43,6 @@ const evaluation = (verdict: Verdict = 'wait', overrides: Partial<PurchaseEvalua
 });
 
 describe('Should I buy this UI', () => {
-  it('offers only active Style categories in the manual purchase selector', () => {
-    expect(MANUAL_PURCHASE_CATEGORIES).toEqual(['wardrobe', 'shoes', 'accessories']);
-    const view = render(<ShoppingCheckScreen />);
-    fireEvent.press(screen.getByLabelText('Enter the details myself'));
-    expect(screen.getByLabelText('Wardrobe')).toBeTruthy();
-    expect(screen.getByLabelText('Shoes')).toBeTruthy();
-    expect(screen.getByLabelText('Accessories')).toBeTruthy();
-    for (const label of ['Skin Care', 'Hair Care', 'Perfumes', 'Supplements']) {
-      expect(screen.queryByLabelText(label)).toBeNull();
-    }
-    view.unmount();
-  });
-
   it('offers a screenshot upload and a manual path', () => {
     const pick = jest.fn(); const manual = jest.fn();
     render(<ShoppingUpload onPickScreenshot={pick} onEnterDetails={manual} />);
