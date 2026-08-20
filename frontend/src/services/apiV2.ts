@@ -972,6 +972,25 @@ export interface CarePurchaseItemInput {
   product_url?: string;
 }
 
+export interface FragrancePurchaseItemInput {
+  category: 'perfumes';
+  display_name: string;
+  brand?: string;
+  subcategory?: string;
+  details?: FragranceCandidateDetails;
+  price?: number;
+  currency?: string;
+  product_url?: string;
+}
+
+export interface FragranceCandidateDetails {
+  fragrance_family?: string | null;
+  concentration?: string | null;
+  season?: string[];
+  occasion?: string[];
+  longevity_user_reported?: string | null;
+}
+
 export interface CareCandidateDetails {
   product_type?: string | null;
   size?: string | null;
@@ -1022,6 +1041,39 @@ export interface CareCandidateInspection {
   missing_information: string[];
   recognised_ingredient_keys: string[];
   recognised_ingredient_families: string[];
+  note: string;
+}
+
+export interface FragranceCandidate {
+  id: string;
+  source: string;
+  category: 'perfumes';
+  subcategory: string | null;
+  display_name: string;
+  brand: string | null;
+  details: FragranceCandidateDetails;
+  price: number | null;
+  currency: string;
+  product_url: string | null;
+  media_asset_id: string | null;
+  verification_state: string;
+  uncertain_fields: string[];
+  extraction_confidence: number | null;
+  ai_run_id: string | null;
+  model_version: string | null;
+  prompt_version: string | null;
+  schema_version: string | null;
+  in_inventory: false;
+}
+
+export interface FragranceCandidateInspection {
+  candidate_truth_version: string;
+  fragrance_purchase_candidate_schema_version: 'v3-05.9';
+  candidate: FragranceCandidate;
+  review_required: boolean;
+  facts_trusted: boolean;
+  normalised_fragrance_family: string | null;
+  missing_information: string[];
   note: string;
 }
 
@@ -1169,7 +1221,7 @@ export interface PurchaseDecisionMemory {
   purchase_decision_memory_version: 'v3-05.8';
   id: string;
   candidate_id: string;
-  strategy: 'style_purchase' | 'care_purchase';
+  strategy: 'style_purchase' | 'care_purchase' | 'fragrance_purchase';
   evaluation_id: string | null;
   recommendation_at_decision: {
     verdict: Verdict;
@@ -1181,6 +1233,52 @@ export interface PurchaseDecisionMemory {
   followed_recommendation: boolean;
   created_at: string | null;
   updated_at: string | null;
+}
+
+export interface FragranceOwnedOption {
+  owned_item_id: string;
+  display_name: string;
+  brand: string | null;
+  fragrance_family?: string | null;
+  normalised_fragrance_family?: string | null;
+  concentration?: string | null;
+  season?: string[];
+  occasion?: string[];
+  remaining_percent?: number | null;
+  usage_count?: number;
+  last_used_at?: string | null;
+}
+
+export interface FragrancePurchaseVerdict {
+  fragrance_purchase_verdict_version: 'v3-05.9';
+  verdict: Verdict;
+  headline: string;
+  explanation: string;
+  primary_reason_code: string;
+  supporting_reason_codes: string[];
+  decision_fingerprint: string;
+  normalised_candidate_family: string | null;
+  same_family_owned: FragranceOwnedOption[];
+  owned_options_to_use_first: FragranceOwnedOption[];
+  missing_information: string[];
+}
+
+export interface FragrancePurchaseCheck {
+  fragrance_purchase_check_version: 'v3-05.9';
+  strategy: 'fragrance_purchase';
+  candidate_truth: FragranceCandidateInspection;
+  collection_context: {
+    owned_perfume_count: number;
+    draft_perfume_count: number;
+    normalised_candidate_family: string | null;
+    exact_owned: FragranceOwnedOption[];
+    same_family_owned: FragranceOwnedOption[];
+    intended_use: { occasion: string[]; season: string[] };
+    coverage: { covered: string[]; unknown: string[]; uncovered: string[] };
+    owned_options_to_use_first: FragranceOwnedOption[];
+  };
+  verdict: FragrancePurchaseVerdict;
+  decision?: PurchaseDecisionMemory | null;
 }
 
 export const getROIModel = async (): Promise<{
@@ -1208,17 +1306,18 @@ export const getPurchaseStrategies = async (): Promise<PurchaseStrategiesRespons
 
 export const inspectPurchaseCandidate = async (body: {
   source: 'manual' | 'screenshot' | 'item_photo';
-  item?: CarePurchaseItemInput;
+  item?: CarePurchaseItemInput | FragrancePurchaseItemInput;
   media_asset_id?: string;
   client_mutation_id?: string;
-}): Promise<CareCandidateInspection> =>
-  (await api.post<CareCandidateInspection>(`${V2}/shopping/candidates/inspect`, body)).data;
+  expected_category?: InventoryCategory;
+}): Promise<CareCandidateInspection | FragranceCandidateInspection> =>
+  (await api.post<CareCandidateInspection | FragranceCandidateInspection>(`${V2}/shopping/candidates/inspect`, body)).data;
 
 export const confirmPurchaseCandidate = async (
   id: string,
-  body: CareCandidateConfirmInput,
-): Promise<CareCandidateInspection> =>
-  (await api.post<CareCandidateInspection>(`${V2}/shopping/candidates/${id}/confirm`, body)).data;
+  body: CareCandidateConfirmInput | { display_name?: string | null; brand?: string | null; subcategory?: string | null; details?: FragranceCandidateDetails | null; price?: number | null; currency?: string | null; product_url?: string | null },
+): Promise<CareCandidateInspection | FragranceCandidateInspection> =>
+  (await api.post<CareCandidateInspection | FragranceCandidateInspection>(`${V2}/shopping/candidates/${id}/confirm`, body)).data;
 
 export const getCarePurchaseCheck = async (id: string, on?: string): Promise<CarePurchaseCheck> =>
   (await api.get<CarePurchaseCheck>(`${V2}/shopping/candidates/${id}/care-check`, { params: on ? { on } : undefined })).data;
@@ -1226,7 +1325,15 @@ export const getCarePurchaseCheck = async (id: string, on?: string): Promise<Car
 export const recordCarePurchaseDecision = async (
   id: string, decision: PurchaseDecisionValue, note?: string, on?: string
 ): Promise<PurchaseDecisionMemory> =>
-  (await api.post<PurchaseDecisionMemory>(`${V2}/shopping/candidates/${id}/decision`, { decision, note }, { params: on ? { on } : undefined })).data;
+    (await api.post<PurchaseDecisionMemory>(`${V2}/shopping/candidates/${id}/decision`, { decision, note }, { params: on ? { on } : undefined })).data;
+
+export const getFragrancePurchaseCheck = async (id: string): Promise<FragrancePurchaseCheck> =>
+  (await api.get<FragrancePurchaseCheck>(`${V2}/shopping/candidates/${id}/fragrance-check`)).data;
+
+export const recordPurchaseCandidateDecision = async (
+  id: string, decision: PurchaseDecisionValue, note?: string
+): Promise<PurchaseDecisionMemory> =>
+  (await api.post<PurchaseDecisionMemory>(`${V2}/shopping/candidates/${id}/decision`, { decision, note })).data;
 
 export const getPurchaseDecision = async (id: string): Promise<{ purchase_decision_memory_version: 'v3-05.8'; decision: PurchaseDecisionMemory | null }> =>
   (await api.get(`${V2}/shopping/candidates/${id}/decision`)).data;

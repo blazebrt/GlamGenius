@@ -21,7 +21,7 @@ from tests.conftest import auth
 
 
 def test_registry_version_and_states_are_exact():
-    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.6"
+    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.9"
     assert PURCHASE_INTELLIGENCE_FOUNDATION_VERSION == "v3-05.0"
     assert PRODUCT_QUALITY_CONTRACT_VERSION == "v3-05.0"
     assert CARE_PURCHASE_ASSESSMENT_VERSION == "v3-05.2"
@@ -37,7 +37,7 @@ def test_registry_version_and_states_are_exact():
     assert resolve_purchase_strategy("wardrobe").state == "active"
     assert resolve_purchase_strategy("beauty").state == "active"
     assert resolve_purchase_strategy("hair").state == "active"
-    assert resolve_purchase_strategy("perfumes").state == "inactive"
+    assert resolve_purchase_strategy("perfumes").state == "active"
     assert resolve_purchase_strategy("supplements").state == "prohibited"
 
 
@@ -56,12 +56,12 @@ async def test_strategy_discovery_endpoint_is_ordered_and_uses_customer_labels(
     response = await app_client.get("/api/v2/shopping/strategies")
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["purchase_strategy_registry_version"] == "v3-05.6"
+    assert body["purchase_strategy_registry_version"] == "v3-05.9"
     assert [strategy["key"] for strategy in body["strategies"]] == [
         "style_purchase", "care_purchase", "fragrance_purchase", "supplement_purchase",
     ]
     assert [strategy["state"] for strategy in body["strategies"]] == [
-        "active", "active", "inactive", "prohibited",
+        "active", "active", "active", "prohibited",
     ]
     assert body["strategies"][0]["categories"] == [
         {"key": key, "label": PURCHASE_CATEGORY_LABELS[key]}

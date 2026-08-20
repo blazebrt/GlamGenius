@@ -19,6 +19,7 @@ from app.domains.purchase.contract import (
     PURCHASE_STRATEGY_REGISTRY,
     PURCHASE_STRATEGY_REGISTRY_VERSION,
     STYLE_PURCHASE_CATEGORIES,
+    resolve_purchase_strategy,
 )
 from app.domains.purchase.schemas import (
     CarePurchaseCandidateConfirm,
@@ -27,6 +28,7 @@ from app.domains.purchase.schemas import (
 from app.domains.recommendation import orchestrator, roi, service
 from app.domains.recommendation.schemas import PurchaseDecisionCreate, ShoppingEvaluateRequest
 from app.shared.database.sql import get_session
+from app.shared.errors.exceptions import ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_shopping_decisions"))])
@@ -59,7 +61,7 @@ async def inspect_purchase_candidate(
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Capture prospective Care facts without running a purchase evaluation."""
+    """Capture prospective Care or Fragrance facts without running a purchase evaluation."""
     row = await purchase_service.inspect_purchase_candidate(
         session,
         account_id=current.account_id,
@@ -186,32 +188,43 @@ async def get_care_purchase_check(
     )
 
 
+@router.get("/shopping/candidates/{candidate_id}/fragrance-check")
+async def get_fragrance_purchase_check(
+    candidate_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Compose the trusted Fragrance Purchase customer read model without writes."""
+    from app.domains.purchase.check_service import resolve_fragrance_check
+
+    return await resolve_fragrance_check(
+        session, account_id=current.account_id, candidate_id=candidate_id
+    )
+
+
 @router.post("/shopping/candidates/{candidate_id}/decision")
-async def record_care_decision(
+async def record_candidate_decision(
     candidate_id: uuid.UUID,
     body: PurchaseDecisionCreate,
     on: date | None = Query(None, description="Decision date; defaults to the account's local day"),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Persist one customer Care outcome from the canonical V3-05.7 check."""
-    from app.domains.purchase.check_service import resolve_care_purchase_check
-
-    check = await resolve_care_purchase_check(
-        session,
-        account_id=current.account_id,
-        account_id_str=current.account_id_str,
-        candidate_id=candidate_id,
-        plan_date=on,
-    )
-    row = await decision_memory.save_care_decision(
-        session,
-        account_id=current.account_id,
-        candidate_id=candidate_id,
-        check=check,
-        decision=body.decision,
-        note=body.note,
-    )
+    """Persist a customer Care or Fragrance outcome from its canonical check."""
+    candidate = await purchase_service.owned_purchase_candidate(session, current.account_id, candidate_id)
+    strategy = resolve_purchase_strategy(candidate.category)
+    if strategy is None or strategy.state != "active":
+        raise ValidationFailedError("This candidate is not eligible for an active purchase strategy.", field="category")
+    if strategy.key == "care_purchase":
+        from app.domains.purchase.check_service import resolve_care_purchase_check
+        check = await resolve_care_purchase_check(session, account_id=current.account_id, account_id_str=current.account_id_str, candidate_id=candidate_id, plan_date=on)
+        row = await decision_memory.save_care_decision(session, account_id=current.account_id, candidate_id=candidate_id, check=check, decision=body.decision, note=body.note)
+    elif strategy.key == "fragrance_purchase":
+        from app.domains.purchase.check_service import resolve_fragrance_check
+        check = await resolve_fragrance_check(session, account_id=current.account_id, candidate_id=candidate_id)
+        row = await decision_memory.save_fragrance_decision(session, account_id=current.account_id, candidate_id=candidate_id, check=check, decision=body.decision, note=body.note)
+    else:
+        raise ValidationFailedError("Style decisions must use the evaluation-backed decision endpoint.", field="category")
     payload = decision_memory.serialize_purchase_decision(row)
     await session.commit()
     return payload

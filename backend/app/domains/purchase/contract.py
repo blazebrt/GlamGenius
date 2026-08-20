@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Literal
 
 PURCHASE_INTELLIGENCE_FOUNDATION_VERSION = "v3-05.0"
-PURCHASE_STRATEGY_REGISTRY_VERSION = "v3-05.6"
+PURCHASE_STRATEGY_REGISTRY_VERSION = "v3-05.9"
 PRODUCT_QUALITY_CONTRACT_VERSION = "v3-05.0"
 PURCHASE_CANDIDATE_TRUTH_VERSION = "v3-05.1"
 CARE_PURCHASE_CANDIDATE_SCHEMA_VERSION = "v3-05.1"
@@ -24,6 +24,9 @@ CARE_PURCHASE_VERDICT_VERSION = "v3-05.5"
 CARE_PURCHASE_VERDICT_SCHEMA_VERSION = "v3-05.5"
 CARE_PURCHASE_CHECK_VERSION = "v3-05.7"
 PURCHASE_DECISION_MEMORY_VERSION = "v3-05.8"
+FRAGRANCE_PURCHASE_CANDIDATE_SCHEMA_VERSION = "v3-05.9"
+FRAGRANCE_PURCHASE_VERDICT_VERSION = "v3-05.9"
+FRAGRANCE_PURCHASE_CHECK_VERSION = "v3-05.9"
 
 STYLE_PURCHASE_CATEGORIES = ("wardrobe", "shoes", "accessories")
 CARE_PURCHASE_CATEGORIES = ("beauty", "hair")
@@ -61,7 +64,7 @@ class PurchaseStrategy:
 PURCHASE_STRATEGY_REGISTRY = (
     PurchaseStrategy("style_purchase", STYLE_PURCHASE_CATEGORIES, "active", "Style purchase"),
     PurchaseStrategy("care_purchase", CARE_PURCHASE_CATEGORIES, "active", "Care purchase"),
-    PurchaseStrategy("fragrance_purchase", FRAGRANCE_PURCHASE_CATEGORIES, "inactive", "Fragrance purchase"),
+    PurchaseStrategy("fragrance_purchase", FRAGRANCE_PURCHASE_CATEGORIES, "active", "Fragrance purchase"),
     PurchaseStrategy("supplement_purchase", PURCHASE_PROHIBITED_CATEGORIES, "prohibited", "Supplement purchase"),
 )
 
@@ -124,6 +127,11 @@ def is_active_style_category(category: str) -> bool:
 def is_active_care_category(category: str) -> bool:
     strategy = resolve_purchase_strategy(category)
     return strategy is not None and strategy.key == "care_purchase" and strategy.state == "active"
+
+
+def is_active_fragrance_category(category: str) -> bool:
+    strategy = resolve_purchase_strategy(category)
+    return strategy is not None and strategy.key == "fragrance_purchase" and strategy.state == "active"
 
 
 # Public immutable aliases make the registry auditable without exposing its

@@ -43,7 +43,10 @@ def test_v3_05_8_adds_memory_without_bumping_prior_authorities():
     assert CARE_PURCHASE_EVIDENCE_VERSION == "v3-05.3"
     assert CARE_PURCHASE_VALUE_VERSION == "v3-05.4"
     assert CARE_PURCHASE_VERDICT_VERSION == "v3-05.5"
-    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.6"
+    # V3-05.9 intentionally advances only the registry content/version to
+    # activate the canonical Fragrance strategy; all prior authorities stay
+    # frozen.
+    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.9"
     assert CARE_PURCHASE_CHECK_VERSION == "v3-05.7"
 
 

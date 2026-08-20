@@ -86,7 +86,7 @@ def test_versions_and_exact_prospective_detail_subset():
     assert PURCHASE_CANDIDATE_TRUTH_VERSION == "v3-05.1"
     assert CARE_PURCHASE_CANDIDATE_SCHEMA_VERSION == "v3-05.1"
     assert PURCHASE_INTELLIGENCE_FOUNDATION_VERSION == "v3-05.0"
-    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.6"
+    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.9"
     assert PRODUCT_QUALITY_CONTRACT_VERSION == "v3-05.0"
     assert {
         "product_type", "size", "purpose", "ingredients_text", "active_ingredients",

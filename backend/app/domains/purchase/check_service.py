@@ -16,6 +16,7 @@ from app.domains.purchase.candidate_truth import (
 from app.domains.purchase.contract import CARE_PURCHASE_CHECK_VERSION
 from app.domains.purchase.decision_memory import current_purchase_decision, serialize_purchase_decision
 from app.domains.purchase.evidence_service import resolve_care_purchase_evidence
+from app.domains.purchase.fragrance_check import resolve_fragrance_purchase_check as _resolve_fragrance_purchase_check
 from app.domains.purchase.value_service import resolve_care_purchase_value
 from app.domains.purchase.verdict_service import resolve_care_purchase_verdict
 from app.shared.errors.exceptions import ValidationFailedError
@@ -154,4 +155,21 @@ async def resolve_care_purchase_check(
     }
 
 
-__all__ = ["resolve_care_purchase_check"]
+async def resolve_fragrance_check(
+    session: AsyncSession,
+    *, account_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Compose the read-only Fragrance candidate/collection/verdict model."""
+    check = await _resolve_fragrance_purchase_check(
+        session, account_id=account_id, candidate_id=candidate_id
+    )
+    decision = await current_purchase_decision(
+        session, account_id=account_id, candidate_id=candidate_id,
+        strategy_key="fragrance_purchase",
+    )
+    check["decision"] = serialize_purchase_decision(decision) if decision else None
+    return check
+
+
+__all__ = ["resolve_care_purchase_check", "resolve_fragrance_check"]

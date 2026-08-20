@@ -16,7 +16,10 @@ from app.domains.purchase.contract import (
     CARE_PURCHASE_VALUE_VERSION,
     CARE_PURCHASE_VERDICT_SCHEMA_VERSION,
     CARE_PURCHASE_VERDICT_VERSION,
+    FRAGRANCE_PURCHASE_CANDIDATE_SCHEMA_VERSION,
     FRAGRANCE_PURCHASE_CATEGORIES,
+    FRAGRANCE_PURCHASE_CHECK_VERSION,
+    FRAGRANCE_PURCHASE_VERDICT_VERSION,
     PRODUCT_QUALITY_CONTRACT_VERSION,
     PRODUCT_QUALITY_DIMENSIONS,
     PURCHASE_CANDIDATE_TRUTH_VERSION,
@@ -29,6 +32,7 @@ from app.domains.purchase.contract import (
     PurchaseStrategy,
     PurchaseStrategyBoundaryError,
     is_active_care_category,
+    is_active_fragrance_category,
     resolve_purchase_strategy,
 )
 
@@ -45,6 +49,9 @@ __all__ = [
     "CARE_PURCHASE_CATEGORIES",
     "CARE_PURCHASE_CANDIDATE_SCHEMA_VERSION",
     "FRAGRANCE_PURCHASE_CATEGORIES",
+    "FRAGRANCE_PURCHASE_CANDIDATE_SCHEMA_VERSION",
+    "FRAGRANCE_PURCHASE_CHECK_VERSION",
+    "FRAGRANCE_PURCHASE_VERDICT_VERSION",
     "PRODUCT_QUALITY_CONTRACT_VERSION",
     "PRODUCT_QUALITY_DIMENSIONS",
     "PURCHASE_CATEGORY_LABELS",
@@ -57,5 +64,6 @@ __all__ = [
     "PurchaseStrategy",
     "PurchaseStrategyBoundaryError",
     "is_active_care_category",
+    "is_active_fragrance_category",
     "resolve_purchase_strategy",
 ]

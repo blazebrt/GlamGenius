@@ -48,7 +48,7 @@ def test_v3_05_7_version_does_not_bump_existing_authorities():
     assert CARE_PURCHASE_VALUE_VERSION == "v3-05.4"
     assert CARE_PURCHASE_VERDICT_VERSION == "v3-05.5"
     assert PRODUCT_QUALITY_CONTRACT_VERSION == "v3-05.0"
-    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.6"
+    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.9"
 
 
 def _authority(candidate_id: uuid.UUID, account_id: uuid.UUID, category: str, fingerprint: str):
