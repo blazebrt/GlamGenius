@@ -18,14 +18,37 @@ from app.domains.purchase.contract import (
     FRAGRANCE_PURCHASE_VERDICT_VERSION,
 )
 from app.domains.purchase.fragrance_truth import (
+    FRAGRANCE_SEASON_KEYS,
     build_fragrance_candidate_truth,
     serialize_fragrance_candidate_truth,
 )
+from app.domains.recommendation.occasions import OCCASION_KEYS, OCCASIONS
 from app.shared.errors.exceptions import ValidationFailedError
 
 
 def _norm(value: str | None) -> str:
     return " ".join((value or "").casefold().split())
+
+
+def _context_key(dimension: str, value: str | None) -> str | None:
+    """Normalize legacy owned display tags to the canonical context key."""
+    normalized = _norm(value).replace(" ", "_")
+    if dimension == "occasion":
+        for key in OCCASION_KEYS:
+            if normalized in {key, _norm(OCCASIONS[key].label).replace(" ", "_")}:
+                return key
+        return None
+    for key in FRAGRANCE_SEASON_KEYS:
+        if normalized in {key, _norm(key.title()).replace(" ", "_")}:
+            return key
+    return None
+
+
+def _owned_context(row: OwnedFragrance, dimension: str) -> tuple[set[str], bool, bool]:
+    raw = list(getattr(row.detail, dimension) or [])
+    recognized = {_context_key(dimension, value) for value in raw}
+    recognized.discard(None)
+    return recognized, not raw, len(recognized) != len(raw)
 
 
 def _json_safe(value: Any) -> Any:
@@ -96,12 +119,16 @@ def _coverage(values: list[str], owned: list[OwnedFragrance], dimension: str) ->
     unknown: list[str] = []
     uncovered: list[str] = []
     for value in values:
-        key = _norm(value)
-        matches = [row for row in owned if any(_norm(item) == key for item in (getattr(row.detail, dimension) or []))]
+        key = _context_key(dimension, value)
+        matches = [row for row in owned if key and key in _owned_context(row, dimension)[0]]
         if matches:
             covered.append(value)
             continue
-        if any(not (getattr(row.detail, dimension) or []) for row in owned):
+        if any(
+            missing or unrecognized
+            for row in owned
+            for _recognized, missing, unrecognized in [_owned_context(row, dimension)]
+        ):
             unknown.append(value)
         else:
             uncovered.append(value)
@@ -150,13 +177,13 @@ def evaluate_fragrance_purchase(
         str(row.item.id): row
         for value in occasions
         for row in owned
-        if any(_norm(item) == _norm(value) for item in (row.detail.occasion or []))
+        if _context_key("occasion", value) in _owned_context(row, "occasion")[0]
     }
     context_by_id.update({
         str(row.item.id): row
         for value in seasons
         for row in owned
-        if any(_norm(item) == _norm(value) for item in (row.detail.season or []))
+        if _context_key("season", value) in _owned_context(row, "season")[0]
     })
     context_covering = [context_by_id[key] for key in sorted(context_by_id)]
     replacement_gap = bool(exact) and all(row.detail.remaining_percent is not None and row.detail.remaining_percent <= 15 for row in exact)
@@ -265,6 +292,10 @@ async def resolve_fragrance_purchase_check(
         "exact_owned": [row.as_dict() for row in exact],
         "same_family_owned": verdict["same_family_owned"],
         "intended_use": {"occasion": list(details.get("occasion") or []), "season": list(details.get("season") or [])},
+        "context_labels": {
+            "occasion": {key: OCCASIONS[key].label for key in OCCASION_KEYS},
+            "season": {key: key.title() for key in FRAGRANCE_SEASON_KEYS},
+        },
         "coverage": {"covered": covered, "unknown": unknown, "uncovered": uncovered},
         "owned_options_to_use_first": verdict["owned_options_to_use_first"],
     }

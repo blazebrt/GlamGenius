@@ -1,10 +1,13 @@
 """V3-05.9 Fragrance Purchase strategy contract and deterministic policy."""
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+from app.domains.inventory.models import InventoryItem
 from app.domains.purchase.contract import (
     CARE_PURCHASE_CHECK_VERSION,
     CARE_PURCHASE_VERDICT_VERSION,
@@ -25,7 +28,13 @@ from app.domains.purchase.fragrance_truth import (
     build_fragrance_candidate_truth,
     validate_fragrance_candidate_details,
 )
-from app.domains.purchase.schemas import ExtractedFragranceCandidate
+from app.domains.purchase.schemas import CarePurchaseCandidateConfirm, ExtractedFragranceCandidate
+from app.domains.purchase.service import _apply_candidate_corrections
+from app.domains.recommendation.models import ShoppingCandidate
+from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import func, select
+
+from tests.conftest import auth
 
 
 def _candidate(*, price=Decimal("1200"), **details):
@@ -91,6 +100,24 @@ def test_extraction_accepts_visible_facts_only_and_rejects_customer_intent():
             pass
         else:
             raise AssertionError(f"extraction must reject customer field {key}")
+    non_perfume = ExtractedFragranceCandidate(
+        category="beauty", display_name="Cleanser", confidence=0.9, photo_quality_notes="clear label", details={}
+    )
+    assert non_perfume.category == "beauty"
+    try:
+        ExtractedFragranceCandidate(
+            category="beauty", display_name="Cleanser", confidence=0.9,
+            photo_quality_notes="clear label", details={"fragrance_family": "woody"},
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("non-perfume extraction must reject fragrance details")
+    perfume = ExtractedFragranceCandidate(
+        category="perfumes", display_name="Rain Garden", confidence=0.9,
+        photo_quality_notes="clear label", details={"fragrance_family": "woody", "concentration": "EDP"},
+    )
+    assert perfume.details == {"fragrance_family": "woody", "concentration": "EDP"}
 
 
 def test_exact_and_price_precedence():
@@ -167,3 +194,122 @@ def test_context_vocab_and_customer_copy_fail_closed():
     assert result["primary_reason_code"] == "exact_bottle_available"
     assert "plenty left" not in result["explanation"]
     assert "market" not in result["explanation"]
+
+
+def test_owned_context_normalizes_legacy_labels_and_distinguishes_unknown_from_gap():
+    candidate = _candidate(occasion=["business_meeting"], season=["summer"])
+    legacy = _owned(occasion=["Business meeting"], season=["Summer"])
+    covered = evaluate_fragrance_purchase(candidate=candidate, owned=[legacy])
+    assert covered["primary_reason_code"] == "declared_use_already_covered"
+    assert [row["owned_item_id"] for row in covered["owned_options_to_use_first"]] == [str(legacy.item.id)]
+
+    unknown = evaluate_fragrance_purchase(
+        candidate=_candidate(occasion=["office"]),
+        owned=[_owned(occasion=["some old custom context"])],
+    )
+    assert unknown["primary_reason_code"] == "owned_context_incomplete"
+    assert unknown["verdict"] == "wait"
+
+    mixed = evaluate_fragrance_purchase(
+        candidate=_candidate(occasion=["office"]),
+        owned=[_owned(occasion=["party"]), _owned(occasion=["old legacy tag"])],
+    )
+    assert mixed["primary_reason_code"] == "owned_context_incomplete"
+
+    uncovered = evaluate_fragrance_purchase(
+        candidate=_candidate(occasion=["office"]),
+        owned=[_owned(occasion=["party"]), _owned(occasion=["festival"])],
+    )
+    assert uncovered["primary_reason_code"] == "declared_use_gap"
+    assert uncovered["verdict"] == "buy"
+
+
+def test_fragrance_confirmation_can_explicitly_clear_extracted_details():
+    candidate = _candidate(fragrance_family="woody", concentration="EDP")
+    body = CarePurchaseCandidateConfirm(details=None, price=None)
+    _apply_candidate_corrections(candidate, body)
+    assert candidate.details == {}
+    assert candidate.price is None
+
+
+def _fragrance_item(name: str = "Rain Garden", *, price: int | None = 1200) -> dict:
+    return {
+        "category": "perfumes", "display_name": name, "brand": "House",
+        "details": {"fragrance_family": "woody", "concentration": "EDP", "occasion": ["office"], "season": ["summer"]},
+        "price": price, "currency": "INR",
+    }
+
+
+async def _count_model(model, account_id: uuid.UUID) -> int:
+    factory = get_sessionmaker()
+    async with factory() as session:
+        return int(await session.scalar(select(func.count(model.id)).where(model.account_id == account_id)))
+
+
+def _perfume_extraction(name: str = "Rain Garden", *, category: str = "perfumes", price: int | None = 1200) -> str:
+    details = '{"fragrance_family":"woody","concentration":"EDP"}' if category == "perfumes" else "{}"
+    return (
+        f'{{"category":"{category}","display_name":"{name}","brand":"House",'
+        f'"details":{details},'
+        f'"price":{price if price is not None else "null"},"currency":"INR",'
+        '"confidence":0.98,"uncertain_fields":[],"photo_quality_notes":"clear label"}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_fragrance_manual_route_persists_candidate_without_inventory_and_checks(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    response = await app_client.post(
+        "/api/v2/shopping/candidates/inspect", headers=auth(token),
+        json={"source": "manual", "item": _fragrance_item()},
+    )
+    assert response.status_code == 200, response.text
+    candidate = response.json()
+    assert candidate["candidate"]["verification_state"] == "user_declared"
+    candidate_id = candidate["candidate"]["id"]
+    check = await app_client.get(f"/api/v2/shopping/candidates/{candidate_id}/fragrance-check", headers=auth(token))
+    assert check.status_code == 200, check.text
+    assert check.json()["strategy"] == "fragrance_purchase"
+    assert await _count_model(ShoppingCandidate, account_id) == 1
+    assert await _count_model(InventoryItem, account_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_fragrance_screenshot_rejects_wrong_category_and_requires_confirmation(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    from tests.conftest import png_bytes
+
+    token, account_id = await registered_supabase_user()
+    upload = await app_client.post("/api/v2/media/upload", headers=auth(token), files={"file": ("wrong.png", png_bytes(), "image/png")})
+    assert upload.status_code in (200, 201), upload.text
+    fake_provider.text = _perfume_extraction(category="beauty")
+    wrong = await app_client.post(
+        "/api/v2/shopping/candidates/inspect", headers=auth(token),
+        json={"source": "screenshot", "media_asset_id": upload.json()["id"], "expected_category": "perfumes"},
+    )
+    assert wrong.status_code == 422, wrong.text
+    assert await _count_model(ShoppingCandidate, account_id) == 0
+
+    fake_provider.text = _perfume_extraction()
+    upload = await app_client.post("/api/v2/media/upload", headers=auth(token), files={"file": ("perfume.png", png_bytes(), "image/png")})
+    extracted = await app_client.post(
+        "/api/v2/shopping/candidates/inspect", headers=auth(token),
+        json={"source": "screenshot", "media_asset_id": upload.json()["id"], "expected_category": "perfumes"},
+    )
+    assert extracted.status_code == 200, extracted.text
+    candidate = extracted.json()
+    assert candidate["candidate"]["verification_state"] == "draft"
+    candidate_id = candidate["candidate"]["id"]
+    assert (await app_client.get(f"/api/v2/shopping/candidates/{candidate_id}/fragrance-check", headers=auth(token))).status_code == 422
+    confirmed = await app_client.post(
+        f"/api/v2/shopping/candidates/{candidate_id}/confirm", headers=auth(token),
+        json={"details": {"fragrance_family": "woody", "concentration": None, "occasion": ["office"], "season": ["summer"]}, "price": None},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["candidate"]["details"]["concentration"] is None or "concentration" not in confirmed.json()["candidate"]["details"]
+    check = await app_client.get(f"/api/v2/shopping/candidates/{candidate_id}/fragrance-check", headers=auth(token))
+    assert check.status_code == 200, check.text
+    assert check.json()["verdict"]["primary_reason_code"] == "candidate_price_missing"

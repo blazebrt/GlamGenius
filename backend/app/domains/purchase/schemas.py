@@ -102,7 +102,9 @@ class ExtractedFragranceCandidate(BaseModel):
     """Visible Fragrance facts; intended use remains customer-declared."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    category: Literal["perfumes"]
+    # The extractor must be able to report a non-perfume category so the
+    # service's expected-category boundary can reject it safely.
+    category: AnyPurchaseCategory
     display_name: str = Field(min_length=1, max_length=200)
     brand: str | None = Field(default=None, max_length=120)
     subcategory: str | None = Field(default=None, max_length=80)
@@ -115,7 +117,12 @@ class ExtractedFragranceCandidate(BaseModel):
 
     @model_validator(mode="after")
     def _visible_fragrance_details(self):
-        self.details = validate_fragrance_extraction_details(self.details)
+        if self.category == "perfumes":
+            self.details = validate_fragrance_extraction_details(self.details)
+        elif self.details:
+            raise ValueError("Non-perfume extraction must not contain Fragrance details.")
+        else:
+            self.details = {}
         return self
 
 

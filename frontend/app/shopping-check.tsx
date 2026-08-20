@@ -248,7 +248,7 @@ export default function ShoppingCheckScreen() {
             {manual && !!category && (
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>{isCare ? 'Tell us about the product' : isFragrance ? 'Tell us about the fragrance' : 'Tell us what it is'}</Text>
-                <Text style={styles.label}>Product name</Text><TextInput accessibilityLabel="Product name" value={name} onChangeText={setName} placeholder="Daily cleanser" placeholderTextColor={COLORS.textMuted} style={styles.input} />
+                <Text style={styles.label}>Product name</Text><TextInput accessibilityLabel="Product name" value={name} onChangeText={setName} placeholder={isFragrance ? 'Fragrance name' : 'Daily cleanser'} placeholderTextColor={COLORS.textMuted} style={styles.input} />
                 {isCare ? <>
                   <Text style={styles.label}>Brand · optional</Text><TextInput accessibilityLabel="Product brand" value={brand} onChangeText={setBrand} placeholder="Brand" placeholderTextColor={COLORS.textMuted} style={styles.input} />
                   <Text style={styles.label}>Product type · optional</Text><TextInput accessibilityLabel="Product type" value={productType} onChangeText={setProductType} placeholder="Cleanser, serum, shampoo" placeholderTextColor={COLORS.textMuted} style={styles.input} />

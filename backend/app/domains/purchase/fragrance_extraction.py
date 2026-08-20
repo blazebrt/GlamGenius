@@ -15,6 +15,10 @@ PROMPT_VERSION = "v3-05.9"
 SCHEMA_VERSION = "v3-05.9"
 
 SYSTEM = """Transcribe only visible facts from a prospective perfume image.
+Identify the actual product category from the canonical category vocabulary
+(wardrobe, shoes, accessories, beauty, hair, perfumes, supplements). If it is
+not a perfume, return that category with no Fragrance details so the
+application can stop safely.
 Never infer intended occasion or season, chemistry, skin behaviour, longevity,
 projection, sillage, compliments, gender suitability, quality, or whether the
 customer should buy it. A customer must review and confirm every extracted fact.
@@ -22,9 +26,12 @@ customer should buy it. A customer must review and confirm every extracted fact.
 
 
 def prompt() -> str:
-    return """Inspect this perfume product image and return visible facts only:
-category=perfumes, display_name, brand, subcategory, fragrance_family and
-concentration only when explicitly visible, price, currency, confidence,
+    return """Inspect this product image and return visible facts only.
+Identify the actual category from this canonical list: wardrobe, shoes,
+accessories, beauty, hair, perfumes, supplements. If it is not a perfume,
+return that category with details={} and do not populate Fragrance details.
+For category=perfumes, return display_name, brand, subcategory,
+fragrance_family and concentration only when explicitly visible, price, currency, confidence,
 uncertain_fields, and photo_quality_notes. Details may contain only
 fragrance_family and concentration. Do not return occasion, season, longevity,
 usage, remaining quantity, chemistry, or performance context. Never return a

@@ -6,6 +6,8 @@ import { FragrancePurchaseCheck } from '../../services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 
 const verdictColor = (value: string) => value === 'buy' ? COLORS.success : value === 'skip' ? COLORS.warning : COLORS.accent;
+const contextLabel = (context: FragrancePurchaseCheck['collection_context'], dimension: 'occasion' | 'season', value: string) =>
+  context.context_labels?.[dimension]?.[value] || value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 
 export function FragranceCandidateReview({
   inspection, onConfirm, onCorrect,
@@ -39,11 +41,11 @@ export function FragranceShoppingResult({
       </View>
       <View style={styles.card} accessibilityLabel="Fragrance intended use">
         <Text style={styles.title}>Where you said you would use it</Text>
-        <Text style={styles.fact}>Occasions: {context.intended_use.occasion.join(', ') || 'Not specified'}</Text>
-        <Text style={styles.fact}>Seasons: {context.intended_use.season.join(', ') || 'Not specified'}</Text>
-        {!!context.coverage.covered.length && <Text style={styles.fact}>Already covered: {context.coverage.covered.join(', ')}</Text>}
-        {!!context.coverage.unknown.length && <Text style={styles.note}>Still unclear from owned metadata: {context.coverage.unknown.join(', ')}</Text>}
-        {!!context.coverage.uncovered.length && <Text style={styles.fact}>Not yet recorded: {context.coverage.uncovered.join(', ')}</Text>}
+        <Text style={styles.fact}>Occasions: {context.intended_use.occasion.map((value) => contextLabel(context, 'occasion', value)).join(', ') || 'Not specified'}</Text>
+        <Text style={styles.fact}>Seasons: {context.intended_use.season.map((value) => contextLabel(context, 'season', value)).join(', ') || 'Not specified'}</Text>
+        {!!context.coverage.covered.length && <Text style={styles.fact}>Already covered: {context.coverage.covered.map((value) => contextLabel(context, value.includes('_') || value in (context.context_labels?.occasion || {}) ? 'occasion' : 'season', value)).join(', ')}</Text>}
+        {!!context.coverage.unknown.length && <Text style={styles.note}>Still unclear from owned metadata: {context.coverage.unknown.map((value) => contextLabel(context, value.includes('_') || value in (context.context_labels?.occasion || {}) ? 'occasion' : 'season', value)).join(', ')}</Text>}
+        {!!context.coverage.uncovered.length && <Text style={styles.fact}>Not yet recorded: {context.coverage.uncovered.map((value) => contextLabel(context, value.includes('_') || value in (context.context_labels?.occasion || {}) ? 'occasion' : 'season', value)).join(', ')}</Text>}
       </View>
       {!!context.owned_options_to_use_first.length && <View style={styles.card} accessibilityLabel="Owned fragrance alternatives"><Text style={styles.title}>What you already own</Text>{context.owned_options_to_use_first.map((item) => <Text key={item.owned_item_id} style={styles.fact}>{item.display_name}{item.brand ? ` · ${item.brand}` : ''}{item.remaining_percent != null ? ` · ${item.remaining_percent}% left` : ''}</Text>)}</View>}
       {!!context.same_family_owned.length && <View style={styles.card} accessibilityLabel="Same family supporting information"><Text style={styles.title}>Same-family context</Text><Text style={styles.note}>This is supporting context only; family overlap does not decide the result.</Text>{context.same_family_owned.map((item) => <Text key={item.owned_item_id} style={styles.fact}>{item.display_name}</Text>)}</View>}

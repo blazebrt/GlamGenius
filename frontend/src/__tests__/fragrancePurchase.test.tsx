@@ -13,6 +13,7 @@ jest.mock('../services/apiV2', () => {
 const mockedApi = api as jest.Mocked<typeof api>;
 const strategyResponse = {
   purchase_strategy_registry_version: 'v3-05.9',
+  fragrance_context_options: { occasions: [{ key: 'business_meeting', label: 'Business meeting' }], seasons: [{ key: 'summer', label: 'Summer' }] },
   strategies: [
     { key: 'style_purchase' as const, label: 'Style', state: 'active' as const, categories: [{ key: 'wardrobe' as const, label: 'Wardrobe' }] },
     { key: 'care_purchase' as const, label: 'Care', state: 'active' as const, categories: [{ key: 'beauty' as const, label: 'Skin Care' }] },
@@ -39,6 +40,17 @@ describe('Fragrance Purchase routing', () => {
     render(<ShoppingCheckScreen />);
     await waitFor(() => expect(screen.getByLabelText('Perfumes')).toBeTruthy());
     expect(screen.queryByLabelText('Supplements')).toBeNull();
+    expect(mockedApi.getPurchaseStrategies).toHaveBeenCalled();
+  });
+
+  it('uses server-provided canonical fragrance context options', async () => {
+    render(<ShoppingCheckScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Perfumes')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Perfumes'));
+    fireEvent.press(screen.getByLabelText('Enter the details myself'));
+    expect(screen.getByLabelText('Occasion Business meeting')).toBeTruthy();
+    expect(screen.getByLabelText('Season Summer')).toBeTruthy();
+    expect(screen.getByPlaceholderText('Fragrance name')).toBeTruthy();
   });
 
   it('uses the Fragrance candidate/check path and never the Style evaluator', async () => {

@@ -106,8 +106,10 @@ def _apply_candidate_corrections(
         row.brand = body.brand
     if "subcategory" in fields:
         row.subcategory = body.subcategory
-    if "details" in fields and body.details is not None:
-        row.details = _validate_candidate_details(row.category, body.details)
+    if "details" in fields and (row.category == "perfumes" or body.details is not None):
+        # Fragrance review supports explicit null clearing so a stale
+        # extracted concentration/family cannot survive customer correction.
+        row.details = _validate_candidate_details(row.category, body.details or {})
     if "price" in fields:
         row.price = body.price
     if "currency" in fields and body.currency is not None:

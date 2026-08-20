@@ -1278,6 +1278,7 @@ export interface FragrancePurchaseCheck {
     exact_owned: FragranceOwnedOption[];
     same_family_owned: FragranceOwnedOption[];
     intended_use: { occasion: string[]; season: string[] };
+    context_labels?: { occasion: Record<string, string>; season: Record<string, string> };
     coverage: { covered: string[]; unknown: string[]; uncovered: string[] };
     owned_options_to_use_first: FragranceOwnedOption[];
   };
