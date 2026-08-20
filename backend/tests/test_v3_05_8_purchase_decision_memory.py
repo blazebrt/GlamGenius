@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.domains.purchase import (
     CARE_PURCHASE_ASSESSMENT_VERSION,
     CARE_PURCHASE_CANDIDATE_SCHEMA_VERSION,

@@ -20,6 +20,7 @@ jest.mock('../services/apiV2', () => {
     inspectPurchaseCandidate: jest.fn(),
     getCarePurchaseCheck: jest.fn(),
     recordCarePurchaseDecision: jest.fn(),
+    recordPurchaseDecision: jest.fn(),
     confirmPurchaseCandidate: jest.fn(),
     evaluateItemDetails: jest.fn(),
     evaluateScreenshot: jest.fn(),
