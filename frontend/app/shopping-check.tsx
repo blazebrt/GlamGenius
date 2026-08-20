@@ -13,7 +13,7 @@ import {
 import { CareCandidateReview, CarePurchaseResult } from '../src/components/shopping/CareShoppingPieces';
 import { AnalysisFailedState } from '../src/components/TrustStates';
 import {
-  CareCandidateInspection, CarePurchaseCheck, CarePurchaseItemInput, InventoryCategory,
+  CareCandidateConfirmInput, CareCandidateInspection, CarePurchaseCheck, CarePurchaseItemInput, InventoryCategory,
   PurchaseEvaluation, PurchaseStrategy, confirmPurchaseCandidate, evaluateItemDetails,
   allowanceWasPreserved, evaluateScreenshot, failureGuidance, getCarePurchaseCheck, getPurchaseStrategies,
   inspectPurchaseCandidate, recordPurchaseDecision, structuredError, uploadMedia,
@@ -118,17 +118,18 @@ export default function ShoppingCheckScreen() {
     if (careCandidate.facts_trusted) { setCareCheck(await getCarePurchaseCheck(careCandidate.candidate.id)); return; }
     setBusy(true); clearError();
     try {
-      const confirmed = await confirmPurchaseCandidate(careCandidate.candidate.id, {
+      const correction: CareCandidateConfirmInput = {
         display_name: name.trim() || careCandidate.candidate.display_name,
-        brand: brand.trim() || undefined,
+        brand: brand.trim() || null,
         details: {
           product_type: productType.trim() || undefined,
           size: size.trim() || undefined,
           ingredients_text: ingredients.trim() || undefined,
         },
-        price: price ? Number(price) : undefined,
+        price: price.trim() ? Number(price) : null,
         currency: careCandidate.candidate.currency,
-      });
+      };
+      const confirmed = await confirmPurchaseCandidate(careCandidate.candidate.id, correction);
       setCareCandidate(confirmed); setEditingCare(false); setCareCheck(await getCarePurchaseCheck(confirmed.candidate.id));
     } catch (err) { setError(err); } finally { setBusy(false); }
   };

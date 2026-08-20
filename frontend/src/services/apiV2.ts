@@ -966,16 +966,28 @@ export interface CarePurchaseItemInput {
   category: 'beauty' | 'hair';
   display_name: string;
   brand?: string;
-  details?: {
-    product_type?: string;
-    size?: string;
-    purpose?: string;
-    ingredients_text?: string;
-    active_ingredients?: string[];
-  };
+  details?: CareCandidateDetails;
   price?: number;
   currency?: string;
   product_url?: string;
+}
+
+export interface CareCandidateDetails {
+  product_type?: string | null;
+  size?: string | null;
+  purpose?: string | null;
+  ingredients_text?: string | null;
+  active_ingredients?: string[];
+}
+
+export interface CareCandidateConfirmInput {
+  display_name?: string | null;
+  brand?: string | null;
+  subcategory?: string | null;
+  details?: CareCandidateDetails | null;
+  price?: number | null;
+  currency?: string | null;
+  product_url?: string | null;
 }
 
 export interface CareCandidate {
@@ -985,13 +997,7 @@ export interface CareCandidate {
   subcategory: string | null;
   display_name: string;
   brand: string | null;
-  details: {
-    product_type?: string | null;
-    size?: string | null;
-    purpose?: string | null;
-    ingredients_text?: string | null;
-    active_ingredients?: string[];
-  };
+  details: CareCandidateDetails;
   price: number | null;
   currency: string;
   product_url: string | null;
@@ -1189,7 +1195,7 @@ export const inspectPurchaseCandidate = async (body: {
 
 export const confirmPurchaseCandidate = async (
   id: string,
-  body: Partial<Omit<CarePurchaseItemInput, 'category' | 'display_name'>> & { display_name?: string },
+  body: CareCandidateConfirmInput,
 ): Promise<CareCandidateInspection> =>
   (await api.post<CareCandidateInspection>(`${V2}/shopping/candidates/${id}/confirm`, body)).data;
 

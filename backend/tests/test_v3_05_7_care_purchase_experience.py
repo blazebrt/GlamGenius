@@ -115,7 +115,13 @@ async def _async(value):
     return value
 
 
-async def _seed_db_candidate(account_id: uuid.UUID, *, category: str = "beauty", verification_state: str = "confirmed") -> uuid.UUID:
+async def _seed_db_candidate(
+    account_id: uuid.UUID,
+    *,
+    category: str = "beauty",
+    verification_state: str = "confirmed",
+    price: Decimal | None = Decimal("1299.00"),
+) -> uuid.UUID:
     candidate_id = uuid.uuid4()
     factory = get_sessionmaker()
     async with factory() as session:
@@ -134,7 +140,7 @@ async def _seed_db_candidate(account_id: uuid.UUID, *, category: str = "beauty",
                 },
                 verification_state=verification_state,
                 extraction_confidence=0.99,
-                price=Decimal("1299.00"),
+                price=price,
                 currency="INR",
             )
         )
@@ -220,3 +226,32 @@ async def test_runtime_care_check_rejects_draft_until_confirmation_without_persi
     assert checked.status_code == 200, checked.text
     assert checked.json()["candidate_truth"]["facts_trusted"] is True
     assert await _care_read_only_counts(account_id) == before
+
+
+@pytest.mark.asyncio
+async def test_runtime_confirmation_clears_extracted_price_and_reaches_missing_price_verdict(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    candidate_id = await _seed_db_candidate(account_id, price=Decimal("1299.00"))
+    confirmed = await app_client.post(
+        f"/api/v2/shopping/candidates/{candidate_id}/confirm",
+        headers=auth(token),
+        json={"price": None},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    factory = get_sessionmaker()
+    async with factory() as session:
+        stored_price = await session.scalar(
+            select(ShoppingCandidate.price).where(ShoppingCandidate.id == candidate_id)
+        )
+    assert stored_price is None
+    checked = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/care-check?on=2026-08-20",
+        headers=auth(token),
+    )
+    assert checked.status_code == 200, checked.text
+    payload = checked.json()
+    assert payload["value"]["value_context"]["candidate_spend"]["status"] == "missing"
+    assert payload["verdict"]["primary_reason_code"] == "candidate_price_missing"
+    assert payload["verdict"]["verdict"] == "wait"

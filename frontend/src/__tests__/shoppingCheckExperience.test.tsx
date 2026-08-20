@@ -27,7 +27,7 @@ jest.mock('../services/apiV2', () => {
 });
 
 const strategies = (): PurchaseStrategiesResponse => ({
-  purchase_strategy_registry_version: 'v3-05',
+  purchase_strategy_registry_version: 'v3-05.6',
   strategies: [
     { key: 'style_purchase', label: 'Style', state: 'active', categories: [
       { key: 'wardrobe', label: 'Wardrobe' }, { key: 'shoes', label: 'Shoes' }, { key: 'accessories', label: 'Accessories' },
@@ -40,12 +40,12 @@ const strategies = (): PurchaseStrategiesResponse => ({
   ],
 });
 
-const candidate = (trusted: boolean): CareCandidateInspection => ({
+const candidate = (trusted: boolean, price: number | null = 499, brand: string | null = 'Example'): CareCandidateInspection => ({
   candidate_truth_version: 'v3-05.1', care_purchase_candidate_schema_version: 'v3-05.1',
   candidate: {
     id: 'candidate-1', source: 'manual', category: 'beauty', subcategory: null,
-    display_name: 'Daily cleanser', brand: 'Example', details: { product_type: 'cleanser', ingredients_text: 'glycerin' },
-    price: 499, currency: 'INR', product_url: null, media_asset_id: null, verification_state: trusted ? 'user_declared' : 'draft',
+    display_name: 'Daily cleanser', brand, details: { product_type: 'cleanser', ingredients_text: 'glycerin' },
+    price, currency: 'INR', product_url: null, media_asset_id: null, verification_state: trusted ? 'user_declared' : 'draft',
     uncertain_fields: [], extraction_confidence: null, ai_run_id: null, model_version: null, prompt_version: null, schema_version: null, in_inventory: false,
   }, review_required: !trusted, facts_trusted: trusted, care_slot: 'cleanser', missing_information: [],
   recognised_ingredient_keys: ['glycerin'], recognised_ingredient_families: ['humectant'], note: 'Prospective candidate.',
@@ -111,5 +111,50 @@ describe('ShoppingCheckScreen strategy and Care flows', () => {
     fireEvent.press(screen.getByLabelText('Confirm product facts'));
     await waitFor(() => expect(mockedApi.getCarePurchaseCheck).toHaveBeenCalledWith('candidate-1'));
     expect(mockedApi.confirmPurchaseCandidate).toHaveBeenCalled();
+  });
+
+  it('sends explicit nulls when screenshot facts are cleared before confirmation', async () => {
+    (ImagePicker.launchImageLibraryAsync as jest.Mock).mockResolvedValue({ canceled: false, assets: [{ uri: 'file://label.jpg', fileName: 'label.jpg', mimeType: 'image/jpeg' }] });
+    mockedApi.uploadMedia.mockResolvedValue({ id: 'media-1' } as never);
+    mockedApi.inspectPurchaseCandidate.mockResolvedValue(candidate(false, 1299, 'Extracted brand'));
+    mockedApi.confirmPurchaseCandidate.mockResolvedValue(candidate(true, null, null));
+    render(<ShoppingCheckScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Skin Care')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Skin Care'));
+    fireEvent.press(screen.getByLabelText('Upload a product screenshot'));
+    await waitFor(() => expect(screen.getByLabelText('Correct product facts')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Correct product facts'));
+    fireEvent.changeText(screen.getByLabelText('Corrected product brand'), '');
+    fireEvent.changeText(screen.getByLabelText('Corrected product price'), '');
+    fireEvent.press(screen.getByLabelText('Save corrected product facts'));
+    await waitFor(() => expect(mockedApi.confirmPurchaseCandidate).toHaveBeenCalledWith('candidate-1', expect.objectContaining({ brand: null, price: null })));
+    expect(mockedApi.getCarePurchaseCheck).toHaveBeenCalledWith('candidate-1');
+    expect(mockedApi.confirmPurchaseCandidate.mock.calls[0][1]).not.toEqual(expect.objectContaining({ price: 1299 }));
+  });
+
+  it('keeps the Style manual path on evaluateItemDetails and outside Care APIs', async () => {
+    mockedApi.evaluateItemDetails.mockRejectedValue(new Error('test stop'));
+    render(<ShoppingCheckScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Wardrobe')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Enter the details myself'));
+    fireEvent.changeText(screen.getByLabelText('Product name'), 'Olive shirt');
+    fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(mockedApi.evaluateItemDetails).toHaveBeenCalledWith(
+      expect.objectContaining({ category: 'wardrobe', display_name: 'Olive shirt' }), undefined, undefined,
+    ));
+    expect(mockedApi.inspectPurchaseCandidate).not.toHaveBeenCalled();
+    expect(mockedApi.getCarePurchaseCheck).not.toHaveBeenCalled();
+  });
+
+  it('renders the preserved allowance trust signal for an explicit Style failure response', async () => {
+    mockedApi.evaluateItemDetails.mockRejectedValue({ response: { data: { detail: {
+      code: 'ANALYSIS_UNAVAILABLE', message: 'Style analysis unavailable', retryable: true, allowance_consumed: false,
+    } } } });
+    render(<ShoppingCheckScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Wardrobe')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Enter the details myself'));
+    fireEvent.changeText(screen.getByLabelText('Product name'), 'Olive shirt');
+    fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(screen.getByTestId('allowance-preserved')).toBeTruthy());
   });
 });

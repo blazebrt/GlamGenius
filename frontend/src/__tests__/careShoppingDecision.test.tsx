@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen } from '@testing-library/react-native';
 
 import { CarePurchaseCheck } from '../services/apiV2';
-import { CarePurchaseResult } from '../components/shopping/CareShoppingPieces';
+import { CarePurchaseResult, formatCareMissingInformation } from '../components/shopping/CareShoppingPieces';
 
 const check = (verdict: 'buy' | 'wait' | 'skip' = 'wait'): CarePurchaseCheck => ({
   care_purchase_check_version: 'v3-05.7', strategy: 'care_purchase',
@@ -18,6 +18,13 @@ const check = (verdict: 'buy' | 'wait' | 'skip' = 'wait'): CarePurchaseCheck => 
 });
 
 describe('Care purchase customer experience', () => {
+  it('formats internal missing-information markers for customers', () => {
+    expect(formatCareMissingInformation('product_type')).toBe('product type');
+    expect(formatCareMissingInformation('care_slot')).toBe('routine role');
+    expect(formatCareMissingInformation('ingredients')).toBe('ingredient information');
+    expect(formatCareMissingInformation('unrecognised_ingredient:retinyl-palmitate')).toBe('Ingredient not recognised: retinyl-palmitate');
+  });
+
   it('renders the canonical verdict and routine context without Style ROI', () => {
     render(<CarePurchaseResult check={check()} onReset={() => undefined} />);
     expect(screen.getByLabelText('Care verdict: Wait')).toBeTruthy();

@@ -37,7 +37,7 @@ export function CareCandidateReview({
       <Text style={styles.title}>{candidate.display_name}</Text>
       {facts.map(([label, value]) => <Text key={label} style={styles.fact}>{label}: {value}</Text>)}
       {!!inspection.missing_information.length && (
-        <Text style={styles.warn}>Still missing: {inspection.missing_information.join(', ')}.</Text>
+        <Text style={styles.warn}>Still missing: {inspection.missing_information.map(formatCareMissingInformation).join(', ')}.</Text>
       )}
       {!!candidate.uncertain_fields.length && (
         <Text style={styles.warn}>Please check: {candidate.uncertain_fields.join(', ')}.</Text>
@@ -73,6 +73,21 @@ const roleCopy: Record<string, string> = {
   role_unresolved: 'We could not identify a clear routine role yet.',
 };
 
+export function formatCareMissingInformation(marker: string): string {
+  const value = marker.trim();
+  const known: Record<string, string> = {
+    product_type: 'product type',
+    care_slot: 'routine role',
+    ingredients: 'ingredient information',
+    purpose: 'product purpose',
+  };
+  if (known[value]) return known[value];
+  if (value.startsWith('unrecognised_ingredient:')) {
+    return `Ingredient not recognised: ${value.slice('unrecognised_ingredient:'.length)}`;
+  }
+  return value.replace(/_/g, ' ');
+}
+
 export function CareWhy({ check }: { check: CarePurchaseCheck }) {
   const dimensions = check.assessment.dimensions || {};
   const role = dimensions.role_utility || {};
@@ -88,8 +103,7 @@ export function CareWhy({ check }: { check: CarePurchaseCheck }) {
   const decisionContext = check.verdict.decision_context;
   if (check.verdict.primary_reason_code === 'candidate_ingredient_information_incomplete') missing.add('ingredient information');
   if (decisionContext.candidate_spend_status === 'missing') missing.add('candidate price');
-  if (decisionContext.owned_value_recovery_status === 'financial_context_partial'
-    || check.value.value_context.status === 'financial_context_partial') missing.add('incomplete financial context');
+  if (check.value.value_context.status === 'financial_context_partial') missing.add('incomplete financial context');
   if (decisionContext.currency_context_status === 'mixed_currency_no_conversion') missing.add('mixed currency context (no conversion)');
   const missingItems = [...missing];
   return (
@@ -153,7 +167,7 @@ export function CareWhy({ check }: { check: CarePurchaseCheck }) {
       {!!missingItems.length && (
         <View style={styles.card} accessibilityLabel="Missing information">
           <Text style={styles.title}>What would make this clearer</Text>
-          {missingItems.map((item) => <Text key={item} style={styles.fact}>• {item}</Text>)}
+          {missingItems.map((item) => <Text key={item} style={styles.fact}>• {formatCareMissingInformation(item)}</Text>)}
         </View>
       )}
     </>
