@@ -9,8 +9,6 @@ import uuid
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select, text
-
 from app.domains.purchase import (
     CARE_PURCHASE_ASSESSMENT_VERSION,
     CARE_PURCHASE_CANDIDATE_SCHEMA_VERSION,
@@ -26,6 +24,7 @@ from app.domains.purchase import (
 )
 from app.domains.recommendation.models import PurchaseDecision, PurchaseEvaluation, RecommendationRun, ShoppingCandidate
 from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import select, text
 
 from tests.conftest import auth
 from tests.test_v3_05_7_care_purchase_experience import (
