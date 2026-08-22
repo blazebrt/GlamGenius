@@ -1,19 +1,65 @@
 """The Monday-to-Sunday planner."""
 from __future__ import annotations
 
+import uuid
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.planning import clock, compiler, service, weekly
+from app.domains.planning import clock, compiler, event_ready, service, weekly
 from app.domains.planning import context as context_stage
-from app.domains.planning.schemas import DayLock, DayPatch, WeekGenerate
+from app.domains.planning.schemas import DayLock, DayPatch, EventReadyActionComplete, EventReadyLookPatch, WeekGenerate
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_planner"))])
+
+
+@router.post("/planner/events/{event_id}/ready/generate")
+async def generate_event_ready(
+    event_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await event_ready.generate(session, current.account_id, event_id)
+    await session.commit()
+    return result
+
+
+@router.get("/planner/events/{event_id}/ready")
+async def get_event_ready(
+    event_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    return await event_ready.read(session, current.account_id, event_id)
+
+
+@router.patch("/planner/events/{event_id}/ready/look")
+async def set_event_ready_look(
+    event_id: uuid.UUID,
+    body: EventReadyLookPatch,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await event_ready.set_look(session, current.account_id, event_id, body.look_id)
+    await session.commit()
+    return result
+
+
+@router.post("/planner/events/{event_id}/ready/actions/{action_id}/complete")
+async def complete_event_ready_action(
+    event_id: uuid.UUID,
+    action_id: uuid.UUID,
+    body: EventReadyActionComplete,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await event_ready.complete_action(session, current.account_id, event_id, action_id, body.completed)
+    await session.commit()
+    return result
 
 
 @router.get("/planner/week")

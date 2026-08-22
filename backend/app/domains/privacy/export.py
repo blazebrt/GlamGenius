@@ -47,7 +47,14 @@ from app.domains.inventory.models import (
 )
 from app.domains.media import service as media_service
 from app.domains.media.models import MediaAsset
-from app.domains.planning.models import CalendarEvent, DailyPlan, WeatherSnapshot, WeeklyPlan
+from app.domains.planning.models import (
+    CalendarEvent,
+    DailyPlan,
+    EventReadyAction,
+    EventReadyPlan,
+    WeatherSnapshot,
+    WeeklyPlan,
+)
 from app.domains.privacy import EXPORT_SCHEMA_VERSION, REGISTRY, Classification
 from app.domains.profile.models import (
     AppearanceGoal,
@@ -304,11 +311,18 @@ async def _planning(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
     weekly = await _fetch(session, select(WeeklyPlan).where(WeeklyPlan.account_id == account_id))
     calendar = await _fetch(session, select(CalendarEvent).where(CalendarEvent.account_id == account_id))
     weather = await _fetch(session, select(WeatherSnapshot).where(WeatherSnapshot.account_id == account_id))
+    event_ready_plans = await _fetch(session, select(EventReadyPlan).where(EventReadyPlan.account_id == account_id))
+    event_ready_actions = await _fetch(
+        session,
+        select(EventReadyAction).where(EventReadyAction.event_ready_plan_id.in_([row.id for row in event_ready_plans])),
+    ) if event_ready_plans else []
     return {
         "daily_plans": [_row_dict(r, [c.name for c in DailyPlan.__table__.columns]) for r in daily],
         "weekly_plans": [_row_dict(r, [c.name for c in WeeklyPlan.__table__.columns]) for r in weekly],
         "calendar_events": [_row_dict(r, [c.name for c in CalendarEvent.__table__.columns]) for r in calendar],
         "weather_snapshots": [_row_dict(r, [c.name for c in WeatherSnapshot.__table__.columns]) for r in weather],
+        "event_ready_plans": [_row_dict(r, [c.name for c in EventReadyPlan.__table__.columns]) for r in event_ready_plans],
+        "event_ready_actions": [_row_dict(r, [c.name for c in EventReadyAction.__table__.columns]) for r in event_ready_actions],
     }
 
 

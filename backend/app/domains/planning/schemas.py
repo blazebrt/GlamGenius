@@ -217,6 +217,18 @@ class DayLock(BaseModel):
     locked: bool = True
 
 
+class EventReadyLookPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    look_id: uuid.UUID | None
+
+
+class EventReadyActionComplete(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    completed: bool
+
+
 # --- Notifications ----------------------------------------------------------
 
 

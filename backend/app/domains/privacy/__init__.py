@@ -144,6 +144,8 @@ REGISTRY: dict[str, Classification] = {
     "weather_snapshots": Classification.INCLUDED,
     "air_quality_snapshots": Classification.INCLUDED,
     "plan_recalculation_events": Classification.INCLUDED,
+    "event_ready_plans": Classification.INCLUDED,
+    "event_ready_actions": Classification.INCLUDED,  # via event_ready_plans
     # --- Routines + safety ---
     "routines": Classification.INCLUDED,
     "routine_steps": Classification.INCLUDED,  # via routines

@@ -1477,6 +1477,60 @@ export interface CalendarEvent {
   status: string;
 }
 
+export type EventReadyStatus = 'not_generated' | 'needs_confirmation' | 'preparing' | 'event_day' | 'past';
+export type EventReadyActionDomain = 'context' | 'style' | 'care' | 'preparation';
+export type EventReadyActionTiming = 'now' | 'before_event' | 'event_day';
+export type HairWashCadenceStatus = 'due' | 'not_due' | 'needs_anchor' | 'unscheduled';
+
+export interface EventReadyAction {
+  id: string;
+  action_key: string;
+  domain: EventReadyActionDomain;
+  timing: EventReadyActionTiming;
+  title: string;
+  body: string;
+  relevance: string;
+  inventory_item_id: string | null;
+  completed: boolean;
+  completed_at: string | null;
+}
+
+export interface EventReadyCare {
+  authority: 'care';
+  decision_version: string;
+  decision_fingerprint: string;
+  routine_plan_version: string;
+  routine_plan_fingerprint: string;
+  resolved_effort: string;
+  active_skin_slot_count: number;
+  active_hair_slot_count: number;
+  skin_gap_count: number;
+  hair_gap_count: number;
+  hair_wash: {
+    version: string;
+    status: HairWashCadenceStatus;
+    reason: string;
+    declared_frequency: string | null;
+    last_wash_on: string | null;
+    next_due_on: string | null;
+    fingerprint: string;
+  };
+}
+
+export interface EventReady {
+  event_ready_version: 'vc-02-v1';
+  event: CalendarEvent;
+  status: EventReadyStatus;
+  countdown: { days_until: number; event_local_date: string };
+  context: { weather: { condition: string; temp_min_c: number | null; temp_max_c: number | null; precipitation_chance: number | null; humidity: number | null; location: string | null } | null; air_quality: { aqi: number; index_system: string; category: string | null; location: string | null } | null };
+  style: { authority: 'style'; status: 'blocked_by_event_confirmation' | 'needs_look' | 'look_selected' | 'look_needs_review'; selected_look: { id: string; title: string; status: string } | null };
+  care: EventReadyCare | null;
+  timeline: EventReadyAction[];
+  readiness: { completed_actions: number; total_actions: number; all_done: boolean };
+  missing_information: string[];
+  event_ready_fingerprint: string;
+}
+
 export interface CalendarStatus {
   connected: boolean;
   integrations: {
@@ -1547,6 +1601,18 @@ export const addPlannerEvent = async (
 
 export const getWeek = async (week_start?: string): Promise<WeeklyPlan> =>
   (await api.get<WeeklyPlan>(`${V2}/planner/week`, { params: week_start ? { week_start } : undefined })).data;
+
+export const getEventReady = async (eventId: string): Promise<EventReady> =>
+  (await api.get<EventReady>(`${V2}/planner/events/${eventId}/ready`)).data;
+
+export const generateEventReady = async (eventId: string): Promise<EventReady> =>
+  (await api.post<EventReady>(`${V2}/planner/events/${eventId}/ready/generate`)).data;
+
+export const setEventReadyLook = async (eventId: string, lookId: string | null): Promise<EventReady> =>
+  (await api.patch<EventReady>(`${V2}/planner/events/${eventId}/ready/look`, { look_id: lookId })).data;
+
+export const setEventReadyActionComplete = async (eventId: string, actionId: string, completed: boolean): Promise<EventReady> =>
+  (await api.post<EventReady>(`${V2}/planner/events/${eventId}/ready/actions/${actionId}/complete`, { completed })).data;
 
 export const generateWeek = async (
   week_start?: string, repetition_window_days = 7
