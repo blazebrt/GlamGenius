@@ -29,6 +29,8 @@ export default function PlannerScreen() {
   const [moving, setMoving] = useState<PlannerDay | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [upcoming, setUpcoming] = useState<CalendarEvent[]>([]);
+  const [upcomingLoading, setUpcomingLoading] = useState(true);
+  const [upcomingError, setUpcomingError] = useState<string | null>(null);
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     if (mode === 'refresh') setRefreshing(true);
@@ -45,13 +47,23 @@ export default function PlannerScreen() {
   }, []);
 
   const loadUpcoming = useCallback(async () => {
+    setUpcomingLoading(true);
     try {
       setUpcoming((await getUpcomingEvents()).events);
+      setUpcomingError(null);
     } catch (err) {
       // The weekly planner remains useful when this optional read is offline.
       console.warn('upcoming events load failed', err);
+      setUpcomingError('We could not load upcoming events right now.');
+    } finally {
+      setUpcomingLoading(false);
     }
   }, []);
+
+  const refreshAll = () => {
+    void load('refresh');
+    void loadUpcoming();
+  };
 
   // `plan` must NOT be a dependency here. Every successful load sets it to a
   // new object, which would change this callback, re-run the effect, and
@@ -95,12 +107,15 @@ export default function PlannerScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView
         contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 110 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load('refresh')} tintColor={COLORS.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAll} tintColor={COLORS.primary} />}
       >
         <Text style={styles.eyebrow}>PLAN / PLANNER</Text>
 
         <UpcomingEvents
           events={upcoming}
+          loading={upcomingLoading}
+          error={upcomingError}
+          onRetry={() => void loadUpcoming()}
           onEventPress={(event) => router.push({ pathname: '/event-ready', params: { eventId: event.id } })}
           onAdd={() => router.push('/event-add')}
         />

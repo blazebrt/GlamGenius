@@ -29,14 +29,15 @@ export function buildOccasionInput(
   answers: Record<string, string | undefined>,
   event?: { eventDate?: string; eventTitle?: string; dressCode?: string; location?: string },
 ): OccasionInput {
-  const body: OccasionInput = {
-    occasion_key: selected.key,
-    ...(event?.eventDate ? { event_date: event.eventDate } : {}),
-    ...(event?.eventTitle ? { title: event.eventTitle } : {}),
-    ...(event?.dressCode ? { dress_code: event.dressCode } : {}),
-    ...(event?.location ? { location: event.location } : {}),
-  };
+  const body: OccasionInput = { occasion_key: selected.key };
   for (const [key, value] of Object.entries(answers)) if (value) (body as any)[key] = value;
+  // Event Ready is the source of truth for these fields. Apply them last so
+  // an ordinary Style follow-up cannot contradict the confirmed event.
+  if (event?.eventDate) body.event_date = event.eventDate;
+  if (event?.eventTitle) body.title = event.eventTitle;
+  if (event?.dressCode) body.dress_code = event.dressCode;
+  if (event?.location) body.location = event.location;
+  body.occasion_key = selected.key;
   return body;
 }
 
@@ -83,8 +84,8 @@ export default function StyleMeScreen() {
   // Only the questions this occasion actually needs, and only the ones we can
   // present as a choice.
   const questions = useMemo(
-    () => (selected?.questions || []).filter((question) => question.options.length > 0),
-    [selected]
+    () => (selected?.questions || []).filter((question) => question.options.length > 0 && !(eventMode && eventDressCode && question.key === 'dress_code')),
+    [eventDressCode, eventMode, selected]
   );
 
   const pick = (occasion: OccasionDefinition) => {

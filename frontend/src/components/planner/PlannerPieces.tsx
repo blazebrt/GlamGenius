@@ -84,8 +84,9 @@ export function UpcomingEventCard({ event, onPress }: { event: CalendarEvent; on
   );
 }
 
-export function UpcomingEvents({ events, onEventPress, onAdd }: {
+export function UpcomingEvents({ events, onEventPress, onAdd, loading = false, error, onRetry }: {
   events: CalendarEvent[]; onEventPress: (event: CalendarEvent) => void; onAdd: () => void;
+  loading?: boolean; error?: string | null; onRetry?: () => void;
 }) {
   return (
     <View accessibilityLabel="Upcoming events" style={styles.upcoming}>
@@ -95,7 +96,14 @@ export function UpcomingEvents({ events, onEventPress, onAdd }: {
           <Text style={styles.addEventLink}>Add an event</Text>
         </TouchableOpacity>
       </View>
-      {events.length ? events.slice(0, 5).map((event) => (
+      {loading ? (
+        <View style={styles.eventEmpty}><Text style={styles.bodyMuted}>Loading upcoming events…</Text></View>
+      ) : error ? (
+        <View style={styles.eventEmpty} accessibilityLabel="Upcoming events unavailable">
+          <Text style={styles.bodyMuted}>{error}</Text>
+          {!!onRetry && <TouchableOpacity accessibilityRole="button" accessibilityLabel="Retry upcoming events" onPress={onRetry}><Text style={styles.addEventLink}>Retry</Text></TouchableOpacity>}
+        </View>
+      ) : events.length ? events.slice(0, 5).map((event) => (
         <UpcomingEventCard key={event.id} event={event} onPress={() => onEventPress(event)} />
       )) : (
         <View style={styles.eventEmpty}>

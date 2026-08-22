@@ -60,9 +60,12 @@ export default function EventReadyScreen() {
     setConfirming(true);
     setError(null);
     try {
-      const event = await patchCalendarEvent(eventId, { occasion_key: occasion.key });
+      await patchCalendarEvent(eventId, { occasion_key: occasion.key });
+      // A PATCH changes the server-derived Event Ready read model. Reconcile
+      // through the canonical route rather than merging only the CalendarEvent
+      // into stale missing-information/style fields in React.
       if (ready.status === 'needs_confirmation') setReady(await generateEventReady(eventId));
-      else setReady((current) => current && { ...current, event });
+      else setReady(await getEventReady(eventId));
     } catch (err) { setError(errorMessage(err)); } finally { setConfirming(false); }
   };
 
@@ -79,8 +82,9 @@ export default function EventReadyScreen() {
   if (!ready) return <View style={[styles.center, { padding: SPACING.lg }]}><Text style={styles.body}>{error || 'This event is not available.'}</Text><TouchableOpacity accessibilityRole="button" onPress={() => void load()} style={styles.primary}><Text style={styles.primaryText}>Try again</Text></TouchableOpacity></View>;
 
   const event = ready.event;
-  const needsConfirmation = !event.user_confirmed || !event.occasion_key || ready.status === 'needs_confirmation';
-  const countdown = ready.status === 'past' ? 'Event passed' : ready.status === 'event_day' ? 'Today' : ready.countdown.days_until === 1 ? 'Tomorrow' : `${ready.countdown.days_until} days to go`;
+  const effectivePast = ready.status === 'past' || ready.countdown.days_until < 0;
+  const needsConfirmation = !effectivePast && (!event.user_confirmed || !event.occasion_key || ready.status === 'needs_confirmation');
+  const countdown = effectivePast ? 'Event passed' : ready.countdown.days_until === 0 ? 'Today' : ready.countdown.days_until === 1 ? 'Tomorrow' : `${ready.countdown.days_until} days to go`;
   const selectedOccasion = occasions.find((occasion) => occasion.key === event.occasion_key);
 
   return (
@@ -108,8 +112,8 @@ export default function EventReadyScreen() {
           {!!occasions.length && <View style={styles.chips}>{occasions.map((occasion) => <TouchableOpacity key={occasion.key} accessibilityRole="button" accessibilityLabel={`Confirm ${occasion.label}`} disabled={confirming} onPress={() => void confirmOccasion(occasion)} style={styles.chip}><Text style={styles.chipText}>{occasion.label}</Text></TouchableOpacity>)}</View>}
         </View>}
 
-        {ready.status === 'not_generated' && !needsConfirmation && <View style={styles.ctaBlock}><Text style={styles.sectionTitle}>A little preparation can make the day easier.</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Prepare for this event" disabled={generating} onPress={() => void generate()} style={[styles.primary, generating && styles.disabled]}><Text style={styles.primaryText}>{generating ? 'Preparing…' : 'Prepare for this event'}</Text></TouchableOpacity></View>}
-        {ready.status === 'past' && <View style={styles.panel}><Text style={styles.sectionTitle}>This event has passed.</Text><Text style={styles.body}>Your event history stays here for reference.</Text></View>}
+        {ready.status === 'not_generated' && !effectivePast && !needsConfirmation && <View style={styles.ctaBlock}><Text style={styles.sectionTitle}>A little preparation can make the day easier.</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Prepare for this event" disabled={generating} onPress={() => void generate()} style={[styles.primary, generating && styles.disabled]}><Text style={styles.primaryText}>{generating ? 'Preparing…' : 'Prepare for this event'}</Text></TouchableOpacity></View>}
+        {effectivePast && <View style={styles.panel}><Text style={styles.sectionTitle}>This event has passed.</Text><Text style={styles.body}>Your event history stays here for reference.</Text></View>}
 
         {(ready.status === 'preparing' || ready.status === 'event_day') && <>
           <View style={styles.panel} accessibilityLabel="Your look">
@@ -121,11 +125,11 @@ export default function EventReadyScreen() {
             </> : <><Text style={styles.panelTitle}>Choose your event look</Text><Text style={styles.panelBody}>Style will build from what you already own.</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Choose a look" onPress={() => router.push({ pathname: '/style-me', params: { eventReadyEventId: eventId, occasionKey: event.occasion_key || '', eventDate: event.local_date, eventTitle: event.title, dressCode: event.dress_code_hint || '', location: event.location || '' } })} style={styles.outline}><Text style={styles.outlineText}>Choose a look</Text></TouchableOpacity></>}
           </View>
           <View style={styles.panel} accessibilityLabel="What needs attention"><Text style={styles.panelEyebrow}>WHAT NEEDS ATTENTION</Text>{ready.timeline.length ? ready.timeline.filter((action) => action.action_key !== 'context:confirm_event').map((action) => <EventReadyActionRow key={action.id} action={action} busy={pendingActions.has(action.id)} onToggle={() => void toggleAction(action.id, action.completed)} />) : <Text style={styles.body}>Nothing extra needs your attention right now.</Text>}</View>
-          {!!ready.care && <CareSummary care={ready.care} onOpen={() => router.push('/(tabs)/today')} />}
+          {!!ready.care && <CareSummary care={ready.care} onOpen={() => router.push('/improve')} />}
           <View style={styles.panel} accessibilityLabel="Event context"><Text style={styles.panelEyebrow}>CONTEXT</Text>{ready.context.weather ? <Text style={styles.panelBody}>Event-day weather: {ready.context.weather.condition}</Text> : <Text style={styles.panelBody}>Event-day weather is not available yet.</Text>}{!!ready.context.air_quality && <Text style={styles.panelBody}>Air quality: {ready.context.air_quality.category || ready.context.air_quality.aqi}</Text>}</View>
           <Text style={styles.progress}>{ready.readiness.completed_actions} of {ready.readiness.total_actions} things done</Text>
         </>}
-        <MissingInformation keys={ready.missing_information} />
+        {!effectivePast && <MissingInformation keys={ready.missing_information} />}
         {ready.status === 'not_generated' && needsConfirmation && selectedOccasion && <Text style={styles.note}>Confirm the event type above before preparing around it.</Text>}
       </ScrollView>
     </View>

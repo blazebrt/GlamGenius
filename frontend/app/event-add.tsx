@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import { addCalendarEvent, CalendarEventInput, getOccasionTypes, OccasionDefinition } from '../src/services/apiV2';
@@ -10,6 +11,7 @@ const DEFAULT_TIME = '12:00';
 
 export default function EventAddScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [title, setTitle] = useState('');
   const [date, setDate] = useState('');
   const [time, setTime] = useState(DEFAULT_TIME);
@@ -68,14 +70,14 @@ export default function EventAddScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.top}>
+      <View style={[styles.top, { paddingTop: insets.top + SPACING.md }]}>
         <TouchableOpacity accessibilityRole="button" accessibilityLabel="Back" onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color={COLORS.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.topTitle}>Add an important event</Text>
         <View style={{ width: 24 }} />
       </View>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 56 }]} keyboardShouldPersistTaps="handled">
         <Text style={styles.eyebrow}>EVENT READY</Text>
         <Text style={styles.title}>What is coming up?</Text>
         <Text style={styles.body}>Add one when you want GlamGenius to help you prepare around it.</Text>
@@ -126,9 +128,9 @@ export default function EventAddScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.backgroundSecondary },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.background },
-  top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: SPACING.lg, paddingTop: SPACING.lg },
+  top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: SPACING.lg },
   topTitle: { fontFamily: FONTS.family.bodySemibold, color: COLORS.textPrimary },
-  content: { padding: SPACING.lg, paddingBottom: 56 },
+  content: { padding: SPACING.lg },
   eyebrow: { fontFamily: FONTS.family.bodySemibold, color: COLORS.primary, fontSize: 10, letterSpacing: 1.3, marginTop: SPACING.lg },
   title: { fontFamily: FONTS.family.heading, color: COLORS.textPrimary, fontSize: 29, marginTop: 5, marginBottom: 6 },
   body: { fontFamily: FONTS.family.body, color: COLORS.textSecondary, fontSize: 13, lineHeight: 19, marginBottom: SPACING.md },

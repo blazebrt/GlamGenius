@@ -63,6 +63,15 @@ describe('Weekly planner UI', () => {
     expect(screen.getByText('No important events here yet.')).toBeTruthy();
   });
 
+  it('distinguishes an upcoming load failure from a successful empty response', () => {
+    const retry = jest.fn();
+    render(<UpcomingEvents events={[]} error="We could not load upcoming events right now." onRetry={retry} onEventPress={jest.fn()} onAdd={jest.fn()} />);
+    expect(screen.getByText('We could not load upcoming events right now.')).toBeTruthy();
+    expect(screen.queryByText('No important events here yet.')).toBeNull();
+    fireEvent.press(screen.getByLabelText('Retry upcoming events'));
+    expect(retry).toHaveBeenCalled();
+  });
+
   it('an ungenerated week invites you to build one', () => {
     const generate = jest.fn();
     render(<WeekEmpty onGenerate={generate} />);

@@ -219,7 +219,10 @@ async def upcoming_events(
     """
     today = clock.local_today(timezone_name)
     start, _ = clock.day_bounds(today, timezone_name)
-    _, end = clock.day_bounds(today + timedelta(days=days + 1), timezone_name)
+    # ``day_bounds`` returns the start of the following local day as its
+    # second value, so the start of local day N is the exclusive upper bound
+    # for an N-day horizon beginning today.
+    end, _ = clock.day_bounds(today + timedelta(days=days), timezone_name)
     result = await session.execute(
         select(CalendarEvent)
         .where(
