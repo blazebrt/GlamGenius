@@ -13,7 +13,7 @@ from app.domains.planning.event_ready import (
     _sha,
     _status,
 )
-from app.domains.planning.models import EventReadyPlan
+from app.domains.planning.models import EventReadyAction, EventReadyPlan
 from app.domains.planning.schemas import EventReadyActionComplete, EventReadyLookPatch
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select
@@ -114,7 +114,9 @@ async def test_event_ready_get_before_generation_is_non_mutating_and_generated_g
     factory = get_sessionmaker()
     async with factory() as session:
         before = await session.scalar(select(func.count()).select_from(EventReadyPlan).where(EventReadyPlan.account_id == account_id))
+        before_actions = await session.scalar(select(func.count()).select_from(EventReadyAction).join(EventReadyPlan).where(EventReadyPlan.account_id == account_id))
     assert before == 0
+    assert before_actions == 0
 
     first = await app_client.get(f"/api/v2/planner/events/{event_id}/ready", headers=auth(token))
     assert first.status_code == 200, first.text
@@ -128,8 +130,57 @@ async def test_event_ready_get_before_generation_is_non_mutating_and_generated_g
 
     generated = await app_client.post(f"/api/v2/planner/events/{event_id}/ready/generate", headers=auth(token))
     assert generated.status_code == 200, generated.text
+    assert generated.json()["status"] == "preparing"
+    assert [row["action_key"] for row in generated.json()["timeline"]] == ["style:choose_event_look"]
     assert generated.json()["care"] is not None
     care = generated.json()["care"]
+    action_id = generated.json()["timeline"][0]["id"]
+    async with factory() as session:
+        plan = (await session.execute(select(EventReadyPlan).where(EventReadyPlan.account_id == account_id, EventReadyPlan.calendar_event_id == event_id))).scalar_one()
+        action = (await session.execute(select(EventReadyAction).where(EventReadyAction.event_ready_plan_id == plan.id))).scalar_one()
+        plan_id, action_material = plan.id, action.material_fingerprint
+        assert str(action.id) == action_id
+
+    second = await app_client.post(f"/api/v2/planner/events/{event_id}/ready/generate", headers=auth(token))
+    assert second.status_code == 200, second.text
+    assert second.json()["timeline"][0]["id"] == action_id
+    async with factory() as session:
+        same_plan = (await session.execute(select(EventReadyPlan).where(EventReadyPlan.account_id == account_id, EventReadyPlan.calendar_event_id == event_id))).scalar_one()
+        same_action = (await session.execute(select(EventReadyAction).where(EventReadyAction.event_ready_plan_id == same_plan.id))).scalar_one()
+        assert same_plan.id == plan_id
+        assert same_action.material_fingerprint == action_material
+        assert await session.scalar(select(func.count()).select_from(EventReadyAction).where(EventReadyAction.event_ready_plan_id == same_plan.id)) == 1
+
+    completed = await app_client.post(
+        f"/api/v2/planner/events/{event_id}/ready/actions/{action_id}/complete",
+        headers=auth(token), json={"completed": True},
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["care"]["decision_fingerprint"] == care["decision_fingerprint"]
+    assert completed.json()["care"]["routine_plan_fingerprint"] == care["routine_plan_fingerprint"]
+    assert completed.json()["timeline"][0]["completed"] is True
+    repeated = await app_client.post(
+        f"/api/v2/planner/events/{event_id}/ready/actions/{action_id}/complete",
+        headers=auth(token), json={"completed": True},
+    )
+    assert repeated.status_code == 200
+    undone = await app_client.post(
+        f"/api/v2/planner/events/{event_id}/ready/actions/{action_id}/complete",
+        headers=auth(token), json={"completed": False},
+    )
+    assert undone.status_code == 200
+    assert undone.json()["care"] is not None
+    assert undone.json()["timeline"][0]["completed"] is False
+
+    async with factory() as session:
+        plan = (await session.execute(select(EventReadyPlan).where(EventReadyPlan.id == plan_id))).scalar_one()
+        action = (await session.execute(select(EventReadyAction).where(EventReadyAction.event_ready_plan_id == plan.id))).scalar_one()
+        await session.delete(action)
+        await session.commit()
+    repaired = await app_client.post(f"/api/v2/planner/events/{event_id}/ready/generate", headers=auth(token))
+    assert repaired.status_code == 200, repaired.text
+    assert [row["action_key"] for row in repaired.json()["timeline"]] == ["style:choose_event_look"]
+
     read = await app_client.get(f"/api/v2/planner/events/{event_id}/ready", headers=auth(token))
     assert read.status_code == 200, read.text
     assert read.json()["status"] == "preparing"

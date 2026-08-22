@@ -242,18 +242,19 @@ async def generate(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.
             plan.selected_look_id = None
     selected_material = {"look_id": str(look.id) if look else None, "look_version": look.version if look else None, "items": sorted(str(item.inventory_item_id) for item in (look_items or []) if item.inventory_item_id)}
     fingerprint = _sha({"event_ready_version": EVENT_READY_VERSION, "event": _event_payload(event, timezone_name), "context": _context_payload(day), "care": _care_payload(material), "style": selected_material})
-    if plan.input_fingerprint == fingerprint:
-        return await _serialize(session, event, plan, timezone_name, day=day, material=material)
-    else:
-        plan.status, plan.input_fingerprint, plan.generated_at = status, fingerprint, utcnow()
     actions = _actions(event, day, material, look, look_items or [], status)
     old = {row.action_key: row for row in (await session.execute(select(EventReadyAction).where(EventReadyAction.event_ready_plan_id == plan.id))).scalars().all()}
-    desired = {row["action_key"] for row in actions}
+    desired = {row["action_key"]: _action_material(row["action_key"], row["material"]) for row in actions}
+    actions_current = set(old) == set(desired) and all(old[key].material_fingerprint == value for key, value in desired.items())
+    if plan.input_fingerprint != fingerprint:
+        plan.status, plan.input_fingerprint, plan.generated_at = status, fingerprint, utcnow()
+    if plan.input_fingerprint == fingerprint and actions_current:
+        return await _serialize(session, event, plan, timezone_name, day=day, material=material)
     for key, row in old.items():
         if key not in desired:
             await session.delete(row)
     for row in actions:
-        fp = _action_material(row["action_key"], row["material"])
+        fp = desired[row["action_key"]]
         existing = old.get(row["action_key"])
         if existing is None:
             await session.execute(pg_insert(EventReadyAction).values(
@@ -312,4 +313,6 @@ async def complete_action(session: AsyncSession, account_id: uuid.UUID, event_id
     action.completed_at = utcnow() if completed else None
     await session.flush()
     timezone_name = await context_stage.resolve_timezone_for(session, account_id)
-    return await _serialize(session, event, plan, timezone_name)
+    day = await _event_day_context(session, event, timezone_name)
+    material = await compiler.build_day_care_material(session, day)
+    return await _serialize(session, event, plan, timezone_name, day=day, material=material)
