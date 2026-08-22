@@ -58,7 +58,7 @@ describe('Fragrance Purchase routing', () => {
 
   it('renders customer-facing context, owned alternatives and missing information without Style purchase UI', () => {
     const richCheck = { ...check, collection_context: { ...check.collection_context, owned_options_to_use_first: [{ owned_item_id: 'owned-1', display_name: 'Office Floral', brand: 'House', remaining_percent: 60 }], same_family_owned: [{ owned_item_id: 'owned-2', display_name: 'Woody Reserve' }], coverage: { covered: ['business_meeting'], unknown: [], uncovered: [] } }, verdict: { ...check.verdict, missing_information: ['draft_owned_context'] } } as any;
-    render(<FragranceShoppingResult check={richCheck} onReset={jest.fn()} onDecide={jest.fn()} />); expect(screen.getByText('Business meeting')).toBeTruthy(); expect(screen.getByLabelText('Owned fragrance alternatives')).toBeTruthy(); expect(screen.getByLabelText('Same family supporting information')).toBeTruthy(); expect(screen.getByText('Some perfume entries still need confirmation before they can count as owned.')).toBeTruthy(); expect(screen.queryByText(/ROI|ingredients|routine|score/i)).toBeNull();
+    render(<FragranceShoppingResult check={richCheck} onReset={jest.fn()} onDecide={jest.fn()} />); expect(screen.getByLabelText('Fragrance intended use')).toBeTruthy(); expect(screen.getByLabelText('Owned fragrance alternatives')).toBeTruthy(); expect(screen.getByLabelText('Same family supporting information')).toBeTruthy(); expect(screen.getByText('Some perfume entries still need confirmation before they can count as owned.')).toBeTruthy(); expect(screen.queryByText(/ROI|ingredients|routine|score/i)).toBeNull();
   });
 
   it('saves a Fragrance decision once and retries a failed save without invoking Style evaluation', async () => {
