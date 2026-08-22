@@ -2,7 +2,7 @@ import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react-native';
 
 import {
-  DayCard, LAUNDRY_LABELS, LaundryPanel, RepetitionPanel, SwapBar, WeekEmpty, repeatedOn,
+  DayCard, LAUNDRY_LABELS, LaundryPanel, RepetitionPanel, SwapBar, UpcomingEvents, UpcomingEventCard, WeekEmpty, repeatedOn,
 } from '../components/planner/PlannerPieces';
 import { LookPiece, PlannerDay, WeeklyPlan } from '../services/apiV2';
 
@@ -39,6 +39,39 @@ const week = (overrides: Partial<WeeklyPlan> = {}): WeeklyPlan => ({
 });
 
 describe('Weekly planner UI', () => {
+  const event = {
+    id: 'event-1', title: 'Wedding', starts_at: '2026-09-01T18:30:00Z', local_time: '00:00', local_date: '2026-09-02',
+    ends_at: null, all_day: false, location: 'Hall', occasion_key: 'wedding' as const, dress_code_hint: null,
+    inference_confidence: 1, user_confirmed: true, provider: 'manual', source: 'user_declared', status: 'active',
+  };
+
+  it('shows upcoming event cards and opens the exact event', () => {
+    const open = jest.fn(); const add = jest.fn();
+    render(<UpcomingEvents events={[event]} onEventPress={open} onAdd={add} />);
+    expect(screen.getAllByText('Wedding').length).toBeGreaterThan(0);
+    expect(screen.getByText('2026-09-02 · 00:00')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Open event Wedding'));
+    fireEvent.press(screen.getByLabelText('Add an event'));
+    expect(open).toHaveBeenCalledWith(event);
+    expect(add).toHaveBeenCalled();
+  });
+
+  it('shows unconfirmed and empty upcoming states without hiding the weekly planner', () => {
+    render(<UpcomingEventCard event={{ ...event, user_confirmed: false, occasion_key: null }} onPress={jest.fn()} />);
+    expect(screen.getByText('Event type needs confirmation')).toBeTruthy();
+    render(<UpcomingEvents events={[]} onEventPress={jest.fn()} onAdd={jest.fn()} />);
+    expect(screen.getByText('No important events here yet.')).toBeTruthy();
+  });
+
+  it('distinguishes an upcoming load failure from a successful empty response', () => {
+    const retry = jest.fn();
+    render(<UpcomingEvents events={[]} error="We could not load upcoming events right now." onRetry={retry} onEventPress={jest.fn()} onAdd={jest.fn()} />);
+    expect(screen.getByText('We could not load upcoming events right now.')).toBeTruthy();
+    expect(screen.queryByText('No important events here yet.')).toBeNull();
+    fireEvent.press(screen.getByLabelText('Retry upcoming events'));
+    expect(retry).toHaveBeenCalled();
+  });
+
   it('an ungenerated week invites you to build one', () => {
     const generate = jest.fn();
     render(<WeekEmpty onGenerate={generate} />);

@@ -92,6 +92,8 @@ function RootLayout() {
             <Stack.Screen name="inventory-add" />
             <Stack.Screen name="inventory-item" />
             <Stack.Screen name="inventory-insights" />
+            <Stack.Screen name="event-add" />
+            <Stack.Screen name="event-ready" />
           </Stack>
         </ErrorBoundary>
       </SafeAreaProvider>

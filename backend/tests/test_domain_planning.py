@@ -25,6 +25,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
+from app.domains.planning import clock as planning_clock
 from app.domains.planning import weather as weather_module
 from app.domains.planning.context import gather
 from app.domains.planning.models import (
@@ -32,6 +33,7 @@ from app.domains.planning.models import (
     CalendarEvent,
     DailyPlan,
     DailyPlanAction,
+    EventReadyPlan,
     WeatherSnapshot,
     WeeklyPlan,
     WeeklyPlanDay,
@@ -769,6 +771,91 @@ async def test_event_with_an_unknown_occasion_is_rejected(
         },
     )
     assert resp.status_code == 422
+
+
+async def test_upcoming_events_are_ordered_scoped_and_read_only(
+    app_client, db_clean, registered_supabase_user, fake_provider
+):
+    owner_token, owner_id = await registered_supabase_user()
+    other_token, _ = await registered_supabase_user()
+
+    async def add(token, title, starts_at):
+        response = await app_client.post(
+            "/api/v2/today/events", headers=auth(token),
+            json={"title": title, "starts_at": starts_at, "occasion_key": "office"},
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["event"]
+
+    timezone_name = "Asia/Kolkata"
+    today = planning_clock.local_today(timezone_name)
+    today_start, _ = planning_clock.day_bounds(today, timezone_name)
+    tomorrow_start, _ = planning_clock.day_bounds(today + timedelta(days=1), timezone_name)
+    day_after_start, _ = planning_clock.day_bounds(today + timedelta(days=2), timezone_name)
+    yesterday_start, _ = planning_clock.day_bounds(today - timedelta(days=1), timezone_name)
+
+    today_event = await add(owner_token, "Today meeting", (today_start + timedelta(hours=10)).isoformat())
+    earlier = await add(owner_token, "Earlier meeting", tomorrow_start.isoformat())
+    later = await add(owner_token, "Later meeting", (day_after_start + timedelta(hours=10)).isoformat())
+    past = await add(owner_token, "Old meeting", yesterday_start.isoformat())
+    dismissed = await add(owner_token, "Dismissed meeting", (day_after_start + timedelta(hours=11)).isoformat())
+    revoked = await add(owner_token, "Revoked meeting", (day_after_start + timedelta(hours=12)).isoformat())
+    await add(other_token, "Other account meeting", (tomorrow_start + timedelta(hours=10)).isoformat())
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        rows = (await session.execute(
+            select(CalendarEvent).where(CalendarEvent.account_id == owner_id)
+        )).scalars().all()
+        by_id = {str(row.id): row for row in rows}
+        by_id[dismissed["id"]].status = "dismissed"
+        by_id[revoked["id"]].status = "revoked"
+        await session.commit()
+        before = {
+            "events": await session.scalar(select(func.count()).select_from(CalendarEvent).where(CalendarEvent.account_id == owner_id)),
+            "plans": await session.scalar(select(func.count()).select_from(DailyPlan).where(DailyPlan.account_id == owner_id)),
+            "event_ready": await session.scalar(select(func.count()).select_from(EventReadyPlan).where(EventReadyPlan.account_id == owner_id)),
+        }
+
+    response = await app_client.get(
+        "/api/v2/planner/events/upcoming?days=90&limit=20", headers=auth(owner_token),
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["timezone"] == "Asia/Kolkata"
+    assert [event["id"] for event in body["events"]] == [today_event["id"], earlier["id"], later["id"]]
+    assert body["events"][1]["local_date"] == (today + timedelta(days=1)).isoformat()
+    assert body["events"][1]["local_time"] == "00:00"
+    assert all(event["status"] == "active" for event in body["events"])
+    assert past["id"] not in {event["id"] for event in body["events"]}
+    assert dismissed["id"] not in {event["id"] for event in body["events"]}
+    assert revoked["id"] not in {event["id"] for event in body["events"]}
+
+    one_day = await app_client.get(
+        "/api/v2/planner/events/upcoming?days=1", headers=auth(owner_token),
+    )
+    assert one_day.status_code == 200, one_day.text
+    assert [event["id"] for event in one_day.json()["events"]] == [today_event["id"]]
+
+    two_days = await app_client.get(
+        "/api/v2/planner/events/upcoming?days=2", headers=auth(owner_token),
+    )
+    assert two_days.status_code == 200, two_days.text
+    assert [event["id"] for event in two_days.json()["events"]] == [today_event["id"], earlier["id"]]
+
+    other_response = await app_client.get(
+        "/api/v2/planner/events/upcoming", headers=auth(other_token),
+    )
+    assert other_response.status_code == 200, other_response.text
+    assert [event["title"] for event in other_response.json()["events"]] == ["Other account meeting"]
+
+    async with factory() as session:
+        after = {
+            "events": await session.scalar(select(func.count()).select_from(CalendarEvent).where(CalendarEvent.account_id == owner_id)),
+            "plans": await session.scalar(select(func.count()).select_from(DailyPlan).where(DailyPlan.account_id == owner_id)),
+            "event_ready": await session.scalar(select(func.count()).select_from(EventReadyPlan).where(EventReadyPlan.account_id == owner_id)),
+        }
+    assert after == before
 
 
 # ---------------------------------------------------------------------------

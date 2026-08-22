@@ -13,7 +13,7 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { LaundryState, PlannerDay, WeeklyPlan } from '../../services/apiV2';
+import { CalendarEvent, LaundryState, PlannerDay, WeeklyPlan } from '../../services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 import { WEATHER_ICONS } from '../today/TodayPieces';
 
@@ -52,6 +52,65 @@ export function WeekEmpty({ onGenerate, busy }: { onGenerate: () => void; busy?:
       >
         <Text style={styles.primaryText}>{busy ? 'Building your week…' : 'Generate this week'}</Text>
       </TouchableOpacity>
+    </View>
+  );
+}
+
+export const occasionLabel = (key: string | null): string | null => {
+  if (!key) return null;
+  return key.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
+
+export function UpcomingEventCard({ event, onPress }: { event: CalendarEvent; onPress: () => void }) {
+  const occasion = event.user_confirmed ? occasionLabel(event.occasion_key) : null;
+  return (
+    <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityLabel={`Open event ${event.title}`}
+      onPress={onPress}
+      style={styles.eventCard}
+    >
+      <View style={styles.eventCardMain}>
+        <Text style={styles.eventTitle}>{event.title}</Text>
+        <Text style={styles.eventWhen}>
+          {event.all_day ? event.local_date : `${event.local_date} · ${event.local_time}`}
+        </Text>
+        {!!event.location && <Text style={styles.eventMeta}>{event.location}</Text>}
+        {!!occasion && <Text style={styles.eventMeta}>{occasion}</Text>}
+        {!event.user_confirmed && <Text style={styles.eventNeedsConfirmation}>Event type needs confirmation</Text>}
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+    </TouchableOpacity>
+  );
+}
+
+export function UpcomingEvents({ events, onEventPress, onAdd, loading = false, error, onRetry }: {
+  events: CalendarEvent[]; onEventPress: (event: CalendarEvent) => void; onAdd: () => void;
+  loading?: boolean; error?: string | null; onRetry?: () => void;
+}) {
+  return (
+    <View accessibilityLabel="Upcoming events" style={styles.upcoming}>
+      <View style={styles.upcomingHeader}>
+        <Text style={styles.sectionTitle}>Upcoming events</Text>
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Add an event" onPress={onAdd}>
+          <Text style={styles.addEventLink}>Add an event</Text>
+        </TouchableOpacity>
+      </View>
+      {loading ? (
+        <View style={styles.eventEmpty}><Text style={styles.bodyMuted}>Loading upcoming events…</Text></View>
+      ) : error ? (
+        <View style={styles.eventEmpty} accessibilityLabel="Upcoming events unavailable">
+          <Text style={styles.bodyMuted}>{error}</Text>
+          {!!onRetry && <TouchableOpacity accessibilityRole="button" accessibilityLabel="Retry upcoming events" onPress={onRetry}><Text style={styles.addEventLink}>Retry</Text></TouchableOpacity>}
+        </View>
+      ) : events.length ? events.slice(0, 5).map((event) => (
+        <UpcomingEventCard key={event.id} event={event} onPress={() => onEventPress(event)} />
+      )) : (
+        <View style={styles.eventEmpty}>
+          <Text style={styles.bodyMuted}>No important events here yet.</Text>
+          <Text style={styles.eventEmptyCopy}>Add one when you want GlamGenius to help you prepare around it.</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -243,4 +302,16 @@ const styles = StyleSheet.create({
   primary: { alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, borderRadius: RADIUS.full, paddingHorizontal: 22, paddingVertical: 13, marginTop: SPACING.md },
   primaryText: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.white },
   disabled: { opacity: 0.6 },
+  upcoming: { marginBottom: SPACING.xl },
+  upcomingHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: SPACING.sm },
+  sectionTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 20, color: COLORS.textPrimary },
+  addEventLink: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.primary },
+  eventCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: COLORS.card, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, padding: SPACING.md, marginBottom: 8 },
+  eventCardMain: { flex: 1, paddingRight: 8 },
+  eventTitle: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.textPrimary },
+  eventWhen: { fontFamily: FONTS.family.bodyMedium, fontSize: 12, color: COLORS.textSecondary, marginTop: 4 },
+  eventMeta: { fontFamily: FONTS.family.body, fontSize: 11, color: COLORS.textMuted, marginTop: 3 },
+  eventNeedsConfirmation: { fontFamily: FONTS.family.bodyMedium, fontSize: 11, color: COLORS.warning, marginTop: 5 },
+  eventEmpty: { backgroundColor: COLORS.card, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, padding: SPACING.md },
+  eventEmptyCopy: { fontFamily: FONTS.family.body, fontSize: 12, lineHeight: 18, color: COLORS.textMuted, marginTop: 5 },
 });

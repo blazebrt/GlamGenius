@@ -162,13 +162,14 @@ export function OptionalPieceRow({ piece }: { piece: LookPiece }) {
 
 // --- Lookboard --------------------------------------------------------------
 
-export function Lookboard({ look, onSwap, onRevise, onReject, onSave, onShare }: {
+export function Lookboard({ look, onSwap, onRevise, onReject, onSave, onShare, onUseForEvent }: {
   look: Look;
   onSwap?: (piece: LookPiece) => void;
   onRevise?: () => void;
   onReject?: () => void;
   onSave?: () => void;
   onShare?: () => void;
+  onUseForEvent?: () => void;
 }) {
   return (
     <View style={styles.board} accessibilityLabel={`${look.title} lookboard`}>
@@ -210,6 +211,7 @@ export function Lookboard({ look, onSwap, onRevise, onReject, onSave, onShare }:
       <ConfidenceRow look={look} />
 
       <View style={styles.actionRow}>
+        {onUseForEvent && <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Use ${look.title} for this event`} onPress={onUseForEvent} style={styles.primary}><Text style={styles.primaryText}>Use for this event</Text></TouchableOpacity>}
         {onSave && <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Save ${look.title}`} onPress={onSave} style={styles.primary}><Text style={styles.primaryText}>Save</Text></TouchableOpacity>}
         {onRevise && <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Revise ${look.title}`} onPress={onRevise} style={styles.outline}><Text style={styles.outlineText}>Revise</Text></TouchableOpacity>}
         {onShare && <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Share ${look.title}`} onPress={onShare} style={styles.outline}><Text style={styles.outlineText}>Share</Text></TouchableOpacity>}

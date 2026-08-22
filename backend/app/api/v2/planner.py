@@ -17,6 +17,24 @@ from app.shared.security.deps import CurrentAccount, get_current_account, requir
 router = APIRouter(dependencies=[Depends(require_flag("v2_planner"))])
 
 
+@router.get("/planner/events/upcoming")
+async def get_upcoming_events(
+    days: int = Query(default=90, ge=1, le=365),
+    limit: int = Query(default=20, ge=1, le=50),
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """List active CalendarEvents without generating any planning state."""
+    timezone_name = await context_stage.resolve_timezone_for(session, current.account_id)
+    events = await service.upcoming_events(
+        session, current.account_id, timezone_name, days=days, limit=limit,
+    )
+    return {
+        "timezone": timezone_name,
+        "events": [service.serialize_event(event, timezone_name) for event in events],
+    }
+
+
 @router.post("/planner/events/{event_id}/ready/generate")
 async def generate_event_ready(
     event_id: uuid.UUID,
