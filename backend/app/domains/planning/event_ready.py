@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.care.decisions import CareDecisionReasonCode
 from app.domains.planning import clock, compiler
 from app.domains.planning import context as context_stage
 from app.domains.planning.models import CalendarEvent, EventReadyAction, EventReadyPlan
@@ -60,10 +61,10 @@ def _context_payload(day: Any) -> dict[str, Any]:
 def _status(event: CalendarEvent, day: Any) -> str:
     local_date = clock.local_now(day.timezone_name, moment=event.starts_at).date()
     today = day.now_local.date()
-    if not event.user_confirmed or not event.occasion_key:
-        return "needs_confirmation"
     if local_date < today:
         return "past"
+    if not event.user_confirmed or not event.occasion_key:
+        return "needs_confirmation"
     return "event_day" if local_date == today else "preparing"
 
 
@@ -98,7 +99,13 @@ def _care_payload(material: Any) -> dict[str, Any]:
     }
 
 
-async def _selected_look(session: AsyncSession, account_id: uuid.UUID, look_id: uuid.UUID | None, event: CalendarEvent, timezone_name: str) -> tuple[Look | None, list[LookItem]]:
+async def _selected_look(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    look_id: uuid.UUID | None,
+    event: CalendarEvent,
+    timezone_name: str,
+) -> tuple[Look | None, list[LookItem]]:
     if look_id is None:
         return None, []
     filters = [
@@ -108,17 +115,22 @@ async def _selected_look(session: AsyncSession, account_id: uuid.UUID, look_id: 
         OccasionRecord.event_date == clock.local_now(timezone_name, moment=event.starts_at).date(),
     ]
     row = (await session.execute(
-        select(Look).join(RecommendationRun, RecommendationRun.id == Look.run_id)
+        select(Look, OccasionRecord).join(RecommendationRun, RecommendationRun.id == Look.run_id)
         .join(StyleRequest, StyleRequest.id == RecommendationRun.style_request_id)
         .join(OccasionRecord, OccasionRecord.id == StyleRequest.occasion_id)
         .where(*filters)
-    )).scalar_one_or_none()
-    if row is not None and event.dress_code_hint and event.dress_code_hint not in get_occasion(event.occasion_key or "everyday").dress_codes:
-        return None, []
+    )).one_or_none()
     if row is None:
         return None, []
-    items = (await session.execute(select(LookItem).where(LookItem.look_id == row.id).order_by(LookItem.position))).scalars().all()
-    return row, list(items)
+    look, occasion_record = row
+    if event.dress_code_hint:
+        resolved_style_code = occasion_record.dress_code or get_occasion(occasion_record.occasion_key).dress_codes[0]
+        if resolved_style_code != event.dress_code_hint:
+            return None, []
+    if look is None:
+        return None, []
+    items = (await session.execute(select(LookItem).where(LookItem.look_id == look.id).order_by(LookItem.position))).scalars().all()
+    return look, list(items)
 
 
 def _action_material(key: str, payload: dict[str, Any]) -> str:
@@ -136,10 +148,12 @@ def _actions(event: CalendarEvent, day: Any, material: Any, look: Look | None, l
         actions.append({"action_key": key, "domain": "style", "timing": "before_event", "title": "Choose your event look", "body": "Choose an existing Style look for this event when you are ready.", "relevance": "No event look has been selected.", "priority": 20, "inventory_item_id": None, "material": {"occasion_key": event.occasion_key}})
     if look is not None and status != "past":
         blocked = set(day.unavailable_item_ids)
-        for item in look_items:
-            if item.inventory_item_id in blocked:
-                key = f"preparation:item_unavailable:{item.inventory_item_id}"
-                actions.append({"action_key": key, "domain": "preparation", "timing": "before_event", "title": "One part of your planned look is unavailable", "body": f"{item.display_name} is marked unavailable for that day.", "relevance": "Use Style's swap option if you want to change it.", "priority": 30, "inventory_item_id": item.inventory_item_id, "material": {"item_id": str(item.inventory_item_id)}})
+        unavailable = [item for item in look_items if item.inventory_item_id in blocked]
+        if unavailable:
+            key = "preparation:item_unavailable"
+            item_ids = sorted(str(item.inventory_item_id) for item in unavailable if item.inventory_item_id)
+            names = ", ".join(item.display_name for item in unavailable)
+            actions.append({"action_key": key, "domain": "preparation", "timing": "before_event", "title": "One part of your planned look is unavailable", "body": f"{names} is marked unavailable for that day.", "relevance": "Use Style's swap option if you want to change it.", "priority": 30, "inventory_item_id": None, "material": {"item_ids": item_ids}})
     if status != "past":
         cadence = material.hair_wash_cadence
         if cadence.status.value == "due":
@@ -148,21 +162,29 @@ def _actions(event: CalendarEvent, day: Any, material: Any, look: Look | None, l
         elif cadence.status.value in ("needs_anchor", "unscheduled"):
             # Uncertainty is surfaced, never converted into a guessed schedule.
             day.missing_information = list(dict.fromkeys([*day.missing_information, "hair_wash_cadence"]))
-        if material.decisions.blocked_product_ids:
+        hard_safety = [
+            decision for decision in material.decisions.product_decisions
+            if any(reason.code in (CareDecisionReasonCode.PRODUCT_EXPIRED, CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH) for reason in decision.blocking_reasons)
+        ]
+        if hard_safety:
             key = "care:attention"
-            actions.append({"action_key": key, "domain": "care", "timing": "before_event", "title": "Review one Care item", "body": "One existing Care safety rule needs your attention before the event.", "relevance": "A canonical Care safety decision is blocking an item.", "priority": 35, "inventory_item_id": None, "material": {"blocked": sorted(str(v) for v in material.decisions.blocked_product_ids)}})
-    return actions[:6]
+            reasons = sorted({reason.code.value for decision in hard_safety for reason in decision.blocking_reasons if reason.code in (CareDecisionReasonCode.PRODUCT_EXPIRED, CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH)})
+            actions.append({"action_key": key, "domain": "care", "timing": "before_event", "title": "Review one Care item", "body": "One existing Care safety rule needs your attention before the event.", "relevance": "A canonical Care safety decision is blocking an item.", "priority": 35, "inventory_item_id": None, "material": {"item_ids": sorted(str(decision.item_id) for decision in hard_safety), "reason_codes": reasons}})
+    return actions
 
 
-async def _plan_row(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.UUID) -> EventReadyPlan | None:
-    return (await session.execute(select(EventReadyPlan).where(EventReadyPlan.account_id == account_id, EventReadyPlan.calendar_event_id == event_id))).scalar_one_or_none()
+async def _plan_row(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.UUID, *, lock: bool = False) -> EventReadyPlan | None:
+    statement = select(EventReadyPlan).where(EventReadyPlan.account_id == account_id, EventReadyPlan.calendar_event_id == event_id)
+    if lock:
+        statement = statement.with_for_update()
+    return (await session.execute(statement)).scalar_one_or_none()
 
 
 async def _serialize(session: AsyncSession, event: CalendarEvent, plan: EventReadyPlan | None, timezone_name: str, *, day: Any | None = None, material: Any | None = None) -> dict[str, Any]:
     event_payload = _event_payload(event, timezone_name)
     if day is None:
         day = await _event_day_context(session, event, timezone_name)
-    status = _status(event, day) if event.status == "active" else "past"
+    status = "not_generated" if plan is None else (_status(event, day) if event.status == "active" else "past")
     local_date = date.fromisoformat(event_payload["local_date"])
     days_until = (local_date - day.now_local.date()).days
     actions = []
@@ -180,7 +202,8 @@ async def _serialize(session: AsyncSession, event: CalendarEvent, plan: EventRea
         missing.append("event_day_weather")
     if not event.user_confirmed or not event.occasion_key:
         missing.append("event_confirmation")
-    payload = {"event_ready_version": EVENT_READY_VERSION, "event": event_payload, "status": status, "countdown": {"days_until": days_until, "event_local_date": event_payload["local_date"]}, "context": {"weather": _context_payload(day)["weather"], "air_quality": _context_payload(day)["air_quality"]}, "style": {"authority": "style", "status": "blocked_by_event_confirmation" if status == "needs_confirmation" else ("look_selected" if selected else "needs_look"), "selected_look": selected}, "care": care, "timeline": actions, "readiness": {"completed_actions": sum(a["completed"] for a in actions), "total_actions": len(actions), "all_done": bool(actions) and all(a["completed"] for a in actions)}, "missing_information": sorted(set(missing))}
+    style_status = "blocked_by_event_confirmation" if (status == "needs_confirmation" or (status == "not_generated" and (not event.user_confirmed or not event.occasion_key))) else ("look_selected" if selected else "needs_look")
+    payload = {"event_ready_version": EVENT_READY_VERSION, "event": event_payload, "status": status, "countdown": {"days_until": days_until, "event_local_date": event_payload["local_date"]}, "context": {"weather": _context_payload(day)["weather"], "air_quality": _context_payload(day)["air_quality"]}, "style": {"authority": "style", "status": style_status, "selected_look": selected}, "care": care, "timeline": actions, "readiness": {"completed_actions": sum(a["completed"] for a in actions), "total_actions": len(actions), "all_done": bool(actions) and all(a["completed"] for a in actions)}, "missing_information": sorted(set(missing))}
     payload["event_ready_fingerprint"] = plan.input_fingerprint if plan else _sha({"event_ready_version": EVENT_READY_VERSION, "event": event_payload, "context": _context_payload(day)})
     return payload
 
@@ -195,15 +218,8 @@ async def generate(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.
     day = await _event_day_context(session, event, timezone_name)
     material = await compiler.build_day_care_material(session, day)
     plan = await _plan_row(session, account_id, event_id)
-    look = look_items = None
-    if plan is not None:
-        look, look_items = await _selected_look(session, account_id, plan.selected_look_id, event, timezone_name)
-        if plan.selected_look_id is not None and look is None:
-            # A date/occasion change can make an old Style look invalid; never
-            # expose it as if it were still compatible with this event.
-            plan.selected_look_id = None
     status = _status(event, day)
-    selected_material = {"look_id": str(look.id) if look else None, "look_version": look.version if look else None, "items": sorted(str(item.inventory_item_id) for item in (look_items or []) if item.inventory_item_id)}
+    selected_material = {"look_id": None, "look_version": None, "items": []}
     fingerprint = _sha({"event_ready_version": EVENT_READY_VERSION, "event": _event_payload(event, timezone_name), "context": _context_payload(day), "care": _care_payload(material), "style": selected_material})
     if plan is None:
         await session.execute(pg_insert(EventReadyPlan).values(
@@ -212,10 +228,21 @@ async def generate(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.
             input_fingerprint=fingerprint, generated_at=utcnow(),
         ).on_conflict_do_nothing(index_elements=["account_id", "calendar_event_id"]))
         await session.flush()
-        plan = await _plan_row(session, account_id, event_id)
-        if plan is None:
-            raise ValidationFailedError("Event Ready could not be generated right now.", field="event_id")
-    elif plan.input_fingerprint == fingerprint:
+        plan = await _plan_row(session, account_id, event_id, lock=True)
+    else:
+        plan = await _plan_row(session, account_id, event_id, lock=True)
+    if plan is None:
+        raise ValidationFailedError("Event Ready could not be generated right now.", field="event_id")
+    look = look_items = None
+    if plan.selected_look_id is not None:
+        look, look_items = await _selected_look(session, account_id, plan.selected_look_id, event, timezone_name)
+        if look is None:
+            # A date/occasion change can make an old Style look invalid; never
+            # expose it as if it were still compatible with this event.
+            plan.selected_look_id = None
+    selected_material = {"look_id": str(look.id) if look else None, "look_version": look.version if look else None, "items": sorted(str(item.inventory_item_id) for item in (look_items or []) if item.inventory_item_id)}
+    fingerprint = _sha({"event_ready_version": EVENT_READY_VERSION, "event": _event_payload(event, timezone_name), "context": _context_payload(day), "care": _care_payload(material), "style": selected_material})
+    if plan.input_fingerprint == fingerprint:
         return await _serialize(session, event, plan, timezone_name, day=day, material=material)
     else:
         plan.status, plan.input_fingerprint, plan.generated_at = status, fingerprint, utcnow()
@@ -248,7 +275,9 @@ async def read(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.UUID
         raise NotFoundError("We could not find that event.")
     timezone_name = await context_stage.resolve_timezone_for(session, account_id)
     plan = await _plan_row(session, account_id, event_id)
-    return await _serialize(session, event, plan, timezone_name)
+    day = await _event_day_context(session, event, timezone_name)
+    material = await compiler.build_day_care_material(session, day) if plan is not None else None
+    return await _serialize(session, event, plan, timezone_name, day=day, material=material)
 
 
 async def set_look(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.UUID, look_id: uuid.UUID | None) -> dict[str, Any]:
@@ -260,6 +289,8 @@ async def set_look(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.
         await generate(session, account_id, event_id)
         plan = await _plan_row(session, account_id, event_id)
     if look_id is not None:
+        if not event.user_confirmed or not event.occasion_key:
+            raise ValidationFailedError("Confirm the event type before choosing a look for it.", field="look_id")
         look, _ = await _selected_look(session, account_id, look_id, event, await context_stage.resolve_timezone_for(session, account_id))
         if look is None:
             raise ValidationFailedError("Choose an active Style look for this event.", field="look_id")
