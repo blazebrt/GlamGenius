@@ -13,7 +13,7 @@ from app.domains.care import routine_plan as care_routine_plan
 from app.domains.care import service as care_service
 from app.domains.media import service as media_service
 from app.domains.planning import context as planning_context
-from app.domains.purchase import extraction
+from app.domains.purchase import extraction, fragrance_extraction
 from app.domains.purchase.candidate_truth import (
     build_care_candidate_truth,
     serialize_care_candidate_truth,
@@ -22,7 +22,12 @@ from app.domains.purchase.candidate_truth import (
 from app.domains.purchase.care_assessment import assess_care_purchase
 from app.domains.purchase.contract import (
     boundary_message,
+    is_active_fragrance_category,
     resolve_purchase_strategy,
+)
+from app.domains.purchase.fragrance_truth import (
+    serialize_fragrance_candidate_truth,
+    validate_fragrance_candidate_details,
 )
 from app.domains.purchase.schemas import (
     CarePurchaseCandidateConfirm,
@@ -48,6 +53,19 @@ def _require_care(category: str) -> None:
         raise ValidationFailedError(_non_care_boundary(category), field="item.category")
 
 
+def _require_fragrance(category: str) -> None:
+    if not is_active_fragrance_category(category):
+        raise ValidationFailedError(_non_care_boundary(category), field="item.category")
+
+
+def _validate_candidate_details(category: str, details: dict[str, Any] | None) -> dict[str, Any]:
+    if category in {"beauty", "hair"}:
+        return validate_care_candidate_details(category, details)
+    if category == "perfumes":
+        return validate_fragrance_candidate_details(details)
+    return dict(details or {})
+
+
 def _identity_error() -> ValidationFailedError:
     return ValidationFailedError(
         "This request key was already used for a different shopping candidate.",
@@ -56,9 +74,9 @@ def _identity_error() -> ValidationFailedError:
 
 
 def _manual_identity_matches(row: ShoppingCandidate, item: CarePurchaseItemInput) -> bool:
-    if item.category not in {"beauty", "hair"}:
+    if item.category not in {"beauty", "hair", "perfumes"}:
         return False
-    details = validate_care_candidate_details(item.category, item.details)
+    details = _validate_candidate_details(item.category, item.details)
     return (
         row.media_asset_id is None
         and row.source == "manual"
@@ -88,8 +106,10 @@ def _apply_candidate_corrections(
         row.brand = body.brand
     if "subcategory" in fields:
         row.subcategory = body.subcategory
-    if "details" in fields and body.details is not None:
-        row.details = validate_care_candidate_details(row.category, body.details)
+    if "details" in fields and (row.category == "perfumes" or body.details is not None):
+        # Fragrance review supports explicit null clearing so a stale
+        # extracted concentration/family cannot survive customer correction.
+        row.details = _validate_candidate_details(row.category, body.details or {})
     if "price" in fields:
         row.price = body.price
     if "currency" in fields and body.currency is not None:
@@ -123,20 +143,26 @@ async def inspect_purchase_candidate(
     account_id_str: str,
     body: PurchaseCandidateInspectRequest,
 ) -> ShoppingCandidate:
-    """Capture facts for a prospective Care product without evaluating it."""
+    """Capture facts for a prospective Care or Fragrance product without evaluating it."""
     existing = await _candidate_for_key(session, account_id, body.client_mutation_id)
     if existing is not None:
         if body.media_asset_id is not None:
             if _screenshot_identity_matches(existing, body.media_asset_id):
-                _require_care(existing.category)
+                if body.expected_category == "perfumes":
+                    _require_fragrance(existing.category)
+                else:
+                    _require_care(existing.category)
                 return existing
         elif body.item is not None and _manual_identity_matches(existing, body.item):
             return existing
         raise _identity_error()
 
     if body.item is not None:
-        _require_care(body.item.category)
-        details = validate_care_candidate_details(body.item.category, body.item.details)
+        if body.item.category == "perfumes":
+            _require_fragrance(body.item.category)
+        else:
+            _require_care(body.item.category)
+        details = _validate_candidate_details(body.item.category, body.item.details)
         row = ShoppingCandidate(
             account_id=account_id,
             source="manual",
@@ -162,12 +188,8 @@ async def inspect_purchase_candidate(
     await media_service.get_owned_asset(
         session, account_id=account_id, asset_id=body.media_asset_id
     )
-    result = await extraction.extract_purchase_candidate(
-        session,
-        account_id=account_id,
-        account_id_str=account_id_str,
-        media_asset_id=body.media_asset_id,
-    )
+    extractor = fragrance_extraction.extract_fragrance_candidate if body.expected_category == "perfumes" else extraction.extract_purchase_candidate
+    result = await extractor(session, account_id=account_id, account_id_str=account_id_str, media_asset_id=body.media_asset_id)
     # The production seam returns gateway.AIResult.  Accepting a direct schema
     # object also keeps deterministic test doubles honest without coupling the
     # purchase domain to inventory's tuple-shaped extractor.
@@ -182,8 +204,13 @@ async def inspect_purchase_candidate(
         model_version = result[2] if len(result) > 2 else None
         prompt_version = result[3] if len(result) > 3 else extraction.PROMPT_VERSION
         schema_version = result[4] if len(result) > 4 else extraction.SCHEMA_VERSION
-    _require_care(extracted.category)
-    details = validate_care_candidate_details(extracted.category, extracted.details)
+    if body.expected_category and extracted.category != body.expected_category:
+        raise ValidationFailedError("The image did not match the selected purchase category. Review it before continuing.", field="category")
+    if extracted.category == "perfumes":
+        _require_fragrance(extracted.category)
+    else:
+        _require_care(extracted.category)
+    details = _validate_candidate_details(extracted.category, extracted.details)
     row = ShoppingCandidate(
         account_id=account_id,
         source="photo_extracted",
@@ -320,6 +347,15 @@ async def care_purchase_verdict(
     )
 
 
+async def fragrance_purchase_check(
+    session: AsyncSession,
+    *, account_id: uuid.UUID, candidate_id: uuid.UUID,
+) -> dict[str, Any]:
+    from app.domains.purchase.check_service import resolve_fragrance_check
+
+    return await resolve_fragrance_check(session, account_id=account_id, candidate_id=candidate_id)
+
+
 async def confirm_care_purchase_candidate(
     session: AsyncSession,
     *,
@@ -328,7 +364,10 @@ async def confirm_care_purchase_candidate(
     body: CarePurchaseCandidateConfirm,
 ) -> ShoppingCandidate:
     row = await owned_purchase_candidate(session, account_id, candidate_id)
-    _require_care(row.category)
+    if row.category == "perfumes":
+        _require_fragrance(row.category)
+    else:
+        _require_care(row.category)
     _apply_candidate_corrections(row, body)
     if row.verification_state == "draft":
         row.verification_state = "confirmed"
@@ -341,6 +380,8 @@ async def confirm_care_purchase_candidate(
 def serialize_purchase_candidate(row: ShoppingCandidate) -> dict[str, Any]:
     if row.category in {"beauty", "hair"}:
         return serialize_care_candidate_truth(row)
+    if row.category == "perfumes":
+        return serialize_fragrance_candidate_truth(row)
     # The route is account-scoped but does not expose a purchase verdict.
     return {
         "candidate": {
@@ -362,6 +403,7 @@ def serialize_purchase_candidate(row: ShoppingCandidate) -> dict[str, Any]:
 # Names used by callers and review tooling.
 inspect_candidate = inspect_purchase_candidate
 owned_candidate = owned_purchase_candidate
+confirm_purchase_candidate = confirm_care_purchase_candidate
 
 
 __all__ = [
@@ -369,6 +411,7 @@ __all__ = [
     "care_purchase_assessment",
     "care_purchase_value",
     "care_purchase_verdict",
+    "fragrance_purchase_check",
     "confirm_care_purchase_candidate",
     "inspect_candidate",
     "inspect_purchase_candidate",

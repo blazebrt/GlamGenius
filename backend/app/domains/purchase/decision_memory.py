@@ -9,8 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.purchase.contract import (
     CARE_PURCHASE_VERDICT_VERSION,
+    FRAGRANCE_PURCHASE_VERDICT_VERSION,
     PURCHASE_DECISION_MEMORY_VERSION,
     is_active_care_category,
+    is_active_fragrance_category,
 )
 from app.domains.recommendation.models import PurchaseDecision, PurchaseEvaluation, ShoppingCandidate
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
@@ -143,9 +145,67 @@ async def save_care_decision(
     return row
 
 
+async def save_fragrance_decision(
+    session: AsyncSession,
+    *, account_id: uuid.UUID, candidate_id: uuid.UUID,
+    check: dict[str, Any], decision: str, note: str | None,
+) -> PurchaseDecision:
+    """Upsert the shared candidate-backed memory for a Fragrance check."""
+    candidate = (await session.execute(
+        select(ShoppingCandidate).where(
+            ShoppingCandidate.id == candidate_id,
+            ShoppingCandidate.account_id == account_id,
+        ).with_for_update()
+    )).scalar_one_or_none()
+    if candidate is None:
+        raise NotFoundError("We could not find that shopping item.")
+    if not is_active_fragrance_category(candidate.category):
+        raise ValidationFailedError("This candidate is not eligible for the active Fragrance purchase strategy.", field="category")
+    verdict = check["verdict"]
+    verdict_key = verdict["verdict"]
+    row = await current_purchase_decision(session, account_id=account_id, candidate_id=candidate_id, strategy_key="fragrance_purchase")
+    followed = {"buy": "bought", "wait": "waiting", "skip": "skipped"}.get(verdict_key) == decision
+    snapshot = {
+        "strategy": "fragrance_purchase",
+        "fragrance_purchase_verdict_version": FRAGRANCE_PURCHASE_VERDICT_VERSION,
+        "verdict": verdict_key,
+        "primary_reason_code": verdict.get("primary_reason_code"),
+        "supporting_reason_codes": verdict.get("supporting_reason_codes", []),
+        "decision_fingerprint": verdict.get("decision_fingerprint"),
+        "candidate_id": str(candidate.id),
+        "owned_perfume_count": check.get("collection_context", {}).get("owned_perfume_count"),
+        "exact_owned_count": len(check.get("collection_context", {}).get("exact_owned", [])),
+        "covered_contexts": check.get("collection_context", {}).get("coverage", {}).get("covered", []),
+        "unknown_contexts": check.get("collection_context", {}).get("coverage", {}).get("unknown", []),
+        "uncovered_contexts": check.get("collection_context", {}).get("coverage", {}).get("uncovered", []),
+    }
+    if row is None:
+        row = PurchaseDecision(
+            evaluation_id=None, account_id=account_id, candidate_id=candidate_id,
+            strategy_key="fragrance_purchase", recommendation_verdict=verdict_key,
+            recommendation_version=FRAGRANCE_PURCHASE_VERDICT_VERSION,
+            recommendation_fingerprint=verdict.get("decision_fingerprint"),
+            recommendation_snapshot=snapshot, decision=decision, note=note,
+            followed_recommendation=followed,
+        )
+        session.add(row)
+    else:
+        row.recommendation_verdict = verdict_key
+        row.recommendation_version = FRAGRANCE_PURCHASE_VERDICT_VERSION
+        row.recommendation_fingerprint = verdict.get("decision_fingerprint")
+        row.recommendation_snapshot = snapshot
+        row.decision = decision
+        row.note = note
+        row.followed_recommendation = followed
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
 __all__ = [
     "current_purchase_decision",
     "save_care_decision",
+    "save_fragrance_decision",
     "serialize_purchase_decision",
     "style_recommendation_snapshot",
 ]

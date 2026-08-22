@@ -11,12 +11,13 @@ import {
   ROIBreakdown, RiskNotes, ShoppingUpload, VerdictCard,
 } from '../src/components/shopping/ShoppingPieces';
 import { CareCandidateReview, CarePurchaseResult } from '../src/components/shopping/CareShoppingPieces';
+import { FragranceCandidateReview, FragranceShoppingResult } from '../src/components/shopping/FragranceShoppingPieces';
 import { AnalysisFailedState } from '../src/components/TrustStates';
 import {
-  CareCandidateConfirmInput, CareCandidateInspection, CarePurchaseCheck, CarePurchaseItemInput, InventoryCategory,
+  CareCandidateConfirmInput, CareCandidateInspection, CarePurchaseCheck, CarePurchaseItemInput, FragranceCandidateInspection, FragrancePurchaseCheck, FragrancePurchaseItemInput, InventoryCategory,
   PurchaseEvaluation, PurchaseStrategy, confirmPurchaseCandidate, evaluateItemDetails,
   allowanceWasPreserved, evaluateScreenshot, failureGuidance, getCarePurchaseCheck, getPurchaseStrategies,
-  inspectPurchaseCandidate, recordCarePurchaseDecision, recordPurchaseDecision, structuredError, uploadMedia,
+  getFragrancePurchaseCheck, inspectPurchaseCandidate, recordCarePurchaseDecision, recordPurchaseCandidateDecision, recordPurchaseDecision, structuredError, uploadMedia,
 } from '../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 
@@ -30,16 +31,23 @@ export default function ShoppingCheckScreen() {
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
   const [productType, setProductType] = useState('');
+  const [concentration, setConcentration] = useState('');
   const [ingredients, setIngredients] = useState('');
   const [size, setSize] = useState('');
   const [colour, setColour] = useState('');
+  const [intendedOccasions, setIntendedOccasions] = useState<string[]>([]);
+  const [intendedSeasons, setIntendedSeasons] = useState<string[]>([]);
+  const [fragranceOptions, setFragranceOptions] = useState<{ occasions: { key: string; label: string }[]; seasons: { key: string; label: string }[] }>({ occasions: [], seasons: [] });
   const [price, setPrice] = useState('');
   const [evaluation, setEvaluation] = useState<PurchaseEvaluation | null>(null);
   const [careCandidate, setCareCandidate] = useState<CareCandidateInspection | null>(null);
   const [careCheck, setCareCheck] = useState<CarePurchaseCheck | null>(null);
+  const [fragranceCandidate, setFragranceCandidate] = useState<FragranceCandidateInspection | null>(null);
+  const [fragranceCheck, setFragranceCheck] = useState<FragrancePurchaseCheck | null>(null);
   const [pendingCareDecision, setPendingCareDecision] = useState<'bought' | 'waiting' | 'skipped' | null>(null);
   const [careDecisionBusy, setCareDecisionBusy] = useState(false);
   const [editingCare, setEditingCare] = useState(false);
+  const [editingFragrance, setEditingFragrance] = useState(false);
   const [error, setError] = useState<any>(null);
 
   const loadPurchaseStrategies = useCallback(async () => {
@@ -50,6 +58,7 @@ export default function ShoppingCheckScreen() {
       const response = await getPurchaseStrategies();
       const active = response.strategies.flatMap((strategy) => strategy.state === 'active' ? strategy.categories : []);
       setStrategies(response.strategies);
+      setFragranceOptions(response.fragrance_context_options || { occasions: [], seasons: [] });
       setCategory(active[0]?.key || null);
     } catch (err) {
       setError(err);
@@ -64,17 +73,21 @@ export default function ShoppingCheckScreen() {
   );
   const selectedStrategy = strategies.find((strategy) => strategy.categories.some((row) => row.key === category));
   const isCare = selectedStrategy?.key === 'care_purchase';
+  const isFragrance = selectedStrategy?.key === 'fragrance_purchase';
 
   const clearError = () => setError(null);
+  const toggleContext = (values: string[], setValues: (next: string[]) => void, key: string) => {
+    setValues(values.includes(key) ? values.filter((value) => value !== key) : [...values, key]);
+  };
   const reset = () => {
-    setEvaluation(null); setCareCandidate(null); setCareCheck(null); setPendingCareDecision(null); setCareDecisionBusy(false); setEditingCare(false); setName(''); setBrand('');
-    setProductType(''); setIngredients(''); setSize(''); setColour(''); setPrice(''); setError(null);
+    setEvaluation(null); setCareCandidate(null); setCareCheck(null); setFragranceCandidate(null); setFragranceCheck(null); setPendingCareDecision(null); setCareDecisionBusy(false); setEditingCare(false); setEditingFragrance(false); setName(''); setBrand('');
+    setProductType(''); setConcentration(''); setIngredients(''); setSize(''); setColour(''); setIntendedOccasions([]); setIntendedSeasons([]); setPrice(''); setError(null);
   };
 
   const inspectCare = async (body: Parameters<typeof inspectPurchaseCandidate>[0]) => {
     setBusy(true); clearError();
     try {
-      const result = await inspectPurchaseCandidate(body);
+      const result = await inspectPurchaseCandidate(body) as CareCandidateInspection;
       setCareCandidate(result);
       setName(result.candidate.display_name);
       setBrand(result.candidate.brand || '');
@@ -86,6 +99,21 @@ export default function ShoppingCheckScreen() {
     } catch (err) { setError(err); } finally { setBusy(false); }
   };
 
+  const inspectFragrance = async (body: Parameters<typeof inspectPurchaseCandidate>[0]) => {
+    setBusy(true); clearError();
+    try {
+      const result = await inspectPurchaseCandidate({ ...body, expected_category: 'perfumes' }) as FragranceCandidateInspection;
+      setFragranceCandidate(result);
+      setName(result.candidate.display_name); setBrand(result.candidate.brand || '');
+      setProductType(result.candidate.details?.fragrance_family || '');
+      setConcentration(result.candidate.details?.concentration || '');
+      setIntendedOccasions(result.candidate.details?.occasion || []);
+      setIntendedSeasons(result.candidate.details?.season || []);
+      setPrice(result.candidate.price == null ? '' : String(result.candidate.price));
+      if (result.facts_trusted) setFragranceCheck(await getFragrancePurchaseCheck(result.candidate.id));
+    } catch (err) { setError(err); } finally { setBusy(false); }
+  };
+
   const fromScreenshot = async () => {
     if (!category) return;
     setBusy(true); clearError();
@@ -94,7 +122,8 @@ export default function ShoppingCheckScreen() {
       if (picked.canceled) return;
       const asset = picked.assets[0];
       const uploaded = await uploadMedia({ uri: asset.uri, name: asset.fileName || `product-${Date.now()}.jpg`, type: asset.mimeType || 'image/jpeg' });
-      if (isCare) await inspectCare({ source: 'screenshot', media_asset_id: uploaded.id });
+      if (isCare) await inspectCare({ source: 'screenshot', media_asset_id: uploaded.id, expected_category: category });
+      else if (isFragrance) await inspectFragrance({ source: 'screenshot', media_asset_id: uploaded.id, expected_category: category });
       else setEvaluation(await evaluateScreenshot(uploaded.id, undefined, price ? Number(price) : undefined));
     } catch (err) { setError(err); } finally { setBusy(false); }
   };
@@ -108,6 +137,15 @@ export default function ShoppingCheckScreen() {
         price: price ? Number(price) : undefined,
       };
       await inspectCare({ source: 'manual', item });
+      return;
+    }
+    if (isFragrance) {
+      const item: FragrancePurchaseItemInput = {
+        category: 'perfumes', display_name: name.trim(), brand: brand.trim() || undefined,
+        details: { fragrance_family: productType.trim() || undefined, concentration: concentration.trim() || undefined, occasion: intendedOccasions, season: intendedSeasons },
+        price: price ? Number(price) : undefined,
+      };
+      await inspectFragrance({ source: 'manual', item, expected_category: 'perfumes' });
       return;
     }
     setBusy(true); clearError();
@@ -131,8 +169,25 @@ export default function ShoppingCheckScreen() {
         price: price.trim() ? Number(price) : null,
         currency: careCandidate.candidate.currency,
       };
-      const confirmed = await confirmPurchaseCandidate(careCandidate.candidate.id, correction);
+      const confirmed = await confirmPurchaseCandidate(careCandidate.candidate.id, correction) as CareCandidateInspection;
       setCareCandidate(confirmed); setEditingCare(false); setCareCheck(await getCarePurchaseCheck(confirmed.candidate.id));
+    } catch (err) { setError(err); } finally { setBusy(false); }
+  };
+
+  const confirmFragrance = async () => {
+    if (!fragranceCandidate) return;
+    if (fragranceCandidate.facts_trusted) { setFragranceCheck(await getFragrancePurchaseCheck(fragranceCandidate.candidate.id)); return; }
+    setBusy(true); clearError();
+    try {
+      const confirmed = await confirmPurchaseCandidate(fragranceCandidate.candidate.id, {
+        display_name: name.trim() || fragranceCandidate.candidate.display_name,
+        brand: brand.trim() || null,
+        details: { fragrance_family: productType.trim() || null, concentration: concentration.trim() || null, occasion: intendedOccasions, season: intendedSeasons },
+        price: price.trim() ? Number(price) : null,
+        currency: fragranceCandidate.candidate.currency,
+      });
+      const typed = confirmed as FragranceCandidateInspection;
+      setFragranceCandidate(typed); setEditingFragrance(false); setFragranceCheck(await getFragrancePurchaseCheck(typed.candidate.id));
     } catch (err) { setError(err); } finally { setBusy(false); }
   };
 
@@ -151,10 +206,22 @@ export default function ShoppingCheckScreen() {
     } catch (err) { setError(err); } finally { setCareDecisionBusy(false); }
   };
 
+  const decideFragrance = async (decision: 'bought' | 'waiting' | 'skipped') => {
+    if (!fragranceCandidate || !fragranceCheck || careDecisionBusy) return;
+    setPendingCareDecision(decision); setCareDecisionBusy(true); clearError();
+    try {
+      const saved = await recordPurchaseCandidateDecision(fragranceCandidate.candidate.id, decision);
+      setFragranceCheck((current) => current ? { ...current, decision: saved } : current);
+      setPendingCareDecision(null);
+    } catch (err) { setError(err); } finally { setCareDecisionBusy(false); }
+  };
+
   const retry = () => {
     if (!strategies.length) return void loadPurchaseStrategies();
     if (pendingCareDecision && careCandidate && careCheck) return void decideCare(pendingCareDecision);
+    if (pendingCareDecision && fragranceCandidate && fragranceCheck) return void decideFragrance(pendingCareDecision);
     if (isCare) return void (careCandidate ? confirmCare() : fromDetails());
+    if (isFragrance) return void (fragranceCandidate ? confirmFragrance() : fromDetails());
     return void (manual ? fromDetails() : fromScreenshot());
   };
 
@@ -167,7 +234,7 @@ export default function ShoppingCheckScreen() {
       <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 48 }} keyboardShouldPersistTaps="handled">
         {!!error && <AnalysisFailedState message={structuredError(error)?.message || 'We could not check that just now.'} guidance={failureGuidance(error)} allowancePreserved={allowanceWasPreserved(error)} retryable={structuredError(error)?.retryable !== false} onRetry={retry} onDismiss={() => { setPendingCareDecision(null); clearError(); }} />}
 
-        {!evaluation && !careCheck && !careCandidate && (
+        {!evaluation && !careCheck && !careCandidate && !fragranceCheck && !fragranceCandidate && (
           <>
             <View style={styles.card} accessibilityLabel="Choose what you are checking">
               <Text style={styles.eyebrow}>CHOOSE A CATEGORY</Text><Text style={styles.title}>What are you considering?</Text>
@@ -180,18 +247,24 @@ export default function ShoppingCheckScreen() {
             {!!category && <ShoppingUpload onPickScreenshot={() => void fromScreenshot()} onEnterDetails={() => setManual((value) => !value)} busy={busy} />}
             {manual && !!category && (
               <View style={styles.card}>
-                <Text style={styles.cardTitle}>{isCare ? 'Tell us about the product' : 'Tell us what it is'}</Text>
-                <Text style={styles.label}>Product name</Text><TextInput accessibilityLabel="Product name" value={name} onChangeText={setName} placeholder="Daily cleanser" placeholderTextColor={COLORS.textMuted} style={styles.input} />
+                <Text style={styles.cardTitle}>{isCare ? 'Tell us about the product' : isFragrance ? 'Tell us about the fragrance' : 'Tell us what it is'}</Text>
+                <Text style={styles.label}>Product name</Text><TextInput accessibilityLabel="Product name" value={name} onChangeText={setName} placeholder={isFragrance ? 'Fragrance name' : 'Daily cleanser'} placeholderTextColor={COLORS.textMuted} style={styles.input} />
                 {isCare ? <>
                   <Text style={styles.label}>Brand · optional</Text><TextInput accessibilityLabel="Product brand" value={brand} onChangeText={setBrand} placeholder="Brand" placeholderTextColor={COLORS.textMuted} style={styles.input} />
                   <Text style={styles.label}>Product type · optional</Text><TextInput accessibilityLabel="Product type" value={productType} onChangeText={setProductType} placeholder="Cleanser, serum, shampoo" placeholderTextColor={COLORS.textMuted} style={styles.input} />
                   <Text style={styles.label}>Ingredients from label · optional</Text><TextInput accessibilityLabel="Ingredients from label" value={ingredients} onChangeText={setIngredients} placeholder="Paste the label text" placeholderTextColor={COLORS.textMuted} style={[styles.input, styles.multiline]} multiline />
                   <Text style={styles.label}>Size · optional</Text><TextInput accessibilityLabel="Product size" value={size} onChangeText={setSize} placeholder="100 ml" placeholderTextColor={COLORS.textMuted} style={styles.input} />
+                </> : isFragrance ? <>
+                  <Text style={styles.label}>Brand · optional</Text><TextInput accessibilityLabel="Product brand" value={brand} onChangeText={setBrand} placeholder="Brand" placeholderTextColor={COLORS.textMuted} style={styles.input} />
+                  <Text style={styles.label}>Fragrance family · optional</Text><TextInput accessibilityLabel="Fragrance family" value={productType} onChangeText={setProductType} placeholder="Floral, woody, fresh" placeholderTextColor={COLORS.textMuted} style={styles.input} />
+                  <Text style={styles.label}>Concentration · optional</Text><TextInput accessibilityLabel="Fragrance concentration" value={concentration} onChangeText={setConcentration} placeholder="EDP, EDT" placeholderTextColor={COLORS.textMuted} style={styles.input} />
+                  <Text style={styles.label}>Where would you reach for this? · optional</Text><View style={styles.optionRow}>{fragranceOptions.occasions.map((option) => <TouchableOpacity key={option.key} accessibilityRole="button" accessibilityLabel={`Occasion ${option.label}`} accessibilityState={{ selected: intendedOccasions.includes(option.key) }} onPress={() => toggleContext(intendedOccasions, setIntendedOccasions, option.key)} style={[styles.option, intendedOccasions.includes(option.key) && styles.optionActive]}><Text style={[styles.optionText, intendedOccasions.includes(option.key) && styles.optionTextActive]}>{option.label}</Text></TouchableOpacity>)}</View>
+                  <Text style={styles.label}>Season you have in mind · optional</Text><View style={styles.optionRow}>{fragranceOptions.seasons.map((option) => <TouchableOpacity key={option.key} accessibilityRole="button" accessibilityLabel={`Season ${option.label}`} accessibilityState={{ selected: intendedSeasons.includes(option.key) }} onPress={() => toggleContext(intendedSeasons, setIntendedSeasons, option.key)} style={[styles.option, intendedSeasons.includes(option.key) && styles.optionActive]}><Text style={[styles.optionText, intendedSeasons.includes(option.key) && styles.optionTextActive]}>{option.label}</Text></TouchableOpacity>)}</View>
                 </> : <>
                   <Text style={styles.label}>Colour · optional</Text><TextInput accessibilityLabel="Item colour" value={colour} onChangeText={setColour} placeholder="Olive green" placeholderTextColor={COLORS.textMuted} style={styles.input} />
                 </>}
                 <Text style={styles.label}>Price · optional</Text><TextInput accessibilityLabel="Product price" value={price} onChangeText={setPrice} keyboardType="numeric" placeholder="2199" placeholderTextColor={COLORS.textMuted} style={styles.input} />
-                <Text style={styles.hint}>{isCare ? 'We use only the facts you provide. Missing information may lead to Wait.' : 'Without a price we say so, rather than guessing.'}</Text>
+                <Text style={styles.hint}>{isCare ? 'We use only the facts you provide. Missing information may lead to Wait.' : isFragrance ? 'Customer-declared use context outranks convention. We never infer performance.' : 'Without a price we say so, rather than guessing.'}</Text>
                 <TouchableOpacity accessibilityRole="button" accessibilityLabel="Check this item" disabled={busy || !name.trim()} onPress={() => void fromDetails()} style={[styles.primary, (busy || !name.trim()) && styles.disabled]}><Text style={styles.primaryText}>Check it</Text></TouchableOpacity>
               </View>
             )}
@@ -212,6 +285,21 @@ export default function ShoppingCheckScreen() {
           </View>
         )}
         {careCheck && <CarePurchaseResult check={careCheck} onReset={reset} busy={careDecisionBusy} onDecide={(value) => void decideCare(value)} />}
+        {fragranceCandidate && !fragranceCheck && !editingFragrance && <FragranceCandidateReview inspection={fragranceCandidate} onConfirm={() => void confirmFragrance()} onCorrect={() => setEditingFragrance(true)} />}
+        {fragranceCandidate && !fragranceCheck && editingFragrance && (
+          <View style={styles.card} accessibilityLabel="Correct Fragrance product facts">
+            <Text style={styles.cardTitle}>Correct what we read</Text>
+            <Text style={styles.label}>Product name</Text><TextInput accessibilityLabel="Corrected fragrance name" value={name} onChangeText={setName} style={styles.input} />
+            <Text style={styles.label}>Brand</Text><TextInput accessibilityLabel="Corrected fragrance brand" value={brand} onChangeText={setBrand} style={styles.input} />
+            <Text style={styles.label}>Fragrance family</Text><TextInput accessibilityLabel="Corrected fragrance family" value={productType} onChangeText={setProductType} style={styles.input} />
+            <Text style={styles.label}>Concentration</Text><TextInput accessibilityLabel="Corrected fragrance concentration" value={concentration} onChangeText={setConcentration} style={styles.input} />
+            <Text style={styles.label}>Intended occasions</Text><View style={styles.optionRow}>{fragranceOptions.occasions.map((option) => <TouchableOpacity key={option.key} accessibilityRole="button" accessibilityLabel={`Corrected occasion ${option.label}`} accessibilityState={{ selected: intendedOccasions.includes(option.key) }} onPress={() => toggleContext(intendedOccasions, setIntendedOccasions, option.key)} style={[styles.option, intendedOccasions.includes(option.key) && styles.optionActive]}><Text style={[styles.optionText, intendedOccasions.includes(option.key) && styles.optionTextActive]}>{option.label}</Text></TouchableOpacity>)}</View>
+            <Text style={styles.label}>Intended seasons</Text><View style={styles.optionRow}>{fragranceOptions.seasons.map((option) => <TouchableOpacity key={option.key} accessibilityRole="button" accessibilityLabel={`Corrected season ${option.label}`} accessibilityState={{ selected: intendedSeasons.includes(option.key) }} onPress={() => toggleContext(intendedSeasons, setIntendedSeasons, option.key)} style={[styles.option, intendedSeasons.includes(option.key) && styles.optionActive]}><Text style={[styles.optionText, intendedSeasons.includes(option.key) && styles.optionTextActive]}>{option.label}</Text></TouchableOpacity>)}</View>
+            <Text style={styles.label}>Price</Text><TextInput accessibilityLabel="Corrected fragrance price" value={price} onChangeText={setPrice} keyboardType="numeric" style={styles.input} />
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="Save corrected fragrance facts" onPress={() => void confirmFragrance()} style={styles.primary}><Text style={styles.primaryText}>Confirm corrections</Text></TouchableOpacity>
+          </View>
+        )}
+        {fragranceCheck && <FragranceShoppingResult check={fragranceCheck} onReset={reset} busy={careDecisionBusy} onDecide={(value) => void decideFragrance(value)} />}
         {evaluation && <>
           <VerdictCard evaluation={evaluation} />{evaluation.candidate && <ExtractedItemReview candidate={evaluation.candidate} />}
           <NewCombinations count={evaluation.new_combinations} /><ROIBreakdown roi={evaluation.appearance_roi} /><OwnedComparisons similar={evaluation.similar_owned_products} alternatives={evaluation.existing_alternatives} /><RiskNotes evaluation={evaluation} />
@@ -225,5 +313,5 @@ export default function ShoppingCheckScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.backgroundSecondary }, top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: SPACING.lg, paddingVertical: 12 }, topTitle: { fontFamily: FONTS.family.bodySemibold, color: COLORS.textPrimary },
-  card: { backgroundColor: COLORS.card, borderRadius: RADIUS.xl, padding: SPACING.lg, borderWidth: 1, borderColor: COLORS.border, marginBottom: SPACING.md }, cardTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary, marginBottom: 8 }, eyebrow: { fontFamily: FONTS.family.bodySemibold, color: COLORS.accent, fontSize: 10, letterSpacing: 1.2, textTransform: 'uppercase' }, title: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary, marginTop: 4 }, body: { fontFamily: FONTS.family.body, fontSize: 13, lineHeight: 19, color: COLORS.textSecondary, marginTop: 6 }, chipRow: { gap: 8, paddingRight: SPACING.md, paddingVertical: 10 }, chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: RADIUS.full, backgroundColor: COLORS.backgroundSecondary, borderWidth: 1, borderColor: COLORS.border }, chipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary }, chipText: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textSecondary }, chipTextActive: { color: COLORS.white }, label: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.textPrimary, marginTop: SPACING.md, marginBottom: 5 }, input: { backgroundColor: COLORS.background, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 14, paddingVertical: 11, fontFamily: FONTS.family.body, fontSize: 14, color: COLORS.textPrimary }, multiline: { minHeight: 76, textAlignVertical: 'top' }, hint: { fontFamily: FONTS.family.body, fontSize: 11, lineHeight: 16, color: COLORS.textMuted, marginTop: 8, textAlign: 'center' }, warn: { fontFamily: FONTS.family.bodyMedium, fontSize: 12, lineHeight: 18, color: COLORS.warning, marginTop: 7 }, primary: { alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, borderRadius: RADIUS.full, paddingVertical: 14, marginTop: SPACING.lg }, primaryText: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.white }, disabled: { opacity: 0.5 }, link: { fontFamily: FONTS.family.bodySemibold, fontSize: 13, color: COLORS.primary, textAlign: 'center', marginTop: SPACING.md },
+  card: { backgroundColor: COLORS.card, borderRadius: RADIUS.xl, padding: SPACING.lg, borderWidth: 1, borderColor: COLORS.border, marginBottom: SPACING.md }, cardTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary, marginBottom: 8 }, eyebrow: { fontFamily: FONTS.family.bodySemibold, color: COLORS.accent, fontSize: 10, letterSpacing: 1.2, textTransform: 'uppercase' }, title: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary, marginTop: 4 }, body: { fontFamily: FONTS.family.body, fontSize: 13, lineHeight: 19, color: COLORS.textSecondary, marginTop: 6 }, chipRow: { gap: 8, paddingRight: SPACING.md, paddingVertical: 10 }, chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: RADIUS.full, backgroundColor: COLORS.backgroundSecondary, borderWidth: 1, borderColor: COLORS.border }, chipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary }, chipText: { fontFamily: FONTS.family.body, fontSize: 12, color: COLORS.textSecondary }, chipTextActive: { color: COLORS.white }, optionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 }, option: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: RADIUS.full, backgroundColor: COLORS.backgroundSecondary, borderWidth: 1, borderColor: COLORS.border }, optionActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary }, optionText: { fontFamily: FONTS.family.body, fontSize: 11, color: COLORS.textSecondary }, optionTextActive: { color: COLORS.white }, label: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.textPrimary, marginTop: SPACING.md, marginBottom: 5 }, input: { backgroundColor: COLORS.background, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 14, paddingVertical: 11, fontFamily: FONTS.family.body, fontSize: 14, color: COLORS.textPrimary }, multiline: { minHeight: 76, textAlignVertical: 'top' }, hint: { fontFamily: FONTS.family.body, fontSize: 11, lineHeight: 16, color: COLORS.textMuted, marginTop: 8, textAlign: 'center' }, warn: { fontFamily: FONTS.family.bodyMedium, fontSize: 12, lineHeight: 16, color: COLORS.warning, marginTop: 7 }, primary: { alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, borderRadius: RADIUS.full, paddingVertical: 14, marginTop: SPACING.lg }, primaryText: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.white }, disabled: { opacity: 0.5 }, link: { fontFamily: FONTS.family.bodySemibold, fontSize: 13, color: COLORS.primary, textAlign: 'center', marginTop: SPACING.md },
 });

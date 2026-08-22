@@ -86,7 +86,7 @@ def test_versions_and_exact_prospective_detail_subset():
     assert PURCHASE_CANDIDATE_TRUTH_VERSION == "v3-05.1"
     assert CARE_PURCHASE_CANDIDATE_SCHEMA_VERSION == "v3-05.1"
     assert PURCHASE_INTELLIGENCE_FOUNDATION_VERSION == "v3-05.0"
-    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.6"
+    assert PURCHASE_STRATEGY_REGISTRY_VERSION == "v3-05.9"
     assert PRODUCT_QUALITY_CONTRACT_VERSION == "v3-05.0"
     assert {
         "product_type", "size", "purpose", "ingredients_text", "active_ingredients",
@@ -492,7 +492,7 @@ async def test_account_isolation_and_noncare_boundaries(
     assert (await app_client.get(f"/api/v2/shopping/candidates/{candidate_id}", headers=auth(intruder_token))).status_code == 404
     assert (await app_client.post(f"/api/v2/shopping/candidates/{candidate_id}/confirm", headers=auth(intruder_token), json={})).status_code == 404
 
-    for category in ("wardrobe", "shoes", "accessories", "perfumes", "supplements"):
+    for category in ("wardrobe", "shoes", "accessories", "supplements"):
         response = await app_client.post(
             "/api/v2/shopping/candidates/inspect", headers=auth(owner_token),
             json={"source":"manual", "item":{"category":category, "display_name":"Not Care"}},
@@ -502,11 +502,19 @@ async def test_account_isolation_and_noncare_boundaries(
         assert message
         if category in {"wardrobe", "shoes", "accessories"}:
             assert "style purchase" in message
-        elif category == "perfumes":
-            assert "fragrance-specific" in message
         else:
             assert "does not recommend whether to buy supplements" in message
-    assert (await _counts(owner_id))["candidates"] == 1
+
+    fragrance = await app_client.post(
+        "/api/v2/shopping/candidates/inspect", headers=auth(owner_token),
+        json={
+            "source": "manual",
+            "item": {"category": "perfumes", "display_name": "Not Care"},
+        },
+    )
+    assert fragrance.status_code == 200, fragrance.text
+    assert fragrance.json()["candidate"]["category"] == "perfumes"
+    assert (await _counts(owner_id))["candidates"] == 2
 
 
 def test_purchase_runtime_has_no_sales_or_merchant_imports():
