@@ -1,10 +1,12 @@
 """Pure contract checks for the VC-02 Event Ready foundation."""
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from app.domains.care.decisions import CareDecisionAuthority, CareDecisionReason, CareDecisionReasonCode
+from app.domains.inventory.models import InventoryItem
 from app.domains.planning.event_ready import (
     EVENT_READY_VERSION,
     _actions,
@@ -15,6 +17,15 @@ from app.domains.planning.event_ready import (
 )
 from app.domains.planning.models import EventReadyAction, EventReadyPlan
 from app.domains.planning.schemas import EventReadyActionComplete, EventReadyLookPatch
+from app.domains.recommendation.models import (
+    Look,
+    LookItem,
+    PurchaseDecision,
+    PurchaseEvaluation,
+    RecommendationRun,
+    ShoppingCandidate,
+    StyleRequest,
+)
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select
 
@@ -128,11 +139,33 @@ async def test_event_ready_get_before_generation_is_non_mutating_and_generated_g
         after_get = await session.scalar(select(func.count()).select_from(EventReadyPlan).where(EventReadyPlan.account_id == account_id))
     assert after_get == 0
 
+    boundary_models = {
+        "style_requests": StyleRequest,
+        "recommendation_runs": RecommendationRun,
+        "looks": Look,
+        "look_items": LookItem,
+        "shopping_candidates": ShoppingCandidate,
+        "purchase_evaluations": PurchaseEvaluation,
+        "purchase_decisions": PurchaseDecision,
+        "inventory_items": InventoryItem,
+    }
+    async with factory() as session:
+        boundary_before = {
+            key: await session.scalar(select(func.count()).select_from(model).where(model.account_id == account_id))
+            for key, model in boundary_models.items()
+        }
+
     generated = await app_client.post(f"/api/v2/planner/events/{event_id}/ready/generate", headers=auth(token))
     assert generated.status_code == 200, generated.text
     assert generated.json()["status"] == "preparing"
     assert [row["action_key"] for row in generated.json()["timeline"]] == ["style:choose_event_look"]
     assert generated.json()["care"] is not None
+    async with factory() as session:
+        boundary_after = {
+            key: await session.scalar(select(func.count()).select_from(model).where(model.account_id == account_id))
+            for key, model in boundary_models.items()
+        }
+    assert boundary_after == boundary_before
     care = generated.json()["care"]
     action_id = generated.json()["timeline"][0]["id"]
     async with factory() as session:
@@ -159,11 +192,14 @@ async def test_event_ready_get_before_generation_is_non_mutating_and_generated_g
     assert completed.json()["care"]["decision_fingerprint"] == care["decision_fingerprint"]
     assert completed.json()["care"]["routine_plan_fingerprint"] == care["routine_plan_fingerprint"]
     assert completed.json()["timeline"][0]["completed"] is True
+    completed_at = completed.json()["timeline"][0]["completed_at"]
+    assert completed_at is not None
     repeated = await app_client.post(
         f"/api/v2/planner/events/{event_id}/ready/actions/{action_id}/complete",
         headers=auth(token), json={"completed": True},
     )
     assert repeated.status_code == 200
+    assert repeated.json()["timeline"][0]["completed_at"] == completed_at
     undone = await app_client.post(
         f"/api/v2/planner/events/{event_id}/ready/actions/{action_id}/complete",
         headers=auth(token), json={"completed": False},
@@ -171,6 +207,13 @@ async def test_event_ready_get_before_generation_is_non_mutating_and_generated_g
     assert undone.status_code == 200
     assert undone.json()["care"] is not None
     assert undone.json()["timeline"][0]["completed"] is False
+    assert undone.json()["timeline"][0]["completed_at"] is None
+    undone_again = await app_client.post(
+        f"/api/v2/planner/events/{event_id}/ready/actions/{action_id}/complete",
+        headers=auth(token), json={"completed": False},
+    )
+    assert undone_again.status_code == 200
+    assert undone_again.json()["timeline"][0]["completed_at"] is None
 
     async with factory() as session:
         plan = (await session.execute(select(EventReadyPlan).where(EventReadyPlan.id == plan_id))).scalar_one()
@@ -225,3 +268,64 @@ async def test_event_ready_targets_requested_event_and_is_tenant_scoped(
 
     assert (await app_client.get(f"/api/v2/planner/events/{office_id}/ready", headers=auth(other_token))).status_code == 404
     assert (await app_client.post(f"/api/v2/planner/events/{office_id}/ready/generate", headers=auth(other_token))).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_event_ready_rejects_unconfirmed_non_null_look_and_allows_clear(
+    app_client, registered_supabase_user,
+):
+    token, _ = await registered_supabase_user()
+    response = await app_client.post(
+        "/api/v2/today/events", headers=auth(token),
+        json={"title": "Unconfirmed commitment", "starts_at": "2030-04-20T12:00:00+05:30"},
+    )
+    assert response.status_code in (200, 201), response.text
+    event_id = response.json()["event"]["id"]
+    rejected = await app_client.patch(
+        f"/api/v2/planner/events/{event_id}/ready/look", headers=auth(token),
+        json={"look_id": str(uuid4())},
+    )
+    assert rejected.status_code in (400, 422)
+
+    generated = await app_client.post(f"/api/v2/planner/events/{event_id}/ready/generate", headers=auth(token))
+    assert generated.status_code == 200, generated.text
+    cleared = await app_client.patch(
+        f"/api/v2/planner/events/{event_id}/ready/look", headers=auth(token),
+        json={"look_id": None},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["style"]["selected_look"] is None
+
+
+@pytest.mark.asyncio
+async def test_event_ready_concurrent_generation_has_one_deterministic_plan_and_action(
+    app_client, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    response = await app_client.post(
+        "/api/v2/today/events", headers=auth(token),
+        json={"title": "Concurrent wedding", "starts_at": "2030-03-20T12:00:00+05:30", "occasion_key": "wedding"},
+    )
+    assert response.status_code in (200, 201), response.text
+    event_id = response.json()["event"]["id"]
+    factory = get_sessionmaker()
+
+    # Both transactions target the same persisted event and therefore exercise
+    # the database uniqueness constraint plus the EventReadyPlan row lock.
+    from app.domains.planning import event_ready
+    async def generate_once():
+        async with factory() as session:
+            result = await event_ready.generate(session, account_id, event_id)
+            await session.commit()
+            return result
+
+    results = await asyncio.gather(generate_once(), generate_once())
+    assert all(result["status"] == "preparing" for result in results)
+    async with factory() as session:
+        plans = await session.scalar(select(func.count()).select_from(EventReadyPlan).where(EventReadyPlan.account_id == account_id, EventReadyPlan.calendar_event_id == event_id))
+        plan = (await session.execute(select(EventReadyPlan).where(EventReadyPlan.account_id == account_id, EventReadyPlan.calendar_event_id == event_id))).scalar_one()
+        actions = (await session.execute(select(EventReadyAction).where(EventReadyAction.event_ready_plan_id == plan.id))).scalars().all()
+        assert plans == 1
+        assert [row.action_key for row in actions] == ["style:choose_event_look"]
+        assert len({row.action_key for row in actions}) == len(actions)
+        assert results[0]["event_ready_fingerprint"] == results[1]["event_ready_fingerprint"] == plan.input_fingerprint

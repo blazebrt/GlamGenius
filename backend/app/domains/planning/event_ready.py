@@ -310,7 +310,11 @@ async def complete_action(session: AsyncSession, account_id: uuid.UUID, event_id
     action = (await session.execute(select(EventReadyAction).where(EventReadyAction.id == action_id, EventReadyAction.event_ready_plan_id == plan.id))).scalar_one_or_none()
     if action is None:
         raise NotFoundError("We could not find that preparation action.")
-    action.completed_at = utcnow() if completed else None
+    if completed:
+        if action.completed_at is None:
+            action.completed_at = utcnow()
+    else:
+        action.completed_at = None
     await session.flush()
     timezone_name = await context_stage.resolve_timezone_for(session, account_id)
     day = await _event_day_context(session, event, timezone_name)
