@@ -63,8 +63,12 @@ describe('Improve Care controls', () => {
       .mockResolvedValueOnce(canonicalAlternative({
         routines: [{ ...overview.routines[0], steps: [{ ...overview.routines[0].steps[0], inventory_item_id: 'cream-cleanser-id', product_name: 'Cream Cleanser' }] }],
         care_product_controls: overview.care_product_controls.map((product) => product.inventory_item_id === 'cream-cleanser-id' ? { ...product, preferred: true } : product),
+      }) as any)
+      .mockResolvedValueOnce(canonicalAlternative({
+        routines: [{ ...overview.routines[0], steps: [{ ...overview.routines[0].steps[0], inventory_item_id: 'cream-cleanser-id', product_name: 'Cream Cleanser' }] }],
       }) as any);
     const prefer = jest.spyOn(apiV2, 'preferCareProduct').mockResolvedValue({ changed: true, status: 'preferred', message: 'Preferred.' });
+    const unprefer = jest.spyOn(apiV2, 'unpreferCareProduct').mockResolvedValue({ changed: true, status: 'standard', message: 'Standard.' });
     render(<ImproveScreen />);
     await waitFor(() => expect(screen.getByLabelText('Routine choices for Gentle Cleanser')).toBeTruthy());
     fireEvent.press(screen.getByLabelText('Routine choices for Gentle Cleanser'));
@@ -76,6 +80,10 @@ describe('Improve Care controls', () => {
     await waitFor(() => expect(getOverview).toHaveBeenCalledTimes(2));
     expect(screen.getByText('Cream Cleanser')).toBeTruthy();
     expect(screen.getByLabelText('Unprefer Cream Cleanser')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Unprefer Cream Cleanser'));
+    expect(unprefer).toHaveBeenCalledTimes(1);
+    expect(unprefer).toHaveBeenCalledWith('cream-cleanser-id');
+    await waitFor(() => expect(getOverview).toHaveBeenCalledTimes(3));
   });
 
   it('pauses and resumes from canonical state, retries the same failed preference, and blocks double submit', async () => {

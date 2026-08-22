@@ -10,7 +10,7 @@ export const CATEGORY_META: Record<InventoryCategory, { label: string; icon: str
   shoes: { label: 'Shoes', icon: 'footsteps-outline' },
   accessories: { label: 'Accessories', icon: 'diamond-outline' },
   beauty: { label: 'Skin Care', icon: 'sparkles-outline' },
-  hair: { label: 'Hair', icon: 'cut-outline' },
+  hair: { label: 'Hair Care', icon: 'cut-outline' },
   perfumes: { label: 'Perfumes', icon: 'flower-outline' },
   supplements: { label: 'Supplements', icon: 'leaf-outline' },
 };
