@@ -4,11 +4,11 @@ import { View } from 'react-native';
 
 import {
   BoundaryNotice, ConsistencyCard, EmptyModule, ExpiringSection, LowUseSection,
-  NutritionCard, PerfumeCard, RoutineCard, StepRow, SupplementCard, WarningCard, WarningList,
+  NutritionCard, PausedCareProducts, PerfumeCard, RoutineCard, StepRow, SupplementCard, WarningCard, WarningList,
 } from '../components/routines/RoutinePieces';
 import { TodayCareGuidance, TodayFood, TodayHomeCare, TodayPerfume, TodayRoutineCard } from '../components/routines/TodayRoutine';
 import {
-  CareGuidance, ExpiringReport, NutritionSuggestion, PerfumePick, Routine, RoutineStep, RuleWarning,
+  CareGuidance, CareProductControl, ExpiringReport, NutritionSuggestion, PerfumePick, Routine, RoutineStep, RuleWarning,
   ShelfProductRow, SupplementRow,
 } from '../services/apiV2';
 
@@ -71,6 +71,34 @@ describe('Warnings', () => {
 // --- Routine steps ------------------------------------------------------------
 
 describe('Routine steps', () => {
+  const careProduct: CareProductControl = {
+    inventory_item_id: 'inv-1', display_name: 'Gentle Face Wash', category: 'skin_care', slot: 'cleanser',
+    paused: false, preferred: false, eligible: true,
+  };
+
+  it('keeps Care choices behind one explicit disclosure and sends server actions without local state changes', () => {
+    const onCareAction = jest.fn();
+    render(<StepRow step={step()} careProduct={careProduct} onCareAction={onCareAction} />);
+    expect(screen.queryByLabelText('Pause Gentle Face Wash')).toBeNull();
+    fireEvent.press(screen.getByLabelText('Routine choices for Gentle Face Wash'));
+    fireEvent.press(screen.getByLabelText('Pause Gentle Face Wash'));
+    fireEvent.press(screen.getByLabelText('Prefer Gentle Face Wash'));
+    expect(onCareAction).toHaveBeenNthCalledWith(1, careProduct, 'pause');
+    expect(onCareAction).toHaveBeenNthCalledWith(2, careProduct, 'prefer');
+    expect(screen.getByText('Gentle Face Wash')).toBeTruthy();
+  });
+
+  it('does not expose controls for a gap, and paused products expose Resume only', () => {
+    const onCareAction = jest.fn();
+    render(<StepRow step={step({ is_gap: true, inventory_item_id: null, product_name: null, owned: false })} careProduct={careProduct} onCareAction={onCareAction} />);
+    expect(screen.queryByLabelText(/Routine choices/)).toBeNull();
+    const paused = { ...careProduct, paused: true };
+    render(<PausedCareProducts products={[paused]} onCareAction={onCareAction} />);
+    fireEvent.press(screen.getByLabelText('Resume Gentle Face Wash'));
+    expect(onCareAction).toHaveBeenCalledWith(paused, 'resume');
+    expect(screen.queryByLabelText('Prefer Gentle Face Wash')).toBeNull();
+  });
+
   it('every step says why it exists, how often, and whether it is optional', () => {
     render(<StepRow step={step()} />);
     expect(screen.getByText(/works better on a clean face/)).toBeTruthy();

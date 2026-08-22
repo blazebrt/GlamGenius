@@ -253,6 +253,7 @@ async def test_minimal_is_idempotent_and_improve_is_read_only(
     assert overview.json()["routine_effort"] == {
         "resolved": "minimal", "source": "user_declared", "can_simplify": False, "next_simpler": None,
     }
+    assert overview.json()["care_product_controls"] == []
     no_op = await app_client.post("/api/v2/routines/simplify", headers=auth(token))
     assert no_op.status_code == 200, no_op.text
     assert no_op.json()["status"] == "already_minimal"

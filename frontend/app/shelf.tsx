@@ -1,7 +1,7 @@
 /**
  * Inventory → your shelf.
  *
- * Beauty, hair, perfumes and supplements, each with what the deterministic
+ * Skin Care, Hair Care, perfumes and supplements, each with what the deterministic
  * engine worked out about them. Supplements deliberately get a much narrower
  * card than the rest: dates, what you said it is for, and nothing else.
  */
@@ -23,7 +23,7 @@ import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 type Tab = 'products' | 'perfumes' | 'supplements';
 
 const TABS: { key: Tab; label: string }[] = [
-  { key: 'products', label: 'Beauty & hair' },
+  { key: 'products', label: 'Skin & Hair Care' },
   { key: 'perfumes', label: 'Perfumes' },
   { key: 'supplements', label: 'Supplements' },
 ];
@@ -144,7 +144,7 @@ export default function ShelfScreen() {
           </>
         ) : (
           <EmptyModule
-            title="No beauty or hair products yet"
+            title="No Skin Care or Hair Care products yet"
             body="Add one you already own and we can work out where it fits in a routine."
             actionLabel="Add a product"
             onPress={() => router.push({ pathname: '/inventory-add', params: { category: 'beauty' } })}
