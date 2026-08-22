@@ -1,10 +1,11 @@
 """Pure contract checks for the VC-02 Event Ready foundation."""
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from app.domains.ai_gateway.models import AIRun
 from app.domains.care.decisions import CareDecisionAuthority, CareDecisionReason, CareDecisionReasonCode
 from app.domains.inventory.models import InventoryItem
 from app.domains.planning.event_ready import (
@@ -22,6 +23,7 @@ from app.domains.recommendation.models import (
     LookItem,
     PurchaseDecision,
     PurchaseEvaluation,
+    RecommendationEntitlement,
     RecommendationRun,
     ShoppingCandidate,
     StyleRequest,
@@ -30,6 +32,7 @@ from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select
 
 from tests.conftest import auth
+from tests.journey import SEVEN_CATEGORY_ITEMS
 
 
 def _event(**overrides):
@@ -147,6 +150,7 @@ async def test_event_ready_get_before_generation_is_non_mutating_and_generated_g
         "purchase_evaluations": PurchaseEvaluation,
         "purchase_decisions": PurchaseDecision,
         "inventory_items": InventoryItem,
+        "ai_runs": AIRun,
     }
     async with factory() as session:
         boundary_before = {
@@ -155,6 +159,12 @@ async def test_event_ready_get_before_generation_is_non_mutating_and_generated_g
         }
         boundary_before["look_items"] = await session.scalar(
             select(func.count()).select_from(LookItem).join(Look).where(Look.account_id == account_id)
+        )
+        boundary_before["style_entitlement_used"] = await session.scalar(
+            select(RecommendationEntitlement.used).where(
+                RecommendationEntitlement.account_id == account_id,
+                RecommendationEntitlement.feature == "style_occasion",
+            )
         )
 
     generated = await app_client.post(f"/api/v2/planner/events/{event_id}/ready/generate", headers=auth(token))
@@ -169,6 +179,12 @@ async def test_event_ready_get_before_generation_is_non_mutating_and_generated_g
         }
         boundary_after["look_items"] = await session.scalar(
             select(func.count()).select_from(LookItem).join(Look).where(Look.account_id == account_id)
+        )
+        boundary_after["style_entitlement_used"] = await session.scalar(
+            select(RecommendationEntitlement.used).where(
+                RecommendationEntitlement.account_id == account_id,
+                RecommendationEntitlement.feature == "style_occasion",
+            )
         )
     assert boundary_after == boundary_before
     care = generated.json()["care"]
@@ -300,6 +316,127 @@ async def test_event_ready_rejects_unconfirmed_non_null_look_and_allows_clear(
     )
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["style"]["selected_look"] is None
+
+
+@pytest.mark.asyncio
+async def test_event_ready_look_link_requires_real_style_compatibility(
+    app_client, registered_supabase_user, fake_provider,
+):
+    owner_token, owner_id = await registered_supabase_user()
+    other_token, _ = await registered_supabase_user()
+    for token in (owner_token, other_token):
+        for item in SEVEN_CATEGORY_ITEMS:
+            response = await app_client.post("/api/v2/inventory/items", headers=auth(token), json=item)
+            assert response.status_code in (200, 201), response.text
+
+    target_date = date(2030, 5, 20)
+    style_payload = {
+        "occasion": {
+            "occasion_key": "wedding", "title": "Target wedding",
+            "event_date": target_date.isoformat(), "time_of_day": "evening",
+            "dress_code": "festive_traditional",
+        }
+    }
+    owner_style = await app_client.post("/api/v2/style/occasion", headers=auth(owner_token), json=style_payload)
+    other_style = await app_client.post("/api/v2/style/occasion", headers=auth(other_token), json=style_payload)
+    assert owner_style.status_code == 200, owner_style.text
+    assert other_style.status_code == 200, other_style.text
+    owner_look_id = owner_style.json()["looks"][0]["id"]
+    other_look_id = other_style.json()["looks"][0]["id"]
+
+    async def create_event(token, starts_at, **extra):
+        response = await app_client.post(
+            "/api/v2/today/events", headers=auth(token),
+            json={"title": "Event Ready fixture", "starts_at": starts_at, **extra},
+        )
+        assert response.status_code in (200, 201), response.text
+        return response.json()["event"]["id"]
+
+    target_event_id = await create_event(
+        owner_token, "2030-05-20T12:00:00+05:30",
+        occasion_key="wedding", dress_code_hint="festive_traditional",
+    )
+    factory = get_sessionmaker()
+    async with factory() as session:
+        runs_before_link = await session.scalar(
+            select(func.count()).select_from(RecommendationRun).where(RecommendationRun.account_id == owner_id)
+        )
+
+    generated = await app_client.post(f"/api/v2/planner/events/{target_event_id}/ready/generate", headers=auth(owner_token))
+    assert generated.status_code == 200, generated.text
+    linked = await app_client.patch(
+        f"/api/v2/planner/events/{target_event_id}/ready/look", headers=auth(owner_token),
+        json={"look_id": owner_look_id},
+    )
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["style"]["selected_look"]["id"] == owner_look_id
+    assert all(row["action_key"] != "style:choose_event_look" for row in linked.json()["timeline"])
+    async with factory() as session:
+        plan = (await session.execute(
+            select(EventReadyPlan).where(
+                EventReadyPlan.account_id == owner_id,
+                EventReadyPlan.calendar_event_id == target_event_id,
+            )
+        )).scalar_one()
+        assert str(plan.selected_look_id) == owner_look_id
+        runs_after_link = await session.scalar(
+            select(func.count()).select_from(RecommendationRun).where(RecommendationRun.account_id == owner_id)
+        )
+    assert runs_after_link == runs_before_link
+
+    cleared = await app_client.patch(
+        f"/api/v2/planner/events/{target_event_id}/ready/look", headers=auth(owner_token),
+        json={"look_id": None},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["style"]["selected_look"] is None
+
+    unconfirmed_id = await create_event(owner_token, "2030-05-20T12:00:00+05:30")
+    rejected_unconfirmed = await app_client.patch(
+        f"/api/v2/planner/events/{unconfirmed_id}/ready/look", headers=auth(owner_token),
+        json={"look_id": owner_look_id},
+    )
+    assert rejected_unconfirmed.status_code in (400, 422)
+
+    mismatched_dress_id = await create_event(
+        owner_token, "2030-05-20T12:00:00+05:30",
+        occasion_key="wedding", dress_code_hint="black_tie",
+    )
+    rejected_dress = await app_client.patch(
+        f"/api/v2/planner/events/{mismatched_dress_id}/ready/look", headers=auth(owner_token),
+        json={"look_id": owner_look_id},
+    )
+    assert rejected_dress.status_code in (400, 422)
+
+    wrong_date_id = await create_event(
+        owner_token, "2030-05-21T12:00:00+05:30",
+        occasion_key="wedding", dress_code_hint="festive_traditional",
+    )
+    rejected_date = await app_client.patch(
+        f"/api/v2/planner/events/{wrong_date_id}/ready/look", headers=auth(owner_token),
+        json={"look_id": owner_look_id},
+    )
+    assert rejected_date.status_code in (400, 422)
+
+    wrong_occasion_id = await create_event(
+        owner_token, "2030-05-20T12:00:00+05:30",
+        occasion_key="office", dress_code_hint="smart_casual",
+    )
+    rejected_occasion = await app_client.patch(
+        f"/api/v2/planner/events/{wrong_occasion_id}/ready/look", headers=auth(owner_token),
+        json={"look_id": owner_look_id},
+    )
+    assert rejected_occasion.status_code in (400, 422)
+
+    other_account_id = await create_event(
+        owner_token, "2030-05-20T12:00:00+05:30",
+        occasion_key="wedding", dress_code_hint="festive_traditional",
+    )
+    rejected_other_account = await app_client.patch(
+        f"/api/v2/planner/events/{other_account_id}/ready/look", headers=auth(owner_token),
+        json={"look_id": other_look_id},
+    )
+    assert rejected_other_account.status_code in (400, 422)
 
 
 @pytest.mark.asyncio
