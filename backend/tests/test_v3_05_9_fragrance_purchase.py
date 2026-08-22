@@ -8,7 +8,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from app.domains.inventory.models import InventoryItem
+from app.bootstrap import seed_inventory_categories
+from app.domains.inventory.models import InventoryItem, InventoryValueEvent, PerfumeDetail
 from app.domains.purchase.contract import (
     CARE_PURCHASE_CHECK_VERSION,
     CARE_PURCHASE_VERDICT_VERSION,
@@ -272,6 +273,7 @@ async def _fragrance_side_effect_counts(account_id: uuid.UUID) -> dict[str, int 
             "decisions": int(await session.scalar(select(func.count(PurchaseDecision.id)).where(PurchaseDecision.account_id == account_id))),
             "entitlement": None if entitlement is None else (entitlement.included, entitlement.used),
             "inventory": int(await session.scalar(select(func.count(InventoryItem.id)).where(InventoryItem.account_id == account_id))),
+            "value_events": int(await session.scalar(select(func.count(InventoryValueEvent.id)).join(InventoryItem).where(InventoryItem.account_id == account_id))),
         }
 
 
@@ -368,17 +370,38 @@ async def test_fragrance_decision_memory_is_candidate_backed_idempotent_and_side
     assert memory["evaluation_id"] is None
     assert memory["recommendation_at_decision"]["version"] == "v3-05.9"
     assert memory["recommendation_at_decision"]["fingerprint"] == check.json()["verdict"]["decision_fingerprint"]
-    assert memory["recommendation_snapshot"]["strategy"] == "fragrance_purchase"
+    assert "recommendation_snapshot" not in memory
+    factory = get_sessionmaker()
+    async with factory() as session:
+        row = await session.scalar(select(PurchaseDecision).where(PurchaseDecision.id == uuid.UUID(memory["id"])))
+        assert row is not None
+        assert row.strategy_key == "fragrance_purchase"
+        assert row.recommendation_version == "v3-05.9"
+        assert row.recommendation_fingerprint == check.json()["verdict"]["decision_fingerprint"]
+        assert row.recommendation_snapshot["strategy"] == "fragrance_purchase"
+        assert row.recommendation_snapshot["fragrance_purchase_verdict_version"] == "v3-05.9"
+        assert row.recommendation_snapshot["decision_fingerprint"] == check.json()["verdict"]["decision_fingerprint"]
     repeated = await app_client.post(
         f"/api/v2/shopping/candidates/{candidate_id}/decision", headers=auth(token),
         json={"decision": "bought"},
     )
     assert repeated.status_code == 200, repeated.text
     assert repeated.json()["id"] == memory["id"]
+    other_token, _ = await registered_supabase_user()
+    foreign_check = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/fragrance-check", headers=auth(other_token)
+    )
+    assert foreign_check.status_code == 404
+    foreign_decision = await app_client.post(
+        f"/api/v2/shopping/candidates/{candidate_id}/decision", headers=auth(other_token),
+        json={"decision": "waiting"},
+    )
+    assert foreign_decision.status_code == 404
     after = await _fragrance_side_effect_counts(account_id)
-    for key in ("evaluations", "factors", "runs", "inputs", "inventory", "entitlement"):
+    for key in ("evaluations", "factors", "runs", "inputs", "inventory", "value_events", "entitlement"):
         assert after[key] == before[key]
     assert after["decisions"] == before["decisions"] + 1
+    assert after["inventory"] == before["inventory"]
 
 
 @pytest.mark.asyncio
@@ -409,3 +432,55 @@ async def test_fragrance_concurrent_first_decisions_leave_one_memory_row(
             PurchaseDecision.strategy_key == "fragrance_purchase",
         ))).scalars().all()
     assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_fragrance_real_owned_context_normalization_is_conservative(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await seed_inventory_categories(session)
+        owned = InventoryItem(
+            account_id=account_id, category="perfumes", display_name="Office Floral", brand="House",
+            verification_state="confirmed", status="active",
+        )
+        session.add(owned)
+        await session.flush()
+        session.add(PerfumeDetail(item_id=owned.id, fragrance_family="floral", concentration="EDP", occasion=["Business meeting"], season=["Summer"], remaining_percent=60))
+        await session.commit()
+    inspected = await app_client.post(
+        "/api/v2/shopping/candidates/inspect", headers=auth(token),
+        json={"source": "manual", "item": {**_fragrance_item("Office Woods"), "details": {"fragrance_family": "woody", "occasion": ["business_meeting"]}}},
+    )
+    assert inspected.status_code == 200, inspected.text
+    check = await app_client.get(
+        f"/api/v2/shopping/candidates/{inspected.json()['candidate']['id']}/fragrance-check", headers=auth(token)
+    )
+    assert check.status_code == 200, check.text
+    payload = check.json()
+    assert payload["verdict"]["verdict"] == "wait"
+    assert payload["verdict"]["primary_reason_code"] == "declared_use_already_covered"
+    assert "business_meeting" in payload["collection_context"]["coverage"]["covered"]
+    assert payload["collection_context"]["owned_options_to_use_first"][0]["display_name"] == "Office Floral"
+
+    async with factory() as session:
+        detail = await session.scalar(select(PerfumeDetail).where(PerfumeDetail.item_id == owned.id))
+        assert detail is not None
+        detail.occasion = ["old custom context"]
+        await session.commit()
+
+    unknown = await app_client.post(
+        "/api/v2/shopping/candidates/inspect", headers=auth(token),
+        json={"source": "manual", "item": {**_fragrance_item("Unknown Woods"), "details": {"fragrance_family": "woody", "occasion": ["office"]}}},
+    )
+    assert unknown.status_code == 200, unknown.text
+    unknown_check = await app_client.get(
+        f"/api/v2/shopping/candidates/{unknown.json()['candidate']['id']}/fragrance-check", headers=auth(token)
+    )
+    assert unknown_check.status_code == 200, unknown_check.text
+    unknown_payload = unknown_check.json()
+    assert unknown_payload["verdict"]["verdict"] == "wait"
+    assert unknown_payload["verdict"]["primary_reason_code"] == "owned_context_incomplete"
+    assert "office" not in unknown_payload["collection_context"]["coverage"]["uncovered"]
