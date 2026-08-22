@@ -7,6 +7,7 @@ import {
   StyleProcessing, VARIANT_BLURB, WhyThisWorks, confidenceLabel,
 } from '../components/style/StylePieces';
 import { Look, LookPiece, OCCASION_KEYS, OccasionDefinition, StyleResult } from '../services/apiV2';
+import { buildOccasionInput } from '../../app/style-me';
 
 const ownedPiece = (overrides: Partial<LookPiece> = {}): LookPiece => ({
   id: 'piece-1', slot: 'clothing', ownership: 'owned', inventory_item_id: 'inv-1',
@@ -55,6 +56,15 @@ const occasion: OccasionDefinition = {
 };
 
 describe('Style Me UI', () => {
+  it('builds Event Mode input from canonical event context without auto-running Style', () => {
+    const body = buildOccasionInput(occasion, {}, {
+      eventDate: '2030-09-12', eventTitle: 'Wedding', dressCode: 'business_casual', location: 'Hall',
+    });
+    expect(body).toEqual(expect.objectContaining({
+      occasion_key: 'office', event_date: '2030-09-12', title: 'Wedding',
+      dress_code: 'business_casual', location: 'Hall',
+    }));
+  });
   it('offers all sixteen supported occasions', () => {
     expect(OCCASION_KEYS).toHaveLength(16);
     expect(OCCASION_KEYS).toContain('business_meeting');

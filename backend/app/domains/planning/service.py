@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -202,6 +202,36 @@ async def owned_event(session: AsyncSession, account_id: uuid.UUID, event_id: uu
     if row is None:
         raise NotFoundError("We could not find that event.")
     return row
+
+
+async def upcoming_events(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    timezone_name: str,
+    *,
+    days: int = 90,
+    limit: int = 20,
+) -> list[CalendarEvent]:
+    """Return the account's active events in the customer's local horizon.
+
+    The local-day bounds are deliberate: an event late tonight must not vanish
+    merely because the API server is still on yesterday's UTC date.
+    """
+    today = clock.local_today(timezone_name)
+    start, _ = clock.day_bounds(today, timezone_name)
+    _, end = clock.day_bounds(today + timedelta(days=days + 1), timezone_name)
+    result = await session.execute(
+        select(CalendarEvent)
+        .where(
+            CalendarEvent.account_id == account_id,
+            CalendarEvent.status == "active",
+            CalendarEvent.starts_at >= start,
+            CalendarEvent.starts_at < end,
+        )
+        .order_by(CalendarEvent.starts_at.asc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
 
 
 def serialize_event(row: CalendarEvent, timezone_name: str) -> dict[str, Any]:

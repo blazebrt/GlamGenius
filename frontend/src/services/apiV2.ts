@@ -1477,6 +1477,28 @@ export interface CalendarEvent {
   status: string;
 }
 
+export interface CalendarEventInput {
+  title: string;
+  starts_at: string;
+  ends_at?: string;
+  all_day?: boolean;
+  location?: string;
+  occasion_key?: OccasionKey;
+  dress_code_hint?: string;
+}
+
+export interface CalendarEventPatchInput {
+  title?: string;
+  occasion_key?: OccasionKey;
+  dress_code_hint?: string;
+  status?: 'active' | 'dismissed';
+}
+
+export interface UpcomingEvents {
+  timezone: string;
+  events: CalendarEvent[];
+}
+
 export type EventReadyStatus = 'not_generated' | 'needs_confirmation' | 'preparing' | 'event_day' | 'past';
 export type EventReadyActionDomain = 'context' | 'style' | 'care' | 'preparation';
 export type EventReadyActionTiming = 'now' | 'before_event' | 'event_day';
@@ -1599,8 +1621,23 @@ export const addPlannerEvent = async (
 ): Promise<{ event: CalendarEvent; created: boolean; plan: DailyPlan }> =>
   (await api.post(`${V2}/today/events`, { title, starts_at, occasion_key })).data;
 
+export const addCalendarEvent = async (
+  body: CalendarEventInput,
+): Promise<{ event: CalendarEvent; created: boolean; plan: DailyPlan }> =>
+  (await api.post<{ event: CalendarEvent; created: boolean; plan: DailyPlan }>(`${V2}/today/events`, body)).data;
+
+export const patchCalendarEvent = async (
+  eventId: string, body: CalendarEventPatchInput,
+): Promise<CalendarEvent> =>
+  (await api.patch<CalendarEvent>(`${V2}/integrations/calendar/events/${eventId}`, body)).data;
+
 export const getWeek = async (week_start?: string): Promise<WeeklyPlan> =>
   (await api.get<WeeklyPlan>(`${V2}/planner/week`, { params: week_start ? { week_start } : undefined })).data;
+
+export const getUpcomingEvents = async (
+  days = 90, limit = 20,
+): Promise<UpcomingEvents> =>
+  (await api.get<UpcomingEvents>(`${V2}/planner/events/upcoming`, { params: { days, limit } })).data;
 
 export const getEventReady = async (eventId: string): Promise<EventReady> =>
   (await api.get<EventReady>(`${V2}/planner/events/${eventId}/ready`)).data;

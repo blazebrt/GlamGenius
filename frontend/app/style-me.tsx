@@ -7,7 +7,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -18,15 +18,40 @@ import { AnalysisFailedState } from '../src/components/TrustStates';
 import {
   Look, LookPiece, OccasionDefinition, OccasionInput, StyleResult,
   allowanceWasPreserved, failureGuidance, getOccasionTypes, reviseLook,
-  sendLookFeedback, structuredError, styleForOccasion,
+  sendLookFeedback, setEventReadyLook, structuredError, styleForOccasion,
 } from '../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 
 type Stage = 'choose' | 'processing' | 'result';
 
+export function buildOccasionInput(
+  selected: OccasionDefinition,
+  answers: Record<string, string | undefined>,
+  event?: { eventDate?: string; eventTitle?: string; dressCode?: string; location?: string },
+): OccasionInput {
+  const body: OccasionInput = {
+    occasion_key: selected.key,
+    ...(event?.eventDate ? { event_date: event.eventDate } : {}),
+    ...(event?.eventTitle ? { title: event.eventTitle } : {}),
+    ...(event?.dressCode ? { dress_code: event.dressCode } : {}),
+    ...(event?.location ? { location: event.location } : {}),
+  };
+  for (const [key, value] of Object.entries(answers)) if (value) (body as any)[key] = value;
+  return body;
+}
+
 export default function StyleMeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams<{ eventReadyEventId?: string | string[]; occasionKey?: string | string[]; eventDate?: string | string[]; eventTitle?: string | string[]; dressCode?: string | string[]; location?: string | string[] }>();
+  const param = (value?: string | string[]) => Array.isArray(value) ? value[0] : value;
+  const eventReadyEventId = param(params.eventReadyEventId);
+  const eventMode = Boolean(eventReadyEventId);
+  const eventOccasionKey = param(params.occasionKey);
+  const eventDate = param(params.eventDate);
+  const eventTitle = param(params.eventTitle);
+  const eventDressCode = param(params.dressCode);
+  const eventLocation = param(params.location);
   const [occasions, setOccasions] = useState<OccasionDefinition[]>([]);
   const [selected, setSelected] = useState<OccasionDefinition | null>(null);
   const [answers, setAnswers] = useState<Record<string, string | undefined>>({});
@@ -34,18 +59,24 @@ export default function StyleMeScreen() {
   const [result, setResult] = useState<StyleResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<any>(null);
+  const [linkingLookId, setLinkingLookId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setOccasions((await getOccasionTypes()).occasions);
+      const definitions = (await getOccasionTypes()).occasions;
+      setOccasions(definitions);
+      if (eventMode && eventOccasionKey) {
+        const eventOccasion = definitions.find((occasion) => occasion.key === eventOccasionKey);
+        if (eventOccasion) setSelected(eventOccasion);
+      }
     } catch (err) {
       setError(err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [eventMode, eventOccasionKey]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -67,16 +98,27 @@ export default function StyleMeScreen() {
     if (!selected) return;
     setStage('processing');
     setError(null);
-    const body: OccasionInput = { occasion_key: selected.key };
-    for (const [key, value] of Object.entries(answers)) {
-      if (value) (body as any)[key] = value;
-    }
+    const body = buildOccasionInput(selected, answers, eventMode ? { eventDate, eventTitle, dressCode: eventDressCode, location: eventLocation } : undefined);
     try {
       setResult(await styleForOccasion(body));
       setStage('result');
     } catch (err) {
       setError(err);
       setStage('choose');
+    }
+  };
+
+  const linkLookToEvent = async (look: Look) => {
+    if (!eventReadyEventId || linkingLookId) return;
+    setLinkingLookId(look.id);
+    setError(null);
+    try {
+      await setEventReadyLook(eventReadyEventId, look.id);
+      router.replace({ pathname: '/event-ready', params: { eventId: eventReadyEventId } });
+    } catch (err) {
+      setError(err);
+    } finally {
+      setLinkingLookId(null);
     }
   };
 
@@ -142,22 +184,29 @@ export default function StyleMeScreen() {
 
             {stage === 'choose' && (
               <>
-                <Text style={styles.eyebrow}>WHAT ARE YOU DRESSING FOR?</Text>
-                <Text style={styles.title}>Style me for an occasion</Text>
+                <Text style={styles.eyebrow}>{eventMode ? 'EVENT MODE' : 'WHAT ARE YOU DRESSING FOR?'}</Text>
+                <Text style={styles.title}>{eventMode ? `Looks for ${eventTitle || 'your event'}` : 'Style me for an occasion'}</Text>
                 <Text style={styles.body}>
                   We build looks only from things you have confirmed you own. Anything you would need to buy is marked clearly.
                 </Text>
 
-                <View style={styles.grid}>
-                  {occasions.map((occasion) => (
-                    <OccasionTile
-                      key={occasion.key}
-                      occasion={occasion}
-                      selected={selected?.key === occasion.key}
-                      onPress={() => pick(occasion)}
-                    />
-                  ))}
-                </View>
+                {eventMode ? (
+                  <View style={styles.detail} accessibilityLabel="Event occasion">
+                    <Text style={styles.detailTitle}>{selected?.label || 'Event occasion'}</Text>
+                    <Text style={styles.body}>This event type is confirmed in Event Ready.</Text>
+                  </View>
+                ) : (
+                  <View style={styles.grid}>
+                    {occasions.map((occasion) => (
+                      <OccasionTile
+                        key={occasion.key}
+                        occasion={occasion}
+                        selected={selected?.key === occasion.key}
+                        onPress={() => pick(occasion)}
+                      />
+                    ))}
+                  </View>
+                )}
 
                 {selected && (
                   <View style={styles.detail}>
@@ -202,6 +251,7 @@ export default function StyleMeScreen() {
                         onSave={() => void feedback(look, 'saved')}
                         onReject={() => void feedback(look, 'not_for_me')}
                         onShare={() => void share(look)}
+                        onUseForEvent={eventMode ? () => void linkLookToEvent(look) : undefined}
                       />
                     ))}
                     {!!result.disclaimer && <Text style={styles.disclaimer}>{result.disclaimer}</Text>}
