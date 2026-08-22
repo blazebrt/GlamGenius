@@ -143,7 +143,6 @@ async def test_event_ready_get_before_generation_is_non_mutating_and_generated_g
         "style_requests": StyleRequest,
         "recommendation_runs": RecommendationRun,
         "looks": Look,
-        "look_items": LookItem,
         "shopping_candidates": ShoppingCandidate,
         "purchase_evaluations": PurchaseEvaluation,
         "purchase_decisions": PurchaseDecision,
@@ -154,6 +153,9 @@ async def test_event_ready_get_before_generation_is_non_mutating_and_generated_g
             key: await session.scalar(select(func.count()).select_from(model).where(model.account_id == account_id))
             for key, model in boundary_models.items()
         }
+        boundary_before["look_items"] = await session.scalar(
+            select(func.count()).select_from(LookItem).join(Look).where(Look.account_id == account_id)
+        )
 
     generated = await app_client.post(f"/api/v2/planner/events/{event_id}/ready/generate", headers=auth(token))
     assert generated.status_code == 200, generated.text
@@ -165,6 +167,9 @@ async def test_event_ready_get_before_generation_is_non_mutating_and_generated_g
             key: await session.scalar(select(func.count()).select_from(model).where(model.account_id == account_id))
             for key, model in boundary_models.items()
         }
+        boundary_after["look_items"] = await session.scalar(
+            select(func.count()).select_from(LookItem).join(Look).where(Look.account_id == account_id)
+        )
     assert boundary_after == boundary_before
     care = generated.json()["care"]
     action_id = generated.json()["timeline"][0]["id"]
