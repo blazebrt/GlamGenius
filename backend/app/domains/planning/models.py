@@ -367,3 +367,45 @@ class PlanRecalculationEvent(UUIDPrimaryKey, TimestampMixin, Base):
     recomputed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
 
     __table_args__ = (Index("ix_plan_recalculation_account_date", "account_id", "plan_date", "created_at"),)
+
+
+class EventReadyPlan(UUIDPrimaryKey, TimestampMixin, Base):
+    """Persisted orchestration state for one exact CalendarEvent."""
+
+    __tablename__ = "event_ready_plans"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    calendar_event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("calendar_events.id", ondelete="CASCADE"), nullable=False)
+    selected_look_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("looks.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="preparing", server_default="preparing")
+    engine_version: Mapped[str] = mapped_column(String(32), nullable=False, default="vc-02-v1", server_default="vc-02-v1")
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "calendar_event_id", name="uq_event_ready_plan_account_event"),
+        Index("ix_event_ready_plans_account_event", "account_id", "calendar_event_id"),
+    )
+
+
+class EventReadyAction(UUIDPrimaryKey, TimestampMixin, Base):
+    """A small, deterministic preparation action owned by an EventReadyPlan."""
+
+    __tablename__ = "event_ready_actions"
+
+    event_ready_plan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("event_ready_plans.id", ondelete="CASCADE"), nullable=False)
+    action_key: Mapped[str] = mapped_column(String(96), nullable=False)
+    domain: Mapped[str] = mapped_column(String(24), nullable=False)
+    timing: Mapped[str] = mapped_column(String(24), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    relevance: Mapped[str] = mapped_column(String(240), nullable=False, default="", server_default="")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=50, server_default="50")
+    inventory_item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("inventory_items.id", ondelete="SET NULL"))
+    material_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("event_ready_plan_id", "action_key", name="uq_event_ready_action_plan_key"),
+        Index("ix_event_ready_actions_plan_priority", "event_ready_plan_id", "priority"),
+    )
