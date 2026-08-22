@@ -7,6 +7,7 @@ const mockParams: Record<string, string> = {
   eventReadyEventId: 'event-1', occasionKey: 'wedding', eventDate: '2030-09-12',
   eventTitle: 'Wedding', dressCode: 'black_tie', location: 'Hall',
 };
+const defaultParams = { ...mockParams };
 const mockGetOccasionTypes = jest.fn();
 const mockStyleForOccasion = jest.fn();
 const mockSetEventReadyLook = jest.fn();
@@ -54,6 +55,7 @@ const result = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  Object.assign(mockParams, defaultParams);
   mockGetOccasionTypes.mockResolvedValue({ occasions: [occasion] });
   mockStyleForOccasion.mockResolvedValue(result);
   mockSetEventReadyLook.mockResolvedValue({});
@@ -81,6 +83,13 @@ describe('VC-03 Style Event Mode screen', () => {
     fireEvent.press(screen.getByLabelText('Use Wedding look for this event'));
     await waitFor(() => expect(mockSetEventReadyLook).toHaveBeenCalledWith('event-1', 'look-7'));
     expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/event-ready', params: { eventId: 'event-1' } });
+  });
+
+  it('keeps the ordinary dress-code question when Event Ready has no dress code', async () => {
+    mockParams.dressCode = '';
+    render(<StyleMeScreen />);
+    await screen.findByText('This event type is confirmed in Event Ready.');
+    expect(screen.getByText('Is there a dress code?')).toBeTruthy();
   });
 
   it('keeps Style results visible when Event Ready rejects a look link and never calls purchase APIs', async () => {
