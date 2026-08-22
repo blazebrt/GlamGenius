@@ -38,6 +38,16 @@ V3-01 ships only manual, stored providers:
 - `StoredWeatherProvider` and `StoredAirQualityProvider` read the latest
   snapshot for the requested account and date.
 
+VC-04 adds an opt-in `open_meteo` adapter. `OPEN_METEO_MODE=evaluation` uses
+the public Open-Meteo forecast, geocoding, and CAMS air-quality endpoints;
+staging and production require `OPEN_METEO_MODE=commercial` and a key. Manual
+rows (`provider=manual`, `source=user_declared`) always win. Live responses
+are cached in the existing snapshot tables, retain only minimal adapter audit
+metadata, and may be served stale for the bounded fallback window without
+rewriting their source. Customer-facing live data carries the attribution
+labels “Weather data · Open-Meteo” and “Air quality · Open-Meteo / CAMS”; user
+entered observations never carry live-provider attribution.
+
 There is no live weather, IMD, or AQI integration. A missing snapshot produces
 no reading; it is never replaced with invented normal weather or good air.
 

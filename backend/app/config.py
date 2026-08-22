@@ -134,6 +134,16 @@ V2_FEATURES = _env_csv("V2_FEATURES", "")
 # ---------------------------------------------------------------------------
 APP_ENV = _env_str("APP_ENV", "development").lower()
 
+# Live environment context.  The provider is deliberately opt-in: disabled is
+# the safe default for local/test deployments, and commercial mode requires a
+# non-empty key before a staging/production process can start.
+LIVE_ENVIRONMENT_PROVIDER = _env_str("LIVE_ENVIRONMENT_PROVIDER")
+OPEN_METEO_MODE = _env_str("OPEN_METEO_MODE", "disabled").lower()
+OPEN_METEO_API_KEY = _env_str("OPEN_METEO_API_KEY")
+OPEN_METEO_TIMEOUT_SECONDS = _env_float("OPEN_METEO_TIMEOUT_SECONDS", 5.0)
+ENVIRONMENT_CACHE_TTL_SECONDS = _env_int("ENVIRONMENT_CACHE_TTL_SECONDS", 3600)
+ENVIRONMENT_STALE_MAX_SECONDS = _env_int("ENVIRONMENT_STALE_MAX_SECONDS", 21600)
+
 
 # ---------------------------------------------------------------------------
 # Media
@@ -215,8 +225,16 @@ def validate_production_configuration() -> None:
     
     Raises RuntimeError if a critical production invariant is missing or unsafe.
     """
+    if OPEN_METEO_MODE not in ("disabled", "evaluation", "commercial"):
+        raise RuntimeError("CRITICAL: OPEN_METEO_MODE must be disabled, evaluation, or commercial.")
+    if LIVE_ENVIRONMENT_PROVIDER and LIVE_ENVIRONMENT_PROVIDER != "open_meteo":
+        raise RuntimeError("CRITICAL: LIVE_ENVIRONMENT_PROVIDER must be open_meteo or empty.")
     if APP_ENV not in ("production", "staging"):
         return
+    if OPEN_METEO_MODE == "evaluation" and APP_ENV in ("production", "staging"):
+        raise RuntimeError("CRITICAL: OPEN_METEO_MODE=evaluation is not permitted in staging or production.")
+    if OPEN_METEO_MODE == "commercial" and not OPEN_METEO_API_KEY:
+        raise RuntimeError("CRITICAL: OPEN_METEO_API_KEY is required when OPEN_METEO_MODE=commercial.")
 
     # 1. Reject HS256 by default. Production must use asymmetric JWKS.
     if not SUPABASE_JWKS_URL:

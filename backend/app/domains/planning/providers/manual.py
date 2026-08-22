@@ -51,6 +51,8 @@ class StoredWeatherProvider:
             select(WeatherSnapshot).where(
                 WeatherSnapshot.account_id == self._account_id,
                 WeatherSnapshot.for_date.in_(list(dates)),
+                WeatherSnapshot.provider == PROVIDER_MANUAL,
+                WeatherSnapshot.source == "user_declared",
             ).order_by(WeatherSnapshot.for_date, WeatherSnapshot.created_at.desc())
         )).scalars().all()
 
@@ -137,6 +139,8 @@ class StoredAirQualityProvider:
             select(AirQualitySnapshot).where(
                 AirQualitySnapshot.account_id == self._account_id,
                 AirQualitySnapshot.for_date.in_(list(dates)),
+                AirQualitySnapshot.provider == PROVIDER_MANUAL,
+                AirQualitySnapshot.source == "user_declared",
             ).order_by(AirQualitySnapshot.for_date, AirQualitySnapshot.created_at.desc())
         )).scalars().all()
 

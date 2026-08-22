@@ -5,6 +5,7 @@ route can report connection status honestly without importing adapters.
 """
 from __future__ import annotations
 
+from app.config import LIVE_ENVIRONMENT_PROVIDER, OPEN_METEO_MODE
 from app.domains.planning.providers.base import (
     AirQualityProvider,
     AirQualityReading,
@@ -21,6 +22,7 @@ from app.domains.planning.providers.manual import (
     StoredWeatherProvider,
     UnconfiguredProvider,
 )
+from app.domains.planning.providers.open_meteo import OpenMeteoProvider
 
 # Names a user may pass. `manual` is the one that works today; the others are
 # declared so the API can say "known, not connected" rather than "unknown", and
@@ -34,10 +36,12 @@ KNOWN_CALENDAR_PROVIDERS: dict[str, str] = {
 
 KNOWN_WEATHER_PROVIDERS: dict[str, str] = {
     PROVIDER_MANUAL: "Weather you enter yourself",
+    "open_meteo": "Live weather · Open-Meteo",
 }
 
 KNOWN_AIR_QUALITY_PROVIDERS: dict[str, str] = {
     PROVIDER_MANUAL: "Air quality you enter yourself",
+    "open_meteo": "Live air quality · Open-Meteo / CAMS",
 }
 
 
@@ -50,23 +54,27 @@ def calendar_provider(name: str, session, account_id) -> CalendarProvider:
 def weather_provider(name: str, session, account_id) -> WeatherProvider:
     if name == PROVIDER_MANUAL:
         return StoredWeatherProvider(session, account_id)
+    if name == "open_meteo":
+        return OpenMeteoProvider()
     return UnconfiguredProvider(name, "weather")
 
 
 def air_quality_provider(name: str, session, account_id) -> AirQualityProvider:
     if name == PROVIDER_MANUAL:
         return StoredAirQualityProvider(session, account_id)
+    if name == "open_meteo":
+        return OpenMeteoProvider()
     return UnconfiguredProvider(name, "air_quality")
 
 
 def catalogue() -> dict[str, list[dict[str, object]]]:
     return {
         "calendar": [
-            {"key": key, "label": label, "available": key == PROVIDER_MANUAL}
+            {"key": key, "label": label, "available": key == PROVIDER_MANUAL or (key == "open_meteo" and LIVE_ENVIRONMENT_PROVIDER == "open_meteo" and OPEN_METEO_MODE in {"evaluation", "commercial"})}
             for key, label in KNOWN_CALENDAR_PROVIDERS.items()
         ],
         "weather": [
-            {"key": key, "label": label, "available": key == PROVIDER_MANUAL}
+            {"key": key, "label": label, "available": key == PROVIDER_MANUAL or (key == "open_meteo" and LIVE_ENVIRONMENT_PROVIDER == "open_meteo" and OPEN_METEO_MODE in {"evaluation", "commercial"})}
             for key, label in KNOWN_WEATHER_PROVIDERS.items()
         ],
         "air_quality": [
@@ -84,6 +92,7 @@ __all__ = [
     "KNOWN_AIR_QUALITY_PROVIDERS",
     "KNOWN_CALENDAR_PROVIDERS",
     "KNOWN_WEATHER_PROVIDERS",
+    "OpenMeteoProvider",
     "PROVIDER_MANUAL",
     "ProviderUnavailable",
     "WeatherProvider",

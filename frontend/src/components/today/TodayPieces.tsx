@@ -121,6 +121,7 @@ export function WeatherChip({ weather }: { weather: WeatherSnapshot }) {
     <View style={styles.chip} accessibilityLabel={`Weather ${weather.condition}`}>
       <Ionicons name={(WEATHER_ICONS[weather.condition] || 'partly-sunny-outline') as any} size={13} color={COLORS.textSecondary} />
       <Text style={styles.chipText}>{weather.condition}{range}</Text>
+      {!!weather.attribution && <Text style={styles.chipText}>{weather.attribution}</Text>}
     </View>
   );
 }

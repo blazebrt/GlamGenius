@@ -49,10 +49,14 @@ def _context_payload(day: Any) -> dict[str, Any]:
             "condition": weather.condition, "temp_min_c": weather.temp_min_c,
             "temp_max_c": weather.temp_max_c, "precipitation_chance": weather.precipitation_chance,
             "humidity": weather.humidity, "location": weather.location,
+            "provider": weather.provider, "source": weather.source,
+            **({"attribution": weather.attribution} if weather.attribution else {}),
         },
         "air_quality": None if air is None else {
             "aqi": air.aqi, "index_system": air.index_system, "category": air.category,
             "location": air.location,
+            "provider": air.provider, "source": air.source,
+            **({"attribution": air.attribution} if air.attribution else {}),
         },
         "unavailable_item_ids": sorted(str(value) for value in day.unavailable_item_ids),
     }
@@ -70,7 +74,10 @@ def _status(event: CalendarEvent, day: Any) -> str:
 
 async def _event_day_context(session: AsyncSession, event: CalendarEvent, timezone_name: str) -> Any:
     target = clock.local_now(timezone_name, moment=event.starts_at).date()
-    day = await context_stage.gather(session, account_id=event.account_id, plan_date=target, timezone_name=timezone_name)
+    day = await context_stage.gather(
+        session, account_id=event.account_id, plan_date=target, timezone_name=timezone_name,
+        environment_location=event.location, explicit_environment_location=bool(event.location and event.location.strip()),
+    )
     # Never use DayContext.primary_event: the requested CalendarEvent is the authority.
     from app.domains.planning.context import DayEvent
     target_event = DayEvent(
