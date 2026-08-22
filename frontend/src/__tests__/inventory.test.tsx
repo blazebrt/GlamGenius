@@ -1,8 +1,12 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react-native';
-
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { CATEGORY_META, CategoryTile, DraftReviewActions, EstimateNotice, GUIDED_TASKS, GuidedSprint, InventoryItemCard, InventoryRecovery, completedGuidedTasks } from '../components/inventory/InventoryPieces';
+import InventoryScreen from '../../app/(tabs)/inventory';
+import * as apiV2 from '../services/apiV2';
 import { INVENTORY_CATEGORIES, InventoryItem, InventorySummary } from '../services/apiV2';
+
+jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn() }) }));
+jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 
 const item: InventoryItem = {
   id: 'item-1', category: 'wardrobe', subcategory: 'kurta', display_name: 'Teal work kurta', brand: 'Local maker', source: 'photo_extracted',
@@ -19,12 +23,24 @@ const summary: InventorySummary = {
 describe('complete inventory UI', () => {
   it('supports all seven named groups', () => {
     expect(INVENTORY_CATEGORIES).toHaveLength(7);
-    expect(INVENTORY_CATEGORIES.map((key) => CATEGORY_META[key].label)).toEqual(['Wardrobe', 'Shoes', 'Accessories', 'Skin Care', 'Hair', 'Perfumes', 'Supplements']);
+    expect(INVENTORY_CATEGORIES.map((key) => CATEGORY_META[key].label)).toEqual(['Wardrobe', 'Shoes', 'Accessories', 'Skin Care', 'Hair Care', 'Perfumes', 'Supplements']);
   });
 
   it('category controls expose labels, counts and selection actions', () => {
     const press = jest.fn(); render(<CategoryTile category="beauty" count={4} onPress={press} />);
     fireEvent.press(screen.getByLabelText('Skin Care, 4 items')); expect(press).toHaveBeenCalled();
+  });
+
+  it('uses customer category labels while preserving the internal Skin Care API key', async () => {
+    jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary);
+    const getItems = jest.spyOn(apiV2, 'getInventoryItems').mockResolvedValue({ items: [], pagination: { total: 0, page: 1, page_size: 20, pages: 0 } });
+    render(<InventoryScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Skin Care, 0 items')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Skin Care, 0 items'));
+    await waitFor(() => expect(screen.getByText('In Skin Care')).toBeTruthy());
+    expect(screen.queryByText('In beauty')).toBeNull();
+    expect(screen.getByLabelText('Hair Care, 0 items')).toBeTruthy();
+    expect(getItems).toHaveBeenLastCalledWith(expect.objectContaining({ category: 'beauty' }));
   });
 
   it('guided sprint gives value without forcing a full catalogue', () => {

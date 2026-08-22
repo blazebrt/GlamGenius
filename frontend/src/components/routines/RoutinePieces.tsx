@@ -12,12 +12,12 @@
  * returns `null` on empty rather than an encouraging placeholder — the brief is
  * explicit that a user who has not populated a module should not be shown it.
  */
-import React from 'react';
+import React, { useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import {
-  ExpiringReport, NutritionSuggestion, PerfumePick, Routine, RoutineStep,
+  CareProductControl, ExpiringReport, NutritionSuggestion, PerfumePick, Routine, RoutineStep,
   RuleWarning, ShelfProductRow, SupplementRow,
 } from '../../services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
@@ -72,12 +72,29 @@ export function WarningList({ warnings }: { warnings: RuleWarning[] }) {
   );
 }
 
-export function StepRow({ step, onComplete, onFeedback }: {
+export type CareProductAction = 'pause' | 'resume' | 'prefer' | 'unprefer';
+
+export function StepRow({ step, onComplete, onFeedback, careProduct, careProducts = [], onCareAction, careActionBusy = false }: {
   step: RoutineStep;
   onComplete?: (step: RoutineStep) => void;
   onFeedback?: (step: RoutineStep) => void;
+  careProduct?: CareProductControl;
+  careProducts?: CareProductControl[];
+  onCareAction?: (product: CareProductControl, action: CareProductAction) => void;
+  careActionBusy?: boolean;
 }) {
   const done = step.completed_today === true;
+  const [choicesOpen, setChoicesOpen] = useState(false);
+  const selectedProduct = careProduct;
+  const sameSlotAlternatives = careProducts.filter((product) => (
+    product.inventory_item_id !== selectedProduct?.inventory_item_id
+    && product.slot === step.slot
+    && product.eligible
+    && !product.paused
+  ));
+  const action = (product: CareProductControl, value: CareProductAction) => {
+    if (onCareAction) onCareAction(product, value);
+  };
   return (
     <View style={[styles.step, step.is_gap && styles.stepGap]}>
       <View style={styles.row}>
@@ -122,14 +139,75 @@ export function StepRow({ step, onComplete, onFeedback }: {
       {!!step.safety_note && <Text style={styles.safety}>{step.safety_note}</Text>}
       {!!step.climate_note && <Text style={styles.climate}>{step.climate_note}</Text>}
       {!!step.alternative && <Text style={styles.alternative}>If not: {step.alternative}</Text>}
+      {!!selectedProduct && !step.is_gap && !!onCareAction && (
+        <>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={`Routine choices for ${selectedProduct.display_name}`}
+            accessibilityState={{ expanded: choicesOpen, disabled: careActionBusy }}
+            onPress={() => setChoicesOpen((value) => !value)}
+            disabled={careActionBusy}
+            style={styles.choiceDisclosure}
+          >
+            <Ionicons name="options-outline" size={15} color={COLORS.primary} />
+            <Text style={styles.feedbackText}>Routine choices</Text>
+          </TouchableOpacity>
+          {choicesOpen && (
+            <View style={styles.choicePanel} accessibilityLabel={`Care choices for ${selectedProduct.display_name}`}>
+              <Text style={styles.choiceHint}>These choices are reversible and the server keeps your routine safe.</Text>
+              <Text style={styles.choiceTitle}>Current · {selectedProduct.display_name}</Text>
+              <View style={styles.choiceRow}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={`${selectedProduct.paused ? 'Resume' : 'Pause'} ${selectedProduct.display_name}`}
+                  onPress={() => action(selectedProduct, selectedProduct.paused ? 'resume' : 'pause')}
+                  disabled={careActionBusy}
+                  style={styles.choiceButton}
+                >
+                  <Text style={styles.choiceButtonText}>{selectedProduct.paused ? 'Resume product' : 'Pause product'}</Text>
+                </TouchableOpacity>
+                {selectedProduct.eligible && <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={`${selectedProduct.preferred ? 'Unprefer' : 'Prefer'} ${selectedProduct.display_name}`}
+                  onPress={() => action(selectedProduct, selectedProduct.preferred ? 'unprefer' : 'prefer')}
+                  disabled={careActionBusy}
+                  style={styles.choiceButton}
+                >
+                  <Text style={styles.choiceButtonText}>{selectedProduct.preferred ? 'Unprefer product' : 'Prefer product'}</Text>
+                </TouchableOpacity>}
+              </View>
+              {!!sameSlotAlternatives.length && <>
+                <Text style={styles.choiceTitle}>Other products for {step.label.toLowerCase()}</Text>
+                {sameSlotAlternatives.map((product) => (
+                  <View key={product.inventory_item_id} style={styles.choiceProductRow}>
+                    <Text style={styles.choiceProductName}>{product.display_name}</Text>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel={`${product.preferred ? 'Remove preference from' : 'Prefer'} ${product.display_name}`}
+                      onPress={() => action(product, product.preferred ? 'unprefer' : 'prefer')}
+                      disabled={careActionBusy}
+                      style={styles.choiceButton}
+                    >
+                      <Text style={styles.choiceButtonText}>{product.preferred ? 'Remove preference' : 'Prefer'}</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </>}
+            </View>
+          )}
+        </>
+      )}
     </View>
   );
 }
 
-export function RoutineCard({ routine, onComplete, onFeedback }: {
+export function RoutineCard({ routine, onComplete, onFeedback, careProducts = [], onCareAction, careActionBusyId }: {
   routine: Routine;
   onComplete?: (step: RoutineStep) => void;
   onFeedback?: (step: RoutineStep) => void;
+  careProducts?: CareProductControl[];
+  onCareAction?: (product: CareProductControl, action: CareProductAction) => void;
+  careActionBusyId?: string | null;
 }) {
   return (
     <View style={styles.routine} accessibilityLabel={routine.label}>
@@ -138,7 +216,16 @@ export function RoutineCard({ routine, onComplete, onFeedback }: {
       {!!routine.summary && <Text style={styles.body}>{routine.summary}</Text>}
 
       {routine.steps.map((step) => (
-        <StepRow key={step.id ?? step.slot} step={step} onComplete={onComplete} onFeedback={onFeedback} />
+        <StepRow
+          key={step.id ?? step.slot}
+          step={step}
+          onComplete={onComplete}
+          onFeedback={onFeedback}
+          careProduct={careProducts.find((product) => product.inventory_item_id === step.inventory_item_id)}
+          careProducts={careProducts}
+          onCareAction={onCareAction}
+          careActionBusy={careActionBusyId !== null && careActionBusyId === step.inventory_item_id}
+        />
       ))}
 
       {!!routine.skipped_for_allergy.length && (
@@ -262,6 +349,35 @@ export function NutritionCard({ suggestion }: { suggestion: NutritionSuggestion 
   );
 }
 
+export function PausedCareProducts({ products, onCareAction, careActionBusyId }: {
+  products: CareProductControl[];
+  onCareAction: (product: CareProductControl, action: CareProductAction) => void;
+  careActionBusyId?: string | null;
+}) {
+  const paused = products.filter((product) => product.paused);
+  if (!paused.length) return null;
+  return (
+    <View style={styles.card} accessibilityLabel="Paused Care products">
+      <Text style={styles.cardTitle}>Products you paused</Text>
+      <Text style={styles.body}>They stay on your shelf and can return whenever you choose.</Text>
+      {paused.map((product) => (
+        <View key={product.inventory_item_id} style={styles.pausedRow}>
+          <Text style={styles.listRow}>{product.display_name}</Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={`Resume ${product.display_name}`}
+            onPress={() => onCareAction(product, 'resume')}
+            disabled={careActionBusyId === product.inventory_item_id}
+            style={styles.choiceButton}
+          >
+            <Text style={styles.choiceButtonText}>Resume</Text>
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export function EmptyModule({ title, body, actionLabel, onPress }: {
   title: string;
   body: string;
@@ -303,6 +419,16 @@ const styles = StyleSheet.create({
   meta: { fontFamily: FONTS.family.bodyMedium, color: COLORS.textMuted, fontSize: 11 },
   feedbackButton: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 5, borderWidth: 1, borderColor: COLORS.primaryMuted, borderRadius: RADIUS.full, paddingHorizontal: 11, paddingVertical: 7, marginTop: 9 },
   feedbackText: { fontFamily: FONTS.family.bodySemibold, color: COLORS.primary, fontSize: 11 },
+  choiceDisclosure: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 10 },
+  choicePanel: { backgroundColor: COLORS.backgroundSecondary, borderRadius: RADIUS.md, padding: 10, marginTop: 8 },
+  choiceHint: { fontFamily: FONTS.family.body, fontSize: 11, lineHeight: 16, color: COLORS.textMuted },
+  choiceTitle: { fontFamily: FONTS.family.bodySemibold, fontSize: 11, color: COLORS.textPrimary, marginTop: 9 },
+  choiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 8 },
+  choiceProductRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 },
+  choiceProductName: { flex: 1, fontFamily: FONTS.family.body, color: COLORS.textSecondary, fontSize: 12 },
+  choiceButton: { borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.full, paddingHorizontal: 11, paddingVertical: 8 },
+  choiceButtonText: { fontFamily: FONTS.family.bodySemibold, fontSize: 11, color: COLORS.primary },
+  pausedRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 10 },
   safety: { fontFamily: FONTS.family.bodyMedium, color: COLORS.primary, fontSize: 11, lineHeight: 16, marginTop: 5 },
   climate: { fontFamily: FONTS.family.body, color: COLORS.textSecondary, fontSize: 11, lineHeight: 16, marginTop: 4 },
   alternative: { fontFamily: FONTS.family.body, color: COLORS.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4 },

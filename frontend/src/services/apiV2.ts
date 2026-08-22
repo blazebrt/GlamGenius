@@ -1637,6 +1637,16 @@ export interface Routine {
   disclaimer: string;
 }
 
+export interface CareProductControl {
+  inventory_item_id: string;
+  display_name: string;
+  category: 'skin_care' | 'hair_care';
+  slot: string | null;
+  paused: boolean;
+  preferred: boolean;
+  eligible: boolean;
+}
+
 export interface CareGuidanceItem {
   domain: 'skin_care' | 'hair_care';
   rule_id: string;
@@ -1808,6 +1818,8 @@ export interface ImproveOverview {
   low_use: { rule_id: string; products: ShelfProductRow[]; count: number; definition: string; note: string };
   missing_categories: RuleWarning[];
   counts: ShelfSummary['counts'];
+  routine_effort?: { resolved: 'minimal' | 'balanced' | 'detailed' | 'not_sure'; source: string; can_simplify: boolean; next_simpler: string | null };
+  care_product_controls: CareProductControl[];
   disclaimer: string;
 }
 
@@ -1852,6 +1864,34 @@ export const completeRoutineStep = async (
 
 export const getImproveOverview = async (): Promise<ImproveOverview> =>
   (await api.get<ImproveOverview>(`${V2}/routines/improve`)).data;
+
+export interface CareRoutineMutationResponse {
+  product_preference_version?: string;
+  selection_preference_version?: string;
+  simplification_version?: string;
+  changed: boolean;
+  status: string;
+  inventory_item_id?: string;
+  display_name?: string;
+  category?: 'skin_care' | 'hair_care';
+  slot?: string | null;
+  message: string;
+}
+
+export const simplifyCareRoutine = async (): Promise<CareRoutineMutationResponse> =>
+  (await api.post<CareRoutineMutationResponse>(`${V2}/routines/simplify`)).data;
+
+export const pauseCareProduct = async (itemId: string): Promise<CareRoutineMutationResponse> =>
+  (await api.post<CareRoutineMutationResponse>(`${V2}/routines/products/${itemId}/pause`)).data;
+
+export const resumeCareProduct = async (itemId: string): Promise<CareRoutineMutationResponse> =>
+  (await api.post<CareRoutineMutationResponse>(`${V2}/routines/products/${itemId}/resume`)).data;
+
+export const preferCareProduct = async (itemId: string): Promise<CareRoutineMutationResponse> =>
+  (await api.post<CareRoutineMutationResponse>(`${V2}/routines/products/${itemId}/prefer`)).data;
+
+export const unpreferCareProduct = async (itemId: string): Promise<CareRoutineMutationResponse> =>
+  (await api.post<CareRoutineMutationResponse>(`${V2}/routines/products/${itemId}/unprefer`)).data;
 
 export const recordCareExperienceFeedback = async (
   body: CareExperienceFeedbackInput

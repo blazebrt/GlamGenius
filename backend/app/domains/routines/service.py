@@ -1694,6 +1694,24 @@ async def improve_overview(session: AsyncSession, *, account_id: uuid.UUID) -> d
     _, care_context, care_decisions = await _current_care_decisions(session, account_id, plan_date)
     care_plan = care_routine_plan.plan_care_routine(care_context, care_decisions)
 
+    decisions_by_item = {row.item_id: row for row in care_decisions.product_decisions}
+    care_product_controls = [
+        {
+            "inventory_item_id": str(product.item.id),
+            "display_name": product.item.display_name,
+            "category": _customer_category(product.item.category),
+            "slot": product.slot,
+            "paused": product.item.id in care_context.paused_product_ids,
+            "preferred": product.item.id in care_context.preferred_product_ids,
+            "eligible": decisions_by_item.get(product.item.id).eligible
+            if product.item.id in decisions_by_item else False,
+        }
+        for product in sorted(
+            (*care_context.skin_products, *care_context.hair_products),
+            key=lambda row: (row.item.category, row.slot or "", str(row.item.id)),
+        )
+    ]
+
     missing = [
         row for report in summary["reports"].values() for row in report["warnings"]
         if row["rule_id"] == rules_engine.RULE_MISSING_SLOT
@@ -1710,5 +1728,6 @@ async def improve_overview(session: AsyncSession, *, account_id: uuid.UUID) -> d
         "missing_categories": missing,
         "counts": summary["counts"],
         "routine_effort": _effort_payload(care_plan),
+        "care_product_controls": care_product_controls,
         "disclaimer": ROUTINE_DISCLAIMER,
     }

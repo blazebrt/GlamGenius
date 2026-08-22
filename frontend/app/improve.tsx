@@ -16,12 +16,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import {
-  ConsistencyCard, EmptyModule, ExpiringSection, LowUseSection, RoutineCard, WarningList,
+  ConsistencyCard, EmptyModule, ExpiringSection, LowUseSection, PausedCareProducts, RoutineCard, WarningList,
 } from '../src/components/routines/RoutinePieces';
+import type { CareProductAction } from '../src/components/routines/RoutinePieces';
 import { CareExperienceFeedbackSheet } from '../src/components/routines/CareExperienceFeedback';
 import {
   ImproveOverview, Routine, RoutineStep, completeRoutineStep, generateRoutines, getImproveOverview,
+  pauseCareProduct, preferCareProduct, resumeCareProduct, simplifyCareRoutine, unpreferCareProduct,
 } from '../src/services/apiV2';
+import type { CareProductControl } from '../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 
 export default function ImproveScreen() {
@@ -32,6 +35,9 @@ export default function ImproveScreen() {
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionBusyId, setActionBusyId] = useState<string | null>(null);
+  const [retryCare, setRetryCare] = useState<{ product: CareProductControl; action: CareProductAction } | null>(null);
   const [feedbackTarget, setFeedbackTarget] = useState<{ routine: Routine; step: RoutineStep } | null>(null);
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
@@ -60,6 +66,27 @@ export default function ImproveScreen() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const simplify = async () => {
+    if (actionBusyId) return;
+    setActionBusyId('simplify'); setActionError(null); setRetryCare(null);
+    try { await simplifyCareRoutine(); await load('refresh'); }
+    catch (err) { console.warn('simplify failed', err); setActionError('We could not simplify your routine just now. Your current routine is unchanged.'); }
+    finally { setActionBusyId(null); }
+  };
+
+  const careAction = async (product: CareProductControl, action: CareProductAction) => {
+    if (actionBusyId) return;
+    setActionBusyId(product.inventory_item_id); setActionError(null); setRetryCare(null);
+    try {
+      if (action === 'pause') await pauseCareProduct(product.inventory_item_id);
+      if (action === 'resume') await resumeCareProduct(product.inventory_item_id);
+      if (action === 'prefer') await preferCareProduct(product.inventory_item_id);
+      if (action === 'unprefer') await unpreferCareProduct(product.inventory_item_id);
+      await load('refresh');
+    } catch (err) { console.warn('Care choice failed', err); setRetryCare({ product, action }); setActionError('We could not save that routine choice just now. Your current routine is unchanged.'); }
+    finally { setActionBusyId(null); }
   };
 
   const onComplete = async (step: RoutineStep) => {
@@ -118,19 +145,42 @@ export default function ImproveScreen() {
         ) : (
           <>
             <Text style={styles.section}>Your routines</Text>
+            {overview.routine_effort?.can_simplify ? <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Simplify my routine"
+              accessibilityState={{ disabled: actionBusyId === 'simplify' }}
+              onPress={() => void simplify()}
+              disabled={actionBusyId !== null}
+              style={styles.secondaryAction}
+            >
+              <Ionicons name="sparkles-outline" size={18} color={COLORS.primary} />
+              <Text style={styles.secondaryActionText}>{actionBusyId === 'simplify' ? 'Simplifying…' : 'Simplify my routine'}</Text>
+            </TouchableOpacity> : null}
             {overview.routines.map((routine) => (
               <RoutineCard
                 key={routine.id ?? routine.kind}
                 routine={routine}
                 onComplete={(step) => void onComplete(step)}
                 onFeedback={(step) => setFeedbackTarget({ routine, step })}
+                careProducts={overview.care_product_controls}
+                onCareAction={(product, action) => void careAction(product, action)}
+                careActionBusyId={actionBusyId}
               />
             ))}
+
+            <PausedCareProducts products={overview.care_product_controls} onCareAction={(product, action) => void careAction(product, action)} careActionBusyId={actionBusyId} />
 
             <Text style={styles.section}>How it is going</Text>
             <ConsistencyCard consistency={overview.consistency} />
           </>
         )}
+
+        {!!actionError && <View>
+          <Text accessibilityRole="alert" style={styles.actionError}>{actionError}</Text>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Try again" onPress={() => retryCare ? void careAction(retryCare.product, retryCare.action) : void simplify()}>
+            <Text style={styles.link}>Try again</Text>
+          </TouchableOpacity>
+        </View>}
 
         {!!overview.needs_attention.length && (
           <>
@@ -196,4 +246,7 @@ const styles = StyleSheet.create({
   confirm: { flexDirection: 'row', gap: 9, alignItems: 'flex-start', backgroundColor: COLORS.primaryLight, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.primaryMuted, padding: 13, marginTop: 14 },
   confirmText: { flex: 1, fontFamily: FONTS.family.body, color: COLORS.textPrimary, fontSize: 12, lineHeight: 18 },
   disclaimer: { fontFamily: FONTS.family.body, color: COLORS.textMuted, fontSize: 11, textAlign: 'center', marginTop: SPACING.lg },
+  secondaryAction: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 7, borderWidth: 1, borderColor: COLORS.primaryMuted, borderRadius: RADIUS.full, paddingHorizontal: 13, paddingVertical: 9, marginTop: 10 },
+  secondaryActionText: { fontFamily: FONTS.family.bodySemibold, color: COLORS.primary, fontSize: 12 },
+  actionError: { fontFamily: FONTS.family.body, color: COLORS.error ?? '#B4231F', fontSize: 12, lineHeight: 17, marginTop: 10 },
 });
