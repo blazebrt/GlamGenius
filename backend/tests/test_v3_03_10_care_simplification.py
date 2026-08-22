@@ -268,6 +268,67 @@ async def test_minimal_is_idempotent_and_improve_is_read_only(
 
 
 @pytest.mark.asyncio
+async def test_improve_exposes_owned_same_slot_controls_and_preference_refresh(
+    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch,
+):
+    _patch_today(monkeypatch)
+    token, _ = await registered_supabase_user()
+    await _db_seed(app_client)
+    cleanser_a = await _db_product(app_client, token, name="Gentle Cleanser", product_type="cleanser")
+    cleanser_b = await _db_product(app_client, token, name="Cream Cleanser", product_type="cleanser")
+    await _db_generate(app_client, token, kinds=["morning"])
+
+    overview = await app_client.get("/api/v2/routines/improve", headers=auth(token))
+    assert overview.status_code == 200, overview.text
+    body = overview.json()
+    controls = {row["inventory_item_id"]: row for row in body["care_product_controls"]}
+    assert set(controls) == {cleanser_a, cleanser_b}
+    for item_id, name in ((cleanser_a, "Gentle Cleanser"), (cleanser_b, "Cream Cleanser")):
+        assert controls[item_id] == {
+            "inventory_item_id": item_id,
+            "display_name": name,
+            "category": "skin_care",
+            "slot": "cleanser",
+            "paused": False,
+            "preferred": False,
+            "eligible": True,
+        }
+    selected_before = next(
+        step["inventory_item_id"]
+        for routine in body["routines"]
+        for step in routine["steps"]
+        if step["slot"] == "cleanser"
+    )
+    alternative = cleanser_b if selected_before == cleanser_a else cleanser_a
+
+    preferred = await app_client.post(
+        f"/api/v2/routines/products/{alternative}/prefer", headers=auth(token),
+    )
+    assert preferred.status_code == 200, preferred.text
+    refreshed = await app_client.get("/api/v2/routines/improve", headers=auth(token))
+    assert refreshed.status_code == 200, refreshed.text
+    refreshed_body = refreshed.json()
+    refreshed_controls = {row["inventory_item_id"]: row for row in refreshed_body["care_product_controls"]}
+    assert refreshed_controls[alternative]["preferred"] is True
+    selected_after = next(
+        step["inventory_item_id"]
+        for routine in refreshed_body["routines"]
+        for step in routine["steps"]
+        if step["slot"] == "cleanser"
+    )
+    assert selected_after == alternative
+
+    paused = await app_client.post(
+        f"/api/v2/routines/products/{alternative}/pause", headers=auth(token),
+    )
+    assert paused.status_code == 200, paused.text
+    paused_overview = await app_client.get("/api/v2/routines/improve", headers=auth(token))
+    assert paused_overview.status_code == 200, paused_overview.text
+    paused_controls = {row["inventory_item_id"]: row for row in paused_overview.json()["care_product_controls"]}
+    assert paused_controls[alternative]["paused"] is True
+
+
+@pytest.mark.asyncio
 async def test_simplification_preserves_safety_and_isolated_export(
     app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch,
 ):

@@ -99,6 +99,25 @@ describe('Routine steps', () => {
     expect(screen.queryByLabelText('Prefer Gentle Face Wash')).toBeNull();
   });
 
+  it('only exposes eligible unpaused alternatives for the same canonical slot', () => {
+    const onCareAction = jest.fn();
+    render(<StepRow
+      step={step()}
+      careProduct={careProduct}
+      careProducts={[
+        careProduct,
+        { ...careProduct, inventory_item_id: 'blocked', display_name: 'Blocked Cleanser', eligible: false },
+        { ...careProduct, inventory_item_id: 'hair-item', display_name: 'Hair Product', category: 'hair_care', slot: 'shampoo' },
+        { ...careProduct, inventory_item_id: 'paused', display_name: 'Paused Cleanser', paused: true },
+      ]}
+      onCareAction={onCareAction}
+    />);
+    fireEvent.press(screen.getByLabelText('Routine choices for Gentle Face Wash'));
+    expect(screen.queryByLabelText('Prefer Blocked Cleanser')).toBeNull();
+    expect(screen.queryByLabelText('Prefer Hair Product')).toBeNull();
+    expect(screen.queryByLabelText('Prefer Paused Cleanser')).toBeNull();
+  });
+
   it('every step says why it exists, how often, and whether it is optional', () => {
     render(<StepRow step={step()} />);
     expect(screen.getByText(/works better on a clean face/)).toBeTruthy();

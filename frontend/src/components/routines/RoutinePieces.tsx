@@ -74,18 +74,26 @@ export function WarningList({ warnings }: { warnings: RuleWarning[] }) {
 
 export type CareProductAction = 'pause' | 'resume' | 'prefer' | 'unprefer';
 
-export function StepRow({ step, onComplete, onFeedback, careProduct, onCareAction, careActionBusy = false }: {
+export function StepRow({ step, onComplete, onFeedback, careProduct, careProducts = [], onCareAction, careActionBusy = false }: {
   step: RoutineStep;
   onComplete?: (step: RoutineStep) => void;
   onFeedback?: (step: RoutineStep) => void;
   careProduct?: CareProductControl;
+  careProducts?: CareProductControl[];
   onCareAction?: (product: CareProductControl, action: CareProductAction) => void;
   careActionBusy?: boolean;
 }) {
   const done = step.completed_today === true;
   const [choicesOpen, setChoicesOpen] = useState(false);
-  const action = (value: CareProductAction) => {
-    if (careProduct && onCareAction) onCareAction(careProduct, value);
+  const selectedProduct = careProduct;
+  const sameSlotAlternatives = careProducts.filter((product) => (
+    product.inventory_item_id !== selectedProduct?.inventory_item_id
+    && product.slot === step.slot
+    && product.eligible
+    && !product.paused
+  ));
+  const action = (product: CareProductControl, value: CareProductAction) => {
+    if (onCareAction) onCareAction(product, value);
   };
   return (
     <View style={[styles.step, step.is_gap && styles.stepGap]}>
@@ -131,11 +139,11 @@ export function StepRow({ step, onComplete, onFeedback, careProduct, onCareActio
       {!!step.safety_note && <Text style={styles.safety}>{step.safety_note}</Text>}
       {!!step.climate_note && <Text style={styles.climate}>{step.climate_note}</Text>}
       {!!step.alternative && <Text style={styles.alternative}>If not: {step.alternative}</Text>}
-      {!!careProduct && !step.is_gap && !!onCareAction && (
+      {!!selectedProduct && !step.is_gap && !!onCareAction && (
         <>
           <TouchableOpacity
             accessibilityRole="button"
-            accessibilityLabel={`Routine choices for ${careProduct.display_name}`}
+            accessibilityLabel={`Routine choices for ${selectedProduct.display_name}`}
             accessibilityState={{ expanded: choicesOpen, disabled: careActionBusy }}
             onPress={() => setChoicesOpen((value) => !value)}
             disabled={careActionBusy}
@@ -145,28 +153,46 @@ export function StepRow({ step, onComplete, onFeedback, careProduct, onCareActio
             <Text style={styles.feedbackText}>Routine choices</Text>
           </TouchableOpacity>
           {choicesOpen && (
-            <View style={styles.choicePanel} accessibilityLabel={`Care choices for ${careProduct.display_name}`}>
+            <View style={styles.choicePanel} accessibilityLabel={`Care choices for ${selectedProduct.display_name}`}>
               <Text style={styles.choiceHint}>These choices are reversible and the server keeps your routine safe.</Text>
+              <Text style={styles.choiceTitle}>Current · {selectedProduct.display_name}</Text>
               <View style={styles.choiceRow}>
                 <TouchableOpacity
                   accessibilityRole="button"
-                  accessibilityLabel={`${careProduct.paused ? 'Resume' : 'Pause'} ${careProduct.display_name}`}
-                  onPress={() => action(careProduct.paused ? 'resume' : 'pause')}
+                  accessibilityLabel={`${selectedProduct.paused ? 'Resume' : 'Pause'} ${selectedProduct.display_name}`}
+                  onPress={() => action(selectedProduct, selectedProduct.paused ? 'resume' : 'pause')}
                   disabled={careActionBusy}
                   style={styles.choiceButton}
                 >
-                  <Text style={styles.choiceButtonText}>{careProduct.paused ? 'Resume product' : 'Pause product'}</Text>
+                  <Text style={styles.choiceButtonText}>{selectedProduct.paused ? 'Resume product' : 'Pause product'}</Text>
                 </TouchableOpacity>
-                {careProduct.eligible && <TouchableOpacity
+                {selectedProduct.eligible && <TouchableOpacity
                   accessibilityRole="button"
-                  accessibilityLabel={`${careProduct.preferred ? 'Unprefer' : 'Prefer'} ${careProduct.display_name}`}
-                  onPress={() => action(careProduct.preferred ? 'unprefer' : 'prefer')}
+                  accessibilityLabel={`${selectedProduct.preferred ? 'Unprefer' : 'Prefer'} ${selectedProduct.display_name}`}
+                  onPress={() => action(selectedProduct, selectedProduct.preferred ? 'unprefer' : 'prefer')}
                   disabled={careActionBusy}
                   style={styles.choiceButton}
                 >
-                  <Text style={styles.choiceButtonText}>{careProduct.preferred ? 'Unprefer product' : 'Prefer product'}</Text>
+                  <Text style={styles.choiceButtonText}>{selectedProduct.preferred ? 'Unprefer product' : 'Prefer product'}</Text>
                 </TouchableOpacity>}
               </View>
+              {!!sameSlotAlternatives.length && <>
+                <Text style={styles.choiceTitle}>Other products for {step.label.toLowerCase()}</Text>
+                {sameSlotAlternatives.map((product) => (
+                  <View key={product.inventory_item_id} style={styles.choiceProductRow}>
+                    <Text style={styles.choiceProductName}>{product.display_name}</Text>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel={`${product.preferred ? 'Remove preference from' : 'Prefer'} ${product.display_name}`}
+                      onPress={() => action(product, product.preferred ? 'unprefer' : 'prefer')}
+                      disabled={careActionBusy}
+                      style={styles.choiceButton}
+                    >
+                      <Text style={styles.choiceButtonText}>{product.preferred ? 'Remove preference' : 'Prefer'}</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </>}
             </View>
           )}
         </>
@@ -196,6 +222,7 @@ export function RoutineCard({ routine, onComplete, onFeedback, careProducts = []
           onComplete={onComplete}
           onFeedback={onFeedback}
           careProduct={careProducts.find((product) => product.inventory_item_id === step.inventory_item_id)}
+          careProducts={careProducts}
           onCareAction={onCareAction}
           careActionBusy={careActionBusyId !== null && careActionBusyId === step.inventory_item_id}
         />
@@ -395,7 +422,10 @@ const styles = StyleSheet.create({
   choiceDisclosure: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 10 },
   choicePanel: { backgroundColor: COLORS.backgroundSecondary, borderRadius: RADIUS.md, padding: 10, marginTop: 8 },
   choiceHint: { fontFamily: FONTS.family.body, fontSize: 11, lineHeight: 16, color: COLORS.textMuted },
+  choiceTitle: { fontFamily: FONTS.family.bodySemibold, fontSize: 11, color: COLORS.textPrimary, marginTop: 9 },
   choiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 8 },
+  choiceProductRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 },
+  choiceProductName: { flex: 1, fontFamily: FONTS.family.body, color: COLORS.textSecondary, fontSize: 12 },
   choiceButton: { borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.full, paddingHorizontal: 11, paddingVertical: 8 },
   choiceButtonText: { fontFamily: FONTS.family.bodySemibold, fontSize: 11, color: COLORS.primary },
   pausedRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 10 },
