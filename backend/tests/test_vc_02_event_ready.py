@@ -344,10 +344,10 @@ async def test_event_ready_look_link_requires_real_style_compatibility(
     owner_look_id = owner_style.json()["looks"][0]["id"]
     other_look_id = other_style.json()["looks"][0]["id"]
 
-    async def create_event(token, starts_at, **extra):
+    async def create_event(token, starts_at, *, title="Event Ready fixture", **extra):
         response = await app_client.post(
             "/api/v2/today/events", headers=auth(token),
-            json={"title": "Event Ready fixture", "starts_at": starts_at, **extra},
+            json={"title": title, "starts_at": starts_at, **extra},
         )
         assert response.status_code in (200, 201), response.text
         return response.json()["event"]["id"]
@@ -391,7 +391,9 @@ async def test_event_ready_look_link_requires_real_style_compatibility(
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["style"]["selected_look"] is None
 
-    unconfirmed_id = await create_event(owner_token, "2030-05-20T12:00:00+05:30")
+    unconfirmed_id = await create_event(
+        owner_token, "2030-05-20T12:00:00+05:30", title="Unconfirmed event",
+    )
     rejected_unconfirmed = await app_client.patch(
         f"/api/v2/planner/events/{unconfirmed_id}/ready/look", headers=auth(owner_token),
         json={"look_id": owner_look_id},
@@ -400,6 +402,7 @@ async def test_event_ready_look_link_requires_real_style_compatibility(
 
     mismatched_dress_id = await create_event(
         owner_token, "2030-05-20T12:00:00+05:30",
+        title="Black tie wedding",
         occasion_key="wedding", dress_code_hint="black_tie",
     )
     rejected_dress = await app_client.patch(
@@ -410,6 +413,7 @@ async def test_event_ready_look_link_requires_real_style_compatibility(
 
     wrong_date_id = await create_event(
         owner_token, "2030-05-21T12:00:00+05:30",
+        title="Next day wedding",
         occasion_key="wedding", dress_code_hint="festive_traditional",
     )
     rejected_date = await app_client.patch(
@@ -420,6 +424,7 @@ async def test_event_ready_look_link_requires_real_style_compatibility(
 
     wrong_occasion_id = await create_event(
         owner_token, "2030-05-20T12:00:00+05:30",
+        title="Office event",
         occasion_key="office", dress_code_hint="smart_casual",
     )
     rejected_occasion = await app_client.patch(
@@ -430,6 +435,7 @@ async def test_event_ready_look_link_requires_real_style_compatibility(
 
     other_account_id = await create_event(
         owner_token, "2030-05-20T12:00:00+05:30",
+        title="Other account look event",
         occasion_key="wedding", dress_code_hint="festive_traditional",
     )
     rejected_other_account = await app_client.patch(
