@@ -73,6 +73,14 @@ async def generate(
     plan.repetition_window_days = repetition_window_days
     existing = await _day_rows(session, plan)
 
+    # Resolve the shared environment target once for the week. DayContext then
+    # consumes the exact persisted snapshots without multiplying geocoding and
+    # provider calls by seven.
+    attributes = await context_stage.style_context.confirmed_attributes(session, account_id)
+    await context_stage.prefetch_environment(
+        session, account_id, clock.week_dates(week_start), attributes.get("city"), timezone_name,
+    )
+
     for position, plan_date in enumerate(clock.week_dates(week_start)):
         row = existing.get(plan_date)
         context = await context_stage.gather(

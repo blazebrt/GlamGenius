@@ -40,6 +40,7 @@ from app.domains.planning.models import (
 )
 from app.domains.planning.providers import ProviderUnavailable, air_quality_provider, weather_provider
 from app.domains.planning.providers.base import AirQualityReading, WeatherReading
+from app.domains.planning.providers.open_meteo import OpenMeteoProvider, ResolvedLocation, location_identity
 from app.domains.recommendation import context as style_context
 from app.domains.recommendation.context import OwnedItem
 from app.domains.recommendation.occasions import OCCASIONS
@@ -345,27 +346,38 @@ def _within_stale(row: Any, now: datetime) -> bool:
     return (now - created).total_seconds() <= ENVIRONMENT_STALE_MAX_SECONDS
 
 
-async def _live_weather_row(session: AsyncSession, account_id: uuid.UUID, target: date, location: str | None) -> WeatherSnapshot | None:
-    query = select(WeatherSnapshot).where(
-        WeatherSnapshot.account_id == account_id, WeatherSnapshot.for_date == target,
-        WeatherSnapshot.provider == "open_meteo", WeatherSnapshot.source == "external_provider",
-    )
-    if location:
-        query = query.where(WeatherSnapshot.location == location)
-    return (await session.execute(query.order_by(WeatherSnapshot.created_at.desc()).limit(1))).scalar_one_or_none()
+def _vague_location(location: str | None) -> bool:
+    if not location or not location.strip():
+        return False
+    normalized = " ".join(location.casefold().split())
+    return normalized in {"hall", "venue", "home", "office", "campus", "hotel", "club", "restaurant"}
 
 
-async def _live_air_row(session: AsyncSession, account_id: uuid.UUID, target: date, location: str | None) -> AirQualitySnapshot | None:
-    query = select(AirQualitySnapshot).where(
-        AirQualitySnapshot.account_id == account_id, AirQualitySnapshot.for_date == target,
-        AirQualitySnapshot.provider == "open_meteo", AirQualitySnapshot.source == "external_provider",
-    )
-    if location:
-        query = query.where(AirQualitySnapshot.location == location)
-    return (await session.execute(query.order_by(AirQualitySnapshot.created_at.desc()).limit(1))).scalar_one_or_none()
+async def _live_weather_row(session: AsyncSession, account_id: uuid.UUID, target: date, identity: str | None) -> WeatherSnapshot | None:
+    if identity is None:
+        return None
+    rows = (await session.execute(
+        select(WeatherSnapshot).where(
+            WeatherSnapshot.account_id == account_id, WeatherSnapshot.for_date == target,
+            WeatherSnapshot.provider == "open_meteo", WeatherSnapshot.source == "external_provider",
+        ).order_by(WeatherSnapshot.created_at.desc())
+    )).scalars().all()
+    return next((row for row in rows if isinstance(row.raw, dict) and row.raw.get("location_identity") == identity), None)
 
 
-async def _environment_readings(session: AsyncSession, account_id: uuid.UUID, target: date, city: str | None, timezone_name: str) -> tuple[WeatherReading | None, uuid.UUID | None, str | None, AirQualityReading | None, uuid.UUID | None]:
+async def _live_air_row(session: AsyncSession, account_id: uuid.UUID, target: date, identity: str | None) -> AirQualitySnapshot | None:
+    if identity is None:
+        return None
+    rows = (await session.execute(
+        select(AirQualitySnapshot).where(
+            AirQualitySnapshot.account_id == account_id, AirQualitySnapshot.for_date == target,
+            AirQualitySnapshot.provider == "open_meteo", AirQualitySnapshot.source == "external_provider",
+        ).order_by(AirQualitySnapshot.created_at.desc())
+    )).scalars().all()
+    return next((row for row in rows if isinstance(row.raw, dict) and row.raw.get("location_identity") == identity), None)
+
+
+async def _environment_readings_legacy(session: AsyncSession, account_id: uuid.UUID, target: date, city: str | None, timezone_name: str) -> tuple[WeatherReading | None, uuid.UUID | None, str | None, AirQualityReading | None, uuid.UUID | None]:
     """Manual -> fresh live cache -> one live fetch -> bounded stale cache."""
     manual_weather = await weather_provider("manual", session, account_id)
     weather_rows = await manual_weather.forecast(location=city, dates=[target], timezone_name=timezone_name)
@@ -403,8 +415,8 @@ async def _environment_readings(session: AsyncSession, account_id: uuid.UUID, ta
     try:
         fetched_weather = (await provider.forecast(location=city, dates=[target], timezone_name=timezone_name))
         fetched_air = (await aq_provider.air_quality(location=city, dates=[target], timezone_name=timezone_name))
-        weather_snapshots = [WeatherSnapshot(account_id=account_id, for_date=reading.for_date, location=reading.location, provider=reading.provider, source=reading.source, condition=reading.condition, temp_min_c=reading.temp_min_c, temp_max_c=reading.temp_max_c, precipitation_chance=reading.precipitation_chance, humidity=reading.humidity, uv_index=reading.uv_index, raw={"adapter": "open_meteo", "version": "v1"}) for reading in fetched_weather]
-        air_snapshots = [AirQualitySnapshot(account_id=account_id, for_date=reading.for_date, location=reading.location, provider=reading.provider, source=reading.source, aqi=reading.aqi, index_system=reading.index_system, category=reading.category, prominent_pollutant=reading.prominent_pollutant, pm2_5=reading.pm2_5, pm10=reading.pm10, raw={"adapter": "open_meteo", "version": "v1"}) for reading in fetched_air]
+        weather_snapshots = [WeatherSnapshot(account_id=account_id, for_date=reading.for_date, location=reading.location, provider=reading.provider, source=reading.source, condition=reading.condition, temp_min_c=reading.temp_min_c, temp_max_c=reading.temp_max_c, precipitation_chance=reading.precipitation_chance, humidity=reading.humidity, uv_index=reading.uv_index, raw={"adapter": "open_meteo", "version": "v1", "location_identity": location_identity(city)}) for reading in fetched_weather]
+        air_snapshots = [AirQualitySnapshot(account_id=account_id, for_date=reading.for_date, location=reading.location, provider=reading.provider, source=reading.source, aqi=reading.aqi, index_system=reading.index_system, category=reading.category, prominent_pollutant=reading.prominent_pollutant, pm2_5=reading.pm2_5, pm10=reading.pm10, raw={"adapter": "open_meteo", "version": "v1", "location_identity": location_identity(city)}) for reading in fetched_air]
         for snapshot in (*weather_snapshots, *air_snapshots):
             session.add(snapshot)
         await session.flush()
@@ -417,6 +429,204 @@ async def _environment_readings(session: AsyncSession, account_id: uuid.UUID, ta
         weather = manual_weather_reading or (WeatherReading(for_date=target, condition=stale_weather.condition, temp_min_c=stale_weather.temp_min_c, temp_max_c=stale_weather.temp_max_c, precipitation_chance=stale_weather.precipitation_chance, humidity=stale_weather.humidity, uv_index=stale_weather.uv_index, location=stale_weather.location, provider="open_meteo", source="external_provider", attribution="Weather data · Open-Meteo", is_stale=True) if stale_weather else None)
         air = manual_air_reading or (AirQualityReading(for_date=target, aqi=stale_air.aqi, index_system=stale_air.index_system, category=stale_air.category, location=stale_air.location, prominent_pollutant=stale_air.prominent_pollutant, pm2_5=stale_air.pm2_5, pm10=stale_air.pm10, provider="open_meteo", source="external_provider", attribution="Air quality · Open-Meteo / CAMS", is_stale=True) if stale_air else None)
         return weather, stale_weather.id if weather is not None and weather.provider == "open_meteo" and stale_weather else None, exc.reason, air, stale_air.id if air is not None and air.provider == "open_meteo" and stale_air else None
+
+
+def _weather_from_snapshot(row: WeatherSnapshot, *, stale: bool = False) -> WeatherReading:
+    return WeatherReading(
+        for_date=row.for_date, condition=row.condition, temp_min_c=row.temp_min_c,
+        temp_max_c=row.temp_max_c, precipitation_chance=row.precipitation_chance,
+        humidity=row.humidity, uv_index=row.uv_index, location=row.location,
+        provider="open_meteo", source="external_provider",
+        attribution="Weather data · Open-Meteo", is_stale=stale,
+    )
+
+
+def _air_from_snapshot(row: AirQualitySnapshot, *, stale: bool = False) -> AirQualityReading:
+    return AirQualityReading(
+        for_date=row.for_date, aqi=row.aqi, index_system=row.index_system,
+        category=row.category, location=row.location,
+        prominent_pollutant=row.prominent_pollutant, pm2_5=row.pm2_5, pm10=row.pm10,
+        provider="open_meteo", source="external_provider",
+        attribution="Air quality · Open-Meteo / CAMS", is_stale=stale,
+    )
+
+
+async def _resolve_weather_for_day(
+    session: AsyncSession, account_id: uuid.UUID, target: date, manual: WeatherReading | None,
+    cached: WeatherSnapshot | None, provider: OpenMeteoProvider | None, location: ResolvedLocation | None,
+    timezone_name: str, identity: str | None, now: datetime,
+) -> tuple[WeatherReading | None, uuid.UUID | None, str | None]:
+    if manual is not None:
+        return manual, None, None
+    if cached is not None and _fresh(cached, now):
+        return _weather_from_snapshot(cached), cached.id, None
+    if provider is None or location is None:
+        if cached is not None and _within_stale(cached, now):
+            return _weather_from_snapshot(cached, stale=True), cached.id, "environment_location_unresolved"
+        return None, None, "environment_location_unresolved" if identity is None else "environment_provider_not_configured"
+    try:
+        readings = await provider.forecast_resolved(target=location, dates=[target], timezone_name=timezone_name)
+        if not readings:
+            raise ProviderUnavailable("Live weather is outside the forecast horizon.", provider=provider.name, reason="outside_forecast_horizon")
+        reading = readings[0]
+        snapshot = WeatherSnapshot(
+            account_id=account_id, for_date=reading.for_date, location=reading.location,
+            provider=reading.provider, source=reading.source, condition=reading.condition,
+            temp_min_c=reading.temp_min_c, temp_max_c=reading.temp_max_c,
+            precipitation_chance=reading.precipitation_chance, humidity=reading.humidity,
+            uv_index=reading.uv_index,
+            raw={"adapter": "open_meteo", "version": "v1", "location_identity": identity},
+        )
+        session.add(snapshot)
+        await session.flush()
+        return reading, snapshot.id, None
+    except ProviderUnavailable as exc:
+        if cached is not None and _within_stale(cached, now):
+            return _weather_from_snapshot(cached, stale=True), cached.id, exc.reason
+        return None, None, exc.reason
+
+
+async def _resolve_air_quality_for_day(
+    session: AsyncSession, account_id: uuid.UUID, target: date, manual: AirQualityReading | None,
+    cached: AirQualitySnapshot | None, provider: OpenMeteoProvider | None, location: ResolvedLocation | None,
+    timezone_name: str, identity: str | None, now: datetime,
+) -> tuple[AirQualityReading | None, uuid.UUID | None, str | None]:
+    if manual is not None:
+        return manual, None, None
+    if cached is not None and _fresh(cached, now):
+        return _air_from_snapshot(cached), cached.id, None
+    if provider is None or location is None:
+        if cached is not None and _within_stale(cached, now):
+            return _air_from_snapshot(cached, stale=True), cached.id, "environment_location_unresolved"
+        return None, None, "environment_location_unresolved" if identity is None else "environment_provider_not_configured"
+    try:
+        readings = await provider.air_quality_resolved(target=location, dates=[target], timezone_name=timezone_name)
+        if not readings:
+            raise ProviderUnavailable("Live air quality is outside the forecast horizon.", provider=provider.name, reason="outside_forecast_horizon")
+        reading = readings[0]
+        snapshot = AirQualitySnapshot(
+            account_id=account_id, for_date=reading.for_date, location=reading.location,
+            provider=reading.provider, source=reading.source, aqi=reading.aqi,
+            index_system=reading.index_system, category=reading.category,
+            prominent_pollutant=reading.prominent_pollutant, pm2_5=reading.pm2_5,
+            pm10=reading.pm10,
+            raw={"adapter": "open_meteo", "version": "v1", "location_identity": identity},
+        )
+        session.add(snapshot)
+        await session.flush()
+        return reading, snapshot.id, None
+    except ProviderUnavailable as exc:
+        if cached is not None and _within_stale(cached, now):
+            return _air_from_snapshot(cached, stale=True), cached.id, exc.reason
+        return None, None, exc.reason
+
+
+async def _environment_readings(
+    session: AsyncSession, account_id: uuid.UUID, target: date, city: str | None,
+    timezone_name: str, *, explicit_location: bool = False,
+) -> tuple[WeatherReading | None, uuid.UUID | None, str | None, AirQualityReading | None, uuid.UUID | None]:
+    """Resolve Weather and AQI independently while sharing one target geocode."""
+    manual_weather_rows = await weather_provider("manual", session, account_id).forecast(
+        location=city, dates=[target], timezone_name=timezone_name,
+    )
+    manual_air_rows = await air_quality_provider("manual", session, account_id).air_quality(
+        location=city, dates=[target], timezone_name=timezone_name,
+    )
+    manual_weather = manual_weather_rows[0] if manual_weather_rows else None
+    manual_air = manual_air_rows[0] if manual_air_rows else None
+    if manual_weather is not None and manual_air is not None:
+        return manual_weather, None, None, manual_air, None
+
+    identity = location_identity(city)
+    if explicit_location and _vague_location(city):
+        identity = None
+    now = utcnow()
+    weather_cached = await _live_weather_row(session, account_id, target, identity)
+    air_cached = await _live_air_row(session, account_id, target, identity)
+    provider: OpenMeteoProvider | None = None
+    location: ResolvedLocation | None = None
+    if LIVE_ENVIRONMENT_PROVIDER == "open_meteo":
+        candidate = weather_provider("open_meteo", session, account_id)
+        if isinstance(candidate, OpenMeteoProvider):
+            provider = candidate
+            weather_needed = manual_weather is None and not (weather_cached is not None and _fresh(weather_cached, now))
+            air_needed = manual_air is None and not (air_cached is not None and _fresh(air_cached, now))
+            if identity is not None and (weather_needed or air_needed):
+                try:
+                    location = await provider.resolve_location(city or "")
+                except ProviderUnavailable:
+                    location = None
+
+    weather, weather_id, weather_reason = await _resolve_weather_for_day(
+        session, account_id, target, manual_weather, weather_cached, provider, location,
+        timezone_name, identity, now,
+    )
+    air, air_id, air_reason = await _resolve_air_quality_for_day(
+        session, account_id, target, manual_air, air_cached, provider, location,
+        timezone_name, identity, now,
+    )
+    return weather, weather_id, weather_reason or air_reason, air, air_id
+
+
+async def prefetch_environment(
+    session: AsyncSession, account_id: uuid.UUID, dates: list[date], city: str | None,
+    timezone_name: str, *, explicit_location: bool = False,
+) -> None:
+    """Batch a weekly environment read into one geocode and one call/domain."""
+    if not dates or LIVE_ENVIRONMENT_PROVIDER != "open_meteo":
+        return
+    identity = location_identity(city)
+    if explicit_location and _vague_location(city):
+        return
+    provider = weather_provider("open_meteo", session, account_id)
+    if not isinstance(provider, OpenMeteoProvider) or identity is None:
+        return
+    manual_weather = await weather_provider("manual", session, account_id).forecast(
+        location=city, dates=dates, timezone_name=timezone_name,
+    )
+    manual_air = await air_quality_provider("manual", session, account_id).air_quality(
+        location=city, dates=dates, timezone_name=timezone_name,
+    )
+    manual_weather_dates = {row.for_date for row in manual_weather}
+    manual_air_dates = {row.for_date for row in manual_air}
+    now = utcnow()
+    weather_cached = {day: await _live_weather_row(session, account_id, day, identity) for day in dates}
+    air_cached = {day: await _live_air_row(session, account_id, day, identity) for day in dates}
+    weather_dates = [day for day in dates if day not in manual_weather_dates and not (_fresh(weather_cached[day], now) if weather_cached[day] else False)]
+    air_dates = [day for day in dates if day not in manual_air_dates and not (_fresh(air_cached[day], now) if air_cached[day] else False)]
+    if not weather_dates and not air_dates:
+        return
+    try:
+        location = await provider.resolve_location(city)
+    except ProviderUnavailable:
+        return
+    if weather_dates:
+        try:
+            for reading in await provider.forecast_resolved(target=location, dates=weather_dates, timezone_name=timezone_name):
+                session.add(WeatherSnapshot(
+                    account_id=account_id, for_date=reading.for_date, location=reading.location,
+                    provider=reading.provider, source=reading.source, condition=reading.condition,
+                    temp_min_c=reading.temp_min_c, temp_max_c=reading.temp_max_c,
+                    precipitation_chance=reading.precipitation_chance, humidity=reading.humidity,
+                    uv_index=reading.uv_index,
+                    raw={"adapter": "open_meteo", "version": "v1", "location_identity": identity},
+                ))
+        except ProviderUnavailable:
+            pass
+    if air_dates:
+        try:
+            for reading in await provider.air_quality_resolved(target=location, dates=air_dates, timezone_name=timezone_name):
+                session.add(AirQualitySnapshot(
+                    account_id=account_id, for_date=reading.for_date, location=reading.location,
+                    provider=reading.provider, source=reading.source, aqi=reading.aqi,
+                    index_system=reading.index_system, category=reading.category,
+                    prominent_pollutant=reading.prominent_pollutant, pm2_5=reading.pm2_5,
+                    pm10=reading.pm10,
+                    raw={"adapter": "open_meteo", "version": "v1", "location_identity": identity},
+                ))
+        except ProviderUnavailable:
+            pass
+    await session.flush()
 
 
 async def gather(
@@ -450,7 +660,8 @@ async def gather(
 
     requested_location = environment_location if explicit_environment_location else (environment_location or attributes.get("city"))
     context.weather, context.weather_snapshot_id, weather_reason, context.air_quality, context.air_quality_snapshot_id = await _environment_readings(
-        session, account_id, target, requested_location, resolved_tz
+        session, account_id, target, requested_location, resolved_tz,
+        explicit_location=explicit_environment_location,
     )
     if context.weather is not None and context.weather.provider == "manual":
         manual_snapshot = await latest_weather(session, account_id, target)

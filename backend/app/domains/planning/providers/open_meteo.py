@@ -7,7 +7,9 @@ value objects rather than introducing another context model.
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+import hashlib
+from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
 
 import httpx
@@ -32,7 +34,9 @@ PUBLIC_HOSTS = {
 COMMERCIAL_HOSTS = {
     "weather": "https://customer-api.open-meteo.com/v1/forecast",
     "air": "https://customer-air-quality-api.open-meteo.com/v1/air-quality",
-    "geocode": "https://customer-geocoding-api.open-meteo.com/v1/search",
+    # Geocoding remains the documented public endpoint; customer billing
+    # applies to the forecast and air-quality APIs, not this lookup service.
+    "geocode": "https://geocoding-api.open-meteo.com/v1/search",
 }
 
 _WMO = {
@@ -47,6 +51,22 @@ _WMO = {
 
 def _hosts() -> dict[str, str]:
     return COMMERCIAL_HOSTS if OPEN_METEO_MODE == "commercial" else PUBLIC_HOSTS
+
+
+def location_identity(location: str | None) -> str | None:
+    """Stable, private identity for the requested environmental target."""
+    if not location or not location.strip():
+        return None
+    normalized = " ".join(location.casefold().split())
+    return "loc:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class ResolvedLocation:
+    identity: str
+    latitude: float
+    longitude: float
+    display_name: str
 
 
 def _number(values: Any, index: int) -> float | None:
@@ -100,12 +120,16 @@ class OpenMeteoProvider:
         if not self.is_configured():
             raise ProviderUnavailable("Live environment data is not enabled.", provider=self.name, reason="not_configured")
         headers = {"Accept": "application/json"}
-        if OPEN_METEO_MODE == "commercial":
-            headers["Authorization"] = f"Bearer {OPEN_METEO_API_KEY}"
+        request_params = dict(params)
+        if OPEN_METEO_MODE == "commercial" and kind in {"weather", "air"}:
+            # Open-Meteo customer endpoints authenticate with the documented
+            # query parameter. Never include the key in an exception or raw
+            # snapshot payload.
+            request_params["apikey"] = OPEN_METEO_API_KEY
         for attempt in range(2):
             try:
                 async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
-                    response = await client.get(_hosts()[kind], params=params, headers=headers)
+                    response = await client.get(_hosts()[kind], params=request_params, headers=headers)
                 if (response.status_code in {408, 425, 429} or response.status_code >= 500) and attempt == 0:
                     await asyncio.sleep(0)
                     continue
@@ -121,7 +145,7 @@ class OpenMeteoProvider:
                 raise ProviderUnavailable("Live environment data is temporarily unavailable.", provider=self.name, reason="provider_error") from exc
         raise ProviderUnavailable("Live environment data is temporarily unavailable.", provider=self.name, reason="provider_error")
 
-    async def resolve_location(self, location: str) -> tuple[float, float, str]:
+    async def resolve_location(self, location: str) -> ResolvedLocation:
         query = location.strip()
         if not query:
             raise ProviderUnavailable("A city is needed for live environment data.", provider=self.name, reason="location_unresolved")
@@ -134,16 +158,27 @@ class OpenMeteoProvider:
             raise ProviderUnavailable("That location could not be resolved unambiguously.", provider=self.name, reason="location_unresolved")
         row = indian[0]
         try:
-            return float(row["latitude"]), float(row["longitude"]), str(row.get("name") or query)
+            return ResolvedLocation(
+                identity=location_identity(query) or "",
+                latitude=float(row["latitude"]), longitude=float(row["longitude"]),
+                display_name=str(row.get("name") or query),
+            )
         except (KeyError, TypeError, ValueError) as exc:
             raise ProviderUnavailable("That location could not be resolved.", provider=self.name, reason="location_unresolved") from exc
 
-    async def forecast(self, *, location: str | None, dates: list[date], timezone_name: str) -> list[WeatherReading]:
+    @staticmethod
+    def _within_horizon(dates: list[date], days: int) -> list[date]:
+        today = date.today()
+        return sorted({day for day in dates if today <= day <= today + timedelta(days=days - 1)})
+
+    async def forecast_resolved(self, *, target: ResolvedLocation, dates: list[date], timezone_name: str) -> list[WeatherReading]:
         if not dates:
             return []
-        latitude, longitude, resolved = await self.resolve_location(location or "")
+        dates = self._within_horizon(dates, 16)
+        if not dates:
+            return []
         payload = await self._get("weather", {
-            "latitude": latitude, "longitude": longitude, "timezone": timezone_name,
+            "latitude": target.latitude, "longitude": target.longitude, "timezone": timezone_name,
             "daily": "temperature_2m_min,temperature_2m_max,precipitation_probability_max,relative_humidity_2m_mean,uv_index_max,weather_code",
             "forecast_days": min(16, max(1, (max(dates) - date.today()).days + 1)),
         })
@@ -166,20 +201,26 @@ class OpenMeteoProvider:
                 temp_min_c=low, temp_max_c=high,
                 precipitation_chance=int(precip) if precip is not None else None,
                 humidity=int(humidity) if humidity is not None else None,
-                uv_index=_number(daily.get("uv_index_max"), index), location=resolved,
+                uv_index=_number(daily.get("uv_index_max"), index), location=target.display_name,
                 provider=self.name, source="external_provider", attribution="Weather data · Open-Meteo",
             ))
         return output
 
-    async def air_quality(self, *, location: str | None, dates: list[date], timezone_name: str) -> list[AirQualityReading]:
+    async def forecast(self, *, location: str | None, dates: list[date], timezone_name: str) -> list[WeatherReading]:
+        target = await self.resolve_location(location or "")
+        return await self.forecast_resolved(target=target, dates=dates, timezone_name=timezone_name)
+
+    async def air_quality_resolved(self, *, target: ResolvedLocation, dates: list[date], timezone_name: str) -> list[AirQualityReading]:
         if not dates:
             return []
-        latitude, longitude, resolved = await self.resolve_location(location or "")
+        dates = self._within_horizon(dates, 7)
+        if not dates:
+            return []
         payload = await self._get("air", {
-            "latitude": latitude, "longitude": longitude, "timezone": timezone_name,
+            "latitude": target.latitude, "longitude": target.longitude, "timezone": timezone_name,
             "hourly": "european_aqi,european_aqi_pm2_5,european_aqi_pm10,pm2_5,pm10",
             "index_system": "european_aqi",
-            "forecast_days": min(5, max(1, (max(dates) - date.today()).days + 1)),
+            "forecast_days": min(7, max(1, (max(dates) - date.today()).days + 1)),
         })
         hourly = payload.get("hourly")
         if not isinstance(hourly, dict) or not isinstance(hourly.get("time"), list):
@@ -215,9 +256,13 @@ class OpenMeteoProvider:
             )[1]
             output.append(AirQualityReading(
                 for_date=day, aqi=value, index_system="european_aqi", category=_aqi_category(value),
-                location=resolved, prominent_pollutant=prominent,
+                location=target.display_name, prominent_pollutant=prominent,
                 pm2_5=max(pm25[day]) if pm25[day] else None,
                 pm10=max(pm10[day]) if pm10[day] else None, provider=self.name,
                 source="external_provider", attribution="Air quality · Open-Meteo / CAMS",
             ))
         return output
+
+    async def air_quality(self, *, location: str | None, dates: list[date], timezone_name: str) -> list[AirQualityReading]:
+        target = await self.resolve_location(location or "")
+        return await self.air_quality_resolved(target=target, dates=dates, timezone_name=timezone_name)
