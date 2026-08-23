@@ -107,6 +107,23 @@ async def test_open_meteo_commercial_geocoding_uses_customer_endpoint_and_apikey
 
 
 @pytest.mark.asyncio
+async def test_open_meteo_commercial_air_uses_customer_endpoint_and_apikey(monkeypatch):
+    monkeypatch.setattr(open_meteo, "OPEN_METEO_MODE", "commercial")
+    monkeypatch.setattr(open_meteo, "OPEN_METEO_API_KEY", "air-key-never-persisted")
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    provider = open_meteo.OpenMeteoProvider(transport=httpx.MockTransport(handler))
+    await provider._get("air", {})
+    assert "customer-air-quality-api.open-meteo.com" in str(seen[0].url)
+    assert seen[0].url.params.get("apikey") == "air-key-never-persisted"
+    assert "authorization" not in {key.lower() for key in seen[0].headers}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["timeout", "server", "malformed"])
 async def test_open_meteo_failures_are_sanitized(monkeypatch, failure):
     monkeypatch.setattr(open_meteo, "OPEN_METEO_MODE", "commercial")
