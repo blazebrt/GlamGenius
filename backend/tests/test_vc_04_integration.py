@@ -1,5 +1,5 @@
 """VC-04 Today acceptance coverage against the real API and database."""
-from datetime import date
+from datetime import date, timedelta
 
 import httpx
 import pytest
@@ -15,14 +15,16 @@ from tests.conftest import auth
 pytestmark = pytest.mark.asyncio
 
 
-def _provider_transport(day: date, *, weather_status: int = 200, air_status: int = 200):
+def _provider_transport(day: date, *, weather_status: int = 200, air_status: int = 200, seen_locations: list[str] | None = None):
     calls = {"geocode": 0, "weather": 0, "air": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if "geocoding" in url:
             calls["geocode"] += 1
-            return httpx.Response(200, json={"results": [{"country_code": "IN", "latitude": 28.61, "longitude": 77.21, "name": "Delhi"}]}, request=request)
+            if seen_locations is not None:
+                seen_locations.append(request.url.params.get("name", ""))
+            return httpx.Response(200, json={"results": [{"country_code": "IN", "latitude": 19.07, "longitude": 72.87, "name": "Mumbai"}]}, request=request)
         if "air-quality" in url:
             calls["air"] += 1
             if air_status != 200:
@@ -30,6 +32,8 @@ def _provider_transport(day: date, *, weather_status: int = 200, air_status: int
             return httpx.Response(200, json={"hourly": {
                 "time": [f"{day.isoformat()}T00:00"], "european_aqi": [35],
                 "european_aqi_pm2_5": [35], "european_aqi_pm10": [20],
+                "european_aqi_nitrogen_dioxide": [15], "european_aqi_ozone": [10],
+                "european_aqi_sulphur_dioxide": [5],
                 "pm2_5": [12.0], "pm10": [20.0],
             }}, request=request)
         calls["weather"] += 1
@@ -113,3 +117,70 @@ async def test_today_provider_failure_keeps_other_domain_and_returns_200(
     body = response.json()
     assert body["weather"] is None if failed_domain == "weather" else body["weather"] is not None
     assert body["air_quality"] is None if failed_domain == "air" else body["air_quality"] is not None
+
+
+async def test_event_ready_uses_explicit_location_for_both_live_domains(
+    app_client, db_clean, registered_supabase_user, monkeypatch,
+):
+    token, _ = await registered_supabase_user()
+    await _set_city(app_client, token)
+    target = clock.local_today("Asia/Kolkata") + timedelta(days=1)
+    seen_locations: list[str] = []
+    calls, transport = _provider_transport(target, seen_locations=seen_locations)
+    _use_provider(monkeypatch, open_meteo.OpenMeteoProvider(transport=transport))
+
+    created = await app_client.post(
+        "/api/v2/today/events", headers=auth(token),
+        json={
+            "title": "Mumbai wedding", "starts_at": f"{target.isoformat()}T12:00:00+05:30",
+            "location": "Mumbai", "occasion_key": "wedding",
+        },
+    )
+    assert created.status_code in (200, 201), created.text
+    event_id = created.json()["event"]["id"]
+    generated = await app_client.post(
+        f"/api/v2/planner/events/{event_id}/ready/generate", headers=auth(token),
+    )
+    assert generated.status_code == 200, generated.text
+    body = generated.json()
+    assert seen_locations == ["Mumbai"]
+    assert body["context"]["weather"]["location"] == "Mumbai"
+    assert body["context"]["air_quality"]["location"] == "Mumbai"
+    assert calls == {"geocode": 1, "weather": 1, "air": 1}
+
+
+@pytest.mark.parametrize(("location", "expected_geocodes"), [("Unknown Hall", ["Unknown Hall"]), ("Hall", [])])
+async def test_event_ready_never_falls_back_after_explicit_location_failure(
+    app_client, db_clean, registered_supabase_user, monkeypatch, location, expected_geocodes,
+):
+    token, _ = await registered_supabase_user()
+    await _set_city(app_client, token)
+    target = clock.local_today("Asia/Kolkata") + timedelta(days=1)
+    seen_locations: list[str] = []
+    calls, transport = _provider_transport(target, seen_locations=seen_locations)
+
+    def unresolved(request: httpx.Request) -> httpx.Response:
+        if "geocoding" in str(request.url):
+            seen_locations.append(request.url.params.get("name", ""))
+            return httpx.Response(200, json={"results": []}, request=request)
+        return httpx.Response(500, request=request)
+
+    _use_provider(monkeypatch, open_meteo.OpenMeteoProvider(transport=httpx.MockTransport(unresolved)))
+    created = await app_client.post(
+        "/api/v2/today/events", headers=auth(token),
+        json={
+            "title": "Unresolved venue", "starts_at": f"{target.isoformat()}T12:00:00+05:30",
+            "location": location, "occasion_key": "wedding",
+        },
+    )
+    assert created.status_code in (200, 201), created.text
+    event_id = created.json()["event"]["id"]
+    generated = await app_client.post(
+        f"/api/v2/planner/events/{event_id}/ready/generate", headers=auth(token),
+    )
+    assert generated.status_code == 200, generated.text
+    body = generated.json()
+    assert body["context"]["weather"] is None
+    assert body["context"]["air_quality"] is None
+    assert seen_locations == expected_geocodes
+    assert calls == {"geocode": 0, "weather": 0, "air": 0}

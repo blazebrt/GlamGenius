@@ -79,15 +79,7 @@ def _number(values: Any, index: int) -> float | None:
 def _weather_condition(code: int | None, low: float | None, high: float | None) -> str:
     if code is not None and code in _WMO:
         return _WMO[code]
-    if high is not None and high >= 35:
-        return "hot"
-    if low is not None and low <= 15:
-        return "cold"
-    if high is not None and high >= 25:
-        return "warm"
-    if high is not None and high < 20:
-        return "cool"
-    return "mild"
+    return "unknown"
 
 
 def _aqi_category(value: int) -> str:
@@ -111,6 +103,13 @@ def _planning_today(timezone_name: str) -> date:
 def _valid_number_series(values: Any, length: int) -> bool:
     return isinstance(values, list) and len(values) == length and all(
         isinstance(value, (int, float)) and not isinstance(value, bool) for value in values
+    )
+
+
+def _valid_optional_number_series(values: Any, length: int) -> bool:
+    return isinstance(values, list) and len(values) == length and all(
+        value is None or (isinstance(value, (int, float)) and not isinstance(value, bool))
+        for value in values
     )
 
 
@@ -265,8 +264,13 @@ class OpenMeteoProvider:
             humidity_values = humidity_by_day[day]
             humidity = int(round(sum(humidity_values) / len(humidity_values))) if humidity_values else None
             code = _number(daily.get("weather_code"), index)
+            condition = _weather_condition(int(code) if code is not None else None, low, high)
+            if condition == "unknown":
+                raise ProviderUnavailable(
+                    "Live weather data was malformed.", provider=self.name, reason="invalid_provider_response",
+                )
             output.append(WeatherReading(
-                for_date=day, condition=_weather_condition(int(code) if code is not None else None, low, high),
+                for_date=day, condition=condition,
                 temp_min_c=low, temp_max_c=high,
                 precipitation_chance=int(precip) if precip is not None else None,
                 humidity=int(humidity) if humidity is not None else None,
@@ -287,20 +291,34 @@ class OpenMeteoProvider:
             return []
         payload = await self._get("air", {
             "latitude": target.latitude, "longitude": target.longitude, "timezone": timezone_name,
-            "hourly": "european_aqi,european_aqi_pm2_5,european_aqi_pm10,pm2_5,pm10",
+            "hourly": (
+                "european_aqi,european_aqi_pm2_5,european_aqi_pm10,"
+                "european_aqi_nitrogen_dioxide,european_aqi_ozone,"
+                "european_aqi_sulphur_dioxide,pm2_5,pm10"
+            ),
             "forecast_days": min(7, max(1, (max(dates) - _planning_today(timezone_name)).days + 1)),
         })
         hourly = payload.get("hourly")
         if not isinstance(hourly, dict) or not isinstance(hourly.get("time"), list):
             raise ProviderUnavailable("Live air-quality data was malformed.", provider=self.name, reason="invalid_provider_response")
         length = len(hourly["time"])
-        required = ("european_aqi", "european_aqi_pm2_5", "european_aqi_pm10", "pm2_5", "pm10")
-        if not _valid_time_series(hourly["time"], length, hourly=True) or any(
-            not _valid_number_series(hourly.get(key), length) for key in required
+        if not _valid_time_series(hourly["time"], length, hourly=True) or not _valid_number_series(
+            hourly.get("european_aqi"), length
         ):
             raise ProviderUnavailable("Live air-quality data was malformed.", provider=self.name, reason="invalid_provider_response")
+        constituent_keys = {
+            "pm2_5": "european_aqi_pm2_5",
+            "pm10": "european_aqi_pm10",
+            "nitrogen_dioxide": "european_aqi_nitrogen_dioxide",
+            "ozone": "european_aqi_ozone",
+            "sulphur_dioxide": "european_aqi_sulphur_dioxide",
+        }
+        if any(not _valid_optional_number_series(hourly.get(key), length) for key in (*constituent_keys.values(), "pm2_5", "pm10")):
+            raise ProviderUnavailable("Live air-quality data was malformed.", provider=self.name, reason="invalid_provider_response")
         buckets: dict[date, list[int]] = {d: [] for d in dates}
-        pollutant_aqi: dict[date, dict[str, list[int]]] = {d: {"pm2_5": [], "pm10": []} for d in dates}
+        pollutant_aqi: dict[date, dict[str, list[int]]] = {
+            d: {key: [] for key in constituent_keys} for d in dates
+        }
         pm25: dict[date, list[float]] = {d: [] for d in dates}
         pm10: dict[date, list[float]] = {d: [] for d in dates}
         for index, raw_time in enumerate(hourly["time"]):
@@ -308,8 +326,8 @@ class OpenMeteoProvider:
             aqi = _number(hourly.get("european_aqi"), index)
             if day in buckets and aqi is not None:
                 buckets[day].append(int(aqi))
-                for key in ("pm2_5", "pm10"):
-                    pollutant_value = _number(hourly.get(f"european_aqi_{key}"), index)
+                for key, query_key in constituent_keys.items():
+                    pollutant_value = _number(hourly.get(query_key), index)
                     if pollutant_value is not None:
                         pollutant_aqi[day][key].append(int(pollutant_value))
                 for key, dest in (("pm2_5", pm25), ("pm10", pm10)):
@@ -321,10 +339,13 @@ class OpenMeteoProvider:
             if not buckets[day]:
                 continue
             value = max(buckets[day])
-            prominent = max(
-                ((max(values), key) for key, values in pollutant_aqi[day].items() if values),
-                default=(None, None),
-            )[1]
+            pollutant_maxima = {
+                key: max(values) for key, values in pollutant_aqi[day].items() if values
+            }
+            prominent = next(
+                (key for key in constituent_keys if pollutant_maxima.get(key) == max(pollutant_maxima.values())),
+                None,
+            ) if pollutant_maxima else None
             output.append(AirQualityReading(
                 for_date=day, aqi=value, index_system="european_aqi", category=_aqi_category(value),
                 location=target.display_name, prominent_pollutant=prominent,

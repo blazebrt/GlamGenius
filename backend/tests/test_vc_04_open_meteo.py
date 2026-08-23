@@ -8,7 +8,7 @@ import httpx
 import pytest
 from app.domains.planning.context import DayContext, _note_gaps, _resolve_air_quality_for_day, _resolve_weather_for_day
 from app.domains.planning.providers import open_meteo
-from app.domains.planning.providers.base import WeatherReading
+from app.domains.planning.providers.base import AirQualityReading, WeatherReading
 from app.shared.observability.sentry_privacy import scrub_event
 
 
@@ -27,6 +27,8 @@ async def test_open_meteo_normalises_weather_and_european_aqi(monkeypatch):
             return httpx.Response(200, json={"hourly": {
                 "time": [f"{day.isoformat()}T00:00"], "european_aqi": [35],
                 "european_aqi_pm2_5": [35], "european_aqi_pm10": [20],
+                "european_aqi_nitrogen_dioxide": [15], "european_aqi_ozone": [10],
+                "european_aqi_sulphur_dioxide": [5],
                 "pm2_5": [12.0], "pm10": [20.0],
             }})
         return httpx.Response(200, json={"daily": {
@@ -56,8 +58,64 @@ async def test_open_meteo_normalises_weather_and_european_aqi(monkeypatch):
     assert weather_request.url.params["hourly"] == "relative_humidity_2m"
     air_request = next(request for request in seen if "air-quality" in str(request.url))
     assert set(air_request.url.params.keys()) == {"latitude", "longitude", "timezone", "hourly", "forecast_days"}
-    assert air_request.url.params["hourly"] == "european_aqi,european_aqi_pm2_5,european_aqi_pm10,pm2_5,pm10"
+    assert air_request.url.params["hourly"] == "european_aqi,european_aqi_pm2_5,european_aqi_pm10,european_aqi_nitrogen_dioxide,european_aqi_ozone,european_aqi_sulphur_dioxide,pm2_5,pm10"
     assert "index_system" not in air_request.url.params
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ({"pm2_5": 35, "pm10": 20, "nitrogen_dioxide": 15, "ozone": 10, "sulphur_dioxide": 5}, "pm2_5"),
+        ({"pm2_5": 10, "pm10": 20, "nitrogen_dioxide": 15, "ozone": 25, "sulphur_dioxide": 5}, "ozone"),
+        ({"pm2_5": 10, "pm10": 20, "nitrogen_dioxide": 30, "ozone": 25, "sulphur_dioxide": 5}, "nitrogen_dioxide"),
+        ({"pm2_5": 10, "pm10": 20, "nitrogen_dioxide": 15, "ozone": 25, "sulphur_dioxide": 35}, "sulphur_dioxide"),
+        ({"pm2_5": 10, "pm10": 40, "nitrogen_dioxide": 15, "ozone": 25, "sulphur_dioxide": 5}, "pm10"),
+        ({"pm2_5": 30, "pm10": 30, "nitrogen_dioxide": 15, "ozone": 25, "sulphur_dioxide": 5}, "pm2_5"),
+    ],
+)
+async def test_open_meteo_prominent_pollutant_uses_all_european_aqi_constituents(monkeypatch, values, expected):
+    monkeypatch.setattr(open_meteo, "OPEN_METEO_MODE", "evaluation")
+    day = date(2026, 8, 23)
+    monkeypatch.setattr(open_meteo.clock, "local_today", lambda timezone_name: day)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "air-quality" not in str(request.url):
+            return httpx.Response(200, json={"results": [{"country_code": "IN", "latitude": 12.97, "longitude": 77.59, "name": "Bengaluru"}]})
+        return httpx.Response(200, json={"hourly": {
+            "time": [f"{day.isoformat()}T00:00"], "european_aqi": [max(values.values())],
+            "european_aqi_pm2_5": [values["pm2_5"]], "european_aqi_pm10": [values["pm10"]],
+            "european_aqi_nitrogen_dioxide": [values["nitrogen_dioxide"]],
+            "european_aqi_ozone": [values["ozone"]],
+            "european_aqi_sulphur_dioxide": [values["sulphur_dioxide"]],
+            "pm2_5": [12.0], "pm10": [20.0],
+        }})
+
+    reading = await open_meteo.OpenMeteoProvider(
+        transport=httpx.MockTransport(handler),
+    ).air_quality(location="Bengaluru", dates=[day], timezone_name="Asia/Kolkata")
+    assert reading[0].prominent_pollutant == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [999, -1, 4])
+async def test_open_meteo_rejects_unknown_weather_codes(monkeypatch, code):
+    monkeypatch.setattr(open_meteo, "OPEN_METEO_MODE", "evaluation")
+    day = date(2026, 8, 23)
+    monkeypatch.setattr(open_meteo.clock, "local_today", lambda timezone_name: day)
+    payload = {"daily": {
+        "time": [day.isoformat()], "temperature_2m_min": [20], "temperature_2m_max": [35],
+        "precipitation_probability_max": [10], "uv_index_max": [7], "weather_code": [code],
+    }, "hourly": {"time": [f"{day.isoformat()}T00:00"], "relative_humidity_2m": [50]}}
+    provider = open_meteo.OpenMeteoProvider(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload)),
+    )
+    with pytest.raises(open_meteo.ProviderUnavailable) as error:
+        await provider.forecast_resolved(
+            target=open_meteo.ResolvedLocation("loc:test", 12.97, 77.59, "Bengaluru"),
+            dates=[day], timezone_name="Asia/Kolkata",
+        )
+    assert error.value.reason == "invalid_provider_response"
 
 
 @pytest.mark.asyncio
@@ -77,7 +135,7 @@ async def test_open_meteo_enforces_weather_16_day_and_aqi_7_day_horizons(monkeyp
     monkeypatch.setattr(open_meteo.clock, "local_today", lambda timezone_name: today)
     def handler(request: httpx.Request) -> httpx.Response:
         if "air-quality" in str(request.url):
-            return httpx.Response(200, json={"hourly": {"time": [today.isoformat() + "T00:00"], "european_aqi": [20], "european_aqi_pm2_5": [20], "european_aqi_pm10": [20], "pm2_5": [12], "pm10": [20]}})
+            return httpx.Response(200, json={"hourly": {"time": [today.isoformat() + "T00:00"], "european_aqi": [20], "european_aqi_pm2_5": [20], "european_aqi_pm10": [20], "european_aqi_nitrogen_dioxide": [20], "european_aqi_ozone": [20], "european_aqi_sulphur_dioxide": [20], "pm2_5": [12], "pm10": [20]}})
         return httpx.Response(200, json={"daily": {"time": [today.isoformat()], "temperature_2m_min": [20], "temperature_2m_max": [25], "precipitation_probability_max": [10], "uv_index_max": [7], "weather_code": [1]}, "hourly": {"time": [today.isoformat() + "T00:00"], "relative_humidity_2m": [50]}})
 
     transport = httpx.MockTransport(handler)
@@ -326,6 +384,70 @@ async def test_weather_stale_fallback_does_not_hide_independent_aqi_failure():
     )
     assert weather is not None and weather.is_stale is True
     assert reason == "provider_error"
+
+
+@pytest.mark.asyncio
+async def test_environment_cache_fresh_expired_and_beyond_stale_are_independent():
+    now = datetime(2026, 8, 23, 12, tzinfo=UTC)
+    day = date(2026, 8, 23)
+    session = SimpleNamespace(added=[])
+    session.add = session.added.append
+    async def flush():
+        return None
+    session.flush = flush
+
+    class Provider:
+        name = "open_meteo"
+        weather_calls = 0
+        air_calls = 0
+
+        async def forecast_resolved(self, **_):
+            type(self).weather_calls += 1
+            return [WeatherReading(for_date=day, condition="clear", temp_max_c=30)]
+
+        async def air_quality_resolved(self, **_):
+            type(self).air_calls += 1
+            return [AirQualityReading(for_date=day, aqi=25, index_system="european_aqi", category="Fair")]
+
+    provider = Provider()
+    target = open_meteo.ResolvedLocation("loc:test", 12.97, 77.59, "Bengaluru")
+    fresh_weather = SimpleNamespace(
+        id=uuid4(), for_date=day, created_at=now, condition="rainy", temp_min_c=20,
+        temp_max_c=25, precipitation_chance=50, humidity=70, uv_index=4, location="Bengaluru",
+    )
+    fresh_air = SimpleNamespace(
+        id=uuid4(), for_date=day, created_at=now, aqi=22, index_system="european_aqi",
+        category="Fair", location="Bengaluru", prominent_pollutant=None, pm2_5=None, pm10=None,
+    )
+    weather, _, _ = await _resolve_weather_for_day(
+        session, uuid4(), day, None, fresh_weather, provider, target,
+        "Asia/Kolkata", "loc:test", now,
+    )
+    air, _, _ = await _resolve_air_quality_for_day(
+        session, uuid4(), day, None, fresh_air, provider, target,
+        "Asia/Kolkata", "loc:test", now,
+    )
+    assert weather.condition == "rainy" and air.aqi == 22
+    assert Provider.weather_calls == Provider.air_calls == 0
+
+    expired_weather = SimpleNamespace(**{**vars(fresh_weather), "created_at": now - timedelta(hours=2)})
+    expired_air = SimpleNamespace(**{**vars(fresh_air), "created_at": now - timedelta(hours=2)})
+    await _resolve_weather_for_day(session, uuid4(), day, None, expired_weather, provider, target, "Asia/Kolkata", "loc:test", now)
+    await _resolve_air_quality_for_day(session, uuid4(), day, None, expired_air, provider, target, "Asia/Kolkata", "loc:test", now)
+    assert Provider.weather_calls == Provider.air_calls == 1
+
+    class Down(Provider):
+        async def forecast_resolved(self, **_):
+            raise open_meteo.ProviderUnavailable("down", provider=self.name, reason="provider_error")
+
+        async def air_quality_resolved(self, **_):
+            raise open_meteo.ProviderUnavailable("down", provider=self.name, reason="provider_error")
+
+    too_old_weather = SimpleNamespace(**{**vars(fresh_weather), "created_at": now - timedelta(hours=8)})
+    too_old_air = SimpleNamespace(**{**vars(fresh_air), "created_at": now - timedelta(hours=8)})
+    missing_weather, _, _ = await _resolve_weather_for_day(session, uuid4(), day, None, too_old_weather, Down(), target, "Asia/Kolkata", "loc:test", now)
+    missing_air, _, _ = await _resolve_air_quality_for_day(session, uuid4(), day, None, too_old_air, Down(), target, "Asia/Kolkata", "loc:test", now)
+    assert missing_weather is None and missing_air is None
 
 
 @pytest.mark.asyncio

@@ -77,7 +77,7 @@ async def generate(
     # consumes the exact persisted snapshots without multiplying geocoding and
     # provider calls by seven.
     attributes = await context_stage.style_context.confirmed_attributes(session, account_id)
-    environment_prefetch_ok = await context_stage.prefetch_environment(
+    await context_stage.prefetch_environment(
         session, account_id, clock.week_dates(week_start), attributes.get("city"), timezone_name,
     )
 
@@ -86,7 +86,9 @@ async def generate(
         context = await context_stage.gather(
             session, account_id=account_id, plan_date=plan_date,
             timezone_name=timezone_name, repetition_window_days=repetition_window_days,
-            skip_live_environment=not environment_prefetch_ok,
+            # The batched prefetch is the only live-network pass for a week.
+            # Every day thereafter consumes persisted/manual/cache/stale facts.
+            skip_live_environment=True,
         )
         if row is not None and row.locked and not regenerate_locked:
             # A locked weekly day keeps its full-day/outfit decision, but the
