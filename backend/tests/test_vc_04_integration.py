@@ -128,6 +128,7 @@ async def test_event_ready_uses_explicit_location_for_both_live_domains(
     seen_locations: list[str] = []
     calls, transport = _provider_transport(target, seen_locations=seen_locations)
     _use_provider(monkeypatch, open_meteo.OpenMeteoProvider(transport=transport))
+    seen_locations.clear()
 
     created = await app_client.post(
         "/api/v2/today/events", headers=auth(token),
@@ -158,6 +159,7 @@ async def test_event_ready_never_falls_back_after_explicit_location_failure(
     target = clock.local_today("Asia/Kolkata") + timedelta(days=1)
     seen_locations: list[str] = []
     calls, transport = _provider_transport(target, seen_locations=seen_locations)
+    seen_locations.clear()
 
     def unresolved(request: httpx.Request) -> httpx.Response:
         if "geocoding" in str(request.url):
