@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -128,6 +129,26 @@ def _valid_time_series(values: Any, length: int, *, hourly: bool = False) -> boo
     return True
 
 
+class _ApiKeyRedactionFilter(logging.Filter):
+    """Redact the commercial query key from HTTPX/httpcore log messages."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        secret = OPEN_METEO_API_KEY
+        if secret:
+            message = record.getMessage()
+            if secret in message:
+                record.msg = message.replace(secret, "[REDACTED]")
+                record.args = ()
+        return True
+
+
+def _install_log_redaction() -> None:
+    for name in ("httpx", "httpcore"):
+        logger = logging.getLogger(name)
+        if not any(isinstance(item, _ApiKeyRedactionFilter) for item in logger.filters):
+            logger.addFilter(_ApiKeyRedactionFilter())
+
+
 class OpenMeteoProvider:
     name = "open_meteo"
 
@@ -150,22 +171,27 @@ class OpenMeteoProvider:
             # query parameter. Never include the key in an exception or raw
             # snapshot payload.
             request_params["apikey"] = OPEN_METEO_API_KEY
+            _install_log_redaction()
         for attempt in range(2):
             try:
                 async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
                     response = await client.get(_hosts()[kind], params=request_params, headers=headers)
-                if (response.status_code in {408, 425, 429} or response.status_code >= 500) and attempt == 0:
+                retryable_status = response.status_code in {408, 425, 429} or response.status_code >= 500
+                if retryable_status and attempt == 0:
                     await asyncio.sleep(0)
                     continue
-                response.raise_for_status()
+                if response.is_error:
+                    break
                 payload = response.json()
                 if not isinstance(payload, dict):
                     raise ValueError("response is not an object")
                 return payload
-            except (httpx.HTTPError, ValueError, TypeError):
+            except httpx.TransportError:
                 if attempt == 0:
                     await asyncio.sleep(0)
                     continue
+                break
+            except (ValueError, TypeError):
                 break
         raise ProviderUnavailable("Live environment data is temporarily unavailable.", provider=self.name, reason="provider_error")
 
@@ -203,7 +229,8 @@ class OpenMeteoProvider:
             return []
         payload = await self._get("weather", {
             "latitude": target.latitude, "longitude": target.longitude, "timezone": timezone_name,
-            "daily": "temperature_2m_min,temperature_2m_max,precipitation_probability_max,relative_humidity_2m_mean,uv_index_max,weather_code",
+            "daily": "temperature_2m_min,temperature_2m_max,precipitation_probability_max,uv_index_max,weather_code",
+            "hourly": "relative_humidity_2m",
             "forecast_days": min(16, max(1, (max(dates) - _planning_today(timezone_name)).days + 1)),
         })
         daily = payload.get("daily")
@@ -211,20 +238,32 @@ class OpenMeteoProvider:
             raise ProviderUnavailable("Live weather data was malformed.", provider=self.name, reason="invalid_provider_response")
         length = len(daily["time"])
         required = (
-            "temperature_2m_min", "temperature_2m_max", "precipitation_probability_max",
-            "relative_humidity_2m_mean", "uv_index_max", "weather_code",
+            "temperature_2m_min", "temperature_2m_max", "precipitation_probability_max", "uv_index_max", "weather_code",
         )
         if not _valid_time_series(daily["time"], length) or any(
             not _valid_number_series(daily.get(key), length) for key in required
         ):
             raise ProviderUnavailable("Live weather data was malformed.", provider=self.name, reason="invalid_provider_response")
+        hourly = payload.get("hourly")
+        if not isinstance(hourly, dict) or not isinstance(hourly.get("time"), list):
+            raise ProviderUnavailable("Live weather data was malformed.", provider=self.name, reason="invalid_provider_response")
+        hourly_length = len(hourly["time"])
+        if not _valid_time_series(hourly["time"], hourly_length, hourly=True) or not _valid_number_series(hourly.get("relative_humidity_2m"), hourly_length):
+            raise ProviderUnavailable("Live weather data was malformed.", provider=self.name, reason="invalid_provider_response")
+        humidity_by_day: dict[date, list[float]] = {day: [] for day in dates}
+        for raw_time, value in zip(hourly["time"], hourly["relative_humidity_2m"], strict=True):
+            local_day = datetime.fromisoformat(raw_time.replace("Z", "+00:00")).date()
+            if local_day in humidity_by_day:
+                humidity_by_day[local_day].append(float(value))
         output: list[WeatherReading] = []
         for index, raw_day in enumerate(daily["time"]):
             day = date.fromisoformat(raw_day)
             if day not in dates:
                 continue
             low, high = _number(daily.get("temperature_2m_min"), index), _number(daily.get("temperature_2m_max"), index)
-            precip, humidity = _number(daily.get("precipitation_probability_max"), index), _number(daily.get("relative_humidity_2m_mean"), index)
+            precip = _number(daily.get("precipitation_probability_max"), index)
+            humidity_values = humidity_by_day[day]
+            humidity = int(round(sum(humidity_values) / len(humidity_values))) if humidity_values else None
             code = _number(daily.get("weather_code"), index)
             output.append(WeatherReading(
                 for_date=day, condition=_weather_condition(int(code) if code is not None else None, low, high),
@@ -249,7 +288,6 @@ class OpenMeteoProvider:
         payload = await self._get("air", {
             "latitude": target.latitude, "longitude": target.longitude, "timezone": timezone_name,
             "hourly": "european_aqi,european_aqi_pm2_5,european_aqi_pm10,pm2_5,pm10",
-            "index_system": "european_aqi",
             "forecast_days": min(7, max(1, (max(dates) - _planning_today(timezone_name)).days + 1)),
         })
         hourly = payload.get("hourly")

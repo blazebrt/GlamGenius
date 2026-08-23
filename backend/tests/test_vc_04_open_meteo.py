@@ -1,4 +1,5 @@
 """VC-04 provider contract tests; all HTTP is supplied by MockTransport."""
+import logging
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -8,15 +9,18 @@ import pytest
 from app.domains.planning.context import DayContext, _note_gaps, _resolve_air_quality_for_day, _resolve_weather_for_day
 from app.domains.planning.providers import open_meteo
 from app.domains.planning.providers.base import WeatherReading
+from app.shared.observability.sentry_privacy import scrub_event
 
 
 @pytest.mark.asyncio
 async def test_open_meteo_normalises_weather_and_european_aqi(monkeypatch):
     monkeypatch.setattr(open_meteo, "OPEN_METEO_MODE", "evaluation")
-
-    day = date.today()
+    day = date(2026, 8, 23)
+    monkeypatch.setattr(open_meteo.clock, "local_today", lambda timezone_name: day)
+    seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
         if "geocoding" in str(request.url):
             return httpx.Response(200, json={"results": [{"country_code": "IN", "latitude": 12.97, "longitude": 77.59, "name": "Bengaluru"}]})
         if "air-quality" in str(request.url):
@@ -27,8 +31,10 @@ async def test_open_meteo_normalises_weather_and_european_aqi(monkeypatch):
             }})
         return httpx.Response(200, json={"daily": {
             "time": [day.isoformat()], "temperature_2m_min": [20], "temperature_2m_max": [30],
-            "precipitation_probability_max": [10], "relative_humidity_2m_mean": [60],
-            "uv_index_max": [7], "weather_code": [1],
+            "precipitation_probability_max": [10], "uv_index_max": [7], "weather_code": [1],
+        }, "hourly": {
+            "time": [f"{day.isoformat()}T00:00", f"{day.isoformat()}T01:00"],
+            "relative_humidity_2m": [50, 70],
         }})
 
     provider = open_meteo.OpenMeteoProvider(transport=httpx.MockTransport(handler))
@@ -36,6 +42,7 @@ async def test_open_meteo_normalises_weather_and_european_aqi(monkeypatch):
     air = await provider.air_quality(location="Bengaluru", dates=[day], timezone_name="Asia/Kolkata")
 
     assert weather[0].condition == "clear"
+    assert weather[0].humidity == 60
     assert weather[0].provider == "open_meteo"
     assert weather[0].source == "external_provider"
     assert weather[0].attribution == "Weather data · Open-Meteo"
@@ -43,6 +50,14 @@ async def test_open_meteo_normalises_weather_and_european_aqi(monkeypatch):
     assert air[0].category == "Fair"
     assert air[0].prominent_pollutant == "pm2_5"
     assert air[0].attribution == "Air quality · Open-Meteo / CAMS"
+    weather_request = next(request for request in seen if "forecast" in str(request.url))
+    assert set(weather_request.url.params.keys()) == {"latitude", "longitude", "timezone", "daily", "hourly", "forecast_days"}
+    assert weather_request.url.params["daily"] == "temperature_2m_min,temperature_2m_max,precipitation_probability_max,uv_index_max,weather_code"
+    assert weather_request.url.params["hourly"] == "relative_humidity_2m"
+    air_request = next(request for request in seen if "air-quality" in str(request.url))
+    assert set(air_request.url.params.keys()) == {"latitude", "longitude", "timezone", "hourly", "forecast_days"}
+    assert air_request.url.params["hourly"] == "european_aqi,european_aqi_pm2_5,european_aqi_pm10,pm2_5,pm10"
+    assert "index_system" not in air_request.url.params
 
 
 @pytest.mark.asyncio
@@ -58,18 +73,20 @@ async def test_open_meteo_rejects_ambiguous_location(monkeypatch):
 @pytest.mark.asyncio
 async def test_open_meteo_enforces_weather_16_day_and_aqi_7_day_horizons(monkeypatch):
     monkeypatch.setattr(open_meteo, "OPEN_METEO_MODE", "evaluation")
+    today = date(2026, 8, 23)
+    monkeypatch.setattr(open_meteo.clock, "local_today", lambda timezone_name: today)
     def handler(request: httpx.Request) -> httpx.Response:
         if "air-quality" in str(request.url):
-            return httpx.Response(200, json={"hourly": {"time": [date.today().isoformat() + "T00:00"], "european_aqi": [20]}})
-        return httpx.Response(200, json={"daily": {"time": [date.today().isoformat()], "temperature_2m_min": [20], "temperature_2m_max": [25], "weather_code": [1]}})
+            return httpx.Response(200, json={"hourly": {"time": [today.isoformat() + "T00:00"], "european_aqi": [20], "european_aqi_pm2_5": [20], "european_aqi_pm10": [20], "pm2_5": [12], "pm10": [20]}})
+        return httpx.Response(200, json={"daily": {"time": [today.isoformat()], "temperature_2m_min": [20], "temperature_2m_max": [25], "precipitation_probability_max": [10], "uv_index_max": [7], "weather_code": [1]}, "hourly": {"time": [today.isoformat() + "T00:00"], "relative_humidity_2m": [50]}})
 
     transport = httpx.MockTransport(handler)
     provider = open_meteo.OpenMeteoProvider(transport=transport)
     target = open_meteo.ResolvedLocation("loc:test", 12.97, 77.59, "Bengaluru")
-    assert date.today() + timedelta(days=15) in provider._within_horizon([date.today() + timedelta(days=15)], 16)
-    assert date.today() + timedelta(days=16) not in provider._within_horizon([date.today() + timedelta(days=16)], 16)
-    assert date.today() + timedelta(days=6) in provider._within_horizon([date.today() + timedelta(days=6)], 7)
-    assert date.today() + timedelta(days=7) not in provider._within_horizon([date.today() + timedelta(days=7)], 7)
+    assert today + timedelta(days=15) in provider._within_horizon([today + timedelta(days=15)], 16, "Asia/Kolkata")
+    assert today + timedelta(days=16) not in provider._within_horizon([today + timedelta(days=16)], 16, "Asia/Kolkata")
+    assert today + timedelta(days=6) in provider._within_horizon([today + timedelta(days=6)], 7, "Asia/Kolkata")
+    assert today + timedelta(days=7) not in provider._within_horizon([today + timedelta(days=7)], 7, "Asia/Kolkata")
 
 
 @pytest.mark.asyncio
@@ -151,13 +168,74 @@ async def test_open_meteo_failures_are_sanitized(monkeypatch, failure):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 401, 403, 404])
+async def test_open_meteo_does_not_retry_terminal_http_errors(monkeypatch, status):
+    monkeypatch.setattr(open_meteo, "OPEN_METEO_MODE", "commercial")
+    monkeypatch.setattr(open_meteo, "OPEN_METEO_API_KEY", "terminal-key")
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(status, request=request)
+
+    with pytest.raises(open_meteo.ProviderUnavailable):
+        await open_meteo.OpenMeteoProvider(transport=httpx.MockTransport(handler))._get("weather", {})
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["timeout", "server"])
+async def test_open_meteo_retries_transient_failures_once(monkeypatch, failure):
+    monkeypatch.setattr(open_meteo, "OPEN_METEO_MODE", "evaluation")
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if failure == "timeout":
+            raise httpx.ReadTimeout("upstream timeout", request=request)
+        return httpx.Response(503, request=request)
+
+    with pytest.raises(open_meteo.ProviderUnavailable):
+        await open_meteo.OpenMeteoProvider(transport=httpx.MockTransport(handler))._get("weather", {})
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["success", "failure"])
+async def test_commercial_api_key_is_redacted_from_logs_and_sentry(monkeypatch, caplog, failure):
+    secret = "commercial-secret-vc04"
+    monkeypatch.setattr(open_meteo, "OPEN_METEO_MODE", "commercial")
+    monkeypatch.setattr(open_meteo, "OPEN_METEO_API_KEY", secret)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        logging.getLogger("httpx").info("HTTP Request: %s", request.url)
+        if failure == "failure":
+            return httpx.Response(503, request=request)
+        return httpx.Response(200, json={"ok": True}, request=request)
+
+    caplog.set_level(logging.INFO)
+    url = "https://customer-api.open-meteo.com/v1/forecast?apikey=" + secret
+    provider = open_meteo.OpenMeteoProvider(transport=httpx.MockTransport(handler))
+    if failure == "failure":
+        with pytest.raises(open_meteo.ProviderUnavailable):
+            await provider._get("weather", {})
+    else:
+        await provider._get("weather", {})
+    event = scrub_event({"message": url, "request": {"url": url}, "breadcrumbs": [{"message": url}]})
+    assert secret not in caplog.text
+    assert secret not in str(event)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload",
     [
         {"daily": {"time": ["2026-08-23"]}},
-        {"daily": {"time": ["2026-08-23"], "temperature_2m_min": [20], "temperature_2m_max": [25], "precipitation_probability_max": [10], "relative_humidity_2m_mean": [60], "uv_index_max": [7], "weather_code": []}},
-        {"daily": {"time": ["2026-08-23"], "temperature_2m_min": ["20"], "temperature_2m_max": [25], "precipitation_probability_max": [10], "relative_humidity_2m_mean": [60], "uv_index_max": [7], "weather_code": [1]}},
-        {"daily": {"time": ["not-a-date"], "temperature_2m_min": [20], "temperature_2m_max": [25], "precipitation_probability_max": [10], "relative_humidity_2m_mean": [60], "uv_index_max": [7], "weather_code": [1]}},
+        {"daily": {"time": ["2026-08-23"], "temperature_2m_min": [20], "temperature_2m_max": [25], "precipitation_probability_max": [10], "uv_index_max": [7], "weather_code": []}},
+        {"daily": {"time": ["2026-08-23"], "temperature_2m_min": ["20"], "temperature_2m_max": [25], "precipitation_probability_max": [10], "uv_index_max": [7], "weather_code": [1]}},
+        {"daily": {"time": ["not-a-date"], "temperature_2m_min": [20], "temperature_2m_max": [25], "precipitation_probability_max": [10], "uv_index_max": [7], "weather_code": [1]}},
     ],
 )
 async def test_open_meteo_rejects_malformed_weather_payloads(monkeypatch, payload):
@@ -251,9 +329,19 @@ async def test_weather_stale_fallback_does_not_hide_independent_aqi_failure():
 
 
 @pytest.mark.asyncio
+async def test_location_resolution_reason_is_preserved_when_provider_is_configured():
+    weather, _, reason = await _resolve_weather_for_day(
+        None, uuid4(), date(2026, 8, 23), None, None, SimpleNamespace(name="open_meteo"), None,
+        "Asia/Kolkata", "loc:unknown", datetime(2026, 8, 23, tzinfo=UTC), "environment_location_unresolved",
+    )
+    assert weather is None
+    assert reason == "environment_location_unresolved"
+
+
+@pytest.mark.asyncio
 async def test_weather_and_aqi_precedence_helpers_are_independent():
-    now = datetime.now(UTC)
-    day = date.today()
+    now = datetime(2026, 8, 23, 12, tzinfo=UTC)
+    day = date(2026, 8, 23)
     manual_weather = WeatherReading(for_date=day, condition="rainy")
     cached_air = SimpleNamespace(
         id=uuid4(), for_date=day, created_at=now, aqi=22, index_system="european_aqi",
