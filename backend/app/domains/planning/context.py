@@ -309,7 +309,7 @@ async def latest_weather(
     return (await session.execute(
         select(WeatherSnapshot)
         .where(WeatherSnapshot.account_id == account_id, WeatherSnapshot.for_date == plan_date,
-               WeatherSnapshot.provider == "manual", WeatherSnapshot.source == "user_declared")
+               WeatherSnapshot.provider == "manual")
         .order_by(WeatherSnapshot.created_at.desc())
         .limit(1)
     )).scalar_one_or_none()
@@ -322,7 +322,7 @@ async def latest_air_quality(
     return (await session.execute(
         select(AirQualitySnapshot)
         .where(AirQualitySnapshot.account_id == account_id, AirQualitySnapshot.for_date == plan_date,
-               AirQualitySnapshot.provider == "manual", AirQualitySnapshot.source == "user_declared")
+               AirQualitySnapshot.provider == "manual")
         .order_by(AirQualitySnapshot.created_at.desc())
         .limit(1)
     )).scalar_one_or_none()
@@ -697,12 +697,20 @@ def _resolve_occasion(context: DayContext) -> None:
 
 
 def _note_gaps(context: DayContext) -> None:
+    reason_copy = {
+        "environment_provider_not_configured": "Weather is not connected for today, so no weather-based assumptions were used.",
+        "environment_location_unresolved": "Weather could not be located for today, so no weather-based assumptions were used.",
+        "outside_forecast_horizon": "Weather is not available that far ahead, so no weather-based assumptions were used.",
+        "invalid_provider_response": "Weather is unavailable right now, so no weather-based assumptions were used.",
+        "provider_error": "Weather is temporarily unavailable, so no weather-based assumptions were used.",
+        "not_configured": "Weather is not connected for today, so no weather-based assumptions were used.",
+    }
     gaps: list[str] = []
     if context.weather is None:
-        gaps.append(
-            context.weather_unavailable_reason
-            or "No weather recorded for today, so nothing was ruled in or out on that basis."
-        )
+        gaps.append(reason_copy.get(
+            context.weather_unavailable_reason or "",
+            "No weather recorded for today, so nothing was ruled in or out on that basis.",
+        ))
     if not context.events:
         gaps.append("Nothing on your calendar for today, so this is planned as a normal day.")
     if context.draft_count:

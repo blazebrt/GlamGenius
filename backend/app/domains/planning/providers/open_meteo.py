@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -19,6 +19,7 @@ from app.config import (
     OPEN_METEO_MODE,
     OPEN_METEO_TIMEOUT_SECONDS,
 )
+from app.domains.planning import clock
 from app.domains.planning.providers.base import (
     AirQualityReading,
     ProviderUnavailable,
@@ -34,9 +35,7 @@ PUBLIC_HOSTS = {
 COMMERCIAL_HOSTS = {
     "weather": "https://customer-api.open-meteo.com/v1/forecast",
     "air": "https://customer-air-quality-api.open-meteo.com/v1/air-quality",
-    # Geocoding remains the documented public endpoint; customer billing
-    # applies to the forecast and air-quality APIs, not this lookup service.
-    "geocode": "https://geocoding-api.open-meteo.com/v1/search",
+    "geocode": "https://customer-geocoding-api.open-meteo.com/v1/search",
 }
 
 _WMO = {
@@ -104,6 +103,31 @@ def _aqi_category(value: int) -> str:
     return "Extremely Poor"
 
 
+def _planning_today(timezone_name: str) -> date:
+    return clock.local_today(timezone_name)
+
+
+def _valid_number_series(values: Any, length: int) -> bool:
+    return isinstance(values, list) and len(values) == length and all(
+        isinstance(value, (int, float)) and not isinstance(value, bool) for value in values
+    )
+
+
+def _valid_time_series(values: Any, length: int, *, hourly: bool = False) -> bool:
+    if not isinstance(values, list) or len(values) != length:
+        return False
+    for value in values:
+        text = value if isinstance(value, str) else ""
+        try:
+            if hourly:
+                datetime.fromisoformat(text.replace("Z", "+00:00"))
+            else:
+                date.fromisoformat(text)
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
 class OpenMeteoProvider:
     name = "open_meteo"
 
@@ -121,7 +145,7 @@ class OpenMeteoProvider:
             raise ProviderUnavailable("Live environment data is not enabled.", provider=self.name, reason="not_configured")
         headers = {"Accept": "application/json"}
         request_params = dict(params)
-        if OPEN_METEO_MODE == "commercial" and kind in {"weather", "air"}:
+        if OPEN_METEO_MODE == "commercial":
             # Open-Meteo customer endpoints authenticate with the documented
             # query parameter. Never include the key in an exception or raw
             # snapshot payload.
@@ -138,11 +162,11 @@ class OpenMeteoProvider:
                 if not isinstance(payload, dict):
                     raise ValueError("response is not an object")
                 return payload
-            except (httpx.HTTPError, ValueError, TypeError) as exc:
+            except (httpx.HTTPError, ValueError, TypeError):
                 if attempt == 0:
                     await asyncio.sleep(0)
                     continue
-                raise ProviderUnavailable("Live environment data is temporarily unavailable.", provider=self.name, reason="provider_error") from exc
+                break
         raise ProviderUnavailable("Live environment data is temporarily unavailable.", provider=self.name, reason="provider_error")
 
     async def resolve_location(self, location: str) -> ResolvedLocation:
@@ -163,34 +187,40 @@ class OpenMeteoProvider:
                 latitude=float(row["latitude"]), longitude=float(row["longitude"]),
                 display_name=str(row.get("name") or query),
             )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ProviderUnavailable("That location could not be resolved.", provider=self.name, reason="location_unresolved") from exc
+        except (KeyError, TypeError, ValueError):
+            raise ProviderUnavailable("That location could not be resolved.", provider=self.name, reason="location_unresolved") from None
 
     @staticmethod
-    def _within_horizon(dates: list[date], days: int) -> list[date]:
-        today = date.today()
+    def _within_horizon(dates: list[date], days: int, timezone_name: str = "UTC") -> list[date]:
+        today = _planning_today(timezone_name)
         return sorted({day for day in dates if today <= day <= today + timedelta(days=days - 1)})
 
     async def forecast_resolved(self, *, target: ResolvedLocation, dates: list[date], timezone_name: str) -> list[WeatherReading]:
         if not dates:
             return []
-        dates = self._within_horizon(dates, 16)
+        dates = self._within_horizon(dates, 16, timezone_name)
         if not dates:
             return []
         payload = await self._get("weather", {
             "latitude": target.latitude, "longitude": target.longitude, "timezone": timezone_name,
             "daily": "temperature_2m_min,temperature_2m_max,precipitation_probability_max,relative_humidity_2m_mean,uv_index_max,weather_code",
-            "forecast_days": min(16, max(1, (max(dates) - date.today()).days + 1)),
+            "forecast_days": min(16, max(1, (max(dates) - _planning_today(timezone_name)).days + 1)),
         })
         daily = payload.get("daily")
         if not isinstance(daily, dict) or not isinstance(daily.get("time"), list):
             raise ProviderUnavailable("Live weather data was malformed.", provider=self.name, reason="invalid_provider_response")
+        length = len(daily["time"])
+        required = (
+            "temperature_2m_min", "temperature_2m_max", "precipitation_probability_max",
+            "relative_humidity_2m_mean", "uv_index_max", "weather_code",
+        )
+        if not _valid_time_series(daily["time"], length) or any(
+            not _valid_number_series(daily.get(key), length) for key in required
+        ):
+            raise ProviderUnavailable("Live weather data was malformed.", provider=self.name, reason="invalid_provider_response")
         output: list[WeatherReading] = []
         for index, raw_day in enumerate(daily["time"]):
-            try:
-                day = date.fromisoformat(str(raw_day))
-            except ValueError:
-                continue
+            day = date.fromisoformat(raw_day)
             if day not in dates:
                 continue
             low, high = _number(daily.get("temperature_2m_min"), index), _number(daily.get("temperature_2m_max"), index)
@@ -213,27 +243,30 @@ class OpenMeteoProvider:
     async def air_quality_resolved(self, *, target: ResolvedLocation, dates: list[date], timezone_name: str) -> list[AirQualityReading]:
         if not dates:
             return []
-        dates = self._within_horizon(dates, 7)
+        dates = self._within_horizon(dates, 7, timezone_name)
         if not dates:
             return []
         payload = await self._get("air", {
             "latitude": target.latitude, "longitude": target.longitude, "timezone": timezone_name,
             "hourly": "european_aqi,european_aqi_pm2_5,european_aqi_pm10,pm2_5,pm10",
             "index_system": "european_aqi",
-            "forecast_days": min(7, max(1, (max(dates) - date.today()).days + 1)),
+            "forecast_days": min(7, max(1, (max(dates) - _planning_today(timezone_name)).days + 1)),
         })
         hourly = payload.get("hourly")
         if not isinstance(hourly, dict) or not isinstance(hourly.get("time"), list):
+            raise ProviderUnavailable("Live air-quality data was malformed.", provider=self.name, reason="invalid_provider_response")
+        length = len(hourly["time"])
+        required = ("european_aqi", "european_aqi_pm2_5", "european_aqi_pm10", "pm2_5", "pm10")
+        if not _valid_time_series(hourly["time"], length, hourly=True) or any(
+            not _valid_number_series(hourly.get(key), length) for key in required
+        ):
             raise ProviderUnavailable("Live air-quality data was malformed.", provider=self.name, reason="invalid_provider_response")
         buckets: dict[date, list[int]] = {d: [] for d in dates}
         pollutant_aqi: dict[date, dict[str, list[int]]] = {d: {"pm2_5": [], "pm10": []} for d in dates}
         pm25: dict[date, list[float]] = {d: [] for d in dates}
         pm10: dict[date, list[float]] = {d: [] for d in dates}
         for index, raw_time in enumerate(hourly["time"]):
-            try:
-                day = date.fromisoformat(str(raw_time)[:10])
-            except ValueError:
-                continue
+            day = date.fromisoformat(raw_time[:10])
             aqi = _number(hourly.get("european_aqi"), index)
             if day in buckets and aqi is not None:
                 buckets[day].append(int(aqi))
