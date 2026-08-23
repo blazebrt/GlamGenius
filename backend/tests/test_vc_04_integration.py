@@ -139,6 +139,7 @@ async def test_event_ready_uses_explicit_location_for_both_live_domains(
     assert created.status_code in (200, 201), created.text
     event_id = created.json()["event"]["id"]
     seen_locations.clear()
+    calls.update({"geocode": 0, "weather": 0, "air": 0})
     generated = await app_client.post(
         f"/api/v2/planner/events/{event_id}/ready/generate", headers=auth(token),
     )
