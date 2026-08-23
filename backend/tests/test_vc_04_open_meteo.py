@@ -205,9 +205,9 @@ async def test_open_meteo_retries_transient_failures_once(monkeypatch, failure):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["success", "failure"])
 async def test_commercial_api_key_is_redacted_from_logs_and_sentry(monkeypatch, caplog, failure):
-    secret = "commercial-secret-vc04"
+    marker = "vc04-redaction-marker"
     monkeypatch.setattr(open_meteo, "OPEN_METEO_MODE", "commercial")
-    monkeypatch.setattr(open_meteo, "OPEN_METEO_API_KEY", secret)
+    monkeypatch.setattr(open_meteo, "OPEN_METEO_API_KEY", marker)
 
     def handler(request: httpx.Request) -> httpx.Response:
         logging.getLogger("httpx").info("HTTP Request: %s", request.url)
@@ -216,7 +216,7 @@ async def test_commercial_api_key_is_redacted_from_logs_and_sentry(monkeypatch, 
         return httpx.Response(200, json={"ok": True}, request=request)
 
     caplog.set_level(logging.INFO)
-    url = "https://customer-api.open-meteo.com/v1/forecast?apikey=" + secret
+    url = "https://customer-api.open-meteo.com/v1/forecast?apikey=" + marker
     provider = open_meteo.OpenMeteoProvider(transport=httpx.MockTransport(handler))
     if failure == "failure":
         with pytest.raises(open_meteo.ProviderUnavailable):
@@ -224,8 +224,8 @@ async def test_commercial_api_key_is_redacted_from_logs_and_sentry(monkeypatch, 
     else:
         await provider._get("weather", {})
     event = scrub_event({"message": url, "request": {"url": url}, "breadcrumbs": [{"message": url}]})
-    assert secret not in caplog.text
-    assert secret not in str(event)
+    assert marker not in caplog.text
+    assert marker not in str(event)
 
 
 @pytest.mark.asyncio
