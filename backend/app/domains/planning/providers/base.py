@@ -44,6 +44,8 @@ class WeatherReading:
     provider: str = "manual"
     source: str = "user_declared"
     raw: dict[str, Any] = field(default_factory=dict)
+    attribution: str | None = None
+    is_stale: bool = False
 
 
 @dataclass
@@ -61,6 +63,8 @@ class AirQualityReading:
     provider: str = "manual"
     source: str = "user_declared"
     raw: dict[str, Any] = field(default_factory=dict)
+    attribution: str | None = None
+    is_stale: bool = False
 
 
 @dataclass

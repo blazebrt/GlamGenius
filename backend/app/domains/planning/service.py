@@ -105,6 +105,7 @@ def serialize_weather(row: WeatherSnapshot | None) -> dict[str, Any] | None:
         "precipitation_chance": row.precipitation_chance, "humidity": row.humidity,
         "uv_index": row.uv_index,
         "location": row.location, "provider": row.provider, "source": row.source,
+        **({"attribution": "Weather data · Open-Meteo"} if row.provider == "open_meteo" else {}),
     }
 
 
@@ -138,6 +139,7 @@ def serialize_air_quality(row: AirQualitySnapshot | None) -> dict[str, Any] | No
         "prominent_pollutant": row.prominent_pollutant,
         "pm2_5": row.pm2_5, "pm10": row.pm10,
         "provider": row.provider, "source": row.source,
+        **({"attribution": "Air quality · Open-Meteo / CAMS"} if row.provider == "open_meteo" else {}),
     }
 
 

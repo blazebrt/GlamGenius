@@ -1388,6 +1388,7 @@ export interface WeatherSnapshot {
   location: string | null;
   provider: string;
   source: string;
+  attribution?: string;
 }
 
 export interface Clarification {
@@ -1544,7 +1545,7 @@ export interface EventReady {
   event: CalendarEvent;
   status: EventReadyStatus;
   countdown: { days_until: number; event_local_date: string };
-  context: { weather: { condition: string; temp_min_c: number | null; temp_max_c: number | null; precipitation_chance: number | null; humidity: number | null; location: string | null } | null; air_quality: { aqi: number; index_system: string; category: string | null; location: string | null } | null };
+  context: { weather: { condition: string; temp_min_c: number | null; temp_max_c: number | null; precipitation_chance: number | null; humidity: number | null; location: string | null; attribution?: string } | null; air_quality: { aqi: number; index_system: string; category: string | null; location: string | null; attribution?: string } | null };
   style: { authority: 'style'; status: 'blocked_by_event_confirmation' | 'needs_look' | 'look_selected' | 'look_needs_review'; selected_look: { id: string; title: string; status: string } | null };
   care: EventReadyCare | null;
   timeline: EventReadyAction[];

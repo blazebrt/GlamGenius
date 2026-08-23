@@ -25,6 +25,7 @@ _EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 _PHONE = re.compile(r"(?<!\w)(?:\+?\d[\d ().-]{7,}\d)(?!\w)")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b")
 _BASE64_LIKE = re.compile(r"^[A-Za-z0-9+/=_-]{80,}$")
+_APIKEY_QUERY = re.compile(r"([?&]apikey=)[^&#\s]+", re.I)
 
 # Key-name filter — anything matching is redacted whole regardless of type.
 _SENSITIVE_KEY = re.compile(
@@ -56,6 +57,7 @@ def _clean(value: Any, key: str = "") -> Any:
         value = _JWT.sub(REDACTED, value)
         value = _EMAIL.sub(REDACTED, value)
         value = _PHONE.sub(REDACTED, value)
+        value = _APIKEY_QUERY.sub(r"\1[REDACTED]", value)
         return value
     return value
 
