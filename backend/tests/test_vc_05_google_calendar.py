@@ -8,8 +8,8 @@ from app.domains.planning import calendar_sync
 from app.domains.planning.credentials import InMemoryCredentialStore
 from app.domains.planning.providers.google_calendar import (
     GoogleCalendarProvider,
-    MalformedGoogleEvent,
     GoogleSyncTokenExpired,
+    MalformedGoogleEvent,
     normalize_google_event,
 )
 
