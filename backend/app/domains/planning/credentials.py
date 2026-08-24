@@ -59,8 +59,9 @@ class SupabaseVaultCredentialStore:
 
     async def store(self, refresh_token: str) -> str:
         result = await self.session.execute(
-            text("SELECT vault.create_secret(:secret, :name, :description)"),
-            {"secret": refresh_token, "name": "glamgenius-google-calendar", "description": "Google Calendar refresh credential"},
+            # An unnamed secret avoids a global name collision between accounts.
+            text("SELECT vault.create_secret(:secret)"),
+            {"secret": refresh_token},
         )
         value = result.scalar_one()
         return f"{self.prefix}{value}"
@@ -73,9 +74,13 @@ class SupabaseVaultCredentialStore:
         return result.scalar_one_or_none()
 
     async def replace(self, credential_ref: str, refresh_token: str) -> str:
-        new_ref = await self.store(refresh_token)
-        await self.delete(credential_ref)
-        return new_ref
+        # Vault updates in place, preserving the opaque UUID reference and
+        # avoiding a create-then-delete window or orphaned secret.
+        await self.session.execute(
+            text("SELECT vault.update_secret(CAST(:id AS uuid), :secret, NULL, NULL)"),
+            {"id": self._id(credential_ref), "secret": refresh_token},
+        )
+        return credential_ref
 
     async def delete(self, credential_ref: str) -> None:
         await self.session.execute(text("SELECT vault.delete_secret(CAST(:id AS uuid))"), {"id": self._id(credential_ref)})

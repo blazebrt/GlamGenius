@@ -74,12 +74,12 @@ describe('Weekly planner UI', () => {
 
   it('offers calm connect, refresh and disconnect controls for Google Calendar', () => {
     const connect = jest.fn(); const sync = jest.fn(); const disconnect = jest.fn();
-    render(<GoogleCalendarControl connected={false} busy={false} onConnect={connect} onSync={sync} onDisconnect={disconnect} />);
+    render(<GoogleCalendarControl status="disconnected" busy={false} onConnect={connect} onSync={sync} onDisconnect={disconnect} />);
     expect(screen.getByText('Connect Google Calendar')).toBeTruthy();
     fireEvent.press(screen.getByLabelText('Connect Google Calendar'));
     expect(connect).toHaveBeenCalledTimes(1);
 
-    render(<GoogleCalendarControl connected label="Google Calendar" lastSyncedAt="2026-08-10T10:00:00Z" onConnect={connect} onSync={sync} onDisconnect={disconnect} />);
+    render(<GoogleCalendarControl status="connected" label="Google Calendar" lastSyncedAt="2026-08-10T10:00:00Z" onConnect={connect} onSync={sync} onDisconnect={disconnect} />);
     fireEvent.press(screen.getByLabelText('Refresh Google Calendar'));
     fireEvent.press(screen.getByLabelText('Disconnect Google Calendar'));
     expect(sync).toHaveBeenCalledTimes(1);

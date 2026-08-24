@@ -35,6 +35,14 @@ export default function PlannerScreen() {
   const [upcomingError, setUpcomingError] = useState<string | null>(null);
   const [calendarStatus, setCalendarStatus] = useState<Awaited<ReturnType<typeof getCalendarStatus>> | null>(null);
   const [calendarBusy, setCalendarBusy] = useState(false);
+  const googleIntegration = calendarStatus?.integrations.find((row) => row.provider === 'google');
+  const googleMessage = googleIntegration?.last_error === 'reconnect_required'
+    ? 'Google needs you to approve access again.'
+    : googleIntegration?.last_error === 'revocation_pending'
+      ? 'We are finishing the disconnect safely.'
+      : googleIntegration?.last_error
+        ? 'Google Calendar could not refresh right now.'
+        : null;
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     if (mode === 'refresh') setRefreshing(true);
@@ -89,7 +97,13 @@ export default function PlannerScreen() {
     setCalendarBusy(true);
     try {
       const { authorization_url } = await authorizeGoogleCalendar();
-      await WebBrowser.openAuthSessionAsync(authorization_url, Linking.createURL('calendar-result'));
+      const result = await WebBrowser.openAuthSessionAsync(authorization_url, Linking.createURL('calendar-result'));
+      if (result.type === WebBrowser.WebBrowserResultType.CANCEL || result.type === WebBrowser.WebBrowserResultType.DISMISS) {
+        setUpcomingError('Google Calendar connection was cancelled.');
+      } else if (result.type === 'success') {
+        const outcome = Linking.parse(result.url).queryParams?.result;
+        if (outcome !== 'connected') setUpcomingError('Google Calendar could not finish connecting.');
+      }
       await loadCalendarStatus();
       await loadUpcoming();
     } catch { setUpcomingError('Google Calendar could not be connected right now.'); }
@@ -98,7 +112,12 @@ export default function PlannerScreen() {
 
   const syncGoogle = async () => {
     setCalendarBusy(true);
-    try { await syncGoogleCalendar(); await loadCalendarStatus(); await loadUpcoming(); }
+    try {
+      const result = await syncGoogleCalendar();
+      if (!result.synced) setUpcomingError(result.reason === 'reconnect_required' ? 'Google Calendar needs to be connected again.' : 'Google Calendar could not refresh right now.');
+      else setUpcomingError(null);
+      await loadCalendarStatus(); await loadUpcoming();
+    }
     catch { setUpcomingError('Google Calendar could not refresh right now.'); }
     finally { setCalendarBusy(false); }
   };
@@ -155,9 +174,10 @@ export default function PlannerScreen() {
         />
         {!!calendarStatus?.providers?.some((provider) => provider.key === 'google' && provider.available) && (
           <GoogleCalendarControl
-            connected={calendarStatus.connected}
-            label={calendarStatus.integrations.find((row) => row.provider === 'google' && row.status === 'connected')?.label}
-            lastSyncedAt={calendarStatus.integrations.find((row) => row.provider === 'google' && row.status === 'connected')?.last_synced_at}
+            status={googleIntegration?.status || 'disconnected'}
+            label={googleIntegration?.label}
+            lastSyncedAt={googleIntegration?.last_synced_at}
+            message={googleMessage}
             busy={calendarBusy}
             onConnect={() => void connectGoogle()}
             onSync={() => void syncGoogle()}

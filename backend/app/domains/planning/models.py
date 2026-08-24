@@ -74,7 +74,7 @@ class ExternalIntegration(UUIDPrimaryKey, TimestampMixin, Base):
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)          # calendar | weather
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="connected", server_default="connected")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="connected", server_default="connected")
     scopes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     credential_ref: Mapped[str | None] = mapped_column(String(200))
     external_account_label: Mapped[str | None] = mapped_column(String(160))

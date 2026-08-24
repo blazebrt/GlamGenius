@@ -8,6 +8,7 @@ from app.domains.planning import calendar_sync
 from app.domains.planning.credentials import InMemoryCredentialStore
 from app.domains.planning.providers.google_calendar import (
     GoogleCalendarProvider,
+    MalformedGoogleEvent,
     GoogleSyncTokenExpired,
     normalize_google_event,
 )
@@ -119,3 +120,28 @@ async def test_in_memory_credential_replace_keeps_opaque_reference_and_new_secre
 
     assert same_ref == old_ref
     assert await store.read(old_ref) == "new-refresh-token"
+
+
+@pytest.mark.asyncio
+async def test_revocation_accepts_only_success_or_documented_invalid_token():
+    responses = [httpx.Response(400, json={"error": "other_error"}), httpx.Response(400, json={"error": "invalid_token"}), httpx.Response(200)]
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return responses.pop(0)
+
+    provider = GoogleCalendarProvider(InMemoryCredentialStore({"memory:1": "refresh"}), transport=httpx.MockTransport(handler))
+    assert await provider.revoke("memory:1") is False
+    assert await provider.revoke("memory:1") is True
+    assert await provider.revoke("memory:1") is True
+
+
+@pytest.mark.asyncio
+async def test_malformed_changed_item_raises_before_cursor_is_returned():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"items": [{"id": "event-1", "start": {}}], "nextSyncToken": "must-not-advance"})
+
+    provider = GoogleCalendarProvider(InMemoryCredentialStore({"memory:1": "refresh"}), transport=httpx.MockTransport(handler))
+    provider._access_token = "access-token"
+    with pytest.raises(MalformedGoogleEvent) as error:
+        await provider.fetch_changes(credential_ref="memory:1", timezone_name="UTC", sync_cursor="cursor-1")
+    assert error.value.reason == "malformed_event"

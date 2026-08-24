@@ -27,6 +27,8 @@ _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}
 _BASE64_LIKE = re.compile(r"^[A-Za-z0-9+/=_-]{80,}$")
 _APIKEY_QUERY = re.compile(r"([?&]apikey=)[^&#\s]+", re.I)
 _OAUTH_QUERY = re.compile(r"([?&](?:code|state|access_token|refresh_token|client_secret)=)[^&#\s]+", re.I)
+_OAUTH_KV = re.compile(r"(\b(?:code|state|access_token|refresh_token|client_secret)\b\s*[:=]\s*)([\"']?)([^\s,}&\"']+)", re.I)
+_AUTH_HEADER = re.compile(r"((?:authorization\s*[:=]\s*)?Bearer\s+)[A-Za-z0-9._~+/=-]+", re.I)
 
 # Key-name filter — anything matching is redacted whole regardless of type.
 _SENSITIVE_KEY = re.compile(
@@ -60,6 +62,8 @@ def _clean(value: Any, key: str = "") -> Any:
         value = _PHONE.sub(REDACTED, value)
         value = _APIKEY_QUERY.sub(r"\1[REDACTED]", value)
         value = _OAUTH_QUERY.sub(r"\1[REDACTED]", value)
+        value = _AUTH_HEADER.sub(r"\1[REDACTED]", value)
+        value = _OAUTH_KV.sub(r"\1[REDACTED]", value)
         return value
     return value
 

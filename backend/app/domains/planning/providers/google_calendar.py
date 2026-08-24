@@ -8,7 +8,6 @@ the injected opaque credential store.
 from __future__ import annotations
 
 import asyncio
-import logging
 from datetime import UTC, date, datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -27,12 +26,17 @@ from app.config import (
 from app.domains.planning.credentials import CalendarCredentialStore
 from app.domains.planning.providers.base import CalendarEventReading, CalendarProvider, ProviderUnavailable
 
-logger = logging.getLogger(__name__)
-
 
 class GoogleSyncTokenExpired(ProviderUnavailable):
     def __init__(self) -> None:
         super().__init__("Google Calendar synchronization must be reset.", provider="google", reason="sync_token_expired")
+
+
+class MalformedGoogleEvent(ProviderUnavailable):
+    """A provider change could not be normalized safely; retry the same cursor."""
+
+    def __init__(self) -> None:
+        super().__init__("Google Calendar returned an unusable event.", provider="google", reason="malformed_event")
 
 
 def _aware(value: str, timezone_name: str) -> datetime:
@@ -48,6 +52,8 @@ def _all_day_bounds(start_value: str, end_value: str | None, timezone_name: str)
 
 
 def normalize_google_event(item: dict[str, Any], timezone_name: str) -> CalendarEventReading:
+    if not isinstance(item.get("id"), str) or not item["id"].strip():
+        raise ValueError("Google event has no usable id")
     start = item.get("start") or {}
     end = item.get("end") or {}
     if item.get("status") == "cancelled" and not start.get("date") and not start.get("dateTime"):
@@ -55,7 +61,7 @@ def normalize_google_event(item: dict[str, Any], timezone_name: str) -> Calendar
         # the change stream so an existing canonical row can be revoked, but
         # never create a new visible event for a tombstone.
         return CalendarEventReading(
-            external_id=str(item["id"]), title="Calendar event",
+            external_id=item["id"].strip(), title="Calendar event",
             starts_at=datetime(1970, 1, 1, tzinfo=UTC), provider="google",
             source="integration", status="revoked", raw={"tombstone": True},
         )
@@ -68,7 +74,7 @@ def normalize_google_event(item: dict[str, Any], timezone_name: str) -> Calendar
         starts_at = _aware(start["dateTime"], timezone_name)
         ends_at = _aware(end["dateTime"], timezone_name) if end.get("dateTime") else None
     return CalendarEventReading(
-        external_id=str(item.get("id") or ""),
+        external_id=item["id"].strip(),
         title=(str(item.get("summary") or "").strip() or "Calendar event")[:240],
         starts_at=starts_at,
         ends_at=ends_at,
@@ -122,6 +128,14 @@ class GoogleCalendarProvider(CalendarProvider):
                     await asyncio.sleep(0)
                     continue
                 if response.status_code >= 400:
+                    error_code = None
+                    try:
+                        body = response.json()
+                        error_code = body.get("error") if isinstance(body, dict) else None
+                    except ValueError:
+                        pass
+                    if error_code == "invalid_grant" and "refresh_token" in data:
+                        raise ProviderUnavailable("Google Calendar needs to be connected again.", provider="google", reason="reconnect_required")
                     raise ProviderUnavailable("Google Calendar authorization failed.", provider="google", reason="authorization_failed")
                 body = response.json()
                 if not isinstance(body, dict):
@@ -187,12 +201,12 @@ class GoogleCalendarProvider(CalendarProvider):
                 query["pageToken"] = next_page
             body = await self._request(credential_ref, query)
             for item in body.get("items", []) or []:
-                if not isinstance(item, dict) or not item.get("id"):
-                    continue
+                if not isinstance(item, dict):
+                    raise MalformedGoogleEvent()
                 try:
                     readings.append(normalize_google_event(item, timezone_name))
                 except (KeyError, ValueError):
-                    logger.info("google_calendar_event_ignored reason=malformed")
+                    raise MalformedGoogleEvent() from None
             next_page = body.get("nextPageToken")
             if not next_page:
                 next_cursor = body.get("nextSyncToken")
@@ -212,8 +226,18 @@ class GoogleCalendarProvider(CalendarProvider):
         try:
             async with httpx.AsyncClient(transport=self.transport, timeout=GOOGLE_CALENDAR_TIMEOUT_SECONDS) as client:
                 response = await client.post(GOOGLE_OAUTH_REVOCATION_ENDPOINT, data={"token": refresh_token})
-            if response.status_code in {200, 400}:
+            if response.status_code == 200:
                 return True
+            if response.status_code == 400:
+                # Google documents invalid_token as the already-revoked case;
+                # other 400 responses are unresolved and must be retried.
+                try:
+                    body = response.json()
+                    if isinstance(body, dict) and body.get("error") == "invalid_token":
+                        return True
+                except ValueError:
+                    pass
+                return False
             if response.status_code in {408, 429, 500, 502, 503, 504}:
                 return False
             return False
@@ -221,4 +245,4 @@ class GoogleCalendarProvider(CalendarProvider):
             return False
 
 
-__all__ = ["GoogleCalendarProvider", "GoogleSyncTokenExpired", "normalize_google_event"]
+__all__ = ["GoogleCalendarProvider", "GoogleSyncTokenExpired", "MalformedGoogleEvent", "normalize_google_event"]

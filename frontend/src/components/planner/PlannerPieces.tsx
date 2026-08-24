@@ -116,16 +116,19 @@ export function UpcomingEvents({ events, onEventPress, onAdd, loading = false, e
 }
 
 export function GoogleCalendarControl({
-  connected, label, lastSyncedAt, busy, onConnect, onSync, onDisconnect,
+  status, label, lastSyncedAt, busy, message, onConnect, onSync, onDisconnect,
 }: {
-  connected: boolean; label?: string | null; lastSyncedAt?: string | null; busy?: boolean;
+  status: string; label?: string | null; lastSyncedAt?: string | null; busy?: boolean; message?: string | null;
   onConnect: () => void; onSync: () => void; onDisconnect: () => void;
 }) {
+  const connected = status === 'connected' || status === 'syncing' || status === 'temporary_failure';
+  const reconnect = status === 'reconnect_required';
+  const pending = status === 'revocation_pending';
   return (
     <View style={styles.googleCard} accessibilityLabel="Google Calendar">
       <View style={{ flex: 1 }}>
-        <Text style={styles.sectionTitle}>{connected ? 'Google Calendar connected' : 'Connect Google Calendar'}</Text>
-        <Text style={styles.bodyMuted}>{connected ? (label || 'Google Calendar') : 'Bring in upcoming plans so GlamGenius can help you prepare around them.'}</Text>
+        <Text style={styles.sectionTitle}>{reconnect ? 'Reconnect Google Calendar' : pending ? 'Disconnecting Google Calendar' : connected ? 'Google Calendar connected' : 'Connect Google Calendar'}</Text>
+        <Text style={styles.bodyMuted}>{message || (connected ? (label || 'Google Calendar') : pending ? 'We are finishing the disconnect safely.' : reconnect ? 'Google needs you to approve access again.' : 'Bring in upcoming plans so GlamGenius can help you prepare around them.')}</Text>
         {!!connected && !!lastSyncedAt && <Text style={styles.eventMeta}>Last synced {new Date(lastSyncedAt).toLocaleString()}</Text>}
       </View>
       {connected ? (
@@ -133,6 +136,10 @@ export function GoogleCalendarControl({
           <TouchableOpacity accessibilityRole="button" accessibilityLabel="Refresh Google Calendar" onPress={onSync} disabled={busy}><Text style={styles.addEventLink}>{busy ? 'Syncing…' : 'Refresh'}</Text></TouchableOpacity>
           <TouchableOpacity accessibilityRole="button" accessibilityLabel="Disconnect Google Calendar" onPress={onDisconnect} disabled={busy}><Text style={styles.disconnectLink}>Disconnect</Text></TouchableOpacity>
         </View>
+      ) : reconnect ? (
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Reconnect Google Calendar" onPress={onConnect} disabled={busy} style={styles.googleButton}><Text style={styles.primaryText}>{busy ? 'Opening…' : 'Reconnect'}</Text></TouchableOpacity>
+      ) : pending ? (
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Retry Google Calendar disconnect" onPress={onDisconnect} disabled={busy}><Text style={styles.addEventLink}>Retry</Text></TouchableOpacity>
       ) : (
         <TouchableOpacity accessibilityRole="button" accessibilityLabel="Connect Google Calendar" onPress={onConnect} disabled={busy} style={styles.googleButton}><Text style={styles.primaryText}>{busy ? 'Opening…' : 'Connect'}</Text></TouchableOpacity>
       )}

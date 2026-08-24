@@ -321,9 +321,8 @@ async def _remove_external_integrations(session: AsyncSession, account_id: uuid.
         ExternalIntegration.account_id == account_id,
         ExternalIntegration.kind == "calendar",
         ExternalIntegration.provider == "google",
-        ExternalIntegration.status != "revoked",
     ))).scalar_one_or_none()
-    if google is not None:
+    if google is not None and (google.status != "revoked" or google.credential_ref):
         result = await disconnect_google_calendar(session, account_id)
         if result.get("status") != "revoked":
             raise RuntimeError("google_calendar_revocation_pending")

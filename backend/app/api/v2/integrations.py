@@ -111,18 +111,28 @@ async def google_callback(
     """OAuth callback: only a fixed safe result is returned to the app."""
     result = "error"
     try:
-        if error or not state or not code:
-            raise ValueError("oauth_denied")
+        if not state:
+            raise ValueError("oauth_state_missing")
         state_row = await calendar_sync.consume_state(session, state)
         account_id = state_row.account_id
         # Commit the one-time nonce before provider work so failed exchanges
         # cannot roll it back and make the callback replayable.
         await session.commit()
+        if error or not code:
+            result = "denied"
+            return RedirectResponse(f"{GOOGLE_CALENDAR_APP_RETURN_URI}?result={result}")
         await calendar_sync.connect_from_callback(session, account_id, code)
-        timezone_name = await context_stage.resolve_timezone_for(session, account_id)
-        await calendar_sync.sync_google_calendar(session, account_id, timezone_name)
+        # Retain the usable refresh credential before the first provider sync;
+        # a transient/ malformed initial response must be safely retryable.
         await session.commit()
-        result = "connected"
+        timezone_name = await context_stage.resolve_timezone_for(session, account_id)
+        try:
+            sync_result = await calendar_sync.sync_google_calendar(session, account_id, timezone_name)
+        except Exception:  # noqa: BLE001 — provider details never reach the app
+            await session.rollback()
+            sync_result = {"synced": False}
+        await session.commit()
+        result = "connected" if sync_result.get("synced") else "sync_failed"
     except Exception:  # noqa: BLE001 — never reflect provider details to redirect/logs
         await session.rollback()
     separator = "&" if "?" in GOOGLE_CALENDAR_APP_RETURN_URI else "?"

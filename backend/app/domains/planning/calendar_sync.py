@@ -66,12 +66,15 @@ async def consume_state(session: AsyncSession, raw_state: str) -> ExternalOAuthS
     return row
 
 
-async def _integration(session: AsyncSession, account_id: uuid.UUID) -> ExternalIntegration | None:
-    return (await session.execute(select(ExternalIntegration).where(
+async def _integration(session: AsyncSession, account_id: uuid.UUID, *, lock: bool = False) -> ExternalIntegration | None:
+    stmt = select(ExternalIntegration).where(
         ExternalIntegration.account_id == account_id,
         ExternalIntegration.kind == INTEGRATION_CALENDAR,
         ExternalIntegration.provider == GOOGLE_PROVIDER,
-    ))).scalar_one_or_none()
+    )
+    if lock:
+        stmt = stmt.with_for_update()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 def _bounds(timezone_name: str) -> tuple[datetime, datetime]:
@@ -112,7 +115,12 @@ async def _apply_reading(session: AsyncSession, integration: ExternalIntegration
         row.all_day = reading.all_day
     if "location" not in overrides:
         row.location = reading.location
-    row.status = reading.status
+    # Provider cancellation/deletion is authoritative and cannot be hidden by
+    # a stale local dismissal. For a live event, an explicit user status wins.
+    if reading.status == "revoked":
+        row.status = "revoked"
+    elif "status" not in overrides:
+        row.status = reading.status
     row.dedup_key = f"google:{reading.external_id}:{reading.starts_at.isoformat()}"
     return row
 
@@ -121,11 +129,15 @@ async def sync_google_calendar(
     session: AsyncSession, account_id: uuid.UUID, timezone_name: str, *,
     provider: GoogleCalendarProvider | None = None, _allow_reset: bool = True,
 ) -> dict[str, Any]:
-    integration = await _integration(session, account_id)
-    if integration is None or integration.status != "connected" or not integration.credential_ref:
+    # Serialize all reads and writes for one integration. The unique external
+    # identity constraint remains a final invariant, not the lock mechanism.
+    integration = await _integration(session, account_id, lock=True)
+    if integration is None or integration.status not in {"connected", "temporary_failure"} or not integration.credential_ref:
         raise NotFoundError("Google Calendar is not connected.")
     provider = provider or GoogleCalendarProvider(credential_store(session))
     initial_sync = integration.sync_cursor is None
+    sync_since: datetime | None = None
+    sync_until: datetime | None = None
     try:
         if integration.sync_cursor:
             readings, cursor, _initial = await provider.fetch_changes(
@@ -133,6 +145,7 @@ async def sync_google_calendar(
             )
         else:
             since, until = _bounds(timezone_name)
+            sync_since, sync_until = since, until
             readings, cursor, _initial = await provider.fetch_changes(
                 credential_ref=integration.credential_ref, timezone_name=timezone_name, sync_cursor=None, since=since, until=until,
             )
@@ -146,8 +159,12 @@ async def sync_google_calendar(
         return await sync_google_calendar(session, account_id, timezone_name, provider=provider, _allow_reset=False)
     except ProviderUnavailable as exc:
         integration.last_error = exc.reason
+        if exc.reason == "reconnect_required":
+            integration.status = "reconnect_required"
+        else:
+            integration.status = "temporary_failure"
         await session.flush()
-        return {"connected": True, "synced": False, "reason": exc.reason}
+        return {"connected": integration.status in {"connected", "temporary_failure"}, "synced": False, "reason": exc.reason}
 
     seen = set()
     created = updated = revoked = 0
@@ -165,18 +182,21 @@ async def sync_google_calendar(
             revoked += 1
         else:
             updated += 1
-    if initial_sync:
+    if initial_sync and sync_since is not None and sync_until is not None:
         # A bounded full sync owns the future horizon. Anything absent from the
         # completed page set is no longer a usable imported event.
         for row in (await session.execute(select(CalendarEvent).where(
             CalendarEvent.integration_id == integration.id,
             CalendarEvent.status == "active",
+            CalendarEvent.starts_at >= sync_since,
+            CalendarEvent.starts_at < sync_until,
         ))).scalars().all():
             if row.external_id not in seen:
                 row.status = "revoked"
                 revoked += 1
     if cursor:
         integration.sync_cursor = cursor
+    integration.status = "connected"
     integration.last_synced_at = utcnow()
     integration.last_error = None
     await session.flush()
@@ -190,7 +210,7 @@ async def connect_from_callback(
     if not code or len(code) > 2048:
         raise ValidationFailedError("Google Calendar could not be connected.", field="code")
     provider = provider or GoogleCalendarProvider(credential_store(session))
-    existing = await _integration(session, account_id)
+    existing = await _integration(session, account_id, lock=True)
     token_response = await provider.exchange_code(code, GOOGLE_CALENDAR_REDIRECT_URI)
     refresh_token = token_response.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token:
@@ -218,7 +238,7 @@ async def connect_from_callback(
 
 
 async def disconnect_google_calendar(session: AsyncSession, account_id: uuid.UUID, *, provider: GoogleCalendarProvider | None = None) -> dict[str, Any]:
-    integration = await _integration(session, account_id)
+    integration = await _integration(session, account_id, lock=True)
     if integration is None:
         return {"status": "revoked", "revoked": False, "message": "Google Calendar is already disconnected."}
     if integration.credential_ref:
