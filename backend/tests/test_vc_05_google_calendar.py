@@ -528,6 +528,7 @@ async def test_sync_google_calendar_410_reset_reconciles_owned_horizon(monkeypat
             id=integration_id, account_id=account_id, kind="calendar", provider="google",
             status="connected", scopes=["readonly"], credential_ref="memory:1", sync_cursor="old",
         ))
+        await session.flush()
         for external_id, when, status, overrides in (
             ("present", datetime(2026, 8, 10, 9, tzinfo=UTC), "dismissed", {"status": True}),
             ("dismissed-absent", datetime(2026, 8, 11, 9, tzinfo=UTC), "dismissed", {"status": True}),
