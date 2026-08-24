@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
@@ -5,7 +6,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from app.domains.planning import calendar_sync
-from app.domains.planning.credentials import InMemoryCredentialStore
+from app.domains.planning.credentials import InMemoryCredentialStore, SupabaseVaultCredentialStore
 from app.domains.planning.providers.google_calendar import (
     GoogleCalendarProvider,
     GoogleSyncTokenExpired,
@@ -23,6 +24,26 @@ class _Session:
 
     async def flush(self) -> None:
         return None
+
+
+class _VaultResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one(self):
+        return self.value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+
+class _VaultSession:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, statement, params=None):
+        self.calls.append((str(statement), params or {}))
+        return _VaultResult("vault-id")
 
 
 @pytest.mark.asyncio
@@ -145,3 +166,31 @@ async def test_malformed_changed_item_raises_before_cursor_is_returned():
     with pytest.raises(MalformedGoogleEvent) as error:
         await provider.fetch_changes(credential_ref="memory:1", timezone_name="UTC", sync_cursor="cursor-1")
     assert error.value.reason == "malformed_event"
+
+
+@pytest.mark.asyncio
+async def test_vault_credentials_are_unnamed_and_replace_in_place():
+    session = _VaultSession()
+    store = SupabaseVaultCredentialStore(session)
+    first = await store.store("refresh-one")
+    same = await store.replace(first, "refresh-two")
+
+    assert first == "supabase-vault:vault-id"
+    assert same == first
+    assert "vault.create_secret(:secret)" in session.calls[0][0]
+    assert "glamgenius-google-calendar" not in session.calls[0][0]
+    assert "vault.update_secret" in session.calls[1][0]
+    assert session.calls[1][1]["id"] == "vault-id"
+    assert session.calls[1][1]["secret"] == "refresh-two"
+
+
+def test_oauth_redaction_covers_parameterized_and_free_text_boundaries():
+    from app.shared.observability.logging import OAuthRedactionFilter
+    from app.shared.observability.sentry_privacy import scrub_event
+
+    marker = "VC05_FAKE_REFRESH_MARKER"
+    record = logging.LogRecord("oauth", logging.ERROR, __file__, 1, "payload=%s", ({"refresh_token": marker},), None)
+    OAuthRedactionFilter().filter(record)
+    assert marker not in record.getMessage()
+    event = scrub_event({"exception": {"values": [{"value": f"refresh_token={marker}"}]}, "request": {"url": f"https://x/callback?code={marker}"}})
+    assert marker not in str(event)

@@ -20,7 +20,7 @@ class OAuthRedactionFilter(logging.Filter):
     """Redact OAuth callback/token material at the logging boundary."""
 
     _query = re.compile(r"([?&](?:code|state|access_token|refresh_token|client_secret)=)[^&#\s]+", re.I)
-    _kv = re.compile(r"(\b(?:code|state|access_token|refresh_token|client_secret)\b\s*[:=]\s*)([\"']?)([^\s,}&\"']+)", re.I)
+    _kv = re.compile(r"((?:[\"']?\b(?:code|state|access_token|refresh_token|client_secret)\b[\"']?)\s*[:=]\s*[\"']?)[^\s,}&\"']+", re.I)
     _header = re.compile(r"((?:authorization\s*[:=]\s*)?Bearer\s+)[A-Za-z0-9._~+/=-]+", re.I)
 
     def filter(self, record: logging.LogRecord) -> bool:
