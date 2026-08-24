@@ -184,6 +184,8 @@ REGISTRY: dict[str, Classification] = {
     "notification_preferences": Classification.INCLUDED,
     "notification_deliveries": Classification.INCLUDED,
     "external_integrations": Classification.INCLUDED,
+    # One-time OAuth CSRF/replay state is security material, never user export.
+    "external_oauth_states": Classification.SECRET_EXCLUDED,
     # --- Audit + beta usage ---
     "audit_events": Classification.INCLUDED,
     "beta_usage_events": Classification.INCLUDED,
