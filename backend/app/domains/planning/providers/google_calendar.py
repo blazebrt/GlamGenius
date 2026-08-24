@@ -113,9 +113,18 @@ class GoogleCalendarProvider(CalendarProvider):
         })
 
     async def refresh(self, credential_ref: str) -> str:
-        refresh_token = await self.credential_store.read(credential_ref)
+        try:
+            refresh_token = await self.credential_store.read(credential_ref)
+        except Exception as exc:  # noqa: BLE001 — storage details stay inside the provider boundary
+            raise ProviderUnavailable(
+                "Google Calendar is temporarily unavailable.",
+                provider="google", reason="provider_unavailable",
+            ) from exc
         if not refresh_token:
-            raise ProviderUnavailable("Google Calendar needs to be connected again.", provider="google", reason="missing_refresh_credential")
+            raise ProviderUnavailable(
+                "Google Calendar needs to be connected again.",
+                provider="google", reason="reconnect_required",
+            )
         payload = await self._token_request({
             "refresh_token": refresh_token, "client_id": GOOGLE_CALENDAR_CLIENT_ID,
             "client_secret": GOOGLE_CALENDAR_CLIENT_SECRET, "grant_type": "refresh_token",

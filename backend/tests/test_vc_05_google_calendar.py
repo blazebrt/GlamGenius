@@ -2,7 +2,7 @@ import logging
 import os
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -11,8 +11,12 @@ from uuid import uuid4
 import httpx
 import pytest
 from app.api.v2 import integrations as integrations_api
-from app.domains.planning import calendar_sync
+from app.domains.planning import calendar_sync, event_ready
+from app.domains.planning import context as planning_context
+from app.domains.planning import service as planning_service
 from app.domains.planning.credentials import InMemoryCredentialStore, SupabaseVaultCredentialStore
+from app.domains.planning.models import CalendarEvent, ExternalIntegration, ExternalOAuthState
+from app.domains.planning.providers.base import CalendarEventReading, ProviderUnavailable
 from app.domains.planning.providers.google_calendar import (
     GoogleCalendarProvider,
     GoogleSyncTokenExpired,
@@ -20,8 +24,9 @@ from app.domains.planning.providers.google_calendar import (
     MalformedGoogleEvent,
     normalize_google_event,
 )
+from app.shared.database.sql import get_sessionmaker
 from app.shared.errors.exceptions import ValidationFailedError
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 
@@ -139,6 +144,28 @@ class _CommitSession:
         self.committed = True
 
 
+class _FakeSyncProvider:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    async def fetch_changes(self, **kwargs):
+        self.calls.append(kwargs)
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+
+def _reading(external_id, *, title="Launch", starts_at=None, location="Mumbai", status="active", raw=None):
+    return CalendarEventReading(
+        external_id=external_id, title=title,
+        starts_at=starts_at or datetime(2026, 8, 10, 9, tzinfo=UTC),
+        location=location, provider="google", source="integration", status=status,
+        raw=raw or {},
+    )
+
+
 @pytest.mark.asyncio
 async def test_authorization_state_is_opaque_and_scope_is_read_only(monkeypatch):
     monkeypatch.setattr("app.config.GOOGLE_CALENDAR_ENABLED", True)
@@ -157,6 +184,24 @@ async def test_authorization_state_is_opaque_and_scope_is_read_only(monkeypatch)
     assert len(state) >= 32
     assert session.added[0].state_hash != state
     assert expires_at > datetime.now(UTC)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_value", [None, RuntimeError("vault unavailable")])
+async def test_google_refresh_credential_failures_are_safe(read_value):
+    class Store:
+        async def read(self, _ref):
+            if isinstance(read_value, BaseException):
+                raise read_value
+            return read_value
+
+    provider = GoogleCalendarProvider(Store())
+    with pytest.raises(ProviderUnavailable) as error:
+        await provider.refresh("opaque-ref")
+    assert error.value.reason == (
+        "provider_unavailable" if isinstance(read_value, BaseException) else "reconnect_required"
+    )
+    assert "vault unavailable" not in str(error.value)
 
 
 @pytest.mark.asyncio
@@ -220,6 +265,42 @@ async def test_reconnect_without_new_refresh_token_does_not_claim_connected():
 
     with pytest.raises(ValidationFailedError, match="refresh credential"):
         await calendar_sync.connect_from_callback(session, uuid4(), "oauth-code", provider=Provider())
+
+
+@pytest.mark.asyncio
+async def test_oauth_state_is_single_use_and_denied_callback_consumes_it(
+    db_clean, registered_supabase_user,
+):
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    now = datetime.now(UTC)
+    valid_raw, denied_raw, expired_raw = "valid-state", "denied-state", "expired-state"
+    async with factory() as session:
+        session.add_all([
+            ExternalOAuthState(account_id=account_id, provider="google", state_hash=calendar_sync._hash_state(valid_raw), expires_at=now + timedelta(minutes=5)),
+            ExternalOAuthState(account_id=account_id, provider="google", state_hash=calendar_sync._hash_state(denied_raw), expires_at=now + timedelta(minutes=5)),
+            ExternalOAuthState(account_id=account_id, provider="google", state_hash=calendar_sync._hash_state(expired_raw), expires_at=now - timedelta(minutes=1)),
+        ])
+        await session.commit()
+
+    async with factory() as session:
+        await calendar_sync.consume_state(session, valid_raw)
+        await session.commit()
+        with pytest.raises(ValidationFailedError):
+            await calendar_sync.consume_state(session, valid_raw)
+        with pytest.raises(ValidationFailedError):
+            await calendar_sync.consume_state(session, expired_raw)
+        with pytest.raises(ValidationFailedError):
+            await calendar_sync.consume_state(session, "unknown-state")
+
+    async with factory() as session:
+        response = await integrations_api.google_callback(
+            code=None, state=denied_raw, error="access_denied", session=session,
+        )
+        assert response.headers["location"].endswith("result=denied")
+        await session.commit()
+        with pytest.raises(ValidationFailedError):
+            await calendar_sync.consume_state(session, denied_raw)
 
 
 @pytest.mark.asyncio
@@ -382,6 +463,219 @@ async def test_malformed_changed_item_raises_before_cursor_is_returned():
     assert error.value.reason == "malformed_event"
 
 
+@pytest.mark.asyncio
+async def test_sync_google_calendar_initial_repeat_and_user_authority(
+    db_clean, registered_supabase_user,
+):
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    integration_id = uuid4()
+    async with factory() as session:
+        session.add(ExternalIntegration(
+            id=integration_id, account_id=account_id, kind="calendar", provider="google",
+            status="connected", scopes=["readonly"], credential_ref="memory:1",
+        ))
+        await session.commit()
+
+    provider = _FakeSyncProvider([
+        ([_reading("google-1")], "cursor-1", True),
+        ([_reading("google-1", title="Moved", starts_at=datetime(2026, 8, 11, 10, tzinfo=UTC), location="Delhi")], "cursor-2", False),
+        ([_reading("google-1", title="Provider title", starts_at=datetime(2026, 8, 12, 11, tzinfo=UTC), location="Pune")], "cursor-3", False),
+        ([_reading("google-1", status="revoked", raw={"tombstone": True})], "cursor-4", False),
+    ])
+    async with factory() as session:
+        first = await calendar_sync.sync_google_calendar(session, account_id, "UTC", provider=provider)
+        await session.commit()
+        row = (await session.execute(select(CalendarEvent).where(CalendarEvent.external_id == "google-1"))).scalar_one()
+        first_id = row.id
+        assert first["created"] == 1 and row.provider == "google" and row.source == "integration"
+        assert row.starts_at == datetime(2026, 8, 10, 9, tzinfo=UTC)
+
+        second = await calendar_sync.sync_google_calendar(session, account_id, "UTC", provider=provider)
+        await session.commit()
+        row = (await session.execute(select(CalendarEvent).where(CalendarEvent.external_id == "google-1"))).scalar_one()
+        assert second["updated"] == 1 and row.id == first_id and row.title == "Moved" and row.location == "Delhi"
+
+        row.occasion_key = "wedding"
+        row.dress_code_hint = "formal"
+        row.status = "dismissed"
+        row.user_overrides = {"occasion_key": True, "dress_code_hint": True, "status": True, "title": True}
+        await session.flush()
+        await calendar_sync.sync_google_calendar(session, account_id, "UTC", provider=provider)
+        await session.commit()
+        row = (await session.execute(select(CalendarEvent).where(CalendarEvent.external_id == "google-1"))).scalar_one()
+        assert row.id == first_id and row.occasion_key == "wedding" and row.dress_code_hint == "formal"
+        assert row.status == "dismissed" and row.starts_at == datetime(2026, 8, 12, 11, tzinfo=UTC)
+        assert row.title == "Moved" and row.location == "Pune"
+
+        await calendar_sync.sync_google_calendar(session, account_id, "UTC", provider=provider)
+        await session.commit()
+        row = (await session.execute(select(CalendarEvent).where(CalendarEvent.external_id == "google-1"))).scalar_one()
+        assert row.id == first_id and row.status == "revoked"
+    assert [call["sync_cursor"] for call in provider.calls] == [None, "cursor-1", "cursor-2", "cursor-3"]
+
+
+@pytest.mark.asyncio
+async def test_sync_google_calendar_410_reset_reconciles_owned_horizon(monkeypatch, db_clean, registered_supabase_user):
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    end = datetime(2026, 11, 1, tzinfo=UTC)
+    monkeypatch.setattr(calendar_sync, "_bounds", lambda _timezone: (start, end))
+    integration_id = uuid4()
+    async with factory() as session:
+        session.add(ExternalIntegration(
+            id=integration_id, account_id=account_id, kind="calendar", provider="google",
+            status="connected", scopes=["readonly"], credential_ref="memory:1", sync_cursor="old",
+        ))
+        for external_id, when, status, overrides in (
+            ("present", datetime(2026, 8, 10, 9, tzinfo=UTC), "dismissed", {"status": True}),
+            ("dismissed-absent", datetime(2026, 8, 11, 9, tzinfo=UTC), "dismissed", {"status": True}),
+            ("active-absent", datetime(2026, 8, 12, 9, tzinfo=UTC), "active", {}),
+            ("already-revoked", datetime(2026, 8, 13, 9, tzinfo=UTC), "revoked", {}),
+            ("outside-horizon", datetime(2026, 11, 2, 9, tzinfo=UTC), "active", {}),
+        ):
+            session.add(CalendarEvent(
+                account_id=account_id, integration_id=integration_id, external_id=external_id,
+                dedup_key=f"google:{external_id}", title=external_id, starts_at=when,
+                provider="google", source="integration", status=status, user_overrides=overrides,
+            ))
+        await session.commit()
+
+    provider = _FakeSyncProvider([
+        GoogleSyncTokenExpired(),
+        ([_reading("present", title="Present", starts_at=datetime(2026, 8, 10, 10, tzinfo=UTC))], "new", True),
+    ])
+    async with factory() as session:
+        result = await calendar_sync.sync_google_calendar(session, account_id, "UTC", provider=provider)
+        await session.commit()
+        rows = {row.external_id: row for row in (await session.execute(select(CalendarEvent).where(CalendarEvent.integration_id == integration_id))).scalars()}
+    assert result["synced"] is True and result["revoked"] == 2
+    assert len(provider.calls) == 2 and provider.calls[0]["sync_cursor"] == "old" and provider.calls[1]["sync_cursor"] is None
+    assert rows["present"].status == "dismissed"
+    assert rows["dismissed-absent"].status == "revoked"
+    assert rows["active-absent"].status == "revoked"
+    assert rows["already-revoked"].status == "revoked"
+    assert rows["outside-horizon"].status == "active"
+
+
+@pytest.mark.asyncio
+async def test_synced_google_event_is_consumed_by_upcoming_today_and_event_ready(
+    monkeypatch, db_clean, registered_supabase_user,
+):
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    starts_at = datetime.now(UTC) + timedelta(days=2)
+    starts_at = starts_at.replace(hour=10, minute=0, second=0, microsecond=0)
+    monkeypatch.setattr(
+        calendar_sync, "_bounds",
+        lambda _timezone: (starts_at - timedelta(days=1), starts_at + timedelta(days=90)),
+    )
+    integration_id = uuid4()
+    async with factory() as session:
+        session.add(ExternalIntegration(
+            id=integration_id, account_id=account_id, kind="calendar", provider="google",
+            status="connected", scopes=["readonly"], credential_ref="memory:1",
+        ))
+        await session.commit()
+
+    provider = _FakeSyncProvider([
+        ([_reading("canonical-google", title="Client dinner", starts_at=starts_at, location="Delhi")], "canonical-cursor", True),
+    ])
+    async with factory() as session:
+        result = await calendar_sync.sync_google_calendar(session, account_id, "UTC", provider=provider)
+        await session.commit()
+        row = (await session.execute(select(CalendarEvent).where(
+            CalendarEvent.integration_id == integration_id,
+            CalendarEvent.external_id == "canonical-google",
+        ))).scalar_one()
+        event_id = row.id
+        upcoming = await planning_service.upcoming_events(session, account_id, "UTC", days=90)
+        todays_events = await planning_context.day_events(session, account_id, starts_at.date(), "UTC")
+        captured: dict[str, object] = {}
+        original_gather = planning_context.gather
+
+        async def capture_gather(*args, **kwargs):
+            captured.update(kwargs)
+            return await original_gather(*args, **kwargs)
+
+        monkeypatch.setattr(event_ready.context_stage, "gather", capture_gather)
+        ready = await event_ready.generate(session, account_id, event_id)
+
+    assert result["synced"] is True
+    assert [item.id for item in upcoming] == [event_id]
+    assert [item.id for item in todays_events] == [event_id]
+    assert todays_events[0].location == "Delhi"
+    assert ready["event"]["id"] == str(event_id)
+    assert ready["event"]["location"] == "Delhi"
+    assert captured["environment_location"] == "Delhi"
+    assert captured["explicit_environment_location"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [
+    MalformedGoogleEvent(),
+    IncompleteGoogleSync(),
+    ProviderUnavailable("offline", provider="google", reason="provider_unavailable"),
+    ProviderUnavailable("reconnect", provider="google", reason="reconnect_required"),
+])
+async def test_sync_google_calendar_failure_keeps_cursor_and_last_sync(failure, db_clean, registered_supabase_user):
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    previous = datetime(2026, 8, 9, 12, tzinfo=UTC)
+    integration_id = uuid4()
+    async with factory() as session:
+        session.add(ExternalIntegration(
+            id=integration_id, account_id=account_id, kind="calendar", provider="google",
+            status="connected", scopes=["readonly"], credential_ref="memory:1", sync_cursor="authoritative",
+            last_synced_at=previous,
+        ))
+        await session.commit()
+    async with factory() as session:
+        result = await calendar_sync.sync_google_calendar(
+            session, account_id, "UTC", provider=_FakeSyncProvider([failure]),
+        )
+        await session.commit()
+        row = (await session.execute(select(ExternalIntegration).where(ExternalIntegration.id == integration_id))).scalar_one()
+    assert result["synced"] is False and result["reason"] == failure.reason
+    assert result["connected"] is (failure.reason != "reconnect_required")
+    assert row.status == ("reconnect_required" if failure.reason == "reconnect_required" else "temporary_failure")
+    assert row.sync_cursor == "authoritative" and row.last_synced_at == previous
+
+
+@pytest.mark.asyncio
+async def test_google_privacy_export_omits_credentials_cursor_and_oauth_state(
+    db_clean, registered_supabase_user,
+):
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    raw_state = "privacy-export-state"
+    async with factory() as session:
+        session.add(ExternalIntegration(
+            account_id=account_id, kind="calendar", provider="google", status="connected",
+            scopes=["readonly"], credential_ref="supabase-vault:secret-ref",
+            sync_cursor="cursor-secret", external_account_label="Google Calendar",
+        ))
+        session.add(ExternalOAuthState(
+            account_id=account_id, provider="google", state_hash=calendar_sync._hash_state(raw_state),
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        ))
+        session.add(CalendarEvent(
+            account_id=account_id, external_id="google-export", dedup_key="google:google-export",
+            title="Planning", starts_at=datetime(2026, 8, 10, 9, tzinfo=UTC), location="Mumbai",
+            provider="google", source="integration", status="active",
+        ))
+        await session.commit()
+        from app.domains.privacy import export as export_service
+        exported = await export_service.build_export(session, account_id)
+    exported_text = str(exported)
+    assert "supabase-vault:secret-ref" not in exported_text
+    assert "cursor-secret" not in exported_text
+    assert calendar_sync._hash_state(raw_state) not in exported_text
+    assert raw_state not in exported_text
+    assert "Planning" in exported_text and "Mumbai" in exported_text
+
+
 def _run_alembic(revision: str, *, downgrade: bool = False) -> None:
     command = "downgrade" if downgrade else "upgrade"
     result = subprocess.run(
@@ -438,6 +732,29 @@ async def test_vc05_identity_migration_preserves_legacy_duplicates_and_guards_go
                             'Google event moved', '2026-08-11T09:00:00+00:00', 'google', 'integration', 'active', '{}'::jsonb)
                 """), {"id": uuid4(), "account_id": account_id, "integration_id": google_integration_id})
                 await session.rollback()
+    finally:
+        _run_alembic("head")
+
+
+@pytest.mark.asyncio
+async def test_calendar_status_downgrade_fails_closed_for_lifecycle_states(
+    db_clean, registered_supabase_user,
+):
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    rows = [
+        ExternalIntegration(account_id=account_id, kind="calendar", provider="manual", status="revocation_pending"),
+        ExternalIntegration(account_id=account_id, kind="calendar", provider="google", status="reconnect_required"),
+        ExternalIntegration(account_id=account_id, kind="weather", provider="manual", status="temporary_failure"),
+    ]
+    async with factory() as session:
+        session.add_all(rows)
+        await session.commit()
+    _run_alembic("g7b8c9d0e1f2", downgrade=True)
+    try:
+        async with factory() as session:
+            statuses = (await session.execute(select(ExternalIntegration.status).order_by(ExternalIntegration.provider))).scalars().all()
+        assert statuses == ["revoked", "revoked", "connected"]
     finally:
         _run_alembic("head")
 
