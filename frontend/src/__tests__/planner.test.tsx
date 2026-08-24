@@ -86,6 +86,29 @@ describe('Weekly planner UI', () => {
     expect(disconnect).toHaveBeenCalledTimes(1);
   });
 
+  it('shows a calendar failure on the calendar card itself', () => {
+    const noop = jest.fn();
+    render(
+      <GoogleCalendarControl
+        status="connected"
+        message="Google Calendar could not refresh right now."
+        onConnect={noop}
+        onSync={noop}
+        onDisconnect={noop}
+      />,
+    );
+    expect(screen.getByText('Google Calendar could not refresh right now.')).toBeTruthy();
+  });
+
+  it('tells you how a pending disconnect actually gets finished', () => {
+    const noop = jest.fn();
+    render(
+      <GoogleCalendarControl status="revocation_pending" onConnect={noop} onSync={noop} onDisconnect={noop} />,
+    );
+    expect(screen.getByText(/Tap Retry to finish removing our access/)).toBeTruthy();
+    expect(screen.getByLabelText('Retry Google Calendar disconnect')).toBeTruthy();
+  });
+
   it('an ungenerated week invites you to build one', () => {
     const generate = jest.fn();
     render(<WeekEmpty onGenerate={generate} />);

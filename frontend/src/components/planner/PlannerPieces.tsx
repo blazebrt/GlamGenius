@@ -128,7 +128,7 @@ export function GoogleCalendarControl({
     <View style={styles.googleCard} accessibilityLabel="Google Calendar">
       <View style={{ flex: 1 }}>
         <Text style={styles.sectionTitle}>{reconnect ? 'Reconnect Google Calendar' : pending ? 'Disconnecting Google Calendar' : connected ? 'Google Calendar connected' : 'Connect Google Calendar'}</Text>
-        <Text style={styles.bodyMuted}>{message || (connected ? (label || 'Google Calendar') : pending ? 'We are finishing the disconnect safely.' : reconnect ? 'Google needs you to approve access again.' : 'Bring in upcoming plans so GlamGenius can help you prepare around them.')}</Text>
+        <Text style={styles.bodyMuted}>{message || (connected ? (label || 'Google Calendar') : pending ? 'Google Calendar has stopped feeding your plan. Tap Retry to finish removing our access.' : reconnect ? 'Google needs you to approve access again.' : 'Bring in upcoming plans so GlamGenius can help you prepare around them.')}</Text>
         {!!connected && !!lastSyncedAt && <Text style={styles.eventMeta}>Last synced {new Date(lastSyncedAt).toLocaleString()}</Text>}
       </View>
       {connected ? (

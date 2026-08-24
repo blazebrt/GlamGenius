@@ -307,49 +307,6 @@ async def connect_calendar(
     return row
 
 
-async def disconnect_calendar(session: AsyncSession, account_id: uuid.UUID) -> list[ExternalIntegration]:
-    """Revoke calendar access and stop using anything it gave us.
-
-    Disconnecting has to actually mean something. Events sourced from the
-    integration are marked revoked so they stop feeding plans; events the user
-    typed themselves are theirs and are left alone.
-    """
-    rows = (await session.execute(
-        select(ExternalIntegration).where(
-            ExternalIntegration.account_id == account_id,
-            ExternalIntegration.kind == INTEGRATION_CALENDAR,
-        )
-    )).scalars().all()
-    google_rows = [row for row in rows if row.provider == "google"]
-    if google_rows:
-        from app.domains.planning.calendar_sync import disconnect_google_calendar
-        await disconnect_google_calendar(session, account_id)
-        rows = [row for row in rows if row.provider != "google"]
-    integration_ids = [row.id for row in rows]
-    for row in rows:
-        row.status = "revoked"
-        row.revoked_at = utcnow()
-        row.credential_ref = None
-
-    # Scoped by integration id rather than by a source string: exactly the
-    # events that came from the connection being revoked, and nothing else.
-    events = (
-        (await session.execute(
-            select(CalendarEvent).where(
-                CalendarEvent.account_id == account_id,
-                CalendarEvent.integration_id.in_(integration_ids),
-                CalendarEvent.status == "active",
-            )
-        )).scalars().all()
-        if integration_ids else []
-    )
-    for event in events:
-        event.status = "revoked"
-
-    await session.flush()
-    return list(rows)
-
-
 async def disconnect_manual_calendar(session: AsyncSession, account_id: uuid.UUID) -> list[ExternalIntegration]:
     """Disconnect legacy/manual calendar content only.
 

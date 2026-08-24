@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import (
@@ -39,8 +39,17 @@ async def async_authorization_url(session: AsyncSession, account_id: uuid.UUID) 
     if not GOOGLE_CALENDAR_ENABLED:
         raise ValidationFailedError("Google Calendar is not enabled yet.", field="provider")
     raw = secrets.token_urlsafe(32)
-    expires = utcnow() + timedelta(seconds=GOOGLE_CALENDAR_STATE_TTL_SECONDS)
+    now = utcnow()
+    expires = now + timedelta(seconds=GOOGLE_CALENDAR_STATE_TTL_SECONDS)
     existing = await _integration(session, account_id, lock=True)
+    # A nonce that is spent or past its deadline can never authorize anything
+    # again, so retaining it only grows the table. Clearing this account's own
+    # dead rows keeps the sweep account-scoped and needs no separate job.
+    await session.execute(delete(ExternalOAuthState).where(
+        ExternalOAuthState.account_id == account_id,
+        ExternalOAuthState.provider == GOOGLE_PROVIDER,
+        or_(ExternalOAuthState.consumed_at.is_not(None), ExternalOAuthState.expires_at <= now),
+    ))
     session.add(ExternalOAuthState(account_id=account_id, provider=GOOGLE_PROVIDER, state_hash=_hash_state(raw), expires_at=expires))
     await session.flush()
     params = {
@@ -259,11 +268,11 @@ async def disconnect_google_calendar(session: AsyncSession, account_id: uuid.UUI
         try:
             provider = provider or GoogleCalendarProvider(credential_store(session))
             if not await provider.revoke(credential_ref):
-                return {"status": "revocation_pending", "revoked": False, "message": "Google Calendar has stopped feeding your plan; we will finish disconnecting shortly."}
+                return {"status": "revocation_pending", "revoked": False, "message": "Google Calendar has stopped feeding your plan. We could not finish removing our access — please try again."}
             await provider.credential_store.delete(credential_ref)
         except Exception:  # noqa: BLE001 — cleanup details never reach the app
             await session.flush()
-            return {"status": "revocation_pending", "revoked": False, "message": "Google Calendar has stopped feeding your plan; we will finish disconnecting shortly."}
+            return {"status": "revocation_pending", "revoked": False, "message": "Google Calendar has stopped feeding your plan. We could not finish removing our access — please try again."}
     integration.status = "revoked"
     integration.revoked_at = utcnow()
     integration.credential_ref = None

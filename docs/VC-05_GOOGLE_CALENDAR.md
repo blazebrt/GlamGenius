@@ -30,11 +30,23 @@ its dismissal and field overrides. Provider cancellations always revoke an
 imported event, while an explicit user status correction remains authoritative
 for live events.
 
+A one-time OAuth nonce is stored only as a hash, and is spent on first use.
+Starting a new authorization clears that account's own consumed and expired
+nonces, so the table cannot grow without bound and no separate sweep job is
+needed. A nonce that is still live is never pruned, and one account's
+authorization never touches another account's rows.
+
+A correction sent as an explicit null is not a correction: it claims no field
+and leaves later provider syncs free to update it. Only a field the user
+actually set becomes authoritative over Google.
+
 Disconnect treats only HTTP 200 as confirmed successful revocation. Provider
 errors, transient failures and network errors leave the integration in
 `revocation_pending`; importantly, the integration is marked pending and all
 imported events are revoked locally before any remote or Vault work begins, so
-planning stops immediately even if cleanup later fails. The Vault credential is
+planning stops immediately even if cleanup later fails. There is no background
+retry: the customer-facing copy says so plainly and offers a Retry control, and
+account deletion runs the same cleanup. The Vault credential is
 retained for retry until remote revoke and Vault deletion both succeed. The
 generic calendar DELETE is manual-only; Google uses its dedicated secure
 disconnect route. A terminal refresh-token `invalid_grant` moves the

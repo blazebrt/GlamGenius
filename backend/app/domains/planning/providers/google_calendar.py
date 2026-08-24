@@ -234,7 +234,12 @@ class GoogleCalendarProvider(CalendarProvider):
     async def events(self, *, since: datetime, until: datetime, credential_ref: str | None) -> list[CalendarEventReading]:
         if not credential_ref:
             raise ProviderUnavailable("Google Calendar needs to be connected.", provider="google", reason="missing_refresh_credential")
-        rows, _cursor, _initial = await self.fetch_changes(credential_ref=credential_ref, timezone_name=str(since.tzinfo), sync_cursor=None, since=since, until=until)
+        # Only a real IANA key can be handed to ZoneInfo. A fixed-offset
+        # tzinfo stringifies to something like "UTC+05:30", which is not a
+        # zone name, so fall back rather than raising deep in normalization.
+        zone = since.tzinfo
+        timezone_name = zone.key if isinstance(zone, ZoneInfo) else "UTC"
+        rows, _cursor, _initial = await self.fetch_changes(credential_ref=credential_ref, timezone_name=timezone_name, sync_cursor=None, since=since, until=until)
         return rows
 
     async def revoke(self, credential_ref: str) -> bool:

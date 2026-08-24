@@ -3,11 +3,12 @@ import logging
 import os
 import subprocess
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -1006,3 +1007,137 @@ def test_oauth_redaction_covers_parameterized_and_free_text_boundaries():
     assert marker not in record.getMessage()
     event = scrub_event({"exception": {"values": [{"value": f"refresh_token={marker}"}]}, "request": {"url": f"https://x/callback?code={marker}"}})
     assert marker not in str(event)
+
+
+@pytest.mark.asyncio
+async def test_explicit_null_correction_does_not_claim_a_field_from_the_provider(
+    db_clean, registered_supabase_user, monkeypatch,
+):
+    """A null field in a PATCH is not a correction and must not freeze the field.
+
+    Recording an override for a field the user never actually set would stop
+    every later Google sync from updating it, silently and permanently.
+    """
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    integration_id = uuid4()
+    async with factory() as session:
+        session.add(ExternalIntegration(
+            id=integration_id, account_id=account_id, kind="calendar", provider="google",
+            status="connected", scopes=["readonly"], credential_ref="memory:1",
+        ))
+        await session.commit()
+
+    provider = _FakeSyncProvider([
+        ([_reading("google-null", title="Original")], "cursor-1", True),
+        ([_reading("google-null", title="Provider renamed")], "cursor-2", False),
+    ])
+    async with factory() as session:
+        await calendar_sync.sync_google_calendar(session, account_id, "UTC", provider=provider)
+        await session.commit()
+        row = (await session.execute(select(CalendarEvent).where(CalendarEvent.external_id == "google-null"))).scalar_one()
+        event_id = row.id
+
+    async def resolve_timezone_for(_session, _account_id):
+        return "UTC"
+
+    monkeypatch.setattr(integrations_api.context_stage, "resolve_timezone_for", resolve_timezone_for)
+    async with factory() as session:
+        body = integrations_api.CalendarEventPatch(title=None, dress_code_hint="formal")
+        await integrations_api.patch_event(
+            event_id=event_id, body=body,
+            current=SimpleNamespace(account_id=account_id), session=session,
+        )
+        row = (await session.execute(select(CalendarEvent).where(CalendarEvent.id == event_id))).scalar_one()
+        # The field the user really set is claimed; the null one is not.
+        assert row.user_overrides == {"dress_code_hint": True}
+        assert row.dress_code_hint == "formal"
+        assert row.title == "Original"
+
+    async with factory() as session:
+        await calendar_sync.sync_google_calendar(session, account_id, "UTC", provider=provider)
+        await session.commit()
+        row = (await session.execute(select(CalendarEvent).where(CalendarEvent.id == event_id))).scalar_one()
+        assert row.title == "Provider renamed"
+        assert row.dress_code_hint == "formal"
+
+
+@pytest.mark.asyncio
+async def test_authorization_clears_only_this_accounts_spent_and_expired_state(
+    db_clean, registered_supabase_user, monkeypatch,
+):
+    """Dead nonces are pruned; a live one and another account's rows survive.
+
+    A spent or expired nonce can never authorize anything again, so keeping it
+    only grows the table. Pruning must stay account-scoped and must never touch
+    a nonce that is still usable.
+    """
+    _, account_id = await registered_supabase_user()
+    _, other_account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    now = datetime.now(UTC)
+
+    monkeypatch.setattr(calendar_sync, "GOOGLE_CALENDAR_CLIENT_ID", "client-id")
+    monkeypatch.setattr(calendar_sync, "GOOGLE_CALENDAR_REDIRECT_URI", "https://api.example/callback")
+    monkeypatch.setenv("GOOGLE_CALENDAR_ENABLED", "true")
+    import app.config as app_config
+    monkeypatch.setattr(app_config, "GOOGLE_CALENDAR_ENABLED", True)
+
+    async with factory() as session:
+        session.add_all([
+            ExternalOAuthState(account_id=account_id, provider="google", state_hash=calendar_sync._hash_state("spent"), expires_at=now + timedelta(minutes=5), consumed_at=now),
+            ExternalOAuthState(account_id=account_id, provider="google", state_hash=calendar_sync._hash_state("expired"), expires_at=now - timedelta(minutes=1)),
+            ExternalOAuthState(account_id=account_id, provider="google", state_hash=calendar_sync._hash_state("live"), expires_at=now + timedelta(minutes=5)),
+            ExternalOAuthState(account_id=other_account_id, provider="google", state_hash=calendar_sync._hash_state("other-spent"), expires_at=now + timedelta(minutes=5), consumed_at=now),
+        ])
+        await session.commit()
+
+    async with factory() as session:
+        url, _expires = await calendar_sync.async_authorization_url(session, account_id)
+        await session.commit()
+        assert "client-id" in url
+
+    async with factory() as session:
+        mine = (await session.execute(select(ExternalOAuthState).where(
+            ExternalOAuthState.account_id == account_id,
+        ))).scalars().all()
+        theirs = (await session.execute(select(ExternalOAuthState).where(
+            ExternalOAuthState.account_id == other_account_id,
+        ))).scalars().all()
+
+    # The live nonce plus the freshly issued one; the spent and expired ones are gone.
+    assert len(mine) == 2
+    hashes = {row.state_hash for row in mine}
+    assert calendar_sync._hash_state("live") in hashes
+    assert calendar_sync._hash_state("spent") not in hashes
+    assert calendar_sync._hash_state("expired") not in hashes
+    # Another account's spent nonce is not this account's to delete.
+    assert [row.state_hash for row in theirs] == [calendar_sync._hash_state("other-spent")]
+
+
+@pytest.mark.asyncio
+async def test_provider_events_tolerates_a_fixed_offset_timezone():
+    """``events`` must not explode on a tzinfo that is not an IANA zone."""
+    captured = {}
+
+    class Provider(GoogleCalendarProvider):
+        async def fetch_changes(self, *, credential_ref, timezone_name, sync_cursor, since=None, until=None):
+            captured["timezone_name"] = timezone_name
+            return [], "cursor", True
+
+    provider = Provider(InMemoryCredentialStore({"memory:1": "refresh"}))
+    fixed_offset = timezone(timedelta(hours=5, minutes=30))
+    await provider.events(
+        since=datetime(2026, 8, 10, tzinfo=fixed_offset),
+        until=datetime(2026, 8, 20, tzinfo=fixed_offset),
+        credential_ref="memory:1",
+    )
+    assert captured["timezone_name"] == "UTC"
+    ZoneInfo(captured["timezone_name"])
+
+    await provider.events(
+        since=datetime(2026, 8, 10, tzinfo=ZoneInfo("Asia/Kolkata")),
+        until=datetime(2026, 8, 20, tzinfo=ZoneInfo("Asia/Kolkata")),
+        credential_ref="memory:1",
+    )
+    assert captured["timezone_name"] == "Asia/Kolkata"

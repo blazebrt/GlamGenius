@@ -190,8 +190,11 @@ async def patch_event(
         row.user_confirmed = True
         row.inference_confidence = 1.0
     for key, value in fields.items():
-        if value is not None:
-            setattr(row, key, value)
+        if value is None:
+            # An explicitly null field carries no correction, so it must not
+            # claim the field and freeze out later provider updates.
+            continue
+        setattr(row, key, value)
         if key in {"title", "occasion_key", "dress_code_hint", "status"}:
             overrides = dict(row.user_overrides or {})
             overrides[key] = True
