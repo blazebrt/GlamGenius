@@ -23,16 +23,27 @@ upcoming horizon, and later syncs use Google's incremental `syncToken`. A 410
 response clears the cursor and performs exactly one bounded full rebuild; only
 events inside that requested interval may be reconciled by absence. A malformed
 provider item fails the sync before its replacement cursor is stored, so it can
-be retried. Provider cancellations always revoke an imported event, while an
-explicit user status correction remains authoritative for live events.
+be retried, and a final page without a usable `nextSyncToken` is also rejected.
+The bounded reconciliation considers every non-revoked imported row, including
+locally dismissed rows: an absent row is revoked, while a present row retains
+its dismissal and field overrides. Provider cancellations always revoke an
+imported event, while an explicit user status correction remains authoritative
+for live events.
 
 Disconnect treats only HTTP 200 (or Google's documented `invalid_token`
 already-revoked response) as successful revocation. Other 400 responses,
 transient failures and network errors leave the integration in
-`revocation_pending`; the Vault credential is retained for retry. A terminal
-refresh-token `invalid_grant` moves the integration to `reconnect_required`
-without logging or persisting the token. Vault replacement updates the
-existing secret UUID in place, while first-time secrets are unnamed and
-collision-safe across accounts. Account deletion runs the same revocation and
-Vault cleanup before removing local integration rows, and retries without
-advancing its stage when cleanup is unresolved.
+`revocation_pending`; importantly, the integration is marked pending and all
+imported events are revoked locally before any remote or Vault work begins, so
+planning stops immediately even if cleanup later fails. The Vault credential is
+retained for retry until remote revoke and Vault deletion both succeed. The
+generic calendar DELETE is manual-only; Google uses its dedicated secure
+disconnect route. A terminal refresh-token `invalid_grant` moves the
+integration to `reconnect_required` without logging or persisting the token,
+and only that recovery path requests explicit Google consent. Vault replacement
+updates the existing secret UUID in place, while first-time secrets are
+unnamed and collision-safe across accounts. The Google identity index is
+partial, so valid legacy/manual duplicate external IDs remain intact. Account
+deletion runs the same revocation and Vault cleanup before removing local
+integration rows, and retries without advancing its stage when cleanup is
+unresolved.

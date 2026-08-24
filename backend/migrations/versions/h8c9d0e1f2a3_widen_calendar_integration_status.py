@@ -15,4 +15,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Older schemas cannot represent lifecycle states longer than 16 chars.
+    # Normalize them before narrowing rather than failing halfway through a
+    # downgrade on a live account.
+    op.execute("UPDATE external_integrations SET status = 'connected' WHERE length(status) > 16")
     op.alter_column("external_integrations", "status", type_=sa.String(length=16), existing_type=sa.String(length=32), existing_nullable=False)

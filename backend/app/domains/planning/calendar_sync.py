@@ -40,6 +40,7 @@ async def async_authorization_url(session: AsyncSession, account_id: uuid.UUID) 
         raise ValidationFailedError("Google Calendar is not enabled yet.", field="provider")
     raw = secrets.token_urlsafe(32)
     expires = utcnow() + timedelta(seconds=GOOGLE_CALENDAR_STATE_TTL_SECONDS)
+    existing = await _integration(session, account_id, lock=True)
     session.add(ExternalOAuthState(account_id=account_id, provider=GOOGLE_PROVIDER, state_hash=_hash_state(raw), expires_at=expires))
     await session.flush()
     params = {
@@ -51,6 +52,8 @@ async def async_authorization_url(session: AsyncSession, account_id: uuid.UUID) 
         "include_granted_scopes": "true",
         "state": raw,
     }
+    if existing is not None and (existing.status == "reconnect_required" or not existing.credential_ref):
+        params["prompt"] = "consent"
     return f"{GOOGLE_OAUTH_AUTHORIZATION_ENDPOINT}?{urllib.parse.urlencode(params)}", expires
 
 
@@ -187,7 +190,7 @@ async def sync_google_calendar(
         # completed page set is no longer a usable imported event.
         for row in (await session.execute(select(CalendarEvent).where(
             CalendarEvent.integration_id == integration.id,
-            CalendarEvent.status == "active",
+            CalendarEvent.status != "revoked",
             CalendarEvent.starts_at >= sync_since,
             CalendarEvent.starts_at < sync_until,
         ))).scalars().all():
@@ -214,7 +217,7 @@ async def connect_from_callback(
     token_response = await provider.exchange_code(code, GOOGLE_CALENDAR_REDIRECT_URI)
     refresh_token = token_response.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token:
-        if existing is None or not existing.credential_ref:
+        if existing is None or not existing.credential_ref or existing.status == "reconnect_required":
             raise ValidationFailedError("Google did not provide a refresh credential. Please reconnect and approve access.", field="provider")
         credential_ref = existing.credential_ref
     else:
@@ -241,19 +244,26 @@ async def disconnect_google_calendar(session: AsyncSession, account_id: uuid.UUI
     integration = await _integration(session, account_id, lock=True)
     if integration is None:
         return {"status": "revoked", "revoked": False, "message": "Google Calendar is already disconnected."}
-    if integration.credential_ref:
-        provider = provider or GoogleCalendarProvider(credential_store(session))
-    if integration.credential_ref and not await provider.revoke(integration.credential_ref):
-        integration.status = "revocation_pending"
-        integration.last_error = "revocation_pending"
-        for event in (await session.execute(select(CalendarEvent).where(CalendarEvent.integration_id == integration.id, CalendarEvent.status == "active"))).scalars().all():
-            event.status = "revoked"
-        await session.flush()
-        return {"status": "revocation_pending", "revoked": False, "message": "Google Calendar has stopped feeding your plan; we will finish disconnecting shortly."}
-    if integration.credential_ref:
-        await provider.credential_store.delete(integration.credential_ref)
-    for event in (await session.execute(select(CalendarEvent).where(CalendarEvent.integration_id == integration.id, CalendarEvent.status == "active"))).scalars().all():
+    # Disable local planning immediately, before remote or Vault cleanup.
+    integration.status = "revocation_pending"
+    integration.last_error = "revocation_pending"
+    for event in (await session.execute(select(CalendarEvent).where(
+        CalendarEvent.integration_id == integration.id,
+        CalendarEvent.status != "revoked",
+    ))).scalars().all():
         event.status = "revoked"
+    await session.flush()
+
+    credential_ref = integration.credential_ref
+    if credential_ref:
+        try:
+            provider = provider or GoogleCalendarProvider(credential_store(session))
+            if not await provider.revoke(credential_ref):
+                return {"status": "revocation_pending", "revoked": False, "message": "Google Calendar has stopped feeding your plan; we will finish disconnecting shortly."}
+            await provider.credential_store.delete(credential_ref)
+        except Exception:  # noqa: BLE001 — cleanup details never reach the app
+            await session.flush()
+            return {"status": "revocation_pending", "revoked": False, "message": "Google Calendar has stopped feeding your plan; we will finish disconnecting shortly."}
     integration.status = "revoked"
     integration.revoked_at = utcnow()
     integration.credential_ref = None

@@ -39,6 +39,13 @@ class MalformedGoogleEvent(ProviderUnavailable):
         super().__init__("Google Calendar returned an unusable event.", provider="google", reason="malformed_event")
 
 
+class IncompleteGoogleSync(ProviderUnavailable):
+    """Google did not provide the cursor proving the final page completed."""
+
+    def __init__(self) -> None:
+        super().__init__("Google Calendar synchronization was incomplete.", provider="google", reason="missing_sync_token")
+
+
 def _aware(value: str, timezone_name: str) -> datetime:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=ZoneInfo(timezone_name))
@@ -210,6 +217,8 @@ class GoogleCalendarProvider(CalendarProvider):
             next_page = body.get("nextPageToken")
             if not next_page:
                 next_cursor = body.get("nextSyncToken")
+                if not isinstance(next_cursor, str) or not next_cursor:
+                    raise IncompleteGoogleSync()
                 break
         return readings, next_cursor, sync_cursor is None
 
@@ -220,7 +229,10 @@ class GoogleCalendarProvider(CalendarProvider):
         return rows
 
     async def revoke(self, credential_ref: str) -> bool:
-        refresh_token = await self.credential_store.read(credential_ref)
+        try:
+            refresh_token = await self.credential_store.read(credential_ref)
+        except Exception:  # noqa: BLE001 — callers retain the reference for retry
+            return False
         if not refresh_token:
             return True
         try:
@@ -245,4 +257,4 @@ class GoogleCalendarProvider(CalendarProvider):
             return False
 
 
-__all__ = ["GoogleCalendarProvider", "GoogleSyncTokenExpired", "MalformedGoogleEvent", "normalize_google_event"]
+__all__ = ["GoogleCalendarProvider", "GoogleSyncTokenExpired", "MalformedGoogleEvent", "IncompleteGoogleSync", "normalize_google_event"]

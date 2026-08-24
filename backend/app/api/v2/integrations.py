@@ -77,15 +77,14 @@ async def disconnect_calendar(
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Disconnect every calendar integration for this account."""
-    revoked = await service.disconnect_calendar(session, current.account_id)
+    """Disconnect manual calendar content; Google has a secure route."""
+    revoked = await service.disconnect_manual_calendar(session, current.account_id)
     await session.commit()
     body = await service.calendar_status(session, current.account_id)
     body.update({
         "revoked": len(revoked),
         "message": (
-            "Calendar access is disconnected. Events that came from it are no longer used "
-            "in your plans. Anything you added yourself is untouched."
+            "Manual calendar access is disconnected. Google Calendar uses its own secure disconnect control."
         ),
     })
     return body

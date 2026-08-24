@@ -17,8 +17,10 @@ def upgrade() -> None:
         "calendar_events",
         sa.Column("user_overrides", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
     )
-    op.create_unique_constraint(
-        "uq_calendar_event_integration_external", "calendar_events", ["integration_id", "external_id"]
+    op.create_index(
+        "uq_calendar_event_integration_external_google", "calendar_events", ["integration_id", "external_id"],
+        unique=True,
+        postgresql_where=sa.text("provider = 'google' AND integration_id IS NOT NULL AND external_id IS NOT NULL"),
     )
     op.create_table(
         "external_oauth_states",
@@ -38,6 +40,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_external_oauth_states_account_provider", table_name="external_oauth_states")
     op.drop_table("external_oauth_states")
-    op.drop_constraint("uq_calendar_event_integration_external", "calendar_events", type_="unique")
+    op.drop_index("uq_calendar_event_integration_external_google", table_name="calendar_events")
     op.drop_column("calendar_events", "user_overrides")
     op.drop_column("external_integrations", "sync_cursor")

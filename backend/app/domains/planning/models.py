@@ -26,7 +26,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -117,7 +117,11 @@ class CalendarEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
     __table_args__ = (
         UniqueConstraint("account_id", "dedup_key", name="uq_calendar_event_dedup"),
-        UniqueConstraint("integration_id", "external_id", name="uq_calendar_event_integration_external"),
+        Index(
+            "uq_calendar_event_integration_external_google",
+            "integration_id", "external_id", unique=True,
+            postgresql_where=text("provider = 'google' AND integration_id IS NOT NULL AND external_id IS NOT NULL"),
+        ),
         Index("ix_calendar_events_account_start", "account_id", "starts_at"),
     )
 
