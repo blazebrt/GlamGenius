@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import subprocess
@@ -102,15 +103,16 @@ class _DisconnectSession:
 
 
 class _RecordingCredentialStore:
-    def __init__(self, *, read_error=False, delete_error=False):
+    def __init__(self, *, read_error=False, delete_error=False, read_value="refresh-token"):
         self.read_error = read_error
         self.delete_error = delete_error
+        self.read_value = read_value
         self.deleted = []
 
     async def read(self, _ref):
         if self.read_error:
             raise RuntimeError("vault unavailable")
-        return "refresh-token"
+        return self.read_value
 
     async def delete(self, ref):
         if self.delete_error:
@@ -155,6 +157,22 @@ class _FakeSyncProvider:
         if isinstance(response, BaseException):
             raise response
         return response
+
+
+class _CoordinatedSyncProvider:
+    def __init__(self, response, *, entered=None, release=None):
+        self.response = response
+        self.entered = entered
+        self.release = release
+        self.calls = []
+
+    async def fetch_changes(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.entered is not None:
+            self.entered.set()
+        if self.release is not None:
+            await self.release.wait()
+        return self.response
 
 
 def _reading(external_id, *, title="Launch", starts_at=None, location="Mumbai", status="active", raw=None):
@@ -466,6 +484,42 @@ async def test_revocation_is_confirmed_only_by_http_200_and_retains_unresolved_s
 
 
 @pytest.mark.asyncio
+async def test_revocation_with_missing_vault_secret_is_unresolved():
+    called = False
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(200)
+
+    provider = GoogleCalendarProvider(
+        InMemoryCredentialStore({"memory:missing": None}),
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert await provider.revoke("memory:missing") is False
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_disconnect_with_missing_vault_secret_stays_pending_and_disables_events():
+    integration = SimpleNamespace(
+        id=uuid4(), status="connected", credential_ref="memory:missing", revoked_at=None,
+        sync_cursor="cursor", last_error=None,
+    )
+    event = SimpleNamespace(status="active")
+    session = _DisconnectSession(integration, [event])
+    provider = GoogleCalendarProvider(InMemoryCredentialStore({"memory:missing": None}))
+
+    result = await calendar_sync.disconnect_google_calendar(session, uuid4(), provider=provider)
+
+    assert result["status"] == "revocation_pending"
+    assert integration.status == "revocation_pending"
+    assert integration.credential_ref == "memory:missing"
+    assert event.status == "revoked"
+
+
+@pytest.mark.asyncio
 async def test_malformed_changed_item_raises_before_cursor_is_returned():
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"items": [{"id": "event-1", "start": {}}], "nextSyncToken": "must-not-advance"})
@@ -527,6 +581,150 @@ async def test_sync_google_calendar_initial_repeat_and_user_authority(
         row = (await session.execute(select(CalendarEvent).where(CalendarEvent.external_id == "google-1"))).scalar_one()
         assert row.id == first_id and row.status == "revoked"
     assert [call["sync_cursor"] for call in provider.calls] == [None, "cursor-1", "cursor-2", "cursor-3"]
+
+
+@pytest.mark.asyncio
+async def test_sync_same_integration_serializes_two_postgres_sessions(
+    db_clean, registered_supabase_user,
+):
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    integration_id = uuid4()
+    async with factory() as session:
+        session.add(ExternalIntegration(
+            id=integration_id, account_id=account_id, kind="calendar", provider="google",
+            status="connected", scopes=["readonly"], credential_ref="memory:1",
+        ))
+        await session.commit()
+
+    a_entered = asyncio.Event()
+    release_a = asyncio.Event()
+    provider_a = _CoordinatedSyncProvider(
+        ([_reading("concurrent-event", title="A", location="A")], "cursor-a", True),
+        entered=a_entered, release=release_a,
+    )
+    provider_b = _CoordinatedSyncProvider(
+        ([_reading("concurrent-event", title="B", location="B")], "cursor-b", False),
+    )
+    application_name = f"vc05-sync-b-{uuid4().hex}"
+
+    async def wait_for_lock_wait() -> bool:
+        async with factory() as probe:
+            for _ in range(100):
+                row = (await probe.execute(text("""
+                    SELECT wait_event_type, pg_blocking_pids(pid) AS blockers
+                    FROM pg_stat_activity
+                    WHERE application_name = :application_name
+                      AND wait_event_type = 'Lock'
+                """), {"application_name": application_name})).first()
+                if row is not None:
+                    return bool(row.blockers)
+                await asyncio.sleep(0.05)
+        return False
+
+    async with factory() as session_a, factory() as session_b:
+        await session_b.execute(
+            text("SELECT set_config('application_name', :application_name, false)"),
+            {"application_name": application_name},
+        )
+        task_a = asyncio.create_task(
+            calendar_sync.sync_google_calendar(session_a, account_id, "UTC", provider=provider_a),
+        )
+        await asyncio.wait_for(a_entered.wait(), timeout=5)
+        task_b = asyncio.create_task(
+            calendar_sync.sync_google_calendar(session_b, account_id, "UTC", provider=provider_b),
+        )
+        try:
+            assert await asyncio.wait_for(wait_for_lock_wait(), timeout=5)
+            release_a.set()
+            result_a = await asyncio.wait_for(task_a, timeout=5)
+            await session_a.commit()
+            result_b = await asyncio.wait_for(task_b, timeout=5)
+            await session_b.commit()
+        finally:
+            release_a.set()
+            if not task_a.done():
+                task_a.cancel()
+            if not task_b.done():
+                task_b.cancel()
+            await asyncio.gather(task_a, task_b, return_exceptions=True)
+
+    async with factory() as session:
+        events = (await session.execute(select(CalendarEvent).where(
+            CalendarEvent.integration_id == integration_id,
+            CalendarEvent.external_id == "concurrent-event",
+        ))).scalars().all()
+        integration = await session.get(ExternalIntegration, integration_id)
+    assert result_a["created"] == 1
+    assert result_b["updated"] == 1
+    assert len(events) == 1
+    assert events[0].title == "B" and events[0].location == "B"
+    assert integration.sync_cursor == "cursor-b"
+
+
+@pytest.mark.asyncio
+async def test_sync_different_integrations_progress_without_global_lock(
+    db_clean, registered_supabase_user,
+):
+    _, account_a = await registered_supabase_user()
+    _, account_b = await registered_supabase_user()
+    factory = get_sessionmaker()
+    integration_a_id, integration_b_id = uuid4(), uuid4()
+    async with factory() as session:
+        session.add_all([
+            ExternalIntegration(
+                id=integration_a_id, account_id=account_a, kind="calendar", provider="google",
+                status="connected", scopes=["readonly"], credential_ref="memory:a",
+            ),
+            ExternalIntegration(
+                id=integration_b_id, account_id=account_b, kind="calendar", provider="google",
+                status="connected", scopes=["readonly"], credential_ref="memory:b",
+            ),
+        ])
+        await session.commit()
+
+    a_entered = asyncio.Event()
+    release_a = asyncio.Event()
+    b_entered = asyncio.Event()
+    provider_a = _CoordinatedSyncProvider(
+        ([_reading("event-a", title="A")], "cursor-a", True),
+        entered=a_entered, release=release_a,
+    )
+    provider_b = _CoordinatedSyncProvider(
+        ([_reading("event-b", title="B")], "cursor-b", True),
+        entered=b_entered,
+    )
+
+    async with factory() as session_a, factory() as session_b:
+        task_a = asyncio.create_task(
+            calendar_sync.sync_google_calendar(session_a, account_a, "UTC", provider=provider_a),
+        )
+        await asyncio.wait_for(a_entered.wait(), timeout=5)
+        task_b = asyncio.create_task(
+            calendar_sync.sync_google_calendar(session_b, account_b, "UTC", provider=provider_b),
+        )
+        try:
+            result_b = await asyncio.wait_for(task_b, timeout=5)
+            await session_b.commit()
+            assert b_entered.is_set()
+            assert not release_a.is_set()
+            release_a.set()
+            result_a = await asyncio.wait_for(task_a, timeout=5)
+            await session_a.commit()
+        finally:
+            release_a.set()
+            if not task_a.done():
+                task_a.cancel()
+            if not task_b.done():
+                task_b.cancel()
+            await asyncio.gather(task_a, task_b, return_exceptions=True)
+
+    async with factory() as session:
+        events = (await session.execute(select(CalendarEvent).where(
+            CalendarEvent.integration_id.in_([integration_a_id, integration_b_id]),
+        ))).scalars().all()
+    assert result_a["created"] == 1 and result_b["created"] == 1
+    assert {event.external_id for event in events} == {"event-a", "event-b"}
 
 
 @pytest.mark.asyncio

@@ -243,7 +243,9 @@ class GoogleCalendarProvider(CalendarProvider):
         except Exception:  # noqa: BLE001 — callers retain the reference for retry
             return False
         if not refresh_token:
-            return True
+            # An opaque reference without a readable Vault secret has not
+            # reached Google's revocation endpoint; cleanup remains pending.
+            return False
         try:
             async with httpx.AsyncClient(transport=self.transport, timeout=GOOGLE_CALENDAR_TIMEOUT_SECONDS) as client:
                 response = await client.post(GOOGLE_OAUTH_REVOCATION_ENDPOINT, data={"token": refresh_token})
