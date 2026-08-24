@@ -1570,6 +1570,11 @@ export interface CalendarStatus {
   message?: string;
 }
 
+export interface GoogleCalendarAuthorization {
+  authorization_url: string;
+  expires_at: string;
+}
+
 export interface NotificationPreferences {
   enabled: boolean;
   daily_cap: number;
@@ -1675,6 +1680,15 @@ export const connectCalendar = async (
 
 export const disconnectCalendar = async (): Promise<CalendarStatus> =>
   (await api.delete<CalendarStatus>(`${V2}/integrations/calendar`)).data;
+
+export const authorizeGoogleCalendar = async (): Promise<GoogleCalendarAuthorization> =>
+  (await api.post<GoogleCalendarAuthorization>(`${V2}/integrations/calendar/google/authorize`)).data;
+
+export const syncGoogleCalendar = async (): Promise<{ connected: boolean; synced: boolean; reason?: string; created?: number; updated?: number; revoked?: number }> =>
+  (await api.post<{ connected: boolean; synced: boolean; reason?: string; created?: number; updated?: number; revoked?: number }>(`${V2}/integrations/calendar/google/sync`)).data;
+
+export const disconnectGoogleCalendar = async (): Promise<{ status: string; revoked: boolean; message: string }> =>
+  (await api.delete<{ status: string; revoked: boolean; message: string }>(`${V2}/integrations/calendar/google`)).data;
 
 export const getNotificationPreferences = async (): Promise<{
   preferences: NotificationPreferences;

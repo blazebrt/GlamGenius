@@ -10,12 +10,14 @@ import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, Toucha
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as WebBrowser from 'expo-web-browser';
+import * as Linking from 'expo-linking';
 
 import {
-  DayCard, LaundryPanel, RepetitionPanel, SwapBar, UpcomingEvents, WeekEmpty, repeatedOn,
+  DayCard, GoogleCalendarControl, LaundryPanel, RepetitionPanel, SwapBar, UpcomingEvents, WeekEmpty, repeatedOn,
 } from '../../src/components/planner/PlannerPieces';
 import {
-  CalendarEvent, PlannerDay, WeeklyPlan, generateWeek, getUpcomingEvents, getWeek, lockPlannerDay, patchPlannerDay,
+  CalendarEvent, PlannerDay, WeeklyPlan, authorizeGoogleCalendar, disconnectGoogleCalendar, generateWeek, getCalendarStatus, getUpcomingEvents, getWeek, lockPlannerDay, patchPlannerDay, syncGoogleCalendar,
 } from '../../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../src/theme/colors';
 
@@ -31,6 +33,8 @@ export default function PlannerScreen() {
   const [upcoming, setUpcoming] = useState<CalendarEvent[]>([]);
   const [upcomingLoading, setUpcomingLoading] = useState(true);
   const [upcomingError, setUpcomingError] = useState<string | null>(null);
+  const [calendarStatus, setCalendarStatus] = useState<Awaited<ReturnType<typeof getCalendarStatus>> | null>(null);
+  const [calendarBusy, setCalendarBusy] = useState(false);
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     if (mode === 'refresh') setRefreshing(true);
@@ -60,6 +64,10 @@ export default function PlannerScreen() {
     }
   }, []);
 
+  const loadCalendarStatus = useCallback(async () => {
+    try { setCalendarStatus(await getCalendarStatus()); } catch { /* optional connection control */ }
+  }, []);
+
   const refreshAll = () => {
     void load('refresh');
     void loadUpcoming();
@@ -73,8 +81,34 @@ export default function PlannerScreen() {
   useFocusEffect(useCallback(() => {
     void load(hasLoaded.current ? 'refresh' : 'initial');
     void loadUpcoming();
+    void loadCalendarStatus();
     hasLoaded.current = true;
-  }, [load, loadUpcoming]));
+  }, [load, loadUpcoming, loadCalendarStatus]));
+
+  const connectGoogle = async () => {
+    setCalendarBusy(true);
+    try {
+      const { authorization_url } = await authorizeGoogleCalendar();
+      await WebBrowser.openAuthSessionAsync(authorization_url, Linking.createURL('calendar-result'));
+      await loadCalendarStatus();
+      await loadUpcoming();
+    } catch { setUpcomingError('Google Calendar could not be connected right now.'); }
+    finally { setCalendarBusy(false); }
+  };
+
+  const syncGoogle = async () => {
+    setCalendarBusy(true);
+    try { await syncGoogleCalendar(); await loadCalendarStatus(); await loadUpcoming(); }
+    catch { setUpcomingError('Google Calendar could not refresh right now.'); }
+    finally { setCalendarBusy(false); }
+  };
+
+  const disconnectGoogle = async () => {
+    setCalendarBusy(true);
+    try { await disconnectGoogleCalendar(); await loadCalendarStatus(); await loadUpcoming(); }
+    catch { setUpcomingError('Google Calendar could not be disconnected yet.'); }
+    finally { setCalendarBusy(false); }
+  };
 
   const run = async (action: () => Promise<WeeklyPlan>) => {
     setBusy(true);
@@ -119,6 +153,17 @@ export default function PlannerScreen() {
           onEventPress={(event) => router.push({ pathname: '/event-ready', params: { eventId: event.id } })}
           onAdd={() => router.push('/event-add')}
         />
+        {!!calendarStatus?.providers?.some((provider) => provider.key === 'google' && provider.available) && (
+          <GoogleCalendarControl
+            connected={calendarStatus.connected}
+            label={calendarStatus.integrations.find((row) => row.provider === 'google' && row.status === 'connected')?.label}
+            lastSyncedAt={calendarStatus.integrations.find((row) => row.provider === 'google' && row.status === 'connected')?.last_synced_at}
+            busy={calendarBusy}
+            onConnect={() => void connectGoogle()}
+            onSync={() => void syncGoogle()}
+            onDisconnect={() => void disconnectGoogle()}
+          />
+        )}
 
         <Text style={styles.eyebrow}>MONDAY TO SUNDAY</Text>
         <Text style={styles.title}>Your week</Text>

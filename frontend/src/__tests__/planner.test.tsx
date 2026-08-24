@@ -2,7 +2,7 @@ import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react-native';
 
 import {
-  DayCard, LAUNDRY_LABELS, LaundryPanel, RepetitionPanel, SwapBar, UpcomingEvents, UpcomingEventCard, WeekEmpty, repeatedOn,
+  DayCard, GoogleCalendarControl, LAUNDRY_LABELS, LaundryPanel, RepetitionPanel, SwapBar, UpcomingEvents, UpcomingEventCard, WeekEmpty, repeatedOn,
 } from '../components/planner/PlannerPieces';
 import { LookPiece, PlannerDay, WeeklyPlan } from '../services/apiV2';
 
@@ -70,6 +70,20 @@ describe('Weekly planner UI', () => {
     expect(screen.queryByText('No important events here yet.')).toBeNull();
     fireEvent.press(screen.getByLabelText('Retry upcoming events'));
     expect(retry).toHaveBeenCalled();
+  });
+
+  it('offers calm connect, refresh and disconnect controls for Google Calendar', () => {
+    const connect = jest.fn(); const sync = jest.fn(); const disconnect = jest.fn();
+    render(<GoogleCalendarControl connected={false} busy={false} onConnect={connect} onSync={sync} onDisconnect={disconnect} />);
+    expect(screen.getByText('Connect Google Calendar')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Connect Google Calendar'));
+    expect(connect).toHaveBeenCalledTimes(1);
+
+    render(<GoogleCalendarControl connected label="Google Calendar" lastSyncedAt="2026-08-10T10:00:00Z" onConnect={connect} onSync={sync} onDisconnect={disconnect} />);
+    fireEvent.press(screen.getByLabelText('Refresh Google Calendar'));
+    fireEvent.press(screen.getByLabelText('Disconnect Google Calendar'));
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(disconnect).toHaveBeenCalledTimes(1);
   });
 
   it('an ungenerated week invites you to build one', () => {

@@ -115,6 +115,31 @@ export function UpcomingEvents({ events, onEventPress, onAdd, loading = false, e
   );
 }
 
+export function GoogleCalendarControl({
+  connected, label, lastSyncedAt, busy, onConnect, onSync, onDisconnect,
+}: {
+  connected: boolean; label?: string | null; lastSyncedAt?: string | null; busy?: boolean;
+  onConnect: () => void; onSync: () => void; onDisconnect: () => void;
+}) {
+  return (
+    <View style={styles.googleCard} accessibilityLabel="Google Calendar">
+      <View style={{ flex: 1 }}>
+        <Text style={styles.sectionTitle}>{connected ? 'Google Calendar connected' : 'Connect Google Calendar'}</Text>
+        <Text style={styles.bodyMuted}>{connected ? (label || 'Google Calendar') : 'Bring in upcoming plans so GlamGenius can help you prepare around them.'}</Text>
+        {!!connected && !!lastSyncedAt && <Text style={styles.eventMeta}>Last synced {new Date(lastSyncedAt).toLocaleString()}</Text>}
+      </View>
+      {connected ? (
+        <View style={styles.googleActions}>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Refresh Google Calendar" onPress={onSync} disabled={busy}><Text style={styles.addEventLink}>{busy ? 'Syncing…' : 'Refresh'}</Text></TouchableOpacity>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Disconnect Google Calendar" onPress={onDisconnect} disabled={busy}><Text style={styles.disconnectLink}>Disconnect</Text></TouchableOpacity>
+        </View>
+      ) : (
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Connect Google Calendar" onPress={onConnect} disabled={busy} style={styles.googleButton}><Text style={styles.primaryText}>{busy ? 'Opening…' : 'Connect'}</Text></TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
 export function DayCard({ day, repeats, selected, onPress, onLock, onRegenerate }: {
   day: PlannerDay;
   repeats?: string[];
@@ -303,6 +328,10 @@ const styles = StyleSheet.create({
   primaryText: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.white },
   disabled: { opacity: 0.6 },
   upcoming: { marginBottom: SPACING.xl },
+  googleCard: { flexDirection: 'row', alignItems: 'center', gap: SPACING.md, padding: SPACING.md, borderRadius: RADIUS.lg, backgroundColor: COLORS.background, marginBottom: SPACING.xl, borderWidth: 1, borderColor: COLORS.border },
+  googleActions: { alignItems: 'flex-end', gap: 8 },
+  googleButton: { borderRadius: RADIUS.full, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: COLORS.primary },
+  disconnectLink: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.error },
   upcomingHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: SPACING.sm },
   sectionTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 20, color: COLORS.textPrimary },
   addEventLink: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.primary },

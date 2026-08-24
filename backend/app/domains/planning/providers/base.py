@@ -13,10 +13,9 @@ three reasons:
   :class:`ProviderUnavailable` and the plan is built without it, with the gap
   named. It never returns a guessed forecast.
 
-No live third-party adapter ships in this phase. Writing one from memory is
-exactly the kind of integration code this project forbids, and doing it properly
-means reading the current official docs for whichever service is chosen. The
-seams are here and typed so that work is additive.
+The Google Calendar adapter is additive and read-only in VC-05. Manual events
+remain first-class and provider-specific HTTP never appears in Today/Event
+Ready code.
 """
 from __future__ import annotations
 
@@ -79,6 +78,7 @@ class CalendarEventReading:
     location: str | None = None
     provider: str = "manual"
     source: str = "user_declared"
+    status: str = "active"
     raw: dict[str, Any] = field(default_factory=dict)
 
     def dedup_key(self) -> str:

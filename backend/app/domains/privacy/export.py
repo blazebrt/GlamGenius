@@ -52,6 +52,7 @@ from app.domains.planning.models import (
     DailyPlan,
     EventReadyAction,
     EventReadyPlan,
+    ExternalIntegration,
     WeatherSnapshot,
     WeeklyPlan,
 )
@@ -310,6 +311,7 @@ async def _planning(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
     daily = await _fetch(session, select(DailyPlan).where(DailyPlan.account_id == account_id))
     weekly = await _fetch(session, select(WeeklyPlan).where(WeeklyPlan.account_id == account_id))
     calendar = await _fetch(session, select(CalendarEvent).where(CalendarEvent.account_id == account_id))
+    integrations = await _fetch(session, select(ExternalIntegration).where(ExternalIntegration.account_id == account_id))
     weather = await _fetch(session, select(WeatherSnapshot).where(WeatherSnapshot.account_id == account_id))
     event_ready_plans = await _fetch(session, select(EventReadyPlan).where(EventReadyPlan.account_id == account_id))
     event_ready_actions = await _fetch(
@@ -320,6 +322,9 @@ async def _planning(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         "daily_plans": [_row_dict(r, [c.name for c in DailyPlan.__table__.columns]) for r in daily],
         "weekly_plans": [_row_dict(r, [c.name for c in WeeklyPlan.__table__.columns]) for r in weekly],
         "calendar_events": [_row_dict(r, [c.name for c in CalendarEvent.__table__.columns]) for r in calendar],
+        # Connection health is user-relevant; opaque credential and provider
+        # cursor machinery are intentionally excluded from privacy export.
+        "calendar_integrations": [_row_dict(r, ["id", "kind", "provider", "status", "scopes", "external_account_label", "last_synced_at", "last_error", "revoked_at"]) for r in integrations],
         "weather_snapshots": [_row_dict(r, [c.name for c in WeatherSnapshot.__table__.columns]) for r in weather],
         "event_ready_plans": [_row_dict(r, [c.name for c in EventReadyPlan.__table__.columns]) for r in event_ready_plans],
         "event_ready_actions": [_row_dict(r, [c.name for c in EventReadyAction.__table__.columns]) for r in event_ready_actions],

@@ -314,11 +314,20 @@ async def _remove_external_integrations(session: AsyncSession, account_id: uuid.
     those are what our own systems index against; production integrations
     add their revocation calls here.
     """
+    from app.domains.planning.calendar_sync import disconnect_google_calendar
     from app.domains.planning.models import ExternalIntegration, NotificationPreference
 
-    await session.execute(
-        delete(ExternalIntegration).where(ExternalIntegration.account_id == account_id)
-    )
+    google = (await session.execute(select(ExternalIntegration).where(
+        ExternalIntegration.account_id == account_id,
+        ExternalIntegration.kind == "calendar",
+        ExternalIntegration.provider == "google",
+        ExternalIntegration.status != "revoked",
+    ))).scalar_one_or_none()
+    if google is not None:
+        result = await disconnect_google_calendar(session, account_id)
+        if result.get("status") != "revoked":
+            raise RuntimeError("google_calendar_revocation_pending")
+    await session.execute(delete(ExternalIntegration).where(ExternalIntegration.account_id == account_id))
     await session.execute(
         delete(NotificationPreference).where(NotificationPreference.account_id == account_id)
     )

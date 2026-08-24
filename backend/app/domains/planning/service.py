@@ -171,6 +171,22 @@ async def upsert_event(
         external_id = f"user-{hashlib.sha256(seed).hexdigest()[:24]}"
     dedup_key = f"{provider}:{external_id}:{body.starts_at.isoformat()}"
 
+    if integration_id is not None and provider != PROVIDER_MANUAL:
+        stable = (await session.execute(select(CalendarEvent).where(
+            CalendarEvent.account_id == account_id,
+            CalendarEvent.integration_id == integration_id,
+            CalendarEvent.external_id == external_id,
+        ))).scalar_one_or_none()
+        if stable is not None:
+            overrides = stable.user_overrides or {}
+            for key in ("title", "starts_at", "ends_at", "all_day", "location"):
+                if key not in overrides:
+                    setattr(stable, key, getattr(body, key))
+            stable.dedup_key = dedup_key
+            stable.status = "active"
+            await session.flush()
+            return stable, False
+
     existing = (await session.execute(
         select(CalendarEvent).where(
             CalendarEvent.account_id == account_id, CalendarEvent.dedup_key == dedup_key
@@ -260,6 +276,8 @@ def serialize_event(row: CalendarEvent, timezone_name: str) -> dict[str, Any]:
 async def connect_calendar(
     session: AsyncSession, account_id: uuid.UUID, provider: str, credential_ref: str | None, label: str | None
 ) -> ExternalIntegration:
+    if provider == "google":
+        raise ValidationFailedError("Use the secure Google Calendar authorization flow to connect Google.", field="provider")
     if provider not in KNOWN_CALENDAR_PROVIDERS:
         raise ValidationFailedError(
             f"'{provider}' is not a calendar we support. Choose one of: {', '.join(KNOWN_CALENDAR_PROVIDERS)}.",
@@ -302,6 +320,11 @@ async def disconnect_calendar(session: AsyncSession, account_id: uuid.UUID) -> l
             ExternalIntegration.kind == INTEGRATION_CALENDAR,
         )
     )).scalars().all()
+    google_rows = [row for row in rows if row.provider == "google"]
+    if google_rows:
+        from app.domains.planning.calendar_sync import disconnect_google_calendar
+        await disconnect_google_calendar(session, account_id)
+        rows = [row for row in rows if row.provider != "google"]
     integration_ids = [row.id for row in rows]
     for row in rows:
         row.status = "revoked"
