@@ -439,16 +439,30 @@ async def test_in_memory_credential_replace_keeps_opaque_reference_and_new_secre
 
 
 @pytest.mark.asyncio
-async def test_revocation_accepts_only_success_or_documented_invalid_token():
-    responses = [httpx.Response(400, json={"error": "other_error"}), httpx.Response(400, json={"error": "invalid_token"}), httpx.Response(200)]
+async def test_revocation_is_confirmed_only_by_http_200_and_retains_unresolved_secret():
+    marker = "VC05_REVOCATION_REFRESH_MARKER"
+    store = InMemoryCredentialStore({"memory:1": marker})
+    responses = [
+        httpx.Response(400, json={"error": "invalid_token"}),
+        httpx.Response(400, json={"error": "other_error"}),
+        httpx.Response(429),
+        httpx.Response(503),
+        httpx.ConnectError("provider unavailable"),
+        httpx.Response(200),
+    ]
 
     async def handler(_request: httpx.Request) -> httpx.Response:
-        return responses.pop(0)
+        response = responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
-    provider = GoogleCalendarProvider(InMemoryCredentialStore({"memory:1": "refresh"}), transport=httpx.MockTransport(handler))
-    assert await provider.revoke("memory:1") is False
+    provider = GoogleCalendarProvider(store, transport=httpx.MockTransport(handler))
+    for _ in range(5):
+        assert await provider.revoke("memory:1") is False
+        assert await store.read("memory:1") == marker
     assert await provider.revoke("memory:1") is True
-    assert await provider.revoke("memory:1") is True
+    assert await store.read("memory:1") == marker
 
 
 @pytest.mark.asyncio
@@ -738,7 +752,7 @@ async def test_vc05_identity_migration_preserves_legacy_duplicates_and_guards_go
 
 
 @pytest.mark.asyncio
-async def test_calendar_status_downgrade_fails_closed_for_lifecycle_states(
+async def test_calendar_status_downgrade_maps_lifecycle_states_before_narrowing(
     db_clean, registered_supabase_user,
 ):
     _, account_id = await registered_supabase_user()
@@ -754,8 +768,16 @@ async def test_calendar_status_downgrade_fails_closed_for_lifecycle_states(
     _run_alembic("g7b8c9d0e1f2", downgrade=True)
     try:
         async with factory() as session:
-            statuses = (await session.execute(select(ExternalIntegration.status).order_by(ExternalIntegration.provider))).scalars().all()
-        assert statuses == ["revoked", "revoked", "connected"]
+            values = (await session.execute(
+                select(ExternalIntegration.kind, ExternalIntegration.provider, ExternalIntegration.status).where(
+                    ExternalIntegration.account_id == account_id,
+                )
+            )).all()
+        assert {(kind, provider): status for kind, provider, status in values} == {
+            ("calendar", "google"): "connected",
+            ("calendar", "manual"): "connected",
+            ("weather", "manual"): "connected",
+        }
     finally:
         _run_alembic("head")
 

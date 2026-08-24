@@ -16,14 +16,14 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Older schemas cannot represent lifecycle states longer than 16 chars.
-    # Normalize them before narrowing rather than failing halfway through a
-    # downgrade on a live account. Security-sensitive states must never become
-    # a falsely healthy connection.
+    # Normalize the explicitly introduced lifecycle states before narrowing.
+    # The previous schema has no representation for these states; connected is
+    # the only valid legacy value that preserves a recoverable integration.
     op.execute("""
         UPDATE external_integrations
         SET status = CASE status
-            WHEN 'revocation_pending' THEN 'revoked'
-            WHEN 'reconnect_required' THEN 'revoked'
+            WHEN 'revocation_pending' THEN 'connected'
+            WHEN 'reconnect_required' THEN 'connected'
             WHEN 'temporary_failure' THEN 'connected'
             ELSE status
         END

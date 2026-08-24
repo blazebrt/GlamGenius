@@ -249,18 +249,9 @@ class GoogleCalendarProvider(CalendarProvider):
                 response = await client.post(GOOGLE_OAUTH_REVOCATION_ENDPOINT, data={"token": refresh_token})
             if response.status_code == 200:
                 return True
-            if response.status_code == 400:
-                # Google documents invalid_token as the already-revoked case;
-                # other 400 responses are unresolved and must be retried.
-                try:
-                    body = response.json()
-                    if isinstance(body, dict) and body.get("error") == "invalid_token":
-                        return True
-                except ValueError:
-                    pass
-                return False
-            if response.status_code in {408, 429, 500, 502, 503, 504}:
-                return False
+            # Only HTTP 200 confirms revocation. Provider errors, including
+            # invalid_token, remain unresolved so the Vault reference is
+            # retained for a later retry.
             return False
         except httpx.HTTPError:
             return False

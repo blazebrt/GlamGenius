@@ -30,9 +30,8 @@ its dismissal and field overrides. Provider cancellations always revoke an
 imported event, while an explicit user status correction remains authoritative
 for live events.
 
-Disconnect treats only HTTP 200 (or Google's documented `invalid_token`
-already-revoked response) as successful revocation. Other 400 responses,
-transient failures and network errors leave the integration in
+Disconnect treats only HTTP 200 as confirmed successful revocation. Provider
+errors, transient failures and network errors leave the integration in
 `revocation_pending`; importantly, the integration is marked pending and all
 imported events are revoked locally before any remote or Vault work begins, so
 planning stops immediately even if cleanup later fails. The Vault credential is

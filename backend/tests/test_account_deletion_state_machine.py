@@ -17,12 +17,15 @@ import uuid
 
 import pytest
 from app.domains.identity import service as identity
+from app.domains.planning import calendar_sync
+from app.domains.planning.models import ExternalIntegration
 from app.domains.privacy import deletion_service
 from app.domains.privacy.models import (
     STATE_COMPLETE,
     STATE_FAILED_RETRYABLE,
 )
 from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import select
 
 pytestmark = pytest.mark.asyncio
 
@@ -232,6 +235,50 @@ async def test_transient_storage_failure_schedules_retry(db_clean, fake_admin, f
     async with factory() as session:
         job = await deletion_service.get_job(session, account_id)
         assert job.state == STATE_COMPLETE
+
+
+async def test_unresolved_google_revocation_retries_integration_stage(
+    db_clean, fake_admin, fake_storage, monkeypatch,
+):
+    factory = get_sessionmaker()
+    account_id = uuid.uuid4()
+    async with factory() as session:
+        await identity.register_account(session, account_id)
+        session.add(ExternalIntegration(
+            account_id=account_id, kind="calendar", provider="google",
+            status="connected", credential_ref="opaque-ref",
+        ))
+        await deletion_service.request_deletion(session, account_id)
+        await session.commit()
+
+    async def unresolved(*_args, **_kwargs):
+        return {"status": "revocation_pending"}
+
+    monkeypatch.setattr(calendar_sync, "disconnect_google_calendar", unresolved)
+    async with factory() as session:
+        await deletion_service.process_once(session)
+        await session.commit()
+        job = await deletion_service.get_job(session, account_id)
+        assert job.state == STATE_FAILED_RETRYABLE
+        assert job.last_error_stage == "integrations_deleting"
+        assert fake_admin.deleted_users == []
+
+    async def resolved(*_args, **_kwargs):
+        return {"status": "revoked"}
+
+    monkeypatch.setattr(calendar_sync, "disconnect_google_calendar", resolved)
+    async with factory() as session:
+        job = await deletion_service.get_job(session, account_id)
+        job.next_retry_at = None
+        await session.commit()
+        await deletion_service.drain_all(session)
+        await session.commit()
+
+    assert fake_admin.deleted_users == [str(account_id)]
+    async with factory() as session:
+        assert (await session.execute(
+            select(ExternalIntegration).where(ExternalIntegration.account_id == account_id)
+        )).scalar_one_or_none() is None
 
 
 async def test_supabase_auth_deletion_happens_last(db_clean, fake_admin, fake_storage):
