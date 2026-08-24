@@ -134,6 +134,23 @@ V2_FEATURES = _env_csv("V2_FEATURES", "")
 # ---------------------------------------------------------------------------
 APP_ENV = _env_str("APP_ENV", "development").lower()
 
+# VC-05 Google Calendar. Disabled is the safe default. The OAuth callback and
+# return URI are fixed server configuration; clients can never supply either.
+GOOGLE_CALENDAR_ENABLED = _env_bool("GOOGLE_CALENDAR_ENABLED", False)
+GOOGLE_CALENDAR_CLIENT_ID = _env_str("GOOGLE_CALENDAR_CLIENT_ID")
+GOOGLE_CALENDAR_CLIENT_SECRET = _env_str("GOOGLE_CALENDAR_CLIENT_SECRET")
+GOOGLE_CALENDAR_REDIRECT_URI = _env_str("GOOGLE_CALENDAR_REDIRECT_URI")
+GOOGLE_CALENDAR_APP_RETURN_URI = _env_str("GOOGLE_CALENDAR_APP_RETURN_URI", "glamgenius://calendar-result")
+GOOGLE_CALENDAR_CREDENTIAL_STORE = _env_str("GOOGLE_CALENDAR_CREDENTIAL_STORE", "disabled").lower()
+GOOGLE_CALENDAR_STATE_TTL_SECONDS = _env_int("GOOGLE_CALENDAR_STATE_TTL_SECONDS", 600)
+GOOGLE_CALENDAR_INITIAL_HORIZON_DAYS = _env_int("GOOGLE_CALENDAR_INITIAL_HORIZON_DAYS", 90)
+GOOGLE_CALENDAR_TIMEOUT_SECONDS = _env_float("GOOGLE_CALENDAR_TIMEOUT_SECONDS", 8.0)
+GOOGLE_OAUTH_AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_OAUTH_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+GOOGLE_OAUTH_REVOCATION_ENDPOINT = "https://oauth2.googleapis.com/revoke"
+GOOGLE_CALENDAR_EVENTS_ENDPOINT = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly"
+
 # Live environment context.  The provider is deliberately opt-in: disabled is
 # the safe default for local/test deployments, and commercial mode requires a
 # non-empty key before a staging/production process can start.
@@ -235,6 +252,13 @@ def validate_production_configuration() -> None:
         raise RuntimeError("CRITICAL: OPEN_METEO_MODE=evaluation is not permitted in staging or production.")
     if OPEN_METEO_MODE == "commercial" and not OPEN_METEO_API_KEY:
         raise RuntimeError("CRITICAL: OPEN_METEO_API_KEY is required when OPEN_METEO_MODE=commercial.")
+    if GOOGLE_CALENDAR_ENABLED:
+        if not all((GOOGLE_CALENDAR_CLIENT_ID, GOOGLE_CALENDAR_CLIENT_SECRET, GOOGLE_CALENDAR_REDIRECT_URI)):
+            raise RuntimeError("CRITICAL: Google Calendar requires client ID, secret, and redirect URI when enabled.")
+        if not GOOGLE_CALENDAR_APP_RETURN_URI or "?" in GOOGLE_CALENDAR_APP_RETURN_URI or "#" in GOOGLE_CALENDAR_APP_RETURN_URI:
+            raise RuntimeError("CRITICAL: GOOGLE_CALENDAR_APP_RETURN_URI must be a fixed URI without query or fragment.")
+        if GOOGLE_CALENDAR_CREDENTIAL_STORE != "supabase_vault":
+            raise RuntimeError("CRITICAL: Google Calendar requires GOOGLE_CALENDAR_CREDENTIAL_STORE=supabase_vault.")
 
     # 1. Reject HS256 by default. Production must use asymmetric JWKS.
     if not SUPABASE_JWKS_URL:

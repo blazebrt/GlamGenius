@@ -26,7 +26,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -74,13 +74,14 @@ class ExternalIntegration(UUIDPrimaryKey, TimestampMixin, Base):
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)          # calendar | weather
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="connected", server_default="connected")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="connected", server_default="connected")
     scopes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     credential_ref: Mapped[str | None] = mapped_column(String(200))
     external_account_label: Mapped[str | None] = mapped_column(String(160))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(String(240))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sync_cursor: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         UniqueConstraint("account_id", "kind", "provider", name="uq_integration_account_kind_provider"),
@@ -110,11 +111,33 @@ class CalendarEvent(UUIDPrimaryKey, TimestampMixin, Base):
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", server_default="manual")
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="user_declared", server_default="user_declared")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    # Field-level provenance for corrections made inside GlamGenius. Provider
+    # syncs may update only fields absent from this object.
+    user_overrides: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
 
     __table_args__ = (
         UniqueConstraint("account_id", "dedup_key", name="uq_calendar_event_dedup"),
+        Index(
+            "uq_calendar_event_integration_external_google",
+            "integration_id", "external_id", unique=True,
+            postgresql_where=text("provider = 'google' AND integration_id IS NOT NULL AND external_id IS NOT NULL"),
+        ),
         Index("ix_calendar_events_account_start", "account_id", "starts_at"),
     )
+
+
+class ExternalOAuthState(UUIDPrimaryKey, TimestampMixin, Base):
+    """One-time, account-bound OAuth CSRF/replay state; raw state is never stored."""
+
+    __tablename__ = "external_oauth_states"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    state_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (Index("ix_external_oauth_states_account_provider", "account_id", "provider"),)
 
 
 class WeatherSnapshot(UUIDPrimaryKey, TimestampMixin, Base):

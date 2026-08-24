@@ -115,6 +115,38 @@ export function UpcomingEvents({ events, onEventPress, onAdd, loading = false, e
   );
 }
 
+export function GoogleCalendarControl({
+  status, label, lastSyncedAt, busy, message, onConnect, onSync, onDisconnect,
+}: {
+  status: string; label?: string | null; lastSyncedAt?: string | null; busy?: boolean; message?: string | null;
+  onConnect: () => void; onSync: () => void; onDisconnect: () => void;
+}) {
+  const connected = status === 'connected' || status === 'syncing' || status === 'temporary_failure';
+  const reconnect = status === 'reconnect_required';
+  const pending = status === 'revocation_pending';
+  return (
+    <View style={styles.googleCard} accessibilityLabel="Google Calendar">
+      <View style={{ flex: 1 }}>
+        <Text style={styles.sectionTitle}>{reconnect ? 'Reconnect Google Calendar' : pending ? 'Disconnecting Google Calendar' : connected ? 'Google Calendar connected' : 'Connect Google Calendar'}</Text>
+        <Text style={styles.bodyMuted}>{message || (connected ? (label || 'Google Calendar') : pending ? 'Google Calendar has stopped feeding your plan. Tap Retry to finish removing our access.' : reconnect ? 'Google needs you to approve access again.' : 'Bring in upcoming plans so GlamGenius can help you prepare around them.')}</Text>
+        {!!connected && !!lastSyncedAt && <Text style={styles.eventMeta}>Last synced {new Date(lastSyncedAt).toLocaleString()}</Text>}
+      </View>
+      {connected ? (
+        <View style={styles.googleActions}>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Refresh Google Calendar" onPress={onSync} disabled={busy}><Text style={styles.addEventLink}>{busy ? 'Syncing…' : 'Refresh'}</Text></TouchableOpacity>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Disconnect Google Calendar" onPress={onDisconnect} disabled={busy}><Text style={styles.disconnectLink}>Disconnect</Text></TouchableOpacity>
+        </View>
+      ) : reconnect ? (
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Reconnect Google Calendar" onPress={onConnect} disabled={busy} style={styles.googleButton}><Text style={styles.primaryText}>{busy ? 'Opening…' : 'Reconnect'}</Text></TouchableOpacity>
+      ) : pending ? (
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Retry Google Calendar disconnect" onPress={onDisconnect} disabled={busy}><Text style={styles.addEventLink}>Retry</Text></TouchableOpacity>
+      ) : (
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Connect Google Calendar" onPress={onConnect} disabled={busy} style={styles.googleButton}><Text style={styles.primaryText}>{busy ? 'Opening…' : 'Connect'}</Text></TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
 export function DayCard({ day, repeats, selected, onPress, onLock, onRegenerate }: {
   day: PlannerDay;
   repeats?: string[];
@@ -303,6 +335,10 @@ const styles = StyleSheet.create({
   primaryText: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.white },
   disabled: { opacity: 0.6 },
   upcoming: { marginBottom: SPACING.xl },
+  googleCard: { flexDirection: 'row', alignItems: 'center', gap: SPACING.md, padding: SPACING.md, borderRadius: RADIUS.lg, backgroundColor: COLORS.background, marginBottom: SPACING.xl, borderWidth: 1, borderColor: COLORS.border },
+  googleActions: { alignItems: 'flex-end', gap: 8 },
+  googleButton: { borderRadius: RADIUS.full, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: COLORS.primary },
+  disconnectLink: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.error },
   upcomingHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: SPACING.sm },
   sectionTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 20, color: COLORS.textPrimary },
   addEventLink: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.primary },

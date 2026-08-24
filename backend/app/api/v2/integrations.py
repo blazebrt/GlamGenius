@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import GOOGLE_CALENDAR_APP_RETURN_URI
+from app.domains.planning import calendar_sync, service
 from app.domains.planning import context as context_stage
-from app.domains.planning import service
 from app.domains.planning.providers import catalogue
 from app.domains.planning.schemas import CalendarConnect, CalendarEventPatch
 from app.shared.database.sql import get_session
@@ -75,17 +77,85 @@ async def disconnect_calendar(
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Disconnect every calendar integration for this account."""
-    revoked = await service.disconnect_calendar(session, current.account_id)
+    """Disconnect manual calendar content; Google has a secure route."""
+    revoked = await service.disconnect_manual_calendar(session, current.account_id)
     await session.commit()
     body = await service.calendar_status(session, current.account_id)
     body.update({
         "revoked": len(revoked),
         "message": (
-            "Calendar access is disconnected. Events that came from it are no longer used "
-            "in your plans. Anything you added yourself is untouched."
+            "Manual calendar access is disconnected. Google Calendar uses its own secure disconnect control."
         ),
     })
+    return body
+
+
+@router.post("/integrations/calendar/google/authorize")
+async def google_authorize(
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    url, expires_at = await calendar_sync.async_authorization_url(session, current.account_id)
+    await session.commit()
+    return {"authorization_url": url, "expires_at": expires_at.isoformat()}
+
+
+@router.get("/integrations/calendar/google/callback", include_in_schema=False)
+async def google_callback(
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+):
+    """OAuth callback: only a fixed safe result is returned to the app."""
+    result = "error"
+    try:
+        if not state:
+            raise ValueError("oauth_state_missing")
+        state_row = await calendar_sync.consume_state(session, state)
+        account_id = state_row.account_id
+        # Commit the one-time nonce before provider work so failed exchanges
+        # cannot roll it back and make the callback replayable.
+        await session.commit()
+        if error or not code:
+            result = "denied"
+            return RedirectResponse(f"{GOOGLE_CALENDAR_APP_RETURN_URI}?result={result}")
+        await calendar_sync.connect_from_callback(session, account_id, code)
+        # Retain the usable refresh credential before the first provider sync;
+        # a transient/ malformed initial response must be safely retryable.
+        await session.commit()
+        timezone_name = await context_stage.resolve_timezone_for(session, account_id)
+        try:
+            sync_result = await calendar_sync.sync_google_calendar(session, account_id, timezone_name)
+        except Exception:  # noqa: BLE001 — provider details never reach the app
+            await session.rollback()
+            sync_result = {"synced": False}
+        await session.commit()
+        result = "connected" if sync_result.get("synced") else "sync_failed"
+    except Exception:  # noqa: BLE001 — never reflect provider details to redirect/logs
+        await session.rollback()
+    separator = "&" if "?" in GOOGLE_CALENDAR_APP_RETURN_URI else "?"
+    return RedirectResponse(f"{GOOGLE_CALENDAR_APP_RETURN_URI}{separator}result={result}")
+
+
+@router.post("/integrations/calendar/google/sync")
+async def google_sync(
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    timezone_name = await context_stage.resolve_timezone_for(session, current.account_id)
+    body = await calendar_sync.sync_google_calendar(session, current.account_id, timezone_name)
+    await session.commit()
+    return body
+
+
+@router.delete("/integrations/calendar/google")
+async def google_disconnect(
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    body = await calendar_sync.disconnect_google_calendar(session, current.account_id)
+    await session.commit()
     return body
 
 
@@ -97,8 +167,7 @@ async def list_providers(
     return {
         **catalogue(),
         "note": (
-            "Only the manual source is connected in this release. The planner is fully "
-            "usable with it — you add the events that matter and nothing leaves the app."
+            "Google Calendar is optional and read-only. Manual events remain fully supported."
         ),
     }
 
@@ -121,8 +190,15 @@ async def patch_event(
         row.user_confirmed = True
         row.inference_confidence = 1.0
     for key, value in fields.items():
-        if value is not None:
-            setattr(row, key, value)
+        if value is None:
+            # An explicitly null field carries no correction, so it must not
+            # claim the field and freeze out later provider updates.
+            continue
+        setattr(row, key, value)
+        if key in {"title", "occasion_key", "dress_code_hint", "status"}:
+            overrides = dict(row.user_overrides or {})
+            overrides[key] = True
+            row.user_overrides = overrides
     await session.commit()
     timezone_name = await context_stage.resolve_timezone_for(session, current.account_id)
     return service.serialize_event(row, timezone_name)

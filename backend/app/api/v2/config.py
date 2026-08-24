@@ -11,6 +11,7 @@ from app.bootstrap import SEED_VERSION
 from app.config import (
     APP_ENV,
     CONSENT_VERSION,
+    GOOGLE_CALENDAR_ENABLED,
     INVITE_REQUIRED,
     MEDIA_ALLOW_LOCAL_IN_PRODUCTION,
     MEDIA_ALLOWED_MIME,
@@ -57,6 +58,10 @@ async def get_config(session: AsyncSession = Depends(get_session)):
             "provider_configured": gemini.is_configured(),
             "consent_required": REQUIRE_ANALYSIS_CONSENT,
             "consent_version": CONSENT_VERSION,
+        },
+        "calendar": {
+            "google_enabled": GOOGLE_CALENDAR_ENABLED,
+            "scope": "read_only_primary" if GOOGLE_CALENDAR_ENABLED else None,
         },
         "media": {
             "max_bytes": MEDIA_MAX_BYTES,
