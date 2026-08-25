@@ -90,9 +90,15 @@ export default function MaintenanceScreen() {
     onRecordToday: () => void run(() => recordMaintenanceDone(row.kind)),
     onSaveCadence: (days: number) => void run(() => updateMaintenance(row.kind, { interval_days: days })),
     onClearCadence: () => void run(() => updateMaintenance(row.kind, { interval_days: null })),
-    onSaveLastDate: (isoDate: string) => void run(() => recordMaintenanceDone(row.kind, { done_on: isoDate })),
-    // Recording an earlier date cannot override a later one, so a wrong date
-    // has to be removable rather than only corrected forwards.
+    // The field is prefilled with the current anchor, so saving a different
+    // date means "correct this one". The anchor is the latest recorded date,
+    // so an earlier correction would otherwise sit behind the old one and do
+    // nothing visible — the previous date is removed first.
+    onSaveLastDate: (isoDate: string) => void run(async () => {
+      const previous = row.last_done_on;
+      if (previous && previous !== isoDate) await forgetMaintenanceDone(row.kind, previous);
+      return recordMaintenanceDone(row.kind, { done_on: isoDate });
+    }),
     onForgetLastDate: (isoDate: string) => void run(() => forgetMaintenanceDone(row.kind, isoDate)),
     onToggleReminders: (enabled: boolean) =>
       void run(() => updateMaintenance(row.kind, { reminders_enabled: enabled })),

@@ -115,6 +115,10 @@ async def generate(
     plan.version += 1
     plan.generated_at = utcnow()
     plan.status = "ready"
+    # Its days have just been rebuilt under the current compiler rules, so the
+    # week must report the version that produced them rather than the one it
+    # was first created with.
+    plan.engine_version = PLANNER_VERSION
     await session.flush()
     return plan
 

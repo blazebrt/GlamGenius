@@ -14,8 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-MAINTENANCE_VERSION = "vc-06.0"
-MAINTENANCE_CATALOGUE_VERSION = "vc-06.0-r1"
+MAINTENANCE_VERSION = "vc-06.1"
+MAINTENANCE_CATALOGUE_VERSION = "vc-06.1-r1"
 
 #: Hard bounds on a customer-declared interval. Wide enough to hold any real
 #: rhythm, narrow enough that an obvious typo cannot become a silent schedule.

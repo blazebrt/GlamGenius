@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Sequence
 from datetime import date
 from typing import Any
 
@@ -40,22 +41,23 @@ SUPPRESSED_QUIET = "quiet_hours"
 SUPPRESSED_DISABLED = "disabled"
 SUPPRESSED_MODULE_OFF = "module_disabled"
 
-#: Modules a new account is notified about by default. Maintenance is opt-in:
-#: its reminders are a per-kind customer choice, so it must never inherit a
-#: generic "on" default the customer never made.
-DEFAULT_MODULE_NOTIFICATIONS: dict[str, bool] = {
-    module: module != MODULE_MAINTENANCE for module in MODULES
-}
+#: Modules a new account is notified about by default. Maintenance sits here
+#: like any other module: its real gate is the per-kind ``reminders_enabled``
+#: choice, which defaults to off. Excluding it from this map instead would make
+#: that per-kind opt-in unreachable, because nothing in the product turns the
+#: generic module flag back on.
+DEFAULT_MODULE_NOTIFICATIONS: dict[str, bool] = {module: True for module in MODULES}
 
 
 async def maintenance_reminders_allowed(
     session: AsyncSession, account_id: uuid.UUID, plan_date: date,
-) -> bool:
-    """Whether a maintenance notification is permitted for this account today.
+) -> Sequence[Any]:
+    """The due kinds this account has explicitly asked to be reminded about.
 
     Consent is read from canonical maintenance state rather than inferred from
-    the module appearing in a plan, so a due card can never carry a reminder
-    the customer did not ask for.
+    the module appearing in a plan, and it is returned per kind rather than as
+    an account-wide boolean so the notification can name only what was opted
+    into. Empty means no maintenance notification is permitted at all.
     """
     from app.domains.care import maintenance as care_maintenance
     from app.domains.care import maintenance_service as care_maintenance_service
@@ -63,7 +65,7 @@ async def maintenance_reminders_allowed(
     decided = await care_maintenance_service.build_maintenance(
         session, account_id, plan_date=plan_date,
     )
-    return bool(care_maintenance.reminder_eligible(decided))
+    return care_maintenance.reminder_eligible(decided)
 
 
 async def preferences_for(session: AsyncSession, account_id: uuid.UUID, timezone_name: str) -> NotificationPreference:
@@ -177,18 +179,26 @@ async def queue_for_plan(
     )).scalars().all()
 
     action = None
-    maintenance_allowed: bool | None = None
+    eligible_kinds: Sequence[Any] | None = None
+    body: str | None = None
     for candidate in candidates:
         if candidate.module == MODULE_MAINTENANCE:
-            # Maintenance reminders are a per-kind opt-in. Without it we move on
-            # to the next action rather than silently sending maintenance text
-            # or dropping the day's notification altogether.
-            if maintenance_allowed is None:
-                maintenance_allowed = await maintenance_reminders_allowed(
+            # Maintenance reminders are a per-kind opt-in. Without one we move
+            # on to the next action rather than silently sending maintenance
+            # text or dropping the day's notification altogether.
+            if eligible_kinds is None:
+                eligible_kinds = await maintenance_reminders_allowed(
                     session, plan.account_id, plan.plan_date,
                 )
-            if not maintenance_allowed:
+            if not eligible_kinds:
                 continue
+            # The plan's card names every due kind. The notification must name
+            # only the ones the customer asked to hear about, so the copy is
+            # rebuilt from the opted-in subset rather than reused.
+            from app.domains.care.maintenance import maintenance_headline
+
+            title, card_body = maintenance_headline(eligible_kinds)
+            body = f"{title}. {card_body}".strip()
         action = candidate
         break
     if action is None:
@@ -196,8 +206,8 @@ async def queue_for_plan(
     return await queue(
         session, account_id=plan.account_id, plan_date=plan.plan_date,
         notification_key="daily_plan", title=plan.headline,
-        body=f"{action.title}. {action.body}".strip(), module=action.module,
-        timezone_name=timezone_name, moment=moment,
+        body=body if body is not None else f"{action.title}. {action.body}".strip(),
+        module=action.module, timezone_name=timezone_name, moment=moment,
     )
 
 

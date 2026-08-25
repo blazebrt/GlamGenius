@@ -78,21 +78,38 @@ the stored provenance still describes the previous state.
 
 ## Notifications
 
-Maintenance reminders are opt-in per kind and default to off. Two independent
-gates enforce it: maintenance is excluded from the default notification module
-set (including for preference rows written before maintenance existed), and
-`queue_for_plan` checks canonical maintenance state before letting a maintenance
-action become the day's notification — if the customer has not opted in, it moves
-on to the next action rather than sending maintenance text or dropping the day's
-notification. Untracking removes eligibility. Quiet hours, the daily cap and
-deduplication all still apply.
+Maintenance reminders are opt-in **per kind** and default to off. That switch,
+not the generic notification module flag, is the gate: excluding maintenance
+from the module defaults would strand the opt-in, because nothing in the product
+turns that flag back on, so an enabled reminder would be suppressed as
+`module_disabled` and never send.
+
+`queue_for_plan` asks canonical maintenance state which due kinds the customer
+opted into. With none, it moves on to the next action rather than sending
+maintenance text or dropping the day's notification. With some, it rebuilds the
+notification copy from **only those kinds** — the Today card names every due
+kind, but the reminder must never name one the customer switched off. Both use
+the same `maintenance_headline` builder so they cannot drift into describing
+different things.
+
+Untracking removes eligibility, turning the module off explicitly still
+suppresses, and quiet hours, the daily cap and deduplication all still apply.
 
 ## Planner provenance
 
-`PLANNER_VERSION` identifies the deterministic rule set that produced a plan, and
-VC-06 adds a rule to `compile_day`, so it advances to `vc06-v1` with a migration
-moving the stored column defaults. Existing plans keep the version they were
-written with, which is the point of storing it.
+Three versions identify rule sets that VC-06 changed, and all three advance:
+
+- `PLANNER_VERSION` → `vc06-v1`, with a migration moving the `engine_version`
+  column defaults. A weekly plan updates its stored version when regeneration
+  rebuilds its days, so it cannot report rules that did not produce its content.
+- `EVENT_READY_VERSION` → `vc-06-v1`, because the Care material and the timeline
+  action rule changed. A plan regenerated under the new rules updates its stored
+  version alongside its fingerprint.
+- `MAINTENANCE_VERSION` → `vc-06.1`, because `needs_cadence` and the lead-window
+  formula are a materially different decision contract from the first cut.
+
+Existing rows keep the version they were written with, which is the point of
+storing it.
 
 ## Data and privacy
 
@@ -102,7 +119,10 @@ Two account-scoped tables, both `ON DELETE CASCADE`:
 the engine never writes one). Both are classified `INCLUDED` in the privacy
 registry and appear in the export under `routines`.
 
-A date after the planning day cannot anchor that day. Recording the same day
-twice is one fact, not two, and the database resolves that with an upsert rather
+A date after the planning day cannot anchor that day. Because the anchor is the
+latest recorded date on or before the planning day, saving a *corrected* earlier
+date removes the previous one first — otherwise the correction would sit behind
+the old anchor and appear to do nothing. Recording the same day twice is one
+fact, not two, and the database resolves that with an upsert rather
 than a check-then-insert, so two concurrent retries cannot collide on the unique
 constraint. A retry that carries no note leaves any existing note alone.

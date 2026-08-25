@@ -716,14 +716,18 @@ def test_reminder_eligibility_requires_an_explicit_opt_in():
     assert reminder_eligible(not_yet_due) == ()
 
 
-def test_maintenance_is_not_a_default_notification_module():
+def test_the_per_kind_switch_is_the_gate_not_the_module_default():
+    """Excluding maintenance from the module map would strand the opt-in.
+
+    Nothing in the product turns the generic module flag back on, so defaulting
+    it off would mean an enabled per-kind reminder is suppressed as
+    ``module_disabled`` and never sends. The real gate is the per-kind switch,
+    which defaults to off.
+    """
     from app.domains.planning.notifications import DEFAULT_MODULE_NOTIFICATIONS
 
-    assert DEFAULT_MODULE_NOTIFICATIONS[MODULE_MAINTENANCE] is False
-    assert all(
-        enabled for module, enabled in DEFAULT_MODULE_NOTIFICATIONS.items()
-        if module != MODULE_MAINTENANCE
-    ), "no other module's default may change"
+    assert DEFAULT_MODULE_NOTIFICATIONS[MODULE_MAINTENANCE] is True
+    assert all(DEFAULT_MODULE_NOTIFICATIONS.values())
 
 
 @pytest.mark.asyncio
@@ -776,7 +780,12 @@ async def test_disabled_maintenance_reminders_never_reach_the_queue(
             session, plan=plan, timezone_name="Asia/Kolkata",
         )
         await session.commit()
-    assert queued is not None and "Haircut" in queued.body
+    # A row alone proves nothing: queue() returns suppressed rows too, which is
+    # exactly how the first version of this test passed while the opt-in did
+    # not actually deliver.
+    assert queued is not None
+    assert queued.status == "queued" and queued.sent_at is not None, queued.suppressed_reason
+    assert "Haircut" in queued.body
 
 
 @pytest.mark.asyncio
@@ -851,9 +860,11 @@ async def test_module_flag_off_still_suppresses_maintenance(db_clean, registered
     _, account_id = await registered_supabase_user()
     factory = get_sessionmaker()
     async with factory() as session:
-        # A brand-new account has maintenance off by default.
+        # Turning the module off explicitly still suppresses, per-kind opt-in
+        # or not.
         preference = await notifications.preferences_for(session, account_id, "Asia/Kolkata")
-        assert preference.modules[MODULE_MAINTENANCE] is False
+        preference.modules = {**preference.modules, MODULE_MAINTENANCE: False}
+        await session.flush()
         row = await notifications.queue(
             session, account_id=account_id, plan_date=PLAN_DATE,
             notification_key="daily_plan", title="Your day", body="Haircut is due.",
@@ -864,10 +875,10 @@ async def test_module_flag_off_still_suppresses_maintenance(db_clean, registered
 
 
 @pytest.mark.asyncio
-async def test_a_legacy_preference_row_without_maintenance_defaults_to_off(
+async def test_a_legacy_preference_row_reads_the_module_default(
     db_clean, registered_supabase_user,
 ):
-    """Rows written before maintenance existed must not read as opted in."""
+    """Rows written before maintenance existed still serialize coherently."""
     from app.domains.planning import notifications
     from app.domains.planning.models import NotificationPreference
 
@@ -883,7 +894,9 @@ async def test_a_legacy_preference_row_without_maintenance_defaults_to_off(
         row = (await session.execute(select(NotificationPreference).where(
             NotificationPreference.account_id == account_id,
         ))).scalar_one()
-        assert notifications.serialize_preferences(row)["modules"][MODULE_MAINTENANCE] is False
+        # A missing key reads as the module default; the per-kind switch, not
+        # this flag, is what keeps a legacy account from being notified.
+        assert notifications.serialize_preferences(row)["modules"][MODULE_MAINTENANCE] is True
 
 
 # --- Atomic same-day recording ------------------------------------------------
@@ -1115,3 +1128,164 @@ def test_event_ready_holds_no_second_timing_engine():
     assert "due_by_event_date" in source
     for forbidden in ("timedelta(days=", "lead_days_for", "MAINTENANCE_KINDS", "suggested_interval_days"):
         assert forbidden not in source, f"event_ready must not compute maintenance timing itself ({forbidden})"
+
+
+# --- Round two: findings raised on the correction itself ----------------------
+
+
+@pytest.mark.asyncio
+async def test_a_per_kind_opt_in_actually_delivers_for_a_new_account(
+    db_clean, registered_supabase_user,
+):
+    """The opt-in must not be stranded behind a flag nothing can turn on.
+
+    Defaulting the maintenance module off meant queue_for_plan selected the
+    action and queue() then suppressed it as module_disabled, so an enabled
+    reminder never sent.
+    """
+    from app.domains.planning import notifications
+    from app.domains.planning.models import DailyPlan, DailyPlanAction
+
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await maintenance_service.set_preference(
+            session, account_id, "haircut", tracked=True, interval_days=42, reminders_enabled=True,
+        )
+        await maintenance_service.record_done(
+            session, account_id, "haircut", done_on=PLAN_DATE - timedelta(days=60), today=PLAN_DATE,
+        )
+        plan = DailyPlan(
+            account_id=account_id, plan_date=PLAN_DATE, status="ready",
+            headline="Your day", cache_key="k2", generated_from="fresh",
+        )
+        session.add(plan)
+        await session.flush()
+        session.add(DailyPlanAction(
+            plan_id=plan.id, module=MODULE_MAINTENANCE, action_type="maintenance_due",
+            priority=1, title="Haircut is due", body="Due by your rhythm.",
+        ))
+        await session.commit()
+        plan_id = plan.id
+
+    # No notification preference row exists yet — the account is brand new.
+    async with factory() as session:
+        plan = (await session.execute(select(DailyPlan).where(DailyPlan.id == plan_id))).scalar_one()
+        queued = await notifications.queue_for_plan(session, plan=plan, timezone_name="Asia/Kolkata")
+        await session.commit()
+    assert queued is not None
+    assert queued.status == "queued" and queued.sent_at is not None, queued.suppressed_reason
+
+
+@pytest.mark.asyncio
+async def test_a_notification_never_names_a_kind_left_switched_off(
+    db_clean, registered_supabase_user,
+):
+    """Two kinds due, one opted in: the reminder must name only that one."""
+    from app.domains.planning import notifications
+    from app.domains.planning.models import DailyPlan, DailyPlanAction
+
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await maintenance_service.set_preference(
+            session, account_id, "haircut", tracked=True, interval_days=42, reminders_enabled=True,
+        )
+        await maintenance_service.record_done(
+            session, account_id, "haircut", done_on=PLAN_DATE - timedelta(days=60), today=PLAN_DATE,
+        )
+        await maintenance_service.set_preference(
+            session, account_id, "nail_care", tracked=True, interval_days=21, reminders_enabled=False,
+        )
+        await maintenance_service.record_done(
+            session, account_id, "nail_care", done_on=PLAN_DATE - timedelta(days=60), today=PLAN_DATE,
+        )
+        plan = DailyPlan(
+            account_id=account_id, plan_date=PLAN_DATE, status="ready",
+            headline="Your day", cache_key="k3", generated_from="fresh",
+        )
+        session.add(plan)
+        await session.flush()
+        # The plan's own card names both, as Today should.
+        session.add(DailyPlanAction(
+            plan_id=plan.id, module=MODULE_MAINTENANCE, action_type="maintenance_due",
+            priority=1, title="Some upkeep is due", body="Haircut, Nail care are due by your own rhythm.",
+        ))
+        await session.commit()
+        plan_id = plan.id
+
+    async with factory() as session:
+        plan = (await session.execute(select(DailyPlan).where(DailyPlan.id == plan_id))).scalar_one()
+        queued = await notifications.queue_for_plan(session, plan=plan, timezone_name="Asia/Kolkata")
+        await session.commit()
+
+    assert queued is not None and queued.status == "queued"
+    assert "Haircut" in queued.body
+    assert "Nail care" not in queued.body, "a kind with reminders off must not be named"
+
+
+def test_the_today_card_and_the_reminder_share_one_copy_builder():
+    """Two builders would eventually describe different kinds."""
+    from app.domains.care.maintenance import maintenance_headline
+    from app.domains.planning.compiler import _maintenance_action
+
+    decided = decide_maintenance(
+        {
+            "haircut": MaintenanceState(kind_key="haircut", tracked=True, interval_days=42, last_done_on=PLAN_DATE - timedelta(days=60)),
+            "nail_care": MaintenanceState(kind_key="nail_care", tracked=True, interval_days=21, last_done_on=PLAN_DATE - timedelta(days=60)),
+        },
+        plan_date=PLAN_DATE,
+    )
+    title, body = maintenance_headline(decided.due)
+    card = _maintenance_action(decided)[0]
+    assert card["title"] == title and card["body"] == body
+
+    # The same builder, given one row, names exactly that row.
+    one_title, one_body = maintenance_headline(decided.due[:1])
+    assert decided.due[0].label in one_body
+    assert decided.due[1].label not in one_body
+    assert one_title == f"{decided.due[0].label} is due"
+
+
+def test_versions_advance_with_the_rules_they_identify():
+    """A changed decision contract must not report the previous version."""
+    from app.domains.care.maintenance_rules import MAINTENANCE_CATALOGUE_VERSION, MAINTENANCE_VERSION
+    from app.domains.planning.event_ready import EVENT_READY_VERSION
+    from app.domains.planning.models import PLANNER_VERSION
+
+    assert MAINTENANCE_VERSION == "vc-06.1", "needs_cadence and the lead formula changed the contract"
+    assert MAINTENANCE_CATALOGUE_VERSION.startswith("vc-06.1")
+    assert EVENT_READY_VERSION == "vc-06-v1", "maintenance material and a new action rule changed it"
+    assert PLANNER_VERSION == "vc06-v1"
+
+
+@pytest.mark.asyncio
+async def test_regenerating_a_week_reports_the_rules_that_rebuilt_it(
+    db_clean, registered_supabase_user,
+):
+    from app.domains.planning.models import PLANNER_VERSION, WeeklyPlan
+    from app.domains.planning.weekly import get_or_create_week
+
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    week_start = PLAN_DATE - timedelta(days=PLAN_DATE.weekday())
+    async with factory() as session:
+        plan = await get_or_create_week(session, account_id, week_start, "Asia/Kolkata")
+        # Simulate a week created under the previous rule set.
+        plan.engine_version = "phase5-v1"
+        await session.commit()
+        plan_id = plan.id
+
+    async with factory() as session:
+        row = (await session.execute(select(WeeklyPlan).where(WeeklyPlan.id == plan_id))).scalar_one()
+        assert row.engine_version == "phase5-v1"
+
+    # The tail of weekly.generate is what advances it; assert that contract
+    # directly rather than driving a whole week build here.
+    import inspect
+
+    from app.domains.planning import weekly
+
+    source = inspect.getsource(weekly.generate)
+    assert "plan.engine_version = PLANNER_VERSION" in source
+    assert PLANNER_VERSION == "vc06-v1"

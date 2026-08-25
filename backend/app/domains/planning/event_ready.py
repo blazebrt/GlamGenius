@@ -21,7 +21,7 @@ from app.domains.recommendation.occasions import get_occasion
 from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 
-EVENT_READY_VERSION = "vc-02-v1"
+EVENT_READY_VERSION = "vc-06-v1"
 
 
 def _sha(payload: Any) -> str:
@@ -294,8 +294,11 @@ async def generate(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.
     old = {row.action_key: row for row in (await session.execute(select(EventReadyAction).where(EventReadyAction.event_ready_plan_id == plan.id))).scalars().all()}
     desired = {row["action_key"]: _action_material(row["action_key"], row["material"]) for row in actions}
     actions_current = set(old) == set(desired) and all(old[key].material_fingerprint == value for key, value in desired.items())
-    if plan.input_fingerprint != fingerprint:
+    if plan.input_fingerprint != fingerprint or plan.engine_version != EVENT_READY_VERSION:
+        # A plan regenerated under new rules must say so, otherwise stored
+        # provenance cannot tell which rule set produced its actions.
         plan.status, plan.input_fingerprint, plan.generated_at = status, fingerprint, utcnow()
+        plan.engine_version = EVENT_READY_VERSION
     if plan.input_fingerprint == fingerprint and actions_current:
         return await _serialize(session, event, plan, timezone_name, day=day, material=material)
     for key, row in old.items():

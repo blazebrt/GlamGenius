@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
@@ -261,6 +262,24 @@ def reminder_eligible(decided: MaintenanceSet) -> tuple[MaintenanceDecision, ...
     return tuple(row for row in decided.due if row.reminders_enabled)
 
 
+def maintenance_headline(rows: Sequence[MaintenanceDecision]) -> tuple[str, str]:
+    """The one piece of customer-facing copy for a set of due kinds.
+
+    Shared by the Today card and the notification so the two can never describe
+    different kinds. Passing only the opted-in rows is how the notification
+    avoids naming a kind the customer left reminders off for.
+    """
+    named = ", ".join(row.label for row in rows[:2])
+    extra = len(rows) - 2
+    title = f"{rows[0].label} is due" if len(rows) == 1 else "Some upkeep is due"
+    body = (
+        f"{named} and {extra} more are due by your own rhythm."
+        if extra > 0
+        else f"{named} {'is' if len(rows) == 1 else 'are'} due by your own rhythm."
+    )
+    return title, body
+
+
 def maintenance_fingerprint(decided: MaintenanceSet) -> str:
     """Stable identity for the maintenance material behind a plan.
 
@@ -312,5 +331,6 @@ __all__ = [
     "decide_maintenance",
     "due_by_event_date",
     "maintenance_fingerprint",
+    "maintenance_headline",
     "reminder_eligible",
 ]

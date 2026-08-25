@@ -49,7 +49,9 @@ def _event(**overrides):
 def test_event_ready_version_and_fingerprint_are_stable():
     event = _event()
     first = _event_payload(event, "Asia/Kolkata")
-    assert EVENT_READY_VERSION == "vc-02-v1"
+    # A deliberate pin: it moved to vc-06-v1 when VC-06 added maintenance to
+    # the Care material and a maintenance timing action to the timeline.
+    assert EVENT_READY_VERSION == "vc-06-v1"
     assert _sha(first) == _sha(dict(first))
     assert _sha(first) == _sha(first)
 

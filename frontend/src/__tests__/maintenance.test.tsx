@@ -147,6 +147,23 @@ describe('Maintenance timing UI', () => {
     expect(props.onForgetLastDate).toHaveBeenCalledWith('2026-01-02');
   });
 
+  it('saving an earlier correction replaces the old date rather than sitting behind it', () => {
+    const props = handlers();
+    render(
+      <MaintenanceSetup
+        kind={kind({ tracked: true, status: 'due', interval_days: 42, last_done_on: '2026-03-10' })}
+        onClose={jest.fn()}
+        {...props}
+      />,
+    );
+    const field = screen.getByLabelText('Date you last did Haircut');
+    // The field is prefilled with the anchor; editing it means "correct this".
+    expect(field.props.value).toBe('2026-03-10');
+    fireEvent.changeText(field, '2026-02-01');
+    fireEvent.press(screen.getByLabelText('Save last date for Haircut'));
+    expect(props.onSaveLastDate).toHaveBeenCalledWith('2026-02-01');
+  });
+
   it('reminders are a switch, and off is the starting point', () => {
     const props = handlers();
     render(
