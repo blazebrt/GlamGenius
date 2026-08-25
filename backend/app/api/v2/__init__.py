@@ -14,6 +14,7 @@ from app.api.v2 import (
     integrations,
     inventory,
     jobs,
+    maintenance,
     me,
     media,
     onboarding,
@@ -50,6 +51,7 @@ router.include_router(today.router, tags=["v2-today"])
 router.include_router(planner.router, tags=["v2-planner"])
 router.include_router(integrations.router, tags=["v2-integrations"])
 router.include_router(shelf.router, tags=["v2-shelf"])
+router.include_router(maintenance.router, tags=["v2-maintenance"])
 router.include_router(routines.router, tags=["v2-routines"])
 router.include_router(progress.router, tags=["v2-progress"])
 router.include_router(admin.router, tags=["v2-admin"])

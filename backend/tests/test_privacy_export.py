@@ -44,6 +44,8 @@ ROUTINES_MODEL_EXPORT_COLLECTIONS = {
     routines_models.NutritionPreference.__tablename__: "nutrition_preferences",
     routines_models.HydrationPreference.__tablename__: "hydration_preferences",
     routines_models.CareExperienceFeedback.__tablename__: "experience_feedback",
+    routines_models.MaintenancePreference.__tablename__: "maintenance_preferences",
+    routines_models.MaintenanceEvent.__tablename__: "maintenance_events",
 }
 
 # Routine steps do not carry a direct account_id; they are exported through

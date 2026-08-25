@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.care import maintenance as care_maintenance
 from app.domains.care.decisions import CareDecisionReasonCode
 from app.domains.planning import clock, compiler
 from app.domains.planning import context as context_stage
@@ -144,6 +145,36 @@ def _action_material(key: str, payload: dict[str, Any]) -> str:
     return _sha({"event_ready_version": EVENT_READY_VERSION, "action_key": key, "material": payload})
 
 
+def _maintenance_actions(material: Any) -> list[dict[str, Any]]:
+    """Upkeep that falls due on or before the event, at most one card.
+
+    Timing comes from the one maintenance authority; Event Ready never
+    computes a second schedule of its own.
+    """
+    maintenance = material.maintenance
+    due = care_maintenance.due_by_event_date(maintenance, maintenance.plan_date)
+    if not due:
+        return []
+    named = ", ".join(row.label for row in due[:2])
+    extra = len(due) - 2
+    body = (
+        f"{named} and {extra} more fall due before this event, by your own rhythm."
+        if extra > 0
+        else f"{named} {'falls' if len(due) == 1 else 'fall'} due before this event, by your own rhythm."
+    )
+    return [{
+        "action_key": "preparation:maintenance_timing", "domain": "preparation",
+        "timing": "before_event", "title": "Upkeep timing for this event",
+        "body": body,
+        "relevance": "You track this upkeep and set the interval yourself.",
+        "priority": 45, "inventory_item_id": None,
+        "material": {
+            "kinds": [row.kind_key for row in due],
+            "next_due_on": [row.next_due_on.isoformat() for row in due if row.next_due_on],
+        },
+    }]
+
+
 def _actions(event: CalendarEvent, day: Any, material: Any, look: Look | None, look_items: list[LookItem], status: str) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     if status == "needs_confirmation":
@@ -177,6 +208,8 @@ def _actions(event: CalendarEvent, day: Any, material: Any, look: Look | None, l
             key = "care:attention"
             reasons = sorted({reason.code.value for decision in hard_safety for reason in decision.blocking_reasons if reason.code in (CareDecisionReasonCode.PRODUCT_EXPIRED, CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH)})
             actions.append({"action_key": key, "domain": "care", "timing": "before_event", "title": "Review one Care item", "body": "One existing Care safety rule needs your attention before the event.", "relevance": "A canonical Care safety decision is blocking an item.", "priority": 35, "inventory_item_id": None, "material": {"item_ids": sorted(str(decision.item_id) for decision in hard_safety), "reason_codes": reasons}})
+    if status != "past":
+        actions.extend(_maintenance_actions(material))
     return actions
 
 

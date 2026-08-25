@@ -87,6 +87,8 @@ from app.domains.recommendation.models import (
 from app.domains.routines.models import (
     CareExperienceFeedback,
     HydrationPreference,
+    MaintenanceEvent,
+    MaintenancePreference,
     NutritionPreference,
     ProductExpiryEvent,
     ProductIngredient,
@@ -372,7 +374,23 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         session,
         select(CareExperienceFeedback).where(CareExperienceFeedback.account_id == account_id),
     )
+    maintenance_preferences = await _fetch(
+        session,
+        select(MaintenancePreference).where(MaintenancePreference.account_id == account_id),
+    )
+    maintenance_events = await _fetch(
+        session,
+        select(MaintenanceEvent).where(MaintenanceEvent.account_id == account_id),
+    )
     return {
+        "maintenance_preferences": [
+            _row_dict(r, [c.name for c in MaintenancePreference.__table__.columns])
+            for r in maintenance_preferences
+        ],
+        "maintenance_events": [
+            _row_dict(r, [c.name for c in MaintenanceEvent.__table__.columns])
+            for r in maintenance_events
+        ],
         "routines": [_row_dict(r, [c.name for c in Routine.__table__.columns]) for r in routines],
         "steps": [_row_dict(r, [c.name for c in RoutineStep.__table__.columns]) for r in steps],
         "adherence": [_row_dict(r, [c.name for c in RoutineAdherence.__table__.columns]) for r in adherence],
