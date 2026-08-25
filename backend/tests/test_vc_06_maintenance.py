@@ -951,6 +951,7 @@ async def test_disabled_maintenance_reminders_never_reach_the_queue(
         plan = (await session.execute(select(DailyPlan).where(DailyPlan.id == plan_id))).scalar_one()
         queued = await notifications.queue_for_plan(
             session, plan=plan, timezone_name="Asia/Kolkata",
+            moment=datetime(2026, 3, 16, 12, tzinfo=UTC),
         )
         await session.commit()
     assert queued is None, "maintenance text must not be sent without an explicit opt-in"
@@ -965,6 +966,7 @@ async def test_disabled_maintenance_reminders_never_reach_the_queue(
         plan = (await session.execute(select(DailyPlan).where(DailyPlan.id == plan_id))).scalar_one()
         queued = await notifications.queue_for_plan(
             session, plan=plan, timezone_name="Asia/Kolkata",
+            moment=datetime(2026, 3, 16, 12, tzinfo=UTC),
         )
         await session.commit()
     # A row alone proves nothing: queue() returns suppressed rows too, which is
@@ -1382,7 +1384,10 @@ async def test_a_per_kind_opt_in_actually_delivers_for_a_new_account(
     # No notification preference row exists yet — the account is brand new.
     async with factory() as session:
         plan = (await session.execute(select(DailyPlan).where(DailyPlan.id == plan_id))).scalar_one()
-        queued = await notifications.queue_for_plan(session, plan=plan, timezone_name="Asia/Kolkata")
+        queued = await notifications.queue_for_plan(
+            session, plan=plan, timezone_name="Asia/Kolkata",
+            moment=datetime(2026, 3, 16, 12, tzinfo=UTC),
+        )
         await session.commit()
     assert queued is not None
     assert queued.status == "queued" and queued.sent_at is not None, queued.suppressed_reason
@@ -1427,7 +1432,10 @@ async def test_a_notification_never_names_a_kind_left_switched_off(
 
     async with factory() as session:
         plan = (await session.execute(select(DailyPlan).where(DailyPlan.id == plan_id))).scalar_one()
-        queued = await notifications.queue_for_plan(session, plan=plan, timezone_name="Asia/Kolkata")
+        queued = await notifications.queue_for_plan(
+            session, plan=plan, timezone_name="Asia/Kolkata",
+            moment=datetime(2026, 3, 16, 12, tzinfo=UTC),
+        )
         await session.commit()
 
     assert queued is not None and queued.status == "queued"

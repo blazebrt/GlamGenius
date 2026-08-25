@@ -46,7 +46,6 @@ from app.domains.routines.models import (
     RoutineAdherence,
     RoutineRecommendationRun,
     RoutineStep,
-    SupplementSafetyFlag,
     UserReportedObservation,
 )
 from app.domains.routines.ontology import INGREDIENT_BY_KEY, ONTOLOGY_VERSION
@@ -292,26 +291,6 @@ async def _store_expiry_events(
         ))
 
 
-async def _store_supplement_flags(
-    session: AsyncSession, account_id: uuid.UUID, rows: Sequence[dict[str, Any]]
-) -> None:
-    """Flags are replaced wholesale, so a resolved one disappears."""
-    item_ids = [uuid.UUID(row["inventory_item_id"]) for row in rows]
-    if item_ids:
-        await session.execute(
-            delete(SupplementSafetyFlag).where(
-                SupplementSafetyFlag.account_id == account_id,
-                SupplementSafetyFlag.item_id.in_(item_ids),
-            )
-        )
-    for row in rows:
-        for flag in row["flags"]:
-            session.add(SupplementSafetyFlag(
-                account_id=account_id, item_id=uuid.UUID(row["inventory_item_id"]),
-                flag=flag["flag"], message=flag["message"],
-            ))
-
-
 async def analyse_shelf(
     session: AsyncSession, *, account_id: uuid.UUID, body: ShelfAnalyseRequest
 ) -> dict[str, Any]:
@@ -325,9 +304,6 @@ async def analyse_shelf(
         products = shelf.build_fresh(context, category)
         parsed += await _store_ingredients(session, account_id, products)
         await _store_expiry_events(session, account_id, products, context.today)
-
-    supplements = shelf.supplement_flags(context)
-    await _store_supplement_flags(session, account_id, supplements)
 
     await session.flush()
     refreshed = await shelf.gather(
@@ -1488,14 +1464,6 @@ async def perfume_recommendation(
         recently_used_item_ids=recent,
         today=context.today,
     )
-
-
-# --- Supplements ----------------------------------------------------------------
-
-
-async def supplements_summary(session: AsyncSession, *, account_id: uuid.UUID) -> dict[str, Any]:
-    context = await shelf.gather(session, account_id=account_id)
-    return shelf.supplement_summary(context)
 
 
 def supplement_question(text: str) -> dict[str, Any]:

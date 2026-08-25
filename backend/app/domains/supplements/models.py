@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import Float, ForeignKey, Index, Numeric, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, Float, ForeignKey, Index, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
@@ -41,6 +41,10 @@ class SupplementLabelComponent(UUIDPrimaryKey, TimestampMixin, Base):
     client_mutation_id: Mapped[str | None] = mapped_column(String(80))
 
     __table_args__ = (
+        CheckConstraint("amount IS NULL OR amount >= 0", name="ck_supplement_label_amount_nonnegative"),
+        CheckConstraint("source IN ('user_declared', 'photo_extracted')", name="ck_supplement_label_source"),
+        CheckConstraint("verification_state IN ('draft', 'confirmed')", name="ck_supplement_label_verification_state"),
+        CheckConstraint("confidence IS NULL OR (confidence >= 0 AND confidence <= 1)", name="ck_supplement_label_confidence"),
         UniqueConstraint("account_id", "client_mutation_id", name="uq_supplement_label_client_mutation"),
         Index("ix_supplement_label_account_item", "account_id", "item_id"),
         Index("ix_supplement_label_overlap", "account_id", "canonical_component_key", "verification_state"),

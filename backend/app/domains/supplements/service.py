@@ -6,13 +6,14 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.inventory.models import InventoryItem, SupplementDetail
 from app.domains.supplements.engine import build_utility, component_identity
 from app.domains.supplements.models import SupplementLabelComponent
 from app.domains.supplements.schemas import LabelComponentCreate, LabelComponentPatch
-from app.shared.errors.exceptions import NotFoundError
+from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 
 
 def _amount_text(value: Decimal | None) -> str | None:
@@ -67,25 +68,43 @@ async def list_facts(session: AsyncSession, account_id: uuid.UUID, item_id: uuid
 
 async def create_fact(session: AsyncSession, account_id: uuid.UUID, item_id: uuid.UUID, body: LabelComponentCreate) -> SupplementLabelComponent:
     item = await owned_supplement_item(session, account_id, item_id)
-    if body.client_mutation_id:
-        replay = (await session.execute(select(SupplementLabelComponent).where(
-            SupplementLabelComponent.account_id == account_id,
-            SupplementLabelComponent.client_mutation_id == body.client_mutation_id,
-        ))).scalar_one_or_none()
-        if replay is not None:
-            return replay
-    normalized, _display = component_identity(body.raw_name)
-    row = SupplementLabelComponent(
-        account_id=account_id, item_id=item.id, raw_name=body.raw_name.strip(), normalized_name=normalized,
-        canonical_component_key=normalized if normalized else None, amount=body.amount,
-        unit=body.unit.strip() if body.unit else None, serving_text=body.serving_text.strip() if body.serving_text else None,
-        source=body.source, verification_state=body.verification_state, confidence=body.confidence,
-        source_ai_run_id=body.source_ai_run_id, model_version=body.model_version, prompt_version=body.prompt_version,
-        client_mutation_id=body.client_mutation_id,
-    )
-    session.add(row)
-    await session.flush()
-    return row
+    normalized, canonical = component_identity(body.raw_name)
+    values = {
+        "account_id": account_id, "item_id": item.id, "raw_name": body.raw_name.strip(),
+        "normalized_name": normalized, "canonical_component_key": canonical or None,
+        "amount": body.amount, "unit": body.unit.strip() if body.unit else None,
+        "serving_text": body.serving_text.strip() if body.serving_text else None,
+        # The public endpoint is manual entry only; provenance is server-owned.
+        "source": "user_declared", "verification_state": "confirmed", "confidence": 1.0,
+        "source_ai_run_id": None, "model_version": None, "prompt_version": None,
+        "client_mutation_id": body.client_mutation_id,
+    }
+    if body.client_mutation_id is None:
+        row = SupplementLabelComponent(**values)
+        session.add(row)
+        await session.flush()
+        return row
+
+    statement = pg_insert(SupplementLabelComponent).values(**values).on_conflict_do_nothing(
+        index_elements=["account_id", "client_mutation_id"]
+    ).returning(SupplementLabelComponent.id)
+    created_id = (await session.execute(statement)).scalar_one_or_none()
+    if created_id is not None:
+        return (await session.execute(select(SupplementLabelComponent).where(
+            SupplementLabelComponent.id == created_id,
+        ))).scalar_one()
+
+    replay = (await session.execute(select(SupplementLabelComponent).where(
+        SupplementLabelComponent.account_id == account_id,
+        SupplementLabelComponent.client_mutation_id == body.client_mutation_id,
+    ))).scalar_one()
+    replay_values = (replay.item_id, replay.raw_name, replay.normalized_name,
+                     replay.canonical_component_key, replay.amount, replay.unit, replay.serving_text)
+    requested_values = (item.id, values["raw_name"], values["normalized_name"],
+                        values["canonical_component_key"], values["amount"], values["unit"], values["serving_text"])
+    if replay_values != requested_values:
+        raise ValidationFailedError("This label-fact submission key is already used for different data.", field="client_mutation_id")
+    return replay
 
 
 async def update_fact(session: AsyncSession, account_id: uuid.UUID, item_id: uuid.UUID, fact_id: uuid.UUID, body: LabelComponentPatch) -> SupplementLabelComponent:
@@ -99,10 +118,10 @@ async def update_fact(session: AsyncSession, account_id: uuid.UUID, item_id: uui
         raise NotFoundError("We could not find that label fact.")
     values = body.model_dump(exclude_unset=True)
     if "raw_name" in values:
-        normalized, _display = component_identity(values["raw_name"])
+        normalized, canonical = component_identity(values["raw_name"])
         row.raw_name = values["raw_name"].strip()
         row.normalized_name = normalized
-        row.canonical_component_key = normalized or None
+        row.canonical_component_key = canonical or None
         values.pop("raw_name")
     for key, value in values.items():
         setattr(row, key, value.strip() if isinstance(value, str) else value)
@@ -122,7 +141,16 @@ async def delete_fact(session: AsyncSession, account_id: uuid.UUID, item_id: uui
 
 
 async def confirm_fact(session: AsyncSession, account_id: uuid.UUID, item_id: uuid.UUID, fact_id: uuid.UUID, confirmed: bool = True) -> SupplementLabelComponent:
-    row = await update_fact(session, account_id, item_id, fact_id, LabelComponentPatch(verification_state="confirmed" if confirmed else "draft"))
+    await owned_supplement_item(session, account_id, item_id)
+    row = (await session.execute(select(SupplementLabelComponent).where(
+        SupplementLabelComponent.id == fact_id,
+        SupplementLabelComponent.account_id == account_id,
+        SupplementLabelComponent.item_id == item_id,
+    ))).scalar_one_or_none()
+    if row is None:
+        raise NotFoundError("We could not find that label fact.")
+    row.verification_state = "confirmed" if confirmed else "draft"
+    await session.flush()
     return row
 
 

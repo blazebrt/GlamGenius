@@ -21,13 +21,15 @@ describe('VC-07 supplement utility API', () => {
     (api.delete as jest.Mock).mockResolvedValue({ data: { deleted: true, id: 'fact-1' } });
 
     await getSupplementLabelFacts('item-1');
-    await createSupplementLabelFact('item-1', { raw_name: 'Vitamin C', amount: '500', unit: 'mg', serving_text: 'Per tablet' });
+    await createSupplementLabelFact('item-1', { raw_name: 'Vitamin C', amount: '500', unit: 'mg', serving_text: 'Per tablet', client_mutation_id: 'stable-retry-key' });
     await patchSupplementLabelFact('item-1', 'fact-1', { amount: '250', unit: 'mg' });
     await confirmSupplementLabelFact('item-1', 'fact-1');
     await deleteSupplementLabelFact('item-1', 'fact-1');
 
     expect(api.get).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-facts');
-    expect(api.post).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-facts', expect.objectContaining({ raw_name: 'Vitamin C', amount: '500' }));
+    expect(api.post).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-facts', {
+      raw_name: 'Vitamin C', amount: '500', unit: 'mg', serving_text: 'Per tablet', client_mutation_id: 'stable-retry-key',
+    });
     expect(api.patch).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-facts/fact-1', { amount: '250', unit: 'mg' });
     expect(api.post).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-facts/fact-1/confirm');
     expect(api.delete).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-facts/fact-1');

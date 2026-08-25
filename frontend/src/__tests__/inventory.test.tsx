@@ -4,8 +4,9 @@ import { CATEGORY_META, CategoryTile, DraftReviewActions, EstimateNotice, GUIDED
 import InventoryScreen from '../../app/(tabs)/inventory';
 import * as apiV2 from '../services/apiV2';
 import { INVENTORY_CATEGORIES, InventoryItem, InventorySummary } from '../services/apiV2';
+import InventoryItemScreen from '../../app/inventory-item';
 
-jest.mock('expo-router', () => ({ useRouter: () => ({ push: jest.fn() }) }));
+jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: 'supplement-1' }), useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => false }) }));
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 
 const item: InventoryItem = {
@@ -71,5 +72,33 @@ describe('complete inventory UI', () => {
     const retry = jest.fn(); const add = jest.fn(); render(<InventoryRecovery onRetry={retry} onAdd={add} />);
     fireEvent.press(screen.getByLabelText('Retry inventory')); fireEvent.press(screen.getByLabelText('Add an item instead'));
     expect(retry).toHaveBeenCalled(); expect(add).toHaveBeenCalled();
+  });
+
+  it('lets a customer edit their supplement note and package label facts with a stable retry key', async () => {
+    const supplement: InventoryItem = {
+      ...item, id: 'supplement-1', category: 'supplements', display_name: 'Cream Cleanser', verification_state: 'confirmed',
+      details: { supplement_name: 'Cream Cleanser', user_entered_purpose: 'for hair', opened_date: '2026-08-01', use_frequency: 'daily', safety_disclaimer: 'Tracking only.' },
+    };
+    const fact = { id: 'fact-1', inventory_item_id: 'supplement-1', raw_name: 'Vitamin C', normalized_name: 'vitamin c', canonical_component_key: 'vitamin c', amount: '500', unit: 'mg', serving_text: 'Per tablet', source: 'user_declared' as const, verification_state: 'confirmed' as const, confidence: 1, schema_version: 'vc-07-v1' };
+    jest.spyOn(apiV2, 'getInventoryItem').mockResolvedValue(supplement);
+    jest.spyOn(apiV2, 'getSupplementLabelFacts').mockResolvedValue({ label_facts: [fact] });
+    const saveItem = jest.spyOn(apiV2, 'patchInventoryItem').mockResolvedValue(supplement);
+    const createFact = jest.spyOn(apiV2, 'createSupplementLabelFact').mockResolvedValue({ ...fact, id: 'fact-2', raw_name: 'Zinc' });
+    const editFact = jest.spyOn(apiV2, 'patchSupplementLabelFact').mockResolvedValue({ ...fact, amount: '250' });
+    render(<InventoryItemScreen />);
+    await waitFor(() => expect(screen.getByText('Your note')).toBeTruthy());
+    expect(screen.getByText('for hair')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('Edit Cream Cleanser'));
+    fireEvent.changeText(screen.getByLabelText('Edit your supplement note'), 'for hair support');
+    fireEvent.press(screen.getByLabelText('Save item corrections'));
+    await waitFor(() => expect(saveItem).toHaveBeenCalledWith('supplement-1', expect.objectContaining({ details: expect.objectContaining({ user_entered_purpose: 'for hair support', expiry_date: null }) })));
+
+    fireEvent.changeText(screen.getByLabelText('Label component name'), 'Zinc');
+    fireEvent.press(screen.getByLabelText('Add label fact'));
+    await waitFor(() => expect(createFact).toHaveBeenCalledWith('supplement-1', expect.objectContaining({ raw_name: 'Zinc', client_mutation_id: expect.any(String) })));
+    fireEvent.press(screen.getByLabelText('Edit Vitamin C'));
+    fireEvent.changeText(screen.getByLabelText('Edit printed amount for Vitamin C'), '250');
+    fireEvent.press(screen.getByLabelText('Save Vitamin C'));
+    await waitFor(() => expect(editFact).toHaveBeenCalledWith('supplement-1', 'fact-1', expect.objectContaining({ amount: '250' })));
   });
 });

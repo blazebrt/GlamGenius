@@ -1,12 +1,24 @@
 """VC-07 API ownership, confirmation, overlap and export regressions."""
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 from tests.conftest import auth
 from tests.journey import ok
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_summary_route_has_one_registered_get_operation():
+    supplements = importlib.import_module("app.api.v2.supplements")
+    server = importlib.import_module("server")
+
+    routes = [route for route in supplements.router.routes if getattr(route, "path", None) == "/supplements/summary"]
+    assert len(routes) == 1
+    assert routes[0].methods == {"GET"}
+    assert list(server.app.openapi()["paths"]["/api/v2/supplements/summary"]) == ["get"]
 
 
 async def test_owned_label_facts_overlap_and_cross_account_isolation(
@@ -30,16 +42,12 @@ async def test_owned_label_facts_overlap_and_cross_account_isolation(
         f"/api/v2/supplements/items/{first['id']}/label-facts", headers=headers_a,
         json={"raw_name": "Vitamin C", "amount": "500", "unit": "mg", "serving_text": "Per tablet"},
     ))
-    candidate = ok(await app_client.post(
+    fact_b = ok(await app_client.post(
         f"/api/v2/supplements/items/{second['id']}/label-facts", headers=headers_a,
-        json={"raw_name": "ascorbic acid", "verification_state": "draft"},
+        json={"raw_name": "ascorbic acid"},
     ))
-    summary = ok(await app_client.get("/api/v2/supplements/summary", headers=headers_a))
-    assert summary["overlaps"] == []
-    confirmed = ok(await app_client.post(
-        f"/api/v2/supplements/items/{second['id']}/label-facts/{candidate['id']}/confirm", headers=headers_a,
-    ))
-    assert confirmed["verification_state"] == "confirmed"
+    assert fact_b["verification_state"] == "confirmed"
+    assert fact_b["canonical_component_key"] == "vitamin c"
     summary = ok(await app_client.get("/api/v2/supplements/summary", headers=headers_a))
     assert summary["overlaps"][0]["product_count"] == 2
     assert {row["fact"]["amount"] for row in summary["overlaps"][0]["items"]} == {"500", None}
@@ -54,7 +62,36 @@ async def test_owned_label_facts_overlap_and_cross_account_isolation(
     exported = ok(await app_client.get("/api/v2/privacy/export", headers=headers_a))
     exported_facts = exported["domains"]["routines"]["supplement_label_components"]
     assert any(row["id"] == fact_a["id"] for row in exported_facts)
+    exported_details = exported["domains"]["inventory"]["supplement_details"]
+    assert any(row["item_id"] == first["id"] for row in exported_details)
 
     assert (await app_client.delete(
         f"/api/v2/supplements/items/{first['id']}/label-facts/{fact_a['id']}", headers=headers_a,
     )).status_code == 200
+
+
+async def test_public_label_fact_contract_rejects_forged_provenance_and_replays_safely(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    item = ok(await app_client.post(
+        "/api/v2/inventory/items", headers=headers,
+        json={"category": "supplements", "display_name": "C", "details": {"supplement_name": "C"}},
+    ))
+    url = f"/api/v2/supplements/items/{item['id']}/label-facts"
+    for field, value in {
+        "source": "photo_extracted", "verification_state": "draft", "confidence": 0.2,
+        "source_ai_run_id": "00000000-0000-0000-0000-000000000000", "model_version": "x", "prompt_version": "x",
+    }.items():
+        response = await app_client.post(url, headers=headers, json={"raw_name": "Vitamin C", field: value})
+        assert response.status_code == 422, field
+
+    payload = {"raw_name": "Vitamin C", "amount": "500", "unit": "mg", "client_mutation_id": "fact-replay"}
+    first = ok(await app_client.post(url, headers=headers, json=payload))
+    replay = ok(await app_client.post(url, headers=headers, json=payload))
+    assert replay["id"] == first["id"]
+    mismatch = await app_client.post(url, headers=headers, json={**payload, "amount": "250"})
+    assert mismatch.status_code == 422
+    patch = await app_client.patch(f"{url}/{first['id']}", headers=headers, json={"verification_state": "draft"})
+    assert patch.status_code == 422

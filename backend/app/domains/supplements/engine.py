@@ -98,9 +98,17 @@ def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> 
             missing.append("purpose")
         component_rows = [_fact_payload(fact) for fact in facts]
         for fact in confirmed:
-            key, display = component_identity(fact.raw_name)
-            group = confirmed_groups.setdefault(key, {"component_key": key, "display_name": display, "items": []})
-            group["items"].append({"item_id": item["id"], "product_name": item["display_name"], "fact": _fact_payload(fact)})
+            # The canonical key is established at validated write time. Do not
+            # derive a competing identity from customer-entered raw text here.
+            key = fact.canonical_component_key or fact.normalized_name
+            group = confirmed_groups.setdefault(
+                key, {"component_key": key, "display_name": fact.raw_name, "items": {}},
+            )
+            product = group["items"].setdefault(
+                item["id"],
+                {"item_id": item["id"], "product_name": item["display_name"], "fact": _fact_payload(fact), "facts": []},
+            )
+            product["facts"].append(_fact_payload(fact))
         summaries.append({
             "inventory_item_id": item["id"],
             "display_name": item["display_name"],
@@ -129,7 +137,7 @@ def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> 
         })
     overlaps = []
     for group in confirmed_groups.values():
-        group["items"].sort(key=lambda row: (row["product_name"].casefold(), row["item_id"]))
+        group["items"] = sorted(group["items"].values(), key=lambda row: (row["product_name"].casefold(), row["item_id"]))
         if len(group["items"]) > 1:
             group["product_count"] = len(group["items"])
             overlaps.append(group)
@@ -160,6 +168,7 @@ def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> 
         ],
         "boundaries": [
             "Package label facts only; no instructions about how much to take, treatment, medical assessment, or interaction conclusions.",
+            "Questions that need health guidance belong with a qualified professional.",
             "Amounts are shown per product and are never added into intake totals.",
             "Upper-limit, RDA, EAR, and deficiency comparisons are not active in this utility.",
         ],

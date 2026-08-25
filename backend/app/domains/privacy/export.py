@@ -44,6 +44,7 @@ from app.domains.inventory.models import (
     InventoryAttribute,
     InventoryEvent,
     InventoryItem,
+    SupplementDetail,
 )
 from app.domains.media import service as media_service
 from app.domains.media.models import MediaAsset
@@ -232,10 +233,18 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
         session,
         select(InventoryEvent).where(InventoryEvent.account_id == account_id),
     )
+    supplement_details = await _fetch(
+        session,
+        select(SupplementDetail).where(SupplementDetail.item_id.in_(item_ids)),
+    ) if item_ids else []
     return {
         "items": [_row_dict(i, [c.name for c in InventoryItem.__table__.columns]) for i in items],
         "attributes": [_row_dict(a, [c.name for c in InventoryAttribute.__table__.columns]) for a in attrs],
         "events": [_row_dict(e, [c.name for c in InventoryEvent.__table__.columns]) for e in events],
+        "supplement_details": [
+            _row_dict(row, [c.name for c in SupplementDetail.__table__.columns])
+            for row in supplement_details
+        ],
     }
 
 

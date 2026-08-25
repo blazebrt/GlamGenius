@@ -38,8 +38,8 @@ def test_normalization_is_conservative_and_unicode_stable():
 
 
 def test_exact_overlap_and_reviewed_alias_are_deterministic():
-    a = Fact("Vitamin C", "vitamin c", uuid4(), amount=Decimal("500"), unit="mg", serving_text="Per tablet")
-    b = Fact("ascorbic acid", "ascorbic acid", uuid4(), amount=Decimal("250"), unit="mg")
+    a = Fact("Vitamin C", "vitamin c", uuid4(), amount=Decimal("500"), unit="mg", serving_text="Per tablet", canonical_component_key="vitamin c")
+    b = Fact("ascorbic acid", "ascorbic acid", uuid4(), amount=Decimal("250"), unit="mg", canonical_component_key="vitamin c")
     items = [item("A", [a]), item("B", [b])]
     result = build_utility(items, today=date(2026, 8, 1))
     assert result["overlaps"][0]["display_name"] == "Vitamin C"
@@ -61,13 +61,24 @@ def test_unconfirmed_facts_and_drafts_do_not_drive_overlap():
 
 
 def test_amounts_units_and_missing_fields_are_preserved_without_totals():
-    first = Fact("Vitamin C", "vitamin c", uuid4(), amount=Decimal("500"), unit="mg", serving_text="Per tablet")
-    second = Fact("Vitamin C", "vitamin c", uuid4(), amount=Decimal("250"), unit="mcg")
+    first = Fact("Vitamin C", "vitamin c", uuid4(), amount=Decimal("500"), unit="mg", serving_text="Per tablet", canonical_component_key="vitamin c")
+    second = Fact("Vitamin C", "vitamin c", uuid4(), amount=Decimal("250"), unit="mcg", canonical_component_key="vitamin c")
     result = build_utility([item("A", [first]), item("B", [second])])
     amounts = {row["fact"]["amount"] for row in result["overlaps"][0]["items"]}
     assert amounts == {"500", "250"}
     assert all("total" not in str(result[key]).lower() for key in ("supplements", "overlaps"))
     assert "serving_text" in result["supplements"][1]["missing_information"]
+
+
+def test_same_item_alias_rows_never_inflate_cross_product_overlap():
+    first = Fact("Vitamin C", "vitamin c", uuid4(), canonical_component_key="vitamin c")
+    alias = Fact("ascorbic acid", "ascorbic acid", uuid4(), canonical_component_key="vitamin c")
+    assert build_utility([item("One bottle", [first, alias])])["overlaps"] == []
+
+    second = Fact("ascorbic acid", "ascorbic acid", uuid4(), canonical_component_key="vitamin c")
+    overlap = build_utility([item("One bottle", [first, alias]), item("Second bottle", [second])])["overlaps"]
+    assert len(overlap) == 1 and overlap[0]["product_count"] == 2
+    assert len(overlap[0]["items"][0]["facts"]) in {1, 2}
 
 
 def test_expiry_states_and_professional_boundary_are_factual():

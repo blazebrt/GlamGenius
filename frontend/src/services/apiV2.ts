@@ -2119,13 +2119,12 @@ export const getSupplementLabelFacts = async (itemId: string): Promise<{ label_f
 
 export const createSupplementLabelFact = async (itemId: string, body: {
   raw_name: string; amount?: string | null; unit?: string | null; serving_text?: string | null;
-  source?: 'user_declared' | 'photo_extracted'; verification_state?: 'draft' | 'confirmed'; client_mutation_id?: string;
+  client_mutation_id?: string;
 }): Promise<SupplementLabelFact> =>
   (await api.post<SupplementLabelFact>(`${V2}/supplements/items/${itemId}/label-facts`, body)).data;
 
 export const patchSupplementLabelFact = async (itemId: string, factId: string, body: {
   raw_name?: string; amount?: string | null; unit?: string | null; serving_text?: string | null;
-  verification_state?: 'draft' | 'confirmed';
 }): Promise<SupplementLabelFact> =>
   (await api.patch<SupplementLabelFact>(`${V2}/supplements/items/${itemId}/label-facts/${factId}`, body)).data;
 

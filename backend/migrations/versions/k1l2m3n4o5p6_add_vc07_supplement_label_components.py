@@ -40,6 +40,10 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["item_id"], ["inventory_items.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["source_ai_run_id"], ["ai_runs.id"], ondelete="SET NULL"),
+        sa.CheckConstraint("amount IS NULL OR amount >= 0", name="ck_supplement_label_amount_nonnegative"),
+        sa.CheckConstraint("source IN ('user_declared', 'photo_extracted')", name="ck_supplement_label_source"),
+        sa.CheckConstraint("verification_state IN ('draft', 'confirmed')", name="ck_supplement_label_verification_state"),
+        sa.CheckConstraint("confidence IS NULL OR (confidence >= 0 AND confidence <= 1)", name="ck_supplement_label_confidence"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("account_id", "client_mutation_id", name="uq_supplement_label_client_mutation"),
     )
