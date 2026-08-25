@@ -61,7 +61,8 @@ export function isValidPastDate(value: string, today: string): boolean {
 }
 
 export function MaintenanceSetup({
-  kind, bounds, today, busy, onSaveCadence, onClearCadence, onSaveLastDate, onToggleReminders, onClose,
+  kind, bounds, today, busy, onSaveCadence, onClearCadence, onSaveLastDate, onForgetLastDate,
+  onToggleReminders, onClose,
 }: {
   kind: MaintenanceKindStatus;
   bounds: IntervalBounds;
@@ -70,6 +71,7 @@ export function MaintenanceSetup({
   onSaveCadence: (days: number) => void;
   onClearCadence: () => void;
   onSaveLastDate: (isoDate: string) => void;
+  onForgetLastDate: (isoDate: string) => void;
   onToggleReminders: (enabled: boolean) => void;
   onClose: () => void;
 }) {
@@ -160,6 +162,16 @@ export function MaintenanceSetup({
       {!!lastDate && !dateOk && (
         <Text style={styles.hint}>Use YYYY-MM-DD, and a date that has already happened.</Text>
       )}
+      {!!kind.last_done_on && (
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={`Remove the recorded date for ${kind.label}`}
+          onPress={() => onForgetLastDate(kind.last_done_on as string)}
+          disabled={busy}
+        >
+          <Text style={styles.quietLink}>Remove {kind.last_done_on}</Text>
+        </TouchableOpacity>
+      )}
 
       <View style={styles.switchRow}>
         <View style={{ flex: 1 }}>
@@ -183,7 +195,8 @@ export function MaintenanceSetup({
 
 export function MaintenanceRow({
   kind, bounds, today, busy, expanded, onToggleExpanded,
-  onTrack, onUntrack, onRecordToday, onSaveCadence, onClearCadence, onSaveLastDate, onToggleReminders,
+  onTrack, onUntrack, onRecordToday, onSaveCadence, onClearCadence, onSaveLastDate,
+  onForgetLastDate, onToggleReminders,
 }: {
   kind: MaintenanceKindStatus;
   bounds: IntervalBounds;
@@ -197,6 +210,7 @@ export function MaintenanceRow({
   onSaveCadence: (days: number) => void;
   onClearCadence: () => void;
   onSaveLastDate: (isoDate: string) => void;
+  onForgetLastDate: (isoDate: string) => void;
   onToggleReminders: (enabled: boolean) => void;
 }) {
   const tracked = kind.tracked;
@@ -266,6 +280,7 @@ export function MaintenanceRow({
           onSaveCadence={onSaveCadence}
           onClearCadence={onClearCadence}
           onSaveLastDate={onSaveLastDate}
+          onForgetLastDate={onForgetLastDate}
           onToggleReminders={onToggleReminders}
           onClose={onToggleExpanded}
         />

@@ -43,6 +43,7 @@ const handlers = () => ({
   onSaveCadence: jest.fn(),
   onClearCadence: jest.fn(),
   onSaveLastDate: jest.fn(),
+  onForgetLastDate: jest.fn(),
   onToggleReminders: jest.fn(),
 });
 
@@ -131,6 +132,19 @@ describe('Maintenance timing UI', () => {
     fireEvent.changeText(field, '2026-12-31');
     fireEvent.press(screen.getByLabelText('Save last date for Haircut'));
     expect(props.onSaveLastDate).toHaveBeenCalledTimes(1);
+  });
+
+  it('a wrongly recorded date can be removed, not only corrected forwards', () => {
+    const props = handlers();
+    render(
+      <MaintenanceSetup
+        kind={kind({ tracked: true, status: 'due', interval_days: 42, last_done_on: '2026-01-02' })}
+        onClose={jest.fn()}
+        {...props}
+      />,
+    );
+    fireEvent.press(screen.getByLabelText('Remove the recorded date for Haircut'));
+    expect(props.onForgetLastDate).toHaveBeenCalledWith('2026-01-02');
   });
 
   it('reminders are a switch, and off is the starting point', () => {

@@ -21,6 +21,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaintenanceEmpty, MaintenanceRow } from '../../src/components/care/MaintenancePieces';
 import {
   MaintenanceOverview,
+  forgetMaintenanceDone,
   getMaintenance,
   recordMaintenanceDone,
   updateMaintenance,
@@ -90,6 +91,9 @@ export default function MaintenanceScreen() {
     onSaveCadence: (days: number) => void run(() => updateMaintenance(row.kind, { interval_days: days })),
     onClearCadence: () => void run(() => updateMaintenance(row.kind, { interval_days: null })),
     onSaveLastDate: (isoDate: string) => void run(() => recordMaintenanceDone(row.kind, { done_on: isoDate })),
+    // Recording an earlier date cannot override a later one, so a wrong date
+    // has to be removable rather than only corrected forwards.
+    onForgetLastDate: (isoDate: string) => void run(() => forgetMaintenanceDone(row.kind, isoDate)),
     onToggleReminders: (enabled: boolean) =>
       void run(() => updateMaintenance(row.kind, { reminders_enabled: enabled })),
   });
