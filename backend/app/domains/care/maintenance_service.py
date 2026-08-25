@@ -10,6 +10,7 @@ import uuid
 from datetime import date
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.care.maintenance import (
@@ -24,6 +25,7 @@ from app.domains.care.maintenance_rules import (
     get_kind,
 )
 from app.domains.routines.models import MaintenanceEvent, MaintenancePreference
+from app.shared.database.base import new_uuid
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 
 
@@ -144,28 +146,28 @@ async def record_done(
     _require_kind(kind_key)
     if done_on > today:
         raise ValidationFailedError("Choose a date that has already happened.", field="done_on")
-    existing = (await session.execute(
-        select(MaintenanceEvent).where(
-            MaintenanceEvent.account_id == account_id,
-            MaintenanceEvent.kind_key == kind_key,
-            MaintenanceEvent.done_on == done_on,
-        )
-    )).scalar_one_or_none()
-    if existing is not None:
-        # Recording the same day twice is the same fact, not a second one.
-        if note is not None:
-            existing.note = note
-        await session.flush()
-        return existing
-    row = MaintenanceEvent(
-        account_id=account_id, kind_key=kind_key, done_on=done_on,
+
+    # Recording the same day twice is the same fact, not a second one. A SELECT
+    # followed by an INSERT would let two concurrent retries both see nothing
+    # and race into the unique constraint, so the database resolves it instead.
+    # An omitted note leaves any existing note alone, which keeps a bare retry
+    # of the same payload deterministic.
+    insert_statement = pg_insert(MaintenanceEvent).values(
+        id=new_uuid(), account_id=account_id, kind_key=kind_key, done_on=done_on,
         source="user_declared", note=note,
     )
-    session.add(row)
+    statement = insert_statement.on_conflict_do_update(
+        constraint="uq_maintenance_event_account_kind_date",
+        set_={"note": func.coalesce(insert_statement.excluded.note, MaintenanceEvent.note)},
+    ).returning(MaintenanceEvent.id)
+    event_id = (await session.execute(statement)).scalar_one()
     # Recording a date is itself a statement that this kind matters to them.
+    # It is not a statement about how often they do it, so no rhythm is set.
     await set_preference(session, account_id, kind_key, tracked=True)
     await session.flush()
-    return row
+    return (await session.execute(
+        select(MaintenanceEvent).where(MaintenanceEvent.id == event_id)
+    )).scalar_one()
 
 
 async def forget_done(

@@ -98,7 +98,9 @@ def test_past_unconfirmed_event_is_past_not_confirmation_action():
 
 def test_paused_product_is_not_reported_as_care_safety_but_expiry_is():
     event = _event()
-    day = SimpleNamespace(unavailable_item_ids=[], missing_information=[])
+    day = SimpleNamespace(
+        unavailable_item_ids=[], missing_information=[], plan_date=date(2020, 1, 13),
+    )
     cadence = SimpleNamespace(status=SimpleNamespace(value="not_due"), as_payload=dict)
     paused = SimpleNamespace(
         item_id=uuid4(),

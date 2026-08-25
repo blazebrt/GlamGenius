@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.planning import clock
 from app.domains.planning.models import (
+    MODULE_MAINTENANCE,
     MODULES,
     DailyPlan,
     DailyPlanAction,
@@ -39,6 +40,31 @@ SUPPRESSED_QUIET = "quiet_hours"
 SUPPRESSED_DISABLED = "disabled"
 SUPPRESSED_MODULE_OFF = "module_disabled"
 
+#: Modules a new account is notified about by default. Maintenance is opt-in:
+#: its reminders are a per-kind customer choice, so it must never inherit a
+#: generic "on" default the customer never made.
+DEFAULT_MODULE_NOTIFICATIONS: dict[str, bool] = {
+    module: module != MODULE_MAINTENANCE for module in MODULES
+}
+
+
+async def maintenance_reminders_allowed(
+    session: AsyncSession, account_id: uuid.UUID, plan_date: date,
+) -> bool:
+    """Whether a maintenance notification is permitted for this account today.
+
+    Consent is read from canonical maintenance state rather than inferred from
+    the module appearing in a plan, so a due card can never carry a reminder
+    the customer did not ask for.
+    """
+    from app.domains.care import maintenance as care_maintenance
+    from app.domains.care import maintenance_service as care_maintenance_service
+
+    decided = await care_maintenance_service.build_maintenance(
+        session, account_id, plan_date=plan_date,
+    )
+    return bool(care_maintenance.reminder_eligible(decided))
+
 
 async def preferences_for(session: AsyncSession, account_id: uuid.UUID, timezone_name: str) -> NotificationPreference:
     row = (await session.execute(
@@ -47,7 +73,7 @@ async def preferences_for(session: AsyncSession, account_id: uuid.UUID, timezone
     if row is None:
         row = NotificationPreference(
             account_id=account_id, timezone_name=timezone_name,
-            modules={module: True for module in MODULES},
+            modules=dict(DEFAULT_MODULE_NOTIFICATIONS),
         )
         session.add(row)
         await session.flush()
@@ -118,7 +144,9 @@ async def queue(
     local_hour = clock.local_now(preference.timezone_name or timezone_name, moment=moment).hour
     if not preference.enabled:
         row.status, row.suppressed_reason = "suppressed", SUPPRESSED_DISABLED
-    elif preference.modules and preference.modules.get(module) is False:
+    elif preference.modules is not None and not preference.modules.get(
+        module, DEFAULT_MODULE_NOTIFICATIONS.get(module, True)
+    ):
         row.status, row.suppressed_reason = "suppressed", SUPPRESSED_MODULE_OFF
     elif in_quiet_hours(local_hour, preference.quiet_hours_start, preference.quiet_hours_end):
         row.status, row.suppressed_reason = "suppressed", SUPPRESSED_QUIET
@@ -140,13 +168,30 @@ async def queue_for_plan(
     One notification carrying the most important thing, rather than one per
     module. If the plan has nothing worth saying, nothing is queued at all.
     """
-    action = (await session.execute(
+    if plan.status != "ready":
+        return None
+    candidates = (await session.execute(
         select(DailyPlanAction)
         .where(DailyPlanAction.plan_id == plan.id)
         .order_by(DailyPlanAction.priority)
-        .limit(1)
-    )).scalar_one_or_none()
-    if action is None or plan.status != "ready":
+    )).scalars().all()
+
+    action = None
+    maintenance_allowed: bool | None = None
+    for candidate in candidates:
+        if candidate.module == MODULE_MAINTENANCE:
+            # Maintenance reminders are a per-kind opt-in. Without it we move on
+            # to the next action rather than silently sending maintenance text
+            # or dropping the day's notification altogether.
+            if maintenance_allowed is None:
+                maintenance_allowed = await maintenance_reminders_allowed(
+                    session, plan.account_id, plan.plan_date,
+                )
+            if not maintenance_allowed:
+                continue
+        action = candidate
+        break
+    if action is None:
         return None
     return await queue(
         session, account_id=plan.account_id, plan_date=plan.plan_date,
@@ -162,7 +207,10 @@ def serialize_preferences(row: NotificationPreference) -> dict[str, Any]:
         "daily_cap": row.daily_cap,
         "quiet_hours": {"start": row.quiet_hours_start, "end": row.quiet_hours_end},
         "preferred_hour": row.preferred_hour,
-        "modules": {module: bool(row.modules.get(module, True)) for module in MODULES},
+        "modules": {
+            module: bool(row.modules.get(module, DEFAULT_MODULE_NOTIFICATIONS[module]))
+            for module in MODULES
+        },
         "timezone": row.timezone_name,
         "note": "At most one proactive appearance notification a day by default. Repeats are never sent twice.",
     }

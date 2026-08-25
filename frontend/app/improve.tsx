@@ -219,6 +219,20 @@ export default function ImproveScreen() {
           </TouchableOpacity>
         )}
 
+        {/* The smallest coherent way into Maintenance from Care, until the
+            final navigation gives Care a destination of its own. */}
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Open upkeep timing"
+          onPress={() => router.push('/(tabs)/services')}
+          style={styles.confirm}
+        >
+          <Ionicons name="time-outline" size={19} color={COLORS.primary} />
+          <Text style={styles.confirmText}>
+            Upkeep timing — haircuts, trims and other routine upkeep, on the rhythm you choose.
+          </Text>
+        </TouchableOpacity>
+
         <Text style={styles.disclaimer}>{overview.disclaimer}</Text>
       </ScrollView>
       {!!feedbackTarget?.step.id && (

@@ -6,8 +6,10 @@ schedule the customer did not set.
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from app.api.v2 import maintenance as maintenance_api
@@ -27,6 +29,7 @@ from app.domains.care.maintenance_rules import (
     MIN_INTERVAL_DAYS,
     MaintenanceDomain,
     get_kind,
+    lead_days_for,
 )
 from app.domains.planning.models import MODULE_MAINTENANCE, MODULES
 from app.domains.routines.models import MaintenanceEvent, MaintenancePreference
@@ -54,8 +57,7 @@ def test_catalogue_is_upkeep_timing_only_and_never_a_marketplace():
         for word in forbidden:
             assert word not in blob, f"{kind.key} says {word!r}"
         assert kind.domain in (MaintenanceDomain.HAIR, MaintenanceDomain.SKIN)
-        assert MIN_INTERVAL_DAYS <= kind.default_interval_days <= MAX_INTERVAL_DAYS
-        assert 1 <= kind.lead_days <= 7
+        assert MIN_INTERVAL_DAYS <= kind.suggested_interval_days <= MAX_INTERVAL_DAYS
 
 
 def test_catalogue_keys_are_unique_and_stable():
@@ -77,9 +79,24 @@ def test_untracked_kind_is_never_scheduled():
     assert decided.due == () and decided.coming_up == () and decided.needs_anchor == ()
 
 
-def test_tracked_without_a_recorded_date_stays_unanchored():
-    """No anchor means we say so, rather than quietly assuming today."""
+def test_tracking_alone_is_not_a_schedule():
+    """Tracking says the kind matters, not how often. The preset stays a preset."""
     states = {"haircut": MaintenanceState(kind_key="haircut", tracked=True)}
+    decided = decide_maintenance(states, plan_date=PLAN_DATE)
+    haircut = next(row for row in decided.decisions if row.kind_key == "haircut")
+    assert haircut.status is MaintenanceStatus.NEEDS_CADENCE
+    assert haircut.reason is MaintenanceReason.NO_CADENCE_SET
+    assert haircut.interval_days is None, "the catalogue preset must not become their rhythm"
+    assert haircut.suggested_interval_days == 42
+    assert haircut.lead_days is None
+    assert haircut.next_due_on is None
+    assert decided.needs_cadence == (haircut,)
+    assert decided.due == () and decided.coming_up == ()
+
+
+def test_cadence_without_a_recorded_date_stays_unanchored():
+    """No anchor means we say so, rather than quietly assuming today."""
+    states = {"haircut": MaintenanceState(kind_key="haircut", tracked=True, interval_days=42)}
     decided = decide_maintenance(states, plan_date=PLAN_DATE)
     haircut = next(row for row in decided.decisions if row.kind_key == "haircut")
     assert haircut.status is MaintenanceStatus.NEEDS_ANCHOR
@@ -87,6 +104,17 @@ def test_tracked_without_a_recorded_date_stays_unanchored():
     assert haircut.next_due_on is None
     assert decided.needs_anchor == (haircut,)
     assert decided.due == ()
+
+
+def test_incomplete_configuration_is_never_a_schedule():
+    states = {
+        "haircut": MaintenanceState(kind_key="haircut", tracked=True),
+        "nail_care": MaintenanceState(kind_key="nail_care", tracked=True, interval_days=21),
+    }
+    decided = decide_maintenance(states, plan_date=PLAN_DATE)
+    assert {row.kind_key for row in decided.incomplete} == {"haircut", "nail_care"}
+    assert decided.due == () and decided.coming_up == ()
+    assert all(row.next_due_on is None for row in decided.incomplete)
 
 
 @pytest.mark.parametrize(
@@ -103,7 +131,8 @@ def test_interval_boundaries_are_exact(days_ago, expected_status, expected_reaso
     """A 42-day haircut has a 7-day lead, so 36 days ago is the first heads-up."""
     states = {
         "haircut": MaintenanceState(
-            kind_key="haircut", tracked=True, last_done_on=PLAN_DATE - timedelta(days=days_ago),
+            kind_key="haircut", tracked=True, interval_days=42,
+            last_done_on=PLAN_DATE - timedelta(days=days_ago),
         )
     }
     decided = decide_maintenance(states, plan_date=PLAN_DATE)
@@ -113,22 +142,24 @@ def test_interval_boundaries_are_exact(days_ago, expected_status, expected_reaso
     assert haircut.next_due_on == PLAN_DATE - timedelta(days=days_ago) + timedelta(days=42)
 
 
-def test_customer_interval_overrides_the_catalogue_rhythm():
+def test_the_customers_rhythm_is_the_only_authority():
     last = PLAN_DATE - timedelta(days=20)
     states = {"haircut": MaintenanceState(kind_key="haircut", tracked=True, last_done_on=last, interval_days=14)}
     decided = decide_maintenance(states, plan_date=PLAN_DATE)
     haircut = next(row for row in decided.decisions if row.kind_key == "haircut")
-    assert haircut.interval_days == 14 and haircut.interval_is_custom is True
+    assert haircut.interval_days == 14
+    assert haircut.suggested_interval_days == 42, "the preset travels alongside, unused"
     assert haircut.status is MaintenanceStatus.DUE
 
 
-def test_an_out_of_range_stored_interval_falls_back_to_the_catalogue():
+def test_an_out_of_range_stored_interval_is_treated_as_unset():
     """A nonsense rhythm from an old row must not become a real schedule."""
     last = PLAN_DATE - timedelta(days=20)
     states = {"haircut": MaintenanceState(kind_key="haircut", tracked=True, last_done_on=last, interval_days=100000)}
     decided = decide_maintenance(states, plan_date=PLAN_DATE)
     haircut = next(row for row in decided.decisions if row.kind_key == "haircut")
-    assert haircut.interval_days == 42 and haircut.interval_is_custom is False
+    assert haircut.interval_days is None
+    assert haircut.status is MaintenanceStatus.NEEDS_CADENCE
 
 
 def test_reminders_never_switch_on_for_an_untracked_kind():
@@ -142,19 +173,19 @@ def test_reminders_never_switch_on_for_an_untracked_kind():
 
 
 def test_fingerprint_ignores_untracked_kinds_but_follows_tracked_change():
-    base = {"haircut": MaintenanceState(kind_key="haircut", tracked=True, last_done_on=PLAN_DATE - timedelta(days=10))}
+    base = {"haircut": MaintenanceState(kind_key="haircut", tracked=True, interval_days=42, last_done_on=PLAN_DATE - timedelta(days=10))}
     first = maintenance_fingerprint(decide_maintenance(base, plan_date=PLAN_DATE))
 
     with_untracked = dict(base)
     with_untracked["nail_care"] = MaintenanceState(kind_key="nail_care", tracked=False)
     assert maintenance_fingerprint(decide_maintenance(with_untracked, plan_date=PLAN_DATE)) == first
 
-    moved = {"haircut": MaintenanceState(kind_key="haircut", tracked=True, last_done_on=PLAN_DATE - timedelta(days=11))}
+    moved = {"haircut": MaintenanceState(kind_key="haircut", tracked=True, interval_days=42, last_done_on=PLAN_DATE - timedelta(days=11))}
     assert maintenance_fingerprint(decide_maintenance(moved, plan_date=PLAN_DATE)) != first
 
 
 def test_fingerprint_is_stable_across_repeated_evaluation():
-    states = {"haircut": MaintenanceState(kind_key="haircut", tracked=True, last_done_on=PLAN_DATE - timedelta(days=50))}
+    states = {"haircut": MaintenanceState(kind_key="haircut", tracked=True, interval_days=42, last_done_on=PLAN_DATE - timedelta(days=50))}
     a = maintenance_fingerprint(decide_maintenance(states, plan_date=PLAN_DATE))
     b = maintenance_fingerprint(decide_maintenance(states, plan_date=PLAN_DATE))
     assert a == b
@@ -165,8 +196,8 @@ def test_fingerprint_is_stable_across_repeated_evaluation():
 
 def test_due_by_event_date_reuses_the_same_authority():
     states = {
-        "haircut": MaintenanceState(kind_key="haircut", tracked=True, last_done_on=PLAN_DATE - timedelta(days=40)),
-        "nail_care": MaintenanceState(kind_key="nail_care", tracked=True, last_done_on=PLAN_DATE - timedelta(days=1)),
+        "haircut": MaintenanceState(kind_key="haircut", tracked=True, interval_days=42, last_done_on=PLAN_DATE - timedelta(days=40)),
+        "nail_care": MaintenanceState(kind_key="nail_care", tracked=True, interval_days=21, last_done_on=PLAN_DATE - timedelta(days=1)),
     }
     decided = decide_maintenance(states, plan_date=PLAN_DATE)
     # Haircut lands 2 days after the plan date; nail care is 20 days out.
@@ -176,7 +207,7 @@ def test_due_by_event_date_reuses_the_same_authority():
 
 
 def test_an_untracked_kind_never_reaches_event_preparation():
-    states = {"haircut": MaintenanceState(kind_key="haircut", tracked=False, last_done_on=PLAN_DATE - timedelta(days=400))}
+    states = {"haircut": MaintenanceState(kind_key="haircut", tracked=False, interval_days=42, last_done_on=PLAN_DATE - timedelta(days=400))}
     decided = decide_maintenance(states, plan_date=PLAN_DATE)
     assert due_by_event_date(decided, PLAN_DATE + timedelta(days=365)) == ()
 
@@ -185,7 +216,8 @@ def test_an_untracked_kind_never_reaches_event_preparation():
 
 
 @pytest.mark.asyncio
-async def test_recording_a_date_starts_tracking_and_anchors_the_schedule(db_clean, registered_supabase_user):
+async def test_recording_a_date_starts_tracking_but_declares_no_rhythm(db_clean, registered_supabase_user):
+    """Recording a date says the kind matters, not how often they do it."""
     _, account_id = await registered_supabase_user()
     factory = get_sessionmaker()
     async with factory() as session:
@@ -198,8 +230,16 @@ async def test_recording_a_date_starts_tracking_and_anchors_the_schedule(db_clea
         decided = await maintenance_service.build_maintenance(session, account_id, plan_date=PLAN_DATE)
         haircut = next(row for row in decided.decisions if row.kind_key == "haircut")
         assert haircut.tracked is True
-        assert haircut.status is MaintenanceStatus.DUE
+        assert haircut.status is MaintenanceStatus.NEEDS_CADENCE
         assert haircut.last_done_on == PLAN_DATE - timedelta(days=50)
+
+    async with factory() as session:
+        await maintenance_service.set_preference(session, account_id, "haircut", interval_days=42)
+        await session.commit()
+    async with factory() as session:
+        decided = await maintenance_service.build_maintenance(session, account_id, plan_date=PLAN_DATE)
+        haircut = next(row for row in decided.decisions if row.kind_key == "haircut")
+        assert haircut.status is MaintenanceStatus.DUE
 
 
 @pytest.mark.asyncio
@@ -309,6 +349,7 @@ async def test_forgetting_a_date_removes_the_anchor(db_clean, registered_supabas
         await maintenance_service.record_done(
             session, account_id, "haircut", done_on=PLAN_DATE - timedelta(days=50), today=PLAN_DATE,
         )
+        await maintenance_service.set_preference(session, account_id, "haircut", interval_days=42)
         await session.commit()
     async with factory() as session:
         assert await maintenance_service.forget_done(
@@ -349,6 +390,7 @@ async def test_a_preference_for_a_retired_kind_is_inert(db_clean, registered_sup
         await maintenance_service.record_done(
             session, account_id, "haircut", done_on=PLAN_DATE - timedelta(days=50), today=PLAN_DATE,
         )
+        await maintenance_service.set_preference(session, account_id, "haircut", interval_days=42)
         await session.commit()
 
     async with factory() as session:
@@ -369,13 +411,13 @@ def test_today_shows_one_card_only_when_something_is_due():
     from app.domains.planning.compiler import _maintenance_action
 
     quiet = decide_maintenance(
-        {"haircut": MaintenanceState(kind_key="haircut", tracked=True, last_done_on=PLAN_DATE)},
+        {"haircut": MaintenanceState(kind_key="haircut", tracked=True, interval_days=42, last_done_on=PLAN_DATE)},
         plan_date=PLAN_DATE,
     )
     assert _maintenance_action(quiet) == []
 
     coming_up = decide_maintenance(
-        {"haircut": MaintenanceState(kind_key="haircut", tracked=True, last_done_on=PLAN_DATE - timedelta(days=38))},
+        {"haircut": MaintenanceState(kind_key="haircut", tracked=True, interval_days=42, last_done_on=PLAN_DATE - timedelta(days=38))},
         plan_date=PLAN_DATE,
     )
     assert coming_up.coming_up, "precondition: this kind should read as coming up"
@@ -383,9 +425,9 @@ def test_today_shows_one_card_only_when_something_is_due():
 
     due = decide_maintenance(
         {
-            "haircut": MaintenanceState(kind_key="haircut", tracked=True, last_done_on=PLAN_DATE - timedelta(days=50)),
-            "nail_care": MaintenanceState(kind_key="nail_care", tracked=True, last_done_on=PLAN_DATE - timedelta(days=40)),
-            "brow_upkeep": MaintenanceState(kind_key="brow_upkeep", tracked=True, last_done_on=PLAN_DATE - timedelta(days=60)),
+            "haircut": MaintenanceState(kind_key="haircut", tracked=True, interval_days=42, last_done_on=PLAN_DATE - timedelta(days=50)),
+            "nail_care": MaintenanceState(kind_key="nail_care", tracked=True, interval_days=21, last_done_on=PLAN_DATE - timedelta(days=40)),
+            "brow_upkeep": MaintenanceState(kind_key="brow_upkeep", tracked=True, interval_days=28, last_done_on=PLAN_DATE - timedelta(days=60)),
         },
         plan_date=PLAN_DATE,
     )
@@ -400,7 +442,7 @@ def test_today_maintenance_copy_stays_constructive():
     from app.domains.planning.compiler import _maintenance_action
 
     due = decide_maintenance(
-        {"haircut": MaintenanceState(kind_key="haircut", tracked=True, last_done_on=PLAN_DATE - timedelta(days=50))},
+        {"haircut": MaintenanceState(kind_key="haircut", tracked=True, interval_days=42, last_done_on=PLAN_DATE - timedelta(days=50))},
         plan_date=PLAN_DATE,
     )
     row = _maintenance_action(due)[0]
@@ -434,7 +476,8 @@ async def test_maintenance_routes_are_account_scoped_and_never_promotional(
     assert tracked.status_code == 200, tracked.text
     haircut = next(row for row in tracked.json()["kinds"] if row["kind"] == "haircut")
     assert haircut["tracked"] is True
-    assert haircut["interval_days"] == 30 and haircut["interval_is_custom"] is True
+    assert haircut["interval_days"] == 30
+    assert haircut["suggested_interval_days"] == 42
     assert haircut["reminders_enabled"] is True
     assert haircut["status"] == "needs_anchor"
     assert tracked.json()["needs_anchor"] == ["haircut"]
@@ -563,3 +606,512 @@ async def test_maintenance_state_is_ignored_for_a_nonexistent_account(db_clean):
             session, uuid.uuid4(), plan_date=PLAN_DATE,
         )
     assert all(row.status is MaintenanceStatus.NOT_TRACKED for row in decided.decisions)
+
+
+# --- Lead window derives from the rhythm actually chosen ----------------------
+
+
+@pytest.mark.parametrize(
+    ("interval", "expected_lead"),
+    [
+        (MIN_INTERVAL_DAYS, 1),   # 3 // 4 == 0, floored at a day
+        (4, 1),
+        (14, 3),
+        (28, 7),
+        (42, 7),                  # the catalogue haircut rhythm
+        (MAX_INTERVAL_DAYS, 7),   # capped, so a yearly rhythm is not "coming up" for months
+    ],
+)
+def test_lead_window_follows_the_chosen_rhythm(interval, expected_lead):
+    assert lead_days_for(interval) == expected_lead
+
+
+def test_a_short_rhythm_is_not_coming_up_the_moment_it_is_recorded():
+    """The bug: a 3-day rhythm inheriting the 42-day haircut's 7-day lead.
+
+    With a catalogue-derived lead it could never read ``not_due`` at all.
+    """
+    states = {
+        "haircut": MaintenanceState(
+            kind_key="haircut", tracked=True, interval_days=3, last_done_on=PLAN_DATE,
+        )
+    }
+    decided = decide_maintenance(states, plan_date=PLAN_DATE)
+    haircut = next(row for row in decided.decisions if row.kind_key == "haircut")
+    assert haircut.lead_days == 1
+    assert haircut.status is MaintenanceStatus.NOT_DUE
+    assert haircut.days_until_due == 3
+
+    # It becomes coming_up only inside its own one-day window.
+    later = decide_maintenance(states, plan_date=PLAN_DATE + timedelta(days=2))
+    assert next(r for r in later.decisions if r.kind_key == "haircut").status is MaintenanceStatus.COMING_UP
+
+
+def test_a_long_rhythm_does_not_linger_in_coming_up():
+    states = {
+        "hair_trim": MaintenanceState(
+            kind_key="hair_trim", tracked=True, interval_days=84,
+            last_done_on=PLAN_DATE - timedelta(days=70),
+        )
+    }
+    decided = decide_maintenance(states, plan_date=PLAN_DATE)
+    trim = next(row for row in decided.decisions if row.kind_key == "hair_trim")
+    assert trim.lead_days == 7
+    assert trim.status is MaintenanceStatus.NOT_DUE, "14 days out is beyond the capped window"
+
+
+# --- Fingerprint reacts to every declared fact -------------------------------
+
+
+def test_fingerprint_follows_cadence_last_date_tracking_and_reminders():
+    def print_of(**overrides):
+        fields = {
+            "kind_key": "haircut", "tracked": True, "interval_days": 42,
+            "last_done_on": PLAN_DATE - timedelta(days=10),
+        }
+        fields.update(overrides)
+        state = MaintenanceState(**fields)
+        return maintenance_fingerprint(decide_maintenance({"haircut": state}, plan_date=PLAN_DATE))
+
+    base = print_of()
+    assert print_of(interval_days=30) != base, "cadence change must move the fingerprint"
+    assert print_of(last_done_on=PLAN_DATE - timedelta(days=11)) != base
+    assert print_of(reminders_enabled=True) != base
+    assert print_of(tracked=False) != base
+    assert print_of() == base
+
+
+# --- Notification gating ------------------------------------------------------
+
+
+def test_reminder_eligibility_requires_an_explicit_opt_in():
+    from app.domains.care.maintenance import reminder_eligible
+
+    due_without_opt_in = decide_maintenance(
+        {"haircut": MaintenanceState(
+            kind_key="haircut", tracked=True, interval_days=42,
+            last_done_on=PLAN_DATE - timedelta(days=60),
+        )},
+        plan_date=PLAN_DATE,
+    )
+    assert due_without_opt_in.due, "precondition: this kind is due"
+    assert reminder_eligible(due_without_opt_in) == ()
+
+    opted_in = decide_maintenance(
+        {"haircut": MaintenanceState(
+            kind_key="haircut", tracked=True, interval_days=42,
+            last_done_on=PLAN_DATE - timedelta(days=60), reminders_enabled=True,
+        )},
+        plan_date=PLAN_DATE,
+    )
+    assert [row.kind_key for row in reminder_eligible(opted_in)] == ["haircut"]
+
+    not_yet_due = decide_maintenance(
+        {"haircut": MaintenanceState(
+            kind_key="haircut", tracked=True, interval_days=42,
+            last_done_on=PLAN_DATE, reminders_enabled=True,
+        )},
+        plan_date=PLAN_DATE,
+    )
+    assert reminder_eligible(not_yet_due) == ()
+
+
+def test_maintenance_is_not_a_default_notification_module():
+    from app.domains.planning.notifications import DEFAULT_MODULE_NOTIFICATIONS
+
+    assert DEFAULT_MODULE_NOTIFICATIONS[MODULE_MAINTENANCE] is False
+    assert all(
+        enabled for module, enabled in DEFAULT_MODULE_NOTIFICATIONS.items()
+        if module != MODULE_MAINTENANCE
+    ), "no other module's default may change"
+
+
+@pytest.mark.asyncio
+async def test_disabled_maintenance_reminders_never_reach_the_queue(
+    db_clean, registered_supabase_user,
+):
+    """A due maintenance card must not become a notification without opt-in."""
+    from app.domains.planning import notifications
+    from app.domains.planning.models import DailyPlan, DailyPlanAction
+
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await maintenance_service.set_preference(
+            session, account_id, "haircut", tracked=True, interval_days=42,
+        )
+        await maintenance_service.record_done(
+            session, account_id, "haircut", done_on=PLAN_DATE - timedelta(days=60), today=PLAN_DATE,
+        )
+        plan = DailyPlan(
+            account_id=account_id, plan_date=PLAN_DATE, status="ready",
+            headline="Your day", cache_key="k", generated_from="fresh",
+        )
+        session.add(plan)
+        await session.flush()
+        session.add(DailyPlanAction(
+            plan_id=plan.id, module=MODULE_MAINTENANCE, action_type="maintenance_due",
+            priority=1, title="Haircut is due", body="Due by your rhythm.",
+        ))
+        await session.commit()
+        plan_id = plan.id
+
+    async with factory() as session:
+        plan = (await session.execute(select(DailyPlan).where(DailyPlan.id == plan_id))).scalar_one()
+        queued = await notifications.queue_for_plan(
+            session, plan=plan, timezone_name="Asia/Kolkata",
+        )
+        await session.commit()
+    assert queued is None, "maintenance text must not be sent without an explicit opt-in"
+
+    # Opting in makes the very same plan eligible.
+    async with factory() as session:
+        await maintenance_service.set_preference(
+            session, account_id, "haircut", reminders_enabled=True,
+        )
+        await session.commit()
+    async with factory() as session:
+        plan = (await session.execute(select(DailyPlan).where(DailyPlan.id == plan_id))).scalar_one()
+        queued = await notifications.queue_for_plan(
+            session, plan=plan, timezone_name="Asia/Kolkata",
+        )
+        await session.commit()
+    assert queued is not None and "Haircut" in queued.body
+
+
+@pytest.mark.asyncio
+async def test_untracking_removes_maintenance_notification_eligibility(
+    db_clean, registered_supabase_user,
+):
+    from app.domains.care.maintenance import reminder_eligible
+
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await maintenance_service.set_preference(
+            session, account_id, "haircut", tracked=True, interval_days=42, reminders_enabled=True,
+        )
+        await maintenance_service.record_done(
+            session, account_id, "haircut", done_on=PLAN_DATE - timedelta(days=60), today=PLAN_DATE,
+        )
+        await session.commit()
+    async with factory() as session:
+        decided = await maintenance_service.build_maintenance(session, account_id, plan_date=PLAN_DATE)
+        assert reminder_eligible(decided)
+
+    async with factory() as session:
+        await maintenance_service.set_preference(session, account_id, "haircut", tracked=False)
+        await session.commit()
+    async with factory() as session:
+        decided = await maintenance_service.build_maintenance(session, account_id, plan_date=PLAN_DATE)
+        assert reminder_eligible(decided) == ()
+
+
+@pytest.mark.asyncio
+async def test_quiet_hours_cap_and_dedup_still_apply_to_maintenance(
+    db_clean, registered_supabase_user,
+):
+    """Opting in does not exempt maintenance from the existing safeguards."""
+    from datetime import datetime as dt
+
+    from app.domains.planning import notifications
+
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        preference = await notifications.preferences_for(session, account_id, "Asia/Kolkata")
+        preference.modules = {**preference.modules, MODULE_MAINTENANCE: True}
+        await session.commit()
+
+    quiet_moment = dt(2026, 3, 16, 20, 0, tzinfo=UTC)  # 01:30 next day in Asia/Kolkata
+    async with factory() as session:
+        row = await notifications.queue(
+            session, account_id=account_id, plan_date=PLAN_DATE,
+            notification_key="daily_plan", title="Your day", body="Haircut is due.",
+            module=MODULE_MAINTENANCE, timezone_name="Asia/Kolkata", moment=quiet_moment,
+        )
+        await session.commit()
+    assert row.status == "suppressed" and row.suppressed_reason == notifications.SUPPRESSED_QUIET
+
+    # The same content queued twice is one delivery, not two.
+    async with factory() as session:
+        again = await notifications.queue(
+            session, account_id=account_id, plan_date=PLAN_DATE,
+            notification_key="daily_plan", title="Your day", body="Haircut is due.",
+            module=MODULE_MAINTENANCE, timezone_name="Asia/Kolkata", moment=quiet_moment,
+        )
+        await session.commit()
+    assert again.id == row.id
+
+
+@pytest.mark.asyncio
+async def test_module_flag_off_still_suppresses_maintenance(db_clean, registered_supabase_user):
+    from app.domains.planning import notifications
+
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        # A brand-new account has maintenance off by default.
+        preference = await notifications.preferences_for(session, account_id, "Asia/Kolkata")
+        assert preference.modules[MODULE_MAINTENANCE] is False
+        row = await notifications.queue(
+            session, account_id=account_id, plan_date=PLAN_DATE,
+            notification_key="daily_plan", title="Your day", body="Haircut is due.",
+            module=MODULE_MAINTENANCE, timezone_name="Asia/Kolkata",
+        )
+        await session.commit()
+    assert row.status == "suppressed" and row.suppressed_reason == notifications.SUPPRESSED_MODULE_OFF
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_preference_row_without_maintenance_defaults_to_off(
+    db_clean, registered_supabase_user,
+):
+    """Rows written before maintenance existed must not read as opted in."""
+    from app.domains.planning import notifications
+    from app.domains.planning.models import NotificationPreference
+
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        session.add(NotificationPreference(
+            account_id=account_id, timezone_name="Asia/Kolkata",
+            modules={"outfit": True, "skincare": True},
+        ))
+        await session.commit()
+    async with factory() as session:
+        row = (await session.execute(select(NotificationPreference).where(
+            NotificationPreference.account_id == account_id,
+        ))).scalar_one()
+        assert notifications.serialize_preferences(row)["modules"][MODULE_MAINTENANCE] is False
+
+
+# --- Atomic same-day recording ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_same_day_recording_is_conflict_safe(db_clean, registered_supabase_user):
+    """Two concurrent retries must not collide on the unique constraint."""
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    done_on = PLAN_DATE - timedelta(days=5)
+
+    async def record(note: str | None):
+        async with factory() as session:
+            await maintenance_service.record_done(
+                session, account_id, "haircut", done_on=done_on, today=PLAN_DATE, note=note,
+            )
+            await session.commit()
+
+    await record("first")
+    await asyncio.gather(record(None), record(None))
+
+    async with factory() as session:
+        rows = (await session.execute(select(MaintenanceEvent).where(
+            MaintenanceEvent.account_id == account_id, MaintenanceEvent.kind_key == "haircut",
+        ))).scalars().all()
+    assert len(rows) == 1, "the same day is one fact however many times it is sent"
+    assert rows[0].note == "first", "a bare retry must not erase the note it was recorded with"
+
+
+@pytest.mark.asyncio
+async def test_a_supplied_note_updates_the_same_fact(db_clean, registered_supabase_user):
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await maintenance_service.record_done(
+            session, account_id, "nail_care", done_on=PLAN_DATE, today=PLAN_DATE, note="first",
+        )
+        await maintenance_service.record_done(
+            session, account_id, "nail_care", done_on=PLAN_DATE, today=PLAN_DATE, note="corrected",
+        )
+        await session.commit()
+    async with factory() as session:
+        rows = (await session.execute(select(MaintenanceEvent).where(
+            MaintenanceEvent.account_id == account_id, MaintenanceEvent.kind_key == "nail_care",
+        ))).scalars().all()
+    assert len(rows) == 1 and rows[0].note == "corrected"
+
+
+# --- Today never invents a task from incomplete configuration ------------------
+
+
+def test_today_stays_silent_while_configuration_is_incomplete():
+    from app.domains.planning.compiler import _maintenance_action
+
+    no_cadence = decide_maintenance(
+        {"haircut": MaintenanceState(kind_key="haircut", tracked=True)}, plan_date=PLAN_DATE,
+    )
+    assert _maintenance_action(no_cadence) == []
+
+    no_anchor = decide_maintenance(
+        {"haircut": MaintenanceState(kind_key="haircut", tracked=True, interval_days=42)},
+        plan_date=PLAN_DATE,
+    )
+    assert _maintenance_action(no_anchor) == []
+
+
+# --- API: cadence, historical dates, reminders --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_customer_can_set_change_and_clear_their_rhythm(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _ = await registered_supabase_user()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    started = await app_client.put("/api/v2/maintenance/haircut", headers=headers, json={"tracked": True})
+    assert started.status_code == 200
+    haircut = next(r for r in started.json()["kinds"] if r["kind"] == "haircut")
+    assert haircut["status"] == "needs_cadence" and haircut["interval_days"] is None
+    assert started.json()["needs_cadence"] == ["haircut"]
+
+    chosen = await app_client.put("/api/v2/maintenance/haircut", headers=headers, json={"interval_days": 21})
+    haircut = next(r for r in chosen.json()["kinds"] if r["kind"] == "haircut")
+    assert haircut["interval_days"] == 21 and haircut["status"] == "needs_anchor"
+
+    changed = await app_client.put("/api/v2/maintenance/haircut", headers=headers, json={"interval_days": 30})
+    assert next(r for r in changed.json()["kinds"] if r["kind"] == "haircut")["interval_days"] == 30
+
+    cleared = await app_client.put("/api/v2/maintenance/haircut", headers=headers, json={"interval_days": None})
+    haircut = next(r for r in cleared.json()["kinds"] if r["kind"] == "haircut")
+    assert haircut["interval_days"] is None and haircut["status"] == "needs_cadence"
+
+
+@pytest.mark.asyncio
+async def test_customer_can_record_and_correct_a_historical_date(
+    app_client, db_clean, registered_supabase_user,
+):
+    """Somebody whose last haircut was ten days ago must not have to say today."""
+    token, _ = await registered_supabase_user()
+    headers = {"Authorization": f"Bearer {token}"}
+    await app_client.put("/api/v2/maintenance/haircut", headers=headers, json={"tracked": True, "interval_days": 42})
+
+    ten_days_ago = (datetime.now(UTC).date() - timedelta(days=10)).isoformat()
+    recorded = await app_client.post(
+        "/api/v2/maintenance/haircut/done", headers=headers, json={"done_on": ten_days_ago},
+    )
+    assert recorded.status_code == 200
+    haircut = next(r for r in recorded.json()["kinds"] if r["kind"] == "haircut")
+    assert haircut["last_done_on"] == ten_days_ago
+    assert haircut["status"] == "not_due"
+
+    corrected_date = (datetime.now(UTC).date() - timedelta(days=40)).isoformat()
+    await app_client.delete(f"/api/v2/maintenance/haircut/done/{ten_days_ago}", headers=headers)
+    corrected = await app_client.post(
+        "/api/v2/maintenance/haircut/done", headers=headers, json={"done_on": corrected_date},
+    )
+    haircut = next(r for r in corrected.json()["kinds"] if r["kind"] == "haircut")
+    assert haircut["last_done_on"] == corrected_date
+
+
+@pytest.mark.asyncio
+async def test_reminder_preference_is_explicit_and_dies_with_tracking(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _ = await registered_supabase_user()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    started = await app_client.put("/api/v2/maintenance/haircut", headers=headers, json={"tracked": True})
+    assert next(r for r in started.json()["kinds"] if r["kind"] == "haircut")["reminders_enabled"] is False
+
+    on = await app_client.put("/api/v2/maintenance/haircut", headers=headers, json={"reminders_enabled": True})
+    assert next(r for r in on.json()["kinds"] if r["kind"] == "haircut")["reminders_enabled"] is True
+
+    off = await app_client.put("/api/v2/maintenance/haircut", headers=headers, json={"tracked": False})
+    assert next(r for r in off.json()["kinds"] if r["kind"] == "haircut")["reminders_enabled"] is False
+
+
+# --- Event Ready: one authority, correct date, honest fingerprint -------------
+
+
+def _material_with(maintenance):
+    """The minimum Care material shape Event Ready reads."""
+    return SimpleNamespace(
+        maintenance=maintenance,
+        decisions=SimpleNamespace(
+            decision_version="v", product_decisions=[],
+            skin_core_gap_count=0, hair_core_gap_count=0,
+        ),
+        care_plan=SimpleNamespace(
+            plan_version="v", resolved_effort=SimpleNamespace(value="standard"),
+            effort_source=SimpleNamespace(value="default"),
+            active_skin_slot_count=0, active_hair_slot_count=0,
+        ),
+        hair_wash_cadence=SimpleNamespace(status=SimpleNamespace(value="not_due"), as_payload=dict),
+        decision_fingerprint="d", routine_plan_fingerprint="r", hair_wash_cadence_fingerprint="h",
+    )
+
+
+def test_event_ready_compares_against_the_event_local_date_not_today():
+    """A kind not due today, but due by the event, must reach the timeline."""
+    from app.domains.planning.event_ready import _maintenance_actions
+
+    today = PLAN_DATE
+    event_local_date = PLAN_DATE + timedelta(days=20)
+    decided = decide_maintenance(
+        {"haircut": MaintenanceState(
+            kind_key="haircut", tracked=True, interval_days=42,
+            last_done_on=today - timedelta(days=30),
+        )},
+        plan_date=today,
+    )
+    haircut = next(row for row in decided.decisions if row.kind_key == "haircut")
+    assert haircut.status is MaintenanceStatus.NOT_DUE, "precondition: not due on the plan date"
+    assert haircut.next_due_on == today + timedelta(days=12)
+
+    rows = _maintenance_actions(_material_with(decided), event_local_date)
+    assert len(rows) == 1
+    assert rows[0]["action_key"] == "preparation:maintenance_timing"
+    assert rows[0]["material"]["kinds"] == ["haircut"]
+
+    # An earlier event, before it comes round, gets nothing.
+    assert _maintenance_actions(_material_with(decided), today + timedelta(days=5)) == []
+
+
+def test_event_ready_stays_silent_for_incomplete_configuration():
+    from app.domains.planning.event_ready import _maintenance_actions
+
+    for state in (
+        MaintenanceState(kind_key="haircut", tracked=True),
+        MaintenanceState(kind_key="haircut", tracked=True, interval_days=42),
+    ):
+        decided = decide_maintenance({"haircut": state}, plan_date=PLAN_DATE)
+        assert _maintenance_actions(_material_with(decided), PLAN_DATE + timedelta(days=365)) == []
+
+
+def test_event_ready_care_payload_carries_the_maintenance_fingerprint():
+    from app.domains.planning.event_ready import _care_payload
+
+    base_state = MaintenanceState(
+        kind_key="haircut", tracked=True, interval_days=42,
+        last_done_on=PLAN_DATE - timedelta(days=30),
+    )
+    first = _care_payload(_material_with(decide_maintenance({"haircut": base_state}, plan_date=PLAN_DATE)))
+    assert first["maintenance_fingerprint"] == maintenance_fingerprint(
+        decide_maintenance({"haircut": base_state}, plan_date=PLAN_DATE)
+    )
+
+    same = _care_payload(_material_with(decide_maintenance({"haircut": base_state}, plan_date=PLAN_DATE)))
+    assert same == first, "identical maintenance state must not move the fingerprint"
+
+    for changed in (
+        MaintenanceState(kind_key="haircut", tracked=True, interval_days=21, last_done_on=PLAN_DATE - timedelta(days=30)),
+        MaintenanceState(kind_key="haircut", tracked=True, interval_days=42, last_done_on=PLAN_DATE - timedelta(days=31)),
+        MaintenanceState(kind_key="haircut", tracked=False, interval_days=42, last_done_on=PLAN_DATE - timedelta(days=30)),
+    ):
+        moved = _care_payload(_material_with(decide_maintenance({"haircut": changed}, plan_date=PLAN_DATE)))
+        assert moved["maintenance_fingerprint"] != first["maintenance_fingerprint"]
+
+
+def test_event_ready_holds_no_second_timing_engine():
+    """Event Ready must read the canonical authority, not re-derive schedules."""
+    import inspect
+
+    from app.domains.planning import event_ready
+
+    source = inspect.getsource(event_ready)
+    assert "due_by_event_date" in source
+    for forbidden in ("timedelta(days=", "lead_days_for", "MAINTENANCE_KINDS", "suggested_interval_days"):
+        assert forbidden not in source, f"event_ready must not compute maintenance timing itself ({forbidden})"

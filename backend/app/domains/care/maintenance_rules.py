@@ -35,54 +35,47 @@ class MaintenanceKind:
     key: str
     label: str
     domain: MaintenanceDomain
-    default_interval_days: int
+    #: An optional preset the customer may accept. It is never applied on their
+    #: behalf: until they choose a rhythm the kind stays ``needs_cadence``.
+    suggested_interval_days: int
     #: What the act is, in the customer's words. Never a reason they "should".
     description: str
-
-    @property
-    def lead_days(self) -> int:
-        """How far ahead this kind starts reading as coming up.
-
-        A quarter of the interval, capped at a week, so a short rhythm gets a
-        short heads-up and a long one does not sit in "coming up" for a month.
-        """
-        return max(1, min(7, self.default_interval_days // 4))
 
 
 MAINTENANCE_KINDS: tuple[MaintenanceKind, ...] = (
     MaintenanceKind(
         key="haircut", label="Haircut", domain=MaintenanceDomain.HAIR,
-        default_interval_days=42,
+        suggested_interval_days=42,
         description="Keeping your usual cut in the shape you like.",
     ),
     MaintenanceKind(
         key="hair_trim", label="Hair trim", domain=MaintenanceDomain.HAIR,
-        default_interval_days=84,
+        suggested_interval_days=84,
         description="Tidying the ends while keeping your length.",
     ),
     MaintenanceKind(
         key="hair_colour_upkeep", label="Hair colour upkeep", domain=MaintenanceDomain.HAIR,
-        default_interval_days=35,
+        suggested_interval_days=35,
         description="Refreshing colour you already wear, including roots.",
     ),
     MaintenanceKind(
         key="beard_upkeep", label="Beard upkeep", domain=MaintenanceDomain.HAIR,
-        default_interval_days=14,
+        suggested_interval_days=14,
         description="Keeping facial hair at the length and shape you prefer.",
     ),
     MaintenanceKind(
         key="brow_upkeep", label="Brow upkeep", domain=MaintenanceDomain.SKIN,
-        default_interval_days=28,
+        suggested_interval_days=28,
         description="Keeping brows in the shape you already wear.",
     ),
     MaintenanceKind(
         key="nail_care", label="Nail care", domain=MaintenanceDomain.SKIN,
-        default_interval_days=21,
+        suggested_interval_days=21,
         description="Routine upkeep for nails on hands and feet.",
     ),
     MaintenanceKind(
         key="body_hair_upkeep", label="Body hair upkeep", domain=MaintenanceDomain.SKIN,
-        default_interval_days=28,
+        suggested_interval_days=28,
         description="Whatever body hair routine you already follow, on your own schedule.",
     ),
 )
@@ -96,6 +89,18 @@ def get_kind(key: str) -> MaintenanceKind | None:
     return MAINTENANCE_KIND_BY_KEY.get(key)
 
 
+def lead_days_for(interval_days: int) -> int:
+    """How far ahead a rhythm starts reading as coming up.
+
+    A quarter of the rhythm the customer actually chose, floored at a day and
+    capped at a week: a short rhythm gets a short heads-up, and a long one does
+    not sit in "coming up" for a month. Deriving this from the catalogue preset
+    instead would let a 3-day rhythm inherit a 7-day window and read as coming
+    up the moment it was recorded done.
+    """
+    return max(1, min(7, interval_days // 4))
+
+
 __all__ = [
     "MAINTENANCE_CATALOGUE_VERSION",
     "MAINTENANCE_KINDS",
@@ -107,4 +112,5 @@ __all__ = [
     "MaintenanceDomain",
     "MaintenanceKind",
     "get_kind",
+    "lead_days_for",
 ]

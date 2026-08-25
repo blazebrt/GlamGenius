@@ -2338,12 +2338,15 @@ export interface MaintenanceKindStatus {
   label: string;
   domain: 'hair_care' | 'skin_care';
   description: string;
-  status: 'due' | 'coming_up' | 'not_due' | 'needs_anchor' | 'not_tracked';
+  status: 'due' | 'coming_up' | 'not_due' | 'needs_cadence' | 'needs_anchor' | 'not_tracked';
   reason: string;
   tracked: boolean;
   reminders_enabled: boolean;
-  interval_days: number;
-  interval_is_custom: boolean;
+  /** The rhythm the customer chose, or null when they have not chosen one. */
+  interval_days: number | null;
+  /** A preset they may accept. Never applied on their behalf. */
+  suggested_interval_days: number;
+  lead_days: number | null;
   last_done_on: string | null;
   next_due_on: string | null;
   days_until_due: number | null;
@@ -2358,6 +2361,7 @@ export interface MaintenanceOverview {
   interval_bounds: { min_days: number; max_days: number };
   due: string[];
   coming_up: string[];
+  needs_cadence: string[];
   needs_anchor: string[];
 }
 

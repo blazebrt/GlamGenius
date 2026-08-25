@@ -34,7 +34,7 @@ from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
 
 # Bumped when the compiler's deterministic rules change. Stored on every plan so
 # an old plan still says which rules produced it.
-PLANNER_VERSION = "phase5-v1"
+PLANNER_VERSION = "vc06-v1"
 
 PLAN_SOURCE_CACHE = "cache"
 PLAN_SOURCE_FRESH = "fresh"
