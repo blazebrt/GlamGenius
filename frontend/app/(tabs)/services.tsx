@@ -2,11 +2,16 @@
  * Skin & Hair maintenance timing (VC-06).
  *
  * Replaces the V2 placeholder. This screen answers one question — what upkeep
- * is due — for the kinds the customer has chosen to track, on intervals they
+ * is due — for the kinds the customer has chosen to track, on the rhythm they
  * set themselves. GlamGenius does not book anything, suggest anywhere, or
  * comment on how anyone looks.
  *
- * The route keeps its `services` filename so existing deep links resolve.
+ * A kind is only scheduled once the customer has given both a rhythm and a
+ * starting date; the catalogue preset is offered as a suggestion they can
+ * accept, never applied on their behalf.
+ *
+ * The route keeps its `services` filename so existing deep links resolve, and
+ * Care links here from `/improve`.
  */
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -16,6 +21,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaintenanceEmpty, MaintenanceRow } from '../../src/components/care/MaintenancePieces';
 import {
   MaintenanceOverview,
+  forgetMaintenanceDone,
   getMaintenance,
   recordMaintenanceDone,
   updateMaintenance,
@@ -29,6 +35,7 @@ export default function MaintenanceScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     if (mode === 'refresh') setRefreshing(true);
@@ -60,6 +67,42 @@ export default function MaintenanceScreen() {
 
   const tracked = overview?.kinds.filter((row) => row.tracked) ?? [];
   const available = overview?.kinds.filter((row) => !row.tracked) ?? [];
+  const bounds = overview?.interval_bounds ?? { min_days: 3, max_days: 365 };
+  const today = overview?.plan_date ?? '';
+
+  const rowProps = (row: (typeof tracked)[number]) => ({
+    kind: row,
+    bounds,
+    today,
+    busy,
+    expanded: expanded === row.kind,
+    onToggleExpanded: () => setExpanded(expanded === row.kind ? null : row.kind),
+    // Tracking is not a schedule, so starting to track opens setup rather than
+    // quietly adopting the suggested rhythm on the customer's behalf.
+    onTrack: () => {
+      setExpanded(row.kind);
+      void run(() => updateMaintenance(row.kind, { tracked: true }));
+    },
+    onUntrack: () => {
+      setExpanded(null);
+      void run(() => updateMaintenance(row.kind, { tracked: false }));
+    },
+    onRecordToday: () => void run(() => recordMaintenanceDone(row.kind)),
+    onSaveCadence: (days: number) => void run(() => updateMaintenance(row.kind, { interval_days: days })),
+    onClearCadence: () => void run(() => updateMaintenance(row.kind, { interval_days: null })),
+    // The field is prefilled with the current anchor, so saving a different
+    // date means "correct this one". The anchor is the latest recorded date,
+    // so an earlier correction would otherwise sit behind the old one and do
+    // nothing visible — the previous date is removed first.
+    onSaveLastDate: (isoDate: string) => void run(async () => {
+      const previous = row.last_done_on;
+      if (previous && previous !== isoDate) await forgetMaintenanceDone(row.kind, previous);
+      return recordMaintenanceDone(row.kind, { done_on: isoDate });
+    }),
+    onForgetLastDate: (isoDate: string) => void run(() => forgetMaintenanceDone(row.kind, isoDate)),
+    onToggleReminders: (enabled: boolean) =>
+      void run(() => updateMaintenance(row.kind, { reminders_enabled: enabled })),
+  });
 
   if (loading && !overview) {
     return (
@@ -85,31 +128,13 @@ export default function MaintenanceScreen() {
         {tracked.length === 0 ? (
           <MaintenanceEmpty />
         ) : (
-          tracked.map((row) => (
-            <MaintenanceRow
-              key={row.kind}
-              kind={row}
-              busy={busy}
-              onTrack={() => void run(() => updateMaintenance(row.kind, { tracked: true }))}
-              onUntrack={() => void run(() => updateMaintenance(row.kind, { tracked: false }))}
-              onRecordToday={() => void run(() => recordMaintenanceDone(row.kind))}
-            />
-          ))
+          tracked.map((row) => <MaintenanceRow key={row.kind} {...rowProps(row)} />)
         )}
 
         {available.length > 0 && (
           <>
             <Text style={styles.section}>Add something you already do</Text>
-            {available.map((row) => (
-              <MaintenanceRow
-                key={row.kind}
-                kind={row}
-                busy={busy}
-                onTrack={() => void run(() => updateMaintenance(row.kind, { tracked: true }))}
-                onUntrack={() => void run(() => updateMaintenance(row.kind, { tracked: false }))}
-                onRecordToday={() => void run(() => recordMaintenanceDone(row.kind))}
-              />
-            ))}
+            {available.map((row) => <MaintenanceRow key={row.kind} {...rowProps(row)} />)}
           </>
         )}
       </ScrollView>

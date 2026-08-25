@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Sequence
 from datetime import date
 from typing import Any
 
@@ -25,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.planning import clock
 from app.domains.planning.models import (
+    MODULE_MAINTENANCE,
     MODULES,
     DailyPlan,
     DailyPlanAction,
@@ -39,6 +41,32 @@ SUPPRESSED_QUIET = "quiet_hours"
 SUPPRESSED_DISABLED = "disabled"
 SUPPRESSED_MODULE_OFF = "module_disabled"
 
+#: Modules a new account is notified about by default. Maintenance sits here
+#: like any other module: its real gate is the per-kind ``reminders_enabled``
+#: choice, which defaults to off. Excluding it from this map instead would make
+#: that per-kind opt-in unreachable, because nothing in the product turns the
+#: generic module flag back on.
+DEFAULT_MODULE_NOTIFICATIONS: dict[str, bool] = {module: True for module in MODULES}
+
+
+async def maintenance_reminders_allowed(
+    session: AsyncSession, account_id: uuid.UUID, plan_date: date,
+) -> Sequence[Any]:
+    """The due kinds this account has explicitly asked to be reminded about.
+
+    Consent is read from canonical maintenance state rather than inferred from
+    the module appearing in a plan, and it is returned per kind rather than as
+    an account-wide boolean so the notification can name only what was opted
+    into. Empty means no maintenance notification is permitted at all.
+    """
+    from app.domains.care import maintenance as care_maintenance
+    from app.domains.care import maintenance_service as care_maintenance_service
+
+    decided = await care_maintenance_service.build_maintenance(
+        session, account_id, plan_date=plan_date,
+    )
+    return care_maintenance.reminder_eligible(decided)
+
 
 async def preferences_for(session: AsyncSession, account_id: uuid.UUID, timezone_name: str) -> NotificationPreference:
     row = (await session.execute(
@@ -47,7 +75,7 @@ async def preferences_for(session: AsyncSession, account_id: uuid.UUID, timezone
     if row is None:
         row = NotificationPreference(
             account_id=account_id, timezone_name=timezone_name,
-            modules={module: True for module in MODULES},
+            modules=dict(DEFAULT_MODULE_NOTIFICATIONS),
         )
         session.add(row)
         await session.flush()
@@ -118,7 +146,9 @@ async def queue(
     local_hour = clock.local_now(preference.timezone_name or timezone_name, moment=moment).hour
     if not preference.enabled:
         row.status, row.suppressed_reason = "suppressed", SUPPRESSED_DISABLED
-    elif preference.modules and preference.modules.get(module) is False:
+    elif preference.modules is not None and not preference.modules.get(
+        module, DEFAULT_MODULE_NOTIFICATIONS.get(module, True)
+    ):
         row.status, row.suppressed_reason = "suppressed", SUPPRESSED_MODULE_OFF
     elif in_quiet_hours(local_hour, preference.quiet_hours_start, preference.quiet_hours_end):
         row.status, row.suppressed_reason = "suppressed", SUPPRESSED_QUIET
@@ -140,19 +170,44 @@ async def queue_for_plan(
     One notification carrying the most important thing, rather than one per
     module. If the plan has nothing worth saying, nothing is queued at all.
     """
-    action = (await session.execute(
+    if plan.status != "ready":
+        return None
+    candidates = (await session.execute(
         select(DailyPlanAction)
         .where(DailyPlanAction.plan_id == plan.id)
         .order_by(DailyPlanAction.priority)
-        .limit(1)
-    )).scalar_one_or_none()
-    if action is None or plan.status != "ready":
+    )).scalars().all()
+
+    action = None
+    eligible_kinds: Sequence[Any] | None = None
+    body: str | None = None
+    for candidate in candidates:
+        if candidate.module == MODULE_MAINTENANCE:
+            # Maintenance reminders are a per-kind opt-in. Without one we move
+            # on to the next action rather than silently sending maintenance
+            # text or dropping the day's notification altogether.
+            if eligible_kinds is None:
+                eligible_kinds = await maintenance_reminders_allowed(
+                    session, plan.account_id, plan.plan_date,
+                )
+            if not eligible_kinds:
+                continue
+            # The plan's card names every due kind. The notification must name
+            # only the ones the customer asked to hear about, so the copy is
+            # rebuilt from the opted-in subset rather than reused.
+            from app.domains.care.maintenance import maintenance_headline
+
+            title, card_body = maintenance_headline(eligible_kinds)
+            body = f"{title}. {card_body}".strip()
+        action = candidate
+        break
+    if action is None:
         return None
     return await queue(
         session, account_id=plan.account_id, plan_date=plan.plan_date,
         notification_key="daily_plan", title=plan.headline,
-        body=f"{action.title}. {action.body}".strip(), module=action.module,
-        timezone_name=timezone_name, moment=moment,
+        body=body if body is not None else f"{action.title}. {action.body}".strip(),
+        module=action.module, timezone_name=timezone_name, moment=moment,
     )
 
 
@@ -162,7 +217,10 @@ def serialize_preferences(row: NotificationPreference) -> dict[str, Any]:
         "daily_cap": row.daily_cap,
         "quiet_hours": {"start": row.quiet_hours_start, "end": row.quiet_hours_end},
         "preferred_hour": row.preferred_hour,
-        "modules": {module: bool(row.modules.get(module, True)) for module in MODULES},
+        "modules": {
+            module: bool(row.modules.get(module, DEFAULT_MODULE_NOTIFICATIONS[module]))
+            for module in MODULES
+        },
         "timezone": row.timezone_name,
         "note": "At most one proactive appearance notification a day by default. Repeats are never sent twice.",
     }

@@ -47,6 +47,7 @@ async def list_maintenance(
         "interval_bounds": {"min_days": MIN_INTERVAL_DAYS, "max_days": MAX_INTERVAL_DAYS},
         "due": [row.kind_key for row in decided.due],
         "coming_up": [row.kind_key for row in decided.coming_up],
+        "needs_cadence": [row.kind_key for row in decided.needs_cadence],
         "needs_anchor": [row.kind_key for row in decided.needs_anchor],
     })
     return payload

@@ -21,7 +21,7 @@ from app.domains.recommendation.occasions import get_occasion
 from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 
-EVENT_READY_VERSION = "vc-02-v1"
+EVENT_READY_VERSION = "vc-06-v1"
 
 
 def _sha(payload: Any) -> str:
@@ -96,7 +96,13 @@ async def _event_day_context(session: AsyncSession, event: CalendarEvent, timezo
 
 def _care_payload(material: Any) -> dict[str, Any]:
     decisions, plan, cadence = material.decisions, material.care_plan, material.hair_wash_cadence
+    # Maintenance can change the preparation timeline, so its canonical
+    # fingerprint belongs in the material the plan fingerprint hashes. Without
+    # it, a maintenance-only change would alter the actions while the stored
+    # provenance still described the previous state.
     return {
+        "maintenance_fingerprint": care_maintenance.maintenance_fingerprint(material.maintenance),
+        "maintenance_version": material.maintenance.maintenance_version,
         "authority": "care", "decision_version": decisions.decision_version,
         "decision_fingerprint": material.decision_fingerprint,
         "routine_plan_version": plan.plan_version, "routine_plan_fingerprint": material.routine_plan_fingerprint,
@@ -145,14 +151,16 @@ def _action_material(key: str, payload: dict[str, Any]) -> str:
     return _sha({"event_ready_version": EVENT_READY_VERSION, "action_key": key, "material": payload})
 
 
-def _maintenance_actions(material: Any) -> list[dict[str, Any]]:
+def _maintenance_actions(material: Any, event_local_date: date) -> list[dict[str, Any]]:
     """Upkeep that falls due on or before the event, at most one card.
 
     Timing comes from the one maintenance authority; Event Ready never
     computes a second schedule of its own.
     """
-    maintenance = material.maintenance
-    due = care_maintenance.due_by_event_date(maintenance, maintenance.plan_date)
+    # The comparison is against the event's own local date, which is what the
+    # customer is preparing for. It is passed in rather than read off the
+    # material so the two can never drift into being accidentally equal.
+    due = care_maintenance.due_by_event_date(material.maintenance, event_local_date)
     if not due:
         return []
     named = ", ".join(row.label for row in due[:2])
@@ -209,7 +217,7 @@ def _actions(event: CalendarEvent, day: Any, material: Any, look: Look | None, l
             reasons = sorted({reason.code.value for decision in hard_safety for reason in decision.blocking_reasons if reason.code in (CareDecisionReasonCode.PRODUCT_EXPIRED, CareDecisionReasonCode.CONFIRMED_ALLERGY_MATCH)})
             actions.append({"action_key": key, "domain": "care", "timing": "before_event", "title": "Review one Care item", "body": "One existing Care safety rule needs your attention before the event.", "relevance": "A canonical Care safety decision is blocking an item.", "priority": 35, "inventory_item_id": None, "material": {"item_ids": sorted(str(decision.item_id) for decision in hard_safety), "reason_codes": reasons}})
     if status != "past":
-        actions.extend(_maintenance_actions(material))
+        actions.extend(_maintenance_actions(material, day.plan_date))
     return actions
 
 
@@ -286,8 +294,11 @@ async def generate(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.
     old = {row.action_key: row for row in (await session.execute(select(EventReadyAction).where(EventReadyAction.event_ready_plan_id == plan.id))).scalars().all()}
     desired = {row["action_key"]: _action_material(row["action_key"], row["material"]) for row in actions}
     actions_current = set(old) == set(desired) and all(old[key].material_fingerprint == value for key, value in desired.items())
-    if plan.input_fingerprint != fingerprint:
+    if plan.input_fingerprint != fingerprint or plan.engine_version != EVENT_READY_VERSION:
+        # A plan regenerated under new rules must say so, otherwise stored
+        # provenance cannot tell which rule set produced its actions.
         plan.status, plan.input_fingerprint, plan.generated_at = status, fingerprint, utcnow()
+        plan.engine_version = EVENT_READY_VERSION
     if plan.input_fingerprint == fingerprint and actions_current:
         return await _serialize(session, event, plan, timezone_name, day=day, material=material)
     for key, row in old.items():

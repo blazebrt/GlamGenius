@@ -555,14 +555,7 @@ def _maintenance_action(
     due = maintenance.due
     if not due:
         return []
-    named = ", ".join(row.label for row in due[:2])
-    extra = len(due) - 2
-    title = f"{due[0].label} is due" if len(due) == 1 else "Some upkeep is due"
-    body = (
-        f"{named} and {extra} more are due by your own rhythm."
-        if extra > 0
-        else f"{named} {'is' if len(due) == 1 else 'are'} due by your own rhythm."
-    )
+    title, body = care_maintenance.maintenance_headline(due)
     return [{
         "module": MODULE_MAINTENANCE, "action_type": "maintenance_due", "priority": 65,
         "title": title,

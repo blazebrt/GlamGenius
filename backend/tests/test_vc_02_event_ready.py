@@ -49,7 +49,9 @@ def _event(**overrides):
 def test_event_ready_version_and_fingerprint_are_stable():
     event = _event()
     first = _event_payload(event, "Asia/Kolkata")
-    assert EVENT_READY_VERSION == "vc-02-v1"
+    # A deliberate pin: it moved to vc-06-v1 when VC-06 added maintenance to
+    # the Care material and a maintenance timing action to the timeline.
+    assert EVENT_READY_VERSION == "vc-06-v1"
     assert _sha(first) == _sha(dict(first))
     assert _sha(first) == _sha(first)
 
@@ -98,7 +100,9 @@ def test_past_unconfirmed_event_is_past_not_confirmation_action():
 
 def test_paused_product_is_not_reported_as_care_safety_but_expiry_is():
     event = _event()
-    day = SimpleNamespace(unavailable_item_ids=[], missing_information=[])
+    day = SimpleNamespace(
+        unavailable_item_ids=[], missing_information=[], plan_date=date(2020, 1, 13),
+    )
     cadence = SimpleNamespace(status=SimpleNamespace(value="not_due"), as_payload=dict)
     paused = SimpleNamespace(
         item_id=uuid4(),
