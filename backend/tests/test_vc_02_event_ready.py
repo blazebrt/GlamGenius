@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from app.domains.ai_gateway.models import AIRun
 from app.domains.care.decisions import CareDecisionAuthority, CareDecisionReason, CareDecisionReasonCode
+from app.domains.care.maintenance import decide_maintenance
 from app.domains.inventory.models import InventoryItem
 from app.domains.planning.event_ready import (
     EVENT_READY_VERSION,
@@ -90,6 +91,7 @@ def test_past_unconfirmed_event_is_past_not_confirmation_action():
     material = SimpleNamespace(
         hair_wash_cadence=SimpleNamespace(status=SimpleNamespace(value="not_due")),
         decisions=SimpleNamespace(product_decisions=[]),
+        maintenance=decide_maintenance({}, plan_date=date(2020, 1, 13)),
     )
     assert _actions(event, day, material, None, [], "past") == []
 
@@ -102,7 +104,10 @@ def test_paused_product_is_not_reported_as_care_safety_but_expiry_is():
         item_id=uuid4(),
         blocking_reasons=[CareDecisionReason(CareDecisionReasonCode.USER_PAUSED_FOR_ROUTINE, CareDecisionAuthority.USER_CONSTRAINT)],
     )
-    material = SimpleNamespace(hair_wash_cadence=cadence, decisions=SimpleNamespace(product_decisions=[paused]))
+    material = SimpleNamespace(
+        hair_wash_cadence=cadence, decisions=SimpleNamespace(product_decisions=[paused]),
+        maintenance=decide_maintenance({}, plan_date=date(2020, 1, 13)),
+    )
     assert not any(row["action_key"] == "care:attention" for row in _actions(event, day, material, None, [], "preparing"))
     expired = SimpleNamespace(
         item_id=uuid4(),

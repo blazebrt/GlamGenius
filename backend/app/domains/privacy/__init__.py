@@ -152,6 +152,9 @@ REGISTRY: dict[str, Classification] = {
     "routine_adherence": Classification.INCLUDED,
     "routine_recommendation_runs": Classification.INCLUDED,
     "care_experience_feedback": Classification.INCLUDED,
+    # Maintenance timing is entirely customer-declared, so it is theirs.
+    "maintenance_preferences": Classification.INCLUDED,
+    "maintenance_events": Classification.INCLUDED,
     "routine_templates": Classification.NOT_USER_OWNED,
     "ingredients": Classification.NOT_USER_OWNED,
     "ingredient_aliases": Classification.NOT_USER_OWNED,

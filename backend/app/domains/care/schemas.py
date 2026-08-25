@@ -8,6 +8,9 @@ from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.domains.care.maintenance_rules import MAX_INTERVAL_DAYS, MIN_INTERVAL_DAYS
 from app.domains.routines.rules import ShelfProduct
 
 CARE_CONTEXT_VERSION = "v3-03.12"
@@ -97,11 +100,37 @@ class CareContext:
         object.__setattr__(self, "preferred_product_ids", frozenset(self.preferred_product_ids))
 
 
+class MaintenancePreferenceRequest(BaseModel):
+    """An explicit choice about one maintenance kind.
+
+    Every field is optional and only what is sent changes, so a customer can
+    adjust their rhythm without also restating whether they track it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tracked: bool | None = None
+    interval_days: int | None = Field(default=None, ge=MIN_INTERVAL_DAYS, le=MAX_INTERVAL_DAYS)
+    reminders_enabled: bool | None = None
+
+
+class MaintenanceDoneRequest(BaseModel):
+    """A date the customer says an upkeep act happened."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Omitted means today in the customer's own timezone.
+    done_on: date | None = None
+    note: str | None = Field(default=None, max_length=240)
+
+
 __all__ = [
     "CARE_CONTEXT_VERSION",
     "CareContext",
     "CareEnvironment",
     "CareEvent",
     "CareFact",
+    "MaintenanceDoneRequest",
+    "MaintenancePreferenceRequest",
     "MissingCareFact",
 ]

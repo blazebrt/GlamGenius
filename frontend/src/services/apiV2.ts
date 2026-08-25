@@ -2330,3 +2330,54 @@ export const requestStylistReview = async (body: {
   question: string;
 }): Promise<{ id: string; status: string; message: string }> =>
   (await api.post(`${V2}/stylist-review`, body)).data;
+
+// --- Skin and Hair maintenance timing (VC-06) --------------------------------
+
+export interface MaintenanceKindStatus {
+  kind: string;
+  label: string;
+  domain: 'hair_care' | 'skin_care';
+  description: string;
+  status: 'due' | 'coming_up' | 'not_due' | 'needs_anchor' | 'not_tracked';
+  reason: string;
+  tracked: boolean;
+  reminders_enabled: boolean;
+  interval_days: number;
+  interval_is_custom: boolean;
+  last_done_on: string | null;
+  next_due_on: string | null;
+  days_until_due: number | null;
+}
+
+export interface MaintenanceOverview {
+  version: string;
+  catalogue_version: string;
+  plan_date: string;
+  kinds: MaintenanceKindStatus[];
+  note: string;
+  interval_bounds: { min_days: number; max_days: number };
+  due: string[];
+  coming_up: string[];
+  needs_anchor: string[];
+}
+
+export const getMaintenance = async (): Promise<MaintenanceOverview> =>
+  (await api.get<MaintenanceOverview>(`${V2}/maintenance`)).data;
+
+export const updateMaintenance = async (
+  kind: string,
+  body: { tracked?: boolean; interval_days?: number | null; reminders_enabled?: boolean },
+): Promise<MaintenanceOverview> =>
+  (await api.put<MaintenanceOverview>(`${V2}/maintenance/${kind}`, body)).data;
+
+export const recordMaintenanceDone = async (
+  kind: string,
+  body: { done_on?: string; note?: string } = {},
+): Promise<MaintenanceOverview> =>
+  (await api.post<MaintenanceOverview>(`${V2}/maintenance/${kind}/done`, body)).data;
+
+export const forgetMaintenanceDone = async (
+  kind: string,
+  doneOn: string,
+): Promise<MaintenanceOverview & { removed: boolean }> =>
+  (await api.delete<MaintenanceOverview & { removed: boolean }>(`${V2}/maintenance/${kind}/done/${doneOn}`)).data;

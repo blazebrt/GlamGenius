@@ -419,3 +419,49 @@ class HydrationPreference(UUIDPrimaryKey, TimestampMixin, Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     remind_in_hot_weather_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     note: Mapped[str | None] = mapped_column(String(240))
+
+
+class MaintenancePreference(UUIDPrimaryKey, TimestampMixin, Base):
+    """One customer's choice about one maintenance kind (VC-06).
+
+    A row only exists once they have expressed a choice. Absence means
+    untracked, so nothing is ever assumed on their behalf. ``interval_days``
+    is their own rhythm; ``NULL`` keeps the catalogue default.
+    """
+
+    __tablename__ = "maintenance_preferences"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    kind_key: Mapped[str] = mapped_column(String(48), nullable=False)
+    tracked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    interval_days: Mapped[int | None] = mapped_column(Integer)
+    reminders_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "kind_key", name="uq_maintenance_preference_account_kind"),
+        CheckConstraint(
+            "interval_days IS NULL OR (interval_days >= 3 AND interval_days <= 365)",
+            name="ck_maintenance_preference_interval_range",
+        ),
+    )
+
+
+class MaintenanceEvent(UUIDPrimaryKey, TimestampMixin, Base):
+    """A maintenance date the customer recorded themselves.
+
+    Always user-declared. The engine never writes one, because a date nobody
+    reported is not a fact about their life.
+    """
+
+    __tablename__ = "maintenance_events"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    kind_key: Mapped[str] = mapped_column(String(48), nullable=False)
+    done_on: Mapped[date] = mapped_column(Date, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="user_declared", server_default="user_declared")
+    note: Mapped[str | None] = mapped_column(String(240))
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "kind_key", "done_on", name="uq_maintenance_event_account_kind_date"),
+        Index("ix_maintenance_events_account_kind_date", "account_id", "kind_key", "done_on"),
+    )
