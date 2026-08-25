@@ -99,7 +99,7 @@ describe('Maintenance timing UI', () => {
 
     fireEvent.press(screen.getByLabelText('Use the suggested timing for Haircut'));
     expect(props.onSaveCadence).toHaveBeenLastCalledWith(42);
-    expect(screen.getByText(/only a suggestion/)).toBeTruthy();
+    expect(screen.getByText('Suggested starting point: 42 days.')).toBeTruthy();
   });
 
   it('an existing rhythm can be cleared', () => {

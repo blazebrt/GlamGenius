@@ -186,6 +186,53 @@ async def forget_done(
     return bool(result.rowcount)
 
 
+async def replace_done(
+    session: AsyncSession, account_id: uuid.UUID, kind_key: str, *,
+    old_done_on: date, new_done_on: date, today: date,
+) -> MaintenanceEvent:
+    """Atomically correct one recorded date without a delete/create gap.
+
+    The source fact must belong to this account and kind.  A correction onto
+    an already-recorded date merges the duplicate deterministically: the
+    existing target row remains authoritative for that date, and it keeps its
+    note when present (otherwise the source note is carried forward).  This
+    preserves the unique account/kind/date invariant inside one transaction.
+    """
+    _require_kind(kind_key)
+    if new_done_on > today:
+        raise ValidationFailedError("Choose a date that has already happened.", field="done_on")
+
+    source = (await session.execute(
+        select(MaintenanceEvent).where(
+            MaintenanceEvent.account_id == account_id,
+            MaintenanceEvent.kind_key == kind_key,
+            MaintenanceEvent.done_on == old_done_on,
+        ).with_for_update()
+    )).scalar_one_or_none()
+    if source is None:
+        raise NotFoundError("That maintenance date was not found.")
+    if old_done_on == new_done_on:
+        return source
+
+    target = (await session.execute(
+        select(MaintenanceEvent).where(
+            MaintenanceEvent.account_id == account_id,
+            MaintenanceEvent.kind_key == kind_key,
+            MaintenanceEvent.done_on == new_done_on,
+        ).with_for_update()
+    )).scalar_one_or_none()
+    if target is None:
+        source.done_on = new_done_on
+        await session.flush()
+        return source
+
+    if target.note is None:
+        target.note = source.note
+    await session.delete(source)
+    await session.flush()
+    return target
+
+
 async def history(
     session: AsyncSession, account_id: uuid.UUID, kind_key: str, *, limit: int = 12,
 ) -> list[MaintenanceEvent]:
@@ -207,6 +254,7 @@ __all__ = [
     "fingerprint_for",
     "forget_done",
     "history",
+    "replace_done",
     "record_done",
     "set_preference",
 ]
