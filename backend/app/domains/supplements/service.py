@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -12,6 +13,15 @@ from app.domains.supplements.engine import build_utility, component_identity
 from app.domains.supplements.models import SupplementLabelComponent
 from app.domains.supplements.schemas import LabelComponentCreate, LabelComponentPatch
 from app.shared.errors.exceptions import NotFoundError
+
+
+def _amount_text(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
 
 
 async def owned_supplement_item(session: AsyncSession, account_id: uuid.UUID, item_id: uuid.UUID) -> InventoryItem:
@@ -40,7 +50,7 @@ def serialize_fact(row: SupplementLabelComponent) -> dict[str, Any]:
         "raw_name": row.raw_name,
         "normalized_name": row.normalized_name,
         "canonical_component_key": row.canonical_component_key,
-        "amount": str(row.amount) if row.amount is not None else None,
+        "amount": _amount_text(row.amount),
         "unit": row.unit,
         "serving_text": row.serving_text,
         "source": row.source,

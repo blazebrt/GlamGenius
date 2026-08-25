@@ -6,6 +6,7 @@ import json
 import re
 import unicodedata
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 from app.domains.routines.safety import needs_professional
@@ -33,6 +34,15 @@ def component_identity(value: str) -> tuple[str, str]:
     return REVIEWED_ALIASES.get(normalized, (normalized, value.strip() or normalized))
 
 
+def _amount_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = format(Decimal(str(value)), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
 def expiry_state(expiry: date | None, today: date) -> str:
     if expiry is None:
         return "unknown"
@@ -51,7 +61,7 @@ def _fact_payload(fact: Any) -> dict[str, Any]:
         "raw_name": fact.raw_name,
         "normalized_name": fact.normalized_name,
         "canonical_component_key": key,
-        "amount": str(fact.amount) if fact.amount is not None else None,
+        "amount": _amount_text(fact.amount),
         "unit": fact.unit,
         "serving_text": fact.serving_text,
         "source": fact.source,
@@ -149,7 +159,7 @@ def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> 
             for row in summaries if any(fact["verification_state"] != "confirmed" for fact in row["label_facts"])
         ],
         "boundaries": [
-            "Package label facts only; no instructions about how much to take, treatment, diagnosis, or interaction conclusions.",
+            "Package label facts only; no instructions about how much to take, treatment, medical assessment, or interaction conclusions.",
             "Amounts are shown per product and are never added into intake totals.",
             "Upper-limit, RDA, EAR, and deficiency comparisons are not active in this utility.",
         ],
