@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import date
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -94,6 +94,26 @@ def _require_kind(kind_key: str):
     if kind is None:
         raise NotFoundError("That maintenance kind is not one we track.")
     return kind
+
+
+async def _lock_correction_scope(
+    session: AsyncSession, account_id: uuid.UUID, kind_key: str,
+) -> None:
+    """Serialize date corrections before an absent target can be inspected.
+
+    A row-level lock cannot lock a row that does not exist.  A transaction-
+    scoped PostgreSQL advisory lock gives every correction for this account
+    and kind one stable rendezvous without adding a locking table or relying
+    on process-local state.
+    """
+    lock_key = f"maintenance-date-correction:{account_id}:{kind_key}"
+    await session.execute(
+        text(
+            "SELECT pg_advisory_xact_lock("
+            "hashtextextended(CAST(:lock_key AS text), 0))"
+        ),
+        {"lock_key": lock_key},
+    )
 
 
 async def set_preference(
@@ -201,6 +221,8 @@ async def replace_done(
     _require_kind(kind_key)
     if new_done_on > today:
         raise ValidationFailedError("Choose a date that has already happened.", field="done_on")
+
+    await _lock_correction_scope(session, account_id, kind_key)
 
     source = (await session.execute(
         select(MaintenanceEvent).where(

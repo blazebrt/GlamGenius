@@ -35,7 +35,7 @@ from app.domains.planning.models import MODULE_MAINTENANCE, MODULES
 from app.domains.routines.models import MaintenanceEvent, MaintenancePreference
 from app.shared.database.sql import get_sessionmaker
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 PLAN_DATE = date(2026, 3, 16)
 
@@ -448,6 +448,97 @@ async def test_date_correction_merges_duplicate_target_and_preserves_target_note
             MaintenanceEvent.account_id == account_id, MaintenanceEvent.kind_key == "haircut",
         ))).scalars().all()
         assert len(rows) == 1 and rows[0].done_on == target_date and rows[0].note == "target"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_date_corrections_serialize_absent_target(
+    db_clean, registered_supabase_user,
+):
+    """Two sessions racing for one absent target must merge, never collide."""
+    _, account_id = await registered_supabase_user()
+    _, other_account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    source_a = PLAN_DATE - timedelta(days=20)
+    source_b = PLAN_DATE - timedelta(days=10)
+    target = PLAN_DATE - timedelta(days=30)
+
+    async with factory() as session:
+        await maintenance_service.record_done(
+            session, account_id, "haircut", done_on=source_a, today=PLAN_DATE, note="source A",
+        )
+        await maintenance_service.record_done(
+            session, account_id, "haircut", done_on=source_b, today=PLAN_DATE, note="source B",
+        )
+        await maintenance_service.record_done(
+            session, other_account_id, "haircut", done_on=source_a, today=PLAN_DATE, note="other account",
+        )
+        await session.commit()
+
+    # Hold each update long enough for both independent sessions to overlap.
+    # With the production advisory lock, only the first serialized correction
+    # reaches this trigger; without it, both can observe the absent target.
+    function_name = "vc06_test_pause_maintenance_update"
+    trigger_name = "vc06_test_pause_maintenance_update_trigger"
+    async with factory() as session:
+        await session.execute(text(
+            f"DROP TRIGGER IF EXISTS {trigger_name} ON maintenance_events"
+        ))
+        await session.execute(text(f"DROP FUNCTION IF EXISTS {function_name}()"))
+        await session.execute(text(f"""
+            CREATE OR REPLACE FUNCTION {function_name}() RETURNS trigger AS $$
+            BEGIN
+                PERFORM pg_sleep(0.25);
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """))
+        await session.execute(text(f"""
+            CREATE TRIGGER {trigger_name}
+            BEFORE UPDATE OF done_on ON maintenance_events
+            FOR EACH ROW EXECUTE FUNCTION {function_name}();
+        """))
+        await session.commit()
+
+    async def correct(old_date: date) -> str | Exception:
+        async with factory() as session:
+            try:
+                event = await maintenance_service.replace_done(
+                    session,
+                    account_id,
+                    "haircut",
+                    old_done_on=old_date,
+                    new_done_on=target,
+                    today=PLAN_DATE,
+                )
+                await session.commit()
+                return event.note or ""
+            except Exception as exc:  # assert below makes an uncontrolled failure test-visible
+                await session.rollback()
+                return exc
+
+    try:
+        notes = await asyncio.gather(correct(source_a), correct(source_b))
+    finally:
+        async with factory() as session:
+            await session.execute(text(
+                f"DROP TRIGGER IF EXISTS {trigger_name} ON maintenance_events"
+            ))
+            await session.execute(text(f"DROP FUNCTION IF EXISTS {function_name}()"))
+            await session.commit()
+
+    assert all(not isinstance(note, Exception) for note in notes), notes
+    assert all(note in {"source A", "source B"} for note in notes)
+
+    async with factory() as session:
+        rows = (await session.execute(select(MaintenanceEvent).where(
+            MaintenanceEvent.account_id == account_id,
+            MaintenanceEvent.kind_key == "haircut",
+        ).order_by(MaintenanceEvent.done_on))).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].done_on == target and rows[0].note in {"source A", "source B"}
+
+        other_rows = await maintenance_service.history(session, other_account_id, "haircut")
+        assert [(row.done_on, row.note) for row in other_rows] == [(source_a, "other account")]
 
 
 @pytest.mark.asyncio
