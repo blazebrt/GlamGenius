@@ -110,6 +110,7 @@ REGISTRY: dict[str, Classification] = {
     "perfume_details": Classification.INCLUDED,
     "supplement_details": Classification.INCLUDED,
     "supplement_safety_flags": Classification.INCLUDED,
+    "supplement_label_components": Classification.INCLUDED,
     # Reference taxonomy
     "inventory_categories": Classification.NOT_USER_OWNED,
     # --- Scans + AI ---

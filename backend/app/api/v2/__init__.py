@@ -28,6 +28,7 @@ from app.api.v2 import (
     shelf,
     shopping,
     style,
+    supplements,
     today,
 )
 
@@ -43,6 +44,7 @@ router.include_router(privacy.router, tags=["v2-privacy"])
 router.include_router(profile.router, tags=["v2-profile"])
 router.include_router(onboarding.router, tags=["v2-onboarding"])
 router.include_router(inventory.router, tags=["v2-inventory"])
+router.include_router(supplements.router, tags=["v2-supplements"])
 router.include_router(scan.router, tags=["v2-scan"])
 router.include_router(quiz.router, tags=["v2-quiz"])
 router.include_router(style.router, tags=["v2-style"])

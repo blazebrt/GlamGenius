@@ -1902,6 +1902,46 @@ export interface SupplementRow {
   flags: { flag: string; message: string }[];
 }
 
+export interface SupplementLabelFact {
+  id: string;
+  inventory_item_id: string;
+  raw_name: string;
+  normalized_name: string;
+  canonical_component_key: string | null;
+  amount: string | null;
+  unit: string | null;
+  serving_text: string | null;
+  source: 'user_declared' | 'photo_extracted';
+  verification_state: 'draft' | 'confirmed';
+  confidence: number | null;
+  schema_version: string;
+}
+
+export interface SupplementUtilitySummary {
+  utility_version: string;
+  normalization_version: string;
+  supplements: {
+    inventory_item_id: string;
+    display_name: string;
+    brand: string | null;
+    user_entered_purpose: string | null;
+    expiry_date: string | null;
+    expiry_state: 'unknown' | 'current' | 'coming_up' | 'past';
+    label_facts: SupplementLabelFact[];
+    missing_information: string[];
+    professional_boundary: boolean;
+  }[];
+  overlaps: {
+    component_key: string;
+    display_name: string;
+    product_count: number;
+    items: { item_id: string; product_name: string; fact: SupplementLabelFact }[];
+  }[];
+  confirmation_needed: { inventory_item_id: string; display_name: string; label_facts: SupplementLabelFact[] }[];
+  boundaries: string[];
+  fingerprint: string;
+}
+
 export interface NutritionSuggestion {
   rule_id: string;
   rule_version: string;
@@ -2070,6 +2110,34 @@ export const getSupplementsSummary = async (): Promise<{
   tracked_fields: string[]; we_do_not: string[];
   disclaimer: string; message: string | null;
 }> => (await api.get(`${V2}/supplements/summary`)).data;
+
+export const getSupplementUtility = async (): Promise<SupplementUtilitySummary> =>
+  (await api.get<SupplementUtilitySummary>(`${V2}/supplements/summary`)).data;
+
+export const getSupplementLabelFacts = async (itemId: string): Promise<{ label_facts: SupplementLabelFact[] }> =>
+  (await api.get<{ label_facts: SupplementLabelFact[] }>(`${V2}/supplements/items/${itemId}/label-facts`)).data;
+
+export const createSupplementLabelFact = async (itemId: string, body: {
+  raw_name: string; amount?: string | null; unit?: string | null; serving_text?: string | null;
+  source?: 'user_declared' | 'photo_extracted'; verification_state?: 'draft' | 'confirmed'; client_mutation_id?: string;
+}): Promise<SupplementLabelFact> =>
+  (await api.post<SupplementLabelFact>(`${V2}/supplements/items/${itemId}/label-facts`, body)).data;
+
+export const patchSupplementLabelFact = async (itemId: string, factId: string, body: {
+  raw_name?: string; amount?: string | null; unit?: string | null; serving_text?: string | null;
+  verification_state?: 'draft' | 'confirmed';
+}): Promise<SupplementLabelFact> =>
+  (await api.patch<SupplementLabelFact>(`${V2}/supplements/items/${itemId}/label-facts/${factId}`, body)).data;
+
+export const confirmSupplementLabelFact = async (itemId: string, factId: string): Promise<SupplementLabelFact> =>
+  (await api.post<SupplementLabelFact>(`${V2}/supplements/items/${itemId}/label-facts/${factId}/confirm`)).data;
+
+export const deleteSupplementLabelFact = async (itemId: string, factId: string): Promise<{ deleted: true; id: string }> =>
+  (await api.delete<{ deleted: true; id: string }>(`${V2}/supplements/items/${itemId}/label-facts/${factId}`)).data;
+
+export const routeSupplementQuestion = async (question: string): Promise<{
+  boundary: boolean; message: string; category?: string; rule_id?: string;
+}> => (await api.post(`${V2}/supplements/professional-boundary`, { question })).data;
 
 export const getNutritionSuggestions = async (): Promise<NutritionAppearanceResponse> =>
   (await api.get<NutritionAppearanceResponse>(`${V2}/nutrition/appearance-suggestions`)).data;

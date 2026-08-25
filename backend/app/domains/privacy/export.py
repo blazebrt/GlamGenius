@@ -100,6 +100,7 @@ from app.domains.routines.models import (
     UserReportedObservation,
 )
 from app.domains.scan.models import Scan
+from app.domains.supplements.models import SupplementLabelComponent
 from app.shared.database.base import utcnow
 
 logger = logging.getLogger(__name__)
@@ -362,6 +363,9 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         session,
         select(SupplementSafetyFlag).where(SupplementSafetyFlag.account_id == account_id),
     )
+    label_components = await _fetch(
+        session, select(SupplementLabelComponent).where(SupplementLabelComponent.account_id == account_id),
+    )
     nutrition_preferences = await _fetch(
         session,
         select(NutritionPreference).where(NutritionPreference.account_id == account_id),
@@ -413,6 +417,10 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         "supplement_safety_flags": [
             _row_dict(r, [c.name for c in SupplementSafetyFlag.__table__.columns])
             for r in supplement_safety_flags
+        ],
+        "supplement_label_components": [
+            _row_dict(r, [c.name for c in SupplementLabelComponent.__table__.columns])
+            for r in label_components
         ],
         "nutrition_preferences": [
             _row_dict(r, [c.name for c in NutritionPreference.__table__.columns])
