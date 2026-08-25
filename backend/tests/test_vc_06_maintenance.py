@@ -35,7 +35,7 @@ from app.domains.planning.models import MODULE_MAINTENANCE, MODULES
 from app.domains.routines.models import MaintenanceEvent, MaintenancePreference
 from app.shared.database.sql import get_sessionmaker
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 PLAN_DATE = date(2026, 3, 16)
 
@@ -364,6 +364,184 @@ async def test_forgetting_a_date_removes_the_anchor(db_clean, registered_supabas
 
 
 @pytest.mark.asyncio
+async def test_date_correction_moves_the_fact_and_is_idempotent(db_clean, registered_supabase_user):
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    old_date = PLAN_DATE - timedelta(days=10)
+    new_date = PLAN_DATE - timedelta(days=40)
+    async with factory() as session:
+        await maintenance_service.record_done(
+            session, account_id, "haircut", done_on=old_date, today=PLAN_DATE, note="original note",
+        )
+        corrected = await maintenance_service.replace_done(
+            session, account_id, "haircut", old_done_on=old_date, new_done_on=new_date, today=PLAN_DATE,
+        )
+        assert corrected.done_on == new_date and corrected.note == "original note"
+        same = await maintenance_service.replace_done(
+            session, account_id, "haircut", old_done_on=new_date, new_done_on=new_date, today=PLAN_DATE,
+        )
+        assert same.id == corrected.id
+        await session.commit()
+
+    async with factory() as session:
+        rows = (await session.execute(select(MaintenanceEvent).where(
+            MaintenanceEvent.account_id == account_id, MaintenanceEvent.kind_key == "haircut",
+        ))).scalars().all()
+        assert [(row.done_on, row.note) for row in rows] == [(new_date, "original note")]
+
+
+@pytest.mark.asyncio
+async def test_failed_date_correction_rolls_back_and_preserves_old_date(
+    db_clean, registered_supabase_user, monkeypatch,
+):
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    old_date = PLAN_DATE - timedelta(days=10)
+    new_date = PLAN_DATE - timedelta(days=40)
+    async with factory() as session:
+        await maintenance_service.record_done(
+            session, account_id, "haircut", done_on=old_date, today=PLAN_DATE,
+        )
+        await session.commit()
+
+    async with factory() as session:
+        async def fail_flush(*args, **kwargs):
+            raise RuntimeError("forced correction failure")
+
+        monkeypatch.setattr(session, "flush", fail_flush)
+        with pytest.raises(RuntimeError, match="forced correction failure"):
+            await maintenance_service.replace_done(
+                session, account_id, "haircut", old_done_on=old_date, new_done_on=new_date, today=PLAN_DATE,
+            )
+        await session.rollback()
+
+    async with factory() as session:
+        rows = (await session.execute(select(MaintenanceEvent).where(
+            MaintenanceEvent.account_id == account_id, MaintenanceEvent.kind_key == "haircut",
+        ))).scalars().all()
+        assert [row.done_on for row in rows] == [old_date]
+
+
+@pytest.mark.asyncio
+async def test_date_correction_merges_duplicate_target_and_preserves_target_note(
+    db_clean, registered_supabase_user,
+):
+    _, account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    old_date = PLAN_DATE - timedelta(days=10)
+    target_date = PLAN_DATE - timedelta(days=40)
+    async with factory() as session:
+        await maintenance_service.record_done(
+            session, account_id, "haircut", done_on=old_date, today=PLAN_DATE, note="source",
+        )
+        await maintenance_service.record_done(
+            session, account_id, "haircut", done_on=target_date, today=PLAN_DATE, note="target",
+        )
+        merged = await maintenance_service.replace_done(
+            session, account_id, "haircut", old_done_on=old_date, new_done_on=target_date, today=PLAN_DATE,
+        )
+        assert merged.done_on == target_date and merged.note == "target"
+        await session.commit()
+
+    async with factory() as session:
+        rows = (await session.execute(select(MaintenanceEvent).where(
+            MaintenanceEvent.account_id == account_id, MaintenanceEvent.kind_key == "haircut",
+        ))).scalars().all()
+        assert len(rows) == 1 and rows[0].done_on == target_date and rows[0].note == "target"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_date_corrections_serialize_absent_target(
+    db_clean, registered_supabase_user,
+):
+    """Two sessions racing for one absent target must merge, never collide."""
+    _, account_id = await registered_supabase_user()
+    _, other_account_id = await registered_supabase_user()
+    factory = get_sessionmaker()
+    source_a = PLAN_DATE - timedelta(days=20)
+    source_b = PLAN_DATE - timedelta(days=10)
+    target = PLAN_DATE - timedelta(days=30)
+
+    async with factory() as session:
+        await maintenance_service.record_done(
+            session, account_id, "haircut", done_on=source_a, today=PLAN_DATE, note="source A",
+        )
+        await maintenance_service.record_done(
+            session, account_id, "haircut", done_on=source_b, today=PLAN_DATE, note="source B",
+        )
+        await maintenance_service.record_done(
+            session, other_account_id, "haircut", done_on=source_a, today=PLAN_DATE, note="other account",
+        )
+        await session.commit()
+
+    # Hold each update long enough for both independent sessions to overlap.
+    # With the production advisory lock, only the first serialized correction
+    # reaches this trigger; without it, both can observe the absent target.
+    function_name = "vc06_test_pause_maintenance_update"
+    trigger_name = "vc06_test_pause_maintenance_update_trigger"
+    async with factory() as session:
+        await session.execute(text(
+            f"DROP TRIGGER IF EXISTS {trigger_name} ON maintenance_events"
+        ))
+        await session.execute(text(f"DROP FUNCTION IF EXISTS {function_name}()"))
+        await session.execute(text(f"""
+            CREATE OR REPLACE FUNCTION {function_name}() RETURNS trigger AS $$
+            BEGIN
+                PERFORM pg_sleep(0.25);
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """))
+        await session.execute(text(f"""
+            CREATE TRIGGER {trigger_name}
+            BEFORE UPDATE OF done_on ON maintenance_events
+            FOR EACH ROW EXECUTE FUNCTION {function_name}();
+        """))
+        await session.commit()
+
+    async def correct(old_date: date) -> str | Exception:
+        async with factory() as session:
+            try:
+                event = await maintenance_service.replace_done(
+                    session,
+                    account_id,
+                    "haircut",
+                    old_done_on=old_date,
+                    new_done_on=target,
+                    today=PLAN_DATE,
+                )
+                await session.commit()
+                return event.note or ""
+            except Exception as exc:  # assert below makes an uncontrolled failure test-visible
+                await session.rollback()
+                return exc
+
+    try:
+        notes = await asyncio.gather(correct(source_a), correct(source_b))
+    finally:
+        async with factory() as session:
+            await session.execute(text(
+                f"DROP TRIGGER IF EXISTS {trigger_name} ON maintenance_events"
+            ))
+            await session.execute(text(f"DROP FUNCTION IF EXISTS {function_name}()"))
+            await session.commit()
+
+    assert all(not isinstance(note, Exception) for note in notes), notes
+    assert all(note in {"source A", "source B"} for note in notes)
+
+    async with factory() as session:
+        rows = (await session.execute(select(MaintenanceEvent).where(
+            MaintenanceEvent.account_id == account_id,
+            MaintenanceEvent.kind_key == "haircut",
+        ).order_by(MaintenanceEvent.done_on))).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].done_on == target and rows[0].note in {"source A", "source B"}
+
+        other_rows = await maintenance_service.history(session, other_account_id, "haircut")
+        assert [(row.done_on, row.note) for row in other_rows] == [(source_a, "other account")]
+
+
+@pytest.mark.asyncio
 async def test_one_account_never_sees_another_accounts_maintenance(db_clean, registered_supabase_user):
     _, account_a = await registered_supabase_user()
     _, account_b = await registered_supabase_user()
@@ -378,6 +556,15 @@ async def test_one_account_never_sees_another_accounts_maintenance(db_clean, reg
         theirs = await maintenance_service.build_maintenance(session, account_b, plan_date=PLAN_DATE)
         assert all(row.status is MaintenanceStatus.NOT_TRACKED for row in theirs.decisions)
         assert await maintenance_service.history(session, account_b, "haircut") == []
+        with pytest.raises(NotFoundError):
+            await maintenance_service.replace_done(
+                session,
+                account_b,
+                "haircut",
+                old_done_on=PLAN_DATE - timedelta(days=50),
+                new_done_on=PLAN_DATE - timedelta(days=20),
+                today=PLAN_DATE,
+            )
 
 
 @pytest.mark.asyncio
@@ -1011,12 +1198,36 @@ async def test_customer_can_record_and_correct_a_historical_date(
     assert haircut["status"] == "not_due"
 
     corrected_date = (datetime.now(UTC).date() - timedelta(days=40)).isoformat()
-    await app_client.delete(f"/api/v2/maintenance/haircut/done/{ten_days_ago}", headers=headers)
-    corrected = await app_client.post(
-        "/api/v2/maintenance/haircut/done", headers=headers, json={"done_on": corrected_date},
+    corrected = await app_client.patch(
+        f"/api/v2/maintenance/haircut/history/{ten_days_ago}", headers=headers,
+        json={"done_on": corrected_date},
     )
+    assert corrected.status_code == 200
     haircut = next(r for r in corrected.json()["kinds"] if r["kind"] == "haircut")
     assert haircut["last_done_on"] == corrected_date
+
+
+@pytest.mark.asyncio
+async def test_date_correction_route_rejects_missing_source_and_future_target(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _ = await registered_supabase_user()
+    headers = {"Authorization": f"Bearer {token}"}
+    missing = await app_client.patch(
+        "/api/v2/maintenance/haircut/history/2026-03-01", headers=headers,
+        json={"done_on": "2026-03-02"},
+    )
+    assert missing.status_code == 404
+
+    recorded = await app_client.post(
+        "/api/v2/maintenance/haircut/done", headers=headers, json={"done_on": "2026-03-01"},
+    )
+    assert recorded.status_code == 200
+    future = await app_client.patch(
+        "/api/v2/maintenance/haircut/history/2026-03-01", headers=headers,
+        json={"done_on": "2099-01-01"},
+    )
+    assert future.status_code == 422
 
 
 @pytest.mark.asyncio

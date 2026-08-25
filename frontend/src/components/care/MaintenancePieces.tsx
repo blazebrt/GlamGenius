@@ -115,7 +115,7 @@ export function MaintenanceSetup({
       </View>
       <View style={styles.inline}>
         <Text style={styles.hint}>
-          Most people use about {kind.suggested_interval_days} days. It is only a suggestion.
+          Suggested starting point: {kind.suggested_interval_days} days.
         </Text>
         <TouchableOpacity
           accessibilityRole="button"

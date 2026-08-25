@@ -12,7 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.care import maintenance_service
 from app.domains.care.maintenance_rules import MAX_INTERVAL_DAYS, MIN_INTERVAL_DAYS
-from app.domains.care.schemas import MaintenanceDoneRequest, MaintenancePreferenceRequest
+from app.domains.care.schemas import (
+    MaintenanceDateCorrectionRequest,
+    MaintenanceDoneRequest,
+    MaintenancePreferenceRequest,
+)
 from app.domains.planning import clock
 from app.domains.planning import context as context_stage
 from app.shared.database.sql import get_session
@@ -105,6 +109,32 @@ async def forget_maintenance(
     payload = await list_maintenance(current=current, session=session)
     payload["removed"] = removed
     return payload
+
+
+@router.patch("/maintenance/{kind_key}/history/{old_date}")
+async def replace_maintenance_date(
+    kind_key: str,
+    old_date: date,
+    body: MaintenanceDateCorrectionRequest,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Correct one recorded date as one account-scoped transaction."""
+    plan_date = await _today_for(session, current.account_id)
+    try:
+        await maintenance_service.replace_done(
+            session,
+            current.account_id,
+            kind_key,
+            old_done_on=old_date,
+            new_done_on=body.done_on,
+            today=plan_date,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return await list_maintenance(current=current, session=session)
 
 
 @router.get("/maintenance/{kind_key}/history")

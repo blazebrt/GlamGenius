@@ -426,7 +426,9 @@ class MaintenancePreference(UUIDPrimaryKey, TimestampMixin, Base):
 
     A row only exists once they have expressed a choice. Absence means
     untracked, so nothing is ever assumed on their behalf. ``interval_days``
-    is their own rhythm; ``NULL`` keeps the catalogue default.
+    is their own rhythm; ``NULL`` means they have not declared a rhythm and
+    keeps the decision in ``needs_cadence``. The catalogue value remains only
+    ``suggested_interval_days`` until they explicitly accept it.
     """
 
     __tablename__ = "maintenance_preferences"

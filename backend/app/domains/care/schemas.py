@@ -124,6 +124,14 @@ class MaintenanceDoneRequest(BaseModel):
     note: str | None = Field(default=None, max_length=240)
 
 
+class MaintenanceDateCorrectionRequest(BaseModel):
+    """The replacement date for one already-recorded maintenance fact."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    done_on: date
+
+
 __all__ = [
     "CARE_CONTEXT_VERSION",
     "CareContext",
@@ -131,6 +139,7 @@ __all__ = [
     "CareEvent",
     "CareFact",
     "MaintenanceDoneRequest",
+    "MaintenanceDateCorrectionRequest",
     "MaintenancePreferenceRequest",
     "MissingCareFact",
 ]

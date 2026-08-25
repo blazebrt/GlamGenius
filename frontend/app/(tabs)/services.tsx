@@ -24,6 +24,7 @@ import {
   forgetMaintenanceDone,
   getMaintenance,
   recordMaintenanceDone,
+  replaceMaintenanceDone,
   updateMaintenance,
 } from '../../src/services/apiV2';
 import { COLORS, FONTS, SPACING } from '../../src/theme/colors';
@@ -90,13 +91,11 @@ export default function MaintenanceScreen() {
     onRecordToday: () => void run(() => recordMaintenanceDone(row.kind)),
     onSaveCadence: (days: number) => void run(() => updateMaintenance(row.kind, { interval_days: days })),
     onClearCadence: () => void run(() => updateMaintenance(row.kind, { interval_days: null })),
-    // The field is prefilled with the current anchor, so saving a different
-    // date means "correct this one". The anchor is the latest recorded date,
-    // so an earlier correction would otherwise sit behind the old one and do
-    // nothing visible — the previous date is removed first.
+    // The field is prefilled with the current anchor, so saving a date means
+    // "correct this one". The server performs that correction atomically.
     onSaveLastDate: (isoDate: string) => void run(async () => {
       const previous = row.last_done_on;
-      if (previous && previous !== isoDate) await forgetMaintenanceDone(row.kind, previous);
+      if (previous) return replaceMaintenanceDone(row.kind, previous, isoDate);
       return recordMaintenanceDone(row.kind, { done_on: isoDate });
     }),
     onForgetLastDate: (isoDate: string) => void run(() => forgetMaintenanceDone(row.kind, isoDate)),

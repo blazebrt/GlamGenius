@@ -2385,3 +2385,10 @@ export const forgetMaintenanceDone = async (
   doneOn: string,
 ): Promise<MaintenanceOverview & { removed: boolean }> =>
   (await api.delete<MaintenanceOverview & { removed: boolean }>(`${V2}/maintenance/${kind}/done/${doneOn}`)).data;
+
+export const replaceMaintenanceDone = async (
+  kind: string,
+  oldDate: string,
+  newDate: string,
+): Promise<MaintenanceOverview> =>
+  (await api.patch<MaintenanceOverview>(`${V2}/maintenance/${kind}/history/${oldDate}`, { done_on: newDate })).data;
