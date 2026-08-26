@@ -12,11 +12,10 @@ let mockRouteParams: Record<string, string> = {};
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => false };
 
 jest.mock('expo-router', () => {
-  const { useEffect } = require('react');
   return {
     useLocalSearchParams: () => mockRouteParams,
     useRouter: () => mockRouter,
-    useFocusEffect: (callback: () => void | (() => void)) => useEffect(callback, []),
+    useFocusEffect: (callback: () => void | (() => void)) => { callback(); },
   };
 });
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
