@@ -5,9 +5,9 @@ import importlib
 
 import pytest
 
+from app.shared.security.deps import get_current_account
 from tests.conftest import auth
 from tests.journey import ok
-from app.shared.security.deps import get_current_account
 
 pytestmark = pytest.mark.asyncio
 
