@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import { CATEGORY_META } from '../../src/components/inventory/InventoryPieces';
-import { STYLE_CATEGORIES } from '../../src/navigation/finalIA';
+import { countForDomain, STYLE_CATEGORIES } from '../../src/navigation/finalIA';
 import { getInventorySummary, InventoryCategory, InventorySummary } from '../../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../src/theme/colors';
 
@@ -23,6 +23,8 @@ export default function StyleScreen() {
   const openCollection = (category?: InventoryCategory) => router.push({
     pathname: '/(tabs)/inventory', params: { domain: 'style', ...(category ? { category } : {}) },
   });
+  const addStyleItem = () => router.push({ pathname: '/inventory-add', params: { domain: 'style', category: 'wardrobe' } });
+  const styleItemCount = countForDomain(summary?.categories, 'style');
 
   return <View style={[styles.container, { paddingTop: insets.top }]}>
     <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 110 }}>
@@ -44,7 +46,7 @@ export default function StyleScreen() {
 
       <View style={styles.sectionHeader}><Text style={styles.section}>What you own</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Manage your wardrobe" onPress={() => openCollection()}><Text style={styles.link}>Manage</Text></TouchableOpacity></View>
       <View style={styles.grid}>{STYLE_CATEGORIES.map((category) => <CategoryEntry key={category} category={category} count={summary?.categories[category] || 0} onPress={() => openCollection(category)} />)}</View>
-      {!summary?.total_items && <View style={styles.empty}><Text style={styles.emptyTitle}>Start with one thing you already wear</Text><Text style={styles.body}>You do not need to catalogue everything today.</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Add a wardrobe item" onPress={() => router.push({ pathname: '/inventory-add', params: { category: 'wardrobe' } })}><Text style={styles.link}>Add a wardrobe item</Text></TouchableOpacity></View>}
+      {summary !== null && styleItemCount === 0 && <View style={styles.empty}><Text style={styles.emptyTitle}>Start with one thing you already wear</Text><Text style={styles.body}>You do not need to catalogue everything today.</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Add a wardrobe item" onPress={addStyleItem}><Text style={styles.link}>Add a wardrobe item</Text></TouchableOpacity></View>}
     </ScrollView>
   </View>;
 }

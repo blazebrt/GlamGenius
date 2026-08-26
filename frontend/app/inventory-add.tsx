@@ -8,6 +8,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { CATEGORY_META } from '../src/components/inventory/InventoryPieces';
 import { INVENTORY_CATEGORIES, InventoryCategory, createInventoryItem, extractInventoryItem, uploadMedia } from '../src/services/apiV2';
 import { errorMessage } from '../src/services/api';
+import { categoriesForDomain } from '../src/navigation/finalIA';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 
 const EXTRA_FIELD: Record<InventoryCategory, { key: string; label: string; placeholder: string }> = {
@@ -18,8 +19,11 @@ const EXTRA_FIELD: Record<InventoryCategory, { key: string; label: string; place
 };
 
 export default function InventoryAddScreen() {
-  const router = useRouter(); const insets = useSafeAreaInsets(); const params = useLocalSearchParams<{ category?: string }>();
-  const initial = INVENTORY_CATEGORIES.includes(params.category as InventoryCategory) ? params.category as InventoryCategory : 'wardrobe';
+  const router = useRouter(); const insets = useSafeAreaInsets(); const params = useLocalSearchParams<{ category?: string; domain?: string }>();
+  const allowedCategories = categoriesForDomain(params.domain);
+  const initial = allowedCategories
+    ? allowedCategories.includes(params.category as InventoryCategory) ? params.category as InventoryCategory : allowedCategories[0]
+    : INVENTORY_CATEGORIES.includes(params.category as InventoryCategory) ? params.category as InventoryCategory : 'wardrobe';
   const [category, setCategory] = useState<InventoryCategory>(initial); const [name, setName] = useState(''); const [brand, setBrand] = useState('');
   const [extra, setExtra] = useState(''); const [price, setPrice] = useState(''); const [expiry, setExpiry] = useState('');
   const [saving, setSaving] = useState(false); const [message, setMessage] = useState('');
@@ -51,7 +55,7 @@ export default function InventoryAddScreen() {
   };
   return <View style={[styles.container, { paddingTop: insets.top }]}><View style={styles.top}><TouchableOpacity accessibilityRole="button" accessibilityLabel="Back to inventory" onPress={() => router.back()}><Ionicons name="arrow-back" size={24} color={COLORS.textPrimary} /></TouchableOpacity><Text style={styles.topTitle}>Add item</Text><View style={{ width: 24 }} /></View><ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 40 }} keyboardShouldPersistTaps="handled">
     <Text style={styles.eyebrow}>ONE ITEM AT A TIME</Text><Text style={styles.title}>What are you adding?</Text><Text style={styles.body}>Start with the items you use most. You can fill in more detail later.</Text>
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categories}>{INVENTORY_CATEGORIES.map((key) => <TouchableOpacity key={key} accessibilityRole="button" accessibilityLabel={CATEGORY_META[key].label} accessibilityState={{ selected: category === key }} onPress={() => { setCategory(key); setExtra(''); }} style={[styles.chip, category === key && styles.chipSelected]}><Text style={[styles.chipText, category === key && styles.chipTextSelected]}>{CATEGORY_META[key].label}</Text></TouchableOpacity>)}</ScrollView>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categories}>{(allowedCategories || INVENTORY_CATEGORIES).map((key) => <TouchableOpacity key={key} accessibilityRole="button" accessibilityLabel={CATEGORY_META[key].label} accessibilityState={{ selected: category === key }} onPress={() => { setCategory(key); setExtra(''); }} style={[styles.chip, category === key && styles.chipSelected]}><Text style={[styles.chipText, category === key && styles.chipTextSelected]}>{CATEGORY_META[key].label}</Text></TouchableOpacity>)}</ScrollView>
     <View style={styles.captureCard}><Text style={styles.captureTitle}>Create a draft from an image</Text><Text style={styles.body}>AI suggestions stay unverified until you review them.</Text><View style={styles.captureRow}><TouchableOpacity accessibilityRole="button" accessibilityLabel="Photograph one item" disabled={saving} onPress={() => void capture('camera')} style={styles.captureButton}><Ionicons name="camera-outline" size={20} color={COLORS.primary} /><Text style={styles.captureText}>Photo</Text></TouchableOpacity><TouchableOpacity accessibilityRole="button" accessibilityLabel="Import product screenshot" disabled={saving} onPress={() => void capture('library')} style={styles.captureButton}><Ionicons name="image-outline" size={20} color={COLORS.primary} /><Text style={styles.captureText}>Screenshot</Text></TouchableOpacity></View><Text style={styles.batchNote}>Shelf, wardrobe and video batch capture are being quality-tested and are not claimed as accurate yet.</Text></View>
     <Text style={styles.or}>OR ADD MANUALLY</Text>
     <Text style={styles.label}>Item name</Text><TextInput accessibilityLabel="Inventory item name" value={name} onChangeText={setName} placeholder="Cotton work kurta" placeholderTextColor={COLORS.textMuted} style={styles.input} />

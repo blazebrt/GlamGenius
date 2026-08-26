@@ -33,7 +33,8 @@ export default function InventoryScreen() {
           : Promise.all([getInventoryItems(filters)]),
       ]);
       setSummary(nextSummary);
-      setItems(listings.flatMap((listing) => listing.items));
+      const scopedItems = listings.flatMap((listing) => listing.items).filter((item) => !allowedCategories || allowedCategories.includes(item.category));
+      setItems([...new Map(scopedItems.map((item) => [item.id, item])).values()]);
     }
     catch (err) { console.warn('inventory load failed', err); setError(true); }
     finally { setLoading(false); }
@@ -41,7 +42,7 @@ export default function InventoryScreen() {
   useEffect(() => { void load(); }, [load]);
   const add = (selected?: InventoryCategory) => {
     const defaultCategory = selected || category || allowedCategories?.[0];
-    router.push({ pathname: '/inventory-add', params: defaultCategory ? { category: defaultCategory } : {} });
+    router.push({ pathname: '/inventory-add', params: { ...(domain ? { domain } : {}), ...(defaultCategory ? { category: defaultCategory } : {}) } });
   };
 
   if (loading && !summary) return <View style={styles.center}><ActivityIndicator color={COLORS.primary} /><Text style={styles.muted}>Opening your inventory…</Text></View>;
@@ -61,7 +62,12 @@ export default function InventoryScreen() {
       <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open duplicate candidates" onPress={() => router.push({ pathname: '/inventory-insights', params: { view: 'duplicates' } })} style={styles.insight}><Text style={styles.insightValue}>{summary.duplicate_candidates}</Text><Text style={styles.insightLabel}>Duplicates</Text></TouchableOpacity>
     </View>
       <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open your shelf" onPress={() => router.push('/shelf')} style={styles.shelfBanner}><Ionicons name="flask-outline" size={20} color={COLORS.primary} /><View style={{ flex: 1 }}><Text style={styles.shelfTitle}>Your shelf</Text><Text style={styles.shelfBody}>Skin Care, Hair Care, perfumes and supplements — what fits where, and what needs attention.</Text></View><Ionicons name="chevron-forward" size={18} color={COLORS.primary} /></TouchableOpacity>
-    <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open Value to Recover" onPress={() => router.push({ pathname: '/inventory-insights', params: { view: 'value' } })} style={styles.valueBanner}><View><Text style={styles.valueLabel}>ESTIMATED VALUE TO RECOVER</Text><Text style={styles.value}>₹{summary.at_risk_value.toLocaleString('en-IN')}</Text></View><View style={{ flex: 1 }} /><Text style={styles.estimate}>Estimate</Text><Ionicons name="chevron-forward" size={18} color={COLORS.primary} /></TouchableOpacity></>}
+      <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open Value to Recover" onPress={() => router.push({ pathname: '/inventory-insights', params: { view: 'value' } })} style={styles.valueBanner}><View><Text style={styles.valueLabel}>ESTIMATED VALUE TO RECOVER</Text><Text style={styles.value}>₹{summary.at_risk_value.toLocaleString('en-IN')}</Text></View><View style={{ flex: 1 }} /><Text style={styles.estimate}>Estimate</Text><Ionicons name="chevron-forward" size={18} color={COLORS.primary} /></TouchableOpacity></>}
+    {allowedCategories && <><Text style={styles.sectionTitle}>Owned-item insights</Text><View style={styles.insightRow}>
+      <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Open ${domain} low-use products`} onPress={() => router.push({ pathname: '/inventory-insights', params: { view: 'low-use', domain } })} style={styles.insight}><Text style={styles.insightLabel}>Low-use products</Text></TouchableOpacity>
+      <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Open ${domain} expiring products`} onPress={() => router.push({ pathname: '/inventory-insights', params: { view: 'expiring', domain } })} style={styles.insight}><Text style={styles.insightLabel}>Expiring products</Text></TouchableOpacity>
+      <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Open ${domain} duplicate candidates`} onPress={() => router.push({ pathname: '/inventory-insights', params: { view: 'duplicates', domain } })} style={styles.insight}><Text style={styles.insightLabel}>Duplicate candidates</Text></TouchableOpacity>
+    </View></>}
 
     <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>{category ? `In ${CATEGORY_META[category].label}` : query || brand || colour || ingredient || occasion || usageLevel ? 'Filtered results' : 'Recently added'}</Text>{(query || category || brand || colour || ingredient || occasion || usageLevel) && <TouchableOpacity accessibilityRole="button" accessibilityLabel="Clear inventory filters" onPress={() => { setQuery(''); setCategory(undefined); setBrand(''); setColour(''); setIngredient(''); setOccasion(''); setUsageLevel(undefined); }}><Text style={styles.clear}>Clear</Text></TouchableOpacity>}</View>
     {items.length ? items.map((item) => <InventoryItemCard key={item.id} item={item} onPress={() => router.push({ pathname: '/inventory-item', params: { id: item.id } })} />) : <View style={styles.empty}><Ionicons name="archive-outline" size={28} color={COLORS.primary} /><Text style={styles.emptyTitle}>{query || category ? 'No matching items' : 'Start with one useful item'}</Text><Text style={styles.muted}>You do not need to catalogue everything today.</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Add first inventory item" onPress={() => add(category)}><Text style={styles.clear}>Add an item</Text></TouchableOpacity></View>}

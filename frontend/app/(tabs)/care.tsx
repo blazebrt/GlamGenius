@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import { CATEGORY_META } from '../../src/components/inventory/InventoryPieces';
-import { CARE_CATEGORIES } from '../../src/navigation/finalIA';
+import { CARE_CATEGORIES, countForDomain } from '../../src/navigation/finalIA';
 import { getInventorySummary, InventoryCategory, InventorySummary } from '../../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../src/theme/colors';
 
@@ -15,6 +15,8 @@ export default function CareScreen() {
   const [summary, setSummary] = useState<InventorySummary | null>(null);
   useFocusEffect(useCallback(() => { let active = true; void getInventorySummary().then((value) => { if (active) setSummary(value); }).catch(() => undefined); return () => { active = false; }; }, []));
   const openCollection = (category?: InventoryCategory) => router.push({ pathname: '/(tabs)/inventory', params: { domain: 'care', ...(category ? { category } : {}) } });
+  const addCareItem = () => router.push({ pathname: '/inventory-add', params: { domain: 'care', category: 'beauty' } });
+  const careItemCount = countForDomain(summary?.categories, 'care');
 
   return <View style={[styles.container, { paddingTop: insets.top }]}><ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 110 }}>
     <Text style={styles.eyebrow}>CARE</Text><Text style={styles.title}>Your routines and shelf</Text><Text style={styles.body}>The products you own, the routines you choose, and safe upkeep timing.</Text>
@@ -23,7 +25,7 @@ export default function CareScreen() {
     <Entry icon="calendar-outline" title="Upkeep timing" body="Track the care rhythms you have chosen." label="Open upkeep timing" onPress={() => router.push('/(tabs)/services')} />
     <View style={styles.sectionHeader}><Text style={styles.section}>Owned care items</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Manage your care items" onPress={() => openCollection()}><Text style={styles.link}>Manage</Text></TouchableOpacity></View>
     <View style={styles.grid}>{CARE_CATEGORIES.map((category) => <CategoryEntry key={category} category={category} count={summary?.categories[category] || 0} onPress={() => openCollection(category)} />)}</View>
-    {!summary?.total_items && <View style={styles.empty}><Text style={styles.emptyTitle}>Start with one product you already own</Text><Text style={styles.body}>Care is for your shelf and routines, never a prompt to buy something.</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Add a Skin Care item" onPress={() => router.push({ pathname: '/inventory-add', params: { category: 'beauty' } })}><Text style={styles.link}>Add a Skin Care item</Text></TouchableOpacity></View>}
+    {summary !== null && careItemCount === 0 && <View style={styles.empty}><Text style={styles.emptyTitle}>Start with one product you already own</Text><Text style={styles.body}>Care is for your shelf and routines, never a prompt to buy something.</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Add a Skin Care item" onPress={addCareItem}><Text style={styles.link}>Add a Skin Care item</Text></TouchableOpacity></View>}
   </ScrollView></View>;
 }
 
