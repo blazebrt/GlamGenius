@@ -68,10 +68,10 @@ async def list_facts(session: AsyncSession, account_id: uuid.UUID, item_id: uuid
 
 async def create_fact(session: AsyncSession, account_id: uuid.UUID, item_id: uuid.UUID, body: LabelComponentCreate) -> SupplementLabelComponent:
     item = await owned_supplement_item(session, account_id, item_id)
-    normalized, canonical = component_identity(body.raw_name)
+    canonical, _display = component_identity(body.raw_name)
     values = {
         "account_id": account_id, "item_id": item.id, "raw_name": body.raw_name.strip(),
-        "normalized_name": normalized, "canonical_component_key": canonical or None,
+        "normalized_name": canonical, "canonical_component_key": canonical or None,
         "amount": body.amount, "unit": body.unit.strip() if body.unit else None,
         "serving_text": body.serving_text.strip() if body.serving_text else None,
         # The public endpoint is manual entry only; provenance is server-owned.
@@ -118,9 +118,9 @@ async def update_fact(session: AsyncSession, account_id: uuid.UUID, item_id: uui
         raise NotFoundError("We could not find that label fact.")
     values = body.model_dump(exclude_unset=True)
     if "raw_name" in values:
-        normalized, canonical = component_identity(values["raw_name"])
+        canonical, _display = component_identity(values["raw_name"])
         row.raw_name = values["raw_name"].strip()
-        row.normalized_name = normalized
+        row.normalized_name = canonical
         row.canonical_component_key = canonical or None
         values.pop("raw_name")
     for key, value in values.items():
