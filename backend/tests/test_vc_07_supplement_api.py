@@ -7,6 +7,7 @@ import pytest
 
 from tests.conftest import auth
 from tests.journey import ok
+from app.shared.security.deps import get_current_account
 
 pytestmark = pytest.mark.asyncio
 
@@ -19,6 +20,53 @@ async def test_summary_route_has_one_registered_get_operation():
     assert len(routes) == 1
     assert routes[0].methods == {"GET"}
     assert list(server.app.openapi()["paths"]["/api/v2/supplements/summary"]) == ["get"]
+
+
+async def test_every_customer_supplement_route_requires_a_registered_account():
+    supplements = importlib.import_module("app.api.v2.supplements")
+
+    routes = [
+        route
+        for route in supplements.router.routes
+        if getattr(route, "path", "").startswith("/supplements")
+    ]
+    assert routes
+    for route in routes:
+        dependencies = route.dependant.dependencies
+        assert any(dependency.call is get_current_account for dependency in dependencies), route.path
+
+
+async def test_professional_boundary_requires_registered_account(
+    app_client, db_clean, fake_supabase_user, registered_supabase_user,
+):
+    path = "/api/v2/supplements/professional-boundary"
+
+    anonymous = await app_client.post(path, json={"question": "Can I take this with my medicine?"})
+    assert anonymous.status_code == 401
+
+    unregistered_token, _ = fake_supabase_user()
+    unregistered = await app_client.post(
+        path, headers=auth(unregistered_token), json={"question": "Can I take this with my medicine?"},
+    )
+    assert unregistered.status_code == 403
+    assert unregistered.json()["detail"]["code"] == "REGISTRATION_REQUIRED"
+
+    registered_token, _ = await registered_supabase_user()
+    medical = ok(await app_client.post(
+        path, headers=auth(registered_token), json={"question": "Can I take this with my medicine?"},
+    ))
+    assert medical["boundary"] is True
+    medical_text = str(medical).lower()
+    for prohibited in ("diagnosis", "dosage", "interaction"):
+        assert prohibited not in medical_text
+
+    ordinary = ok(await app_client.post(
+        path, headers=auth(registered_token), json={"question": "I take this after breakfast."},
+    ))
+    assert ordinary == {
+        "boundary": False,
+        "message": "We track supplements as inventory — name, brand, dates and how often you take them.",
+    }
 
 
 async def test_owned_label_facts_overlap_and_cross_account_isolation(

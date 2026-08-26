@@ -31,7 +31,10 @@ async def supplement_summary(
 
 
 @router.post("/supplements/professional-boundary")
-async def supplement_professional_boundary(body: SupplementQuestion):
+async def supplement_professional_boundary(
+    body: SupplementQuestion,
+    current: CurrentAccount = Depends(get_current_account),
+):
     """Route health-like supplement questions without attempting an answer."""
     return supplement_question(body.question)
 
