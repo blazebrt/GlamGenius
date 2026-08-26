@@ -44,6 +44,7 @@ from app.domains.inventory.models import (
     InventoryAttribute,
     InventoryEvent,
     InventoryItem,
+    SupplementDetail,
 )
 from app.domains.media import service as media_service
 from app.domains.media.models import MediaAsset
@@ -100,6 +101,7 @@ from app.domains.routines.models import (
     UserReportedObservation,
 )
 from app.domains.scan.models import Scan
+from app.domains.supplements.models import SupplementLabelComponent
 from app.shared.database.base import utcnow
 
 logger = logging.getLogger(__name__)
@@ -231,10 +233,18 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
         session,
         select(InventoryEvent).where(InventoryEvent.account_id == account_id),
     )
+    supplement_details = await _fetch(
+        session,
+        select(SupplementDetail).where(SupplementDetail.item_id.in_(item_ids)),
+    ) if item_ids else []
     return {
         "items": [_row_dict(i, [c.name for c in InventoryItem.__table__.columns]) for i in items],
         "attributes": [_row_dict(a, [c.name for c in InventoryAttribute.__table__.columns]) for a in attrs],
         "events": [_row_dict(e, [c.name for c in InventoryEvent.__table__.columns]) for e in events],
+        "supplement_details": [
+            _row_dict(row, [c.name for c in SupplementDetail.__table__.columns])
+            for row in supplement_details
+        ],
     }
 
 
@@ -362,6 +372,9 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         session,
         select(SupplementSafetyFlag).where(SupplementSafetyFlag.account_id == account_id),
     )
+    label_components = await _fetch(
+        session, select(SupplementLabelComponent).where(SupplementLabelComponent.account_id == account_id),
+    )
     nutrition_preferences = await _fetch(
         session,
         select(NutritionPreference).where(NutritionPreference.account_id == account_id),
@@ -413,6 +426,10 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         "supplement_safety_flags": [
             _row_dict(r, [c.name for c in SupplementSafetyFlag.__table__.columns])
             for r in supplement_safety_flags
+        ],
+        "supplement_label_components": [
+            _row_dict(r, [c.name for c in SupplementLabelComponent.__table__.columns])
+            for r in label_components
         ],
         "nutrition_preferences": [
             _row_dict(r, [c.name for c in NutritionPreference.__table__.columns])

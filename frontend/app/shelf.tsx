@@ -16,7 +16,7 @@ import {
 } from '../src/components/routines/RoutinePieces';
 import {
   PerfumePick, ShelfSummary, SupplementRow, analyseShelf, getPerfumeRecommendation,
-  getShelfSummary, getSupplementsSummary,
+  SupplementUtilitySummary, getShelfSummary, getSupplementsSummary,
 } from '../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 
@@ -35,7 +35,8 @@ export default function ShelfScreen() {
   const [summary, setSummary] = useState<ShelfSummary | null>(null);
   const [perfumes, setPerfumes] = useState<{ recommendations: PerfumePick[]; note: string; message: string | null } | null>(null);
   const [supplements, setSupplements] = useState<{
-    supplements: SupplementRow[]; we_do_not: string[]; disclaimer: string; message: string | null;
+    supplements: SupplementRow[]; overlaps?: SupplementUtilitySummary['overlaps'];
+    we_do_not: string[]; disclaimer: string; message: string | null;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -168,6 +169,18 @@ export default function ShelfScreen() {
         {tab === 'supplements' && (supplements?.supplements.length ? (
           <>
             {supplements.supplements.map((row) => <SupplementCard key={row.inventory_item_id} row={row} />)}
+            {!!supplements.overlaps?.length && (
+              <View style={styles.overlapCard} accessibilityLabel="Repeated label components">
+                <Text style={styles.cardTitle}>Repeated label components</Text>
+                <Text style={styles.muted}>The same named component appears on more than one of your labels.</Text>
+                {supplements.overlaps.map((group) => (
+                  <View key={group.component_key} style={styles.overlapRow}>
+                    <Text style={styles.overlapName}>{group.display_name}</Text>
+                    <Text style={styles.muted}>{group.items.map((item) => item.product_name).join(' · ')}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
             <View style={styles.weDoNot} accessibilityLabel="What we do not do">
               <Text style={styles.cardTitle}>What we do not do</Text>
               {supplements.we_do_not.map((line, index) => (
@@ -208,6 +221,9 @@ const styles = StyleSheet.create({
   actionText: { fontFamily: FONTS.family.bodySemibold, color: COLORS.textPrimary, fontSize: 12 },
   cardTitle: { fontFamily: FONTS.family.headingMedium, color: COLORS.textPrimary, fontSize: 15 },
   weDoNot: { backgroundColor: COLORS.card, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, padding: 13, marginTop: 12 },
+  overlapCard: { backgroundColor: COLORS.card, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, padding: 13, marginTop: 12 },
+  overlapRow: { borderTopWidth: 1, borderTopColor: COLORS.border, marginTop: 9, paddingTop: 9 },
+  overlapName: { fontFamily: FONTS.family.bodySemibold, color: COLORS.textPrimary, fontSize: 12 },
   muted: { fontFamily: FONTS.family.body, color: COLORS.textSecondary, fontSize: 12, lineHeight: 18, marginTop: 5 },
   disclaimer: { fontFamily: FONTS.family.body, color: COLORS.textMuted, fontSize: 11, marginTop: 12, textAlign: 'center' },
 });

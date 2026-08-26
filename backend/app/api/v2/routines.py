@@ -224,18 +224,6 @@ async def perfume_recommendation(
     )
 
 
-# --- Supplements ------------------------------------------------------------------
-
-
-@router.get("/supplements/summary")
-async def supplements_summary(
-    current: CurrentAccount = Depends(get_current_account),
-    session: AsyncSession = Depends(get_session),
-):
-    """Supplement inventory: names, dates, and nothing that resembles advice."""
-    return await service.supplements_summary(session, account_id=current.account_id)
-
-
 # --- Nutrition and hydration ---------------------------------------------------------
 
 

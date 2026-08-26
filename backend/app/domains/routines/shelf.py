@@ -35,21 +35,11 @@ from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import ProductIngredient
 from app.domains.routines.ontology import INGREDIENT_BY_KEY, SEVERITY_AVOID, SEVERITY_CAUTION, SLOT_BY_KEY
 from app.domains.routines.rules import Finding, ShelfProduct
-from app.domains.routines.safety import (
-    SUPPLEMENT_DISCLAIMER,
-    SUPPLEMENT_FLAG_EXPIRED,
-    SUPPLEMENT_FLAG_EXPIRING,
-    SUPPLEMENT_FLAG_NO_EXPIRY,
-    SUPPLEMENT_FLAG_PROFESSIONAL,
-    SUPPLEMENT_FLAG_TEXT,
-    needs_professional,
-)
 
 # Categories the routine engine reasons over. Perfumes and supplements are
 # inventory with their own, narrower handling.
 ROUTINE_CATEGORIES = ("beauty", "hair")
 
-SUPPLEMENT_EXPIRING_DAYS = 45
 
 
 @dataclass
@@ -439,73 +429,4 @@ def consistency(
             "Consistency over the last fortnight. Missing a day is not a problem — "
             "we do not count streaks."
         ),
-    }
-
-
-# --- Supplements --------------------------------------------------------------
-
-
-def supplement_flags(context: ShelfContext) -> list[dict[str, Any]]:
-    """The only things this app is allowed to say about a supplement.
-
-    Expiry status, a missing date, and a pointer at a professional when the
-    user's own recorded purpose reads like a health question. No dosage, no
-    effect, no interaction — the set is closed, and it is closed here.
-    """
-    rows: list[dict[str, Any]] = []
-    for item in context.by_category("supplements"):
-        details = item.details or {}
-        expiry = inventory_service.effective_expiry_from_details(details)
-        days = (expiry - context.today).days if expiry else None
-
-        flags: list[str] = []
-        if days is None:
-            flags.append(SUPPLEMENT_FLAG_NO_EXPIRY)
-        elif days < 0:
-            flags.append(SUPPLEMENT_FLAG_EXPIRED)
-        elif days <= SUPPLEMENT_EXPIRING_DAYS:
-            flags.append(SUPPLEMENT_FLAG_EXPIRING)
-
-        purpose = details.get("user_entered_purpose") or ""
-        if needs_professional(purpose):
-            flags.append(SUPPLEMENT_FLAG_PROFESSIONAL)
-
-        rows.append({
-            "inventory_item_id": str(item.id),
-            "display_name": item.display_name,
-            "brand": item.brand,
-            # Recorded verbatim and never interpreted.
-            "user_entered_purpose": purpose or None,
-            "use_frequency": details.get("use_frequency"),
-            "expiry_date": expiry.isoformat() if expiry else None,
-            "opened_date": details.get("opened_date"),
-            "days_to_expiry": days,
-            "flags": [{"flag": flag, "message": SUPPLEMENT_FLAG_TEXT[flag]} for flag in flags],
-        })
-    return rows
-
-
-def supplement_summary(context: ShelfContext) -> dict[str, Any]:
-    """Supplement inventory. Tracking only, and it says so."""
-    rows = supplement_flags(context)
-    return {
-        "supplements": rows,
-        "count": len(rows),
-        "flag_counts": {
-            SUPPLEMENT_FLAG_EXPIRED: sum(1 for row in rows for flag in row["flags"] if flag["flag"] == SUPPLEMENT_FLAG_EXPIRED),
-            SUPPLEMENT_FLAG_EXPIRING: sum(1 for row in rows for flag in row["flags"] if flag["flag"] == SUPPLEMENT_FLAG_EXPIRING),
-            SUPPLEMENT_FLAG_NO_EXPIRY: sum(1 for row in rows for flag in row["flags"] if flag["flag"] == SUPPLEMENT_FLAG_NO_EXPIRY),
-        },
-        "tracked_fields": [
-            "name", "brand", "what you said it is for", "expiry date",
-            "opened date", "how often you take it", "label text",
-        ],
-        "we_do_not": [
-            "Tell you how much to take",
-            "Tell you to start or stop anything",
-            "Say what a supplement will do for you",
-            "Advise on interactions with medicines",
-        ],
-        "disclaimer": SUPPLEMENT_DISCLAIMER,
-        "message": None if rows else "No supplements recorded. Add one and we will track its dates for you.",
     }
