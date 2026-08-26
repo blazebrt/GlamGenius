@@ -214,12 +214,6 @@ export default function ProfileScreen() {
           <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
         </TouchableOpacity>
 
-        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open Improve" style={styles.appearanceCard} onPress={() => router.push('/improve')}>
-          <Ionicons name="list-outline" size={28} color={COLORS.primary} />
-          <View style={{ flex: 1 }}><Text style={styles.appearanceTitle}>Improve</Text><Text style={styles.appearanceText}>Your routines, how they are going, and what on your shelf needs attention</Text></View>
-          <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
-        </TouchableOpacity>
-
         <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(auth)/welcome')}>
           <Ionicons name="log-in-outline" size={20} color={COLORS.primary} />
           <Text style={styles.linkText}>Sign in / create account</Text>

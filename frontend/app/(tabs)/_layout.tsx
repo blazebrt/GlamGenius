@@ -1,11 +1,12 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { View, StyleSheet, Platform } from 'react-native';
+import { StyleSheet, Platform } from 'react-native';
 import { COLORS, FONTS } from '../../src/theme/colors';
+import { LEGACY_HIDDEN_TAB_ROUTES } from '../../src/navigation/finalIA';
 
 /**
- * Primary navigation: Today · Inventory · Style Me · Planner · You.
+ * Final primary navigation: Today · Style · Care · Plan · You.
  *
  * Home and Today are one screen now — opening the app should answer "what do I
  * wear today", not present a menu. The skin check, salon ideas and history are
@@ -31,44 +32,36 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="inventory"
+        name="style"
         options={{
-          title: 'Inventory',
-          tabBarIcon: ({ color }) => <Ionicons name="archive-outline" size={22} color={color} />,
+          title: 'Style',
+          tabBarIcon: ({ color }) => <Ionicons name="shirt-outline" size={22} color={color} />,
         }}
       />
       <Tabs.Screen
-        name="style-me-tab"
+        name="care"
         options={{
-          title: 'Style Me',
-          tabBarIcon: () => (
-            <View style={styles.centreButton}>
-              <Ionicons name="sparkles" size={24} color={COLORS.white} />
-            </View>
-          ),
-          tabBarLabel: () => null,
+          title: 'Care',
+          tabBarIcon: ({ color }) => <Ionicons name="leaf-outline" size={22} color={color} />,
         }}
       />
       <Tabs.Screen
-        name="planner"
+        name="plan"
         options={{
-          title: 'Planner',
+          title: 'Plan',
           tabBarIcon: ({ color }) => <Ionicons name="calendar-outline" size={22} color={color} />,
         }}
       />
       <Tabs.Screen
-        name="profile"
+        name="you"
         options={{
           title: 'You',
           tabBarIcon: ({ color }) => <Ionicons name="person-outline" size={22} color={color} />,
         }}
       />
 
-      {/* Still routable, just not tabs. */}
-      <Tabs.Screen name="home" options={{ href: null }} />
-      <Tabs.Screen name="scan-tab" options={{ href: null }} />
-      <Tabs.Screen name="history" options={{ href: null }} />
-      <Tabs.Screen name="services" options={{ href: null }} />
+      {/* Compatibility routes remain routable but are never primary tabs. */}
+      {LEGACY_HIDDEN_TAB_ROUTES.map((name) => <Tabs.Screen key={name} name={name} options={{ href: null }} />)}
     </Tabs>
   );
 }
@@ -85,14 +78,5 @@ const styles = StyleSheet.create({
   tabBarLabel: {
     fontSize: 11,
     fontFamily: FONTS.family.bodyMedium,
-  },
-  centreButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: COLORS.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 20,
   },
 });

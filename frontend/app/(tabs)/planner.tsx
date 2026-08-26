@@ -166,7 +166,7 @@ export default function PlannerScreen() {
         contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 110 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAll} tintColor={COLORS.primary} />}
       >
-        <Text style={styles.eyebrow}>PLAN / PLANNER</Text>
+        <Text style={styles.eyebrow}>PLAN</Text>
 
         <UpcomingEvents
           events={upcoming}

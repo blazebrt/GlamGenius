@@ -184,11 +184,11 @@ export default function TodayScreen() {
         <MissingInformation plan={plan} />
 
         <View style={styles.shortcuts}>
-          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open the weekly planner" onPress={() => router.push('/(tabs)/planner')} style={styles.shortcut}>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open the weekly plan" onPress={() => router.push('/(tabs)/plan')} style={styles.shortcut}>
             <Ionicons name="calendar-outline" size={19} color={COLORS.primary} />
             <Text style={styles.shortcutText}>Plan the week</Text>
           </TouchableOpacity>
-          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open my routines" onPress={() => router.push('/improve')} style={styles.shortcut}>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open my routines" onPress={() => router.push('/(tabs)/care')} style={styles.shortcut}>
             <Ionicons name="list-outline" size={19} color={COLORS.primary} />
             <Text style={styles.shortcutText}>My routines</Text>
           </TouchableOpacity>

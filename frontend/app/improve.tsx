@@ -1,5 +1,5 @@
 /**
- * You → Improve.
+ * Care → Improve.
  *
  * The routine overview, how consistently it is going, what needs attention,
  * what is running out, what is going unused, and which routine steps have
@@ -123,7 +123,7 @@ export default function ImproveScreen() {
             <Ionicons name="chevron-back" size={24} color={COLORS.textPrimary} />
           </TouchableOpacity>
           <View>
-            <Text style={styles.eyebrow}>YOU</Text>
+            <Text style={styles.eyebrow}>CARE</Text>
             <Text style={styles.title}>Improve</Text>
           </View>
         </View>
@@ -208,7 +208,7 @@ export default function ImproveScreen() {
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityLabel="Confirm ingredients we read at low confidence"
-            onPress={() => router.push('/(tabs)/inventory')}
+            onPress={() => router.push('/(tabs)/care')}
             style={styles.confirm}
           >
             <Ionicons name="help-circle-outline" size={19} color={COLORS.primary} />
