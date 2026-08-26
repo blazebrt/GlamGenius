@@ -395,7 +395,7 @@ class NotificationDelivery(UUIDPrimaryKey, TimestampMixin, Base):
     channel: Mapped[str] = mapped_column(String(16), nullable=False, default="push", server_default="push")
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued", server_default="queued")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", server_default="queued")
     suppressed_reason: Mapped[str | None] = mapped_column(String(64))
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deep_link: Mapped[str | None] = mapped_column(String(240))
