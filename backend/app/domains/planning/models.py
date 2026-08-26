@@ -30,7 +30,7 @@ from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, Float, ForeignK
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
+from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey, utcnow
 
 # Bumped when the compiler's deterministic rules change. Stored on every plan so
 # an old plan still says which rules produced it.
