@@ -5,7 +5,6 @@ import importlib
 
 import pytest
 
-from app.shared.security.deps import get_current_account
 from tests.conftest import auth
 from tests.journey import ok
 
@@ -23,6 +22,8 @@ async def test_summary_route_has_one_registered_get_operation():
 
 
 async def test_every_customer_supplement_route_requires_a_registered_account():
+    from app.shared.security.deps import get_current_account
+
     supplements = importlib.import_module("app.api.v2.supplements")
 
     routes = [
