@@ -19,7 +19,8 @@ import { TodayCareGuidance, TodayFood, TodayHomeCare, TodayPerfume, TodayRoutine
 import {
   CareGuidance, DailyPlan, HomeCare, LookPiece, NutritionSuggestion, PerfumePick, PlanAction, Routine, RoutineStep,
   answerClarification, completePlanAction, completeRoutineStep, getNutritionSuggestions,
-  getPerfumeRecommendation, getRoutinesToday, getToday, regenerateToday, reportItemUnavailable,
+  getPerfumeRecommendation, getRoutinesToday, getToday, getTodayAgenda, regenerateToday, reportItemUnavailable,
+  AttentionAgenda,
   sendTodayFeedback,
 } from '../../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../src/theme/colors';
@@ -39,6 +40,7 @@ export default function TodayScreen() {
   const [homeCare, setHomeCare] = useState<HomeCare | null>(null);
   const [perfume, setPerfume] = useState<PerfumePick | null>(null);
   const [food, setFood] = useState<NutritionSuggestion | null>(null);
+  const [agenda, setAgenda] = useState<AttentionAgenda | null>(null);
 
   const loadModules = useCallback(async () => {
     const [routineResult, perfumeResult, foodResult] = await Promise.allSettled([
@@ -59,6 +61,7 @@ export default function TodayScreen() {
     if (mode === 'refresh') setRefreshing(true);
     try {
       setPlan(await getToday());
+      void getTodayAgenda().then(setAgenda).catch(() => setAgenda(null));
       void loadModules();
       setOffline(false);
     } catch (err) {
@@ -136,6 +139,12 @@ export default function TodayScreen() {
 
         <TodayHeader plan={plan} />
 
+        <NextUp agenda={agenda} onOpen={(destination, params) => {
+          if (!['/(tabs)/today', '/(tabs)/style', '/(tabs)/care', '/(tabs)/plan', '/event-ready', '/improve', '/(tabs)/services', '/(tabs)/inventory'].includes(destination)) return;
+          if (destination === '/event-ready') router.push({ pathname: destination, params });
+          else router.push(destination as never);
+        }} />
+
         {plan.needs_clarification && plan.clarification && (
           <View style={{ marginTop: SPACING.lg }}>
             <ClarificationCard clarification={plan.clarification} onAnswer={(value) => void onAnswer(value)} />
@@ -209,4 +218,20 @@ const styles = StyleSheet.create({
   shortcut: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: RADIUS.lg, backgroundColor: COLORS.card, borderWidth: 1, borderColor: COLORS.border },
   shortcutText: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.textPrimary },
   disclaimer: { fontFamily: FONTS.family.body, fontSize: 11, color: COLORS.textMuted, textAlign: 'center', marginTop: SPACING.lg },
+  nextUp: { marginTop: SPACING.lg, backgroundColor: COLORS.card, borderColor: COLORS.border, borderWidth: 1, borderRadius: RADIUS.lg, padding: SPACING.md },
+  nextTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary },
+  nextItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
+  nextSecondary: { borderTopWidth: 1, borderTopColor: COLORS.border },
+  nextItemTitle: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.textPrimary },
+  nextBody: { fontFamily: FONTS.family.body, fontSize: 12, lineHeight: 17, color: COLORS.textSecondary, marginTop: 2 },
 });
+
+function NextUp({ agenda, onOpen }: { agenda: AttentionAgenda | null; onOpen: (destination: string, params: Record<string, string>) => void }) {
+  if (!agenda || agenda.items.length === 0) return null;
+  return <View style={styles.nextUp} accessibilityLabel="Next up">
+    <Text style={styles.nextTitle}>Next up</Text>
+    {agenda.items.slice(0, 3).map((item, index) => <TouchableOpacity key={item.key} accessibilityRole="button" accessibilityLabel={`Open ${item.title}`} onPress={() => onOpen(item.destination, item.destination_params)} style={[styles.nextItem, index > 0 && styles.nextSecondary]}>
+      <View style={{ flex: 1 }}><Text style={styles.nextItemTitle}>{item.title}</Text><Text style={styles.nextBody}>{item.body}</Text></View><Ionicons name="chevron-forward" size={17} color={COLORS.textMuted} />
+    </TouchableOpacity>)}
+  </View>;
+}

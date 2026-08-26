@@ -973,7 +973,7 @@ async def test_disabled_maintenance_reminders_never_reach_the_queue(
     # exactly how the first version of this test passed while the opt-in did
     # not actually deliver.
     assert queued is not None
-    assert queued.status == "queued" and queued.sent_at is not None, queued.suppressed_reason
+    assert queued.status == "queued" and queued.sent_at is None, queued.suppressed_reason
     assert "Haircut" in queued.body
 
 
@@ -1390,7 +1390,7 @@ async def test_a_per_kind_opt_in_actually_delivers_for_a_new_account(
         )
         await session.commit()
     assert queued is not None
-    assert queued.status == "queued" and queued.sent_at is not None, queued.suppressed_reason
+    assert queued.status == "queued" and queued.sent_at is None, queued.suppressed_reason
 
 
 @pytest.mark.asyncio

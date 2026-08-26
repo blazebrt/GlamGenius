@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
+import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -28,6 +29,7 @@ import { initSentry, wrapRoot } from '../src/monitoring';
 initSentry();
 
 function RootLayout() {
+  const router = useRouter();
   const { initializeUser } = useUserStore();
   const loadConfig = useConfigStore((s) => s.load);
 
@@ -51,6 +53,19 @@ function RootLayout() {
     // stable across renders. This effect must run exactly once on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' || typeof Notifications.addNotificationResponseReceivedListener !== 'function') return undefined;
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data as { destination?: unknown; eventId?: unknown };
+      const destination = typeof data.destination === 'string' ? data.destination : '/(tabs)/today';
+      const allowed = ['/(tabs)/today', '/(tabs)/style', '/(tabs)/care', '/(tabs)/plan', '/event-ready', '/improve', '/(tabs)/services', '/(tabs)/inventory'];
+      if (!allowed.includes(destination)) { router.replace('/(tabs)/today'); return; }
+      if (destination === '/event-ready' && typeof data.eventId === 'string') router.push({ pathname: destination, params: { eventId: data.eventId } });
+      else router.push(destination as never);
+    });
+    return () => subscription.remove();
+  }, [router]);
 
   if (!fontsLoaded) {
     return (
@@ -94,6 +109,7 @@ function RootLayout() {
             <Stack.Screen name="inventory-insights" />
             <Stack.Screen name="event-add" />
             <Stack.Screen name="event-ready" />
+            <Stack.Screen name="notifications" />
           </Stack>
         </ErrorBoundary>
       </SafeAreaProvider>

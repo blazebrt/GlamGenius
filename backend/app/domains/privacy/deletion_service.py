@@ -315,7 +315,7 @@ async def _remove_external_integrations(session: AsyncSession, account_id: uuid.
     add their revocation calls here.
     """
     from app.domains.planning.calendar_sync import disconnect_google_calendar
-    from app.domains.planning.models import ExternalIntegration, NotificationPreference
+    from app.domains.planning.models import ExternalIntegration, NotificationDevice, NotificationPreference, NotificationDelivery
 
     google = (await session.execute(select(ExternalIntegration).where(
         ExternalIntegration.account_id == account_id,
@@ -329,6 +329,12 @@ async def _remove_external_integrations(session: AsyncSession, account_id: uuid.
     await session.execute(delete(ExternalIntegration).where(ExternalIntegration.account_id == account_id))
     await session.execute(
         delete(NotificationPreference).where(NotificationPreference.account_id == account_id)
+    )
+    await session.execute(
+        delete(NotificationDelivery).where(NotificationDelivery.account_id == account_id)
+    )
+    await session.execute(
+        delete(NotificationDevice).where(NotificationDevice.account_id == account_id)
     )
     await session.flush()
 

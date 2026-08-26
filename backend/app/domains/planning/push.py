@@ -45,6 +45,7 @@ class PushResult:
     sent: int
     failed: int
     receipts: list[str]          # server-side receipt ids for later delivery check
+    errors: list[str] | None = None
 
 
 async def send(messages: list[PushMessage]) -> PushResult:
@@ -54,7 +55,7 @@ async def send(messages: list[PushMessage]) -> PushResult:
     request failure. The caller sees ``failed > 0`` and can decide.
     """
     if not messages:
-        return PushResult(sent=0, failed=0, receipts=[])
+        return PushResult(sent=0, failed=0, receipts=[], errors=[])
 
     try:
         import httpx  # noqa: PLC0415
@@ -65,6 +66,7 @@ async def send(messages: list[PushMessage]) -> PushResult:
     sent = 0
     failed = 0
     receipts: list[str] = []
+    errors: list[str] = []
 
     for start in range(0, len(messages), _MAX_PER_REQUEST):
         batch = messages[start : start + _MAX_PER_REQUEST]
@@ -90,8 +92,11 @@ async def send(messages: list[PushMessage]) -> PushResult:
                         receipts.append(rid)
                 else:
                     failed += 1
+                    if isinstance(entry, dict) and entry.get("details", {}).get("error"):
+                        errors.append(str(entry["details"]["error"]))
         except Exception as exc:  # noqa: BLE001
             logger.info("push_batch_failed error=%s size=%s", type(exc).__name__, len(batch))
             failed += len(batch)
+            errors.append(type(exc).__name__)
 
-    return PushResult(sent=sent, failed=failed, receipts=receipts)
+    return PushResult(sent=sent, failed=failed, receipts=receipts, errors=errors)

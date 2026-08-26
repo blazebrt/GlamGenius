@@ -236,6 +236,7 @@ class NotificationPreferencePatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool | None = None
+    native_push_enabled: bool | None = None
     daily_cap: int | None = Field(default=None, ge=0, le=5)
     quiet_hours_start: int | None = Field(default=None, ge=0, le=23)
     quiet_hours_end: int | None = Field(default=None, ge=0, le=23)
@@ -250,3 +251,11 @@ class NotificationPreferencePatch(BaseModel):
             if unknown:
                 raise ValueError(f"Unknown module: {sorted(unknown)[0]}. Choose from: {', '.join(MODULES)}.")
         return value
+
+
+class NotificationDeviceRegister(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_key: str = Field(min_length=1, max_length=160)
+    platform: Literal["ios", "android", "web", "unknown"] = "unknown"
+    expo_push_token: str = Field(min_length=1, max_length=512)
