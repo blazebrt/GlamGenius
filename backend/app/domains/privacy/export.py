@@ -571,6 +571,10 @@ async def build_export(session: AsyncSession, account_id: uuid.UUID) -> dict[str
                 name for name, kind in REGISTRY.items()
                 if kind == Classification.NOT_USER_OWNED
             ),
+            "secret_excluded": sorted(
+                name for name, kind in REGISTRY.items()
+                if kind == Classification.SECRET_EXCLUDED
+            ),
             "operational_only": sorted(
                 name for name, kind in REGISTRY.items()
                 if kind == Classification.OPERATIONAL
