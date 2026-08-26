@@ -1,7 +1,7 @@
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import * as apiV2 from '../services/apiV2';
-import { InventoryItem, InventorySummary } from '../services/apiV2';
+import { DuplicateCandidate, InventoryItem, InventorySummary } from '../services/apiV2';
 import StyleScreen from '../../app/(tabs)/style';
 import CareScreen from '../../app/(tabs)/care';
 import InventoryScreen from '../../app/(tabs)/inventory';
@@ -11,11 +11,17 @@ import InventoryInsightsScreen from '../../app/inventory-insights';
 let mockRouteParams: Record<string, string> = {};
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => false };
 
+function mockUseFocusEffect(callback: () => void | (() => void)) {
+  // The test double intentionally delegates to React's lifecycle hook.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  React.useEffect(() => callback(), [callback]);
+}
+
 jest.mock('expo-router', () => {
   return {
     useLocalSearchParams: () => mockRouteParams,
     useRouter: () => mockRouter,
-    useFocusEffect: (callback: () => void | (() => void)) => { callback(); },
+    useFocusEffect: mockUseFocusEffect,
   };
 });
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
@@ -41,12 +47,14 @@ const listing = (items: InventoryItem[]) => ({ items, pagination: { total: items
 describe('VC-08 final IA domain boundaries', () => {
   beforeEach(() => {
     cleanup(); mockRouteParams = {}; jest.clearAllMocks();
+    jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({}));
     jest.spyOn(apiV2, 'getInventoryItems').mockResolvedValue(listing([]));
     jest.spyOn(apiV2, 'getLowUseInventory').mockResolvedValue([]);
     jest.spyOn(apiV2, 'getExpiringInventory').mockResolvedValue([]);
     jest.spyOn(apiV2, 'getInventoryDuplicates').mockResolvedValue([]);
+    jest.spyOn(apiV2, 'getValueToRecover').mockResolvedValue({ label: 'Value to Recover', estimated_total: 0, currency: 'INR', is_estimate: true, metric_version: 'v1', explanation: 'No items', items: [] });
   });
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => { cleanup(); jest.restoreAllMocks(); });
 
   it('shows Style empty state from Style counts only, even when Care has items', async () => {
     jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({ beauty: 2 }));
@@ -102,10 +110,12 @@ describe('VC-08 final IA domain boundaries', () => {
     expect(screen.queryByLabelText('Wardrobe')).toBeNull(); expect(screen.queryByLabelText('Shoes')).toBeNull(); expect(screen.queryByLabelText('Accessories')).toBeNull();
   });
 
-  it('keeps direct InventoryAdd legacy behavior', () => {
+  it('keeps direct InventoryAdd legacy behavior for all seven categories', () => {
     mockRouteParams = {};
     render(<InventoryAddScreen />);
-    expect(screen.getByLabelText('Wardrobe')).toBeTruthy(); expect(screen.getByLabelText('Skin Care')).toBeTruthy(); expect(screen.getByLabelText('Supplements')).toBeTruthy();
+    ['Wardrobe', 'Shoes', 'Accessories', 'Skin Care', 'Hair Care', 'Perfumes', 'Supplements'].forEach((label) => {
+      expect(screen.getByLabelText(label)).toBeTruthy();
+    });
   });
 
   it('rejects an invalid domain/category pair deterministically', () => {
@@ -115,7 +125,7 @@ describe('VC-08 final IA domain boundaries', () => {
     expect(screen.queryByLabelText('Supplements')).toBeNull();
   });
 
-  it('filters domain inventory results and retains domain insight entry points', async () => {
+  it('filters domain inventory results and retains Style insight entry points', async () => {
     mockRouteParams = { domain: 'style' };
     jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({ wardrobe: 1, beauty: 1 }));
     jest.spyOn(apiV2, 'getInventoryItems').mockResolvedValue(listing([item('wardrobe', 'Kurta'), item('beauty', 'Serum')]));
@@ -127,11 +137,41 @@ describe('VC-08 final IA domain boundaries', () => {
     expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/inventory-insights', params: { view: 'low-use', domain: 'style' } });
   });
 
-  it('filters Care insight rows and duplicate pairs to the requested domain', async () => {
+  it('filters Care low-use rows to the requested domain', async () => {
     mockRouteParams = { domain: 'care', view: 'low-use' };
     jest.spyOn(apiV2, 'getLowUseInventory').mockResolvedValue([item('beauty', 'Serum'), item('wardrobe', 'Kurta')]);
     render(<InventoryInsightsScreen />);
     await waitFor(() => expect(screen.getByText('Serum')).toBeTruthy());
     expect(screen.queryByText('Kurta')).toBeNull();
+  });
+
+  const duplicate = (id: string, item_a: InventoryItem, item_b: InventoryItem): DuplicateCandidate => ({
+    id, confidence: .92, reason: 'similar name', status: 'open', item_a, item_b,
+  });
+
+  it('shows only all-Style duplicate candidates and their actions on Style', async () => {
+    mockRouteParams = { domain: 'style', view: 'duplicates' };
+    const stylePair = duplicate('style-pair', item('wardrobe', 'Jacket'), item('shoes', 'Boots'));
+    const carePair = duplicate('care-pair', item('beauty', 'Serum'), item('hair', 'Shampoo'));
+    const mixedPair = duplicate('mixed-pair', item('accessories', 'Watch'), item('beauty', 'Moisturiser'));
+    jest.spyOn(apiV2, 'getInventoryDuplicates').mockResolvedValue([stylePair, carePair, mixedPair]);
+    render(<InventoryInsightsScreen />);
+    await waitFor(() => expect(screen.getByText('Jacket · Boots')).toBeTruthy());
+    expect(screen.getByLabelText('Keep both Jacket and Boots')).toBeTruthy();
+    expect(screen.queryByText('Serum · Shampoo')).toBeNull();
+    expect(screen.queryByText('Watch · Moisturiser')).toBeNull();
+  });
+
+  it('shows only all-Care duplicate candidates and their actions on Care', async () => {
+    mockRouteParams = { domain: 'care', view: 'duplicates' };
+    const stylePair = duplicate('style-pair', item('wardrobe', 'Jacket'), item('shoes', 'Boots'));
+    const carePair = duplicate('care-pair', item('beauty', 'Serum'), item('hair', 'Shampoo'));
+    const mixedPair = duplicate('mixed-pair', item('accessories', 'Watch'), item('beauty', 'Moisturiser'));
+    jest.spyOn(apiV2, 'getInventoryDuplicates').mockResolvedValue([stylePair, carePair, mixedPair]);
+    render(<InventoryInsightsScreen />);
+    await waitFor(() => expect(screen.getByText('Serum · Shampoo')).toBeTruthy());
+    expect(screen.getByLabelText('Keep both Serum and Shampoo')).toBeTruthy();
+    expect(screen.queryByText('Jacket · Boots')).toBeNull();
+    expect(screen.queryByText('Watch · Moisturiser')).toBeNull();
   });
 });
