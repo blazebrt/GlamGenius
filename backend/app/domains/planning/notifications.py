@@ -30,8 +30,8 @@ from app.domains.planning.models import (
     MODULES,
     DailyPlan,
     DailyPlanAction,
-    NotificationDevice,
     NotificationDelivery,
+    NotificationDevice,
     NotificationPreference,
 )
 from app.shared.database.base import utcnow
@@ -234,9 +234,11 @@ async def queue_for_agenda(
     candidate = next((item for item in agenda.items if item.notification_eligible), None)
     if candidate is None:
         return None
-    if candidate.provenance.get("action_key") == "preparation:maintenance_timing":
-        if not await maintenance_reminders_allowed(session, account_id, plan_date):
-            return None
+    if (
+        candidate.provenance.get("action_key") == "preparation:maintenance_timing"
+        and not await maintenance_reminders_allowed(session, account_id, plan_date)
+    ):
+        return None
     return await queue(
         session, account_id=account_id, plan_date=plan_date,
         notification_key=candidate.key, title=candidate.title, body=candidate.body,

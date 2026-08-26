@@ -67,7 +67,6 @@ from app.domains.recommendation.occasions import OCCASIONS, get_occasion
 from app.domains.routines import adherence as routine_adherence
 from app.shared.database.base import utcnow
 
-
 # Below this, the occasion is too uncertain to just act on, and the plan asks
 # one question instead of guessing.
 CLARIFY_BELOW = 0.6
