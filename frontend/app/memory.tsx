@@ -220,7 +220,7 @@ export default function MemoryScreen() {
         <TouchableOpacity
           accessibilityRole="button"
           accessibilityLabel="Open privacy settings"
-          onPress={() => router.push('/(tabs)/profile')}
+          onPress={() => router.push('/(tabs)/you')}
           style={styles.action}
         >
           <Ionicons name="lock-closed-outline" size={18} color={COLORS.primary} />

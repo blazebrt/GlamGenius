@@ -128,7 +128,7 @@ describe('VC-03 Event Ready screen', () => {
     expect(screen.queryByLabelText('Choose a look')).toBeNull();
   });
 
-  it('passes canonical Event Mode fields to Style and opens Care at /improve', async () => {
+  it('passes canonical Event Mode fields to Style and opens the Care destination', async () => {
     mockGetEventReady.mockResolvedValue(ready({ status: 'preparing', care: { hair_wash: { status: 'not_due' } } as any }));
     render(<EventReadyScreen />);
     await screen.findByText('YOUR LOOK');
@@ -138,7 +138,7 @@ describe('VC-03 Event Ready screen', () => {
       eventTitle: 'Wedding', dressCode: 'black_tie', location: 'Hall',
     } });
     fireEvent.press(screen.getByLabelText('Open Care'));
-    expect(mockRouter.push).toHaveBeenCalledWith('/improve');
+    expect(mockRouter.push).toHaveBeenCalledWith('/(tabs)/care');
   });
 
   it('uses exact server action ids, guards duplicates, and supports undo', async () => {

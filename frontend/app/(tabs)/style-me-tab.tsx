@@ -1,9 +1,6 @@
 /**
- * The centre tab: the two Phase 4 decisions, side by side.
- *
- * These are the two questions the app exists to answer right now — "what do I
- * wear to this" and "should I buy this" — so they get the centre button rather
- * than being buried a level down.
+ * Legacy compatibility route for previously bookmarked Style entry points.
+ * The canonical customer-facing Style tab is `/(tabs)/style`.
  */
 import React, { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -109,8 +106,8 @@ export default function StyleMeTabScreen() {
           </Text>
         </View>
 
-        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open my inventory" onPress={() => router.push('/(tabs)/inventory')}>
-          <Text style={styles.link}>Manage my inventory</Text>
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open Style" onPress={() => router.push('/(tabs)/style')}>
+          <Text style={styles.link}>Open Style</Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
