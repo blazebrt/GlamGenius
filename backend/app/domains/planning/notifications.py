@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import and_, func, not_, or_, select, update
+from sqlalchemy import and_, func, not_, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.planning import clock
@@ -64,13 +64,25 @@ DEFAULT_TOPIC_NOTIFICATIONS: dict[str, bool] = {topic: True for topic in NOTIFIC
 
 def topic_for_candidate(candidate: Any) -> str | None:
     """Map one agenda item to exactly one typed customer topic."""
-    if candidate.source_kind in {"event_ready_action", "event_preparation_entry"}:
-        if candidate.domain == "maintenance" or "maintenance" in candidate.provenance.get("action_key", ""):
+    source_kind = getattr(candidate, "source_kind", None)
+    domain = getattr(candidate, "domain", None)
+    provenance = getattr(candidate, "provenance", {}) or {}
+    action_key = provenance.get("action_key", "")
+    if source_kind in {"event_ready_action", "event_preparation_entry"}:
+        if domain == "maintenance" or action_key.startswith("maintenance:"):
             return "maintenance"
-        return "event_preparation"
-    if candidate.domain in {"maintenance", "skincare", "hair", "care", "perfume"}:
-        return "maintenance" if candidate.domain == "maintenance" else "care"
-    return "today_style"
+        if domain in {"event", "preparation", "style", "care"}:
+            return "event_preparation"
+        return None
+    if source_kind != "today_action":
+        return None
+    if domain == "maintenance":
+        return "maintenance"
+    if domain in {"skincare", "hair", "care", "perfume"}:
+        return "care"
+    if domain in {"style", "outfit", "shopping", "wardrobe", "shoes", "accessories"}:
+        return "today_style"
+    return None
 
 
 def _target(destination: str | None, params: dict[str, Any] | None) -> tuple[str | None, dict[str, str]]:
@@ -333,6 +345,16 @@ async def register_device(
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     now = utcnow()
+    # A token can be registered by two accounts before either account has a
+    # row to lock. A transaction-scoped advisory lock gives every handoff for
+    # that token one PostgreSQL rendezvous without logging the token or key.
+    await session.execute(
+        text(
+            "SELECT pg_advisory_xact_lock("
+            "hashtextextended(CAST(:lock_key AS text), 0))"
+        ),
+        {"lock_key": f"notification-token:{expo_push_token}"},
+    )
     # Token ownership is account-global. The partial unique index in the
     # migration is the final concurrency guard; this update performs the
     # atomic hand-off without exposing the previous owner to the caller.

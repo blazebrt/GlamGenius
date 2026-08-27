@@ -27,6 +27,14 @@ jest.mock('../services/apiV2', () => ({
 }));
 
 describe('Today Screen', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (apiV2.getRoutinesToday as jest.Mock).mockResolvedValue({ routines: [] });
+    (apiV2.getPerfumeRecommendation as jest.Mock).mockResolvedValue({ recommendations: [] });
+    (apiV2.getNutritionSuggestions as jest.Mock).mockResolvedValue({ enabled: false, suggestions: [] });
+    (apiV2.getTodayAgenda as jest.Mock).mockResolvedValue({ agenda_version: 'vc-09-v1', generated_for: '2026-08-07', timezone: 'Asia/Kolkata', items: [] });
+  });
+
   it('renders TodayScreen safely with a mocked valid plan to ensure it does not crash', async () => {
     const mockedGetToday = apiV2.getToday as jest.Mock;
     mockedGetToday.mockResolvedValue({
@@ -52,5 +60,37 @@ describe('Today Screen', () => {
     await waitFor(() => {
       expect(screen.getByText(/A mocked plan/i)).toBeTruthy();
     });
+  });
+
+  it('shows an agenda today action once while preserving unrelated plan actions', async () => {
+    (apiV2.getToday as jest.Mock).mockResolvedValue({
+      plan_date: '2026-08-07', weekday: 'Friday', status: 'ready', headline: 'A mocked plan',
+      primary: [
+        { id: 'agenda-action', module: 'care', action_type: 'reminder', title: 'Hydrate your skin', body: 'Agenda copy', priority: 10, relevance: '', completed: false, completed_at: null, inventory_item_id: null },
+        { id: 'unrelated-action', module: 'hydration', action_type: 'reminder', title: 'Carry water', body: 'Keep water nearby', priority: 20, relevance: '', completed: false, completed_at: null, inventory_item_id: null },
+      ],
+      optional_modules: [], missing_information: [], confidence: 'high', outfit: null, disclaimer: 'test',
+    });
+    (apiV2.getTodayAgenda as jest.Mock).mockResolvedValue({
+      agenda_version: 'vc-09-v1', generated_for: '2026-08-07', timezone: 'Asia/Kolkata',
+      items: [{ key: 'today:agenda-action', source_kind: 'today_action', source_action_id: 'agenda-action', title: 'Hydrate your skin', body: 'Agenda copy', destination: '/(tabs)/care', destination_params: {} }],
+    });
+
+    render(<TodayScreen />);
+    await waitFor(() => expect(screen.getAllByText('Hydrate your skin')).toHaveLength(1));
+    expect(screen.getByText('Carry water')).toBeTruthy();
+    expect(screen.getByLabelText('Next up')).toBeTruthy();
+  });
+
+  it('keeps the original Today plan when agenda loading fails', async () => {
+    (apiV2.getToday as jest.Mock).mockResolvedValue({
+      plan_date: '2026-08-07', weekday: 'Friday', status: 'ready', headline: 'A mocked plan',
+      primary: [], optional_modules: [], missing_information: [], confidence: 'high', outfit: null, disclaimer: 'test',
+    });
+    (apiV2.getTodayAgenda as jest.Mock).mockRejectedValue(new Error('agenda unavailable'));
+
+    render(<TodayScreen />);
+    await waitFor(() => expect(screen.getByText('A mocked plan')).toBeTruthy());
+    expect(screen.queryByLabelText('Next up')).toBeNull();
   });
 });
