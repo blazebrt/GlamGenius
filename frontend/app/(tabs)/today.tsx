@@ -81,7 +81,11 @@ export default function TodayScreen() {
   const apply = (next: DailyPlan) => { setPlan(next); setOffline(false); };
 
   const onComplete = async (action: PlanAction) => {
-    try { apply(await completePlanAction(action.id, !action.completed)); }
+    try {
+      apply(await completePlanAction(action.id, !action.completed));
+      const nextAgenda = await getTodayAgenda();
+      setAgenda(nextAgenda);
+    }
     catch (err) { console.warn('complete failed', err); }
   };
 
@@ -143,7 +147,7 @@ export default function TodayScreen() {
 
         <TodayHeader plan={plan} />
 
-        <NextUp agenda={agenda} onOpen={(destination, params) => {
+        <NextUp agenda={agenda} plan={plan} onComplete={(action) => void onComplete(action)} onOpen={(destination, params) => {
           if (!['/(tabs)/today', '/(tabs)/style', '/(tabs)/care', '/(tabs)/plan', '/event-ready', '/improve', '/(tabs)/services', '/(tabs)/inventory'].includes(destination)) return;
           if (destination === '/event-ready') router.push({ pathname: destination, params });
           else router.push(destination as never);
@@ -228,14 +232,28 @@ const styles = StyleSheet.create({
   nextSecondary: { borderTopWidth: 1, borderTopColor: COLORS.border },
   nextItemTitle: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.textPrimary },
   nextBody: { fontFamily: FONTS.family.body, fontSize: 12, lineHeight: 17, color: COLORS.textSecondary, marginTop: 2 },
+  nextComplete: { borderColor: COLORS.primary, borderWidth: 1, borderRadius: RADIUS.md, paddingHorizontal: 10, paddingVertical: 6 },
+  nextCompleteText: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.primary },
 });
 
-function NextUp({ agenda, onOpen }: { agenda: AttentionAgenda | null; onOpen: (destination: string, params: Record<string, string>) => void }) {
+function NextUp({ agenda, plan, onComplete, onOpen }: { agenda: AttentionAgenda | null; plan: DailyPlan; onComplete: (action: PlanAction) => void; onOpen: (destination: string, params: Record<string, string>) => void }) {
   if (!agenda || agenda.items.length === 0) return null;
+  const planActions = [...plan.primary, ...plan.optional_modules];
   return <View style={styles.nextUp} accessibilityLabel="Next up">
     <Text style={styles.nextTitle}>Next up</Text>
-    {agenda.items.slice(0, 3).map((item, index) => <TouchableOpacity key={item.key} accessibilityRole="button" accessibilityLabel={`Open ${item.title}`} onPress={() => onOpen(item.destination, item.destination_params)} style={[styles.nextItem, index > 0 && styles.nextSecondary]}>
-      <View style={{ flex: 1 }}><Text style={styles.nextItemTitle}>{item.title}</Text><Text style={styles.nextBody}>{item.body}</Text></View><Ionicons name="chevron-forward" size={17} color={COLORS.textMuted} />
-    </TouchableOpacity>)}
+    {agenda.items.slice(0, 3).map((item, index) => {
+      const sourceAction = item.source_kind === 'today_action' && item.source_action_id
+        ? planActions.find((action) => action.id === item.source_action_id)
+        : undefined;
+      return <View key={item.key} style={[styles.nextItem, index > 0 && styles.nextSecondary]}>
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Open ${item.title}`} onPress={() => onOpen(item.destination, item.destination_params)} style={{ flex: 1 }}>
+          <Text style={styles.nextItemTitle}>{item.title}</Text><Text style={styles.nextBody}>{item.body}</Text>
+        </TouchableOpacity>
+        {sourceAction && <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Complete ${item.title}`} onPress={() => onComplete(sourceAction)} style={styles.nextComplete}>
+          <Text style={styles.nextCompleteText}>Done</Text>
+        </TouchableOpacity>}
+        {!sourceAction && <Ionicons name="chevron-forward" size={17} color={COLORS.textMuted} />}
+      </View>;
+    })}
   </View>;
 }

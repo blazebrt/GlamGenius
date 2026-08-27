@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import TodayScreen from '../../app/(tabs)/today';
 import * as apiV2 from '../services/apiV2';
@@ -20,6 +20,7 @@ jest.mock('react-native-safe-area-context', () => ({
 
 jest.mock('../services/apiV2', () => ({
   getToday: jest.fn(),
+  completePlanAction: jest.fn(),
   getTodayAgenda: jest.fn().mockResolvedValue({ agenda_version: 'vc-09-v1', generated_for: '2026-08-07', timezone: 'Asia/Kolkata', items: [] }),
   getRoutinesToday: jest.fn(),
   getPerfumeRecommendation: jest.fn(),
@@ -92,5 +93,25 @@ describe('Today Screen', () => {
     render(<TodayScreen />);
     await waitFor(() => expect(screen.getByText('A mocked plan')).toBeTruthy());
     expect(screen.queryByLabelText('Next up')).toBeNull();
+  });
+
+  it('completes an agenda Today action through the canonical Today endpoint', async () => {
+    (apiV2.getToday as jest.Mock).mockResolvedValue({
+      plan_date: '2026-08-07', weekday: 'Friday', status: 'ready', headline: 'A mocked plan',
+      primary: [{ id: 'agenda-action', module: 'care', action_type: 'reminder', title: 'Hydrate your skin', body: 'Agenda copy', priority: 10, relevance: '', completed: false, completed_at: null, inventory_item_id: null }],
+      optional_modules: [], missing_information: [], confidence: 'high', outfit: null, disclaimer: 'test',
+    });
+    (apiV2.getTodayAgenda as jest.Mock)
+      .mockResolvedValueOnce({ agenda_version: 'vc-09-v1', generated_for: '2026-08-07', timezone: 'Asia/Kolkata', items: [{ key: 'today:agenda-action', source_kind: 'today_action', source_action_id: 'agenda-action', title: 'Hydrate your skin', body: 'Agenda copy', destination: '/(tabs)/care', destination_params: {} }] })
+      .mockResolvedValueOnce({ agenda_version: 'vc-09-v1', generated_for: '2026-08-07', timezone: 'Asia/Kolkata', items: [] });
+    (apiV2.completePlanAction as jest.Mock).mockResolvedValue({
+      plan_date: '2026-08-07', weekday: 'Friday', status: 'ready', headline: 'A mocked plan',
+      primary: [], optional_modules: [], missing_information: [], confidence: 'high', outfit: null, disclaimer: 'test',
+    });
+    render(<TodayScreen />);
+    const done = await screen.findByRole('button', { name: 'Complete Hydrate your skin' });
+    fireEvent.press(done);
+    await waitFor(() => expect(apiV2.completePlanAction).toHaveBeenCalledWith('agenda-action', true));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Complete Hydrate your skin' })).toBeNull());
   });
 });

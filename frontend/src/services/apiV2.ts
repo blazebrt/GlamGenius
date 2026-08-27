@@ -1723,7 +1723,7 @@ export const registerNotificationDevice = async (body: {
 }): Promise<{ device: { device_key: string; platform: string; status: string }; native_push_enabled: boolean }> =>
   (await api.post(`${V2}/today/notifications/devices`, body)).data;
 
-export const unregisterNotificationDevice = async (deviceKey: string): Promise<{ device_key: string; removed: boolean }> =>
+export const unregisterNotificationDevice = async (deviceKey: string): Promise<{ device_key: string; removed: boolean; active_devices_remaining: boolean; native_push_enabled: boolean }> =>
   (await api.delete(`${V2}/today/notifications/devices/${encodeURIComponent(deviceKey)}`)).data;
 
 // --- Phase 6: routines, shelf, perfume, supplements, food context -----------

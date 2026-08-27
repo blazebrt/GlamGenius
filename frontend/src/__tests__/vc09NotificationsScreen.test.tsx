@@ -1,12 +1,13 @@
 import React from 'react';
-import { act, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NotificationsScreen from '../../app/notifications';
 import * as apiV2 from '../services/apiV2';
 
 jest.mock('expo-router', () => ({ useRouter: () => ({ back: jest.fn() }) }));
 jest.mock('expo-notifications', () => ({
-  __esModule: true, getPermissionsAsync: jest.fn(), requestPermissionsAsync: jest.fn(), getExpoPushTokenAsync: jest.fn(),
+  __esModule: true, AndroidImportance: { DEFAULT: 3 }, setNotificationChannelAsync: jest.fn(), getPermissionsAsync: jest.fn(), requestPermissionsAsync: jest.fn(), getExpoPushTokenAsync: jest.fn(),
 }));
 jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: { eas: { projectId: 'project-1' } } } } }));
 jest.mock('../services/apiV2', () => ({
@@ -18,7 +19,7 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 const mockNotifications = jest.requireMock('expo-notifications') as {
-  getPermissionsAsync: jest.Mock; requestPermissionsAsync: jest.Mock; getExpoPushTokenAsync: jest.Mock;
+  setNotificationChannelAsync: jest.Mock; getPermissionsAsync: jest.Mock; requestPermissionsAsync: jest.Mock; getExpoPushTokenAsync: jest.Mock;
 };
 
 const preferences = {
@@ -31,7 +32,7 @@ describe('VC-09 Notifications screen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (AsyncStorage.getItem as jest.Mock).mockResolvedValue('11111111-1111-4111-8111-111111111111');
-    (apiV2.getNotificationPreferences as jest.Mock).mockResolvedValue({ preferences });
+    (apiV2.getNotificationPreferences as jest.Mock).mockResolvedValue({ preferences, recent: [] });
     (apiV2.patchNotificationPreferences as jest.Mock).mockResolvedValue({ preferences });
   });
 
@@ -42,18 +43,59 @@ describe('VC-09 Notifications screen', () => {
   });
 
   it('requests permission only after explicit native enable and registers the stable device', async () => {
+    const originalPlatform = Platform.OS;
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
     mockNotifications.getPermissionsAsync.mockResolvedValue({ status: 'denied' });
     mockNotifications.requestPermissionsAsync.mockResolvedValue({ status: 'granted' });
     mockNotifications.getExpoPushTokenAsync.mockResolvedValue({ data: 'ExponentPushToken[test]' });
     (apiV2.registerNotificationDevice as jest.Mock).mockResolvedValue({ native_push_enabled: true });
     render(<NotificationsScreen />);
-    const toggle = await screen.findByRole('switch', { name: 'Native push on this device' });
+    await screen.findByText('Native push on this device');
+    const toggle = screen.UNSAFE_getByProps({ accessibilityLabel: 'Native push on this device' });
     await waitFor(() => expect(toggle.props.disabled).toBeFalsy());
-    await act(async () => {
-      toggle.props.onChange({ nativeEvent: { value: true } });
-      await Promise.resolve();
-    });
+    await act(async () => { fireEvent(toggle, 'valueChange', true); await Promise.resolve(); });
     await waitFor(() => expect(mockNotifications.requestPermissionsAsync).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(apiV2.registerNotificationDevice).toHaveBeenCalledWith(expect.objectContaining({ device_key: '11111111-1111-4111-8111-111111111111' })));
+    expect(mockNotifications.setNotificationChannelAsync.mock.invocationCallOrder[0]).toBeLessThan(
+      mockNotifications.requestPermissionsAsync.mock.invocationCallOrder[0],
+    );
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
+  });
+
+  it('does not obtain a token when native permission is denied', async () => {
+    mockNotifications.getPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    mockNotifications.requestPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    render(<NotificationsScreen />);
+    await screen.findByText('Native push on this device');
+    const toggle = screen.UNSAFE_getByProps({ accessibilityLabel: 'Native push on this device' });
+    await act(async () => { fireEvent(toggle, 'valueChange', true); await Promise.resolve(); });
+    await waitFor(() => expect(mockNotifications.requestPermissionsAsync).toHaveBeenCalledTimes(1));
+    expect(mockNotifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
+    expect(apiV2.registerNotificationDevice).not.toHaveBeenCalled();
+  });
+
+  it('disabling one of two devices does not disable the account', async () => {
+    (apiV2.getNotificationPreferences as jest.Mock).mockResolvedValue({ preferences: { ...preferences, native_push_enabled: true }, recent: [] });
+    (apiV2.unregisterNotificationDevice as jest.Mock).mockResolvedValue({
+      device_key: '11111111-1111-4111-8111-111111111111', removed: true,
+      active_devices_remaining: true, native_push_enabled: true,
+    });
+    render(<NotificationsScreen />);
+    await screen.findByText('Native push on this device');
+    const toggle = screen.UNSAFE_getByProps({ accessibilityLabel: 'Native push on this device' });
+    await act(async () => { fireEvent(toggle, 'valueChange', false); await Promise.resolve(); });
+    await waitFor(() => expect(apiV2.unregisterNotificationDevice).toHaveBeenCalledWith('11111111-1111-4111-8111-111111111111'));
+    expect(apiV2.patchNotificationPreferences).not.toHaveBeenCalled();
+  });
+
+  it('renders truthful recent notification history', async () => {
+    (apiV2.getNotificationPreferences as jest.Mock).mockResolvedValue({ preferences, recent: [
+      { id: '1', title: 'Care reminder', status: 'provider_accepted', suppressed_reason: null },
+      { id: '2', title: 'Style reminder', status: 'suppressed', suppressed_reason: 'quiet_hours' },
+    ] });
+    render(<NotificationsScreen />);
+    await waitFor(() => expect(screen.getByText('Care reminder')).toBeTruthy());
+    expect(screen.getByText('Sent')).toBeTruthy();
+    expect(screen.getByText('Not sent — quiet hours')).toBeTruthy();
   });
 });

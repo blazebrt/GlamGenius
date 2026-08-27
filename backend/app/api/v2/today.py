@@ -300,11 +300,17 @@ async def unregister_notification_device(
     removed = await notifications.unregister_device(session, current.account_id, device_key)
     if not removed:
         raise HTTPException(status_code=404, detail={"code": "device_not_found", "message": "That device is not registered."})
-    if not await notifications.active_devices(session, current.account_id):
-        preference = await notifications.preferences_for(session, current.account_id, clock.DEFAULT_TIMEZONE)
+    active_remaining = bool(await notifications.active_devices(session, current.account_id))
+    preference = await notifications.preferences_for(session, current.account_id, clock.DEFAULT_TIMEZONE)
+    if not active_remaining:
         preference.native_push_enabled = False
     await session.commit()
-    return {"device_key": device_key, "removed": True}
+    return {
+        "device_key": device_key,
+        "removed": True,
+        "active_devices_remaining": active_remaining,
+        "native_push_enabled": bool(preference.native_push_enabled),
+    }
 
 
 @router.patch("/today/notifications")

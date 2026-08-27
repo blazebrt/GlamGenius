@@ -203,28 +203,30 @@ async def queue(
     )
 
     local_hour = clock.local_now(preference.timezone_name or timezone_name, moment=moment).hour
+    # Suppression is an ordered, mutually-exclusive chain.  A higher
+    # authority (for example the master switch) must never be overwritten by a
+    # later quiet-hours or cap check.
     if not preference.enabled:
         row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_DISABLED
-    selected_topic = topic if topic in NOTIFICATION_TOPICS else None
-    if topic is not None and selected_topic is None:
-        row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_MODULE_OFF
-        session.add(row)
-        await session.flush()
-        return row
-    topic_preferences = preference.topics or {}
-    if selected_topic is None:
-        # Legacy callers are mapped conservatively; arbitrary planner module
-        # names do not bypass the typed topic layer.
-        selected_topic = module if module in NOTIFICATION_TOPICS else "today_style"
-    if not bool(topic_preferences.get(selected_topic, DEFAULT_TOPIC_NOTIFICATIONS[selected_topic])):
-        row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_MODULE_OFF
-    elif module in MODULES and preference.modules is not None and module in preference.modules and not bool(preference.modules[module]):
-        # Preserve old preference JSON while keeping topic semantics primary.
-        row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_MODULE_OFF
-    elif in_quiet_hours(local_hour, preference.quiet_hours_start, preference.quiet_hours_end):
-        row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_QUIET
-    elif await _sent_today(session, account_id, plan_date) >= preference.daily_cap:
-        row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_CAP
+    else:
+        selected_topic = topic if topic in NOTIFICATION_TOPICS else None
+        topic_preferences = preference.topics or {}
+        if topic is not None and selected_topic is None:
+            row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_MODULE_OFF
+        else:
+            if selected_topic is None:
+                # Legacy callers are mapped conservatively; arbitrary planner
+                # module names do not bypass the typed topic layer.
+                selected_topic = module if module in NOTIFICATION_TOPICS else "today_style"
+            if not bool(topic_preferences.get(selected_topic, DEFAULT_TOPIC_NOTIFICATIONS[selected_topic])):
+                row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_MODULE_OFF
+            elif module in MODULES and preference.modules is not None and module in preference.modules and not bool(preference.modules[module]):
+                # Preserve old preference JSON while keeping topic semantics primary.
+                row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_MODULE_OFF
+            elif in_quiet_hours(local_hour, preference.quiet_hours_start, preference.quiet_hours_end):
+                row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_QUIET
+            elif await _sent_today(session, account_id, plan_date) >= preference.daily_cap:
+                row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_CAP
 
     session.add(row)
     await session.flush()
@@ -289,6 +291,7 @@ async def queue_for_agenda(
 
     agenda = await build_agenda(session, account_id, generated_for=plan_date, timezone_name=timezone_name)
     candidate = None
+    preference = await preferences_for(session, account_id, timezone_name)
     eligible_kinds: Sequence[Any] | None = None
     body = None
     title = None
@@ -297,6 +300,13 @@ async def queue_for_agenda(
             continue
         topic = topic_for_candidate(item)
         if topic is None:
+            continue
+        topic_preferences = preference.topics or {}
+        if not bool(topic_preferences.get(topic, DEFAULT_TOPIC_NOTIFICATIONS[topic])):
+            # A disabled high-ranked item must not consume the day's chance;
+            # continue to the next typed candidate instead.
+            continue
+        if item.domain in MODULES and preference.modules is not None and item.domain in preference.modules and not bool(preference.modules[item.domain]):
             continue
         if topic == "maintenance":
             if eligible_kinds is None:

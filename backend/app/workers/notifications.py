@@ -48,7 +48,13 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
         session, account_id=preference.account_id, plan_date=plan_date,
         timezone_name=preference.timezone_name, moment=now,
     )
-    if decision is None or decision.status != notifications.STATUS_QUEUED:
+    if decision is None or decision.status not in {
+        notifications.STATUS_QUEUED, notifications.STATUS_SENDING,
+    }:
+        # queue_for_agenda records suppression decisions durably.  Commit them
+        # before returning so the account can explain why nothing was sent.
+        if decision is not None and decision.status == notifications.STATUS_SUPPRESSED:
+            await session.commit()
         return 0
     claim = await notifications.claim_delivery(session, decision.id)
     if claim is None:

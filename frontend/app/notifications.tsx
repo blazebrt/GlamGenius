@@ -10,10 +10,11 @@ import { getInstallationId } from '../src/services/deviceIdentity';
 export default function NotificationsScreen() {
   const router = useRouter();
   const [preferences, setPreferences] = useState<NotificationPreferences | null>(null);
+  const [recent, setRecent] = useState<{ id: string; title: string; status: string; suppressed_reason: string | null }[]>([]);
   const [busy, setBusy] = useState(false);
   const [deviceKey, setDeviceKey] = useState<string | null>(null);
   useEffect(() => { void getInstallationId().then(setDeviceKey).catch(() => setDeviceKey(null)); }, []);
-  useEffect(() => { void getNotificationPreferences().then((result) => setPreferences(result.preferences)).catch(() => undefined); }, []);
+  useEffect(() => { void getNotificationPreferences().then((result) => { setPreferences(result.preferences); setRecent(result.recent); }).catch(() => undefined); }, []);
 
   const update = async (body: Parameters<typeof patchNotificationPreferences>[0]) => {
     try { const result = await patchNotificationPreferences(body); setPreferences(result.preferences); }
@@ -24,6 +25,11 @@ export default function NotificationsScreen() {
     if (Platform.OS === 'web') { Alert.alert('Notifications unavailable', 'Push notifications are not supported on the web.'); return; }
     setBusy(true);
     try {
+      if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync('appearance-reminders', {
+          name: 'Appearance reminders', importance: Notifications.AndroidImportance.DEFAULT,
+        });
+      }
       const current = await Notifications.getPermissionsAsync();
       const permission = current.status === 'granted' ? current : await Notifications.requestPermissionsAsync();
       if (permission.status !== 'granted') { Alert.alert('Notifications are off', 'You can keep using GlamGenius normally.'); return; }
@@ -38,10 +44,24 @@ export default function NotificationsScreen() {
 
   const disableNative = async () => {
     setBusy(true);
-    if (!deviceKey) { await update({ native_push_enabled: false }); setBusy(false); return; }
-    try { await unregisterNotificationDevice(deviceKey); await update({ native_push_enabled: false }); }
-    catch { await update({ native_push_enabled: false }); }
+    if (!deviceKey) { setBusy(false); return; }
+    try {
+      const result = await unregisterNotificationDevice(deviceKey);
+      setPreferences((value) => value ? { ...value, native_push_enabled: result.native_push_enabled } : value);
+    }
+    catch { Alert.alert('Could not save', 'Notifications remain unchanged.'); }
     finally { setBusy(false); }
+  };
+
+  const deliveryStatus = (row: { status: string; suppressed_reason: string | null }) => {
+    if (row.status === 'provider_accepted' || row.status === 'receipt_ok') return 'Sent';
+    if (row.suppressed_reason === 'disabled') return 'Not sent — notifications off';
+    if (row.suppressed_reason === 'quiet_hours') return 'Not sent — quiet hours';
+    if (row.suppressed_reason === 'daily_cap_reached') return 'Not sent — daily limit';
+    if (row.suppressed_reason === 'module_disabled') return 'Not sent — topic disabled';
+    if (row.status === 'suppressed') return 'Not sent';
+    if (row.status === 'provider_failed') return 'Not sent';
+    return 'Pending';
   };
 
   return <View style={styles.container}><ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: 80 }}>
@@ -60,7 +80,10 @@ export default function NotificationsScreen() {
     <Text style={styles.section}>Quiet hours</Text>
     <View style={styles.hours}>{[21, 22, 23, 0, 6, 7].map((hour) => <TouchableOpacity key={`quiet-start-${hour}`} accessibilityRole="button" accessibilityLabel={`Quiet hours start ${hour}:00`} onPress={() => void update({ quiet_hours_start: hour })} style={[styles.hour, preferences?.quiet_hours.start === hour && styles.hourActive]}><Text style={styles.hourText}>Start {String(hour).padStart(2, '0')}:00</Text></TouchableOpacity>)}</View>
     <View style={[styles.hours, { marginTop: 8 }]}>{[6, 7, 8, 9].map((hour) => <TouchableOpacity key={`quiet-end-${hour}`} accessibilityRole="button" accessibilityLabel={`Quiet hours end ${hour}:00`} onPress={() => void update({ quiet_hours_end: hour })} style={[styles.hour, preferences?.quiet_hours.end === hour && styles.hourActive]}><Text style={styles.hourText}>End {String(hour).padStart(2, '0')}:00</Text></TouchableOpacity>)}</View>
-    <Text style={styles.section}>Recent status</Text><Text style={styles.body}>Sent and not-sent decisions appear here without claiming device delivery.</Text>
+    <Text style={styles.section}>Recent status</Text>
+    {recent.length === 0
+      ? <Text style={styles.body}>No notification decisions yet.</Text>
+      : recent.map((row) => <View key={row.id} style={styles.recentRow}><Text style={styles.recentTitle}>{row.title}</Text><Text style={styles.body}>{deliveryStatus(row)}</Text></View>)}
   </ScrollView></View>;
 }
 
@@ -68,4 +91,4 @@ function Row({ label, value, onValueChange, disabled }: { label: string; value: 
   return <View style={styles.row}><Text style={styles.rowLabel}>{label}</Text><Switch accessibilityRole="switch" accessibilityLabel={label} value={value} onValueChange={onValueChange} disabled={disabled} trackColor={{ false: COLORS.border, true: COLORS.primary }} /> </View>;
 }
 
-const styles = StyleSheet.create({ container: { flex: 1, backgroundColor: COLORS.backgroundSecondary }, back: { color: COLORS.primary, fontFamily: FONTS.family.bodySemibold, fontSize: 14, marginBottom: SPACING.lg }, eyebrow: { color: COLORS.primary, fontFamily: FONTS.family.bodySemibold, fontSize: 10, letterSpacing: 1.4 }, title: { color: COLORS.textPrimary, fontFamily: FONTS.family.heading, fontSize: 30, marginTop: 4 }, body: { color: COLORS.textSecondary, fontFamily: FONTS.family.body, fontSize: 13, lineHeight: 19, marginTop: 6 }, row: { alignItems: 'center', borderBottomColor: COLORS.border, borderBottomWidth: 1, flexDirection: 'row', justifyContent: 'space-between', minHeight: 56 }, rowLabel: { color: COLORS.textPrimary, flex: 1, fontFamily: FONTS.family.body, fontSize: 14 }, section: { color: COLORS.textPrimary, fontFamily: FONTS.family.headingMedium, fontSize: 18, marginTop: SPACING.xl, marginBottom: SPACING.sm }, hours: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, hour: { borderColor: COLORS.border, borderRadius: 10, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10 }, hourActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary }, hourText: { color: COLORS.textPrimary, fontFamily: FONTS.family.bodySemibold, fontSize: 12 }, note: { color: COLORS.textMuted, fontFamily: FONTS.family.body, fontSize: 12, marginTop: SPACING.sm } });
+const styles = StyleSheet.create({ container: { flex: 1, backgroundColor: COLORS.backgroundSecondary }, back: { color: COLORS.primary, fontFamily: FONTS.family.bodySemibold, fontSize: 14, marginBottom: SPACING.lg }, eyebrow: { color: COLORS.primary, fontFamily: FONTS.family.bodySemibold, fontSize: 10, letterSpacing: 1.4 }, title: { color: COLORS.textPrimary, fontFamily: FONTS.family.heading, fontSize: 30, marginTop: 4 }, body: { color: COLORS.textSecondary, fontFamily: FONTS.family.body, fontSize: 13, lineHeight: 19, marginTop: 6 }, row: { alignItems: 'center', borderBottomColor: COLORS.border, borderBottomWidth: 1, flexDirection: 'row', justifyContent: 'space-between', minHeight: 56 }, rowLabel: { color: COLORS.textPrimary, flex: 1, fontFamily: FONTS.family.body, fontSize: 14 }, section: { color: COLORS.textPrimary, fontFamily: FONTS.family.headingMedium, fontSize: 18, marginTop: SPACING.xl, marginBottom: SPACING.sm }, hours: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, hour: { borderColor: COLORS.border, borderRadius: 10, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10 }, hourActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary }, hourText: { color: COLORS.textPrimary, fontFamily: FONTS.family.bodySemibold, fontSize: 12 }, note: { color: COLORS.textMuted, fontFamily: FONTS.family.body, fontSize: 12, marginTop: SPACING.sm }, recentRow: { borderBottomColor: COLORS.border, borderBottomWidth: 1, paddingVertical: 10 }, recentTitle: { color: COLORS.textPrimary, fontFamily: FONTS.family.bodySemibold, fontSize: 13 } });
