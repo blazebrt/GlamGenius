@@ -14,7 +14,8 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.planning import clock, compiler, context as context_stage, notifications, push
+from app.domains.planning import clock, compiler, notifications, push
+from app.domains.planning import context as context_stage
 from app.domains.planning.models import NotificationDelivery, NotificationPreference
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_sessionmaker
