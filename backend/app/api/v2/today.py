@@ -320,6 +320,8 @@ async def patch_notification_preferences(
         raise ValidationFailedError("Register this device before enabling native notifications.", field="native_push_enabled")
     if "modules" in fields and fields["modules"] is not None:
         row.modules = {**(row.modules or {}), **fields.pop("modules")}
+    if "topics" in fields and fields["topics"] is not None:
+        row.topics = {**(row.topics or {}), **fields.pop("topics")}
     for key, value in fields.items():
         if value is not None:
             setattr(row, key, value)

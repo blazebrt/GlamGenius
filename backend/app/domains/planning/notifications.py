@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, not_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.planning import clock
@@ -43,6 +43,7 @@ SUPPRESSED_DISABLED = "disabled"
 SUPPRESSED_MODULE_OFF = "module_disabled"
 STATUS_SUPPRESSED = "suppressed"
 STATUS_QUEUED = "queued"
+STATUS_SENDING = "sending"
 STATUS_PROVIDER_ACCEPTED = "provider_accepted"
 STATUS_PROVIDER_FAILED = "provider_failed"
 STATUS_RECEIPT_OK = "receipt_ok"
@@ -54,6 +55,35 @@ STATUS_RECEIPT_FAILED = "receipt_failed"
 #: that per-kind opt-in unreachable, because nothing in the product turns the
 #: generic module flag back on.
 DEFAULT_MODULE_NOTIFICATIONS: dict[str, bool] = {module: True for module in MODULES}
+
+# Customer-facing switches. These are deliberately not the Planning MODULES
+# map: an unknown topic must never silently become enabled.
+NOTIFICATION_TOPICS = ("today_style", "care", "event_preparation", "maintenance")
+DEFAULT_TOPIC_NOTIFICATIONS: dict[str, bool] = {topic: True for topic in NOTIFICATION_TOPICS}
+
+
+def topic_for_candidate(candidate: Any) -> str | None:
+    """Map one agenda item to exactly one typed customer topic."""
+    if candidate.source_kind in {"event_ready_action", "event_preparation_entry"}:
+        if candidate.domain == "maintenance" or "maintenance" in candidate.provenance.get("action_key", ""):
+            return "maintenance"
+        return "event_preparation"
+    if candidate.domain in {"maintenance", "skincare", "hair", "care", "perfume"}:
+        return "maintenance" if candidate.domain == "maintenance" else "care"
+    return "today_style"
+
+
+def _target(destination: str | None, params: dict[str, Any] | None) -> tuple[str | None, dict[str, str]]:
+    """Keep only server-owned destinations and their narrow routing data."""
+    allowed = {"/(tabs)/today", "/(tabs)/style", "/(tabs)/care", "/(tabs)/plan", "/event-ready", "/improve", "/(tabs)/services", "/(tabs)/inventory"}
+    if destination not in allowed:
+        return None, {}
+    if destination == "/event-ready":
+        event_id = (params or {}).get("eventId")
+        if not isinstance(event_id, str) or not event_id:
+            return "/(tabs)/plan", {}
+        return destination, {"eventId": event_id}
+    return destination, {}
 
 
 async def maintenance_reminders_allowed(
@@ -114,7 +144,7 @@ async def _sent_today(session: AsyncSession, account_id: uuid.UUID, plan_date: d
         select(func.count()).select_from(NotificationDelivery).where(
             NotificationDelivery.account_id == account_id,
             NotificationDelivery.plan_date == plan_date,
-            NotificationDelivery.status.in_((STATUS_QUEUED, STATUS_PROVIDER_ACCEPTED, STATUS_PROVIDER_FAILED)),
+            NotificationDelivery.status.in_((STATUS_QUEUED, STATUS_SENDING, STATUS_PROVIDER_ACCEPTED, STATUS_PROVIDER_FAILED)),
         )
     )).scalar_one())
 
@@ -131,6 +161,8 @@ async def queue(
     timezone_name: str = clock.DEFAULT_TIMEZONE,
     moment=None,
     deep_link: str | None = None,
+    destination_params: dict[str, Any] | None = None,
+    topic: str | None = None,
     source_kind: str | None = None,
     source_id: str | None = None,
     scheduled_for: datetime | None = None,
@@ -150,19 +182,32 @@ async def queue(
         # second one — this is what makes queueing idempotent.
         return existing
 
+    deep_link, destination_params = _target(deep_link, destination_params)
     row = NotificationDelivery(
         account_id=account_id, plan_date=plan_date, notification_key=notification_key,
         dedup_hash=digest, title=title, body=body, status=STATUS_QUEUED,
-        deep_link=deep_link, source_kind=source_kind, source_id=source_id,
+        deep_link=deep_link, destination_params=destination_params or {}, source_kind=source_kind, source_id=source_id,
         scheduled_for=scheduled_for,
     )
 
     local_hour = clock.local_now(preference.timezone_name or timezone_name, moment=moment).hour
     if not preference.enabled:
         row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_DISABLED
-    elif preference.modules is not None and not preference.modules.get(
-        module, DEFAULT_MODULE_NOTIFICATIONS.get(module, True)
-    ):
+    selected_topic = topic if topic in NOTIFICATION_TOPICS else None
+    if topic is not None and selected_topic is None:
+        row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_MODULE_OFF
+        session.add(row)
+        await session.flush()
+        return row
+    topic_preferences = preference.topics or {}
+    if selected_topic is None:
+        # Legacy callers are mapped conservatively; arbitrary planner module
+        # names do not bypass the typed topic layer.
+        selected_topic = module if module in NOTIFICATION_TOPICS else "today_style"
+    if not bool(topic_preferences.get(selected_topic, DEFAULT_TOPIC_NOTIFICATIONS[selected_topic])):
+        row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_MODULE_OFF
+    elif module in MODULES and preference.modules is not None and module in preference.modules and not bool(preference.modules[module]):
+        # Preserve old preference JSON while keeping topic semantics primary.
         row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_MODULE_OFF
     elif in_quiet_hours(local_hour, preference.quiet_hours_start, preference.quiet_hours_end):
         row.status, row.suppressed_reason = STATUS_SUPPRESSED, SUPPRESSED_QUIET
@@ -231,21 +276,53 @@ async def queue_for_agenda(
     from app.domains.planning.agenda import build_agenda
 
     agenda = await build_agenda(session, account_id, generated_for=plan_date, timezone_name=timezone_name)
-    candidate = next((item for item in agenda.items if item.notification_eligible), None)
+    candidate = None
+    eligible_kinds: Sequence[Any] | None = None
+    body = None
+    title = None
+    for item in agenda.items:
+        if not item.notification_eligible:
+            continue
+        topic = topic_for_candidate(item)
+        if topic is None:
+            continue
+        if topic == "maintenance":
+            if eligible_kinds is None:
+                eligible_kinds = await maintenance_reminders_allowed(session, account_id, plan_date)
+            if not eligible_kinds:
+                continue
+            from app.domains.care.maintenance import maintenance_headline
+            title, card_body = maintenance_headline(eligible_kinds)
+            body = f"{title}. {card_body}".strip()
+        candidate = item
+        break
     if candidate is None:
         return None
-    if (
-        candidate.provenance.get("action_key") == "preparation:maintenance_timing"
-        and not await maintenance_reminders_allowed(session, account_id, plan_date)
-    ):
-        return None
+    topic = topic_for_candidate(candidate)
     return await queue(
         session, account_id=account_id, plan_date=plan_date,
-        notification_key=candidate.key, title=candidate.title, body=candidate.body,
-        module=candidate.domain, timezone_name=timezone_name, moment=moment,
+        notification_key=candidate.key, title=title or candidate.title, body=body or candidate.body,
+        module=candidate.domain, topic=topic, timezone_name=timezone_name, moment=moment,
         deep_link=candidate.destination, source_kind=candidate.source_kind,
-        source_id=candidate.source_id, scheduled_for=moment,
+        destination_params=candidate.destination_params, source_id=candidate.source_id,
+        scheduled_for=moment,
     )
+
+
+async def claim_delivery(session: AsyncSession, delivery_id: uuid.UUID, *, lease_seconds: int = 300) -> str | None:
+    """Atomically claim a queued outbox row before any provider request."""
+    now = utcnow()
+    token = uuid.uuid4().hex
+    stale = now.timestamp() - lease_seconds
+    result = await session.execute(update(NotificationDelivery).where(
+        NotificationDelivery.id == delivery_id,
+        or_(NotificationDelivery.status == STATUS_QUEUED,
+            and_(NotificationDelivery.status == STATUS_SENDING, NotificationDelivery.claimed_at < datetime.fromtimestamp(stale, tz=now.tzinfo))),
+    ).values(status=STATUS_SENDING, claim_token=token, claimed_at=now, attempted_at=now))
+    if not result.rowcount:
+        return None
+    await session.flush()
+    return token
 
 
 async def register_device(
@@ -256,6 +333,14 @@ async def register_device(
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     now = utcnow()
+    # Token ownership is account-global. The partial unique index in the
+    # migration is the final concurrency guard; this update performs the
+    # atomic hand-off without exposing the previous owner to the caller.
+    await session.execute(update(NotificationDevice).where(
+        NotificationDevice.expo_push_token == expo_push_token,
+        not_(and_(NotificationDevice.account_id == account_id, NotificationDevice.device_key == device_key)),
+        NotificationDevice.status == "active",
+    ).values(status="disabled", disabled_at=now))
     await session.execute(pg_insert(NotificationDevice).values(
         account_id=account_id, device_key=device_key, platform=platform,
         expo_push_token=expo_push_token, status="active", last_seen_at=now,
@@ -296,6 +381,7 @@ def serialize_preferences(row: NotificationPreference) -> dict[str, Any]:
             module: bool(row.modules.get(module, DEFAULT_MODULE_NOTIFICATIONS[module]))
             for module in MODULES
         },
+        "topics": {topic: bool((row.topics or {}).get(topic, DEFAULT_TOPIC_NOTIFICATIONS[topic])) for topic in NOTIFICATION_TOPICS},
         "timezone": row.timezone_name,
         "note": "At most one proactive appearance notification a day by default. Repeats are never sent twice.",
     }
@@ -308,6 +394,7 @@ def serialize_delivery(row: NotificationDelivery) -> dict[str, Any]:
         "status": row.status, "suppressed_reason": row.suppressed_reason,
         "scheduled_for": row.scheduled_for.isoformat() if row.scheduled_for else None,
         "deep_link": row.deep_link, "source_kind": row.source_kind, "source_id": row.source_id,
+        "destination_params": dict(row.destination_params or {}),
         "provider_ticket_id": row.provider_ticket_id, "provider_error_code": row.provider_error_code,
         "attempted_at": row.attempted_at.isoformat() if row.attempted_at else None,
         "sent_at": row.sent_at.isoformat() if row.sent_at else None,

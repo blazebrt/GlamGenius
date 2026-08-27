@@ -110,7 +110,10 @@ def _event_tier(action_key: str, domain: str, priority: int) -> tuple[int, str]:
 
 
 def _today_tier(action: DailyPlanAction) -> tuple[int, str, bool]:
-    if action.module in {"shopping"} or action.action_type in {"low_use", "value_recovery", "purchase"}:
+    if action.module in {"shopping"} or action.action_type in {
+        "low_use", "wear_low_use", "value_recovery", "value_recovery_review",
+        "purchase", "shopping", "shopping_evaluation", "purchase_candidate",
+    }:
         return 4, "optional", False
     if action.module in {"maintenance", "hair", "skincare"}:
         return 3, "upkeep", True

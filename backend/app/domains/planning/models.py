@@ -363,6 +363,9 @@ class NotificationPreference(UUIDPrimaryKey, TimestampMixin, Base):
     quiet_hours_end: Mapped[int] = mapped_column(Integer, nullable=False, default=7, server_default="7")
     preferred_hour: Mapped[int] = mapped_column(Integer, nullable=False, default=7, server_default="7")
     modules: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    # Customer-facing topic switches are intentionally separate from planner
+    # modules. Unknown keys are ignored/fail closed by the notification layer.
+    topics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     timezone_name: Mapped[str] = mapped_column(String(48), nullable=False, default="Asia/Kolkata", server_default="Asia/Kolkata")
 
 
@@ -387,6 +390,7 @@ class NotificationDevice(UUIDPrimaryKey, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("account_id", "device_key", name="uq_notification_device_account_key"),
         Index("ix_notification_devices_account_status", "account_id", "status"),
+        Index("uq_notification_device_active_token", "expo_push_token", unique=True, postgresql_where=text("status = 'active'")),
         CheckConstraint("status IN ('active', 'disabled', 'revoked')", name="ck_notification_device_status"),
         CheckConstraint("platform IN ('ios', 'android', 'web', 'unknown')", name="ck_notification_device_platform"),
     )
@@ -412,17 +416,20 @@ class NotificationDelivery(UUIDPrimaryKey, TimestampMixin, Base):
     suppressed_reason: Mapped[str | None] = mapped_column(String(64))
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deep_link: Mapped[str | None] = mapped_column(String(240))
+    destination_params: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, default=dict, server_default="{}")
     source_kind: Mapped[str | None] = mapped_column(String(32))
     source_id: Mapped[str | None] = mapped_column(String(96))
     provider_ticket_id: Mapped[str | None] = mapped_column(String(160))
     provider_error_code: Mapped[str | None] = mapped_column(String(80))
     attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_token: Mapped[str | None] = mapped_column(String(64))
 
     __table_args__ = (
         UniqueConstraint("account_id", "dedup_hash", name="uq_notification_dedup"),
         Index("ix_notification_deliveries_account_date", "account_id", "plan_date"),
-        CheckConstraint("status IN ('suppressed', 'queued', 'provider_accepted', 'provider_failed', 'receipt_ok', 'receipt_failed')", name="ck_notification_delivery_status"),
+        CheckConstraint("status IN ('suppressed', 'queued', 'sending', 'provider_accepted', 'provider_failed', 'receipt_ok', 'receipt_failed')", name="ck_notification_delivery_status"),
     )
 
 

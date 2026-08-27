@@ -22,6 +22,7 @@ import { useUserStore } from '../src/store/userStore';
 import { useConfigStore } from '../src/store/configStore';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { initSentry, wrapRoot } from '../src/monitoring';
+import { notificationTarget } from '../src/navigation/notifications';
 
 // Fire Sentry init before the root component mounts so a rendering error
 // inside <RootLayout /> itself is still captured. Safe to call with no
@@ -56,14 +57,15 @@ function RootLayout() {
 
   useEffect(() => {
     if (Platform.OS === 'web' || typeof Notifications.addNotificationResponseReceivedListener !== 'function') return undefined;
-    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      const data = response.notification.request.content.data as { destination?: unknown; eventId?: unknown };
-      const destination = typeof data.destination === 'string' ? data.destination : '/(tabs)/today';
-      const allowed = ['/(tabs)/today', '/(tabs)/style', '/(tabs)/care', '/(tabs)/plan', '/event-ready', '/improve', '/(tabs)/services', '/(tabs)/inventory'];
-      if (!allowed.includes(destination)) { router.replace('/(tabs)/today'); return; }
-      if (destination === '/event-ready' && typeof data.eventId === 'string') router.push({ pathname: destination, params: { eventId: data.eventId } });
-      else router.push(destination as never);
-    });
+    const open = (response: Notifications.NotificationResponse) => {
+      const target = notificationTarget(response.notification.request.content.data);
+      if (target.params) router.push({ pathname: target.destination, params: target.params });
+      else router.push(target.destination as never);
+    };
+    const subscription = Notifications.addNotificationResponseReceivedListener(open);
+    // Expo retains the response that launched a cold app. Consume it once so
+    // a tap is not lost before the listener is attached.
+    void Notifications.getLastNotificationResponseAsync?.().then((response) => { if (response) open(response); }).catch(() => undefined);
     return () => subscription.remove();
   }, [router]);
 

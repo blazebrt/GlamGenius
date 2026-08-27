@@ -20,6 +20,7 @@ jest.mock('react-native-safe-area-context', () => ({
 
 jest.mock('../services/apiV2', () => ({
   getToday: jest.fn(),
+  getTodayAgenda: jest.fn().mockResolvedValue({ agenda_version: 'vc-09-v1', generated_for: '2026-08-07', timezone: 'Asia/Kolkata', items: [] }),
   getRoutinesToday: jest.fn(),
   getPerfumeRecommendation: jest.fn(),
   getNutritionSuggestions: jest.fn(),

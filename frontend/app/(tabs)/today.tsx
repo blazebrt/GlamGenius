@@ -128,6 +128,10 @@ export default function TodayScreen() {
     );
   }
 
+  const agendaActionIds = new Set(
+    (agenda?.items ?? []).filter((item) => item.source_kind === 'today_action' && item.source_action_id).map((item) => item.source_action_id as string),
+  );
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView
@@ -163,12 +167,12 @@ export default function TodayScreen() {
                 onUnavailable={(piece) => void onUnavailable(piece)}
               />
               {plan.primary
-                .filter((action) => action.action_type !== 'wear_outfit')
+                .filter((action) => action.action_type !== 'wear_outfit' && !agendaActionIds.has(action.id))
                 .map((action) => (
                   <ActionRow key={action.id} action={action} onComplete={() => void onComplete(action)} />
                 ))}
               <OptionalModules
-                actions={plan.optional_modules}
+                actions={plan.optional_modules.filter((action) => !agendaActionIds.has(action.id))}
                 expanded={expanded}
                 onToggle={() => setExpanded((value) => !value)}
                 onComplete={(action) => void onComplete(action)}

@@ -242,6 +242,7 @@ class NotificationPreferencePatch(BaseModel):
     quiet_hours_end: int | None = Field(default=None, ge=0, le=23)
     preferred_hour: int | None = Field(default=None, ge=0, le=23)
     modules: dict[str, bool] | None = None
+    topics: dict[str, bool] | None = None
 
     @field_validator("modules")
     @classmethod
@@ -250,6 +251,16 @@ class NotificationPreferencePatch(BaseModel):
             unknown = set(value) - set(MODULES)
             if unknown:
                 raise ValueError(f"Unknown module: {sorted(unknown)[0]}. Choose from: {', '.join(MODULES)}.")
+        return value
+
+    @field_validator("topics")
+    @classmethod
+    def _known_topics(cls, value: dict[str, bool] | None) -> dict[str, bool] | None:
+        if value:
+            from app.domains.planning.notifications import NOTIFICATION_TOPICS
+            unknown = set(value) - set(NOTIFICATION_TOPICS)
+            if unknown:
+                raise ValueError(f"Unknown notification topic: {sorted(unknown)[0]}.")
         return value
 
 

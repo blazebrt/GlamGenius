@@ -1582,6 +1582,7 @@ export interface NotificationPreferences {
   quiet_hours: { start: number; end: number };
   preferred_hour: number;
   modules: Record<PlanModule, boolean>;
+  topics: { today_style: boolean; care: boolean; event_preparation: boolean; maintenance: boolean };
   timezone: string;
   note: string;
 }
@@ -1713,7 +1714,7 @@ export const getNotificationPreferences = async (): Promise<{
 }> => (await api.get(`${V2}/today/notifications`)).data;
 
 export const patchNotificationPreferences = async (
-  body: Partial<{ enabled: boolean; native_push_enabled: boolean; daily_cap: number; preferred_hour: number; quiet_hours_start: number; quiet_hours_end: number; modules: Record<string, boolean> }>
+  body: Partial<{ enabled: boolean; native_push_enabled: boolean; daily_cap: number; preferred_hour: number; quiet_hours_start: number; quiet_hours_end: number; modules: Record<string, boolean>; topics: Record<string, boolean> }>
 ): Promise<{ preferences: NotificationPreferences }> =>
   (await api.patch(`${V2}/today/notifications`, body)).data;
 

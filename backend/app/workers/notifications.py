@@ -14,7 +14,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.planning import clock, notifications, push
+from app.domains.planning import clock, compiler, context as context_stage, notifications, push
 from app.domains.planning.models import NotificationDelivery, NotificationPreference
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_sessionmaker
@@ -39,35 +39,52 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
     if not devices:
         return 0
     plan_date = clock.local_today(preference.timezone_name, moment=now)
+    # The worker is proactive: it uses the same canonical Today compiler as
+    # GET /today, without coupling notification delivery to a screen open.
+    context = await context_stage.gather(session, account_id=preference.account_id, plan_date=plan_date)
+    await compiler.compile_day(session, context=context, force=False, trigger="notification_worker")
     decision = await notifications.queue_for_agenda(
         session, account_id=preference.account_id, plan_date=plan_date,
         timezone_name=preference.timezone_name, moment=now,
     )
     if decision is None or decision.status != notifications.STATUS_QUEUED:
         return 0
+    claim = await notifications.claim_delivery(session, decision.id)
+    if claim is None:
+        await session.rollback()
+        return 0
+    # Commit the claim before calling Expo. This is the duplicate-prevention
+    # boundary; no transaction remains open across the network request.
     await session.commit()
     messages = [push.PushMessage(
         to=device.expo_push_token, title=decision.title, body=decision.body,
-        data={"destination": decision.deep_link} if decision.deep_link else None,
+        data=({"destination": decision.deep_link, **(decision.destination_params or {})} if decision.deep_link else None),
     ) for device in devices]
     result = await push.send(messages)
     async with session.begin():
         row = await session.get(NotificationDelivery, decision.id, with_for_update=True)
-        if row is None or row.status != notifications.STATUS_QUEUED:
+        if row is None or row.status != notifications.STATUS_SENDING or row.claim_token != claim:
             return 0
         row.attempted_at = utcnow()
+        outcomes = result.outcomes or []
         if result.sent:
             row.status = notifications.STATUS_PROVIDER_ACCEPTED
             row.sent_at = row.attempted_at
-            row.provider_ticket_id = result.receipts[0] if result.receipts else None
+            accepted = next((item for item in outcomes if item.accepted), None)
+            row.provider_ticket_id = accepted.ticket_id if accepted else (result.receipts[0] if result.receipts else None)
         else:
             row.status = notifications.STATUS_PROVIDER_FAILED
             errors = result.errors or []
             row.provider_error_code = errors[0][:80] if errors else "transport_failed"
-            if any(error == "DeviceNotRegistered" for error in errors):
-                for device in devices:
-                    device.status = "disabled"
-                    device.disabled_at = utcnow()
+        # Provider errors belong to the exact token that produced them.
+        by_token = {item.token: item for item in outcomes}
+        for device in devices:
+            outcome = by_token.get(device.expo_push_token)
+            if outcome and outcome.error == "DeviceNotRegistered":
+                device.status = "disabled"
+                device.disabled_at = utcnow()
+        row.claim_token = None
+        row.claimed_at = None
     return result.sent
 
 

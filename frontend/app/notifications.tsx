@@ -5,12 +5,14 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { COLORS, FONTS, SPACING } from '../src/theme/colors';
 import { getNotificationPreferences, patchNotificationPreferences, registerNotificationDevice, unregisterNotificationDevice, NotificationPreferences } from '../src/services/apiV2';
+import { getInstallationId } from '../src/services/deviceIdentity';
 
 export default function NotificationsScreen() {
   const router = useRouter();
   const [preferences, setPreferences] = useState<NotificationPreferences | null>(null);
   const [busy, setBusy] = useState(false);
-  const [deviceKey] = useState(() => Constants.deviceId || 'expo-device');
+  const [deviceKey, setDeviceKey] = useState<string | null>(null);
+  useEffect(() => { void getInstallationId().then(setDeviceKey).catch(() => setDeviceKey(null)); }, []);
   useEffect(() => { void getNotificationPreferences().then((result) => setPreferences(result.preferences)).catch(() => undefined); }, []);
 
   const update = async (body: Parameters<typeof patchNotificationPreferences>[0]) => {
@@ -25,7 +27,9 @@ export default function NotificationsScreen() {
       const current = await Notifications.getPermissionsAsync();
       const permission = current.status === 'granted' ? current : await Notifications.requestPermissionsAsync();
       if (permission.status !== 'granted') { Alert.alert('Notifications are off', 'You can keep using GlamGenius normally.'); return; }
-      const token = await Notifications.getExpoPushTokenAsync();
+      const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
+      if (!projectId || !deviceKey) throw new Error('push_configuration_unavailable');
+      const token = await Notifications.getExpoPushTokenAsync({ projectId });
       await registerNotificationDevice({ device_key: deviceKey, platform: Platform.OS === 'ios' ? 'ios' : 'android', expo_push_token: token.data });
       setPreferences((value) => value ? { ...value, native_push_enabled: true } : value);
     } catch { Alert.alert('Notifications are off', 'We could not register this device. Nothing was enabled.'); }
@@ -34,6 +38,7 @@ export default function NotificationsScreen() {
 
   const disableNative = async () => {
     setBusy(true);
+    if (!deviceKey) { await update({ native_push_enabled: false }); setBusy(false); return; }
     try { await unregisterNotificationDevice(deviceKey); await update({ native_push_enabled: false }); }
     catch { await update({ native_push_enabled: false }); }
     finally { setBusy(false); }
@@ -49,7 +54,12 @@ export default function NotificationsScreen() {
     <Text style={styles.section}>Preferred local hour</Text>
     <View style={styles.hours}>{[7, 8, 9, 18, 19, 20].map((hour) => <TouchableOpacity key={hour} accessibilityRole="button" accessibilityLabel={`Preferred time ${hour}:00`} onPress={() => void update({ preferred_hour: hour })} style={[styles.hour, preferences?.preferred_hour === hour && styles.hourActive]}><Text style={styles.hourText}>{String(hour).padStart(2, '0')}:00</Text></TouchableOpacity>)}</View>
     <Text style={styles.section}>What can notify me</Text>
-    {preferences && Object.entries(preferences.modules).map(([module, enabled]) => <Row key={module} label={module === 'skincare' ? 'Skin Care' : module.charAt(0).toUpperCase() + module.slice(1)} value={enabled} onValueChange={(value) => void update({ modules: { [module]: value } })} />)}
+    {preferences && ([
+      ['today_style', 'Today & Style'], ['care', 'Care'], ['event_preparation', 'Event preparation'], ['maintenance', 'Maintenance'],
+    ] as const).map(([topic, label]) => <Row key={topic} label={label} value={preferences.topics ? preferences.topics[topic] !== false : true} onValueChange={(value) => void update({ topics: { [topic]: value } })} />)}
+    <Text style={styles.section}>Quiet hours</Text>
+    <View style={styles.hours}>{[21, 22, 23, 0, 6, 7].map((hour) => <TouchableOpacity key={`quiet-start-${hour}`} accessibilityRole="button" accessibilityLabel={`Quiet hours start ${hour}:00`} onPress={() => void update({ quiet_hours_start: hour })} style={[styles.hour, preferences?.quiet_hours.start === hour && styles.hourActive]}><Text style={styles.hourText}>Start {String(hour).padStart(2, '0')}:00</Text></TouchableOpacity>)}</View>
+    <View style={[styles.hours, { marginTop: 8 }]}>{[6, 7, 8, 9].map((hour) => <TouchableOpacity key={`quiet-end-${hour}`} accessibilityRole="button" accessibilityLabel={`Quiet hours end ${hour}:00`} onPress={() => void update({ quiet_hours_end: hour })} style={[styles.hour, preferences?.quiet_hours.end === hour && styles.hourActive]}><Text style={styles.hourText}>End {String(hour).padStart(2, '0')}:00</Text></TouchableOpacity>)}</View>
     <Text style={styles.section}>Recent status</Text><Text style={styles.body}>Sent and not-sent decisions appear here without claiming device delivery.</Text>
   </ScrollView></View>;
 }
