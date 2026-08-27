@@ -6,11 +6,10 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
-
 from app.domains.planning import agenda, notifications
 from app.domains.planning.models import NotificationDevice
 from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import select
 
 
 def test_quiet_hours_crossing_midnight_are_deterministic() -> None:
