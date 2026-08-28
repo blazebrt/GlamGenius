@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
+import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -21,6 +22,7 @@ import { useUserStore } from '../src/store/userStore';
 import { useConfigStore } from '../src/store/configStore';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { initSentry, wrapRoot } from '../src/monitoring';
+import { notificationTarget } from '../src/navigation/notifications';
 
 // Fire Sentry init before the root component mounts so a rendering error
 // inside <RootLayout /> itself is still captured. Safe to call with no
@@ -28,6 +30,7 @@ import { initSentry, wrapRoot } from '../src/monitoring';
 initSentry();
 
 function RootLayout() {
+  const router = useRouter();
   const { initializeUser } = useUserStore();
   const loadConfig = useConfigStore((s) => s.load);
 
@@ -51,6 +54,20 @@ function RootLayout() {
     // stable across renders. This effect must run exactly once on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' || typeof Notifications.addNotificationResponseReceivedListener !== 'function') return undefined;
+    const open = (response: Notifications.NotificationResponse) => {
+      const target = notificationTarget(response.notification.request.content.data);
+      if (target.params) router.push({ pathname: target.destination, params: target.params });
+      else router.push(target.destination as never);
+    };
+    const subscription = Notifications.addNotificationResponseReceivedListener(open);
+    // Expo retains the response that launched a cold app. Consume it once so
+    // a tap is not lost before the listener is attached.
+    void Notifications.getLastNotificationResponseAsync?.().then((response) => { if (response) open(response); }).catch(() => undefined);
+    return () => subscription.remove();
+  }, [router]);
 
   if (!fontsLoaded) {
     return (
@@ -94,6 +111,7 @@ function RootLayout() {
             <Stack.Screen name="inventory-insights" />
             <Stack.Screen name="event-add" />
             <Stack.Screen name="event-ready" />
+            <Stack.Screen name="notifications" />
           </Stack>
         </ErrorBoundary>
       </SafeAreaProvider>

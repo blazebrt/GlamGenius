@@ -54,6 +54,8 @@ from app.domains.planning.models import (
     EventReadyAction,
     EventReadyPlan,
     ExternalIntegration,
+    NotificationDelivery,
+    NotificationPreference,
     WeatherSnapshot,
     WeeklyPlan,
 )
@@ -330,6 +332,8 @@ async def _planning(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         session,
         select(EventReadyAction).where(EventReadyAction.event_ready_plan_id.in_([row.id for row in event_ready_plans])),
     ) if event_ready_plans else []
+    notification_preferences = await _fetch(session, select(NotificationPreference).where(NotificationPreference.account_id == account_id))
+    notification_deliveries = await _fetch(session, select(NotificationDelivery).where(NotificationDelivery.account_id == account_id))
     return {
         "daily_plans": [_row_dict(r, [c.name for c in DailyPlan.__table__.columns]) for r in daily],
         "weekly_plans": [_row_dict(r, [c.name for c in WeeklyPlan.__table__.columns]) for r in weekly],
@@ -340,6 +344,10 @@ async def _planning(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         "weather_snapshots": [_row_dict(r, [c.name for c in WeatherSnapshot.__table__.columns]) for r in weather],
         "event_ready_plans": [_row_dict(r, [c.name for c in EventReadyPlan.__table__.columns]) for r in event_ready_plans],
         "event_ready_actions": [_row_dict(r, [c.name for c in EventReadyAction.__table__.columns]) for r in event_ready_actions],
+        "notification_preferences": [_row_dict(r, [c.name for c in NotificationPreference.__table__.columns]) for r in notification_preferences],
+        # Delivery history is useful to the customer; provider token/error
+        # internals are intentionally reduced to truthful status metadata.
+        "notification_deliveries": [_row_dict(r, ["id", "plan_date", "notification_key", "channel", "status", "suppressed_reason", "scheduled_for", "attempted_at", "sent_at", "created_at"]) for r in notification_deliveries],
     }
 
 
@@ -562,6 +570,10 @@ async def build_export(session: AsyncSession, account_id: uuid.UUID) -> dict[str
             "not_user_owned": sorted(
                 name for name, kind in REGISTRY.items()
                 if kind == Classification.NOT_USER_OWNED
+            ),
+            "secret_excluded": sorted(
+                name for name, kind in REGISTRY.items()
+                if kind == Classification.SECRET_EXCLUDED
             ),
             "operational_only": sorted(
                 name for name, kind in REGISTRY.items()

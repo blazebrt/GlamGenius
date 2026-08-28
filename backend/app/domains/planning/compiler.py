@@ -19,7 +19,6 @@ that Today is not one.
 """
 from __future__ import annotations
 
-import logging
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -37,7 +36,7 @@ from app.domains.care import routine_plan as care_routine_plan
 from app.domains.care import service as care_service
 from app.domains.care.schemas import CareContext
 from app.domains.inventory import service as inventory_service
-from app.domains.planning import clock, notifications
+from app.domains.planning import clock
 from app.domains.planning import context as context_stage
 from app.domains.planning.context import DayContext
 from app.domains.planning.models import (
@@ -67,8 +66,6 @@ from app.domains.recommendation.models import Look, OccasionRecord
 from app.domains.recommendation.occasions import OCCASIONS, get_occasion
 from app.domains.routines import adherence as routine_adherence
 from app.shared.database.base import utcnow
-
-logger = logging.getLogger(__name__)
 
 # Below this, the occasion is too uncertain to just act on, and the plan asks
 # one question instead of guessing.
@@ -948,15 +945,6 @@ async def compile_day(
 
     await _schedule_outfit(session, context, plan, ranked)
     await session.flush()
-
-    # Queue the day's single notification. The decision layer — dedup, the
-    # daily cap, quiet hours — runs here so preferences actually take effect;
-    # delivery to a device is a separate transport and is not wired yet, so a
-    # queued row is where this stops. Never allowed to break a plan.
-    try:
-        await notifications.queue_for_plan(session, plan=plan, timezone_name=context.timezone_name)
-    except Exception:  # noqa: BLE001 - a notification must not fail the day
-        logger.exception("notification_queue_failed date=%s", context.plan_date)
 
     return plan, True
 

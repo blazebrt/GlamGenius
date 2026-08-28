@@ -236,11 +236,13 @@ class NotificationPreferencePatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool | None = None
+    native_push_enabled: bool | None = None
     daily_cap: int | None = Field(default=None, ge=0, le=5)
     quiet_hours_start: int | None = Field(default=None, ge=0, le=23)
     quiet_hours_end: int | None = Field(default=None, ge=0, le=23)
     preferred_hour: int | None = Field(default=None, ge=0, le=23)
     modules: dict[str, bool] | None = None
+    topics: dict[str, bool] | None = None
 
     @field_validator("modules")
     @classmethod
@@ -250,3 +252,21 @@ class NotificationPreferencePatch(BaseModel):
             if unknown:
                 raise ValueError(f"Unknown module: {sorted(unknown)[0]}. Choose from: {', '.join(MODULES)}.")
         return value
+
+    @field_validator("topics")
+    @classmethod
+    def _known_topics(cls, value: dict[str, bool] | None) -> dict[str, bool] | None:
+        if value:
+            from app.domains.planning.notifications import NOTIFICATION_TOPICS
+            unknown = set(value) - set(NOTIFICATION_TOPICS)
+            if unknown:
+                raise ValueError(f"Unknown notification topic: {sorted(unknown)[0]}.")
+        return value
+
+
+class NotificationDeviceRegister(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_key: str = Field(min_length=1, max_length=160)
+    platform: Literal["ios", "android", "web", "unknown"] = "unknown"
+    expo_push_token: str = Field(min_length=1, max_length=512)

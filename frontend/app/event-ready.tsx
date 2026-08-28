@@ -34,12 +34,16 @@ export default function EventReadyScreen() {
       setReady(await getEventReady(eventId));
       setError(null);
     } catch (err) {
+      if ((err as any)?.response?.status === 404) {
+        router.replace('/(tabs)/plan');
+        return;
+      }
       setError(errorMessage(err));
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [eventId]);
+  }, [eventId, router]);
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 

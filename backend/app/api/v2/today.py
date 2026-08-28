@@ -9,10 +9,10 @@ from __future__ import annotations
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.planning import clock, compiler, notifications, service
+from app.domains.planning import agenda, clock, compiler, notifications, service
 from app.domains.planning import context as context_stage
 from app.domains.planning.models import DailyPlan
 from app.domains.planning.schemas import (
@@ -21,6 +21,7 @@ from app.domains.planning.schemas import (
     CalendarEventInput,
     ClarificationAnswer,
     ItemUnavailable,
+    NotificationDeviceRegister,
     NotificationPreferencePatch,
     TodayFeedback,
     TodayOutfitSwap,
@@ -249,6 +250,7 @@ async def add_event(
 
 @router.get("/today/notifications")
 async def get_notification_preferences(
+    device_key: str | None = Query(None, max_length=160),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
@@ -258,6 +260,66 @@ async def get_notification_preferences(
     return {
         "preferences": notifications.serialize_preferences(row),
         "recent": await notifications.recent_deliveries(session, current.account_id),
+        "current_device_registered": (
+            await notifications.current_device_registered(session, current.account_id, device_key)
+            if device_key else False
+        ),
+    }
+
+
+@router.get("/today/agenda")
+async def get_today_agenda(
+    plan_date: date | None = Query(None, description="Defaults to today in your timezone"),
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Read the thin cross-domain attention view without compiling Today."""
+    timezone_name = await context_stage.resolve_timezone_for(session, current.account_id)
+    return await agenda.agenda_payload(
+        session, current.account_id, generated_for=plan_date, timezone_name=timezone_name,
+    )
+
+
+@router.post("/today/notifications/devices")
+async def register_notification_device(
+    body: NotificationDeviceRegister,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    device = await notifications.register_device(
+        session, current.account_id, device_key=body.device_key,
+        platform=body.platform, expo_push_token=body.expo_push_token,
+    )
+    preference = await notifications.preferences_for(session, current.account_id, clock.DEFAULT_TIMEZONE)
+    preference.native_push_enabled = True
+    await session.commit()
+    return {
+        "device": {"device_key": device.device_key, "platform": device.platform, "status": device.status},
+        "native_push_enabled": True,
+        "current_device_registered": True,
+    }
+
+
+@router.delete("/today/notifications/devices/{device_key}")
+async def unregister_notification_device(
+    device_key: str,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    removed = await notifications.unregister_device(session, current.account_id, device_key)
+    if not removed:
+        raise HTTPException(status_code=404, detail={"code": "device_not_found", "message": "That device is not registered."})
+    active_remaining = bool(await notifications.active_devices(session, current.account_id))
+    preference = await notifications.preferences_for(session, current.account_id, clock.DEFAULT_TIMEZONE)
+    if not active_remaining:
+        preference.native_push_enabled = False
+    await session.commit()
+    return {
+        "device_key": device_key,
+        "removed": True,
+        "active_devices_remaining": active_remaining,
+        "native_push_enabled": bool(preference.native_push_enabled),
+        "current_device_registered": False,
     }
 
 
@@ -270,8 +332,12 @@ async def patch_notification_preferences(
     timezone_name = await context_stage.resolve_timezone_for(session, current.account_id)
     row = await notifications.preferences_for(session, current.account_id, timezone_name)
     fields = body.model_dump(exclude_unset=True)
+    if fields.get("native_push_enabled") is True and not await notifications.active_devices(session, current.account_id):
+        raise ValidationFailedError("Register this device before enabling native notifications.", field="native_push_enabled")
     if "modules" in fields and fields["modules"] is not None:
         row.modules = {**(row.modules or {}), **fields.pop("modules")}
+    if "topics" in fields and fields["topics"] is not None:
+        row.topics = {**(row.topics or {}), **fields.pop("topics")}
     for key, value in fields.items():
         if value is not None:
             setattr(row, key, value)

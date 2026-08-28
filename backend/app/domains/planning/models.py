@@ -26,11 +26,24 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
+from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey, utcnow
 
 # Bumped when the compiler's deterministic rules change. Stored on every plan so
 # an old plan still says which rules produced it.
@@ -342,12 +355,45 @@ class NotificationPreference(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    # Backend preference and OS consent are deliberately separate. Enabling
+    # the in-app setting never implies that a device may receive a push.
+    native_push_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     daily_cap: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     quiet_hours_start: Mapped[int] = mapped_column(Integer, nullable=False, default=21, server_default="21")
     quiet_hours_end: Mapped[int] = mapped_column(Integer, nullable=False, default=7, server_default="7")
     preferred_hour: Mapped[int] = mapped_column(Integer, nullable=False, default=7, server_default="7")
     modules: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    # Customer-facing topic switches are intentionally separate from planner
+    # modules. Unknown keys are ignored/fail closed by the notification layer.
+    topics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     timezone_name: Mapped[str] = mapped_column(String(48), nullable=False, default="Asia/Kolkata", server_default="Asia/Kolkata")
+
+
+class NotificationDevice(UUIDPrimaryKey, TimestampMixin, Base):
+    """An account-owned Expo device registration.
+
+    ``expo_push_token`` is operational secret-like data: it is never exposed
+    through normal serializers or privacy exports and is only read by the
+    worker while sending to this account's own device.
+    """
+
+    __tablename__ = "notification_devices"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    device_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    expo_push_token: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, server_default=text("now()"))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "device_key", name="uq_notification_device_account_key"),
+        Index("ix_notification_devices_account_status", "account_id", "status"),
+        Index("uq_notification_device_active_token", "expo_push_token", unique=True, postgresql_where=text("status = 'active'")),
+        CheckConstraint("status IN ('active', 'disabled', 'revoked')", name="ck_notification_device_status"),
+        CheckConstraint("platform IN ('ios', 'android', 'web', 'unknown')", name="ck_notification_device_platform"),
+    )
 
 
 class NotificationDelivery(UUIDPrimaryKey, TimestampMixin, Base):
@@ -366,13 +412,24 @@ class NotificationDelivery(UUIDPrimaryKey, TimestampMixin, Base):
     channel: Mapped[str] = mapped_column(String(16), nullable=False, default="push", server_default="push")
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued", server_default="queued")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", server_default="queued")
     suppressed_reason: Mapped[str | None] = mapped_column(String(64))
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deep_link: Mapped[str | None] = mapped_column(String(240))
+    destination_params: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, default=dict, server_default="{}")
+    source_kind: Mapped[str | None] = mapped_column(String(32))
+    source_id: Mapped[str | None] = mapped_column(String(96))
+    provider_ticket_id: Mapped[str | None] = mapped_column(String(160))
+    provider_error_code: Mapped[str | None] = mapped_column(String(80))
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_token: Mapped[str | None] = mapped_column(String(64))
 
     __table_args__ = (
         UniqueConstraint("account_id", "dedup_hash", name="uq_notification_dedup"),
         Index("ix_notification_deliveries_account_date", "account_id", "plan_date"),
+        CheckConstraint("status IN ('suppressed', 'queued', 'sending', 'provider_accepted', 'provider_failed', 'receipt_ok', 'receipt_failed')", name="ck_notification_delivery_status"),
     )
 
 

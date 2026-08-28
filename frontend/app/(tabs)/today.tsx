@@ -19,7 +19,8 @@ import { TodayCareGuidance, TodayFood, TodayHomeCare, TodayPerfume, TodayRoutine
 import {
   CareGuidance, DailyPlan, HomeCare, LookPiece, NutritionSuggestion, PerfumePick, PlanAction, Routine, RoutineStep,
   answerClarification, completePlanAction, completeRoutineStep, getNutritionSuggestions,
-  getPerfumeRecommendation, getRoutinesToday, getToday, regenerateToday, reportItemUnavailable,
+  getPerfumeRecommendation, getRoutinesToday, getToday, getTodayAgenda, regenerateToday, reportItemUnavailable,
+  AttentionAgenda,
   sendTodayFeedback,
 } from '../../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../src/theme/colors';
@@ -39,6 +40,7 @@ export default function TodayScreen() {
   const [homeCare, setHomeCare] = useState<HomeCare | null>(null);
   const [perfume, setPerfume] = useState<PerfumePick | null>(null);
   const [food, setFood] = useState<NutritionSuggestion | null>(null);
+  const [agenda, setAgenda] = useState<AttentionAgenda | null>(null);
 
   const loadModules = useCallback(async () => {
     const [routineResult, perfumeResult, foodResult] = await Promise.allSettled([
@@ -59,6 +61,7 @@ export default function TodayScreen() {
     if (mode === 'refresh') setRefreshing(true);
     try {
       setPlan(await getToday());
+      void getTodayAgenda().then(setAgenda).catch(() => setAgenda(null));
       void loadModules();
       setOffline(false);
     } catch (err) {
@@ -78,7 +81,11 @@ export default function TodayScreen() {
   const apply = (next: DailyPlan) => { setPlan(next); setOffline(false); };
 
   const onComplete = async (action: PlanAction) => {
-    try { apply(await completePlanAction(action.id, !action.completed)); }
+    try {
+      apply(await completePlanAction(action.id, !action.completed));
+      const nextAgenda = await getTodayAgenda();
+      setAgenda(nextAgenda);
+    }
     catch (err) { console.warn('complete failed', err); }
   };
 
@@ -125,6 +132,10 @@ export default function TodayScreen() {
     );
   }
 
+  const agendaActionIds = new Set(
+    (agenda?.items ?? []).filter((item) => item.source_kind === 'today_action' && item.source_action_id).map((item) => item.source_action_id as string),
+  );
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView
@@ -135,6 +146,12 @@ export default function TodayScreen() {
         {!offline && isStale(plan) && <StaleNotice onRefresh={() => void load('refresh')} />}
 
         <TodayHeader plan={plan} />
+
+        <NextUp agenda={agenda} plan={plan} onComplete={(action) => void onComplete(action)} onOpen={(destination, params) => {
+          if (!['/(tabs)/today', '/(tabs)/style', '/(tabs)/care', '/(tabs)/plan', '/event-ready', '/improve', '/(tabs)/services', '/(tabs)/inventory'].includes(destination)) return;
+          if (destination === '/event-ready') router.push({ pathname: destination, params });
+          else router.push(destination as never);
+        }} />
 
         {plan.needs_clarification && plan.clarification && (
           <View style={{ marginTop: SPACING.lg }}>
@@ -154,12 +171,12 @@ export default function TodayScreen() {
                 onUnavailable={(piece) => void onUnavailable(piece)}
               />
               {plan.primary
-                .filter((action) => action.action_type !== 'wear_outfit')
+                .filter((action) => action.action_type !== 'wear_outfit' && !agendaActionIds.has(action.id))
                 .map((action) => (
                   <ActionRow key={action.id} action={action} onComplete={() => void onComplete(action)} />
                 ))}
               <OptionalModules
-                actions={plan.optional_modules}
+                actions={plan.optional_modules.filter((action) => !agendaActionIds.has(action.id))}
                 expanded={expanded}
                 onToggle={() => setExpanded((value) => !value)}
                 onComplete={(action) => void onComplete(action)}
@@ -209,4 +226,34 @@ const styles = StyleSheet.create({
   shortcut: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: RADIUS.lg, backgroundColor: COLORS.card, borderWidth: 1, borderColor: COLORS.border },
   shortcutText: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.textPrimary },
   disclaimer: { fontFamily: FONTS.family.body, fontSize: 11, color: COLORS.textMuted, textAlign: 'center', marginTop: SPACING.lg },
+  nextUp: { marginTop: SPACING.lg, backgroundColor: COLORS.card, borderColor: COLORS.border, borderWidth: 1, borderRadius: RADIUS.lg, padding: SPACING.md },
+  nextTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 18, color: COLORS.textPrimary },
+  nextItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
+  nextSecondary: { borderTopWidth: 1, borderTopColor: COLORS.border },
+  nextItemTitle: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.textPrimary },
+  nextBody: { fontFamily: FONTS.family.body, fontSize: 12, lineHeight: 17, color: COLORS.textSecondary, marginTop: 2 },
+  nextComplete: { borderColor: COLORS.primary, borderWidth: 1, borderRadius: RADIUS.md, paddingHorizontal: 10, paddingVertical: 6 },
+  nextCompleteText: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.primary },
 });
+
+function NextUp({ agenda, plan, onComplete, onOpen }: { agenda: AttentionAgenda | null; plan: DailyPlan; onComplete: (action: PlanAction) => void; onOpen: (destination: string, params: Record<string, string>) => void }) {
+  if (!agenda || agenda.items.length === 0) return null;
+  const planActions = [...plan.primary, ...plan.optional_modules];
+  return <View style={styles.nextUp} accessibilityLabel="Next up">
+    <Text style={styles.nextTitle}>Next up</Text>
+    {agenda.items.slice(0, 3).map((item, index) => {
+      const sourceAction = item.source_kind === 'today_action' && item.source_action_id
+        ? planActions.find((action) => action.id === item.source_action_id)
+        : undefined;
+      return <View key={item.key} style={[styles.nextItem, index > 0 && styles.nextSecondary]}>
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Open ${item.title}`} onPress={() => onOpen(item.destination, item.destination_params)} style={{ flex: 1 }}>
+          <Text style={styles.nextItemTitle}>{item.title}</Text><Text style={styles.nextBody}>{item.body}</Text>
+        </TouchableOpacity>
+        {sourceAction && <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Complete ${item.title}`} onPress={() => onComplete(sourceAction)} style={styles.nextComplete}>
+          <Text style={styles.nextCompleteText}>Done</Text>
+        </TouchableOpacity>}
+        {!sourceAction && <Ionicons name="chevron-forward" size={17} color={COLORS.textMuted} />}
+      </View>;
+    })}
+  </View>;
+}

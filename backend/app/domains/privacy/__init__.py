@@ -187,6 +187,8 @@ REGISTRY: dict[str, Classification] = {
     # --- Notifications + integrations ---
     "notification_preferences": Classification.INCLUDED,
     "notification_deliveries": Classification.INCLUDED,
+    # Expo push tokens are secret-like operational data and never exported.
+    "notification_devices": Classification.SECRET_EXCLUDED,
     "external_integrations": Classification.INCLUDED,
     # One-time OAuth CSRF/replay state is operational metadata, never user export.
     "external_oauth_states": Classification.OPERATIONAL,

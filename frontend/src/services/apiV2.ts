@@ -1577,16 +1577,34 @@ export interface GoogleCalendarAuthorization {
 
 export interface NotificationPreferences {
   enabled: boolean;
+  native_push_enabled: boolean;
   daily_cap: number;
   quiet_hours: { start: number; end: number };
   preferred_hour: number;
   modules: Record<PlanModule, boolean>;
+  topics: { today_style: boolean; care: boolean; event_preparation: boolean; maintenance: boolean };
   timezone: string;
   note: string;
 }
 
+export interface AttentionItem {
+  key: string; source_kind: 'today_action' | 'event_ready_action' | 'event_preparation_entry';
+  source_id: string; source_action_id: string | null; domain: string;
+  entity_type: string; entity_id: string | null; title: string; body: string;
+  relevance: string; urgency: string; priority_tier: number; due_at: string | null;
+  event_id: string | null; destination: string; destination_params: Record<string, string>;
+  completed: boolean; notification_eligible: boolean; provenance: Record<string, string>;
+}
+
+export interface AttentionAgenda {
+  agenda_version: string; generated_for: string; timezone: string; items: AttentionItem[];
+}
+
 export const getToday = async (plan_date?: string): Promise<DailyPlan> =>
-  (await api.get<DailyPlan>(`${V2}/today`, { params: plan_date ? { plan_date } : undefined })).data;
+    (await api.get<DailyPlan>(`${V2}/today`, { params: plan_date ? { plan_date } : undefined })).data;
+
+export const getTodayAgenda = async (plan_date?: string): Promise<AttentionAgenda> =>
+  (await api.get<AttentionAgenda>(`${V2}/today/agenda`, { params: plan_date ? { plan_date } : undefined })).data;
 
 export const regenerateToday = async (
   reason?: 'weather_changed' | 'plans_changed' | 'not_my_style' | 'item_unavailable' | 'manual',
@@ -1690,15 +1708,24 @@ export const syncGoogleCalendar = async (): Promise<{ connected: boolean; synced
 export const disconnectGoogleCalendar = async (): Promise<{ status: string; revoked: boolean; message: string }> =>
   (await api.delete<{ status: string; revoked: boolean; message: string }>(`${V2}/integrations/calendar/google`)).data;
 
-export const getNotificationPreferences = async (): Promise<{
+export const getNotificationPreferences = async (deviceKey?: string): Promise<{
   preferences: NotificationPreferences;
   recent: { id: string; title: string; status: string; suppressed_reason: string | null }[];
-}> => (await api.get(`${V2}/today/notifications`)).data;
+  current_device_registered: boolean;
+}> => (await api.get(`${V2}/today/notifications`, { params: deviceKey ? { device_key: deviceKey } : undefined })).data;
 
 export const patchNotificationPreferences = async (
-  body: Partial<{ enabled: boolean; daily_cap: number; preferred_hour: number; modules: Record<string, boolean> }>
+  body: Partial<{ enabled: boolean; native_push_enabled: boolean; daily_cap: number; preferred_hour: number; quiet_hours_start: number; quiet_hours_end: number; modules: Record<string, boolean>; topics: Record<string, boolean> }>
 ): Promise<{ preferences: NotificationPreferences }> =>
   (await api.patch(`${V2}/today/notifications`, body)).data;
+
+export const registerNotificationDevice = async (body: {
+  device_key: string; platform: 'ios' | 'android' | 'web' | 'unknown'; expo_push_token: string;
+}): Promise<{ device: { device_key: string; platform: string; status: string }; native_push_enabled: boolean; current_device_registered: boolean }> =>
+  (await api.post(`${V2}/today/notifications/devices`, body)).data;
+
+export const unregisterNotificationDevice = async (deviceKey: string): Promise<{ device_key: string; removed: boolean; active_devices_remaining: boolean; native_push_enabled: boolean; current_device_registered: boolean }> =>
+  (await api.delete(`${V2}/today/notifications/devices/${encodeURIComponent(deviceKey)}`)).data;
 
 // --- Phase 6: routines, shelf, perfume, supplements, food context -----------
 // Every warning carries the id of a reviewed rule. The client never invents

@@ -214,6 +214,12 @@ export default function ProfileScreen() {
           <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
         </TouchableOpacity>
 
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open Notifications" style={styles.appearanceCard} onPress={() => router.push('/notifications')}>
+          <Ionicons name="notifications-outline" size={28} color={COLORS.primary} />
+          <View style={{ flex: 1 }}><Text style={styles.appearanceTitle}>Notifications</Text><Text style={styles.appearanceText}>Quiet, optional reminders and device settings</Text></View>
+          <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
+        </TouchableOpacity>
+
         <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(auth)/welcome')}>
           <Ionicons name="log-in-outline" size={20} color={COLORS.primary} />
           <Text style={styles.linkText}>Sign in / create account</Text>
