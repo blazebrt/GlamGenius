@@ -1708,10 +1708,11 @@ export const syncGoogleCalendar = async (): Promise<{ connected: boolean; synced
 export const disconnectGoogleCalendar = async (): Promise<{ status: string; revoked: boolean; message: string }> =>
   (await api.delete<{ status: string; revoked: boolean; message: string }>(`${V2}/integrations/calendar/google`)).data;
 
-export const getNotificationPreferences = async (): Promise<{
+export const getNotificationPreferences = async (deviceKey?: string): Promise<{
   preferences: NotificationPreferences;
   recent: { id: string; title: string; status: string; suppressed_reason: string | null }[];
-}> => (await api.get(`${V2}/today/notifications`)).data;
+  current_device_registered: boolean;
+}> => (await api.get(`${V2}/today/notifications`, { params: deviceKey ? { device_key: deviceKey } : undefined })).data;
 
 export const patchNotificationPreferences = async (
   body: Partial<{ enabled: boolean; native_push_enabled: boolean; daily_cap: number; preferred_hour: number; quiet_hours_start: number; quiet_hours_end: number; modules: Record<string, boolean>; topics: Record<string, boolean> }>
@@ -1720,10 +1721,10 @@ export const patchNotificationPreferences = async (
 
 export const registerNotificationDevice = async (body: {
   device_key: string; platform: 'ios' | 'android' | 'web' | 'unknown'; expo_push_token: string;
-}): Promise<{ device: { device_key: string; platform: string; status: string }; native_push_enabled: boolean }> =>
+}): Promise<{ device: { device_key: string; platform: string; status: string }; native_push_enabled: boolean; current_device_registered: boolean }> =>
   (await api.post(`${V2}/today/notifications/devices`, body)).data;
 
-export const unregisterNotificationDevice = async (deviceKey: string): Promise<{ device_key: string; removed: boolean; active_devices_remaining: boolean; native_push_enabled: boolean }> =>
+export const unregisterNotificationDevice = async (deviceKey: string): Promise<{ device_key: string; removed: boolean; active_devices_remaining: boolean; native_push_enabled: boolean; current_device_registered: boolean }> =>
   (await api.delete(`${V2}/today/notifications/devices/${encodeURIComponent(deviceKey)}`)).data;
 
 // --- Phase 6: routines, shelf, perfume, supplements, food context -----------

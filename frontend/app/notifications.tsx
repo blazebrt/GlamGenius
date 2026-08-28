@@ -13,8 +13,25 @@ export default function NotificationsScreen() {
   const [recent, setRecent] = useState<{ id: string; title: string; status: string; suppressed_reason: string | null }[]>([]);
   const [busy, setBusy] = useState(false);
   const [deviceKey, setDeviceKey] = useState<string | null>(null);
-  useEffect(() => { void getInstallationId().then(setDeviceKey).catch(() => setDeviceKey(null)); }, []);
-  useEffect(() => { void getNotificationPreferences().then((result) => { setPreferences(result.preferences); setRecent(result.recent); }).catch(() => undefined); }, []);
+  const [currentDeviceRegistered, setCurrentDeviceRegistered] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const key = await getInstallationId();
+        if (cancelled) return;
+        setDeviceKey(key);
+        const result = await getNotificationPreferences(key);
+        if (cancelled) return;
+        setPreferences(result.preferences);
+        setRecent(result.recent);
+        setCurrentDeviceRegistered(Boolean(result.current_device_registered));
+      } catch {
+        if (!cancelled) setCurrentDeviceRegistered(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const update = async (body: Parameters<typeof patchNotificationPreferences>[0]) => {
     try { const result = await patchNotificationPreferences(body); setPreferences(result.preferences); }
@@ -37,6 +54,7 @@ export default function NotificationsScreen() {
       if (!projectId || !deviceKey) throw new Error('push_configuration_unavailable');
       const token = await Notifications.getExpoPushTokenAsync({ projectId });
       await registerNotificationDevice({ device_key: deviceKey, platform: Platform.OS === 'ios' ? 'ios' : 'android', expo_push_token: token.data });
+      setCurrentDeviceRegistered(true);
       setPreferences((value) => value ? { ...value, native_push_enabled: true } : value);
     } catch { Alert.alert('Notifications are off', 'We could not register this device. Nothing was enabled.'); }
     finally { setBusy(false); }
@@ -44,9 +62,14 @@ export default function NotificationsScreen() {
 
   const disableNative = async () => {
     setBusy(true);
-    if (!deviceKey) { setBusy(false); return; }
+    if (!deviceKey) {
+      setBusy(false);
+      Alert.alert('Could not save', 'This device could not be identified. Notifications remain unchanged.');
+      return;
+    }
     try {
       const result = await unregisterNotificationDevice(deviceKey);
+      setCurrentDeviceRegistered(false);
       setPreferences((value) => value ? { ...value, native_push_enabled: result.native_push_enabled } : value);
     }
     catch { Alert.alert('Could not save', 'Notifications remain unchanged.'); }
@@ -69,7 +92,7 @@ export default function NotificationsScreen() {
     <Text style={styles.eyebrow}>YOUR SETTINGS</Text><Text style={styles.title}>Notifications</Text>
     <Text style={styles.body}>Choose if and when GlamGenius may gently remind you. Notifications are never required to use the app.</Text>
     <Row label="Daily appearance notification" value={Boolean(preferences?.enabled)} onValueChange={(value) => void update({ enabled: value })} />
-    <Row label="Native push on this device" value={Boolean(preferences?.native_push_enabled)} disabled={busy || !preferences} onValueChange={(value) => void (value ? enableNative() : disableNative())} />
+    <Row label="Native push on this device" value={currentDeviceRegistered} disabled={busy || !preferences} onValueChange={(value) => void (value ? enableNative() : disableNative())} />
     {Platform.OS === 'web' && <Text style={styles.note}>Push notifications are unavailable on the web.</Text>}
     <Text style={styles.section}>Preferred local hour</Text>
     <View style={styles.hours}>{[7, 8, 9, 18, 19, 20].map((hour) => <TouchableOpacity key={hour} accessibilityRole="button" accessibilityLabel={`Preferred time ${hour}:00`} onPress={() => void update({ preferred_hour: hour })} style={[styles.hour, preferences?.preferred_hour === hour && styles.hourActive]}><Text style={styles.hourText}>{String(hour).padStart(2, '0')}:00</Text></TouchableOpacity>)}</View>

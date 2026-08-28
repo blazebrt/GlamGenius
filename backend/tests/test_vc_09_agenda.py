@@ -13,6 +13,8 @@ from app.shared.database.base import utcnow
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import select
 
+from tests.conftest import auth
+
 
 def test_quiet_hours_crossing_midnight_are_deterministic() -> None:
     assert notifications.in_quiet_hours(22, 21, 7)
@@ -206,3 +208,40 @@ async def test_worker_commits_suppressed_decision(monkeypatch):
     session = Session()
     assert await worker.process_account(session, preference, now=utcnow()) == 0
     assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_notification_preferences_report_current_device_registration(
+    db_clean, registered_supabase_user, app_client,
+):
+    token, _ = await registered_supabase_user()
+    device_key = "install-current"
+    headers = auth(token)
+    registered = await app_client.post(
+        "/api/v2/today/notifications/devices",
+        headers=headers,
+        json={
+            "device_key": device_key,
+            "platform": "android",
+            "expo_push_token": f"ExponentPushToken[{uuid4().hex}]",
+        },
+    )
+    assert registered.status_code == 200
+
+    current = await app_client.get(
+        "/api/v2/today/notifications",
+        params={"device_key": device_key},
+        headers=headers,
+    )
+    assert current.status_code == 200
+    assert current.json()["preferences"]["native_push_enabled"] is True
+    assert current.json()["current_device_registered"] is True
+
+    other = await app_client.get(
+        "/api/v2/today/notifications",
+        params={"device_key": "install-other"},
+        headers=headers,
+    )
+    assert other.status_code == 200
+    assert other.json()["preferences"]["native_push_enabled"] is True
+    assert other.json()["current_device_registered"] is False

@@ -250,6 +250,7 @@ async def add_event(
 
 @router.get("/today/notifications")
 async def get_notification_preferences(
+    device_key: str | None = Query(None, max_length=160),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
@@ -259,6 +260,10 @@ async def get_notification_preferences(
     return {
         "preferences": notifications.serialize_preferences(row),
         "recent": await notifications.recent_deliveries(session, current.account_id),
+        "current_device_registered": (
+            await notifications.current_device_registered(session, current.account_id, device_key)
+            if device_key else False
+        ),
     }
 
 
@@ -288,7 +293,11 @@ async def register_notification_device(
     preference = await notifications.preferences_for(session, current.account_id, clock.DEFAULT_TIMEZONE)
     preference.native_push_enabled = True
     await session.commit()
-    return {"device": {"device_key": device.device_key, "platform": device.platform, "status": device.status}, "native_push_enabled": True}
+    return {
+        "device": {"device_key": device.device_key, "platform": device.platform, "status": device.status},
+        "native_push_enabled": True,
+        "current_device_registered": True,
+    }
 
 
 @router.delete("/today/notifications/devices/{device_key}")
@@ -310,6 +319,7 @@ async def unregister_notification_device(
         "removed": True,
         "active_devices_remaining": active_remaining,
         "native_push_enabled": bool(preference.native_push_enabled),
+        "current_device_registered": False,
     }
 
 

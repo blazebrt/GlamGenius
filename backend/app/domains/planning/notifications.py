@@ -403,6 +403,19 @@ async def active_devices(session: AsyncSession, account_id: uuid.UUID) -> list[N
     ).order_by(NotificationDevice.id))).scalars().all())
 
 
+async def current_device_registered(
+    session: AsyncSession, account_id: uuid.UUID, device_key: str,
+) -> bool:
+    """Return whether this account's exact installation is actively registered."""
+    result = await session.execute(select(NotificationDevice.id).where(
+        NotificationDevice.account_id == account_id,
+        NotificationDevice.device_key == device_key,
+        NotificationDevice.status == "active",
+        NotificationDevice.disabled_at.is_(None),
+    ).limit(1))
+    return result.scalar_one_or_none() is not None
+
+
 def serialize_preferences(row: NotificationPreference) -> dict[str, Any]:
     return {
         "enabled": row.enabled, "native_push_enabled": row.native_push_enabled,
