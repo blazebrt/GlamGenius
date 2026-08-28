@@ -1,39 +1,26 @@
 # GlamGenius
 
-Personal stylist + skin & hair wellness coach for India.
+GlamGenius is a personal appearance decision system for India. It brings an
+owned wardrobe, care shelf, routines, events and preferences into a calm daily
+plan, starting with what the customer already owns.
 
-Not a diagnosis app. No salon cart or checkout — salon visits are suggestions only.
-Currently **invite-only**, in a private beta. Nothing is for sale.
+The primary experience is **Today · Style · Care · Plan · You**. It keeps
+customer-facing decisions grounded in explicit inventory, context and
+preferences; AI may contribute bounded, reviewable observations, never an
+unreviewable authority.
 
 ## Features
 
-- AI skin / hair check (visible observations only)
-- Skin tone → clothing colour recommendations (Indian wardrobe)
-- Label ingredients to look for (e.g. salicylic acid for oily / pimple-prone look)
-- Nutrition: ingredient → common Indian foods
-- Salon ideas without prices or booking
-- Free preview without an account: skin tone + top clothing colours
-- Invite-only access with a monthly check allowance
-- Complete appearance inventory across wardrobe, shoes, accessories, beauty, hair,
-  perfumes and supplements
-- **Style Me for an occasion** — up to three genuinely different looks built only from
-  items you have confirmed you own, across 16 occasions
-- **Should I buy this?** — Buy, Wait or Skip from a published Appearance ROI formula,
-  with the owned alternatives you already have shown alongside
-- **Today** — one short answer to "what do I wear today", built from what you own and
-  served from cache, with no AI call per user per morning
-- **Weekly planner** — Monday to Sunday, with lock, move, redo, laundry state and a
-  repetition indicator
+- **Today** — an owned-first outfit and the few things worth attention
+- **Style** — occasion looks and purchase decisions from Wardrobe, Shoes and Accessories
+- **Care** — Skin Care, Hair Care, Perfumes and Supplements inventory; routines and upkeep
+- **Plan** — weekly planning, events and optional Google Calendar context
+- **You** — appearance context, progress, memory, privacy and account settings
 
-### What happens when a check fails
-
-Analysis either produces a real, schema-validated result or it fails openly. There is
-no fallback that invents a skin tone, a hair type or a set of colours. A failed check:
-
-- returns `ANALYSIS_UNAVAILABLE` with a reason and specific guidance
-- **does not** use one of your monthly checks
-- **does not** write anything to your profile
-- can be retried with the same photo
+All seven inventory categories remain first-class: Wardrobe, Shoes,
+Accessories, Skin Care, Hair Care, Perfumes and Supplements. GlamGenius does
+not provide an attractiveness score, medical diagnosis, supplement dosing,
+salon booking, marketplace, checkout or billing.
 
 ## Quick start (Docker)
 
@@ -146,7 +133,7 @@ comes from the token, never from the URL or request body.
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | GET | /api/v2/health | — | Health including PostgreSQL |
-| GET | /api/v2/config | — | Billing availability, media rules, feature flags |
+| GET | /api/v2/config | — | Media rules and feature flags |
 | GET | /api/v2/me | 🔒 | Profile, account status, consent, usage |
 | GET | /api/v2/consent | 🔒 | Current consent state |
 | POST | /api/v2/consent | 🔒 | Grant or withdraw consent |
@@ -209,7 +196,7 @@ comes from the token, never from the URL or request body.
 | POST | /api/v2/integrations/calendar/connect | 🔒 | Connect a calendar source |
 | DELETE | /api/v2/integrations/calendar | 🔒 | Disconnect, and stop using its events |
 | GET | /api/v2/integrations/providers | 🔒 | Which sources exist and which are usable |
-| POST | /api/v2/shelf/analyse | 🔒 | Re-read your beauty and hair labels |
+| POST | /api/v2/shelf/analyse | 🔒 | Re-read your Skin Care and Hair Care labels |
 | GET | /api/v2/shelf/summary | 🔒 | Your whole shelf, counted rather than scored |
 | GET | /api/v2/shelf/expiring | 🔒 | What is running out, and what has no date recorded |
 | GET | /api/v2/shelf/low-use | 🔒 | Products sitting unused |
@@ -244,16 +231,14 @@ comes from the token, never from the URL or request body.
 | POST | /api/v2/memory/feedback | 🔒 | Tell us what you thought; we say what we learned |
 | GET | /api/v2/milestones | 🔒 | What you have reached, and what is on the list |
 | POST | /api/v2/milestones/{id}/acknowledge | 🔒 | Dismiss a milestone |
-| POST | /api/v2/support | 🔒 | Ask for help, with your billing context attached |
+| POST | /api/v2/support | 🔒 | Ask for help with relevant account context attached |
 | POST | /api/v2/stylist-review | 🔒 | Ask a human stylist to look at something |
 | GET | /api/v2/tryon/status | 🔒 | Whether virtual try-on exists yet. It does not |
 
-## Billing
+## Commercial boundary
 
-Payments are not part of the architecture.
-
-Operations — backup, restore, monitoring, and the payment incident runbook —
-are in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+There is no marketplace, checkout or billing surface. Operations — backup,
+restore and monitoring — are in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ## Progress and memory
 
@@ -395,9 +380,8 @@ Every error returns the same shape, which the app already understands:
 ```
 
 Codes: `ANALYSIS_UNAVAILABLE`, `CONSENT_REQUIRED`, `UNSUPPORTED_MEDIA_TYPE`,
-`MEDIA_TOO_LARGE`, `SUBSCRIPTIONS_UNAVAILABLE`, `FEATURE_UNAVAILABLE`,
-`VALIDATION_FAILED`, `NOT_FOUND`, `INTERNAL_ERROR`, plus the existing V1 codes
-`SCAN_LIMIT`, `AI_RATE_LIMIT`, `PREVIEW_LIMIT` and the `INVITE_*` family.
+`MEDIA_TOO_LARGE`, `FEATURE_UNAVAILABLE`, `VALIDATION_FAILED`, `NOT_FOUND`,
+`INTERNAL_ERROR`, plus the existing `AI_RATE_LIMIT` and `INVITE_*` family.
 
 Every response carries an `X-Request-Id` header, echoed in the error body, so a user's
 screenshot is enough to find the request in the logs.
@@ -405,11 +389,11 @@ screenshot is enough to find the request in the logs.
 ## Privacy
 
 - **Explicit consent comes first.** Signed-in users record consent through
-  `/api/v2/consent`; a signed-out preview includes a per-request consent answer. Both scan
-  routes refuse the image before provider or allowance work when consent is missing.
-- **Face photos are never stored.** Scan images are transient provider input only;
-  `scan/analyze` truncates the image to 83 characters before saving a scan record. The
-  media API rejects analysis photos entirely. Both boundaries are covered by tests.
+  `/api/v2/consent`; protected routes refuse optional photo analysis before provider
+  work when consent is missing.
+- **Appearance photos are reviewable observations, not a hidden authority.** Optional
+  onboarding photos are transient input; their structured observations remain separate
+  from confirmed customer facts.
 - Photos uploaded to your own collection are stored until you delete them.
 - Optional onboarding photos follow the same transient rule: only structured,
   reviewable observations are retained. The image itself is never added to profile or
@@ -430,7 +414,7 @@ screenshot is enough to find the request in the logs.
 
 ## Disclaimer
 
-Guidance is for general wellness and personal style from photos — not medical advice.
+Guidance is for general style and care decisions — not medical advice.
 
 ## Appearance digital twin
 
@@ -447,8 +431,8 @@ completion percentage.
 
 ## Complete appearance inventory
 
-Phase 3 adds a structured inventory for wardrobe, shoes, accessories, beauty products,
-hair products, perfumes and supplements. Manual entries are confirmed user facts; AI
+Phase 3 adds a structured inventory for Wardrobe, Shoes, Accessories, Skin Care,
+Hair Care, Perfumes and Supplements. Manual entries are confirmed user facts; AI
 photo extraction creates a draft that must be reviewed. Every item is owned, versioned,
 searchable and linked only to media belonging to the same account.
 

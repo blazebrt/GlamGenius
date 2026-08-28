@@ -88,7 +88,7 @@ export default function ProfileScreen() {
       height_cm,
       style_vibe: styleVibe,
     });
-    notify('Saved', 'Your stylist profile was updated.');
+    notify('Saved', 'Your profile was updated.');
   };
 
   const handleDeleteAccount = () => {
@@ -119,30 +119,23 @@ export default function ProfileScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: 120 }}>
-        <Text style={styles.label}>IN YOUR POCKET</Text>
-        <Text style={styles.title}>Stylist profile</Text>
+        <Text style={styles.label}>YOU</Text>
+        <Text style={styles.title}>Your profile</Text>
         <Text style={styles.subtitle}>
-          Keep account basics here. My Appearance holds your confirmed style, fit, goals, and reviewable observations.
+          Preferences, appearance context, progress, memory, privacy and account settings.
         </Text>
 
-        <View style={styles.planCard}>
-          <Text style={styles.planTitle}>Private beta member</Text>
-          <Text style={styles.planSub} testID="beta-plan-note">
-            Full access is included with your invite — nothing to pay.
-          </Text>
-        </View>
-
         {deletionStatus && (
-          <View style={[styles.planCard, { backgroundColor: COLORS.error }]}>
-            <Text style={styles.planTitle}>Account Deletion Pending</Text>
-            <Text style={styles.planSub}>
+          <View style={[styles.deletionCard, { backgroundColor: COLORS.error }]}>
+            <Text style={styles.deletionTitle}>Account Deletion Pending</Text>
+            <Text style={styles.deletionText}>
               Your account is scheduled for deletion (State: {deletionStatus.state}).
               {deletionStatus.state === 'failed_retryable' && ' Retrying soon...'}
               {deletionStatus.state === 'failed_terminal' && ' Deletion failed. Please contact support.'}
             </Text>
             {deletionStatus.state === 'requested' && (
-              <TouchableOpacity style={[styles.upgradeBtn, { marginTop: 16 }]} onPress={handleCancelDeletion}>
-                <Text style={[styles.upgradeText, { color: COLORS.error }]}>Cancel Deletion</Text>
+              <TouchableOpacity style={[styles.cancelDeletionButton, { marginTop: 16 }]} onPress={handleCancelDeletion}>
+                <Text style={[styles.cancelDeletionText, { color: COLORS.error }]}>Cancel Deletion</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -190,7 +183,7 @@ export default function ProfileScreen() {
         </View>
 
         <TouchableOpacity style={styles.saveBtn} onPress={save}>
-          <Text style={styles.saveText}>Save stylist profile</Text>
+          <Text style={styles.saveText}>Save profile</Text>
         </TouchableOpacity>
 
         <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open My Appearance" style={styles.appearanceCard} onPress={() => router.push('/my-appearance')}>
@@ -198,9 +191,6 @@ export default function ProfileScreen() {
           <View style={{ flex: 1 }}><Text style={styles.appearanceTitle}>My Appearance</Text><Text style={styles.appearanceText}>Verified attributes, suggestions, fit preferences, goals, and readiness</Text></View>
           <Ionicons name="chevron-forward" size={20} color={COLORS.textMuted} />
         </TouchableOpacity>
-
-        {/* The "Your plan" card was removed with the payment UI cleanup.
-            Paid membership is a future workstream; no CTA appears here. */}
 
         <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open Progress" style={styles.appearanceCard} onPress={() => router.push('/progress')}>
           <Ionicons name="trending-up-outline" size={28} color={COLORS.primary} />
@@ -225,11 +215,6 @@ export default function ProfileScreen() {
           <Text style={styles.linkText}>Sign in / create account</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/style-quiz')}>
-          <Ionicons name="clipboard-outline" size={20} color={COLORS.primary} />
-          <Text style={styles.linkText}>Retake stylist quiz</Text>
-        </TouchableOpacity>
-
         <TouchableOpacity
           style={styles.linkRow}
           onPress={async () => {
@@ -249,7 +234,7 @@ export default function ProfileScreen() {
         )}
 
         <Text style={styles.disclaimer}>
-          GlamGenius is your pocket fashion stylist and wellness coach. It does not diagnose medical conditions.
+          GlamGenius provides style and general care guidance. It does not diagnose or prescribe.
         </Text>
       </ScrollView>
     </View>
@@ -270,16 +255,16 @@ const styles = StyleSheet.create({
   label: { fontFamily: FONTS.family.bodySemibold, fontSize: 11, color: COLORS.primary, letterSpacing: 1.4 },
   title: { fontFamily: FONTS.family.heading, fontSize: 28, color: COLORS.textPrimary, marginTop: 4 },
   subtitle: { fontFamily: FONTS.family.body, fontSize: 13, color: COLORS.textSecondary, marginTop: 6, marginBottom: 16, lineHeight: 19 },
-  planCard: {
+  deletionCard: {
     backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, padding: 16, marginBottom: 16, ...SHADOWS.md,
   },
-  planTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 20, color: COLORS.white },
-  planSub: { fontFamily: FONTS.family.body, fontSize: 13, color: 'rgba(255,255,255,0.85)', marginTop: 6 },
-  upgradeBtn: {
+  deletionTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 20, color: COLORS.white },
+  deletionText: { fontFamily: FONTS.family.body, fontSize: 13, color: 'rgba(255,255,255,0.85)', marginTop: 6 },
+  cancelDeletionButton: {
     marginTop: 12, alignSelf: 'flex-start', backgroundColor: COLORS.white,
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: RADIUS.full,
   },
-  upgradeText: { fontFamily: FONTS.family.bodySemibold, color: COLORS.primary, fontSize: 13 },
+  cancelDeletionText: { fontFamily: FONTS.family.bodySemibold, color: COLORS.primary, fontSize: 13 },
   stats: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   stat: {
     width: '48%', backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: 12,
