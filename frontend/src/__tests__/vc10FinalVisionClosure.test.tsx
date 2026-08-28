@@ -31,14 +31,6 @@ jest.mock('../services/apiV2', () => ({
   cancelPrivacyAccountDeletion: jest.fn(),
 }));
 
-jest.mock('react-native-reanimated', () => {
-  const React = require('react');
-  const { View } = require('react-native');
-  const AnimatedView = ({ children, ...props }: any) => React.createElement(View, props, children);
-  const entering = { delay: () => entering };
-  return { default: { View: AnimatedView }, View: AnimatedView, FadeIn: entering, FadeInDown: entering, FadeInUp: entering };
-});
-
 describe('VC-10 final vision closure', () => {
   it('keeps the five-tab appearance OS and customer category terminology', () => {
     expect(PRIMARY_TAB_LABELS).toEqual(['Today', 'Style', 'Care', 'Plan', 'You']);
