@@ -23,18 +23,6 @@ exceptions:
     expiry_date: "2026-09-08"
     upgrade_plan: "Remove exception immediately when patched package lands"
 
-  - cve_or_advisory_id: "CVE-2026-53615"
-    affected_package: "util-linux family"
-    installed_version: "2.41-5"
-    reason: "Component not used in production runtime"
-    exploitability_assessment: "Affected path is DOS partition parsing in libblkid and GlamGenius does not expose block devices, parse partition tables, or invoke blkid/mount; runtime is non-root."
-    compensating_control: "Minimal container surface with non-root user and no shell access"
-    owner: "@blazebrt"
-    created_date: "2026-08-08"
-    review_date: "2026-08-24"
-    expiry_date: "2026-09-08"
-    upgrade_plan: "Remove exception immediately when patched package lands"
-
   - cve_or_advisory_id: "CVE-2026-54369"
     affected_package: "libacl1"
     installed_version: "2.3.2-2+b1"
