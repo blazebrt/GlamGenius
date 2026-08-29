@@ -100,3 +100,44 @@ These are cost controls, not payment plans.
 
 The account deletion worker operates continuously to ensure user data is erased completely across the database, object storage, and Supabase Auth.
 Check the durable worker heartbeat in the database to ensure the worker is processing the queue.
+
+---
+
+## 6. Release preparation
+
+Before a production deployment:
+
+1. Configure the required production environment values.
+2. Run `python -m app.release_readiness` and resolve every `missing`,
+   `placeholder`, `development_default`, or `invalid` required status.
+3. Run database migrations.
+4. Deploy the API.
+5. Deploy the frontend.
+6. Configure the hourly notification worker scheduler described below.
+7. Verify Google Calendar if it is enabled.
+8. Verify live environment context if it is enabled.
+9. Perform staging smoke tests using real accounts and devices.
+
+The command intentionally reports configuration keys and safe statuses only; it
+does not print keys, passwords, DSNs, tokens, or OAuth secrets. In production
+or staging it exits `0` only when the configured feature set satisfies the
+existing production validation contract; it exits `1` otherwise.
+
+## 7. Notification worker scheduler
+
+Run exactly one worker cycle per hour:
+
+```bash
+python -m app.workers.notifications
+```
+
+The host scheduler is an external deployment responsibility. Avoid overlapping
+executions where practical. The worker is repeat-safe: it claims a delivery
+before provider I/O, preserves durable suppression decisions, and will not send
+a late catch-up outside an account's preferred local hour. One account failure
+is isolated so the remaining accounts can still be processed. If the scheduler
+fails, proactive push reminders do not run; Today remains usable.
+
+For staging smoke testing, invoke the same command once manually and verify a
+single opted-in test account. The application cannot determine whether a host
+cron or scheduler is actually configured.

@@ -89,7 +89,16 @@ def catalogue() -> dict[str, list[dict[str, object]]]:
             for key, label in KNOWN_WEATHER_PROVIDERS.items()
         ],
         "air_quality": [
-            {"key": key, "label": label, "available": key == PROVIDER_MANUAL}
+            {
+                "key": key,
+                "label": label,
+                "available": key == PROVIDER_MANUAL
+                or (
+                    key == "open_meteo"
+                    and LIVE_ENVIRONMENT_PROVIDER == "open_meteo"
+                    and OPEN_METEO_MODE in {"evaluation", "commercial"}
+                ),
+            }
             for key, label in KNOWN_AIR_QUALITY_PROVIDERS.items()
         ],
     }
