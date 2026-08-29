@@ -12,7 +12,7 @@ we will not do that again.
   [`../stabilisation/BRANCH_PROTECTION_SETUP.md`](../stabilisation/BRANCH_PROTECTION_SETUP.md).
 - Nobody pushes to `main` directly, including administrators.
 - `main` always has passing CI and always has an evidence report that
-  matches its state (see [`../../STABILISATION_REPORT.md`](../../STABILISATION_REPORT.md)).
+  matches its state (see [`../reports/STABILISATION_REPORT.md`](../reports/STABILISATION_REPORT.md)).
 
 ## 2. Feature branches
 

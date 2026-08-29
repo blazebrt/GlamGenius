@@ -441,9 +441,9 @@ host's crontab.
 
 - [docs/V2_ARCHITECTURE_AND_PHASE_PLAN.md](docs/V2_ARCHITECTURE_AND_PHASE_PLAN.md)
 - [docs/v2/PHASE_1_AUDIT.md](docs/v2/PHASE_1_AUDIT.md)
-- [PHASE_1_REPORT.md](PHASE_1_REPORT.md)
-- [PHASE_2_REPORT.md](PHASE_2_REPORT.md)
-- [PHASE_3_REPORT.md](PHASE_3_REPORT.md)
+- [docs/reports/PHASE_1_REPORT.md](docs/reports/PHASE_1_REPORT.md)
+- [docs/reports/PHASE_2_REPORT.md](docs/reports/PHASE_2_REPORT.md)
+- [docs/reports/PHASE_3_REPORT.md](docs/reports/PHASE_3_REPORT.md)
 
 ## Disclaimer
 

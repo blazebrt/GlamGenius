@@ -92,10 +92,10 @@ against the code on `main`:
 
 ## 5. Governance documents added
 
-- [`docs/engineering/REVIEW_POLICY.md`](docs/engineering/REVIEW_POLICY.md)
+- [`docs/engineering/REVIEW_POLICY.md`](../engineering/REVIEW_POLICY.md)
   — independent-human-reviewer policy, AI-authored-change rule, bot-PR
   rule, no-self-approval, no-bypass.
-- [`docs/engineering/BRANCHING_STRATEGY.md`](docs/engineering/BRANCHING_STRATEGY.md)
+- [`docs/engineering/BRANCHING_STRATEGY.md`](../engineering/BRANCHING_STRATEGY.md)
   — trunk-based short-lived branches, work-package numbering,
   squash-merge, no long-lived agent branches, no auto-merge during
   stabilisation.
@@ -107,18 +107,18 @@ against the code on `main`:
   - `CHECKLIST_MOBILE_UX.md`
   - `CHECKLIST_EXTERNAL_INTEGRATION.md`
   - `CHECKLIST_EVIDENCE.md`
-- [`docs/engineering/CI_SELF_TEST.md`](docs/engineering/CI_SELF_TEST.md)
+- [`docs/engineering/CI_SELF_TEST.md`](../engineering/CI_SELF_TEST.md)
   — the throwaway-PR procedure that proves the merge gate actually
   blocks. Owner runs it once after branch protection is enabled and
   again after any structural workflow change.
-- [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md)
+- [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md)
   — expanded to require an explicit independent-reviewer handle, the
   seven checklists, the three payment-untouched commands, and an
   AI-authored-change disclosure.
-- [`docs/stabilisation/BRANCH_PROTECTION_SETUP.md`](docs/stabilisation/BRANCH_PROTECTION_SETUP.md)
+- [`docs/stabilisation/BRANCH_PROTECTION_SETUP.md`](../stabilisation/BRANCH_PROTECTION_SETUP.md)
   — API command corrected to use `--input <json>` with a full request
   body; verification section references the CI self-test doc.
-- [`docs/stabilisation/EMERGENT_HOSTING_AUDIT.md`](docs/stabilisation/EMERGENT_HOSTING_AUDIT.md)
+- [`docs/stabilisation/EMERGENT_HOSTING_AUDIT.md`](../stabilisation/EMERGENT_HOSTING_AUDIT.md)
   — the ownership/security decision for the `.emergent` directory and
   `memory/PRD.md`.
 
@@ -184,14 +184,14 @@ does not exercise any external service.
 
 1. **Enable branch protection on `main`** using the corrected `gh api
    --input` command in
-   [`docs/stabilisation/BRANCH_PROTECTION_SETUP.md`](docs/stabilisation/BRANCH_PROTECTION_SETUP.md).
+   [`docs/stabilisation/BRANCH_PROTECTION_SETUP.md`](../stabilisation/BRANCH_PROTECTION_SETUP.md).
    Expected settings include `enforce_admins=true`,
    `required_linear_history=true`, `required_conversation_resolution=true`,
    `dismiss_stale_reviews=true`, `require_code_owner_reviews=true`,
    `required_approving_review_count=1`, and every job title listed
    in the setup doc as a required context.
 2. **Run the CI self-test throwaway-PR procedure** in
-   [`docs/engineering/CI_SELF_TEST.md`](docs/engineering/CI_SELF_TEST.md).
+   [`docs/engineering/CI_SELF_TEST.md`](../engineering/CI_SELF_TEST.md).
    Confirm the deliberately failing PR is blocked from merge, that
    `gh pr merge --admin` is refused, and record the CI run URL in
    §12 below.
@@ -350,7 +350,7 @@ subjects from the brief:
 The four SHAs are what `git log --oneline main..HEAD` reports on the
 branch at PR-open time; they are stable from that point onwards
 because the branch is not force-pushed post-review-open (per the
-[branching strategy](docs/engineering/BRANCHING_STRATEGY.md)).
+[branching strategy](../engineering/BRANCHING_STRATEGY.md)).
 
 Diff summary against `main`:
 

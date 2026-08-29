@@ -20,7 +20,7 @@ Run the throwaway-PR procedure below:
 3. Once a year, unprompted, as a scheduled compliance check.
 
 Record the run in
-[`../../STABILISATION_REPORT.md`](../../STABILISATION_REPORT.md) with
+[`../reports/STABILISATION_REPORT.md`](../reports/STABILISATION_REPORT.md) with
 the date, the PR URL, and the CI run URL that failed.
 
 ## What "proved" means
@@ -126,7 +126,7 @@ gh pr create --draft --title "chore(ci): self-test — deliberate failure, DO NO
 
 ### Step 5 — record
 
-Update `STABILISATION_REPORT.md` §"CI self-test evidence" with:
+Update `docs/reports/STABILISATION_REPORT.md` §"CI self-test evidence" with:
 
 - The PR URL.
 - The CI run URL that failed.
