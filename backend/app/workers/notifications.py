@@ -99,15 +99,35 @@ async def process_once(*, now: datetime | None = None) -> int:
     factory = get_sessionmaker()
     total = 0
     async with factory() as session:
-        rows = (await session.execute(select(NotificationPreference).where(
-            NotificationPreference.enabled.is_(True), NotificationPreference.native_push_enabled.is_(True),
-        ))).scalars().all()
-        for preference in rows:
+        # Hold plain identifiers, not ORM rows. A rollback expires every object
+        # in the session's identity map, so reading an attribute off one
+        # afterwards needs fresh IO from a synchronous attribute access and
+        # raises MissingGreenlet — inside the very handler meant to contain the
+        # failure. The rows still queued behind it are expired too, so a single
+        # bad account would cost every later account its notification for that
+        # hour, and the batch would look like "nothing was due" rather than an
+        # error. Re-reading each account after the rollback keeps the failure
+        # confined to the account that caused it.
+        account_ids = list((await session.execute(
+            select(NotificationPreference.account_id).where(
+                NotificationPreference.enabled.is_(True),
+                NotificationPreference.native_push_enabled.is_(True),
+            )
+        )).scalars().all())
+        for account_id in account_ids:
             try:
+                preference = (await session.execute(
+                    select(NotificationPreference).where(
+                        NotificationPreference.account_id == account_id,
+                    )
+                )).scalar_one_or_none()
+                if preference is None:
+                    # Withdrawn between the two reads; nothing to send.
+                    continue
                 total += await process_account(session, preference, now=now)
             except Exception:  # noqa: BLE001 - one account must not stop the batch
                 await session.rollback()
-                logger.exception("notification_account_failed account=%s", preference.account_id)
+                logger.exception("notification_account_failed account=%s", account_id)
     return total
 
 
