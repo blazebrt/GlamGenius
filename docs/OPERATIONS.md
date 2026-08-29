@@ -103,41 +103,94 @@ Check the durable worker heartbeat in the database to ensure the worker is proce
 
 ---
 
-## 6. Release preparation
+## 6. Notification Worker (hourly)
 
-Before a production deployment:
-
-1. Configure the required production environment values.
-2. Run `python -m app.release_readiness` and resolve every `missing`,
-   `placeholder`, `development_default`, or `invalid` required status.
-3. Run database migrations.
-4. Deploy the API.
-5. Deploy the frontend.
-6. Configure the hourly notification worker scheduler described below.
-7. Verify Google Calendar if it is enabled.
-8. Verify live environment context if it is enabled.
-9. Perform staging smoke tests using real accounts and devices.
-
-The command intentionally reports configuration keys and safe statuses only; it
-does not print keys, passwords, DSNs, tokens, or OAuth secrets. In production
-or staging it exits `0` only when the configured feature set satisfies the
-existing production validation contract; it exits `1` otherwise.
-
-## 7. Notification worker scheduler
-
-Run exactly one worker cycle per hour:
+The proactive notification worker is a **scheduled batch**, not a daemon. It has
+to be invoked by the host once per hour:
 
 ```bash
 python -m app.workers.notifications
 ```
 
-The host scheduler is an external deployment responsibility. Avoid overlapping
-executions where practical. The worker is repeat-safe: it claims a delivery
-before provider I/O, preserves durable suppression decisions, and will not send
-a late catch-up outside an account's preferred local hour. One account failure
-is isolated so the remaining accounts can still be processed. If the scheduler
-fails, proactive push reminders do not run; Today remains usable.
+### What it does per run
 
-For staging smoke testing, invoke the same command once manually and verify a
-single opted-in test account. The application cannot determine whether a host
-cron or scheduler is actually configured.
+It looks at every account that has both notifications and native push switched
+on, compiles that account's Today plan through the same canonical compiler the
+`/today` endpoint uses, and queues at most the one delivery the account's own
+preferences allow. Quiet hours, the daily cap and deduplication are applied
+inside that decision, not by the scheduler.
+
+### Operational properties
+
+* **Repeat-safe.** A delivery is claimed in the database and committed *before*
+  the Expo call, so a second run in the same hour cannot send it twice. No
+  transaction is held open across the network request.
+* **Isolated per account.** One account's failure is caught, rolled back and
+  logged as `notification_account_failed`, and the batch continues. The loop
+  works from plain account identifiers rather than ORM rows precisely so a
+  rollback cannot poison the accounts still queued behind it.
+* **No late catch-up.** A run outside an account's preferred local hour does not
+  fire a backdated notification. A missed hour is simply a missed hour.
+* **Disabled devices self-heal.** An Expo `DeviceNotRegistered` outcome disables
+  that specific token, and nothing else.
+
+### Scheduling requirement
+
+* Invoke it **once per hour**. More often is wasted work; less often silently
+  drops notifications for the hours you skip.
+* **Avoid overlapping invocations** where the scheduler supports it. The claim
+  boundary makes overlap safe rather than duplicating, but a run that overlaps
+  itself is a sign the batch is taking longer than an hour and should be
+  investigated.
+* Exit status is not a delivery count. Treat a non-zero exit as a failed run.
+
+This repository deliberately does **not** pick your scheduler. Any of cron, a
+systemd timer, or a managed scheduled-job feature is fine; the requirement is
+only "once an hour, one process". The application cannot detect whether the
+schedule exists, so `python -m app.release_readiness` reports the worker as
+`requires_host_scheduler` rather than claiming it is configured.
+
+Illustrative only — not a mandated architecture:
+
+```cron
+# crontab: hourly, on the hour
+0 * * * * cd /srv/glamgenius/backend && /srv/glamgenius/venv/bin/python -m app.workers.notifications >> /var/log/glamgenius/notifications.log 2>&1
+```
+
+### If the scheduler is not running
+
+Proactive push stops. Nothing else breaks: Today, Style, Care, Plan and You all
+remain fully usable, because the worker only *pushes* what the app already
+computes on demand. This is a degradation, not an outage.
+
+### Running one cycle by hand (staging smoke test)
+
+```bash
+cd backend
+python -m app.workers.notifications
+```
+
+It processes the current eligible set once and exits. Safe to run repeatedly:
+anything already claimed for the hour will not be sent again.
+
+---
+
+## 7. Release Readiness Check
+
+Before deploying to a staging or production tier:
+
+```bash
+cd backend
+python -m app.release_readiness          # human-readable
+python -m app.release_readiness --json   # machine-readable
+```
+
+Exit `0` means ready for the feature set that is actually configured; exit `1`
+means something required is missing, placeholder, or invalid. The report prints
+configuration **key names and statuses only** — never a secret's value — so it
+is safe to paste into a ticket or a deployment log.
+
+It is an explanation layer over `validate_production_configuration()`, which is
+what actually refuses to start a misconfigured process. If that validation
+rejects the environment, the report repeats its reason verbatim and reports
+`not_ready`. The two cannot disagree.

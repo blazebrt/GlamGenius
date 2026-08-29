@@ -89,16 +89,11 @@ def catalogue() -> dict[str, list[dict[str, object]]]:
             for key, label in KNOWN_WEATHER_PROVIDERS.items()
         ],
         "air_quality": [
-            {
-                "key": key,
-                "label": label,
-                "available": key == PROVIDER_MANUAL
-                or (
-                    key == "open_meteo"
-                    and LIVE_ENVIRONMENT_PROVIDER == "open_meteo"
-                    and OPEN_METEO_MODE in {"evaluation", "commercial"}
-                ),
-            }
+            # Open-Meteo serves air quality on the same live-environment
+            # boundary as weather. Reporting only the manual source here told
+            # customers the live one was unavailable while Context was already
+            # consuming it.
+            {"key": key, "label": label, "available": key == PROVIDER_MANUAL or (key == "open_meteo" and LIVE_ENVIRONMENT_PROVIDER == "open_meteo" and OPEN_METEO_MODE in {"evaluation", "commercial"})}
             for key, label in KNOWN_AIR_QUALITY_PROVIDERS.items()
         ],
     }

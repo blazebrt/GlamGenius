@@ -1,177 +1,370 @@
-"""Safe, feature-aware deployment configuration readiness reporting.
+"""Production readiness reporting (RR-01).
 
-This command deliberately reports only configuration *states*.  It never
-prints values, DSNs, tokens, credentials, or URLs supplied by a deployer.
-Production validity remains owned by :func:`validate_production_configuration`;
-this is an explanation layer for the same startup contract.
+One place that answers "what still has to be configured before this can go to
+production", so the answer is not scattered across ``config.py``, ``env.example``
+and the operations docs.
+
+This module **explains**; it does not decide. The decision stays with
+:func:`app.config.validate_production_configuration`, which is what actually
+refuses to start a misconfigured staging or production process. The overall
+verdict here is taken from that function so the two can never disagree: if it
+raises, this reports ``not_ready`` and repeats its reason verbatim.
+
+Nothing here ever reads or prints a secret's value. Every entry is a
+configuration **key name** plus a safe status word, so the report is safe to
+paste into a ticket, a log, or a deployment transcript.
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import sys
+import urllib.parse
+from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 from app import config
 
-PRODUCTION_ENVS = {"production", "staging"}
-PLACEHOLDER_MARKERS = ("placeholder", "your_", "change_me", "example.com", "fake")
+
+class Status(StrEnum):
+    """What we can say about one configuration key without reading its value."""
+
+    CONFIGURED = "configured"
+    MISSING = "missing"
+    PLACEHOLDER = "placeholder"
+    DEVELOPMENT_DEFAULT = "development_default"
+    INVALID = "invalid"
+    #: The feature is switched off on purpose, so its keys are not required.
+    DISABLED_OPTIONAL = "disabled_optional"
+    #: Correct in the repository, but it depends on something outside it.
+    REQUIRES_HOST_SCHEDULER = "requires_host_scheduler"
 
 
-def _is_placeholder(value: str) -> bool:
-    return any(marker in value.casefold() for marker in PLACEHOLDER_MARKERS)
+#: Statuses that mean a required key is not fit for production.
+BLOCKING_STATUSES = frozenset({
+    Status.MISSING, Status.PLACEHOLDER, Status.DEVELOPMENT_DEFAULT, Status.INVALID,
+})
+
+#: Substrings that mark a value as an unedited example rather than a real one.
+#: These cover every placeholder form shipped in ``env.example`` — leaving one
+#: of them in place is the most likely single-key configuration mistake, so the
+#: check has to name it rather than call it configured.
+PLACEHOLDER_MARKERS = (
+    "placeholder", "example.com", "changeme", "change_me", "todo", "your_", "your-project", "fake",
+)
 
 
-def _value_state(value: str, *, placeholder: bool = True) -> str:
-    if not value:
-        return "missing"
-    if placeholder and _is_placeholder(value):
-        return "placeholder"
-    return "configured"
+@dataclass(frozen=True)
+class ReadinessReport:
+    app_env: str
+    status: str
+    required: dict[str, str]
+    optional_integrations: dict[str, str]
+    #: Verbatim reasons from the authoritative production validation.
+    blocking: tuple[str, ...] = ()
+    notes: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def ready(self) -> bool:
+        return self.status == "ready"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "app_env": self.app_env,
+            "status": self.status,
+            "required": dict(self.required),
+            "optional_integrations": dict(self.optional_integrations),
+            "blocking": list(self.blocking),
+            "notes": list(self.notes),
+        }
 
 
-def _boolean_state(value: bool, *, required_value: bool = True) -> str:
-    return "configured" if value is required_value else "invalid"
+def _present(value: str | None) -> bool:
+    return bool(value and value.strip())
 
 
-def _core_requirements() -> dict[str, str]:
-    postgres_is_default = "POSTGRES_URL" not in os.environ
+def _looks_like_placeholder(value: str) -> bool:
+    lowered = value.lower()
+    return any(marker in lowered for marker in PLACEHOLDER_MARKERS)
+
+
+def _secret_status(value: str | None) -> Status:
+    """Status for a value we must never echo."""
+    if not _present(value):
+        return Status.MISSING
+    if _looks_like_placeholder(value or ""):
+        return Status.PLACEHOLDER
+    return Status.CONFIGURED
+
+
+def _url_status(value: str | None, *, require_https: bool = False) -> Status:
+    if not _present(value):
+        return Status.MISSING
+    assert value is not None
+    if _looks_like_placeholder(value):
+        return Status.PLACEHOLDER
+    parsed = urllib.parse.urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+        return Status.INVALID
+    if require_https and parsed.scheme != "https":
+        return Status.INVALID
+    return Status.CONFIGURED
+
+
+def _postgres_status() -> Status:
+    url = config.POSTGRES_URL
+    if not _present(url):
+        return Status.MISSING
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return Status.INVALID
+    if _looks_like_placeholder(host):
+        return Status.PLACEHOLDER
+    # A local database is right for development and wrong for production. The
+    # caller decides which of those it is; this only reports what it sees.
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return Status.DEVELOPMENT_DEFAULT
+    return Status.CONFIGURED
+
+
+def _origins_status() -> Status:
+    if config.ALLOWED_ORIGINS_IS_DEFAULT:
+        return Status.DEVELOPMENT_DEFAULT
+    if not config.ALLOWED_ORIGINS:
+        return Status.MISSING
+    if "*" in config.ALLOWED_ORIGINS:
+        return Status.INVALID
+    for origin in config.ALLOWED_ORIGINS:
+        parsed = urllib.parse.urlparse(origin)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return Status.INVALID
+        if host in ("localhost", "127.0.0.1"):
+            return Status.DEVELOPMENT_DEFAULT
+    return Status.CONFIGURED
+
+
+def _sentry_status() -> Status:
+    dsn = os.environ.get("SENTRY_BACKEND_DSN", "").strip()
+    if not dsn:
+        return Status.MISSING
+    if _looks_like_placeholder(dsn):
+        return Status.PLACEHOLDER
+    parsed = urllib.parse.urlparse(dsn)
+    # A DSN carries a key in its username. Structure is checked; nothing is shown.
+    if not parsed.scheme or not parsed.netloc or not parsed.username:
+        return Status.INVALID
+    return Status.CONFIGURED
+
+
+def _media_status() -> Status:
+    backend = config.MEDIA_STORAGE_BACKEND.lower()
+    if backend == "supabase":
+        return Status.CONFIGURED
+    if backend == "local":
+        return Status.DEVELOPMENT_DEFAULT
+    return Status.INVALID
+
+
+def _core_requirements() -> dict[str, Status]:
+    """Keys production needs regardless of which optional integrations are on."""
     return {
-        "SUPABASE_URL": _value_state(config.SUPABASE_URL),
-        "SUPABASE_ANON_KEY": _value_state(config.SUPABASE_ANON_KEY),
-        "SUPABASE_SERVICE_ROLE_KEY": _value_state(config.SUPABASE_SERVICE_ROLE_KEY),
-        "SUPABASE_JWKS_URL": _value_state(config.SUPABASE_JWKS_URL),
-        "SUPABASE_JWT_ISSUER": _value_state(config.SUPABASE_JWT_ISSUER),
-        "POSTGRES_URL": "development_default" if postgres_is_default else _value_state(config.POSTGRES_URL, placeholder=False),
-        "SUPABASE_STORAGE_BUCKET": _value_state(config.SUPABASE_STORAGE_BUCKET, placeholder=False),
-        "GEMINI_API_KEY": _value_state(config.GEMINI_API_KEY),
-        "SENTRY_BACKEND_DSN": _value_state(os.environ.get("SENTRY_BACKEND_DSN", ""), placeholder=False),
-        "INVITE_REQUIRED": _boolean_state(config.INVITE_REQUIRED),
-        "REQUIRE_ANALYSIS_CONSENT": _boolean_state(config.REQUIRE_ANALYSIS_CONSENT),
-        "CONSENT_VERSION": _value_state(config.CONSENT_VERSION, placeholder=False),
-        "MEDIA_STORAGE_BACKEND": "configured" if config.MEDIA_STORAGE_BACKEND == "supabase" else "invalid",
-        "PRIVACY_POLICY_URL": _value_state(config.PRIVACY_POLICY_URL),
-        "SUPPORT_URL": _value_state(config.SUPPORT_URL),
-        "ALLOWED_ORIGINS": (
-            "development_default"
-            if config.ALLOWED_ORIGINS_IS_DEFAULT
-            else "missing" if not config.ALLOWED_ORIGINS else "configured"
+        "SUPABASE_URL": _url_status(config.SUPABASE_URL, require_https=True),
+        "SUPABASE_ANON_KEY": _secret_status(config.SUPABASE_ANON_KEY),
+        "SUPABASE_SERVICE_ROLE_KEY": _secret_status(config.SUPABASE_SERVICE_ROLE_KEY),
+        "SUPABASE_JWT_ISSUER": _url_status(config.SUPABASE_JWT_ISSUER),
+        "SUPABASE_JWKS_URL": _url_status(config.SUPABASE_JWKS_URL),
+        "SUPABASE_STORAGE_BUCKET": (
+            Status.CONFIGURED if _present(config.SUPABASE_STORAGE_BUCKET) else Status.MISSING
+        ),
+        "POSTGRES_URL": _postgres_status(),
+        "GEMINI_API_KEY": _secret_status(config.GEMINI_API_KEY),
+        "SENTRY_BACKEND_DSN": _sentry_status(),
+        "MEDIA_STORAGE_BACKEND": _media_status(),
+        "ALLOWED_ORIGINS": _origins_status(),
+        "PRIVACY_POLICY_URL": _url_status(config.PRIVACY_POLICY_URL),
+        "SUPPORT_URL": _url_status(config.SUPPORT_URL),
+        "INVITE_REQUIRED": (
+            Status.CONFIGURED if config.INVITE_REQUIRED else Status.INVALID
+        ),
+        "REQUIRE_ANALYSIS_CONSENT": (
+            Status.CONFIGURED if config.REQUIRE_ANALYSIS_CONSENT else Status.INVALID
+        ),
+        "CONSENT_VERSION": (
+            Status.CONFIGURED if _present(config.CONSENT_VERSION) else Status.MISSING
         ),
     }
 
 
-def _google_calendar() -> dict[str, str]:
+def _google_calendar_state() -> tuple[str, dict[str, Status]]:
+    """Google Calendar is optional: switched off, it requires nothing."""
     if not config.GOOGLE_CALENDAR_ENABLED:
-        return {"status": "disabled_optional"}
-    requirements = {
-        "GOOGLE_CALENDAR_CLIENT_ID": _value_state(config.GOOGLE_CALENDAR_CLIENT_ID),
-        "GOOGLE_CALENDAR_CLIENT_SECRET": _value_state(config.GOOGLE_CALENDAR_CLIENT_SECRET),
-        "GOOGLE_CALENDAR_REDIRECT_URI": _value_state(config.GOOGLE_CALENDAR_REDIRECT_URI),
+        return Status.DISABLED_OPTIONAL.value, {}
+    keys = {
+        "GOOGLE_CALENDAR_CLIENT_ID": _secret_status(config.GOOGLE_CALENDAR_CLIENT_ID),
+        "GOOGLE_CALENDAR_CLIENT_SECRET": _secret_status(config.GOOGLE_CALENDAR_CLIENT_SECRET),
+        "GOOGLE_CALENDAR_REDIRECT_URI": _url_status(config.GOOGLE_CALENDAR_REDIRECT_URI),
         "GOOGLE_CALENDAR_APP_RETURN_URI": (
-            "configured"
-            if config.GOOGLE_CALENDAR_APP_RETURN_URI
+            Status.CONFIGURED
+            if _present(config.GOOGLE_CALENDAR_APP_RETURN_URI)
             and "?" not in config.GOOGLE_CALENDAR_APP_RETURN_URI
             and "#" not in config.GOOGLE_CALENDAR_APP_RETURN_URI
-            else "invalid"
+            else Status.INVALID
         ),
         "GOOGLE_CALENDAR_CREDENTIAL_STORE": (
-            "configured" if config.GOOGLE_CALENDAR_CREDENTIAL_STORE == "supabase_vault" else "invalid"
+            Status.CONFIGURED
+            if config.GOOGLE_CALENDAR_CREDENTIAL_STORE == "supabase_vault"
+            else Status.INVALID
         ),
     }
-    requirements["status"] = "ready" if all(
-        value == "configured" for key, value in requirements.items() if key != "status"
-    ) else "not_ready"
-    return requirements
+    unmet = any(status in BLOCKING_STATUSES for status in keys.values())
+    return ("incomplete" if unmet else "ready"), keys
 
 
-def _live_environment() -> dict[str, str]:
-    if not config.LIVE_ENVIRONMENT_PROVIDER and config.OPEN_METEO_MODE == "disabled":
-        return {"status": "disabled_optional", "mode": "disabled"}
-    if config.LIVE_ENVIRONMENT_PROVIDER != "open_meteo":
-        return {"status": "invalid", "mode": config.OPEN_METEO_MODE or "disabled"}
-    if config.OPEN_METEO_MODE == "evaluation":
-        return {
-            "status": "invalid" if config.APP_ENV in PRODUCTION_ENVS else "evaluation",
-            "mode": "evaluation",
-        }
-    if config.OPEN_METEO_MODE == "commercial":
-        return {
-            "status": "ready" if config.OPEN_METEO_API_KEY else "not_ready",
-            "mode": "commercial",
-            "OPEN_METEO_API_KEY": _value_state(config.OPEN_METEO_API_KEY),
-        }
-    return {"status": "invalid", "mode": config.OPEN_METEO_MODE or "disabled"}
-
-
-def readiness_report() -> dict[str, Any]:
-    """Return a safe report for the current process configuration.
-
-    Only variable names and status categories are included.  The canonical
-    production validator decides the final production outcome, avoiding a
-    second, weaker validation contract.
-    """
-    core = _core_requirements()
-    calendar = _google_calendar()
-    live_environment = _live_environment()
-    validation_error: str | None = None
-    if config.APP_ENV in PRODUCTION_ENVS:
-        try:
-            config.validate_production_configuration()
-        except RuntimeError:
-            # The individual report states identify what must be configured;
-            # do not surface values embedded in an operator-supplied setting.
-            validation_error = "production_configuration_invalid"
-
-    ready = (
-        config.APP_ENV not in PRODUCTION_ENVS
-        or (
-            validation_error is None
-            and calendar["status"] in {"ready", "disabled_optional"}
-            and live_environment["status"] in {"ready", "disabled_optional"}
-        )
+def _live_environment_state() -> tuple[str, dict[str, Status]]:
+    """Open-Meteo weather and air quality, off unless deliberately enabled."""
+    mode = config.OPEN_METEO_MODE
+    if mode not in ("disabled", "evaluation", "commercial"):
+        return "invalid", {"OPEN_METEO_MODE": Status.INVALID}
+    if config.LIVE_ENVIRONMENT_PROVIDER and config.LIVE_ENVIRONMENT_PROVIDER != "open_meteo":
+        return "invalid", {"LIVE_ENVIRONMENT_PROVIDER": Status.INVALID}
+    if mode == "disabled" or config.LIVE_ENVIRONMENT_PROVIDER != "open_meteo":
+        return Status.DISABLED_OPTIONAL.value, {}
+    if mode == "evaluation":
+        # Permitted in development only; production validation refuses it.
+        if config.APP_ENV in ("production", "staging"):
+            return "invalid", {"OPEN_METEO_MODE": Status.INVALID}
+        return "evaluation", {"OPEN_METEO_MODE": Status.CONFIGURED}
+    key_status = _secret_status(config.OPEN_METEO_API_KEY)
+    return (
+        "commercial" if key_status is Status.CONFIGURED else "incomplete",
+        {"OPEN_METEO_API_KEY": key_status},
     )
-    return {
-        "status": "development" if config.APP_ENV not in PRODUCTION_ENVS else ("ready" if ready else "not_ready"),
-        "environment": config.APP_ENV,
-        "required": core,
-        "optional_integrations": {
-            "google_calendar": calendar,
-            "open_meteo": live_environment,
-            "native_push": {
-                "status": "requires_runtime_scheduler",
-                "scheduler": "external_hourly",
-                "note": "The application cannot verify host scheduler configuration.",
-            },
-        },
-        "production_validation": "valid" if validation_error is None else "invalid",
+
+
+def evaluate() -> ReadinessReport:
+    """Build the readiness report for the current process configuration."""
+    app_env = config.APP_ENV
+    is_production_like = app_env in ("production", "staging")
+
+    required = {key: status.value for key, status in _core_requirements().items()}
+    google_state, google_keys = _google_calendar_state()
+    live_state, live_keys = _live_environment_state()
+
+    optional: dict[str, str] = {
+        "google_calendar": google_state,
+        "live_environment": live_state,
+        # The repository cannot see the host's crontab. Claiming otherwise
+        # would be the one lie that matters most on launch day.
+        "notification_worker": Status.REQUIRES_HOST_SCHEDULER.value,
     }
+    for key, status in {**google_keys, **live_keys}.items():
+        optional[key] = status.value
+
+    notes: list[str] = []
+    if not is_production_like:
+        notes.append(
+            f"APP_ENV={app_env!r}: production requirements are reported for information "
+            "only and do not fail this check."
+        )
+    notes.append(
+        "Run 'python -m app.workers.notifications' once per hour from the host "
+        "scheduler. Nothing in this repository can verify that it is scheduled."
+    )
+    if google_state == Status.DISABLED_OPTIONAL.value:
+        notes.append("Google Calendar is off; its credentials are not required.")
+    if live_state == Status.DISABLED_OPTIONAL.value:
+        notes.append("Live weather and air quality are off; Open-Meteo is not required.")
+
+    # The authoritative verdict. Its messages name configuration keys and never
+    # carry values, so repeating them verbatim is safe.
+    blocking: list[str] = []
+    try:
+        config.validate_production_configuration()
+    except RuntimeError as exc:
+        blocking.append(str(exc))
+
+    if is_production_like:
+        # Startup validation is the authority on what may boot, but it is not a
+        # superset of this report: it screens the Supabase keys for "placeholder"
+        # and "fake" only, so an unedited "your_anon_key_here" passes it. Without
+        # this, the report could print PLACEHOLDER against a key and still call
+        # the deployment ready — a green light on the one question this command
+        # exists to answer. Report key names only; never the offending value.
+        for key in sorted(required):
+            if Status(required[key]) in BLOCKING_STATUSES:
+                blocking.append(f"{key} is {required[key]} and must be set before production.")
+        for state, label in ((google_state, "Google Calendar"), (live_state, "Live environment")):
+            if state in ("incomplete", "invalid"):
+                blocking.append(f"{label} is enabled but its configuration is {state}.")
+
+    if blocking:
+        status = "not_ready"
+    elif is_production_like:
+        status = "ready"
+    else:
+        # Development is ready for what it is. Production gaps are listed above
+        # so they can be closed before anyone tries to deploy.
+        status = "ready"
+
+    return ReadinessReport(
+        app_env=app_env,
+        status=status,
+        required=required,
+        optional_integrations=optional,
+        blocking=tuple(blocking),
+        notes=tuple(notes),
+    )
 
 
-def _render(report: dict[str, Any]) -> str:
-    lines = [f"Release readiness: {report['status']} ({report['environment']})", "", "Required configuration:"]
-    lines.extend(f"  {key}: {value}" for key, value in report["required"].items())
+def render(report: ReadinessReport) -> str:
+    """A human-readable report. Key names and statuses only."""
+    lines = [
+        "GlamGenius release readiness",
+        f"  environment : {report.app_env}",
+        f"  status      : {report.status}",
+        "",
+        "Required for production:",
+    ]
+    for key in sorted(report.required):
+        lines.append(f"  {key:<32} {report.required[key]}")
     lines.append("")
     lines.append("Optional integrations:")
-    for name, details in report["optional_integrations"].items():
-        lines.append(f"  {name}: {details['status']}")
-        for key, value in details.items():
-            if key not in {"status", "note"}:
-                lines.append(f"    {key}: {value}")
-    lines.append("")
-    lines.append(f"Production validation: {report['production_validation']}")
+    for key in sorted(report.optional_integrations):
+        lines.append(f"  {key:<32} {report.optional_integrations[key]}")
+    if report.blocking:
+        lines.append("")
+        lines.append("Blocking — must be resolved before production:")
+        lines.extend(f"  - {reason}" for reason in report.blocking)
+    if report.notes:
+        lines.append("")
+        lines.append("Notes:")
+        lines.extend(f"  - {note}" for note in report.notes)
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Report safe GlamGenius release configuration readiness.")
-    parser.add_argument("--json", action="store_true", help="emit machine-readable status only")
-    args = parser.parse_args(argv)
-    report = readiness_report()
-    sys.stdout.write((json.dumps(report, sort_keys=True) if args.json else _render(report)) + "\n")
-    if report["status"] == "not_ready":
-        raise SystemExit(1)
+def main(argv: list[str] | None = None) -> int:
+    """Exit 0 when ready for the configured feature set, 1 when not."""
+    argv = sys.argv[1:] if argv is None else argv
+    report = evaluate()
+    if "--json" in argv:
+        print(json.dumps(report.as_dict(), indent=2, sort_keys=True))  # noqa: T201 - CLI output
+    else:
+        print(render(report))  # noqa: T201 - CLI output
+    return 0 if report.ready else 1
+
+
+__all__ = [
+    "BLOCKING_STATUSES",
+    "ReadinessReport",
+    "Status",
+    "evaluate",
+    "main",
+    "render",
+]
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
