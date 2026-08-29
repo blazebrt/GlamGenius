@@ -163,7 +163,7 @@ After configuring:
 
 Record the date the protection was activated and the throwaway-PR
 verification in
-[`../../STABILISATION_REPORT.md`](../../STABILISATION_REPORT.md).
+[`../reports/STABILISATION_REPORT.md`](../reports/STABILISATION_REPORT.md).
 
 ## Status
 

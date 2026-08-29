@@ -66,7 +66,7 @@ docs/product/**                          @blazebrt
 # --- Stabilisation documentation -------------------------------------------
 # The stabilisation report is the single source of truth about what is
 # actually done. Only the owner promotes items from partial to complete.
-STABILISATION_REPORT.md                  @blazebrt
+docs/reports/STABILISATION_REPORT.md     @blazebrt
 docs/stabilisation/**                    @blazebrt
 
 # --- Emergent hosting metadata ---------------------------------------------

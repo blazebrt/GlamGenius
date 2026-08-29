@@ -177,10 +177,10 @@ WP6 closes when:
       sweeps recorded.
 - [ ] Every P0 finding has landed either as a follow-up fix PR or
       as a documented deferred item in the results file.
-- [ ] `STABILISATION_REPORT.md` is updated: Fix 17 → PARTIAL or
+- [ ] `docs/reports/STABILISATION_REPORT.md` is updated: Fix 17 → PARTIAL or
       DONE with the device list and the results-file path.
 - [ ] The final non-payment readiness paragraph in
-      `STABILISATION_REPORT.md §"Truthful conclusion"` is
+      `docs/reports/STABILISATION_REPORT.md §"Truthful conclusion"` is
       re-evaluated against the sweep and re-written truthfully.
 
 If the sweep uncovers a class of issue too large to resolve inside
