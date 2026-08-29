@@ -404,6 +404,39 @@ screenshot is enough to find the request in the logs.
 - Deletions and exports are recorded in `audit_events` with a hashed source address —
   enough to investigate, not a location log.
 
+## Going to production
+
+The sequence, in order. Steps 1 and 2 are the ones that catch mistakes early.
+
+```bash
+# 1. Configure the production environment (see env.example, and
+#    docs/FOUNDER_PRODUCTION_INPUTS.md for what only you can supply)
+
+# 2. Check what is still missing — key names and statuses only, no secrets
+cd backend && python -m app.release_readiness      # exit 0 = ready, 1 = not
+
+# 3. Run migrations
+alembic upgrade head
+
+# 4. Deploy the API
+# 5. Deploy the frontend
+
+# 6. Schedule the hourly notification worker on your host — see
+#    docs/OPERATIONS.md §6. Nothing in this repository can verify it exists.
+python -m app.workers.notifications                 # one manual cycle
+
+# 7. If Google Calendar is enabled, connect one real account and confirm a sync
+# 8. If live weather is enabled, confirm a real forecast reaches Today
+# 9. Run the staging smoke tests
+```
+
+Steps 7 and 8 are verification, not configuration. Code existing for an
+integration is not the same as that integration being live, and the readiness
+report will not claim otherwise: an integration that is switched off reads
+`disabled_optional`, and the notification scheduler always reads
+`requires_host_scheduler` because the application genuinely cannot see the
+host's crontab.
+
 ## Documentation
 
 - [docs/V2_ARCHITECTURE_AND_PHASE_PLAN.md](docs/V2_ARCHITECTURE_AND_PHASE_PLAN.md)
