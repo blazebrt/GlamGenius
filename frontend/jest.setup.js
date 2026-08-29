@@ -25,8 +25,30 @@ jest.mock('@expo/vector-icons', () => {
   };
 });
 
+// Reanimated entering transitions are presentation-only in unit tests. Keep
+// the component shape used by app/index.tsx and render through a normal View.
+jest.mock('react-native-reanimated', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  const AnimatedView = ({ children, ...props }) =>
+    React.createElement(View, props, children);
+  const entering = { delay: () => entering };
+  return {
+    default: { View: AnimatedView },
+    View: AnimatedView,
+    FadeIn: entering,
+    FadeInDown: entering,
+    FadeInUp: entering,
+  };
+});
+
 // expo-router: navigation is a side effect, not something these tests assert on.
 jest.mock('expo-router', () => ({
+  Redirect: ({ href }) => {
+    const React = require('react');
+    const { View } = require('react-native');
+    return React.createElement(View, { testID: `redirect:${href}`, accessibilityLabel: `redirect:${href}` });
+  },
   router: { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => true },
   useRouter: () => ({
     push: jest.fn(),

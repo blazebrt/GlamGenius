@@ -109,7 +109,7 @@ export default function OnboardingScreen() {
       <Text style={styles.completeTitle}>{result.headline || 'Your appearance profile is ready'}</Text>
       <Text style={styles.completeText}>{result.recommendation}</Text>
       <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open My Appearance" style={styles.primary} onPress={() => router.replace('/my-appearance')}><Text style={styles.primaryText}>Open My Appearance</Text></TouchableOpacity>
-      <TouchableOpacity accessibilityRole="button" accessibilityLabel="Go to home" onPress={home}><Text style={styles.skipText}>Go home</Text></TouchableOpacity>
+      <TouchableOpacity accessibilityRole="button" accessibilityLabel="Go to Today" onPress={home}><Text style={styles.skipText}>Go to Today</Text></TouchableOpacity>
     </View>;
   }
 

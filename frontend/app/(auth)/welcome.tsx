@@ -118,7 +118,7 @@ export default function AuthWelcome() {
 
   const subtitle =
     mode === 'login'
-      ? 'Sign in to see your looks, colours, and progress across devices.'
+      ? 'Sign in to your wardrobe, routines, plans and progress across devices.'
       : mode === 'register'
         ? 'GlamGenius is currently invite-only. Enter the code you were given to create your account.'
         : 'Enter your email and we will send you a reset link.';

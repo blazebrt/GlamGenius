@@ -46,9 +46,7 @@ function RootLayout() {
 
   useEffect(() => {
     initializeUser().catch((err) => console.warn('init user failed', err));
-    // Loaded once, before any screen can decide whether to offer a payment.
-    // The store fails closed, so a failure here hides paid actions rather than
-    // showing them.
+    // Loaded once so all screens share the same server-authoritative config.
     loadConfig().catch((err) => console.warn('load config failed', err));
     // Both action references come from Zustand singleton stores and are
     // stable across renders. This effect must run exactly once on mount.
@@ -73,7 +71,7 @@ function RootLayout() {
     return (
       <View style={styles.loadingContainer}>
         <Text style={styles.loadingLogo}>GlamGenius</Text>
-        <Text style={styles.loadingTagline}>SKIN · HAIR · STYLE</Text>
+        <Text style={styles.loadingTagline}>YOUR APPEARANCE · ORGANISED</Text>
         <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 24 }} />
       </View>
     );

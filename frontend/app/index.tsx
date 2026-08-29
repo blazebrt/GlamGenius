@@ -54,7 +54,7 @@ export default function WelcomeScreen() {
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingLogo}>GlamGenius</Text>
-          <Text style={styles.loadingTagline}>SKIN · HAIR · STYLE</Text>
+          <Text style={styles.loadingTagline}>YOUR APPEARANCE · ORGANISED</Text>
           <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 24 }} />
         </View>
       </View>
@@ -71,20 +71,15 @@ export default function WelcomeScreen() {
           <Ionicons name="leaf-outline" size={30} color={COLORS.primary} />
         </View>
         <Text style={styles.brandName}>GlamGenius</Text>
-        <Text style={styles.brandTagline}>STYLIST · WELLNESS · SKIN & HAIR</Text>
+        <EntryBrandTagline />
       </Animated.View>
 
       <Animated.View entering={FadeInDown.delay(400)} style={styles.heroSection}>
-        <Text style={styles.heroTitle}>Your fashion{'\n'}stylist in{'\n'}your pocket</Text>
-        <Text style={styles.heroSubtitle}>
-          One coach for clothing that flatters your tone & frame, skin & hair habits, and occasion-ready looks — without celebrity budgets.
-        </Text>
+        <EntryHero />
       </Animated.View>
 
       <Animated.View entering={FadeInDown.delay(600)} style={styles.features}>
-        <FeatureItem icon="shirt-outline" title="Fashion stylist" description="Colours, fits, occasions & wearable trends" />
-        <FeatureItem icon="scan-outline" title="Skin & hair advisor" description="Visible checks that inform your style" />
-        <FeatureItem icon="nutrition-outline" title="Wellness coach" description="Ingredients, Indian foods & simple routines" />
+        <EntryFeatures />
       </Animated.View>
 
       <Animated.View entering={FadeInUp.delay(800)} style={[styles.ctaSection, { paddingBottom: insets.bottom + 20 }]}>
@@ -106,6 +101,27 @@ export default function WelcomeScreen() {
       </Animated.View>
     </View>
   );
+}
+
+export function EntryBrandTagline() {
+  return <Text style={styles.brandTagline}>STYLE · CARE · PLAN</Text>;
+}
+
+export function EntryHero() {
+  return <>
+    <Text style={styles.heroTitle}>Know what to wear.{"\n"}Know what needs attention.</Text>
+    <Text style={styles.heroSubtitle}>
+      GlamGenius brings your wardrobe, care shelf, routines, occasions and preferences into one calm daily plan — starting with what you already own.
+    </Text>
+  </>;
+}
+
+export function EntryFeatures() {
+  return <>
+    <FeatureItem icon="sunny-outline" title="Today, decided" description="A clear owned-first outfit and the few things worth your attention." />
+    <FeatureItem icon="shirt-outline" title="Style from your wardrobe" description="Occasion looks and purchase decisions without buying pressure." />
+    <FeatureItem icon="leaf-outline" title="Care and planning together" description="Routines, upkeep, events and progress in one place." />
+  </>;
 }
 
 function FeatureItem({ icon, title, description }: { icon: any; title: string; description: string }) {

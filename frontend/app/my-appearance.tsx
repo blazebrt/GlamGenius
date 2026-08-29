@@ -47,7 +47,7 @@ export default function MyAppearanceScreen() {
   return <View style={[styles.container, { paddingTop: insets.top }]}>
     <View style={styles.topBar}><TouchableOpacity accessibilityRole="button" accessibilityLabel="Back" onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)/you')}><Ionicons name="arrow-back" size={24} color={COLORS.textPrimary} /></TouchableOpacity><Text style={styles.topTitle}>My Appearance</Text><View style={{ width: 24 }} /></View>
     <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 40 }}>
-      <Text style={styles.eyebrow}>YOUR DIGITAL TWIN</Text><Text style={styles.title}>What GlamGenius knows</Text>
+      <Text style={styles.eyebrow}>YOUR APPEARANCE PROFILE</Text><Text style={styles.title}>What GlamGenius knows</Text>
       <Text style={styles.subtitle}>Confirmed facts stay yours. Suggestions remain separate until you confirm them.</Text>
       <Text style={styles.sectionTitle}>Decision readiness</Text>
       {profile.readiness.map((item) => <View key={item.area} style={styles.readiness}><Ionicons name={item.ready ? 'checkmark-circle' : 'add-circle-outline'} size={21} color={item.ready ? COLORS.success : COLORS.warning} /><Text style={styles.readinessText}>{item.message}</Text></View>)}
