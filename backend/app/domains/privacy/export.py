@@ -43,6 +43,8 @@ from app.domains.identity.models import Account
 from app.domains.inventory.models import (
     InventoryAttribute,
     InventoryEvent,
+    InventoryImportCandidate,
+    InventoryImportJob,
     InventoryItem,
     SupplementDetail,
 )
@@ -240,6 +242,16 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
         session,
         select(SupplementDetail).where(SupplementDetail.item_id.in_(item_ids)),
     ) if item_ids else []
+    # Photo captures and what each one offered. A rejected candidate stays in
+    # the export: it is a record of a guess made about this person.
+    imports = await _fetch(
+        session,
+        select(InventoryImportJob).where(InventoryImportJob.account_id == account_id),
+    )
+    candidates = await _fetch(
+        session,
+        select(InventoryImportCandidate).where(InventoryImportCandidate.account_id == account_id),
+    )
     return {
         "items": [_row_dict(i, [c.name for c in InventoryItem.__table__.columns]) for i in items],
         "attributes": [_row_dict(a, [c.name for c in InventoryAttribute.__table__.columns]) for a in attrs],
@@ -247,6 +259,14 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
         "supplement_details": [
             _row_dict(row, [c.name for c in SupplementDetail.__table__.columns])
             for row in supplement_details
+        ],
+        "import_jobs": [
+            _row_dict(row, [c.name for c in InventoryImportJob.__table__.columns])
+            for row in imports
+        ],
+        "import_candidates": [
+            _row_dict(row, [c.name for c in InventoryImportCandidate.__table__.columns])
+            for row in candidates
         ],
     }
 

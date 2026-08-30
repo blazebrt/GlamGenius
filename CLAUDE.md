@@ -63,7 +63,7 @@ backend/
   pytest.ini                 # testpaths = tests, session-scoped event loop
   pyproject.toml             # Ruff config (line-length 120, py311)
   requirements.txt
-  migrations/versions/       # 18 Alembic revisions, one linear chain
+  migrations/versions/       # 19 Alembic revisions, one linear chain
   app/
     config.py                # every env var, plus validate_production_configuration()
     release.py               # `python -m app.release` — lock, migrate, seed, verify
@@ -79,13 +79,13 @@ backend/
       errors/                # exceptions, handlers, codes
       observability/         # logging, request_id, sentry_bootstrap, sentry_privacy
       validation/media.py
-  tests/                     # 99 pytest modules (~1,700 tests) + conftest.py
+  tests/                     # 100 pytest modules (~1,700 tests) + conftest.py
 frontend/
   app/                       # expo-router routes; (tabs)/ is Today · Style · Care · Plan · You
   src/services/              # api.ts, apiV2.ts (typed V2 client), supabase.ts, notify.ts
   src/components/            # per-area component folders
   src/store/                 # zustand stores
-  src/__tests__/             # 39 Jest suites (~360 tests)
+  src/__tests__/             # 40 Jest suites (~370 tests)
 docs/                        # architecture, engineering checklists, ADRs, operations, reports
 ```
 
@@ -107,7 +107,7 @@ All 25 packages under `backend/app/domains/`:
 | `media` | Uploads, ownership, deletion; storage adapters (`storage/supabase.py`, `storage/local.py`) |
 | `ai_gateway` | The one controlled path to Gemini. Every AI run is recorded |
 | `profile` | The appearance digital twin: attributes, observations inbox, onboarding, baseline |
-| `inventory` | All seven categories: Wardrobe, Shoes, Accessories, Skin Care, Hair Care, Perfumes, Supplements |
+| `inventory` | All seven categories: Wardrobe, Shoes, Accessories, Skin Care, Hair Care, Perfumes, Supplements. **Multi-item capture: one shelf photo, one tap per candidate** |
 | `scan` | Photo analysis history. **No image is ever stored** — see §4 |
 | `quiz` | Versioned style quiz questions and submissions |
 | `recommendation` | Occasion styling and the decision engine (candidates, ranking, ROI, explanation) |
@@ -260,8 +260,8 @@ Health: `GET /api/v2/health` (served from `backend/app/api/v2/config.py`, not `h
 ### Migrations
 
 Alembic, one linear chain, `backend/migrations/versions/`. The current head is
-`l2m3n4o5p6` (VC-09 notifications). `0001_initial_glamgenius_v2.py` is the consolidated
-greenfield baseline.
+`p6q7r8s9t0` (multi-item capture candidates). `0001_initial_glamgenius_v2.py` is the
+consolidated greenfield baseline.
 
 ```bash
 cd backend

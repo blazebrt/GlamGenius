@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -184,6 +185,51 @@ class InventoryImportJob(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "inventory_import_jobs"
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     capture_type: Mapped[str] = mapped_column(String(32), nullable=False); status: Mapped[str] = mapped_column(String(24), nullable=False); media_asset_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("media_assets.id", ondelete="SET NULL")); ai_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL")); detected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0"); error_code: Mapped[str | None] = mapped_column(String(64)); completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InventoryImportCandidate(UUIDPrimaryKey, TimestampMixin, Base):
+    """One thing a shelf photo appeared to show, waiting for one tap.
+
+    A candidate is deliberately **not** an inventory item. Fifteen guesses from
+    one photo must not appear on the shelf, feed a routine, or land in the
+    duplicates queue before a person has looked at them — "nothing enters the
+    shelf unconfirmed" is only true if the unconfirmed thing is not there.
+
+    Confirming turns a candidate into a real, confirmed item through the same
+    ``service.create_item`` every other item goes through. Rejecting creates
+    nothing and leaves the row as a record of what was offered and refused.
+    """
+
+    __tablename__ = "inventory_import_candidates"
+
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_import_jobs.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    #: Where it sat in the model's reading of the photo. Keeps the review list
+    #: in a stable order between refreshes.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    subcategory: Mapped[str | None] = mapped_column(String(80))
+    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    brand: Mapped[str | None] = mapped_column(String(120))
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    #: ``[{"key": ..., "value": ..., "confidence": ...}]`` — the same shape the
+    #: single-item path writes into inventory_attributes on confirm.
+    attributes: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    uncertain_fields: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    photo_quality_notes: Mapped[str | None] = mapped_column(Text)
+    #: pending | confirmed | rejected. Never anything else.
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
+    #: Set only when a person confirmed it and an item was created.
+    item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("inventory_items.id", ondelete="SET NULL"))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("state IN ('pending', 'confirmed', 'rejected')", name="ck_import_candidate_state"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_import_candidate_confidence"),
+        Index("ix_import_candidates_job", "job_id", "position"),
+        Index("ix_import_candidates_account_state", "account_id", "state"),
+    )
 
 
 class InventoryValueEvent(UUIDPrimaryKey, TimestampMixin, Base):

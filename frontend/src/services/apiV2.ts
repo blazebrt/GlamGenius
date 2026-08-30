@@ -609,6 +609,70 @@ export interface InventoryExtraction {
   message: string;
 }
 
+// --- Multi-item capture -----------------------------------------------------
+
+export interface ImportCandidate {
+  id: string;
+  position: number;
+  category: InventoryCategory;
+  subcategory: string | null;
+  display_name: string;
+  brand: string | null;
+  confidence: number;
+  details: Record<string, any>;
+  attributes: { key: string; value: any; confidence: number }[];
+  uncertain_fields: string[];
+  photo_quality_notes: string | null;
+  /** Nothing is on the shelf until this leaves 'pending'. */
+  state: 'pending' | 'confirmed' | 'rejected';
+  item_id: string | null;
+  decided_at: string | null;
+}
+
+export interface InventoryImport {
+  job_id: string;
+  status: string;
+  capture_type: string;
+  detected_count: number;
+  pending_count: number;
+  confirmed_count: number;
+  rejected_count: number;
+  candidates: ImportCandidate[];
+  photo_quality_notes: string | null;
+  /** Things in the photo that could not be identified. Stated, not hidden. */
+  unreadable_count: number | null;
+  message: string;
+}
+
+/** One photo of a shelf. Produces candidates; creates no items. */
+export const extractInventoryBatch = async (
+  media_asset_id: string,
+  category_hint?: InventoryCategory,
+  capture_type: 'shelf_photo' | 'wardrobe_photo' | 'counter_photo' = 'shelf_photo'
+): Promise<InventoryImport> =>
+  (await api.post<InventoryImport>(`${V2}/inventory/extract/batch`, {
+    media_asset_id, category_hint, capture_type,
+  })).data;
+
+export const readInventoryImport = async (jobId: string): Promise<InventoryImport> =>
+  (await api.get<InventoryImport>(`${V2}/inventory/imports/${jobId}`)).data;
+
+/** One tap. `accept` is the whole decision. */
+export const decideImportCandidate = async (
+  jobId: string, candidateId: string, accept: boolean
+): Promise<ImportCandidate> =>
+  (await api.post<ImportCandidate>(
+    `${V2}/inventory/imports/${jobId}/candidates/${candidateId}/${accept ? 'confirm' : 'reject'}`
+  )).data;
+
+/** Several taps at once, for when they outrun the network. */
+export const decideImportCandidates = async (
+  jobId: string, decisions: { candidate_id: string; accept: boolean }[]
+): Promise<InventoryImport & { decided: ImportCandidate[] }> =>
+  (await api.post<InventoryImport & { decided: ImportCandidate[] }>(
+    `${V2}/inventory/imports/${jobId}/decisions`, { decisions }
+  )).data;
+
 export const extractInventoryItem = async (
   media_asset_id: string, category_hint?: InventoryCategory, capture_type: 'item_photo' | 'screenshot' = 'item_photo'
 ): Promise<InventoryExtraction> =>

@@ -84,6 +84,40 @@ class ExtractRequest(BaseModel):
     capture_type: Literal["item_photo", "screenshot", "shelf_photo", "wardrobe_photo", "wardrobe_video"] = "item_photo"
 
 
+#: The most candidates one photo may yield. A shelf holds more than this in
+#: theory; in practice a photo that shows forty things shows none of them
+#: legibly, and a review list nobody can finish is worse than a second photo.
+BATCH_ITEM_LIMIT = 25
+
+
+class BatchExtractRequest(BaseModel):
+    """One photo of a shelf, a counter or a drawer."""
+
+    model_config = ConfigDict(extra="forbid")
+    media_asset_id: uuid.UUID
+    category_hint: Category | None = None
+    capture_type: Literal["shelf_photo", "wardrobe_photo", "counter_photo"] = "shelf_photo"
+
+
+class CandidateDecision(BaseModel):
+    """One tap. ``accept`` is the whole decision."""
+
+    model_config = ConfigDict(extra="forbid")
+    candidate_id: uuid.UUID
+    accept: bool
+
+
+class BatchDecisions(BaseModel):
+    """Several taps, sent together.
+
+    The person still decides one item at a time; this only spares the phone a
+    request per tap when the taps come faster than the network.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    decisions: list[CandidateDecision] = Field(min_length=1, max_length=BATCH_ITEM_LIMIT)
+
+
 class ExtractedAttribute(BaseModel):
     model_config = ConfigDict(extra="forbid")
     key: str = Field(min_length=1, max_length=64)
@@ -110,3 +144,19 @@ class ExtractedInventoryItem(BaseModel):
         self.details = validate_details(self.category, self.details)
         validate_attribute_keys(self.category, (row.key for row in self.attributes))
         return self
+
+
+class ExtractedInventoryBatch(BaseModel):
+    """What one shelf photo may yield.
+
+    ``items`` reuses the single-item contract exactly, so a candidate and a
+    single extraction validate against the same rules — the same categories,
+    the same detail fields, the same honest confidence.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    items: list[ExtractedInventoryItem] = Field(default_factory=list, max_length=BATCH_ITEM_LIMIT)
+    photo_quality_notes: str = Field(min_length=3, max_length=400)
+    #: Things visible in the photo that could not be identified. Stated rather
+    #: than guessed at, so the person knows the list is not the whole shelf.
+    unreadable_count: int = Field(default=0, ge=0, le=50)

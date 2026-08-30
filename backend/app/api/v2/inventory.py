@@ -6,8 +6,10 @@ import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.inventory import extraction, service
+from app.domains.inventory import batch, extraction, service
 from app.domains.inventory.schemas import (
+    BatchDecisions,
+    BatchExtractRequest,
     ConditionCreate,
     DuplicateResolve,
     ExtractRequest,
@@ -30,6 +32,94 @@ async def extract_inventory_item(body: ExtractRequest, current: CurrentAccount =
     job, item, extracted = await extraction.analyse(session, account_id=current.account_id, account_id_str=current.account_id_str, media_asset_id=body.media_asset_id, category_hint=body.category_hint, capture_type=body.capture_type)
     await session.commit()
     return extraction.serialize_result(job, await service.serialize_item(session, item, include_history=True), extracted)
+
+
+@router.post("/inventory/extract/batch")
+async def extract_inventory_batch(
+    body: BatchExtractRequest,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """One photo of a shelf, several candidates, no items yet.
+
+    Nothing here is on the shelf. Each candidate needs one tap.
+    """
+    if not await flag_service.is_enabled(session, "v2_inventory_batch"):
+        raise FeatureUnavailableError("v2_inventory_batch")
+    job, candidates, extracted = await batch.analyse_batch(
+        session,
+        account_id=current.account_id,
+        account_id_str=current.account_id_str,
+        media_asset_id=body.media_asset_id,
+        category_hint=body.category_hint,
+        capture_type=body.capture_type,
+    )
+    await session.commit()
+    return batch.serialize_batch(job, candidates, extracted)
+
+
+@router.get("/inventory/imports/{job_id}")
+async def read_inventory_import(
+    job_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """The review list, re-readable — a phone that dropped mid-review resumes here."""
+    job = await batch.owned_job(session, current.account_id, job_id)
+    candidates = await batch.candidates_for(session, current.account_id, job_id)
+    return batch.serialize_batch(job, candidates)
+
+
+@router.post("/inventory/imports/{job_id}/candidates/{candidate_id}/confirm")
+async def confirm_import_candidate(
+    job_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """One tap. The item is created, already confirmed."""
+    candidate = await batch.owned_candidate(session, current.account_id, job_id, candidate_id)
+    decided = await batch.decide(session, account_id=current.account_id, candidate=candidate, accept=True)
+    await session.commit()
+    return batch.serialize_candidate(decided)
+
+
+@router.post("/inventory/imports/{job_id}/candidates/{candidate_id}/reject")
+async def reject_import_candidate(
+    job_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """One tap the other way. Nothing is created."""
+    candidate = await batch.owned_candidate(session, current.account_id, job_id, candidate_id)
+    decided = await batch.decide(session, account_id=current.account_id, candidate=candidate, accept=False)
+    await session.commit()
+    return batch.serialize_candidate(decided)
+
+
+@router.post("/inventory/imports/{job_id}/decisions")
+async def decide_import_candidates(
+    job_id: uuid.UUID,
+    body: BatchDecisions,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Several taps in one request, for when taps outrun the network."""
+    await batch.owned_job(session, current.account_id, job_id)
+    decided = await batch.decide_many(
+        session,
+        account_id=current.account_id,
+        job_id=job_id,
+        decisions=[(row.candidate_id, row.accept) for row in body.decisions],
+    )
+    await session.commit()
+    job = await batch.owned_job(session, current.account_id, job_id)
+    candidates = await batch.candidates_for(session, current.account_id, job_id)
+    return {
+        "decided": [batch.serialize_candidate(row) for row in decided],
+        **batch.serialize_batch(job, candidates),
+    }
 
 
 @router.post("/inventory/items")

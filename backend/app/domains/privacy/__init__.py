@@ -91,6 +91,10 @@ REGISTRY: dict[str, Classification] = {
     "inventory_events": Classification.INCLUDED,
     "inventory_item_images": Classification.INCLUDED,  # via inventory_items
     "inventory_import_jobs": Classification.INCLUDED,
+    # What a shelf photo appeared to show, and what the person did about
+    # each one. A rejected candidate is theirs too: it is the record of a
+    # guess we made about them and they refused.
+    "inventory_import_candidates": Classification.INCLUDED,
     "inventory_value_events": Classification.INCLUDED,  # via inventory_items
     "item_condition_events": Classification.INCLUDED,  # via inventory_items
     "item_expiry_events": Classification.INCLUDED,  # via inventory_items

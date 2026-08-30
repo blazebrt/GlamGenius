@@ -105,6 +105,8 @@ function RootLayout() {
             <Stack.Screen name="onboarding" />
             <Stack.Screen name="my-appearance" />
             <Stack.Screen name="inventory-add" />
+            {/* One shelf photo, one tap per thing on it. */}
+            <Stack.Screen name="inventory-batch" options={{ presentation: 'fullScreenModal' }} />
             <Stack.Screen name="inventory-item" />
             <Stack.Screen name="inventory-insights" />
             <Stack.Screen name="event-add" />
