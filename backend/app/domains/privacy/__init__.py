@@ -220,6 +220,11 @@ REGISTRY: dict[str, Classification] = {
     "evidence_claims": Classification.NOT_USER_OWNED,
     "evidence_claim_sources": Classification.NOT_USER_OWNED,
     "rule_evidence_links": Classification.NOT_USER_OWNED,
+    # The supplement absorption knowledge base is the same kind of thing: one
+    # row per compound form, shipped with the release and identical for every
+    # account. A customer's own label transcriptions live in
+    # supplement_label_components, which is account-owned and exported.
+    "supplement_component_knowledge": Classification.NOT_USER_OWNED,
 }
 
 

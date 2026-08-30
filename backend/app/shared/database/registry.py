@@ -50,6 +50,7 @@ from app.domains.reference import (
 from app.domains.routines import models as routines_models
 from app.domains.scan.models import Scan
 from app.domains.supplements import models as supplement_models
+from app.domains.supplements.models import SupplementComponentKnowledge
 from app.domains.system.models import WorkerStatus
 from app.shared.database.base import Base
 from app.shared.flags.models import FeatureFlag

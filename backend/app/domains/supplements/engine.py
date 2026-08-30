@@ -17,10 +17,15 @@ COMING_UP_DAYS = 90
 
 # Deliberately small, explicit, reviewed identities. Unknown terms retain only
 # their deterministic normalized spelling; no runtime synonym invention occurs.
+# Label spellings that resolve to a canonical component key. The two original
+# entries are kept verbatim; the rest come from the absorption knowledge base,
+# which owns the compound forms and their Indian label spellings, so there is
+# one place to add a form rather than two that can drift apart.
 REVIEWED_ALIASES: dict[str, tuple[str, str]] = {
     "ascorbic acid": ("vitamin c", "Vitamin C"),
     "l ascorbic acid": ("vitamin c", "Vitamin C"),
 }
+
 
 
 def normalize_component(value: str) -> str:
@@ -32,6 +37,14 @@ def normalize_component(value: str) -> str:
 def component_identity(value: str) -> tuple[str, str]:
     normalized = normalize_component(value)
     return REVIEWED_ALIASES.get(normalized, (normalized, value.strip() or normalized))
+def _load_knowledge_aliases() -> None:
+    """Fold the knowledge base's aliases in, without letting it shadow these two."""
+    from app.domains.supplements.knowledge import raw_aliases  # noqa: PLC0415 - deferred by design
+
+    for alias, key, nutrient in raw_aliases():
+        REVIEWED_ALIASES.setdefault(normalize_component(alias), (key, nutrient))
+
+_load_knowledge_aliases()
 
 
 def _amount_text(value: Any) -> str | None:
