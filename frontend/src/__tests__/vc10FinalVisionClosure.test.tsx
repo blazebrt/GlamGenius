@@ -1,11 +1,11 @@
+import { existsSync } from 'fs';
+import { join } from 'path';
+
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react-native';
 
 import { EntryBrandTagline, EntryFeatures, EntryHero } from '../../app/index';
-import GetAdviceRedirect from '../../app/get-advice';
-import RecommendationsRedirect from '../../app/recommendations';
 import ScanRedirect from '../../app/scan';
-import StyleQuizRedirect from '../../app/style-quiz';
 import HistoryRedirect from '../../app/(tabs)/history';
 import ScanTabRedirect from '../../app/(tabs)/scan-tab';
 import ProfileScreen from '../../app/(tabs)/profile';
@@ -63,9 +63,6 @@ describe('VC-10 final vision closure', () => {
   });
 
   it.each([
-    ['style quiz', StyleQuizRedirect, '/my-appearance'],
-    ['advice', GetAdviceRedirect, '/style-me'],
-    ['recommendations', RecommendationsRedirect, '/style-me'],
     ['scan', ScanRedirect, '/my-appearance'],
     ['scan tab', ScanTabRedirect, '/my-appearance'],
     ['history', HistoryRedirect, '/progress'],
@@ -73,4 +70,15 @@ describe('VC-10 final vision closure', () => {
     render(<Route />);
     expect(screen.getByTestId(`redirect:${destination}`)).toBeTruthy();
   });
+
+  // Style Me is infrastructure for Event Ready, never a standalone feature
+  // (PRODUCT_CONSTITUTION.md, master rule). The screens survive because Event
+  // Ready opens them; every standalone way in is gone, and must stay gone —
+  // a redirect would be a way in, so these routes do not exist at all.
+  it.each(['get-advice', 'recommendations', 'style-quiz', '(tabs)/style-me-tab'])(
+    'has no standalone %s route into Style Me',
+    (route) => {
+      expect(existsSync(join(__dirname, '..', '..', 'app', `${route}.tsx`))).toBe(false);
+    },
+  );
 });
