@@ -14,7 +14,8 @@ Food, cosmetics, supplements, cookware, salon upkeep. India only.
 The engine judges effect on the body. It never judges appearance.
 INTERNAL EXCEPTION: the recommendation/Look engine is retained as
 infrastructure for Event Ready, answering "what do you already own that
-suits this occasion". It is never surfaced as a standalone style feature.
+suits this occasion". This exception covers backend modules only. No
+Style, quiz, or colour-analysis SCREEN may exist.
 
 ## The manager rule
 The app decides. It does not offer menus. Every result is a decision
@@ -25,13 +26,50 @@ constraint lifts, say so.
 ## Hard handoffs — the app must NOT decide
 Pregnancy, breastfeeding, any named medication, any diagnosed condition,
 children under 12. State the fact, hand off to a doctor, never advise.
-needs_professional in routines/safety.py is the canonical
-implementation. Reuse it everywhere.
+The gate is routines/hard_handoff.py: evaluate() and requires_handoff().
+It covers age under 12, a child subject, pregnancy, breastfeeding, any
+named medication, and any condition a clinician is already handling. It
+recognises medications by how drug names are built, not from a list, and
+it fails closed — medical text with unclear specifics hands off anyway.
+
+needs_professional() in routines/safety.py is a partial text check for a
+different, narrower job and MUST NOT be treated as satisfying this
+requirement.
+
+A feature satisfies this rule only when it CALLS the gate. The gate
+existing is not the same as a feature using it, and every feature that
+touches this territory must pass its text and whatever age it holds.
 
 ## The evidence rule
 The app never makes a claim in its own voice. It reports what a named,
 openable source says. No source, no claim. Missing data is stated as
 "Not enough information", never guessed.
+
+## Data licensing
+Open Food Facts data is ODbL licensed with a share-alike clause.
+OFF-derived data and proprietary data live in two physically separate
+stores, joined only at query time on barcode. No proprietary value is
+ever written into an OFF-derived record. Breaking this obliges us to
+publish our entire knowledge base.
+
+## User-generated content
+Structured dropdowns only. Zero free text anywhere, ever. Observations
+never conclusions. A minimum report threshold before display. A visible
+right of reply for brands.
+
+## Knowledge verification — all five required before publishing any entry
+1. An openable source URL, or the entry is NOT_ENOUGH_INFORMATION
+2. The founder opens the source and confirms the number
+3. Claude and Codex asked blind and separately; disagreement does not
+   ship
+4. An adversarial pass
+5. Doubt ships as "not enough information"
+
+## ASLI score gates
+Culinary ingredients (ghee, oils, salt, sugar, jaggery) return
+NOT_GRADED, never a letter. NOVA 4 has a hard ceiling of C. Saturated
+fat is penalised only at NOVA 3-4. A missing nutrition panel or
+ingredient list means no grade is shown.
 
 ## Free vs paid
 Free forever: all scanning, all scores, full ingredient breakdown with

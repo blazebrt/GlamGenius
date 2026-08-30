@@ -131,8 +131,24 @@ _MEDICAL_QUESTION_PATTERNS: tuple[str, ...] = (
 _MEDICAL_QUESTION = re.compile("|".join(_MEDICAL_QUESTION_PATTERNS), re.IGNORECASE)
 
 
+# NOT THE HARD HANDOFF. needs_professional() below is a partial text check and
+# MUST NOT be used as the hard-handoff gate. It takes no age, so it cannot
+# enforce the under-12 rule at all; it matches a finite list of words, so it
+# recognises neither a medication nor a condition it was not given in advance.
+#
+# The hard handoff lives in ``hard_handoff.py`` — evaluate() / requires_handoff().
+# Use that wherever the under-12, pregnancy, breastfeeding, medication or
+# clinical-condition boundary applies. This function keeps its own narrower job:
+# spotting a question that reads medical, so a routine answer can be replaced by
+# PROFESSIONAL_BOUNDARY. Deliberately not widened — test_hard_handoff.py asserts
+# the two stay separate.
+#
+# See PRODUCT_CONSTITUTION.md, "Hard handoffs".
 def needs_professional(text: str | None) -> bool:
-    """True when a question belongs with a clinician, not with this app."""
+    """True when a question reads like a medical one.
+
+    A partial text check, not the hard handoff. See the comment above.
+    """
     return bool(_MEDICAL_QUESTION.search(text or ""))
 
 

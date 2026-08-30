@@ -71,12 +71,13 @@ describe('VC-10 final vision closure', () => {
     expect(screen.getByTestId(`redirect:${destination}`)).toBeTruthy();
   });
 
-  // Style Me is infrastructure for Event Ready, never a standalone feature
-  // (PRODUCT_CONSTITUTION.md, master rule). The screens survive because Event
-  // Ready opens them; every standalone way in is gone, and must stay gone —
-  // a redirect would be a way in, so these routes do not exist at all.
-  it.each(['get-advice', 'recommendations', 'style-quiz', '(tabs)/style-me-tab'])(
-    'has no standalone %s route into Style Me',
+  // The recommendation engine is retained for Event Ready, but the exception
+  // covers backend modules only: no Style, quiz or colour-analysis SCREEN may
+  // exist (PRODUCT_CONSTITUTION.md, master rule). Choosing an event look now
+  // happens inside Event Ready. A redirect would itself be a way in, so none of
+  // these routes exists at all.
+  it.each(['style-me', 'get-advice', 'recommendations', 'style-quiz', '(tabs)/style-me-tab'])(
+    'has no %s screen',
     (route) => {
       expect(existsSync(join(__dirname, '..', '..', 'app', `${route}.tsx`))).toBe(false);
     },

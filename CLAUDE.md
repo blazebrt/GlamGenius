@@ -8,9 +8,12 @@
 > **Writing or changing any user-facing string? `LEGAL_RULES.md` governs it.**
 > Every legal risk in this product lives in sentences.
 
-GlamGenius is a personal appearance decision system for India — style, skin/hair care,
-routines, events and planning built on what the customer already owns. It is **not** a
-diagnosis app, and it has no payments, checkout or billing.
+GlamGenius is a decision engine for everything that enters or touches the human body —
+food, cosmetics, supplements, cookware and salon upkeep. The customer scans a product;
+the app decides Buy / Wait / Skip and says why. India only. It is **not** a diagnosis
+app. `PRODUCT_CONSTITUTION.md` is the authority on what it is; this file describes the
+code that exists so far, which is a body-and-appearance manager built on what the
+customer already owns.
 
 This file is the map of what the repository actually is. The rules below are not
 suggestions; they hold for every task unless the user changes them here.
@@ -30,12 +33,21 @@ suggestions; they hold for every task unless the user changes them here.
 | App | **Expo / React Native** (`frontend/`), expo-router, TypeScript, Zustand |
 | Monitoring | **Sentry** (optional — a missing DSN is a no-op, never a startup failure) |
 
-Payments were removed. `razorpay`, `checkout`, `paywall`, `billing` and the Mongo runtime
-(`pymongo`, `motor.motor_asyncio`, `MONGO_URL`) are **forbidden strings** in backend
-source. Two things enforce it: `backend/tests/test_no_legacy_terms.py` (fails per file and
-line) and the "Legacy and payment absence" job in `.github/workflows/ci.yml`. Do not
-reintroduce any of them, and do not add a `subscription`, `payment` or `invoice` table —
-`backend/tests/test_schema_regression.py` rejects those table names outright.
+The Mongo runtime is gone for good: `pymongo`, `motor.motor_asyncio` and `MONGO_URL` are
+**forbidden strings** in backend source, enforced by `backend/tests/test_no_legacy_terms.py`
+and the "Legacy and payment absence" job in `.github/workflows/ci.yml`. Never reintroduce
+them.
+
+Billing is different, and the distinction matters. The **Razorpay integration** was
+removed and is not coming back, so `razorpay`, `checkout` and `paywall` remain forbidden
+strings. But the business model **does** include paid family subscriptions and health
+modes, so payment tables are not permanently prohibited — see `PRODUCT_CONSTITUTION.md`,
+"Free vs paid". What is true today is narrower: the same tests still reject a
+`subscription`, `payment` or `invoice` table (`backend/tests/test_schema_regression.py`)
+and the same CI job still greps for billing terms. Those gates were written for the
+Razorpay removal, and they must be revisited deliberately — as their own change, with its
+own review — before any billing work can land. Do not quietly weaken them in passing, and
+do not treat them as a statement that the product will never charge.
 
 ## 2. Where things live
 
@@ -142,7 +154,11 @@ This is enforced in code, not just by convention:
   `NUTRITION_DISCLAIMER`, and the literal `"disclaimer"` keys in planning, profile and
   progress responses). They stay in the response. Do not remove or soften one.
 
-No supplement dosage. No calorie counting. No deficiency claims.
+No **personalised** dosage advice. Stating what a label declares, and what a published
+source says about absorption, is required — it is the product's core differentiator.
+Telling a specific person what to take is prohibited.
+
+No calorie counting. No deficiency claims.
 
 The medical boundary is not the only one a sentence can cross. `LEGAL_RULES.md` holds
 the six writing rules for every user-facing string — state rather than characterise,

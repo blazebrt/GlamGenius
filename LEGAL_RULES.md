@@ -50,9 +50,17 @@ The primary verdict sentence must be under ten words and must say what
 to DO, not what the thing IS.
 
 ## Never show a reading where a decision belongs
-YES: "Move tonight's exfoliant to Saturday. Air is very bad and the
-      weather is dry — your skin barrier is under strain this week."
+YES: "Move tonight's exfoliant to Saturday. Air is very bad today
+      (NAQI 340, CPCB) and humidity is low."
+NO:  "Move tonight's exfoliant to Saturday. Your skin barrier is under
+      strain this week."
 NO:  "Temp 12C · Humidity 34% · UV 6 · AQI 340"
+
+Note: an environmental decision may state the reading and the published
+category. It may never assert anything about the user's body. "Air is very
+bad today (NAQI 340, CPCB)" is a reading and a published category, and is
+allowed. "Your skin barrier is under strain" is a claim about a person's
+physiology with no source, and is not — it breaks rule 3 above.
 
 ## The test
 Write every string as though it will be read aloud in the Delhi High
