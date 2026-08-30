@@ -140,7 +140,7 @@ that outcome here in a subsequent PR.
 
 ## 6. Cross-references
 
-- [`STABILISATION_REPORT.md`](../../STABILISATION_REPORT.md)
+- [`STABILISATION_REPORT.md`](../reports/STABILISATION_REPORT.md)
 - [`docs/product/DEVICE_SWEEP_PROTOCOL.md`](../product/DEVICE_SWEEP_PROTOCOL.md)
 - [`docs/product/DEVICE_MATRIX.md`](../product/DEVICE_MATRIX.md)
 - [`docs/product/DEVICE_SWEEP_RESULTS_TEMPLATE.md`](../product/DEVICE_SWEEP_RESULTS_TEMPLATE.md)

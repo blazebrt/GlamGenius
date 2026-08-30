@@ -471,7 +471,7 @@ You should see `93 passed` and `42 passed`.
 | 13 | The phase is committed | ✅ | Hash in §15 |
 
 Additional Phase 1 implementation requirements met: repository audit at
-[docs/v2/PHASE_1_AUDIT.md](docs/v2/PHASE_1_AUDIT.md) (37 findings); modular V2 structure
+[docs/v2/PHASE_1_AUDIT.md](../v2/PHASE_1_AUDIT.md) (37 findings); modular V2 structure
 with no duplicate entrypoint; all ten requested tables; media abstraction with local and
 S3 adapters; AI gateway recording all twelve required fields; privacy controls with
 consent, export, deletion and audit; eight frontend trust states; the full Step 9

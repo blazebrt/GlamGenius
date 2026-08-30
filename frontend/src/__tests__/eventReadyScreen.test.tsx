@@ -128,15 +128,18 @@ describe('VC-03 Event Ready screen', () => {
     expect(screen.queryByLabelText('Choose a look')).toBeNull();
   });
 
-  it('passes canonical Event Mode fields to Style and opens the Care destination', async () => {
+  it('opens the look picker in place and never navigates to a Style screen', async () => {
     mockGetEventReady.mockResolvedValue(ready({ status: 'preparing', care: { hair_wash: { status: 'not_due' } } as any }));
     render(<EventReadyScreen />);
     await screen.findByText('YOUR LOOK');
     fireEvent.press(screen.getByLabelText('Choose a look'));
-    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/style-me', params: {
-      eventReadyEventId: 'event-1', occasionKey: 'wedding', eventDate: '2030-09-12',
-      eventTitle: 'Wedding', dressCode: 'black_tie', location: 'Hall',
-    } });
+
+    // The picker appears inside Event Ready. Nothing navigates away, and in
+    // particular nothing routes to a Style screen — there is no longer one.
+    await screen.findByLabelText('Choose a look for this event');
+    const routed = mockRouter.push.mock.calls.map((call) => JSON.stringify(call[0]));
+    expect(routed.some((target) => target.includes('style-me'))).toBe(false);
+
     fireEvent.press(screen.getByLabelText('Open Care'));
     expect(mockRouter.push).toHaveBeenCalledWith('/(tabs)/care');
   });

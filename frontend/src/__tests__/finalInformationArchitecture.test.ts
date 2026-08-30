@@ -17,9 +17,11 @@ describe('VC-08 final information architecture', () => {
 
   it('keeps legacy destinations routable but outside primary navigation', () => {
     expect(LEGACY_HIDDEN_TAB_ROUTES).toEqual(expect.arrayContaining([
-      'home', 'inventory', 'style-me-tab', 'planner', 'profile', 'services', 'scan-tab', 'history',
+      'home', 'inventory', 'planner', 'profile', 'services', 'scan-tab', 'history',
     ]));
     expect(PRIMARY_TABS).not.toEqual(expect.arrayContaining(LEGACY_HIDDEN_TAB_ROUTES));
+    // Retired with the standalone Style Me entry points; no longer routable.
+    expect(LEGACY_HIDDEN_TAB_ROUTES).not.toContain('style-me-tab');
   });
 
   it('keeps the all-seven-category inventory authority while enforcing domain collections', () => {

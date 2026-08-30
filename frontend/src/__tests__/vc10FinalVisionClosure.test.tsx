@@ -1,11 +1,11 @@
+import { existsSync } from 'fs';
+import { join } from 'path';
+
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react-native';
 
 import { EntryBrandTagline, EntryFeatures, EntryHero } from '../../app/index';
-import GetAdviceRedirect from '../../app/get-advice';
-import RecommendationsRedirect from '../../app/recommendations';
 import ScanRedirect from '../../app/scan';
-import StyleQuizRedirect from '../../app/style-quiz';
 import HistoryRedirect from '../../app/(tabs)/history';
 import ScanTabRedirect from '../../app/(tabs)/scan-tab';
 import ProfileScreen from '../../app/(tabs)/profile';
@@ -63,9 +63,6 @@ describe('VC-10 final vision closure', () => {
   });
 
   it.each([
-    ['style quiz', StyleQuizRedirect, '/my-appearance'],
-    ['advice', GetAdviceRedirect, '/style-me'],
-    ['recommendations', RecommendationsRedirect, '/style-me'],
     ['scan', ScanRedirect, '/my-appearance'],
     ['scan tab', ScanTabRedirect, '/my-appearance'],
     ['history', HistoryRedirect, '/progress'],
@@ -73,4 +70,16 @@ describe('VC-10 final vision closure', () => {
     render(<Route />);
     expect(screen.getByTestId(`redirect:${destination}`)).toBeTruthy();
   });
+
+  // The recommendation engine is retained for Event Ready, but the exception
+  // covers backend modules only: no Style, quiz or colour-analysis SCREEN may
+  // exist (PRODUCT_CONSTITUTION.md, master rule). Choosing an event look now
+  // happens inside Event Ready. A redirect would itself be a way in, so none of
+  // these routes exists at all.
+  it.each(['style-me', 'get-advice', 'recommendations', 'style-quiz', '(tabs)/style-me-tab'])(
+    'has no %s screen',
+    (route) => {
+      expect(existsSync(join(__dirname, '..', '..', 'app', `${route}.tsx`))).toBe(false);
+    },
+  );
 });

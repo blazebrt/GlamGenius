@@ -7,7 +7,7 @@ import {
   StyleProcessing, VARIANT_BLURB, WhyThisWorks, confidenceLabel,
 } from '../components/style/StylePieces';
 import { Look, LookPiece, OCCASION_KEYS, OccasionDefinition, StyleResult } from '../services/apiV2';
-import { buildOccasionInput } from '../../app/style-me';
+import { buildEventOccasionInput } from '../components/planner/EventLookPicker';
 
 const ownedPiece = (overrides: Partial<LookPiece> = {}): LookPiece => ({
   id: 'piece-1', slot: 'clothing', ownership: 'owned', inventory_item_id: 'inv-1',
@@ -55,9 +55,10 @@ const occasion: OccasionDefinition = {
   notes: 'A normal working day at your workplace.',
 };
 
-describe('Style Me UI', () => {
-  it('builds Event Mode input from canonical event context without auto-running Style', () => {
-    const body = buildOccasionInput(occasion, {}, {
+describe('Look-building pieces', () => {
+  it('builds the styling request from canonical event context', () => {
+    const body = buildEventOccasionInput(occasion, {}, {
+      eventId: 'event-1',
       eventDate: '2030-09-12', eventTitle: 'Wedding', dressCode: 'business_casual', location: 'Hall',
     });
     expect(body).toEqual(expect.objectContaining({

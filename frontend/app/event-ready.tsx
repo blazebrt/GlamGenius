@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import { CareSummary, EventReadyActionRow, MissingInformation } from '../src/components/planner/EventReadyPieces';
+import { EventLookPicker } from '../src/components/planner/EventLookPicker';
 import {
   EventReady, OccasionDefinition, generateEventReady, getEventReady, getOccasionTypes,
   patchCalendarEvent, setEventReadyActionComplete,
@@ -26,6 +27,9 @@ export default function EventReadyScreen() {
   const [confirming, setConfirming] = useState(false);
   const [pendingActions, setPendingActions] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  // Choosing a look happens here, inside Event Ready. There is no Style screen
+  // to navigate to (PRODUCT_CONSTITUTION.md, master rule).
+  const [pickingLook, setPickingLook] = useState(false);
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     if (!eventId) { setError('This event is missing.'); setLoading(false); return; }
@@ -125,8 +129,20 @@ export default function EventReadyScreen() {
             {ready.style.selected_look ? <>
               <Text style={styles.panelTitle}>{ready.style.selected_look.title}</Text>
               <Text style={styles.panelBody}>{ready.style.selected_look.status}</Text>
-              <View style={styles.inlineActions}><TouchableOpacity accessibilityRole="button" accessibilityLabel="Open look" onPress={() => router.push({ pathname: '/look', params: { id: ready.style.selected_look?.id } })}><Text style={styles.link}>Open look</Text></TouchableOpacity><TouchableOpacity accessibilityRole="button" accessibilityLabel="Choose another look" onPress={() => router.push({ pathname: '/style-me', params: { eventReadyEventId: eventId, occasionKey: event.occasion_key || '', eventDate: event.local_date, eventTitle: event.title, dressCode: event.dress_code_hint || '', location: event.location || '' } })}><Text style={styles.link}>Choose another look</Text></TouchableOpacity></View>
-            </> : <><Text style={styles.panelTitle}>Choose your event look</Text><Text style={styles.panelBody}>Style will build from what you already own.</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Choose a look" onPress={() => router.push({ pathname: '/style-me', params: { eventReadyEventId: eventId, occasionKey: event.occasion_key || '', eventDate: event.local_date, eventTitle: event.title, dressCode: event.dress_code_hint || '', location: event.location || '' } })} style={styles.outline}><Text style={styles.outlineText}>Choose a look</Text></TouchableOpacity></>}
+              <View style={styles.inlineActions}><TouchableOpacity accessibilityRole="button" accessibilityLabel="Open look" onPress={() => router.push({ pathname: '/look', params: { id: ready.style.selected_look?.id } })}><Text style={styles.link}>Open look</Text></TouchableOpacity><TouchableOpacity accessibilityRole="button" accessibilityLabel="Choose another look" onPress={() => setPickingLook(true)}><Text style={styles.link}>Choose another look</Text></TouchableOpacity></View>
+            </> : <><Text style={styles.panelTitle}>Choose your event look</Text><Text style={styles.panelBody}>Style will build from what you already own.</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Choose a look" onPress={() => setPickingLook(true)} style={styles.outline}><Text style={styles.outlineText}>Choose a look</Text></TouchableOpacity></>}
+            {pickingLook && !!eventId && <EventLookPicker
+              event={{
+                eventId,
+                occasionKey: event.occasion_key,
+                eventDate: event.local_date,
+                eventTitle: event.title,
+                dressCode: event.dress_code_hint,
+                location: event.location,
+              }}
+              onLinked={() => { setPickingLook(false); void load('refresh'); }}
+              onCancel={() => setPickingLook(false)}
+            />}
           </View>
           <View style={styles.panel} accessibilityLabel="What needs attention"><Text style={styles.panelEyebrow}>WHAT NEEDS ATTENTION</Text>{ready.timeline.length ? ready.timeline.filter((action) => action.action_key !== 'context:confirm_event').map((action) => <EventReadyActionRow key={action.id} action={action} busy={pendingActions.has(action.id)} onToggle={() => void toggleAction(action.id, action.completed)} />) : <Text style={styles.body}>Nothing extra needs your attention right now.</Text>}</View>
           {!!ready.care && <CareSummary care={ready.care} onOpen={() => router.push('/(tabs)/care')} />}

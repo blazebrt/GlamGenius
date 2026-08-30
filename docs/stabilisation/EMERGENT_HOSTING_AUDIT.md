@@ -250,7 +250,7 @@ deliberately left alone.
    hardening effective in the running platform, the same change has
    to land in the platform's dispatcher template upstream. That is
    an owner action tracked in
-   [`../../STABILISATION_REPORT.md §10`](../../STABILISATION_REPORT.md#10-owner-actions-required),
+   [`../reports/STABILISATION_REPORT.md §10`](../reports/STABILISATION_REPORT.md#10-owner-actions-required),
    not a code fix on this branch. Reviewers who see
    `git status` show `.emergent/cron/dispatch_webhook.sh` as
    "modified" after a pod restart are looking at that regeneration;
