@@ -111,6 +111,9 @@ class RuleKind(StrEnum):
     INGREDIENT_CONTRAINDICATION = "ingredient_contraindication"
     INGREDIENT_SENSITIVITY = "ingredient_sensitivity"
     ROUTINE_GUIDANCE = "routine_guidance"
+    #: The ten environment rules: what today's air, humidity, UV and
+    #: temperature change about a routine.
+    ENVIRONMENT_RESPONSE = "environment_response"
     NUTRITION_CONTEXT = "nutrition_context"
     SUPPLEMENT_CONTEXT = "supplement_context"
 

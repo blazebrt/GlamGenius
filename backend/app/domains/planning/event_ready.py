@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.care import maintenance as care_maintenance
 from app.domains.care.decisions import CareDecisionReasonCode
+from app.domains.care.environment_decision import evaluate_environment
 from app.domains.planning import clock, compiler
 from app.domains.planning import context as context_stage
 from app.domains.planning.models import CalendarEvent, EventReadyAction, EventReadyPlan
@@ -221,6 +222,59 @@ def _actions(event: CalendarEvent, day: Any, material: Any, look: Look | None, l
     return actions
 
 
+#: Days at Poor or worse in the run-up that make the air worth naming before an
+#: event. Matches the sustained-exposure threshold the daily rules use.
+EVENT_SUSTAINED_POOR_DAYS = 3
+
+
+async def _environment_actions(
+    session: AsyncSession, *, account_id: uuid.UUID, plan_date: date, days_until: int,
+) -> list[dict[str, Any]]:
+    """Name a sustained poor-air stretch in the run-up to an event.
+
+    The point is not to report the air. It is that somebody preparing for a
+    wedding on Saturday should not plan a strong exfoliation on Thursday during
+    a week the air has been Very Poor — and should be told, before they do it,
+    that it is deferred and what takes its place.
+    """
+    from app.domains.care import environment_service
+    from app.domains.care.environment_decision import EnvironmentAction
+
+    if days_until < 0 or days_until > 7:
+        return []
+    window = await environment_service.load_window(
+        session, account_id=account_id, plan_date=plan_date,
+    )
+    streak = window.consecutive_at_least("Poor")
+    if streak < EVENT_SUSTAINED_POOR_DAYS:
+        return []
+    allowed = await environment_service.allowed_environment_rule_ids(session)
+    decision = evaluate_environment(window, allowed_rule_ids=allowed)
+    if decision is None or decision.action is EnvironmentAction.RESTORE:
+        return []
+    today = window.today
+    return [{
+        "action_key": "care:environment_before_event",
+        "domain": "care",
+        "timing": "before_event",
+        "title": decision.headline,
+        "body": (
+            f"Air has been Poor or worse for {streak} days running "
+            f"(today NAQI {today.aqi}, CPCB category {today.category}). "
+            f"{decision.reason}"
+        ),
+        "relevance": "Sustained air-quality readings in the run-up to this event.",
+        "priority": 25,
+        "inventory_item_id": None,
+        "material": {
+            "rule_id": decision.rule_id,
+            "streak_days": streak,
+            "aqi": today.aqi,
+            "category": today.category,
+        },
+    }]
+
+
 async def _plan_row(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.UUID, *, lock: bool = False) -> EventReadyPlan | None:
     statement = select(EventReadyPlan).where(EventReadyPlan.account_id == account_id, EventReadyPlan.calendar_event_id == event_id)
     if lock:
@@ -291,6 +345,12 @@ async def generate(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.
     selected_material = {"look_id": str(look.id) if look else None, "look_version": look.version if look else None, "items": sorted(str(item.inventory_item_id) for item in (look_items or []) if item.inventory_item_id)}
     fingerprint = _sha({"event_ready_version": EVENT_READY_VERSION, "event": _event_payload(event, timezone_name), "context": _context_payload(day), "care": _care_payload(material), "style": selected_material})
     actions = _actions(event, day, material, look, look_items or [], status)
+    if status != "past":
+        event_local_date = date.fromisoformat(_event_payload(event, timezone_name)["local_date"])
+        actions.extend(await _environment_actions(
+            session, account_id=account_id, plan_date=day.plan_date,
+            days_until=(event_local_date - day.now_local.date()).days,
+        ))
     old = {row.action_key: row for row in (await session.execute(select(EventReadyAction).where(EventReadyAction.event_ready_plan_id == plan.id))).scalars().all()}
     desired = {row["action_key"]: _action_material(row["action_key"], row["material"]) for row in actions}
     actions_current = set(old) == set(desired) and all(old[key].material_fingerprint == value for key, value in desired.items())

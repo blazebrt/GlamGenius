@@ -63,7 +63,7 @@ backend/
   pytest.ini                 # testpaths = tests, session-scoped event loop
   pyproject.toml             # Ruff config (line-length 120, py311)
   requirements.txt
-  migrations/versions/       # 19 Alembic revisions, one linear chain
+  migrations/versions/       # 20 Alembic revisions, one linear chain
   app/
     config.py                # every env var, plus validate_production_configuration()
     release.py               # `python -m app.release` — lock, migrate, seed, verify
@@ -79,13 +79,13 @@ backend/
       errors/                # exceptions, handlers, codes
       observability/         # logging, request_id, sentry_bootstrap, sentry_privacy
       validation/media.py
-  tests/                     # 100 pytest modules (~1,700 tests) + conftest.py
+  tests/                     # 101 pytest modules (~1,750 tests) + conftest.py
 frontend/
   app/                       # expo-router routes; (tabs)/ is Today · Style · Care · Plan · You
   src/services/              # api.ts, apiV2.ts (typed V2 client), supabase.ts, notify.ts
   src/components/            # per-area component folders
   src/store/                 # zustand stores
-  src/__tests__/             # 40 Jest suites (~370 tests)
+  src/__tests__/             # 41 Jest suites (~375 tests)
 docs/                        # architecture, engineering checklists, ADRs, operations, reports
 ```
 
@@ -113,12 +113,12 @@ All 25 packages under `backend/app/domains/`:
 | `recommendation` | Occasion styling and the decision engine (candidates, ranking, ROI, explanation) |
 | `purchase` | "Should I buy this?" — care, fragrance and style purchase verdicts, decision memory |
 | `routines` | Routine compilation, shelf, perfume, adherence, and `safety.py` — the medical boundary |
-| `care` | Care context, deterministic decisions, guidance, home care, **maintenance timing (VC-06)** |
+| `care` | Care context, deterministic decisions, guidance, home care, **maintenance timing (VC-06)**, the ten environment rules and their precedence |
 | `supplements` | **Owned-supplement label facts, component overlap, safety boundaries (VC-07)** |
 | `nutrition` | Opt-in appearance-adjacent food context. No diets, no calories, no RDA maths |
 | `evidence` | Release-owned evidence provenance, claims, rule support and applicability |
 | `reference` | Versioned global reference data written by the seed bootstrap |
-| `planning` | **Today engine, weekly planner, events, calendar sync, weather/air quality, notifications** |
+| `planning` | **Today engine, weekly planner, events, calendar sync, weather/air quality (Indian NAQI from CPCB breakpoints), notifications** |
 | `progress` | Explainable metrics, milestones, comparison and controlled long-term memory |
 | `system` | `system_worker_status` — worker heartbeats and last-error state |
 | `off` | Store A: the Open Food Facts copy, behind the ODbL wall — see §5a |
@@ -260,7 +260,7 @@ Health: `GET /api/v2/health` (served from `backend/app/api/v2/config.py`, not `h
 ### Migrations
 
 Alembic, one linear chain, `backend/migrations/versions/`. The current head is
-`p6q7r8s9t0` (multi-item capture candidates). `0001_initial_glamgenius_v2.py` is the
+`q7r8s9t0u1` (environment-response rule kind). `0001_initial_glamgenius_v2.py` is the
 consolidated greenfield baseline.
 
 ```bash

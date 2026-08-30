@@ -1083,6 +1083,7 @@ async def run(session: AsyncSession) -> dict:
     }
     # Evidence is global reference data and participates in this same
     # transaction. Import lazily to keep bootstrap/evidence modules acyclic.
+    from app.domains.evidence.environment_seed import run as run_environment_evidence_seed
     from app.domains.evidence.guidance_seed import run as run_guidance_evidence_seed
     from app.domains.evidence.home_care_seed import run as run_home_care_evidence_seed
     from app.domains.evidence.nutrition_guidance_seed import run as run_nutrition_guidance_seed
@@ -1096,9 +1097,10 @@ async def run(session: AsyncSession) -> dict:
     nutrition_authority_result = await run_nutrition_authority_seed(session)
     food_composition_result = await run_food_composition_seed(session)
     nutrition_guidance_result = await run_nutrition_guidance_seed(session)
+    environment_evidence_result = await run_environment_evidence_seed(session)
     await record_seed_version(session, counts)
     await session.commit()
-    return {"seed_version": SEED_VERSION, "counts": counts, "evidence": evidence_result, "guidance_evidence": guidance_evidence_result, "home_care_evidence": home_care_evidence_result, "nutrition_authority_evidence": nutrition_authority_result, "food_composition": food_composition_result, "nutrition_guidance_evidence": nutrition_guidance_result}
+    return {"seed_version": SEED_VERSION, "counts": counts, "evidence": evidence_result, "guidance_evidence": guidance_evidence_result, "home_care_evidence": home_care_evidence_result, "nutrition_authority_evidence": nutrition_authority_result, "food_composition": food_composition_result, "nutrition_guidance_evidence": nutrition_guidance_result, "environment_evidence": environment_evidence_result}
 
 
 async def main() -> None:

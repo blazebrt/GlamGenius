@@ -13,7 +13,7 @@ from app.shared.observability.sentry_privacy import scrub_event
 
 
 @pytest.mark.asyncio
-async def test_open_meteo_normalises_weather_and_european_aqi(monkeypatch):
+async def test_open_meteo_normalises_weather_and_indian_naqi(monkeypatch):
     monkeypatch.setattr(open_meteo, "OPEN_METEO_MODE", "evaluation")
     day = date(2026, 8, 23)
     monkeypatch.setattr(open_meteo.clock, "local_today", lambda timezone_name: day)
@@ -48,8 +48,17 @@ async def test_open_meteo_normalises_weather_and_european_aqi(monkeypatch):
     assert weather[0].provider == "open_meteo"
     assert weather[0].source == "external_provider"
     assert weather[0].attribution == "Weather data · Open-Meteo"
-    assert air[0].index_system == "european_aqi"
-    assert air[0].category == "Fair"
+    # The index shown is India's, computed from the raw particulates against the
+    # published CPCB breakpoints. pm2.5 12 µg/m³ and pm10 20 µg/m³ are both well
+    # inside the Good band.
+    assert air[0].index_system == "india_naqi"
+    assert air[0].category == "Good"
+    assert air[0].aqi == 20
+    # The European reading is still stored, as a fallback and for provenance —
+    # it is simply never the category anybody is shown.
+    assert air[0].raw["european_aqi"] == 35
+    assert air[0].raw["european_aqi_category"] == "Fair"
+    assert air[0].raw["naqi_basis"] == "pm2_5_pm10_only"
     assert air[0].prominent_pollutant == "pm2_5"
     assert air[0].attribution == "Air quality · Open-Meteo / CAMS"
     weather_request = next(request for request in seen if "forecast" in str(request.url))

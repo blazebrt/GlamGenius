@@ -202,8 +202,13 @@ async def test_worker_commits_suppressed_decision(monkeypatch):
         return None
     async def suppressed(*args, **kwargs):
         return decision
+    async def no_crossing(*args, **kwargs):
+        return None
     monkeypatch.setattr(worker.context_stage, "gather", no_context)
     monkeypatch.setattr(worker.compiler, "compile_day", no_compile)
+    # The environment trigger is offered before the agenda; no crossing today,
+    # so the agenda is what produces the suppressed decision under test.
+    monkeypatch.setattr(notifications, "queue_for_environment_crossing", no_crossing)
     monkeypatch.setattr(notifications, "queue_for_agenda", suppressed)
     session = Session()
     assert await worker.process_account(session, preference, now=utcnow()) == 0

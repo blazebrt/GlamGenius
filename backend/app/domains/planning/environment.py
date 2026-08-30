@@ -13,27 +13,142 @@ from enum import StrEnum
 from app.domains.recommendation.compatibility import SEASON_FOR_CONDITION
 
 # --- Air quality -----------------------------------------------------------
+#
+# India publishes its own index. The European AQI saturates above 100 and cannot
+# tell NAQI 150 from NAQI 450 — which is the entire range that matters in the
+# North Indian winter. So we compute the Indian NAQI ourselves from the raw
+# PM2.5 and PM10 concentrations a provider returns, using the published CPCB
+# breakpoints, and the European value is kept only as a stored fallback.
+#
+# Source: Central Pollution Control Board, Ministry of Environment, Forest and
+# Climate Change, Government of India — "National Air Quality Index" (2014),
+# breakpoint table for sub-index calculation.
+# https://cpcb.nic.in/openpdffile.php?id=TGF0ZXN0RmlsZS9MYXRlc3RfMTI1X0FRSV9SRVBPUlRfMjAxNC5wZGY=
+#
+# One honest limitation, stated rather than hidden: CPCB's published index is
+# computed from a minimum of three pollutants, one of which must be PM2.5 or
+# PM10. We have two. In Indian conditions particulate matter is almost always
+# the pollutant that sets the index, so the PM-only maximum is the closest
+# honest reading — but it is a PM-only reading, and every record says so in
+# ``naqi_basis``. It is never presented as the official CPCB station value.
+
+NAQI_INDEX_SYSTEM = "india_naqi"
+NAQI_BASIS_PM_ONLY = "pm2_5_pm10_only"
+NAQI_SOURCE = "CPCB National Air Quality Index (2014) breakpoints"
+
+#: CPCB sub-index breakpoints: (concentration low, concentration high,
+#: index low, index high). Concentrations are 24-hour averages in µg/m³.
+CPCB_PM25_BREAKPOINTS: tuple[tuple[float, float, int, int], ...] = (
+    (0.0, 30.0, 0, 50),
+    (30.0, 60.0, 51, 100),
+    (60.0, 90.0, 101, 200),
+    (90.0, 120.0, 201, 300),
+    (120.0, 250.0, 301, 400),
+    (250.0, 500.0, 401, 500),
+)
+
+CPCB_PM10_BREAKPOINTS: tuple[tuple[float, float, int, int], ...] = (
+    (0.0, 50.0, 0, 50),
+    (50.0, 100.0, 51, 100),
+    (100.0, 250.0, 101, 200),
+    (250.0, 350.0, 201, 300),
+    (350.0, 430.0, 301, 400),
+    (430.0, 1000.0, 401, 500),
+)
+
+#: The published category vocabulary, with the index band each one covers.
+NAQI_CATEGORY_BANDS: tuple[tuple[int, str], ...] = (
+    (50, "Good"),
+    (100, "Satisfactory"),
+    (200, "Moderate"),
+    (300, "Poor"),
+    (400, "Very Poor"),
+    (500, "Severe"),
+)
+
+#: Ordered worst-last. Comparisons in the rules engine use this, never the
+#: raw number, so a band change is one edit here.
+NAQI_CATEGORY_ORDER: tuple[str, ...] = (
+    "Good", "Satisfactory", "Moderate", "Poor", "Very Poor", "Severe",
+)
+
+
+def naqi_sub_index(
+    concentration: float | None, breakpoints: tuple[tuple[float, float, int, int], ...]
+) -> int | None:
+    """One pollutant's CPCB sub-index, by linear interpolation within its band."""
+    if concentration is None or concentration < 0:
+        return None
+    for low_c, high_c, low_i, high_i in breakpoints:
+        if concentration <= high_c:
+            if high_c == low_c:
+                return low_i
+            span = (high_i - low_i) / (high_c - low_c)
+            return round(low_i + span * (concentration - low_c))
+    # Above the top breakpoint the index is capped at its published maximum.
+    return breakpoints[-1][3]
+
+
+def naqi_from_particulates(
+    pm2_5: float | None, pm10: float | None
+) -> tuple[int | None, str | None]:
+    """The Indian NAQI and its prominent particulate, from raw concentrations.
+
+    Returns ``(None, None)`` when neither pollutant is available. Guessing an
+    index from nothing would be worse than saying we do not know.
+    """
+    sub_indices = {
+        "pm2_5": naqi_sub_index(pm2_5, CPCB_PM25_BREAKPOINTS),
+        "pm10": naqi_sub_index(pm10, CPCB_PM10_BREAKPOINTS),
+    }
+    available = {key: value for key, value in sub_indices.items() if value is not None}
+    if not available:
+        return None, None
+    highest = max(available.values())
+    # Ties go to PM2.5, which is the finer fraction and the one CPCB reports
+    # first when two sub-indices coincide.
+    prominent = "pm2_5" if available.get("pm2_5") == highest else next(
+        key for key, value in available.items() if value == highest
+    )
+    return highest, prominent
+
+
+def naqi_category(aqi: int | None) -> str:
+    """The published CPCB category for an Indian NAQI value."""
+    if aqi is None or aqi < 0:
+        return "unknown"
+    for ceiling, name in NAQI_CATEGORY_BANDS:
+        if aqi <= ceiling:
+            return name
+    return "Severe"
 
 
 def determine_naqi_category(
     aqi: int | None, index_system: str, existing_category: str | None = None
 ) -> str | None:
-    """Map an Indian NAQI value to its published category vocabulary."""
-    if index_system != "india_naqi":
+    """Map an Indian NAQI value to its published category vocabulary.
+
+    Any other index system keeps whatever category it arrived with: a European
+    or US category is not an Indian one, and relabelling it would be inventing
+    a reading.
+    """
+    if index_system != NAQI_INDEX_SYSTEM:
         return existing_category
-    if aqi is None or aqi < 0:
-        return "unknown"
-    if aqi <= 50:
-        return "Good"
-    if aqi <= 100:
-        return "Satisfactory"
-    if aqi <= 200:
-        return "Moderate"
-    if aqi <= 300:
-        return "Poor"
-    if aqi <= 400:
-        return "Very Poor"
-    return "Severe"
+    return naqi_category(aqi)
+
+
+def naqi_at_least(category: str | None, threshold: str) -> bool:
+    """True when ``category`` is ``threshold`` or worse on the published scale."""
+    if category not in NAQI_CATEGORY_ORDER or threshold not in NAQI_CATEGORY_ORDER:
+        return False
+    return NAQI_CATEGORY_ORDER.index(category) >= NAQI_CATEGORY_ORDER.index(threshold)
+
+
+def naqi_at_most(category: str | None, threshold: str) -> bool:
+    """True when ``category`` is ``threshold`` or better on the published scale."""
+    if category not in NAQI_CATEGORY_ORDER or threshold not in NAQI_CATEGORY_ORDER:
+        return False
+    return NAQI_CATEGORY_ORDER.index(category) <= NAQI_CATEGORY_ORDER.index(threshold)
 
 
 # --- Climate regions and reviewed calendar priors -------------------------

@@ -24,9 +24,11 @@ from typing import Any
 from sqlalchemy import and_, func, not_, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.care.environment_decision import evaluate_environment
 from app.domains.planning import clock
 from app.domains.planning.models import (
     MODULE_MAINTENANCE,
+    MODULE_SKINCARE,
     MODULES,
     DailyPlan,
     DailyPlanAction,
@@ -279,6 +281,52 @@ async def queue_for_plan(
         notification_key="daily_plan", title=plan.headline,
         body=body if body is not None else f"{action.title}. {action.body}".strip(),
         module=action.module, timezone_name=timezone_name, moment=moment,
+    )
+
+
+async def queue_for_environment_crossing(
+    session: AsyncSession, *, account_id: uuid.UUID, plan_date: date,
+    timezone_name: str, moment: datetime | None = None,
+) -> NotificationDelivery | None:
+    """Notify only when the air actually crossed a band, in either direction.
+
+    A daily "the air is bad" message trains people to ignore it. This fires on
+    the day something changed — into Poor or worse, or back out of it — and
+    stays silent through the middle of a long stretch.
+
+    The crossing decides *whether* to queue. Everything about *when* a person
+    is reachable — the hourly batch, the due check, quiet hours, the daily cap
+    and the claim-before-send boundary — belongs to the worker and to
+    :func:`queue`, and is untouched here.
+    """
+    from app.domains.care import environment_service
+    from app.domains.planning.environment import naqi_at_least
+
+    window = await environment_service.load_window(
+        session, account_id=account_id, plan_date=plan_date,
+    )
+    today = window.today
+    yesterday = window.history[-1] if window.history else None
+    if not today.is_indian_reading or yesterday is None or not yesterday.is_indian_reading:
+        # No crossing can be established without two consecutive readings, and
+        # a crossing we cannot establish is not one we announce.
+        return None
+
+    today_bad = naqi_at_least(today.category, "Poor")
+    yesterday_bad = naqi_at_least(yesterday.category, "Poor")
+    if today_bad == yesterday_bad:
+        return None
+
+    allowed = await environment_service.allowed_environment_rule_ids(session)
+    decision = evaluate_environment(window, allowed_rule_ids=allowed)
+    if decision is None:
+        return None
+
+    return await queue(
+        session, account_id=account_id, plan_date=plan_date,
+        notification_key=f"environment_crossing:{today.category}",
+        title=decision.headline, body=decision.reason,
+        module=MODULE_SKINCARE, timezone_name=timezone_name, moment=moment,
     )
 
 

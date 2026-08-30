@@ -101,10 +101,19 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
     # GET /today, without coupling notification delivery to a screen open.
     context = await context_stage.gather(session, account_id=preference.account_id, plan_date=plan_date)
     await compiler.compile_day(session, context=context, force=False, trigger="notification_worker")
-    decision = await notifications.queue_for_agenda(
+    # An air-quality band crossing is the one thing worth interrupting someone
+    # for on the day it happens, so it is offered first and the agenda is the
+    # fallback. This chooses *what* to queue; when a person is reachable is
+    # decided above and inside notifications.queue, both untouched.
+    decision = await notifications.queue_for_environment_crossing(
         session, account_id=preference.account_id, plan_date=plan_date,
         timezone_name=preference.timezone_name, moment=now,
     )
+    if decision is None:
+        decision = await notifications.queue_for_agenda(
+            session, account_id=preference.account_id, plan_date=plan_date,
+            timezone_name=preference.timezone_name, moment=now,
+        )
     if decision is None or decision.status not in {
         notifications.STATUS_QUEUED, notifications.STATUS_SENDING,
     }:

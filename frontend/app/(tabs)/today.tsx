@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import {
-  ActionRow, ClarificationCard, MissingInformation, NeedsInventory, OfflineNotice,
+  ActionRow, ClarificationCard, EnvironmentDecisionCard, MissingInformation, NeedsInventory, OfflineNotice,
   OptionalModules, OutfitCard, StaleNotice, TodayHeader, TodayLoading, isStale,
 } from '../../src/components/today/TodayPieces';
 import { TodayCareGuidance, TodayFood, TodayHomeCare, TodayPerfume, TodayRoutineCard } from '../../src/components/routines/TodayRoutine';
@@ -172,9 +172,12 @@ export default function TodayScreen() {
               />
               {plan.primary
                 .filter((action) => action.action_type !== 'wear_outfit' && !agendaActionIds.has(action.id))
-                .map((action) => (
+                .map((action) => (action.action_type === 'environment_decision' ? (
+                  // A decision, not a task. Nothing here is ticked off.
+                  <EnvironmentDecisionCard key={action.id} action={action} />
+                ) : (
                   <ActionRow key={action.id} action={action} onComplete={() => void onComplete(action)} />
-                ))}
+                )))}
               <OptionalModules
                 actions={plan.optional_modules.filter((action) => !agendaActionIds.has(action.id))}
                 expanded={expanded}
