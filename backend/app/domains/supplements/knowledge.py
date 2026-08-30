@@ -30,23 +30,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from enum import StrEnum
 
+from app.domains.evidence.grading import Confidence, Verification
 from app.domains.supplements.chemistry import elemental_percent
 
-
-class Confidence(StrEnum):
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-
-
-class Verification(StrEnum):
-    """Whether a person has opened the source and confirmed the number."""
-
-    UNVERIFIED = "unverified"
-    CONFIRMED = "confirmed"
-    DISPUTED = "disputed"
+# Confidence and Verification are owned by the evidence domain so every
+# knowledge set grades itself the same way. Re-exported here for callers.
+Confidence = Confidence
+Verification = Verification
 
 
 # The tier vocabulary the authoring tool uses.
