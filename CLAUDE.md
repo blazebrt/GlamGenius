@@ -4,6 +4,9 @@
 > It governs what this product is, what it must never become, and what is already built
 > and must not be rebuilt. On any product question it outranks this file; this file stays
 > the map of the code as it actually is today.
+>
+> **Writing or changing any user-facing string? `LEGAL_RULES.md` governs it.**
+> Every legal risk in this product lives in sentences.
 
 GlamGenius is a personal appearance decision system for India — style, skin/hair care,
 routines, events and planning built on what the customer already owns. It is **not** a
@@ -141,6 +144,12 @@ This is enforced in code, not just by convention:
 
 No supplement dosage. No calorie counting. No deficiency claims.
 
+The medical boundary is not the only one a sentence can cross. `LEGAL_RULES.md` holds
+the six writing rules for every user-facing string — state rather than characterise,
+cite rather than assert, compare products rather than advise the person, never mock a
+brand, state missing data rather than fill it, and show the source with every negative
+statement. Read it before writing or changing any copy.
+
 ## 6. Running things
 
 ### Tests — the definition of done
@@ -256,6 +265,7 @@ decision needs their input, ask one clear question with the options spelled out.
 ## 8. Where to read more
 
 - `PRODUCT_CONSTITUTION.md` — what the product is and is not. Read it first
+- `LEGAL_RULES.md` — how every user-facing string must be written
 - `README.md` — product overview and quick start
 - `docs/OPERATIONS.md` — running it in production, including the worker schedule
 - `docs/engineering/` — review policy, branching, checklists (migration, privacy, security,
