@@ -654,6 +654,46 @@ export const extractInventoryBatch = async (
     media_asset_id, category_hint, capture_type,
   })).data;
 
+// --- Product verdict --------------------------------------------------------
+
+interface VerdictComponentWire {
+  key: 'processing' | 'nutrients' | 'additives' | 'naming';
+  band: 'green' | 'yellow' | 'red';
+  state: string;
+  rule: string | null;
+  finding: string | null;
+  source: string | null;
+  high?: { nutrient: string; attribution: string | null }[];
+  exempt?: string[];
+  ingredient?: string | null;
+  declared_percent?: number | null;
+}
+
+export interface ProductVerdictWire {
+  engine_version: string;
+  outcome: 'graded' | 'not_graded' | 'not_enough_information';
+  grade: 'A' | 'B' | 'C' | 'D' | 'E' | null;
+  band: 'green' | 'yellow' | 'red';
+  product_name: string;
+  nutrition: {
+    total_sugar_g: number | null;
+    salt_g: number | null;
+    total_fat_g: number | null;
+    protein_g: number | null;
+  };
+  components: VerdictComponentWire[];
+  ingredients: { name: string; tier: string; description: string | null; source: string | null }[];
+  quantity_guidance: string | null;
+  purity_note: string | null;
+  missing: string[];
+  confidence: { level: string; text: string };
+  attribution: { text: string } | null;
+}
+
+/** The graded verdict for one barcode, shaped for the verdict screen. */
+export const readProductVerdict = async (barcode: string): Promise<ProductVerdictWire> =>
+  (await api.get<ProductVerdictWire>(`${V2}/scan/verdict/${encodeURIComponent(barcode)}`)).data;
+
 export const readInventoryImport = async (jobId: string): Promise<InventoryImport> =>
   (await api.get<InventoryImport>(`${V2}/inventory/imports/${jobId}`)).data;
 

@@ -87,6 +87,44 @@ class ProductRecord(UUIDPrimaryKey, TimestampMixin, Base):
     )
 
 
+class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):
+    """Somebody told us a number on a pack is wrong.
+
+    Its own table rather than a scan with a note attached: a complaint is not a
+    scan, and filing it as one would put it in the person's scan history and
+    count it towards how much they have scanned.
+
+    ``client_report_id`` makes the offline queue safe to replay, the same way
+    ``client_scan_id`` does for scans.
+    """
+
+    __tablename__ = "label_error_reports"
+
+    device_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("scan_devices.id", ondelete="CASCADE"),
+    )
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"),
+    )
+    client_report_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    barcode: Mapped[str | None] = mapped_column(String(64))
+    #: What was on screen when they tapped: a number, an ingredient, the grade.
+    subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    #: wrong_number | wrong_ingredient | wrong_product | wrong_grade |
+    #: pack_changed | something_else
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    #: Where the photo of the pack went, when one was attached.
+    photo_key: Mapped[str | None] = mapped_column(String(200))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("device_id", "client_report_id", name="uq_label_report_device_client_id"),
+        Index("ix_label_error_reports_barcode", "barcode", "created_at"),
+        Index("ix_label_error_reports_open", "resolved_at"),
+    )
+
+
 class ScanEvent(UUIDPrimaryKey, TimestampMixin, Base):
     """One scan, recorded once.
 

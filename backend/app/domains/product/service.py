@@ -31,7 +31,7 @@ from app.domains.product.confidence import (
     ProductConfidence,
 )
 from app.domains.product.fssai import find_licence, is_valid_licence
-from app.domains.product.models import ProductRecord, ScanEvent
+from app.domains.product.models import LabelErrorReport, ProductRecord, ScanEvent
 from app.shared.database.base import utcnow
 
 OUTCOME_LOCAL = "found_local"
@@ -226,3 +226,44 @@ async def apply_confirmed_label(
         )
     await session.flush()
     return record
+
+
+#: Where a report photo lives. Not under an account prefix: the person who
+#: notices a wrong number is often not signed in.
+LABEL_REPORT_PREFIX = "label-reports"
+
+REPORT_REASONS = (
+    "wrong_number", "wrong_ingredient", "wrong_product",
+    "wrong_grade", "pack_changed", "something_else",
+)
+
+
+async def record_label_error(
+    session: AsyncSession,
+    *,
+    client_report_id: str,
+    subject: str,
+    reason: str,
+    barcode: str | None = None,
+    note: str | None = None,
+    photo_key: str | None = None,
+    device_id: uuid.UUID | None = None,
+    account_id: uuid.UUID | None = None,
+) -> tuple[LabelErrorReport, bool]:
+    """File one report, once. A replayed offline queue gets the original back."""
+    existing = (await session.execute(
+        select(LabelErrorReport).where(
+            LabelErrorReport.device_id == device_id,
+            LabelErrorReport.client_report_id == client_report_id,
+        )
+    )).scalar_one_or_none()
+    if existing is not None:
+        return existing, False
+    row = LabelErrorReport(
+        device_id=device_id, account_id=account_id, client_report_id=client_report_id,
+        barcode=barcode, subject=subject[:200], reason=reason, note=note,
+        photo_key=photo_key,
+    )
+    session.add(row)
+    await session.flush()
+    return row, True

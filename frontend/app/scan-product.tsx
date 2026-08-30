@@ -35,6 +35,7 @@ import {
   type ScanResult,
 } from '../src/services/productScan';
 import { LabelReview, NotFoundResult, OfflineNote, ProductResult } from '../src/components/scan/ScanPieces';
+import { S } from '../src/strings/verdict';
 import { transcribeProductLabel, uploadMedia } from '../src/services/apiV2';
 import { errorMessage } from '../src/services/api';
 import { useUserStore } from '../src/store/userStore';
@@ -244,6 +245,17 @@ export default function ScanProductScreen() {
       {stage === 'result' && result && (result.found
         ? <ProductResult result={result} onCaptureLabel={captureLabel} onScanAgain={scanAgain} />
         : <NotFoundResult result={result} onCaptureLabel={captureLabel} onScanAgain={scanAgain} />)}
+
+      {stage === 'result' && result?.found && (
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={S.primary.why}
+          onPress={() => router.push({ pathname: '/verdict', params: { barcode: result.barcode } })}
+          style={styles.primaryButton}
+        >
+          <Text style={styles.primaryText}>{S.primary.why}</Text>
+        </TouchableOpacity>
+      )}
 
       {stage === 'label' && labelFacts && (
         <LabelReview

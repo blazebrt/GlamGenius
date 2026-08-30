@@ -436,3 +436,80 @@ def test_positives_never_lift_past_the_ceiling():
     ))
     assert result.ceiling is Grade.B, "salt added to a whole food is NOVA 3"
     assert result.grade is Grade.B, "positives may cancel a penalty, never beat the ceiling"
+
+
+# ---------------------------------------------------------------------------
+# What one screen is handed
+# ---------------------------------------------------------------------------
+def test_the_screen_payload_carries_four_components_and_a_colour():
+    from app.domains.nutrition.grading.presentation import COMPONENT_KEYS, present
+
+    product = next(p for label, p, _ in CASES if label == "Glucose biscuit")
+    payload = present(product, grade_product(product))
+    assert payload["grade"] == "D"
+    assert payload["band"] == "red"
+    assert [row["key"] for row in payload["components"]] == list(COMPONENT_KEYS)
+    assert all(row["band"] in {"green", "yellow", "red"} for row in payload["components"])
+    assert all(row["source"] for row in payload["components"])
+
+
+def test_the_screen_payload_carries_every_ingredient_free():
+    from app.domains.nutrition.grading.presentation import present
+
+    product = next(p for label, p, _ in CASES if label == "Glucose biscuit")
+    payload = present(product, grade_product(product))
+    assert len(payload["ingredients"]) == len(product.ingredients)
+    emulsifier = next(row for row in payload["ingredients"] if "emulsifier" in row["name"].lower())
+    assert emulsifier["tier"] in {"plain", "green", "amber", "red", "black"}
+
+
+def test_the_screen_payload_carries_no_english_copy():
+    """The app owns its words; the wire carries keys, bands and sources."""
+    from app.domains.nutrition.grading.presentation import present
+
+    product = next(p for label, p, _ in CASES if label == "Cola")
+    payload = present(product, grade_product(product))
+    for component in payload["components"]:
+        assert component["state"]
+        # A state is a key the app maps to a sentence, never a sentence itself.
+        assert " " not in component["state"]
+
+
+@pytest.mark.parametrize(
+    ("label", "expected_band"),
+    [("Toor dal", "green"), ("Maida", "yellow"), ("Cola", "red")],
+)
+def test_the_colour_matches_the_letter(label, expected_band):
+    from app.domains.nutrition.grading.presentation import present
+
+    product = next(p for row_label, p, _ in CASES if row_label == label)
+    assert present(product, grade_product(product))["band"] == expected_band
+
+
+def test_an_ingredient_list_is_split_the_way_a_pack_reads():
+    from app.domains.nutrition.grading.from_scan import split_ingredients
+
+    parts = split_ingredients(
+        "Refined wheat flour (maida), Sugar, Edible vegetable oil (palm, cottonseed), Salt"
+    )
+    assert parts == (
+        "Refined wheat flour (maida)", "Sugar",
+        "Edible vegetable oil (palm, cottonseed)", "Salt",
+    )
+
+
+def test_a_declared_percentage_is_read_off_the_ingredient_list():
+    from app.domains.nutrition.grading.from_scan import declared_percentages
+
+    assert declared_percentages(("Atta 30%", "Sugar", "Palm oil")) == {"atta": D("30")}
+
+
+def test_a_missing_panel_reaches_the_screen_as_not_enough_information():
+    from app.domains.nutrition.grading.from_scan import build
+    from app.domains.nutrition.grading.presentation import present
+
+    product = build(barcode="8901234567890", name="Unknown Snack", off_half=None)
+    payload = present(product, grade_product(product))
+    assert payload["outcome"] == "not_enough_information"
+    assert payload["grade"] is None
+    assert payload["missing"]

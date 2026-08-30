@@ -10,10 +10,12 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.media.storage import factory as storage_factory
+from app.domains.nutrition.grading import from_scan, grade_product, presentation
 from app.domains.product import devices, extraction, service
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
@@ -23,6 +25,9 @@ from app.shared.errors.exceptions import ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account
 
 router = APIRouter()
+
+#: A photo of a pack, not a photo album. Bigger than this is a mistake.
+MAX_REPORT_PHOTO_BYTES = 6 * 1024 * 1024
 
 
 class DeviceRegisterBody(BaseModel):
@@ -201,3 +206,72 @@ async def transcribe_label(
         "confidence": service.confidence_block(ProductConfidence.UNVERIFIED.value),
         "provenance": result.provenance(),
     }
+
+
+@router.get("/scan/verdict/{barcode}")
+async def read_product_verdict(
+    barcode: str,
+    device: ScanDevice = Depends(current_device),
+    session: AsyncSession = Depends(get_session),
+):
+    """The graded verdict for one barcode, shaped for one screen.
+
+    The two halves are paired here for the length of this response and are not
+    written anywhere together — the ODbL wall, same as every other join.
+    """
+    found = await service.lookup(session, barcode)
+    off_half = found.get("open_food_facts")
+    name = (off_half or {}).get("product_name") or barcode
+    product = from_scan.build(barcode=barcode, name=name, off_half=off_half)
+    result = grade_product(product)
+    payload = presentation.present(product, result)
+    payload["confidence"] = found["confidence"]
+    payload["attribution"] = found.get("attribution")
+    return payload
+
+
+@router.post("/reports/label-error", status_code=status.HTTP_201_CREATED)
+async def report_label_error(
+    client_report_id: str = Form(..., min_length=6, max_length=64),
+    subject: str = Form(..., min_length=1, max_length=200),
+    reason: str = Form(...),
+    barcode: str | None = Form(default=None),
+    note: str | None = Form(default=None),
+    photo: UploadFile | None = File(default=None),
+    device: ScanDevice = Depends(current_device),
+    session: AsyncSession = Depends(get_session),
+):
+    """Record one error report, with the photo attached inline.
+
+    Multipart rather than JSON because the photo is the point: a person who has
+    spotted a wrong number is holding the pack that proves it, and asking them
+    to upload it separately loses most of them.
+
+    Reachable with a device token and no account. The person best placed to
+    notice a wrong number is somebody standing in a shop who has never signed
+    up, and an email address would simply mean never hearing from them.
+    """
+    if reason not in service.REPORT_REASONS:
+        raise ValidationFailedError("That is not a reason we recognise.", field="reason")
+
+    photo_key: str | None = None
+    if photo is not None:
+        data = await photo.read()
+        if data:
+            if len(data) > MAX_REPORT_PHOTO_BYTES:
+                raise ValidationFailedError(
+                    "That photo is too large. Take it again at a smaller size.", field="photo",
+                )
+            photo_key = f"{service.LABEL_REPORT_PREFIX}/{client_report_id}.jpg"
+            await storage_factory.get_storage().put(
+                photo_key, data, photo.content_type or "image/jpeg",
+            )
+
+    report, created = await service.record_label_error(
+        session,
+        client_report_id=client_report_id, subject=subject, reason=reason,
+        barcode=barcode, note=note, photo_key=photo_key,
+        device_id=device.id, account_id=device.claimed_by_account_id,
+    )
+    await session.commit()
+    return {"report_id": str(report.id), "created": created}

@@ -98,6 +98,8 @@ function RootLayout() {
             <Stack.Screen name="index" />
             {/* The scanner is the launch screen: camera first, no account. */}
             <Stack.Screen name="scan-product" options={{ animation: 'none' }} />
+            {/* The answer. Colour first, three lines of text, nothing else. */}
+            <Stack.Screen name="verdict" />
             <Stack.Screen name="intro" />
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="(auth)" />

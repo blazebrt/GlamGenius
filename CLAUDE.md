@@ -63,7 +63,7 @@ backend/
   pytest.ini                 # testpaths = tests, session-scoped event loop
   pyproject.toml             # Ruff config (line-length 120, py311)
   requirements.txt
-  migrations/versions/       # 20 Alembic revisions, one linear chain
+  migrations/versions/       # 21 Alembic revisions, one linear chain
   app/
     config.py                # every env var, plus validate_production_configuration()
     release.py               # `python -m app.release` — lock, migrate, seed, verify
@@ -83,9 +83,10 @@ backend/
 frontend/
   app/                       # expo-router routes; (tabs)/ is Today · Style · Care · Plan · You
   src/services/              # api.ts, apiV2.ts (typed V2 client), supabase.ts, notify.ts
+  src/strings/               # every user-facing string, keyed. No copy lives in a component
   src/components/            # per-area component folders
   src/store/                 # zustand stores
-  src/__tests__/             # 41 Jest suites (~375 tests)
+  src/__tests__/             # 42 Jest suites (~415 tests)
 docs/                        # architecture, engineering checklists, ADRs, operations, reports
 ```
 
@@ -260,7 +261,7 @@ Health: `GET /api/v2/health` (served from `backend/app/api/v2/config.py`, not `h
 ### Migrations
 
 Alembic, one linear chain, `backend/migrations/versions/`. The current head is
-`q7r8s9t0u1` (environment-response rule kind). `0001_initial_glamgenius_v2.py` is the
+`r8s9t0u1v2` (label error reports). `0001_initial_glamgenius_v2.py` is the
 consolidated greenfield baseline.
 
 ```bash

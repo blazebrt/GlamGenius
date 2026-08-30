@@ -240,6 +240,9 @@ REGISTRY: dict[str, Classification] = {
     # domain in export.py. Scans made anonymously carry no account and belong
     # to nobody, so they are not in anybody's export.
     "scan_events": Classification.INCLUDED,
+    # A report somebody filed about a pack. Theirs, and exported with their
+    # scans; the photo lives in storage and is referenced by key, never inlined.
+    "label_error_reports": Classification.INCLUDED,
 }
 
 
