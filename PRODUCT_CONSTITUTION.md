@@ -26,12 +26,19 @@ constraint lifts, say so.
 ## Hard handoffs — the app must NOT decide
 Pregnancy, breastfeeding, any named medication, any diagnosed condition,
 children under 12. State the fact, hand off to a doctor, never advise.
-HARD HANDOFF IS NOT YET IMPLEMENTED. needs_professional() in
-routines/safety.py is a partial text check only and MUST NOT be treated
-as satisfying this requirement. No feature that requires the hard
-handoff may ship until a real implementation exists covering: age under
-12, pregnancy, breastfeeding, any named medication, any diagnosed
-condition.
+The gate is routines/hard_handoff.py: evaluate() and requires_handoff().
+It covers age under 12, a child subject, pregnancy, breastfeeding, any
+named medication, and any condition a clinician is already handling. It
+recognises medications by how drug names are built, not from a list, and
+it fails closed — medical text with unclear specifics hands off anyway.
+
+needs_professional() in routines/safety.py is a partial text check for a
+different, narrower job and MUST NOT be treated as satisfying this
+requirement.
+
+A feature satisfies this rule only when it CALLS the gate. The gate
+existing is not the same as a feature using it, and every feature that
+touches this territory must pass its text and whatever age it holds.
 
 ## The evidence rule
 The app never makes a claim in its own voice. It reports what a named,

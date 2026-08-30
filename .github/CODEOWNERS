@@ -39,6 +39,8 @@ backend/migrations/**                    @blazebrt
 # The one file that decides whether a styling app can drift into being a
 # medical one.
 backend/app/domains/routines/safety.py   @blazebrt
+# The hard handoff is a legal boundary, not a quality feature.
+backend/app/domains/routines/hard_handoff.py @blazebrt
 backend/app/domains/routines/rules.py    @blazebrt
 backend/app/domains/routines/ontology.py @blazebrt
 
