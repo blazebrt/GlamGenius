@@ -79,7 +79,7 @@ backend/
       errors/                # exceptions, handlers, codes
       observability/         # logging, request_id, sentry_bootstrap, sentry_privacy
       validation/media.py
-  tests/                     # 101 pytest modules (~1,750 tests) + conftest.py
+  tests/                     # 102 pytest modules (~1,800 tests) + conftest.py
 frontend/
   app/                       # expo-router routes; (tabs)/ is Today · Style · Care · Plan · You
   src/services/              # api.ts, apiV2.ts (typed V2 client), supabase.ts, notify.ts
@@ -115,7 +115,7 @@ All 25 packages under `backend/app/domains/`:
 | `routines` | Routine compilation, shelf, perfume, adherence, and `safety.py` — the medical boundary |
 | `care` | Care context, deterministic decisions, guidance, home care, **maintenance timing (VC-06)**, the ten environment rules and their precedence |
 | `supplements` | **Owned-supplement label facts, component overlap, safety boundaries (VC-07)** |
-| `nutrition` | Opt-in appearance-adjacent food context. No diets, no calories, no RDA maths |
+| `nutrition` | Opt-in appearance-adjacent food context. No diets, no calories, no RDA maths. **`grading/` is the Indian food grading engine: six gates in order, never a weighted average** |
 | `evidence` | Release-owned evidence provenance, claims, rule support and applicability |
 | `reference` | Versioned global reference data written by the seed bootstrap |
 | `planning` | **Today engine, weekly planner, events, calendar sync, weather/air quality (Indian NAQI from CPCB breakpoints), notifications** |
