@@ -29,11 +29,27 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# Store A (Open Food Facts) lives in its own schema and is deliberately NOT
+# managed by this chain — see docs/architecture/ODBL_DATA_WALL.md. Without this
+# filter, autogenerate would see those tables as unmanaged and propose dropping
+# them, which is how a licence boundary quietly becomes a migration.
+from app.domains.off.models import OFF_SCHEMA  # noqa: E402
+
+
+def include_object(object_, name, type_, reflected, compare_to):  # noqa: ANN001, ANN201, ARG001
+    schema = getattr(object_, "schema", None)
+    if schema == OFF_SCHEMA:
+        return False
+    if type_ == "table" and getattr(object_, "schema", None) == OFF_SCHEMA:
+        return False
+    return True
+
 
 def run_migrations_offline() -> None:
     context.configure(
         url=POSTGRES_URL,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
@@ -46,6 +62,7 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
+        include_object=include_object,
         compare_type=True,
     )
     with context.begin_transaction():

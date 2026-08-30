@@ -7,6 +7,11 @@
 >
 > **Writing or changing any user-facing string? `LEGAL_RULES.md` governs it.**
 > Every legal risk in this product lives in sentences.
+>
+> **Touching Open Food Facts data? Read `docs/architecture/ODBL_DATA_WALL.md` first.**
+> Their licence is share-alike. Combining their data with ours into one database
+> obliges us to publish ours — the whole product — openly. Two stores, joined only
+> in memory, on barcode. Never write one into the other.
 
 GlamGenius is a decision engine for everything that enters or touches the human body —
 food, cosmetics, supplements, cookware and salon upkeep. The customer scans a product;
@@ -166,6 +171,44 @@ cite rather than assert, compare products rather than advise the person, never m
 brand, state missing data rather than fill it, and show the source with every negative
 statement. Read it before writing or changing any copy.
 
+## 5a. The ODbL wall: two stores that never become one
+
+Open Food Facts data is licensed under ODbL, which is **share-alike**. If their
+database and ours are combined into one derived database, we are obliged to publish
+the combined thing openly — the absorption knowledge base, the thresholds, the
+scores, the decision memory. The whole product, given away.
+
+So they stay apart:
+
+- **Store A** (`backend/app/domains/off/`) holds Open Food Facts data and nothing
+  else: barcode, product name, brand, ingredients, nutrition values, categories,
+  images. Its own `MetaData`, its own engine (`OFF_DATABASE_URL`), outside the main
+  Alembic chain.
+- **Store B** is everything else — the rest of this repository.
+- They meet **only in memory, at query time, on barcode**
+  (`app/domains/off/join.py`). The pair is discarded with the response.
+
+Never do any of these. Each one creates a derived database:
+
+- Add a column of ours to a Store A table, or an Open Food Facts field to one of ours.
+- Add a foreign key in either direction between the stores.
+- Build a view, cache or table spanning both.
+- Copy `nutriments` into a scoring table to make a query faster. This is the one
+  that looks like an optimisation and is a licence breach.
+
+Four things enforce it: separate metadata, a separate connection, the `OFF_FIELDS`
+allowlist in `app/domains/off/wall.py`, and a write guard on the Store A session.
+`backend/tests/test_odbl_data_wall.py` holds them up. **If one of those tests fails,
+do not adjust the test** — the failure means the change would put the product under
+ODbL.
+
+Attribution is a licence condition, not copy: every surface showing this data renders
+"Contains information from Open Food Facts, made available under the Open Database
+License (ODbL)", verbatim. Every API call carries an identifying User-Agent, which
+Open Food Facts requires.
+
+Full explanation: `docs/architecture/ODBL_DATA_WALL.md`.
+
 ## 6. Running things
 
 ### Tests — the definition of done
@@ -286,6 +329,8 @@ decision needs their input, ask one clear question with the options spelled out.
 - `docs/OPERATIONS.md` — running it in production, including the worker schedule
 - `docs/engineering/` — review policy, branching, checklists (migration, privacy, security,
   AI safety, evidence, external integration, mobile UX)
+- `docs/architecture/ODBL_DATA_WALL.md` — why Open Food Facts data lives in its own
+  database, and what would happen if it did not
 - `docs/engineering/adrs/` — why the non-obvious choices were made
 - `docs/reports/` — the phase and stabilisation reports (historical records)
 - Feature-area specs: `docs/VC-05_GOOGLE_CALENDAR.md`, `docs/VC-06_MAINTENANCE.md`,
