@@ -96,6 +96,9 @@ function RootLayout() {
             }}
           >
             <Stack.Screen name="index" />
+            {/* The scanner is the launch screen: camera first, no account. */}
+            <Stack.Screen name="scan-product" options={{ animation: 'none' }} />
+            <Stack.Screen name="intro" />
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="(auth)" />
             <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal' }} />

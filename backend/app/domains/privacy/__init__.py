@@ -225,6 +225,17 @@ REGISTRY: dict[str, Classification] = {
     # account. A customer's own label transcriptions live in
     # supplement_label_components, which is account-owned and exported.
     "supplement_component_knowledge": Classification.NOT_USER_OWNED,
+    # --- Barcode scanning ---
+    # A device row carries the hash of the token that authenticates the phone.
+    # It authenticates, so it never leaves in an export.
+    "scan_devices": Classification.SECRET_EXCLUDED,
+    # What we know about a barcode is the same for everybody: a product, its
+    # confidence, its FSSAI licence. Nobody's personal data is in it.
+    "product_records": Classification.NOT_USER_OWNED,
+    # A person's own scan history is theirs. Exported by the ``product_scans``
+    # domain in export.py. Scans made anonymously carry no account and belong
+    # to nobody, so they are not in anybody's export.
+    "scan_events": Classification.INCLUDED,
 }
 
 

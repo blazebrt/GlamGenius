@@ -81,6 +81,16 @@ Any of these creates a derived database and triggers the obligation:
 That last one is the realistic danger. It looks like a performance improvement
 and it is a licence breach.
 
+### The phone's offline cache is not one of these
+
+The scanner keeps recent lookup responses on the phone
+(`src/services/productScan.ts`) so it still answers with no signal. That cache
+holds the joined response, our half beside theirs, and that is fine: it is one
+person's own device holding answers to their own queries, it is never published,
+and the attribution renders with it. It stops being fine the moment the same
+join is written on a server — a shared cache, a warm-up job, an analytics
+table. Keep the pairing on the phone and in the response, and nowhere else.
+
 ## What we give back
 
 `python -m app.domains.off.export` publishes our copy of the Open Food Facts

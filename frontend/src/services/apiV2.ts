@@ -241,6 +241,51 @@ export const uploadMedia = async (
   return response.data;
 };
 
+// --- Product scanning -------------------------------------------------------
+
+/**
+ * Attach the phone to the account that has just signed in, so scans made before
+ * signing up follow the person. Needs both identities: the account's token and
+ * the device's.
+ */
+export const claimScanDevice = async (
+  deviceToken: string
+): Promise<{ claimed: boolean; scans_attached: number }> => {
+  const response = await api.post<{ claimed: boolean; scans_attached: number }>(
+    `${V2}/scan/device/claim`,
+    {},
+    { headers: { 'X-Device-Token': deviceToken } }
+  );
+  return response.data;
+};
+
+// --- Product label transcription -------------------------------------------
+
+export interface TranscribedLabelResponse {
+  barcode: string;
+  facts: Record<string, unknown>;
+  fssai_licence: string | null;
+  /** Always false: a transcription is shown to the person before it is kept. */
+  stored: boolean;
+  confidence: { level: string; text: string };
+  provenance: Record<string, unknown>;
+}
+
+/**
+ * Read one label photo. Signed in, unlike the rest of scanning, because a model
+ * call costs money and is counted against an account.
+ */
+export const transcribeProductLabel = async (
+  barcode: string,
+  mediaAssetId: string
+): Promise<TranscribedLabelResponse> => {
+  const response = await api.post<TranscribedLabelResponse>(`${V2}/scan/label/transcribe`, {
+    barcode,
+    media_asset_id: mediaAssetId,
+  });
+  return response.data;
+};
+
 export const getMedia = async (id: string): Promise<MediaAsset> => {
   const response = await api.get<MediaAsset>(`${V2}/media/${id}`);
   return response.data;

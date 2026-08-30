@@ -60,6 +60,7 @@ from app.domains.planning.models import (
     WeeklyPlan,
 )
 from app.domains.privacy import EXPORT_SCHEMA_VERSION, REGISTRY, Classification
+from app.domains.product.models import ScanEvent
 from app.domains.profile.models import (
     AppearanceGoal,
     AppearanceProfile,
@@ -268,6 +269,22 @@ async def _scans(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]
     # Scan rows never contain raw image bytes — face/hair/hand photos are
     # transient request data. We keep the analysis result reference.
     return {"scans": [_row_dict(r, [c.name for c in Scan.__table__.columns]) for r in rows]}
+
+
+async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
+    """Barcodes this account has scanned.
+
+    Only scans linked to the account. A scan made before signing up carries no
+    account and belongs to nobody, so it is in nobody's export.
+    """
+    rows = await _fetch(
+        session,
+        select(ScanEvent)
+        .where(ScanEvent.account_id == account_id)
+        .order_by(ScanEvent.created_at.desc()),
+    )
+    fields = [c.name for c in ScanEvent.__table__.columns]
+    return {"scans": [_row_dict(r, fields) for r in rows]}
 
 
 async def _quiz_and_styling(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
@@ -535,6 +552,7 @@ DOMAIN_HANDLERS: dict[str, DomainHandler] = {
     "inventory": _inventory,
     "media": _media,
     "scans": _scans,
+    "product_scans": _product_scans,
     "quiz_and_styling": _quiz_and_styling,
     "shopping": _shopping,
     "planning": _planning,

@@ -24,6 +24,7 @@ from app.domains.media.models import MediaAsset
 from app.domains.nutrition import models as nutrition_models
 from app.domains.planning import models as planning_models
 from app.domains.privacy.models import AccountDeletionJob
+from app.domains.product.models import ProductRecord, ScanDevice, ScanEvent
 from app.domains.profile.models import (
     AppearanceGoal,
     AppearanceProfile,

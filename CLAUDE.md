@@ -63,13 +63,13 @@ backend/
   pytest.ini                 # testpaths = tests, session-scoped event loop
   pyproject.toml             # Ruff config (line-length 120, py311)
   requirements.txt
-  migrations/versions/       # 15 Alembic revisions, one linear chain
+  migrations/versions/       # 18 Alembic revisions, one linear chain
   app/
     config.py                # every env var, plus validate_production_configuration()
     release.py               # `python -m app.release` — lock, migrate, seed, verify
     release_readiness.py     # `python -m app.release_readiness` — honest readiness report
-    api/v2/                  # 23 route modules mounted by api/v2/__init__.py (health.py is an empty orphan)
-    domains/                 # 23 domain packages — see §3
+    api/v2/                  # 24 route modules mounted by api/v2/__init__.py (health.py is an empty orphan)
+    domains/                 # 25 domain packages — see §3
     workers/                 # notifications.py, account_deletion.py — see §6
     bootstrap/               # reference_data.py — versioned seed catalogue
     shared/
@@ -79,13 +79,13 @@ backend/
       errors/                # exceptions, handlers, codes
       observability/         # logging, request_id, sentry_bootstrap, sentry_privacy
       validation/media.py
-  tests/                     # 92 pytest modules (~1,330 tests) + conftest.py
+  tests/                     # 99 pytest modules (~1,700 tests) + conftest.py
 frontend/
   app/                       # expo-router routes; (tabs)/ is Today · Style · Care · Plan · You
   src/services/              # api.ts, apiV2.ts (typed V2 client), supabase.ts, notify.ts
   src/components/            # per-area component folders
   src/store/                 # zustand stores
-  src/__tests__/             # 36 Jest suites (~320 tests)
+  src/__tests__/             # 39 Jest suites (~360 tests)
 docs/                        # architecture, engineering checklists, ADRs, operations, reports
 ```
 
@@ -94,7 +94,7 @@ startup checks. Real work lives under `backend/app/`.
 
 ## 3. The domains
 
-All 23 packages under `backend/app/domains/`:
+All 25 packages under `backend/app/domains/`:
 
 | Domain | Owns |
 | --- | --- |
@@ -121,6 +121,8 @@ All 23 packages under `backend/app/domains/`:
 | `planning` | **Today engine, weekly planner, events, calendar sync, weather/air quality, notifications** |
 | `progress` | Explainable metrics, milestones, comparison and controlled long-term memory |
 | `system` | `system_worker_status` — worker heartbeats and last-error state |
+| `off` | Store A: the Open Food Facts copy, behind the ODbL wall — see §5a |
+| `product` | Barcode scanning: anonymous device identity, our product record, scan events, label transcription |
 
 Every ORM model module must be imported in `backend/app/shared/database/registry.py`.
 A model that is not imported there is invisible to Alembic and its table is silently
