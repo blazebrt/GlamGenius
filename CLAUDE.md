@@ -1,5 +1,10 @@
 # CLAUDE.md
 
+> **Read `PRODUCT_CONSTITUTION.md` first, in every session, before deciding anything.**
+> It governs what this product is, what it must never become, and what is already built
+> and must not be rebuilt. On any product question it outranks this file; this file stays
+> the map of the code as it actually is today.
+
 GlamGenius is a personal appearance decision system for India — style, skin/hair care,
 routines, events and planning built on what the customer already owns. It is **not** a
 diagnosis app, and it has no payments, checkout or billing.
@@ -250,6 +255,7 @@ decision needs their input, ask one clear question with the options spelled out.
 
 ## 8. Where to read more
 
+- `PRODUCT_CONSTITUTION.md` — what the product is and is not. Read it first
 - `README.md` — product overview and quick start
 - `docs/OPERATIONS.md` — running it in production, including the worker schedule
 - `docs/engineering/` — review policy, branching, checklists (migration, privacy, security,
