@@ -1,0 +1,29 @@
+# Invokes the notification cycle once an hour, on the hour.
+#
+# Enable with:
+#   systemctl enable --now glamgenius-notifications.timer
+#
+# Check it is actually scheduled:
+#   systemctl list-timers glamgenius-notifications.timer
+
+[Unit]
+Description=Run the GlamGenius notification cycle hourly
+Documentation=file:///srv/glamgenius/docs/OPERATIONS.md
+
+[Timer]
+OnCalendar=hourly
+# Spread the start over the first two minutes so a fleet does not stampede the
+# database at exactly :00. Accounts are matched on the hour, not the minute, so
+# this does not change who is due.
+RandomizedDelaySec=120
+AccuracySec=30
+
+# Deliberately NOT set: Persistent=true. A missed hour must stay missed. Firing
+# a catch-up run after a reboot would notify people about a morning that has
+# already passed.
+Persistent=false
+
+Unit=glamgenius-notifications.service
+
+[Install]
+WantedBy=timers.target

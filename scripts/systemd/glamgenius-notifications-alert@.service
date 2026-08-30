@@ -1,0 +1,13 @@
+# Runs when a notification cycle fails. systemd passes the failed unit name as
+# the instance (%i), so the alert says what broke.
+#
+# Replace ExecStart with whatever your team actually reads. The default writes
+# a high-priority journal entry, which is enough for journald-based alerting
+# and costs nothing.
+
+[Unit]
+Description=Alert that %i failed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -p daemon.crit -t glamgenius-alert "FAILED: %i — GlamGenius notification cycle did not complete. Check: journalctl -u %i -n 50"

@@ -112,7 +112,10 @@ to be invoked by the host once per hour:
 python -m app.workers.notifications
 ```
 
-### What it does per run
+Nothing in this repository schedules it. Until you install the schedule in
+§6.3, proactive notifications do not happen at all.
+
+### 6.1 What it does per run
 
 It looks at every account that has both notifications and native push switched
 on, compiles that account's Today plan through the same canonical compiler the
@@ -120,11 +123,14 @@ on, compiles that account's Today plan through the same canonical compiler the
 preferences allow. Quiet hours, the daily cap and deduplication are applied
 inside that decision, not by the scheduler.
 
-### Operational properties
+Each run ends with one log line and one database heartbeat.
+
+### 6.2 Operational properties
 
 * **Repeat-safe.** A delivery is claimed in the database and committed *before*
   the Expo call, so a second run in the same hour cannot send it twice. No
-  transaction is held open across the network request.
+  transaction is held open across the network request. Proven by
+  `backend/tests/test_notification_worker_operations.py`.
 * **Isolated per account.** One account's failure is caught, rolled back and
   logged as `notification_account_failed`, and the batch continues. The loop
   works from plain account identifiers rather than ORM rows precisely so a
@@ -134,44 +140,139 @@ inside that decision, not by the scheduler.
 * **Disabled devices self-heal.** An Expo `DeviceNotRegistered` outcome disables
   that specific token, and nothing else.
 
-### Scheduling requirement
+### 6.3 Installing the schedule
 
-* Invoke it **once per hour**. More often is wasted work; less often silently
-  drops notifications for the hours you skip.
-* **Avoid overlapping invocations** where the scheduler supports it. The claim
-  boundary makes overlap safe rather than duplicating, but a run that overlaps
-  itself is a sign the batch is taking longer than an hour and should be
-  investigated.
-* Exit status is not a delivery count. Treat a non-zero exit as a failed run.
+Two supported ways. **systemd is recommended** — it gives you failure alerting
+and a way to ask "is this actually scheduled?", which cron does not.
 
-This repository deliberately does **not** pick your scheduler. Any of cron, a
-systemd timer, or a managed scheduled-job feature is fine; the requirement is
-only "once an hour, one process". The application cannot detect whether the
-schedule exists, so `python -m app.release_readiness` reports the worker as
-`requires_host_scheduler` rather than claiming it is configured.
+Unit files are in `scripts/systemd/`. Adjust the paths (`/srv/glamgenius`,
+`glamgenius` user) to your deployment, then:
 
-Illustrative only — not a mandated architecture:
+```bash
+# 1. Environment file — secrets live here, never in the unit.
+sudo install -d -m 0755 /etc/glamgenius
+sudo cp env.example /etc/glamgenius/notifications.env
+sudo chmod 0600 /etc/glamgenius/notifications.env
+sudo editor /etc/glamgenius/notifications.env      # POSTGRES_URL, SUPABASE_*, etc.
+
+# 2. Install the units.
+sudo cp scripts/systemd/glamgenius-notifications.service \
+        scripts/systemd/glamgenius-notifications.timer \
+        scripts/systemd/glamgenius-notifications-alert@.service \
+        /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# 3. Prove one cycle works before scheduling it.
+sudo systemctl start glamgenius-notifications.service
+sudo journalctl -u glamgenius-notifications -n 30 --no-pager
+
+# 4. Turn on the hourly schedule.
+sudo systemctl enable --now glamgenius-notifications.timer
+
+# 5. Confirm it is really scheduled, and when it next fires.
+systemctl list-timers glamgenius-notifications.timer
+```
+
+`Persistent=false` in the timer is deliberate: after a reboot, systemd must not
+fire a catch-up run for an hour that has already passed.
+
+**Cron alternative.** Cron has no failure alerting; if you use it, rely on the
+`/api/v2/admin/workers` check in §6.5 instead.
 
 ```cron
-# crontab: hourly, on the hour
+# Hourly, on the hour. MAILTO makes cron email a failing run.
+MAILTO=ops@example.com
 0 * * * * cd /srv/glamgenius/backend && /srv/glamgenius/venv/bin/python -m app.workers.notifications >> /var/log/glamgenius/notifications.log 2>&1
 ```
 
-### If the scheduler is not running
+Whichever you use, the requirement is the same: **once an hour, one process.**
+More often is wasted work; less often silently drops the hours you skip.
+
+### 6.4 Reading a run
+
+Every run logs exactly one summary line:
+
+```
+notification_worker_run outcome=ok accounts_considered=412 accounts_failed=0 notifications_sent=37 duration_ms=1840
+```
+
+| Field | Meaning |
+| --- | --- |
+| `outcome` | `ok`, or `degraded` when at least one account failed |
+| `accounts_considered` | Accounts with notifications and push switched on |
+| `accounts_failed` | Accounts that raised; each also logs `notification_account_failed` |
+| `notifications_sent` | Deliveries Expo accepted. Routinely far below `accounts_considered` — most accounts are not in their preferred hour |
+| `duration_ms` | Wall-clock time for the cycle |
+
+Exit codes, which is what the scheduler acts on:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The cycle completed |
+| `2` | The cycle failed. systemd runs the alert unit; cron emails `MAILTO` |
+| `3` | A manual run was refused — see §6.6 |
+
+```bash
+journalctl -u glamgenius-notifications --since "24 hours ago" | grep notification_worker_run
+```
+
+### 6.5 Noticing a run that never happened
+
+A batch process cannot report its own absence, so the *last* run is the
+evidence. Every cycle writes a heartbeat to `system_worker_status`, and
+`GET /api/v2/admin/workers` (admin token required) reports it under
+`scheduled_workers`:
+
+```json
+{"worker_name": "notification_worker", "expected_interval_seconds": 3600,
+ "state": "healthy", "last_heartbeat_age_seconds": 812,
+ "detail": "Last run 812s ago."}
+```
+
+| `state` | What it means | What to do |
+| --- | --- | --- |
+| `healthy` | A run finished within the last two hours | Nothing |
+| `never_run` | No run has ever been recorded | The schedule was never installed. Do §6.3 |
+| `missed` | The last run is more than two hours old | The timer or cron is stopped, or the host is down. `systemctl list-timers` |
+| `failing` | The last run reported an error | `journalctl -u glamgenius-notifications -n 50` |
+
+**Alerting on it.** Poll that endpoint every 15 minutes from whatever you
+already use for uptime checks, and alert when `state` is not `healthy`. This is
+the check that catches the failure mode that matters most — a scheduler nobody
+ever installed — because it does not depend on the worker running to fire.
+
+If Sentry is configured, a failed or degraded run also captures an event. A
+missing Sentry DSN is a no-op.
+
+### 6.6 Testing it by hand, without notifying customers
+
+Two independent guards, both outside the worker's decision logic:
+
+```bash
+# Full cycle, transport switched off. No socket is opened, so nothing can
+# reach a device. Safe to run against production data.
+python -m app.workers.notifications --dry-run
+
+# One account, and only an account you have nominated. Really delivers.
+export NOTIFICATION_TEST_ACCOUNT_IDS=8f14e45f-ceea-467a-9f6a-1c0e5a2e0000
+python -m app.workers.notifications --account 8f14e45f-ceea-467a-9f6a-1c0e5a2e0000
+```
+
+* `--dry-run` is enforced inside `push.send()` itself, so no caller can route
+  around it. A dry run never marks a delivery as accepted, so it cannot consume
+  an account's daily cap.
+* `--account` refuses (exit `3`) when `NOTIFICATION_TEST_ACCOUNT_IDS` is empty,
+  and refuses any account not in it. Testing by hand therefore cannot become
+  notifying the customer base.
+* `PUSH_DELIVERY_MODE=dry_run` set in the environment does the same thing
+  globally. `validate_production_configuration()` refuses to start staging or
+  production with it set, so it cannot be left on by accident.
+
+### 6.7 If the scheduler is not running
 
 Proactive push stops. Nothing else breaks: Today, Style, Care, Plan and You all
 remain fully usable, because the worker only *pushes* what the app already
 computes on demand. This is a degradation, not an outage.
-
-### Running one cycle by hand (staging smoke test)
-
-```bash
-cd backend
-python -m app.workers.notifications
-```
-
-It processes the current eligible set once and exits. Safe to run repeatedly:
-anything already claimed for the hour will not be sent again.
 
 ---
 

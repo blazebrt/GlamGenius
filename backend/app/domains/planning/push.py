@@ -24,12 +24,24 @@ Design rules:
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
+
+from app import config
 
 logger = logging.getLogger(__name__)
 
 _ENDPOINT = "https://exp.host/--/api/v2/push/send"
 _MAX_PER_REQUEST = 100
+
+# Reported against every message a dry run drops, so the reason a delivery did
+# not go out is legible in the database rather than looking like a provider bug.
+DRY_RUN_ERROR = "push_dry_run"
+
+
+def _delivery_mode() -> str:
+    """Read the mode per call, not at import, so a manual run can set it in-process."""
+    return (os.environ.get("PUSH_DELIVERY_MODE") or config.PUSH_DELIVERY_MODE or "live").lower()
 
 
 @dataclass(frozen=True)
@@ -65,6 +77,21 @@ async def send(messages: list[PushMessage]) -> PushResult:
     """
     if not messages:
         return PushResult(sent=0, failed=0, receipts=[], errors=[], outcomes=[])
+
+    # The dry-run kill switch. Read here, at the transport boundary, rather than
+    # in a caller, so no code path can route around it: if this is on, no socket
+    # is opened and nothing can reach a real device. Every message is reported
+    # as failed with a distinctive error, because "delivered" would be a lie and
+    # would let a dry run mark deliveries as accepted and burn the daily cap.
+    if _delivery_mode() != "live":
+        logger.info("push_dry_run_skipped count=%s", len(messages))
+        return PushResult(
+            sent=0,
+            failed=len(messages),
+            receipts=[],
+            errors=[DRY_RUN_ERROR],
+            outcomes=[PushOutcome(m.to, False, error=DRY_RUN_ERROR) for m in messages],
+        )
 
     try:
         import httpx  # noqa: PLC0415
