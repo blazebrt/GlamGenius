@@ -99,9 +99,6 @@ function RootLayout() {
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="(auth)" />
             <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal' }} />
-            <Stack.Screen name="style-quiz" />
-            <Stack.Screen name="get-advice" />
-            <Stack.Screen name="recommendations" />
             <Stack.Screen name="onboarding" />
             <Stack.Screen name="my-appearance" />
             <Stack.Screen name="inventory-add" />

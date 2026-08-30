@@ -21,5 +21,5 @@ export const countForDomain = (
 ): number => (categoriesForDomain(domain) || []).reduce((total, category) => total + (categories?.[category] || 0), 0);
 
 export const LEGACY_HIDDEN_TAB_ROUTES = [
-  'home', 'inventory', 'style-me-tab', 'planner', 'profile', 'services', 'scan-tab', 'history',
+  'home', 'inventory', 'planner', 'profile', 'services', 'scan-tab', 'history',
 ] as const;
