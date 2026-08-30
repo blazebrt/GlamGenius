@@ -107,6 +107,7 @@ function RootLayout() {
             <Stack.Screen name="event-add" />
             <Stack.Screen name="event-ready" />
             <Stack.Screen name="notifications" />
+            <Stack.Screen name="admin-knowledge" />
           </Stack>
         </ErrorBoundary>
       </SafeAreaProvider>

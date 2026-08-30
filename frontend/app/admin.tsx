@@ -188,6 +188,19 @@ export default function AdminDashboard() {
             Generated {new Date(stats.generated_at).toLocaleString()}
           </Text>
         )}
+
+        {/* The knowledge authoring tool. Admin-only on both sides, like this screen. */}
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Open knowledge entries"
+          onPress={() => router.push('/admin-knowledge')}
+          style={styles.toolLink}
+        >
+          <Text style={styles.toolLinkTitle}>Knowledge entries</Text>
+          <Text style={styles.toolLinkBody}>
+            Add, review, approve and publish what the product is allowed to say.
+          </Text>
+        </TouchableOpacity>
       </ScrollView>
     </View>
   );
@@ -241,6 +254,25 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     marginTop: 4,
     marginBottom: SPACING.md,
+  },
+  toolLink: {
+    backgroundColor: COLORS.card,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    marginTop: SPACING.lg,
+    padding: SPACING.md,
+  },
+  toolLinkTitle: {
+    color: COLORS.textPrimary,
+    fontFamily: FONTS.family.headingMedium,
+    fontSize: 17,
+  },
+  toolLinkBody: {
+    color: COLORS.textSecondary,
+    fontFamily: FONTS.family.body,
+    fontSize: 13,
+    marginTop: 4,
   },
   tile: {
     backgroundColor: COLORS.card,

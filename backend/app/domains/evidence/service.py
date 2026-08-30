@@ -242,6 +242,13 @@ async def assert_claim_approvable(session: AsyncSession, claim: EvidenceClaim) -
         if not link.reviewed_at or not link.reviewed_by:
             raise EvidenceApprovalError("every non-background source link must be reviewed")
 
+    # NOTE: the source-URL requirement is enforced in
+    # ``app.domains.evidence.authoring.assert_has_openable_source`` for entries
+    # written through the authoring tool, not here. Extending it to every claim
+    # would also condemn the seeded release evidence, some of which cites works
+    # that have no URL — a classical text, for instance. Making the rule global
+    # means backfilling those sources first, and that is its own decision.
+
 
 async def evidence_state_for_rule(
     session: AsyncSession,

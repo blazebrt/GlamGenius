@@ -2448,3 +2448,117 @@ export const replaceMaintenanceDone = async (
   newDate: string,
 ): Promise<MaintenanceOverview> =>
   (await api.patch<MaintenanceOverview>(`${V2}/maintenance/${kind}/history/${oldDate}`, { done_on: newDate })).data;
+
+// --- Knowledge authoring (admin only) ---------------------------------------
+// The internal tool for adding and approving knowledge entries. Every call is
+// admin-gated server-side; the screen also guards itself so a non-admin who
+// deep-links never sees the form.
+
+export type EvidenceTier =
+  | 'clinically_studied' | 'classical_text' | 'traditional_use'
+  | 'not_enough_information' | 'avoid';
+
+export type KnowledgeStatus =
+  | 'draft' | 'approved' | 'published' | 'rejected' | 'superseded';
+
+export interface KnowledgeEntry {
+  id: string;
+  claim_key: string;
+  version: number;
+  domain: string;
+  subject_type: string;
+  subject: string;
+  claim: string;
+  value: string | null;
+  unit: string | null;
+  evidence_tier: EvidenceTier | null;
+  notes: string | null;
+  status: KnowledgeStatus;
+  rejection_reason: string | null;
+  supersedes_id: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  published_by: string | null;
+  published_at: string | null;
+  created_at: string | null;
+  source: { name: string; url: string | null; publisher: string } | null;
+}
+
+export interface KnowledgeEntryInput {
+  subject_type: string;
+  subject: string;
+  claim: string;
+  value?: string | null;
+  unit?: string | null;
+  source_name: string;
+  source_url?: string | null;
+  evidence_tier: string;
+  notes?: string | null;
+  domain?: string;
+}
+
+export interface KnowledgeVocabulary {
+  evidence_tiers: EvidenceTier[];
+  statuses: KnowledgeStatus[];
+  domains: string[];
+  subject_types: string[];
+  csv_columns: string[];
+}
+
+export interface KnowledgeQueue {
+  entries: KnowledgeEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface KnowledgeImportResult {
+  created_count: number;
+  error_count: number;
+  status: KnowledgeStatus;
+  created: KnowledgeEntry[];
+  errors: { line: number; message: string }[];
+}
+
+const KNOWLEDGE = `${V2}/admin/knowledge`;
+
+export const getKnowledgeVocabulary = async (): Promise<KnowledgeVocabulary> =>
+  (await api.get<KnowledgeVocabulary>(`${KNOWLEDGE}/vocabulary`)).data;
+
+export const listKnowledgeEntries = async (
+  filters: { subject_type?: string; status?: string } = {},
+): Promise<KnowledgeQueue> => {
+  const query = new URLSearchParams();
+  if (filters.subject_type) query.set('subject_type', filters.subject_type);
+  if (filters.status) query.set('status', filters.status);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return (await api.get<KnowledgeQueue>(`${KNOWLEDGE}/entries${suffix}`)).data;
+};
+
+export const createKnowledgeEntry = async (body: KnowledgeEntryInput): Promise<KnowledgeEntry> =>
+  (await api.post<KnowledgeEntry>(`${KNOWLEDGE}/entries`, body)).data;
+
+export const editKnowledgeEntry = async (
+  id: string, body: KnowledgeEntryInput,
+): Promise<KnowledgeEntry> =>
+  (await api.put<KnowledgeEntry>(`${KNOWLEDGE}/entries/${id}`, body)).data;
+
+export const approveKnowledgeEntry = async (id: string): Promise<KnowledgeEntry> =>
+  (await api.post<KnowledgeEntry>(`${KNOWLEDGE}/entries/${id}/approve`)).data;
+
+export const publishKnowledgeEntry = async (id: string): Promise<KnowledgeEntry> =>
+  (await api.post<KnowledgeEntry>(`${KNOWLEDGE}/entries/${id}/publish`)).data;
+
+export const rejectKnowledgeEntry = async (id: string, reason: string): Promise<KnowledgeEntry> =>
+  (await api.post<KnowledgeEntry>(`${KNOWLEDGE}/entries/${id}/reject`, { reason })).data;
+
+export const getKnowledgeVersions = async (
+  id: string,
+): Promise<{ claim_key: string; versions: KnowledgeEntry[] }> =>
+  (await api.get<{ claim_key: string; versions: KnowledgeEntry[] }>(
+    `${KNOWLEDGE}/entries/${id}/versions`,
+  )).data;
+
+/** Import pasted CSV. Every row lands as a draft; this cannot publish. */
+export const importKnowledgeCsv = async (csv: string): Promise<KnowledgeImportResult> =>
+  (await api.post<KnowledgeImportResult>(`${KNOWLEDGE}/import-text`, { csv })).data;

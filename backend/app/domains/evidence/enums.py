@@ -41,11 +41,37 @@ class ClaimStatus(StrEnum):
 
 
 class ReviewStatus(StrEnum):
+    """Where an entry sits in the authoring queue.
+
+    The path a knowledge entry takes is draft -> approved -> published.
+    REJECTED is a terminal answer to a draft and always carries a reason.
+    REVIEWED, SUPERSEDED and RETIRED predate the authoring tool and keep their
+    original meanings; SUPERSEDED is what an older version becomes when an
+    entry is edited.
+    """
+
     DRAFT = "draft"
     REVIEWED = "reviewed"
     APPROVED = "approved"
+    PUBLISHED = "published"
+    REJECTED = "rejected"
     SUPERSEDED = "superseded"
     RETIRED = "retired"
+
+
+class EvidenceTier(StrEnum):
+    """How good the backing for an entry is, in the product's own words.
+
+    Deliberately separate from EvidenceStrength: that grades a body of
+    research, while this is the tier an author picks in the authoring tool and
+    the product surfaces. NOT_ENOUGH_INFORMATION is a real answer, not a gap.
+    """
+
+    CLINICALLY_STUDIED = "clinically_studied"
+    CLASSICAL_TEXT = "classical_text"
+    TRADITIONAL_USE = "traditional_use"
+    NOT_ENOUGH_INFORMATION = "not_enough_information"
+    AVOID = "avoid"
 
 
 class ClaimSourceRelationship(StrEnum):
@@ -107,6 +133,7 @@ EvidenceSourceStatus = SourceStatus
 EvidenceClaimStrength = EvidenceStrength
 EvidenceClaimStatus = ClaimStatus
 EvidenceReviewStatus = ReviewStatus
+EvidenceClaimTier = EvidenceTier
 EvidenceClaimSourceRelationship = ClaimSourceRelationship
 RuleEvidenceLinkRelationship = RuleEvidenceRelationship
 EvidenceRuleKind = RuleKind
@@ -118,6 +145,7 @@ SOURCE_STATUSES = tuple(x.value for x in SourceStatus)
 EVIDENCE_STRENGTHS = tuple(x.value for x in EvidenceStrength)
 CLAIM_STATUSES = tuple(x.value for x in ClaimStatus)
 REVIEW_STATUSES = tuple(x.value for x in ReviewStatus)
+EVIDENCE_TIERS = tuple(x.value for x in EvidenceTier)
 CLAIM_SOURCE_RELATIONSHIPS = tuple(x.value for x in ClaimSourceRelationship)
 RULE_EVIDENCE_RELATIONSHIPS = tuple(x.value for x in RuleEvidenceRelationship)
 REGULATORY_CONTEXTS = tuple(x.value for x in RegulatoryContext)
