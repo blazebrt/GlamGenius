@@ -190,6 +190,25 @@ CONSENT_VERSION = _env_str("CONSENT_VERSION", "2026-01-01")
 INVITE_REQUIRED = _env_bool("INVITE_REQUIRED", True)
 
 # ---------------------------------------------------------------------------
+# Push delivery safety
+# ---------------------------------------------------------------------------
+# "live"    — the notification worker may call Expo. The production setting.
+# "dry_run" — every push is logged and dropped at the transport boundary. No
+#             socket is opened, so nothing can reach a real device. This is a
+#             kill switch, not a preference: it is read inside push.send(), so
+#             no caller can route around it.
+PUSH_DELIVERY_MODE = _env_str("PUSH_DELIVERY_MODE", "live").lower()
+
+# Accounts a human is allowed to target with a manual worker run. The manual
+# trigger refuses to run against anything outside this list, and refuses to run
+# at all when the list is empty — so "test the worker by hand" cannot become
+# "notify every customer".
+NOTIFICATION_TEST_ACCOUNT_IDS = {
+    value.strip() for value in _env_csv("NOTIFICATION_TEST_ACCOUNT_IDS", "") if value.strip()
+}
+
+
+# ---------------------------------------------------------------------------
 # Policy and Support URLs
 # ---------------------------------------------------------------------------
 PRIVACY_POLICY_URL = _env_str("PRIVACY_POLICY_URL", "https://glamgenius.placeholder/privacy")
@@ -242,12 +261,19 @@ def validate_production_configuration() -> None:
     
     Raises RuntimeError if a critical production invariant is missing or unsafe.
     """
+    if PUSH_DELIVERY_MODE not in ("live", "dry_run"):
+        raise RuntimeError("CRITICAL: PUSH_DELIVERY_MODE must be live or dry_run.")
     if OPEN_METEO_MODE not in ("disabled", "evaluation", "commercial"):
         raise RuntimeError("CRITICAL: OPEN_METEO_MODE must be disabled, evaluation, or commercial.")
     if LIVE_ENVIRONMENT_PROVIDER and LIVE_ENVIRONMENT_PROVIDER != "open_meteo":
         raise RuntimeError("CRITICAL: LIVE_ENVIRONMENT_PROVIDER must be open_meteo or empty.")
     if APP_ENV not in ("production", "staging"):
         return
+    if PUSH_DELIVERY_MODE == "dry_run":
+        raise RuntimeError(
+            "CRITICAL: PUSH_DELIVERY_MODE=dry_run silently drops every notification. "
+            "It is a testing switch and must not be set in staging or production."
+        )
     if OPEN_METEO_MODE == "evaluation" and APP_ENV in ("production", "staging"):
         raise RuntimeError("CRITICAL: OPEN_METEO_MODE=evaluation is not permitted in staging or production.")
     if OPEN_METEO_MODE == "commercial" and not OPEN_METEO_API_KEY:

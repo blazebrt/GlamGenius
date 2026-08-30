@@ -1,0 +1,55 @@
+# One notification cycle. Started by glamgenius-notifications.timer, not enabled
+# on its own — this is a batch that runs and exits, never a daemon.
+#
+# Install: see docs/OPERATIONS.md section 6.
+
+[Unit]
+Description=GlamGenius hourly notification cycle
+Documentation=file:///srv/glamgenius/docs/OPERATIONS.md
+# Do not start a cycle before the database is reachable.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=glamgenius
+Group=glamgenius
+WorkingDirectory=/srv/glamgenius/backend
+
+# Secrets come from the environment file, never from this unit. Keep it
+# 0600 and owned by root so the service user can read it and nobody else can.
+EnvironmentFile=/etc/glamgenius/notifications.env
+
+ExecStart=/srv/glamgenius/venv/bin/python -m app.workers.notifications
+
+# A cycle that has not finished in ten minutes is wedged. Kill it so the next
+# hour starts clean; the claim boundary makes an interrupted run safe to repeat.
+TimeoutStartSec=600
+
+# No automatic retry. A missed hour is a missed hour by design — the worker
+# never sends a late catch-up, so retrying achieves nothing but noise.
+Restart=no
+
+# Failure is reported by the alert unit rather than swallowed.
+OnFailure=glamgenius-notifications-alert@%n.service
+
+# Hardening. The worker needs the network and its own working directory;
+# nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glamgenius-notifications
+
+[Install]
+WantedBy=multi-user.target
