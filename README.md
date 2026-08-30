@@ -1,8 +1,13 @@
 # GlamGenius
 
-GlamGenius is a personal appearance decision system for India. It brings an
-owned wardrobe, care shelf, routines, events and preferences into a calm daily
-plan, starting with what the customer already owns.
+GlamGenius is a decision engine for everything that enters or touches the human
+body — food, cosmetics, supplements, cookware and salon upkeep. You scan a
+product; the app decides Buy / Wait / Skip and tells you why. India only.
+
+`PRODUCT_CONSTITUTION.md` is the authority on what the product is. What is built
+so far is the body-and-appearance manager described below: an owned care shelf,
+routines, events and preferences brought into a calm daily plan, starting with
+what the customer already owns.
 
 The primary experience is **Today · Style · Care · Plan · You**. It keeps
 customer-facing decisions grounded in explicit inventory, context and
@@ -30,10 +35,11 @@ cp env.example .env
 docker compose up --build
 ```
 
-Starts PostgreSQL, the API and the outbox worker. Database migrations run
-automatically on start.
+Starts PostgreSQL, the API and the account-deletion worker. Database migrations
+run automatically on start.
 
-- V2 health (includes PostgreSQL): http://localhost:8000/api/v2/health
+- Liveness (no database call): http://localhost:8000/api/v2/health
+- Readiness (PostgreSQL, config, seed, schema): http://localhost:8000/api/v2/ready
 
 ## Backend (local)
 
@@ -124,15 +130,19 @@ disabled flag returns 404 — a switched-off feature should look absent, not for
 
 ## API overview
 
-Routes marked 🔒 require an `Authorization: Bearer <token>` header. The token
-comes from register or login and is valid 30 days. The caller's identity always
-comes from the token, never from the URL or request body.
+Routes marked 🔒 require an `Authorization: Bearer <token>` header. The token is a
+**Supabase Auth** JWT: the app signs in through Supabase and the API verifies the
+token against Supabase's JWKS. There is no register or login endpoint here and no
+local password store, so the lifetime of a token is whatever the Supabase project
+issues, not something this API sets. The caller's identity always comes from the
+verified token, never from the URL or request body.
 
 ### V2 — `/api/v2`
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| GET | /api/v2/health | — | Health including PostgreSQL |
+| GET | /api/v2/health | — | Liveness only. Answers if the process is up; makes no network call |
+| GET | /api/v2/ready | — | Readiness: PostgreSQL, production config, storage, seed version |
 | GET | /api/v2/config | — | Media rules and feature flags |
 | GET | /api/v2/me | 🔒 | Profile, account status, consent, usage |
 | GET | /api/v2/consent | 🔒 | Current consent state |

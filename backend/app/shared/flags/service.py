@@ -43,7 +43,7 @@ KNOWN_FLAGS: dict[str, str] = {
     "v2_profile": "Appearance digital twin and progressive onboarding",
     "v2_inventory": "Complete appearance inventory",
     "v2_inventory_batch": "Experimental multi-item inventory capture",
-    "v2_recommendations": "Occasion styling: style me for an occasion",
+    "v2_recommendations": "Internal look engine used by Event Ready",
     "v2_shopping_decisions": "Shopping decisions: should I buy this?",
     "v2_today": "The Today engine: one plan for the day",
     "v2_planner": "The Monday-to-Sunday weekly planner",
@@ -54,7 +54,7 @@ KNOWN_FLAGS: dict[str, str] = {
         "Explainable progress metrics, goals, milestones and controlled memory"
     ),
     "v2_scan": "Face/hair/hands photo analysis with consent enforcement",
-    "v2_quiz": "Style vibe quiz",
+    "v2_quiz": "Style vibe quiz. Rejected product surface; keep this off.",
     "v2_beta_access": "Invite reservation, redemption and beta usage limiter",
     "v2_onboarding": "Progressive onboarding flow",
     "v2_virtual_tryon": "Virtual try-on. No provider is selected; keep this off.",
@@ -83,7 +83,7 @@ STABLE_BETA_DEFAULTS: dict[str, bool] = {
     "v2_routines": True,
     "v2_progress": True,
     "v2_scan": True,
-    "v2_quiz": True,
+    "v2_quiz": False,
     "v2_beta_access": True,
     "v2_onboarding": True,
     "v2_virtual_tryon": False,
@@ -131,6 +131,17 @@ def env_enabled(key: str) -> bool:
 
 # Essential beta flags. If the resolved-config set has any of these off we
 # emit a startup warning so an operator knows the deploy is broken.
+#
+# "Essential" means the beta is broken without it, not merely that the code
+# exists. Two flags are deliberately absent:
+#   v2_quiz            — a rejected product surface, defaulted off above.
+#   v2_recommendations — the look engine is retained, but only as internal
+#                        infrastructure Event Ready calls. It stays on by
+#                        default so Event Ready works; it is not standalone
+#                        product infrastructure, so its absence is not a
+#                        broken deploy.
+# v2_scan stays: the photo baseline is part of the retained skin and hair
+# manager, not a style surface.
 ESSENTIAL_BETA_FLAGS: list[str] = [
     "v2_profile",
     "v2_onboarding",
@@ -138,8 +149,6 @@ ESSENTIAL_BETA_FLAGS: list[str] = [
     "v2_media",
     "v2_consent",
     "v2_scan",
-    "v2_quiz",
-    "v2_recommendations",
     "v2_shopping_decisions",
     "v2_today",
     "v2_planner",

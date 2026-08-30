@@ -150,7 +150,11 @@ async def test_export_carries_a_record_from_every_active_domain(
     assert domains["inventory"]["items"]
     assert domains["media"]["assets"]
     assert domains["scans"]["scans"]
-    assert domains["quiz_and_styling"]["quiz_submissions"]
+    # The journey no longer submits a quiz (rejected surface), so this list is
+    # legitimately empty. The domain must still be exported, and the styling
+    # records the journey *did* create must still be carried.
+    assert "quiz_submissions" in domains["quiz_and_styling"]
+    assert domains["quiz_and_styling"]["occasions"]
     assert domains["shopping"]["candidates"]
     assert domains["planning"]["daily_plans"]
     assert domains["routines"]["routines"]
