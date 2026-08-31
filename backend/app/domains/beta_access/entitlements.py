@@ -1,8 +1,7 @@
 """Private-beta access contract.
 
-This is intentionally not a billing or subscription model.  Invitees receive
-the complete beta surface without an upgrade prompt; cost limits remain abuse
-controls, not paid-plan gates.
+Invitees receive the complete beta surface without an upgrade prompt; cost
+limits remain abuse controls, not commercial-access gates.
 """
 from __future__ import annotations
 
@@ -19,7 +18,7 @@ def beta_entitlement_matrix() -> dict[str, object]:
     """Return the transparent current beta access matrix without pricing copy."""
     return {
         "access_model": "invite_beta",
-        "payment_available": False,
+        "commercial_access_active": False,
         "items": [dict(item) for item in BETA_ENTITLEMENTS],
         "note": "All listed beta features are available to invited accounts.",
     }

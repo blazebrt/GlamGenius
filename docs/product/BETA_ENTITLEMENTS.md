@@ -1,7 +1,7 @@
 # Beta access
 
-GlamGenius is currently invite-only. Payment, subscriptions, upgrades, and
-payment-driven access controls are not active in beta.
+GlamGenius is currently invite-only. Subscriptions, upgrades, and
+commercial-access controls are not active in beta.
 
 | Capability | Invited beta account |
 | --- | --- |
