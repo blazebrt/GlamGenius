@@ -24,11 +24,11 @@ export const S = {
   // The letter itself. Three words at most: the colour has already answered.
   // -----------------------------------------------------------------------
   grade: {
-    A: { verdict: 'Take it', band: 'green' },
-    B: { verdict: 'Take it', band: 'green' },
-    C: { verdict: 'Think', band: 'yellow' },
-    D: { verdict: 'Leave it', band: 'red' },
-    E: { verdict: 'Leave it', band: 'red' },
+    A: { verdict: 'BUY', band: 'green' },
+    B: { verdict: 'BUY', band: 'green' },
+    C: { verdict: 'WAIT', band: 'yellow' },
+    D: { verdict: 'SKIP', band: 'red' },
+    E: { verdict: 'SKIP', band: 'red' },
   },
 
   // -----------------------------------------------------------------------
@@ -36,12 +36,12 @@ export const S = {
   // -----------------------------------------------------------------------
   primary: {
     /** Line 1. Under ten words, and it says what to DO. */
-    actionA: 'A good everyday food. Keep it.',
-    actionB: 'Simple and fine. Keep it.',
-    actionC: 'Fine once in a while, not daily.',
-    actionD: 'Better to put this back.',
-    actionE: 'Put this back.',
-    actionNotGraded: 'Cooking item. Use a small amount.',
+    actionA: 'The label has fewer decision flags.',
+    actionB: 'The label has some processing flags.',
+    actionC: 'The label has product facts to consider.',
+    actionD: 'The label has multiple product flags.',
+    actionE: 'The label has a strong product concern.',
+    actionNotGraded: 'Cooking ingredient. No letter applies.',
     actionUnknown: 'We could not read this label.',
 
     /** Line 2. One number, in something you can picture. */
@@ -51,21 +51,6 @@ export const S = {
     saltPinchesOne: '1 pinch of salt in one packet',
     oilSpoons: '{spoons} spoons of oil in one packet',
     oilSpoonsOne: '1 spoon of oil in one packet',
-    // Used when the pack does not state its net quantity. Saying "one packet"
-    // there would be a made-up number: wrong several times over for a sachet,
-    // and far under for a kilo bag.
-    sugarSpoonsPer100: '{spoons} spoons of sugar in every 100 g',
-    sugarSpoonsOnePer100: '1 spoon of sugar in every 100 g',
-    saltPinchesPer100: '{pinches} pinches of salt in every 100 g',
-    saltPinchesOnePer100: '1 pinch of salt in every 100 g',
-    oilSpoonsPer100: '{spoons} spoons of oil in every 100 g',
-    oilSpoonsOnePer100: '1 spoon of oil in every 100 g',
-    sugarSpoonsPer100Ml: '{spoons} spoons of sugar in every 100 ml',
-    sugarSpoonsOnePer100Ml: '1 spoon of sugar in every 100 ml',
-    saltPinchesPer100Ml: '{pinches} pinches of salt in every 100 ml',
-    saltPinchesOnePer100Ml: '1 pinch of salt in every 100 ml',
-    oilSpoonsPer100Ml: '{spoons} spoons of oil in every 100 ml',
-    oilSpoonsOnePer100Ml: '1 spoon of oil in every 100 ml',
     proteinBowls: 'Protein of about {bowls} bowls of dal',
     noEverydayNumber: 'Nothing on this label stands out.',
 
@@ -82,6 +67,24 @@ export const S = {
     share: 'Share',
     ingredients: 'What is in it',
     scanAnother: 'Scan another',
+  },
+  taxonomy: {
+    packaged_food: 'Packaged food', whole_minimally_processed: 'Whole or minimally processed food',
+    culinary_ingredient: 'Cooking ingredient', biscuit: 'Biscuit', cereal: 'Cereal',
+    beverage: 'Beverage', dal: 'Dal', ghee: 'Ghee', cooking_oil: 'Cooking oil', salt: 'Salt',
+    other_packaged_food: 'Packaged food',
+  },
+  factors: {
+    lowers: 'What lowers it', helps: 'What helps', noLowers: 'No product flags were found in the available label facts.',
+    noHelps: 'No positive label facts were available.', source: 'Source', details: 'What this means',
+    declared: 'Declared on label', no_concern_found: 'No concern found', worth_knowing: 'Worth knowing',
+    worth_caution: 'Worth caution', flagged: 'Flagged', not_permitted: 'Not permitted',
+    not_enough_information: 'Not enough information', lower_processing_group: 'Less processing on this label.',
+    declared_on_label: 'This amount is declared on the label.',
+    lower_processing: 'This product has more processing flags.', lower_sugar: 'The label shows a sugar flag.',
+    lower_salt: 'The label shows a salt flag.', lower_fat: 'The label shows a fat flag.',
+    lower_additive: 'An ingredient on the label is flagged.', lower_naming: 'The name and declared ingredient details do not fully match.',
+    lower_label_fact: 'A label fact lowered the grade.',
   },
 
   // -----------------------------------------------------------------------
@@ -181,6 +184,12 @@ export const S = {
     tierRed: 'We flag this one',
     tierBlack: 'Should not be in food sold here',
     tierPlain: 'Food',
+    noConcernFound: 'No concern found',
+    worthKnowing: 'Worth knowing',
+    worthCaution: 'Worth caution',
+    flagged: 'Flagged',
+    notPermitted: 'Not permitted',
+    notEnoughInformation: 'Not enough information',
     empty: 'The pack did not carry an ingredient list.',
   },
 
@@ -201,7 +210,6 @@ export const S = {
     addPhoto: 'Add a photo of the pack',
     retakePhoto: 'Take it again',
     photoAdded: 'Photo added',
-    notePlaceholder: 'Anything you want to add (not required)',
     submit: 'Send',
     sending: 'Sending',
     sent: 'Sent. Thank you — we check every one.',

@@ -16,6 +16,23 @@ export type GradeLetter = 'A' | 'B' | 'C' | 'D' | 'E';
 export type ColourBand = 'green' | 'yellow' | 'red';
 export type Outcome = 'graded' | 'not_graded' | 'not_enough_information';
 
+export interface VerdictEvidenceSource {
+  name: string;
+  url: string | null;
+  publisher: string | null;
+  version: string | null;
+}
+
+export interface VerdictFactor {
+  key: string;
+  status: string;
+  band: ColourBand;
+  quantity: { label: string; value: number; unit: string } | null;
+  explanation: string;
+  rule: string | null;
+  sources: VerdictEvidenceSource[];
+}
+
 /** One teaspoon of sugar, in grams. The conversion everyone already knows. */
 export const SUGAR_G_PER_SPOON = 5;
 /** A pinch of salt, in grams. Used because "grams of salt" means nothing. */
@@ -32,6 +49,8 @@ export interface VerdictComponent {
   band: ColourBand;
   rule: string;
   source: string;
+  sourceUrl?: string | null;
+  sources?: VerdictEvidenceSource[];
   /** A technical word and the words that explain it, shown side by side. */
   term?: { word: string; plain: string };
 }
@@ -41,6 +60,9 @@ export interface VerdictIngredient {
   tier: 'plain' | 'green' | 'amber' | 'red' | 'black';
   tierLabel: string;
   description: string;
+  status?: string;
+  whyFlagged?: string | null;
+  sources?: VerdictEvidenceSource[];
 }
 
 export interface Alternative {
@@ -53,6 +75,8 @@ export interface VerdictSource {
   outcome: Outcome;
   grade: GradeLetter | null;
   productName: string;
+  taxonomy?: { domain: string; category: string; subcategory: string };
+  decision?: { action: 'buy' | 'wait' | 'skip'; reasonKey: string };
   /** Per 100 g / 100 ml, straight off the panel. */
   totalSugarG?: number | null;
   saltG?: number | null;
@@ -69,6 +93,8 @@ export interface VerdictSource {
    */
   attribution?: string | null;
   components: VerdictComponent[];
+  lowers?: VerdictFactor[];
+  helps?: VerdictFactor[];
   ingredients: VerdictIngredient[];
   alternative?: Alternative | null;
   quantityGuidance?: string | null;
@@ -108,57 +134,15 @@ export const rupees = (paise: number): string => {
  * screen exists to replace.
  */
 export function everydayNumber(source: VerdictSource): string {
-  // Only a stated net quantity makes "one packet" a real quantity. Without
-  // one the number stays what the panel actually says — per 100 g or 100 ml —
-  // rather than being presented as a pack it was never measured against.
-  const known = !!source.packSizeG && source.packSizeG > 0;
-  const pack = known ? (source.packSizeG as number) : 100;
-  const per = (per100: number) => (per100 * pack) / 100;
-  const drink = source.basis === 'drink';
-
-  const wording = {
-    sugar: known ? S.primary.sugarSpoons
-      : drink ? S.primary.sugarSpoonsPer100Ml : S.primary.sugarSpoonsPer100,
-    sugarOne: known ? S.primary.sugarSpoonsOne
-      : drink ? S.primary.sugarSpoonsOnePer100Ml : S.primary.sugarSpoonsOnePer100,
-    salt: known ? S.primary.saltPinches
-      : drink ? S.primary.saltPinchesPer100Ml : S.primary.saltPinchesPer100,
-    saltOne: known ? S.primary.saltPinchesOne
-      : drink ? S.primary.saltPinchesOnePer100Ml : S.primary.saltPinchesOnePer100,
-    oil: known ? S.primary.oilSpoons
-      : drink ? S.primary.oilSpoonsPer100Ml : S.primary.oilSpoonsPer100,
-    oilOne: known ? S.primary.oilSpoonsOne
-      : drink ? S.primary.oilSpoonsOnePer100Ml : S.primary.oilSpoonsOnePer100,
-  };
-
-  const sugar = source.totalSugarG ?? 0;
-  const salt = source.saltG ?? 0;
-  const fat = source.totalFatG ?? 0;
-  const protein = source.proteinG ?? 0;
-
-  const spoonsOfSugar = Math.round(per(sugar) / SUGAR_G_PER_SPOON);
-  const pinchesOfSalt = Math.round(per(salt) / SALT_G_PER_PINCH);
-  const spoonsOfOil = Math.round(per(fat) / OIL_G_PER_SPOON);
-  const bowlsOfDal = Math.round(per(protein) / PROTEIN_G_PER_BOWL);
-
-  // Ordered by what a person would want to know first about a poor product,
-  // and only shown when the number is big enough to be worth a sentence.
-  if (spoonsOfSugar >= 2) {
-    return t(spoonsOfSugar === 1 ? wording.sugarOne : wording.sugar,
-      { spoons: spoonsOfSugar });
-  }
-  if (pinchesOfSalt >= 4) {
-    return t(pinchesOfSalt === 1 ? wording.saltOne : wording.salt,
-      { pinches: pinchesOfSalt });
-  }
-  if (spoonsOfOil >= 2) {
-    return t(spoonsOfOil === 1 ? wording.oilOne : wording.oil,
-      { spoons: spoonsOfOil });
-  }
-  // For a good product the number worth showing is the good one.
-  if (bowlsOfDal >= 2) {
-    return t(S.primary.proteinBowls, { bowls: bowlsOfDal });
-  }
+  // A familiar-unit conversion is only honest with a pack quantity behind it.
+  // ``packSizeG`` now carries one where the label states a net quantity (see
+  // pack_size_g in the grading module), so re-enabling the spoons-and-pinches
+  // wording is a reviewed change away rather than a rewrite — but until that
+  // review happens the declared label fact is what is shown.
+  if (typeof source.totalSugarG === 'number') return `${source.totalSugarG} g total sugar per 100 g`;
+  if (typeof source.saltG === 'number') return `${source.saltG} g salt per 100 g`;
+  if (typeof source.totalFatG === 'number') return `${source.totalFatG} g total fat per 100 g`;
+  if (typeof source.proteinG === 'number') return `${source.proteinG} g protein per 100 g`;
   return S.primary.noEverydayNumber;
 }
 

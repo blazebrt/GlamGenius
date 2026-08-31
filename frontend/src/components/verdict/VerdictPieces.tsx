@@ -11,12 +11,13 @@
  * inline.
  */
 import React from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { S, t } from '../../strings/verdict';
 import type {
   ColourBand, VerdictComponent, VerdictIngredient, VerdictView,
+  VerdictFactor,
 } from '../../services/verdictModel';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 
@@ -33,6 +34,15 @@ const TIER_LABELS: Record<VerdictIngredient['tier'], string> = {
   amber: S.ingredients.tierAmber,
   red: S.ingredients.tierRed,
   black: S.ingredients.tierBlack,
+};
+
+const INGREDIENT_STATUS: Record<string, string> = {
+  no_concern_found: S.ingredients.noConcernFound,
+  worth_knowing: S.ingredients.worthKnowing,
+  worth_caution: S.ingredients.worthCaution,
+  flagged: S.ingredients.flagged,
+  not_permitted: S.ingredients.notPermitted,
+  not_enough_information: S.ingredients.notEnoughInformation,
 };
 
 const TIER_DOTS: Record<VerdictIngredient['tier'], string> = {
@@ -184,6 +194,17 @@ export function ComponentRow({
         />
       </TouchableOpacity>
 
+      {(component.band === 'red' || component.band === 'yellow') && !!component.source && (
+        <TouchableOpacity
+          accessibilityRole="link"
+          accessibilityLabel={`${S.why.sourceLead}: ${component.source}`}
+          disabled={!component.sourceUrl}
+          onPress={() => { if (component.sourceUrl) void Linking.openURL(component.sourceUrl); }}
+        >
+          <Text style={styles.bodySource}>{component.source}</Text>
+        </TouchableOpacity>
+      )}
+
       {expanded && (
         <View style={styles.componentBody}>
           {!!component.term && (
@@ -200,6 +221,43 @@ export function ComponentRow({
           <Text style={styles.bodySource}>{component.source}</Text>
         </View>
       )}
+    </View>
+  );
+}
+
+/** Default-visible evidence facts. Details are separate from the source link. */
+export function FactorSection({
+  title, rows, empty, onExplain,
+}: {
+  title: string;
+  rows: VerdictFactor[];
+  empty: string;
+  onExplain: (row: VerdictFactor) => void;
+}) {
+  return (
+    <View style={styles.factorSection}>
+      <Text style={styles.sectionHeading}>{title}</Text>
+      {rows.length === 0 && <Text style={styles.empty}>{empty}</Text>}
+      {rows.map((row) => (
+        <View key={row.key} style={styles.factor}>
+          <View style={[styles.dot, { backgroundColor: BAND_COLOURS[row.band].fill }]} />
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={styles.factorStatus}>{S.factors[row.status as keyof typeof S.factors] ?? row.status}</Text>
+            {!!row.quantity && <Text style={styles.factorQuantity}>{`${row.quantity.value} ${row.quantity.unit}`}</Text>}
+            <Text style={styles.ingredientDescription}>{S.factors[row.explanation as keyof typeof S.factors] ?? row.explanation}</Text>
+            {row.sources.map((source) => (
+              <TouchableOpacity key={source.name} accessibilityRole="link" disabled={!source.url}
+                onPress={() => { if (source.url) void Linking.openURL(source.url); }}>
+                <Text style={styles.bodySource}>{source.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel={S.factors.details}
+            onPress={() => onExplain(row)} hitSlop={12}>
+            <Ionicons name="help-circle-outline" size={20} color={COLORS.primary} />
+          </TouchableOpacity>
+        </View>
+      ))}
     </View>
   );
 }
@@ -228,8 +286,15 @@ export function IngredientList({
           <View style={[styles.dot, { backgroundColor: TIER_DOTS[row.tier] }]} />
           <View style={{ flex: 1 }}>
             <Text style={styles.ingredientName}>{row.name}</Text>
-            <Text style={styles.ingredientTier}>{TIER_LABELS[row.tier]}</Text>
+            <Text style={styles.ingredientTier}>{INGREDIENT_STATUS[row.status ?? ''] ?? TIER_LABELS[row.tier]}</Text>
             <Text style={styles.ingredientDescription}>{row.description}</Text>
+            {!!row.whyFlagged && <Text style={styles.ingredientDescription}>{row.whyFlagged}</Text>}
+            {row.sources?.map((source) => (
+              <TouchableOpacity key={source.name} accessibilityRole="link" disabled={!source.url}
+                onPress={() => { if (source.url) void Linking.openURL(source.url); }}>
+                <Text style={styles.bodySource}>{source.name}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
           <TouchableOpacity
             accessibilityRole="button"
@@ -387,6 +452,15 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.card, borderRadius: RADIUS.lg, borderWidth: 1,
     borderColor: COLORS.border, marginTop: SPACING.sm, overflow: 'hidden',
   },
+  factorSection: { marginTop: SPACING.lg, gap: SPACING.sm },
+  sectionHeading: { fontFamily: FONTS.family.heading, fontSize: 21, color: COLORS.textPrimary },
+  factor: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: SPACING.sm,
+    backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.md,
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  factorStatus: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.textPrimary },
+  factorQuantity: { fontFamily: FONTS.family.bodyMedium, fontSize: 13, color: COLORS.textSecondary },
   componentHead: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm, padding: SPACING.md },
   dot: { width: 14, height: 14, borderRadius: 7 },
   componentLabel: { fontFamily: FONTS.family.bodySemibold, fontSize: 16, color: COLORS.textPrimary },

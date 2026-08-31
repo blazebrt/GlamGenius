@@ -83,6 +83,19 @@ class EntryInput:
     domain: str = EvidenceDomain.NUTRITION.value
 
 
+@dataclass(frozen=True)
+class VerificationInput:
+    """Named governance attestations; never inferred from a URL or an AI run."""
+
+    source_opened: bool
+    founder_verified_fact: bool
+    claude_review_completed: bool
+    codex_review_completed: bool
+    independent_reviews_agree: bool
+    adversarial_review_passed: bool
+    unresolved_doubt: bool = False
+
+
 def _require(value: str | None, field: str) -> str:
     text = (value or "").strip()
     if not text:
@@ -138,6 +151,7 @@ def serialize(claim: EvidenceClaim, source: EvidenceSource | None = None) -> dic
             "url": source.canonical_url,
             "publisher": source.publisher,
         } if source is not None else None,
+        "verification": (claim.structured_value or {}).get("publication_verification"),
     }
 
 
@@ -347,12 +361,53 @@ async def publish(
     # Re-checked at publish as well as at approval: the source could have been
     # edited in between, and publishing is the step that makes it public.
     source = await assert_has_openable_source(session, claim)
+    verification = (claim.structured_value or {}).get("publication_verification") or {}
+    required = (
+        "source_opened", "founder_verified_fact", "claude_review_completed",
+        "codex_review_completed", "independent_reviews_agree", "adversarial_review_passed",
+    )
+    if verification.get("unresolved_doubt") or not all(verification.get(field) is True for field in required):
+        raise ValidationFailedError(
+            "This entry cannot publish until every independent verification checkpoint passes "
+            "and unresolved doubt is cleared.", field="verification",
+        )
 
     claim.review_status = ReviewStatus.PUBLISHED.value
     claim.published_by = publisher[:160]
     claim.published_at = utcnow()
     await session.flush()
     return serialize(claim, source)
+
+
+async def record_publication_verification(
+    session: AsyncSession, entry_id: uuid.UUID, *, verification: VerificationInput, actor: str,
+) -> dict[str, Any]:
+    """Persist founder and independent-review attestations before publication.
+
+    This is intentionally a separate explicit admin action.  Creating a claim,
+    supplying a URL, or an automated reviewer can never imply that a founder
+    opened a source or checked the relevant fact.
+    """
+    claim = await session.get(EvidenceClaim, entry_id)
+    if claim is None:
+        raise NotFoundError("That entry does not exist.")
+    if claim.review_status in {ReviewStatus.PUBLISHED.value, ReviewStatus.SUPERSEDED.value}:
+        raise ConflictError("Published evidence cannot have its verification rewritten.")
+    current = dict(claim.structured_value or {})
+    current["publication_verification"] = {
+        "source_opened": verification.source_opened,
+        "founder_verified_fact": verification.founder_verified_fact,
+        "claude_review_completed": verification.claude_review_completed,
+        "codex_review_completed": verification.codex_review_completed,
+        "independent_reviews_agree": verification.independent_reviews_agree,
+        "adversarial_review_passed": verification.adversarial_review_passed,
+        "unresolved_doubt": verification.unresolved_doubt,
+        "recorded_by": actor[:160],
+        "recorded_at": utcnow().isoformat(),
+    }
+    claim.structured_value = current
+    await session.flush()
+    return serialize(claim, await _source_for(session, claim))
 
 
 async def reject(

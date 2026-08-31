@@ -30,7 +30,7 @@ import {
 import { getProductVerdict } from '../src/services/verdictClient';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import {
-  ComponentRow, GradeBlock, IngredientList, NotGradedCard, ReportSheet,
+  ComponentRow, FactorSection, GradeBlock, IngredientList, NotGradedCard, ReportSheet,
   UnknownCard, VerdictActions, VerdictLines,
 } from '../src/components/verdict/VerdictPieces';
 
@@ -48,6 +48,7 @@ export default function VerdictScreen() {
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportStatus, setReportStatus] = useState<string | null>(null);
+  const [explanation, setExplanation] = useState<{ explanation: string; rule: string | null } | null>(null);
 
   const load = useCallback(() => {
     if (!barcode) return;
@@ -161,10 +162,17 @@ export default function VerdictScreen() {
       >
         {tab === 'verdict' && (
           <>
+            {!!source.taxonomy && (
+              <Text style={styles.category}>{`${S.taxonomy[source.taxonomy.category as keyof typeof S.taxonomy]} · ${S.taxonomy[source.taxonomy.subcategory as keyof typeof S.taxonomy]}`}</Text>
+            )}
             <GradeBlock view={view} />
             {source.outcome === 'graded' && (
               <VerdictLines view={view} onReport={openReport} />
             )}
+            <FactorSection title={S.factors.lowers} rows={source.lowers ?? []} empty={S.factors.noLowers}
+              onExplain={(row) => setExplanation(row)} />
+            <FactorSection title={S.factors.helps} rows={source.helps ?? []} empty={S.factors.noHelps}
+              onExplain={(row) => setExplanation(row)} />
             {source.outcome === 'not_graded' && (
               <NotGradedCard quantity={source.quantityGuidance} purity={source.purityNote} />
             )}
@@ -253,6 +261,17 @@ export default function VerdictScreen() {
           />
         </View>
       </Modal>
+      <Modal visible={explanation !== null} transparent animationType="fade" onRequestClose={() => setExplanation(null)}>
+        <View style={styles.explanationBackdrop}>
+          <View style={styles.explanationCard}>
+            <Text style={styles.cardTitle}>{S.factors.details}</Text>
+            <Text style={styles.body}>{explanation ? (S.factors[explanation.explanation as keyof typeof S.factors] ?? S.factors.lower_label_fact) : ''}</Text>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel={S.report.cancel} onPress={() => setExplanation(null)} style={styles.link}>
+              <Text style={styles.linkText}>{S.report.cancel}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -282,6 +301,7 @@ const styles = StyleSheet.create({
   productName: {
     flex: 1, fontFamily: FONTS.family.bodyMedium, fontSize: 15, color: COLORS.textSecondary,
   },
+  category: { fontFamily: FONTS.family.bodyMedium, fontSize: 13, color: COLORS.textSecondary, marginBottom: SPACING.sm },
   reportTop: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.primary },
   sectionTitle: { fontFamily: FONTS.family.heading, fontSize: 26, color: COLORS.textPrimary },
   sectionSubtitle: {
@@ -290,4 +310,8 @@ const styles = StyleSheet.create({
   },
   link: { paddingVertical: SPACING.md, alignItems: 'center' },
   linkText: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.primary },
+  body: { fontFamily: FONTS.family.body, fontSize: 14, color: COLORS.textSecondary, marginTop: SPACING.sm },
+  cardTitle: { fontFamily: FONTS.family.heading, fontSize: 22, color: COLORS.textPrimary },
+  explanationBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#00000066', padding: SPACING.lg },
+  explanationCard: { width: '100%', borderRadius: 16, backgroundColor: COLORS.card, padding: SPACING.lg },
 });

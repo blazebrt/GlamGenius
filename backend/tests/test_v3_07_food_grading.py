@@ -311,14 +311,15 @@ def test_partially_hydrogenated_oil_is_automatic_e():
     assert any("partially_hydrogenated" in entry.rule_id for entry in result.trace)
 
 
-def test_trans_fat_above_the_fssai_limit_is_automatic_e():
+def test_trans_fat_without_the_regulatory_oils_and_fats_denominator_is_not_automatic_e():
     result = grade_product(P(
         name="Bakery Shortening Cake",
         ingredients=("refined wheat flour (maida)", "sugar", "edible vegetable oil"),
         energy_kcal=D("400"), total_fat_g=D("20"), trans_fat_g=D("1.2"),
         saturated_fat_g=D("8"), total_sugar_g=D("18"), sodium_g=D("0.2"),
     ))
-    assert result.grade is Grade.E
+    assert result.grade is not Grade.E
+    assert any(entry.rule_id == "grade.step2.trans_fat_denominator_missing" for entry in result.trace)
     assert any("trans_fat" in entry.rule_id for entry in result.trace)
 
 
@@ -451,6 +452,21 @@ def test_the_screen_payload_carries_four_components_and_a_colour():
     assert [row["key"] for row in payload["components"]] == list(COMPONENT_KEYS)
     assert all(row["band"] in {"green", "yellow", "red"} for row in payload["components"])
     assert all(row["source"] for row in payload["components"])
+
+
+def test_screen_payload_has_customer_taxonomy_and_evidence_fact_sections():
+    """The verdict surface gets category and traceable facts without changing grade rules."""
+    from app.domains.nutrition.grading.presentation import present
+
+    product = next(p for label, p, _ in CASES if label == "Glucose biscuit")
+    payload = present(product, grade_product(product))
+    assert payload["taxonomy"] == {
+        "domain": "consumed", "category": "packaged_food", "subcategory": "biscuit",
+    }
+    assert payload["decision"]["action"] == "skip"
+    assert payload["lowers"]
+    assert all("quantity" in row and "sources" in row for row in payload["lowers"])
+    assert payload["helps"]
 
 
 def test_the_screen_payload_carries_every_ingredient_free():
@@ -594,13 +610,21 @@ def test_a_declared_added_sugar_is_still_charged_from_the_total():
 # ---------------------------------------------------------------------------
 # Open Food Facts states energy in two different units
 # ---------------------------------------------------------------------------
-def test_open_food_facts_kilojoules_are_converted_before_grading():
-    from app.domains.nutrition.grading.from_scan import energy_kcal_from
+def test_open_food_facts_energy_is_never_read_in_the_wrong_unit():
+    """``energy_100g`` is not reliably kcal, so it is refused rather than guessed.
 
-    # The generic key is kJ. Read as kcal it would say 1874 kcal per 100 g.
-    converted = energy_kcal_from({"energy_100g": 1874})
+    Reading it as kilocalories inflates energy about 4.2x, which shrinks
+    sugar's share of it and lets a product slip under the gates that share
+    feeds. An explicit kilojoule figure converts; the ambiguous one does not.
+    """
+    from app.domains.nutrition.grading.from_scan import _energy_kcal
+
+    assert _energy_kcal({"energy-kcal_100g": 448}) == D("448")
+
+    converted = _energy_kcal({"energy-kj_100g": 1874})
     assert converted is not None
     assert D("447") < converted < D("449")
 
-    # An explicit kcal figure is preferred and passes through untouched.
-    assert energy_kcal_from({"energy-kcal_100g": 448, "energy_100g": 1874}) == D("448")
+    # The ambiguous key alone yields nothing, so step 5 answers rather than
+    # the engine grading on a number in an unknown unit.
+    assert _energy_kcal({"energy_100g": 1874}) is None

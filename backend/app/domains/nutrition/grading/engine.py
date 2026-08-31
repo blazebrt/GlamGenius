@@ -65,7 +65,10 @@ FOOD_GRADE_ENGINE_VERSION = "food-grade-v1"
 #: and fats, in force from January 2022.
 TRANS_FAT_LIMIT_PCT_OF_FAT = Decimal("2")
 
-PHO_MARKERS = ("partially hydrogenated", "vanaspati", "hydrogenated vegetable")
+# Fully hydrogenated vegetable oil is not the same textual claim as partially
+# hydrogenated industrial trans fat.  Only the label terms that establish the
+# latter can trigger the automatic rule.
+PHO_MARKERS = ("partially hydrogenated", "vanaspati")
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +97,9 @@ class ProductInput:
     sodium_g: Decimal | None = None
     salt_g: Decimal | None = None
     basis: str = "solid"                    # solid | drink
+    #: Producer category text, used only to select a customer-facing taxonomy
+    #: path.  It never changes the evidence or grade.
+    categories: str | None = None
     #: Declared percentages, keyed by ingredient: {"atta": 30}
     declared_percentages: dict[str, Decimal] = field(default_factory=dict)
     #: The ingredient the product's own name promises, if any.
@@ -202,36 +208,8 @@ PURITY_NOTES: dict[str, str] = {
 }
 
 
-#: Words a pack puts around a culinary ingredient without changing what it is.
-#: "Pure Cow Ghee" is ghee; "Ghee Roast Snacks" is a snack that mentions ghee.
-_CULINARY_QUALIFIERS: frozenset[str] = frozenset({
-    "pure", "natural", "organic", "premium", "fresh", "raw", "100", "percent",
-    "desi", "cow", "buffalo", "filtered", "unrefined", "refined", "double",
-    "cold", "pressed", "wood", "kachi", "ghani", "iodised", "iodized",
-    "table", "edible", "grade", "food", "classic", "original", "traditional",
-})
-
-
-def _name_is_only(name: str, token: str) -> bool:
-    """True when the pack name is this ingredient and nothing else.
-
-    Containment is not enough. "Honey Oat Cereal" contains "honey" and
-    "Brown Sugar Cookies" contains "sugar", and both are packaged foods that
-    must go through the processing, nutrient and additive gates rather than
-    leaving by step 0. So everything in the name that is not the ingredient
-    itself has to be a word that merely qualifies it.
-    """
-    leftover = set(name.split()) - set(token.split())
-    return not (leftover - _CULINARY_QUALIFIERS)
-
-
 def _match_culinary(product: ProductInput) -> CulinaryIngredient | None:
-    """Is this product a cooking ingredient rather than a food?
-
-    Two ways to be sure, and containment in the name is not one of them: the
-    label declares a single ingredient and that ingredient is a culinary one,
-    or the pack name is the ingredient itself.
-    """
+    """Is this product a cooking ingredient rather than a food?"""
     name = nova.normalise(product.name)
     ingredients = [nova.normalise(row) for row in product.ingredients]
     single_ingredient = ingredients[0] if len(ingredients) == 1 else None
@@ -241,13 +219,13 @@ def _match_culinary(product: ProductInput) -> CulinaryIngredient | None:
             token = nova.normalise(alias)
             if not token:
                 continue
-            hit = (
-                (nova._contains(name, token) and _name_is_only(name, token))
-                or (
-                    single_ingredient is not None
-                    and nova._contains(single_ingredient, token)
-                    and _name_is_only(single_ingredient, token)
-                )
+            # A culinary ingredient has to be the product itself (or the sole
+            # declared ingredient), not merely a word in a composite product
+            # name such as "Honey Cookies".
+            hit = name == token or (
+                single_ingredient is not None
+                and nova._contains(name, token)
+                and nova._contains(single_ingredient, token)
             )
             if hit and (best is None or len(token) > best[0]):
                 best = (len(token), ingredient)
@@ -513,16 +491,13 @@ def _automatic_e(product: ProductInput, trace: list[TraceEntry]) -> str | None:
                 FSSAI_TRANSFAT.name, effect="Automatic E.",
             ))
             return f"The ingredient list contains {marker} oil."
-    if product.trans_fat_g is not None and product.total_fat_g:
-        share = (product.trans_fat_g / product.total_fat_g) * Decimal("100")
-        if share > TRANS_FAT_LIMIT_PCT_OF_FAT:
-            trace.append(TraceEntry(
-                2, "Nutrient bands", "grade.step2.trans_fat_over_limit",
-                f"Trans fat is about {share:.1f}% of the fat in this product. The FSSAI "
-                f"limit is {TRANS_FAT_LIMIT_PCT_OF_FAT}%.",
-                FSSAI_TRANSFAT.name, effect="Automatic E.",
-            ))
-            return "Trans fat is above the FSSAI limit."
+    if product.trans_fat_g is not None:
+        trace.append(TraceEntry(
+            2, "Nutrient bands", "grade.step2.trans_fat_denominator_missing",
+            "The label gives trans fat, but not the verified oils-and-fats denominator required "
+            "for the regulatory calculation.",
+            FSSAI_TRANSFAT.name, effect="Recorded as missing regulatory information.",
+        ))
     return None
 
 
@@ -714,11 +689,11 @@ def _severe_added_sugar(product: ProductInput, trace: list[TraceEntry]) -> str |
 
 
 _HEADLINES: dict[Grade, str] = {
-    Grade.A: "Grade A. A whole food.",
-    Grade.B: "Grade B. A simple processed food.",
-    Grade.C: "Grade C. Processed; fine occasionally.",
-    Grade.D: "Grade D. Heavily processed.",
-    Grade.E: "Grade E. Ultra-processed, and little else.",
+    Grade.A: "Grade A. Fewer product flags.",
+    Grade.B: "Grade B. Some processing flags.",
+    Grade.C: "Grade C. Product facts need consideration.",
+    Grade.D: "Grade D. Multiple product flags.",
+    Grade.E: "Grade E. Strong product concern.",
 }
 
 

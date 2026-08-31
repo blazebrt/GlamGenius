@@ -113,7 +113,6 @@ class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):
     #: wrong_number | wrong_ingredient | wrong_product | wrong_grade |
     #: pack_changed | something_else
     reason: Mapped[str] = mapped_column(String(32), nullable=False)
-    note: Mapped[str | None] = mapped_column(Text)
     #: Where the photo of the pack went, when one was attached.
     photo_key: Mapped[str | None] = mapped_column(String(200))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -153,4 +152,21 @@ class ScanEvent(UUIDPrimaryKey, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("device_id", "client_scan_id", name="uq_scan_event_device_client_id"),
         Index("ix_scan_events_barcode", "barcode"),
+    )
+
+
+class LabelSnapshot(UUIDPrimaryKey, TimestampMixin, Base):
+    """Versioned Store-B facts read from and confirmed against a physical pack."""
+
+    __tablename__ = "product_label_snapshots"
+
+    barcode: Mapped[str] = mapped_column(String(64), nullable=False)
+    device_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("scan_devices.id", ondelete="SET NULL"))
+    scan_event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_events.id", ondelete="RESTRICT"), nullable=False, unique=True)
+    facts: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    confidence: Mapped[str] = mapped_column(String(32), nullable=False, default=ProductConfidence.UNVERIFIED.value)
+
+    __table_args__ = (
+        CheckConstraint(f"confidence IN ({_CONFIDENCE_IN})", name="ck_product_label_snapshots_confidence"),
+        Index("ix_product_label_snapshots_barcode_created", "barcode", "created_at"),
     )
