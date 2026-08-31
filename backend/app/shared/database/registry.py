@@ -26,7 +26,6 @@ from app.domains.planning import models as planning_models
 from app.domains.privacy.models import AccountDeletionJob
 from app.domains.product.models import (
     LabelErrorReport,
-    ProductLabelFacts,
     ProductRecord,
     ScanDevice,
     ScanEvent,

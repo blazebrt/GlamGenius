@@ -16,7 +16,6 @@ from datetime import datetime
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
-    Float,
     ForeignKey,
     Index,
     Integer,
@@ -86,42 +85,6 @@ class ProductRecord(UUIDPrimaryKey, TimestampMixin, Base):
         CheckConstraint("confirmation_count >= 0", name="ck_product_records_confirmations"),
         Index("ix_product_records_confidence", "confidence"),
     )
-
-
-class ProductLabelFacts(UUIDPrimaryKey, TimestampMixin, Base):
-    """What a person read off a physical pack and confirmed.
-
-    This is ours, not Open Food Facts'. Somebody photographed a pack we had no
-    answer for, checked the transcription and tapped confirm; nothing here is
-    copied from Store A, and the ODbL wall is about not combining *their*
-    database with ours. Storing our own reading of a pack in Store B creates no
-    derived database and triggers no share-alike obligation.
-
-    The columns are named for what they are — what was printed — so that the
-    distinction stays visible to whoever reads this next. Store A keeps its own
-    field names, and the two are still only ever paired in memory.
-
-    One row per barcode: a later confirmation replaces the earlier reading
-    rather than accumulating versions, because the pack is the authority and
-    the newest reading of it is the best one we have.
-    """
-
-    __tablename__ = "product_label_facts"
-
-    barcode: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    printed_name: Mapped[str | None] = mapped_column(String(200))
-    printed_brand: Mapped[str | None] = mapped_column(String(160))
-    printed_ingredients: Mapped[str | None] = mapped_column(Text)
-    #: The nutrition table as printed: {"energy_kcal": "480", "sugars_g": "22.5"}.
-    printed_nutrition: Mapped[dict | None] = mapped_column(JSONB)
-    printed_serving_size: Mapped[str | None] = mapped_column(String(80))
-    printed_net_quantity: Mapped[str | None] = mapped_column(String(80))
-    printed_veg_mark: Mapped[str | None] = mapped_column(String(24))
-    printed_allergens: Mapped[str | None] = mapped_column(Text)
-    #: How sure the transcription was, and what it could not read.
-    transcription_confidence: Mapped[float | None] = mapped_column(Float)
-    uncertain_fields: Mapped[dict | None] = mapped_column(JSONB)
-    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):

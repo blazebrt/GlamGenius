@@ -28,24 +28,6 @@ _NUTRIMENT_KEYS: dict[str, tuple[str, ...]] = {
     "salt_g": ("salt_100g",),
 }
 
-#: The same nutrients as they come back from a label transcription, which uses
-#: its own key names rather than Open Food Facts'. Several spellings each,
-#: because the transcription copies the panel as printed and Indian packs are
-#: not consistent about wording.
-_LABEL_KEYS: dict[str, tuple[str, ...]] = {
-    "protein_g": ("protein_g", "proteins_g", "protein"),
-    "total_fat_g": ("total_fat_g", "fat_g", "total_fat"),
-    "saturated_fat_g": ("saturated_fat_g", "saturates_g", "saturated_fat"),
-    "trans_fat_g": ("trans_fat_g", "trans_fat"),
-    "total_sugar_g": ("total_sugar_g", "sugars_g", "sugar_g", "total_sugars_g"),
-    "added_sugar_g": ("added_sugar_g", "added_sugars_g"),
-    "fibre_g": ("fibre_g", "fiber_g", "dietary_fibre_g", "dietary_fiber_g"),
-    "sodium_g": ("sodium_g", "sodium"),
-    "salt_g": ("salt_g", "salt"),
-}
-_LABEL_ENERGY_KCAL_KEYS: tuple[str, ...] = ("energy_kcal", "energy_kcal_100g", "energy")
-_LABEL_ENERGY_KJ_KEYS: tuple[str, ...] = ("energy_kj", "energy_kj_100g")
-
 _DRINK_HINTS = ("beverage", "drink", "juice", "soda", "cola", "water", "milk", "lassi")
 
 #: Energy needs its own handling because Open Food Facts stores two different
@@ -177,48 +159,16 @@ def basis_for(categories: str | None, name: str) -> str:
     return "drink" if any(hint in haystack for hint in _DRINK_HINTS) else "solid"
 
 
-def _label_values(label: dict[str, Any]) -> dict[str, Decimal | None]:
-    """Nutrition off a confirmed label transcription, in ProductInput's terms."""
-    panel = label.get("nutrition_per_100g") or {}
-    lowered = {str(key).strip().lower(): value for key, value in panel.items()}
-    values: dict[str, Decimal | None] = {}
-    for field, keys in _LABEL_KEYS.items():
-        values[field] = next(
-            (v for v in (_decimal(lowered.get(key)) for key in keys) if v is not None), None
-        )
-    energy = next(
-        (v for v in (_decimal(lowered.get(key)) for key in _LABEL_ENERGY_KCAL_KEYS)
-         if v is not None), None
-    )
-    if energy is None:
-        kilojoules = next(
-            (v for v in (_decimal(lowered.get(key)) for key in _LABEL_ENERGY_KJ_KEYS)
-             if v is not None), None
-        )
-        energy = kilojoules / KJ_PER_KCAL if kilojoules is not None else None
-    values["energy_kcal"] = energy
-    return values
-
-
 def build(
     *,
     barcode: str,
     name: str,
     off_half: dict[str, Any] | None,
-    label_half: dict[str, Any] | None = None,
     name_promises: str | None = None,
     marketed_to_children: bool = False,
 ) -> ProductInput:
-    """Assemble one gradeable product from the joined scan result.
-
-    ``label_half`` is our own confirmed reading of the pack, and it fills the
-    gaps rather than replacing anything: Open Food Facts wins where it has a
-    value, because it is the wider record, and the label answers where their
-    copy is silent or missing entirely. The two are read side by side here and
-    are never written back together — the ODbL wall, same as everywhere else.
-    """
+    """Assemble one gradeable product from the joined scan result."""
     off = off_half or {}
-    label = label_half or {}
     nutriments = off.get("nutriments") or {}
     values: dict[str, Decimal | None] = {}
     for field, keys in _NUTRIMENT_KEYS.items():
@@ -226,13 +176,7 @@ def build(
             (v for v in (_decimal(nutriments.get(key)) for key in keys) if v is not None), None
         )
     values["energy_kcal"] = energy_kcal_from(nutriments)
-    if label:
-        for field, value in _label_values(label).items():
-            if values.get(field) is None:
-                values[field] = value
-    ingredients = split_ingredients(
-        off.get("ingredients_text") or label.get("ingredients_text")
-    )
+    ingredients = split_ingredients(off.get("ingredients_text"))
     percentages = declared_percentages(ingredients)
     promised = name_promises
     if promised is None:
@@ -241,7 +185,7 @@ def build(
         promised = next((key for key in percentages if key in name.lower()), None)
 
     return ProductInput(
-        name=name or off.get("product_name") or label.get("product_name") or barcode,
+        name=name or off.get("product_name") or barcode,
         ingredients=ingredients,
         energy_kcal=values["energy_kcal"],
         protein_g=values["protein_g"],
