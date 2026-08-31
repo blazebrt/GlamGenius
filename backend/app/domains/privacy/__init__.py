@@ -235,6 +235,16 @@ REGISTRY: dict[str, Classification] = {
     "scan_devices": Classification.SECRET_EXCLUDED,
     # What we know about a barcode is the same for everybody: a product, its
     # confidence, its FSSAI licence. Nobody's personal data is in it.
+    # The account's own Family Circle. Account-local by construction — the
+    # circle has a unique account_id and the profiles hang off it — so it
+    # leaves with the account and belongs in their export.
+    "family_circles": Classification.INCLUDED,
+    "family_profiles": Classification.INCLUDED,
+    # A person's own preparation for the FSSAI portal: what they saw on the
+    # pack and chose to raise. Theirs, exported with them, and removed when
+    # they go — it is a draft they never filed, not a regulatory record we
+    # are obliged to keep.
+    "fssai_complaint_handoffs": Classification.INCLUDED,
     "product_records": Classification.NOT_USER_OWNED,
     # A confirmed reading of a physical pack. True of the product rather than
     # of the person who photographed it, and the whole point is that the next

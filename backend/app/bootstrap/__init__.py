@@ -397,11 +397,20 @@ def _feature_flag_defaults() -> list[tuple[str, bool, str]]:
     (``STABLE_BETA_DEFAULTS``). A hand-maintained copy here drifted: it seeded
     ``v2_virtual_try_on`` — a key nothing reads — and omitted three flags the
     code knows about, so those rows never appeared in the database at all.
+
+    The seeded value is ``resolved_default``, not the stable default on its
+    own. The documented precedence is database row, then ``V2_FEATURES``, then
+    the stable default — but seeding writes a database row, and a database row
+    outranks the environment. Seeding the raw stable default therefore made
+    ``V2_FEATURES`` inert the moment a deployment seeded: an operator who set
+    the variable would watch it be silently overruled by the safety net it is
+    supposed to sit above. ``resolved_default`` folds the environment in first,
+    so the row we write is the answer the precedence actually calls for.
     """
-    from app.shared.flags.service import KNOWN_FLAGS, STABLE_BETA_DEFAULTS
+    from app.shared.flags.service import KNOWN_FLAGS, resolved_default
 
     return [
-        (key, bool(STABLE_BETA_DEFAULTS.get(key, False)), description)
+        (key, resolved_default(key), description)
         for key, description in KNOWN_FLAGS.items()
     ]
 
