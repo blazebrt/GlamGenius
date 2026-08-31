@@ -131,6 +131,13 @@ def _complete_production(monkeypatch) -> None:
         app_config, "POSTGRES_URL",
         f"postgresql+asyncpg://appuser:{SECRET_PG_PASSWORD}@db.realproject.supabase.co:5432/glamgenius",
     )
+    # A different host, because that is the whole point of this one: in
+    # production it is what keeps Store A physically apart from ours rather
+    # than the two sharing a database. Production refuses to start without it.
+    monkeypatch.setattr(
+        app_config, "OFF_DATABASE_URL",
+        f"postgresql+asyncpg://offuser:{SECRET_PG_PASSWORD}@off.realproject.internal:5432/off",
+    )
     monkeypatch.setattr(app_config, "GEMINI_API_KEY", SECRET_GEMINI)
     monkeypatch.setenv("SENTRY_BACKEND_DSN", f"https://{SECRET_DSN_KEY}@o1.ingest.sentry.io/2")
     monkeypatch.setattr(app_config, "MEDIA_STORAGE_BACKEND", "supabase")
