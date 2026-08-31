@@ -107,6 +107,15 @@ def test_sugar_names_the_exact_rule_and_an_openable_source(payload):
     assert source["identifier"]
 
 
+def test_trace_keeps_the_rule_and_evidence_lifecycle_provenance(payload):
+    trace = next(row for row in payload["trace"] if row["rule_id"] == "grade.step2.sugar")
+    assert trace["source_id"]
+    assert trace["source_url"]
+    assert trace["evidence"]["rule_version"] == "v1"
+    assert trace["evidence"]["status"] == "candidate"
+    assert trace["evidence"]["evidence_claim_ids"] == []
+
+
 # ---------------------------------------------------------------------------
 # The other three rows the screen promises
 # ---------------------------------------------------------------------------

@@ -232,6 +232,22 @@ def _evidence(rule_id: str | None, ruleset: ProductionRuleset) -> dict[str, Any]
     }
 
 
+def _trace_payload(result: GradeResult, ruleset: ProductionRuleset) -> list[dict[str, Any]]:
+    """Preserve exact lifecycle provenance beside every engine trace entry.
+
+    The engine deliberately stays database-free.  The presentation boundary is
+    where its stable rule identifier is joined to the resolved production
+    ruleset, so an audit export can name both the rule version and the exact
+    evidence claim(s) rather than only the candidate source citation.
+    """
+    rows: list[dict[str, Any]] = []
+    for entry in result.trace:
+        row = entry.as_payload()
+        row["evidence"] = _evidence(entry.rule_id, ruleset)
+        rows.append(row)
+    return rows
+
+
 def _factor(
     *,
     key: str,
@@ -660,6 +676,7 @@ def present(
         "lowers": lowers,
         "helps": helps,
         "ingredients": _ingredient_rows(product),
+        "trace": _trace_payload(result, ruleset),
         "quantity_guidance": result.quantity_guidance,
         "purity_note": result.purity_note,
         "missing": list(result.missing),
