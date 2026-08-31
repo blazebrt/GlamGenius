@@ -98,6 +98,24 @@ SEVERE_REQUIRES_FOOD_BELOW_PCT = Decimal("10")
 #: Energy per gram, for turning grams of sugar into a share of energy.
 KCAL_PER_G_SUGAR = Decimal("4")
 
+#: Ingredient wordings that mean a sugar was added to this product.
+#:
+#: Indian panels usually declare only total sugar, so this list is what makes
+#: the total usable: it separates a biscuit that lists sugar second from plain
+#: milk or a pure juice, where every gram of sugar came with the food itself.
+#: Lactose is deliberately absent — it is milk's own sugar, not an addition.
+ADDED_SUGAR_INGREDIENTS: tuple[str, ...] = (
+    "sugar", "cane sugar", "refined sugar", "brown sugar", "caster sugar",
+    "invert sugar", "invert syrup", "invert sugar syrup",
+    "glucose", "liquid glucose", "glucose syrup", "dextrose", "dextrin",
+    "fructose", "high fructose corn syrup", "hfcs", "corn syrup",
+    "maltose", "high maltose corn syrup", "maltodextrin", "malto dextrin",
+    "golden syrup", "malt extract", "malt syrup", "molasses",
+    "honey", "jaggery", "gur", "shakkar", "misri", "khandsari",
+    "date syrup", "fruit juice concentrate", "juice concentrate",
+    "sucrose", "syrup", "treacle", "caramel syrup",
+)
+
 
 @dataclass(frozen=True)
 class Band:
@@ -202,6 +220,7 @@ FSSAI_SUGAR_ENERGY_SOURCE = FSSAI_LABELLING
 __all__ = [
     "ADDED_SUGAR_ENERGY_DEMERIT_PCT",
     "ADDED_SUGAR_ENERGY_SEVERE_PCT",
+    "ADDED_SUGAR_INGREDIENTS",
     "BAND_HIGH",
     "BAND_LOW",
     "BAND_MEDIUM",

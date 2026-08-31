@@ -225,6 +225,12 @@ async def test_the_export_produces_a_valid_downloadable_dataset(off_clean, tmp_p
     assert written["contains_proprietary_data"] is False
     assert written["sha256"] and written["license_url"]
 
+    # The advertised digest has to be the digest of the file people download,
+    # or nobody can verify what we published.
+    import hashlib
+    on_disk = hashlib.sha256((tmp_path / DATA_FILE).read_bytes()).hexdigest()
+    assert written["sha256"] == on_disk
+
 
 @pytest.mark.asyncio
 async def test_the_export_refuses_to_publish_a_proprietary_field(off_clean, tmp_path, monkeypatch):

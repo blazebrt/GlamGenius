@@ -223,7 +223,11 @@ OFF_DATABASE_URL = _to_async_url(_env_str("OFF_DATABASE_URL")) if _env_str("OFF_
 OFF_APP_NAME = _env_str("OFF_APP_NAME", "GlamGenius")
 OFF_APP_VERSION = _env_str("OFF_APP_VERSION", "1.0")
 OFF_CONTACT_EMAIL = _env_str("OFF_CONTACT_EMAIL")
-OFF_TIMEOUT_SECONDS = _env_float("OFF_TIMEOUT_SECONDS", 8.0)
+# Kept below the app's own lookup timeout (LOOKUP_TIMEOUT_MS in
+# frontend/src/services/productScan.ts). A budget the client will not wait
+# out is worse than a short one: the phone abandons a lookup that was
+# about to succeed, shows an offline answer and queues a sync for it.
+OFF_TIMEOUT_SECONDS = _env_float("OFF_TIMEOUT_SECONDS", 4.0)
 
 # Where the ODbL export job writes the redistributable dataset.
 OFF_EXPORT_DIR = _env_str("OFF_EXPORT_DIR", "/data/off-export")

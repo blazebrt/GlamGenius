@@ -62,26 +62,42 @@ export default function InventoryBatchScreen() {
   // Taps are recorded here and flushed in the background, so a slow network
   // never sits between two taps.
   const outbox = useRef<{ candidate_id: string; accept: boolean }[]>([]);
-  const flushing = useRef(false);
+  // The flush in progress, so a caller can wait for it rather than skip it.
+  const flushing = useRef<Promise<void> | null>(null);
   const jobId = useRef<string | null>(null);
+  const [unsent, setUnsent] = useState(false);
 
   useEffect(() => {
     if (permission && !permission.granted && permission.canAskAgain) void requestPermission();
   }, [permission, requestPermission]);
 
-  const flush = useCallback(async () => {
-    if (flushing.current || !jobId.current || outbox.current.length === 0) return;
-    flushing.current = true;
-    const sending = outbox.current;
-    outbox.current = [];
-    try {
-      await decideImportCandidates(jobId.current, sending);
-    } catch {
-      // Put them back; the next tap or the finish button tries again.
-      outbox.current = [...sending, ...outbox.current];
-    } finally {
-      flushing.current = false;
-    }
+  const flush = useCallback((): Promise<void> => {
+    // Join the run already going rather than returning as if there were
+    // nothing to do: a caller that skips it here can declare the capture
+    // finished while decisions are still queued.
+    if (flushing.current) return flushing.current;
+    if (!jobId.current || outbox.current.length === 0) return Promise.resolve();
+
+    const run = (async () => {
+      // Drain, rather than send once. A tap made while a request was in
+      // flight is still sitting in the outbox and nothing else comes back
+      // for it — those items would silently never reach the shelf.
+      while (jobId.current && outbox.current.length > 0) {
+        const sending = outbox.current;
+        outbox.current = [];
+        try {
+          await decideImportCandidates(jobId.current, sending);
+        } catch {
+          // Put them back, ahead of anything queued since, and stop; the next
+          // tap or the finish button tries again.
+          outbox.current = [...sending, ...outbox.current];
+          return;
+        }
+      }
+    })().finally(() => { flushing.current = null; });
+
+    flushing.current = run;
+    return run;
   }, []);
 
   const takePhoto = useCallback(async () => {
@@ -115,13 +131,28 @@ export default function InventoryBatchScreen() {
 
   useEffect(() => {
     if (stage !== 'review' || pending.length > 0) return;
-    // Everything decided. Make sure the last taps landed before saying so.
-    void flush().then(() => setStage('done'));
+    let cancelled = false;
+    // Everything decided. Make sure the last taps landed before saying so —
+    // including any that were made while the previous request was in flight.
+    void (async () => {
+      await flush();
+      if (outbox.current.length > 0) await flush();
+      if (cancelled) return;
+      setUnsent(outbox.current.length > 0);
+      setStage('done');
+    })();
+    return () => { cancelled = true; };
   }, [flush, pending.length, stage]);
+
+  const retryUnsent = useCallback(async () => {
+    await flush();
+    setUnsent(outbox.current.length > 0);
+  }, [flush]);
 
   const startOver = useCallback(() => {
     jobId.current = null;
     outbox.current = [];
+    setUnsent(false);
     setCapture(null);
     setPending([]);
     setStage('camera');
@@ -221,6 +252,8 @@ export default function InventoryBatchScreen() {
         <CaptureDone
           kept={kept}
           dropped={dropped}
+          unsent={unsent}
+          onRetryUnsent={() => void retryUnsent()}
           onScanAnother={startOver}
           onOpenInventory={() => router.replace('/(tabs)/care')}
         />

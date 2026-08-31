@@ -51,6 +51,21 @@ export const S = {
     saltPinchesOne: '1 pinch of salt in one packet',
     oilSpoons: '{spoons} spoons of oil in one packet',
     oilSpoonsOne: '1 spoon of oil in one packet',
+    // Used when the pack does not state its net quantity. Saying "one packet"
+    // there would be a made-up number: wrong several times over for a sachet,
+    // and far under for a kilo bag.
+    sugarSpoonsPer100: '{spoons} spoons of sugar in every 100 g',
+    sugarSpoonsOnePer100: '1 spoon of sugar in every 100 g',
+    saltPinchesPer100: '{pinches} pinches of salt in every 100 g',
+    saltPinchesOnePer100: '1 pinch of salt in every 100 g',
+    oilSpoonsPer100: '{spoons} spoons of oil in every 100 g',
+    oilSpoonsOnePer100: '1 spoon of oil in every 100 g',
+    sugarSpoonsPer100Ml: '{spoons} spoons of sugar in every 100 ml',
+    sugarSpoonsOnePer100Ml: '1 spoon of sugar in every 100 ml',
+    saltPinchesPer100Ml: '{pinches} pinches of salt in every 100 ml',
+    saltPinchesOnePer100Ml: '1 pinch of salt in every 100 ml',
+    oilSpoonsPer100Ml: '{spoons} spoons of oil in every 100 ml',
+    oilSpoonsOnePer100Ml: '1 spoon of oil in every 100 ml',
     proteinBowls: 'Protein of about {bowls} bowls of dal',
     noEverydayNumber: 'Nothing on this label stands out.',
 
@@ -86,6 +101,18 @@ export const S = {
     missingIngredients: 'the ingredient list',
     missingPanel: 'the nutrition panel',
     helpUs: 'Send us a photo of the pack',
+  },
+
+  // -----------------------------------------------------------------------
+  // While it loads, and when it does not.
+  // -----------------------------------------------------------------------
+  loading: {
+    working: 'Reading this pack',
+    failedTitle: 'We could not load this',
+    // States what happened. It does not blame the phone or promise a cause.
+    failedBody: 'The verdict did not arrive. Your connection may be down.',
+    retry: 'Try again',
+    back: 'Go back',
   },
 
   // -----------------------------------------------------------------------

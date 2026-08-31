@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.evidence.applicability import EvidenceApplicability, parse_behavior_applicability
 from app.domains.evidence.enums import (
+    APPROVED_REVIEW_STATUSES,
     EVIDENCE_STRENGTHS,
     ClaimSourceRelationship,
     ClaimStatus,
@@ -224,8 +225,8 @@ async def assert_claim_approvable(session: AsyncSession, claim: EvidenceClaim) -
     This is intentionally a service assertion rather than a public endpoint.
     Draft records can exist freely; only an explicit human review can pass it.
     """
-    if claim.review_status != ReviewStatus.APPROVED.value:
-        raise EvidenceApprovalError("claim review_status must be approved")
+    if claim.review_status not in APPROVED_REVIEW_STATUSES:
+        raise EvidenceApprovalError("claim review_status must be approved or published")
     if not claim.reviewed_by or not claim.reviewed_at:
         raise EvidenceApprovalError("approved claims require reviewer and reviewed_at")
     if not claim.claim_status:

@@ -159,12 +159,17 @@ async def confirm_label(
     """Accept a transcribed label. One tap, the VC-07 draft-to-confirmed pattern."""
     if not body.facts:
         raise ValidationFailedError("There is nothing to confirm.", field="facts")
-    record = await service.apply_confirmed_label(session, barcode=body.barcode, facts=body.facts)
-    await service.record_scan(
+    # The scan is recorded first because it is the idempotent half: it knows
+    # whether this confirmation is new. A phone replaying its offline queue
+    # would otherwise count one tap as several and promote the record.
+    _event, created = await service.record_scan(
         session,
         barcode=body.barcode, outcome=service.OUTCOME_LABEL,
         client_scan_id=body.client_scan_id, device_id=device.id,
         account_id=device.claimed_by_account_id, label_facts=body.facts,
+    )
+    record = await service.apply_confirmed_label(
+        session, barcode=body.barcode, facts=body.facts, count_confirmation=created,
     )
     await session.commit()
     return {
@@ -221,12 +226,29 @@ async def read_product_verdict(
     """
     found = await service.lookup(session, barcode)
     off_half = found.get("open_food_facts")
-    name = (off_half or {}).get("product_name") or barcode
-    product = from_scan.build(barcode=barcode, name=name, off_half=off_half)
+    label_half = found.get("label")
+    name = (
+        (off_half or {}).get("product_name")
+        or (label_half or {}).get("product_name")
+        or barcode
+    )
+    product = from_scan.build(
+        barcode=barcode, name=name, off_half=off_half, label_half=label_half,
+    )
     result = grade_product(product)
     payload = presentation.present(product, result)
     payload["confidence"] = found["confidence"]
     payload["attribution"] = found.get("attribution")
+    # What the pack actually holds, so "one packet" on the screen means this
+    # packet. Absent when neither source states a net quantity, and the screen
+    # then says "in 100 g" rather than inventing a pack.
+    size = from_scan.pack_size_g(
+        (off_half or {}).get("quantity") or (label_half or {}).get("net_quantity")
+    )
+    payload["pack_size_g"] = float(size) if size is not None else None
+    # Solid or drink, so the screen can say "100 g" or "100 ml" honestly when
+    # there is no pack size to work from.
+    payload["basis"] = product.basis
     return payload
 
 

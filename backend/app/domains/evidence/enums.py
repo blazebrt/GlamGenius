@@ -148,6 +148,18 @@ SOURCE_STATUSES = tuple(x.value for x in SourceStatus)
 EVIDENCE_STRENGTHS = tuple(x.value for x in EvidenceStrength)
 CLAIM_STATUSES = tuple(x.value for x in ClaimStatus)
 REVIEW_STATUSES = tuple(x.value for x in ReviewStatus)
+
+#: Statuses that carry a completed human approval.
+#:
+#: Publishing is a step *past* approval, not an alternative to it: the
+#: transition table only allows approved -> published, so a published claim was
+#: reviewed by a person and still is. Checking for the literal "approved" alone
+#: would make publishing a claim silently switch off the rules it supports.
+APPROVED_REVIEW_STATUSES: frozenset[str] = frozenset({
+    ReviewStatus.APPROVED.value,
+    ReviewStatus.PUBLISHED.value,
+})
+
 EVIDENCE_TIERS = tuple(x.value for x in EvidenceTier)
 CLAIM_SOURCE_RELATIONSHIPS = tuple(x.value for x in ClaimSourceRelationship)
 RULE_EVIDENCE_RELATIONSHIPS = tuple(x.value for x in RuleEvidenceRelationship)

@@ -60,6 +60,14 @@ export interface VerdictSource {
   proteinG?: number | null;
   /** Grams in the pack, so "one packet" means this packet. */
   packSizeG?: number | null;
+  /** Which unit the per-100 panel is in, for when there is no pack size. */
+  basis?: 'solid' | 'drink';
+  /**
+   * Set when the product name, ingredients or nutrition came from Open Food
+   * Facts. Their licence requires the attribution on every surface that shows
+   * the data, so this travels with it rather than being decided per screen.
+   */
+  attribution?: string | null;
   components: VerdictComponent[];
   ingredients: VerdictIngredient[];
   alternative?: Alternative | null;
@@ -100,8 +108,28 @@ export const rupees = (paise: number): string => {
  * screen exists to replace.
  */
 export function everydayNumber(source: VerdictSource): string {
-  const pack = source.packSizeG && source.packSizeG > 0 ? source.packSizeG : 100;
+  // Only a stated net quantity makes "one packet" a real quantity. Without
+  // one the number stays what the panel actually says — per 100 g or 100 ml —
+  // rather than being presented as a pack it was never measured against.
+  const known = !!source.packSizeG && source.packSizeG > 0;
+  const pack = known ? (source.packSizeG as number) : 100;
   const per = (per100: number) => (per100 * pack) / 100;
+  const drink = source.basis === 'drink';
+
+  const wording = {
+    sugar: known ? S.primary.sugarSpoons
+      : drink ? S.primary.sugarSpoonsPer100Ml : S.primary.sugarSpoonsPer100,
+    sugarOne: known ? S.primary.sugarSpoonsOne
+      : drink ? S.primary.sugarSpoonsOnePer100Ml : S.primary.sugarSpoonsOnePer100,
+    salt: known ? S.primary.saltPinches
+      : drink ? S.primary.saltPinchesPer100Ml : S.primary.saltPinchesPer100,
+    saltOne: known ? S.primary.saltPinchesOne
+      : drink ? S.primary.saltPinchesOnePer100Ml : S.primary.saltPinchesOnePer100,
+    oil: known ? S.primary.oilSpoons
+      : drink ? S.primary.oilSpoonsPer100Ml : S.primary.oilSpoonsPer100,
+    oilOne: known ? S.primary.oilSpoonsOne
+      : drink ? S.primary.oilSpoonsOnePer100Ml : S.primary.oilSpoonsOnePer100,
+  };
 
   const sugar = source.totalSugarG ?? 0;
   const salt = source.saltG ?? 0;
@@ -116,15 +144,15 @@ export function everydayNumber(source: VerdictSource): string {
   // Ordered by what a person would want to know first about a poor product,
   // and only shown when the number is big enough to be worth a sentence.
   if (spoonsOfSugar >= 2) {
-    return t(spoonsOfSugar === 1 ? S.primary.sugarSpoonsOne : S.primary.sugarSpoons,
+    return t(spoonsOfSugar === 1 ? wording.sugarOne : wording.sugar,
       { spoons: spoonsOfSugar });
   }
   if (pinchesOfSalt >= 4) {
-    return t(pinchesOfSalt === 1 ? S.primary.saltPinchesOne : S.primary.saltPinches,
+    return t(pinchesOfSalt === 1 ? wording.saltOne : wording.salt,
       { pinches: pinchesOfSalt });
   }
   if (spoonsOfOil >= 2) {
-    return t(spoonsOfOil === 1 ? S.primary.oilSpoonsOne : S.primary.oilSpoons,
+    return t(spoonsOfOil === 1 ? wording.oilOne : wording.oil,
       { spoons: spoonsOfOil });
   }
   // For a good product the number worth showing is the good one.

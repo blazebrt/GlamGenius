@@ -246,6 +246,13 @@ def _fires(rule: CareEnvironmentRule, window: EnvironmentWindow, facts: dict[str
     if rule.rule_id == "care.env.rain_recovery_window":
         if not _is_wet(today):
             return False
+        # Rain that has not actually cleared the air is not a window. Without
+        # this the restore fires alongside the deferral on a wet Very Poor day,
+        # and because a restore is preferred as the supporting note the day
+        # would read "strong actives are deferred" over "now is the time to
+        # resume them". Giving something back has to be true to be worth it.
+        if not today.is_indian_reading or naqi_at_least(today.category, "Poor"):
+            return False
         # The rain is today; the poor stretch is the days before it.
         prior = EnvironmentWindow(
             today=window.history[-1], history=window.history[:-1]

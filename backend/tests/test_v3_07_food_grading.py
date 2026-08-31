@@ -513,3 +513,94 @@ def test_a_missing_panel_reaches_the_screen_as_not_enough_information():
     assert payload["outcome"] == "not_enough_information"
     assert payload["grade"] is None
     assert payload["missing"]
+
+
+# ---------------------------------------------------------------------------
+# Step 0 only lets a product out when the pack really is the ingredient
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("name", "ingredients"),
+    [
+        # Each of these contains a culinary ingredient's name and is a
+        # packaged food. Leaving by step 0 would skip processing, nutrients
+        # and additives entirely and show no grade at all.
+        ("Honey Oat Cereal", ("whole oats", "honey", "sugar", "sunflower oil")),
+        ("Brown Sugar Cookies", ("refined wheat flour (maida)", "brown sugar",
+                                 "edible vegetable oil (palm)", "raising agent (ins 500ii)")),
+        ("Ghee Roast Snacks", ("rice flour", "ghee", "iodised salt", "spices")),
+        ("Honey Roasted Peanuts", ("peanuts", "honey", "sugar", "iodised salt")),
+    ],
+)
+def test_a_packaged_food_named_after_an_ingredient_is_still_graded(name, ingredients):
+    result = grade_product(P(
+        name=name, ingredients=ingredients, energy_kcal=D("450"),
+        total_fat_g=D("18"), saturated_fat_g=D("6"), total_sugar_g=D("22"),
+        fibre_g=D("2"), sodium_g=D("0.3"),
+    ))
+    assert result.outcome is GradeOutcome.GRADED, f"{name} left by the culinary gate"
+    assert result.grade is not None
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Ghee", "Pure Cow Ghee", "Amul Pure Ghee", "100% Pure Ghee", "Desi Ghee"],
+)
+def test_the_pack_name_around_a_culinary_ingredient_still_reads_as_that_ingredient(name):
+    result = grade_product(P(
+        name=name, ingredients=("ghee",), energy_kcal=D("900"),
+        total_fat_g=D("100"), saturated_fat_g=D("65"),
+    ))
+    assert result.outcome is GradeOutcome.NOT_GRADED
+
+
+# ---------------------------------------------------------------------------
+# Total sugar stands in for added sugar only when a sugar was added
+# ---------------------------------------------------------------------------
+def test_milk_sugar_is_not_charged_as_added_sugar():
+    """Lactose is milk's own. Charging it would send milk to the sugar gate."""
+    result = grade_product(P(
+        name="Toned Milk", ingredients=("toned milk",), energy_kcal=D("58"),
+        protein_g=D("3.1"), total_fat_g=D("3"), saturated_fat_g=D("2"),
+        total_sugar_g=D("4.7"), sodium_g=D("0.04"),
+    ))
+    assert result.outcome is GradeOutcome.GRADED
+    assert not any("added_sugar" in entry.rule_id for entry in result.trace)
+
+
+def test_pure_juice_is_not_treated_as_sugar_water():
+    """100% juice is a poor product; it is not a cola, and E is not its grade."""
+    result = grade_product(P(
+        name="100% Orange Juice",
+        ingredients=("orange juice from concentrate",),
+        energy_kcal=D("45"), total_sugar_g=D("10"), sodium_g=D("0.001"),
+        basis="drink",
+    ))
+    assert result.grade is not Grade.E
+
+
+def test_a_declared_added_sugar_is_still_charged_from_the_total():
+    """The proxy has to keep working, or the gate stops catching anything."""
+    result = grade_product(P(
+        name="Fizzy Orange Drink",
+        ingredients=("carbonated water", "sugar", "acidity regulator (ins 330)",
+                     "colour (ins 110)", "flavouring"),
+        energy_kcal=D("42"), total_sugar_g=D("10.5"), sodium_g=D("0.01"),
+        basis="drink",
+    ))
+    assert result.grade is Grade.E
+    assert any("added_sugar_dominates" in entry.rule_id for entry in result.trace)
+
+
+# ---------------------------------------------------------------------------
+# Open Food Facts states energy in two different units
+# ---------------------------------------------------------------------------
+def test_open_food_facts_kilojoules_are_converted_before_grading():
+    from app.domains.nutrition.grading.from_scan import energy_kcal_from
+
+    # The generic key is kJ. Read as kcal it would say 1874 kcal per 100 g.
+    converted = energy_kcal_from({"energy_100g": 1874})
+    assert converted is not None
+    assert D("447") < converted < D("449")
+
+    # An explicit kcal figure is preferred and passes through untouched.
+    assert energy_kcal_from({"energy-kcal_100g": 448, "energy_100g": 1874}) == D("448")

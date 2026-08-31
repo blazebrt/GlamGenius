@@ -322,11 +322,15 @@ async def queue_for_environment_crossing(
     if decision is None:
         return None
 
+    # An air-quality decision is a care notification. Without the typed topic
+    # the planner module name falls through to ``today_style``, and somebody
+    # who turned care notifications off would still be sent this one.
     return await queue(
         session, account_id=account_id, plan_date=plan_date,
         notification_key=f"environment_crossing:{today.category}",
         title=decision.headline, body=decision.reason,
-        module=MODULE_SKINCARE, timezone_name=timezone_name, moment=moment,
+        module=MODULE_SKINCARE, topic="care",
+        timezone_name=timezone_name, moment=moment,
     )
 
 

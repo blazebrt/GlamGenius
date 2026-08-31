@@ -180,6 +180,8 @@ export interface MeResponse {
   account: {
     id: string;
     status: 'active' | 'deletion_requested' | 'deleted';
+    /** Server-decided. The client mirrors it; it never grants it. */
+    is_admin: boolean;
     deletion_requested_at: string | null;
   };
   consent: ConsentSummary;
@@ -688,6 +690,10 @@ export interface ProductVerdictWire {
   missing: string[];
   confidence: { level: string; text: string };
   attribution: { text: string } | null;
+  /** Grams in the pack, when either source states a net quantity. */
+  pack_size_g: number | null;
+  /** "solid" or "drink" — which unit the per-100 panel is stated in. */
+  basis: string;
 }
 
 /** The graded verdict for one barcode, shaped for the verdict screen. */

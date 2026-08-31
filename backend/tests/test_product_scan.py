@@ -62,6 +62,13 @@ def _fake_ai_result(data):
 
 
 async def _seed_off_product(barcode: str, **fields):
+    """Seed Store A the way the cache writes it, ``fetched_at`` included.
+
+    Every record the application caches carries the time it was fetched, and
+    the freshness check reads it, so a fixture without one is not a cached
+    record — it is an undated import.
+    """
+    fields.setdefault("fetched_at", datetime.now(UTC))
     factory = get_off_sessionmaker()
     async with factory() as session:
         session.add(OffProduct(barcode=barcode, **fields))
@@ -447,7 +454,7 @@ async def test_a_scan_nobody_claimed_is_in_nobodys_export(
     factory = get_sessionmaker()
     async with factory() as session:
         payload = await export_service.build_export(session, account_id)
-    assert payload["domains"]["product_scans"] == {"scans": []}
+    assert payload["domains"]["product_scans"] == {"scans": [], "label_error_reports": []}
 
 
 @pytest.mark.asyncio
@@ -477,3 +484,130 @@ def test_the_device_token_itself_is_never_exported():
     assert REGISTRY["scan_devices"] == Classification.SECRET_EXCLUDED
     assert REGISTRY["scan_events"] == Classification.INCLUDED
     assert REGISTRY["product_records"] == Classification.NOT_USER_OWNED
+
+
+# ---------------------------------------------------------------------------
+# A photographed pack becomes an answer
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_a_confirmed_label_answers_the_next_lookup(db_clean, off_clean, app_client, device):
+    """The point of the label capture: an unknown barcode stops being unknown.
+
+    Confirming used to keep only the FSSAI licence, leaving the ingredients and
+    nutrition on a scan event nothing ever read back — so the rescan that
+    follows the confirmation found the same nothing it started with.
+    """
+    facts = {
+        "product_name": "Regional namkeen",
+        "brand": "Local",
+        "ingredients_text": "besan, edible oil, salt, spices. FSSAI Lic. No. 10012345678901",
+        "nutrition_per_100g": {
+            "energy_kcal": "520", "sugars_g": "3.1", "total_fat_g": "32",
+            "saturated_fat_g": "14", "protein_g": "12", "sodium_g": "1.1",
+        },
+        "confidence": 0.9,
+    }
+    confirm = await app_client.post(
+        "/api/v2/scan/label/confirm", headers=device,
+        json={"barcode": UNKNOWN, "facts": facts, "client_scan_id": uuid.uuid4().hex},
+    )
+    assert confirm.status_code == 201, confirm.text
+
+    found = (await app_client.get(f"/api/v2/scan/lookup/{UNKNOWN}", headers=device)).json()
+    assert found["found"] is True
+    assert found["label"]["ingredients_text"].startswith("besan")
+    assert found["label"]["product_name"] == "Regional namkeen"
+    # There is an ingredient list now, so there is nothing left to capture.
+    assert found["can_capture_label"] is False
+
+    verdict = (await app_client.get(f"/api/v2/scan/verdict/{UNKNOWN}", headers=device)).json()
+    assert verdict["outcome"] != "not_enough_information", verdict
+    assert verdict["grade"] is not None
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_label_does_not_reach_store_a(db_clean, off_clean, app_client, device):
+    """Ours stays ours. Their store holds only what they published."""
+    await app_client.post(
+        "/api/v2/scan/label/confirm", headers=device,
+        json={
+            "barcode": UNKNOWN,
+            "facts": {"product_name": "Regional namkeen", "ingredients_text": "besan, salt"},
+            "client_scan_id": uuid.uuid4().hex,
+        },
+    )
+    factory = get_off_sessionmaker()
+    async with factory() as session:
+        row = (await session.execute(
+            select(OffProduct).where(OffProduct.barcode == UNKNOWN)
+        )).scalar_one_or_none()
+    assert row is None, "a confirmed label was written into Store A"
+
+
+@pytest.mark.asyncio
+async def test_replaying_a_confirmation_does_not_promote_the_record(
+    db_clean, off_clean, app_client, device,
+):
+    """An offline queue sending the same tap five times is still one tap."""
+    client_scan_id = uuid.uuid4().hex
+    facts = {"product_name": "Namkeen", "ingredients_text": "besan, salt"}
+    bodies = []
+    for _ in range(5):
+        response = await app_client.post(
+            "/api/v2/scan/label/confirm", headers=device,
+            json={"barcode": UNKNOWN, "facts": facts, "client_scan_id": client_scan_id},
+        )
+        assert response.status_code == 201, response.text
+        bodies.append(response.json())
+    assert [b["confirmations"] for b in bodies] == [1, 1, 1, 1, 1]
+    assert bodies[-1]["confidence"]["level"] == ProductConfidence.UNVERIFIED.value
+
+
+@pytest.mark.asyncio
+async def test_a_stale_cached_product_is_revalidated(db_clean, off_clean, app_client, device, monkeypatch):
+    """Formulations change. A copy kept forever pins the grade to the old pack."""
+    from datetime import timedelta
+
+    from app.domains.off import client as off_client
+    from app.domains.product import service as product_service
+
+    await _seed_off_product(
+        KNOWN, product_name="Old Name", brands="Parle",
+        ingredients_text="wheat flour",
+        fetched_at=datetime.now(UTC) - product_service.OFF_CACHE_TTL - timedelta(days=1),
+    )
+
+    called = {"n": 0}
+
+    async def _fetch(barcode: str):
+        called["n"] += 1
+        return {"product_name": "New Name", "brands": "Parle",
+                "ingredients_text": "wheat flour, sugar"}
+
+    monkeypatch.setattr(off_client, "fetch_product", _fetch)
+    body = (await app_client.get(f"/api/v2/scan/lookup/{KNOWN}", headers=device)).json()
+    assert called["n"] == 1, "a stale record was served without re-checking"
+    assert body["open_food_facts"]["product_name"] == "New Name"
+
+
+@pytest.mark.asyncio
+async def test_a_stale_record_survives_a_failed_refresh(db_clean, off_clean, app_client, device, monkeypatch):
+    """Their API being down is not a reason to lose the answer we have."""
+    from datetime import timedelta
+
+    from app.domains.off import client as off_client
+    from app.domains.product import service as product_service
+
+    await _seed_off_product(
+        KNOWN, product_name="Parle-G Biscuits", brands="Parle",
+        ingredients_text="wheat flour",
+        fetched_at=datetime.now(UTC) - product_service.OFF_CACHE_TTL - timedelta(days=1),
+    )
+
+    async def _fetch(barcode: str):
+        return None
+
+    monkeypatch.setattr(off_client, "fetch_product", _fetch)
+    body = (await app_client.get(f"/api/v2/scan/lookup/{KNOWN}", headers=device)).json()
+    assert body["found"] is True
+    assert body["open_food_facts"]["product_name"] == "Parle-G Biscuits"

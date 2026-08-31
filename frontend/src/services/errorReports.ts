@@ -10,8 +10,8 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { api } from './api';
 import { V2 } from './apiV2';
+import { postDeviceForm } from './productScan';
 
 const QUEUE_KEY = 'glamgenius_error_reports_v1';
 
@@ -76,9 +76,11 @@ async function post(report: ErrorReport): Promise<void> {
       uri: report.photo_uri, name: 'pack.jpg', type: 'image/jpeg',
     } as unknown as Blob);
   }
-  await api.post(`${V2}/reports/label-error`, form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  // As this device, not as an account. The endpoint authenticates with the
+  // device token — the person who notices a wrong number is often not signed
+  // in — and the account client would both omit that header and sign a
+  // signed-in user out on the 401 it got back.
+  await postDeviceForm(`${V2}/reports/label-error`, form);
 }
 
 /** Send now if we can, keep it if we cannot. Returns true when it went. */

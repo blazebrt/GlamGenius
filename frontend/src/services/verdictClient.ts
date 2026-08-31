@@ -117,7 +117,14 @@ export function toVerdictSource(
     saltG: wire.nutrition.salt_g,
     totalFatG: wire.nutrition.total_fat_g,
     proteinG: wire.nutrition.protein_g,
-    packSizeG,
+    // The server knows the pack size; the parameter stays as an override for
+    // a caller that knows better (a scanned multipack, say).
+    packSizeG: packSizeG ?? wire.pack_size_g ?? null,
+    basis: wire.basis === 'drink' ? 'drink' : 'solid',
+    // ODbL is a condition, not a nicety: wherever their data is shown, the
+    // attribution goes with it. Dropping it here left the main graded screen
+    // rendering their fields with no notice at all.
+    attribution: wire.attribution?.text ?? null,
     components,
     ingredients,
     alternative,

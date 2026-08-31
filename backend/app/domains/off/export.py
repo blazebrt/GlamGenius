@@ -101,12 +101,15 @@ async def export(destination: Path | None = None) -> dict[str, Any]:
     factory = get_off_sessionmaker()
     async with factory() as session:
         rows = (await session.execute(select(OffProduct).order_by(OffProduct.barcode))).scalars()
-        with data_path.open("w", encoding="utf-8") as handle:
+        # newline="\n" so the bytes on disk are the bytes hashed on every
+        # platform; the digest has to cover the record separators too, or the
+        # published sha256 never matches the file anybody downloads.
+        with data_path.open("w", encoding="utf-8", newline="\n") as handle:
             for product in rows:
                 row = _assert_publishable(_record(product))
-                line = json.dumps(row, ensure_ascii=False, sort_keys=True)
-                handle.write(line + "\n")
-                digest.update(line.encode("utf-8"))
+                payload = json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+                handle.write(payload)
+                digest.update(payload.encode("utf-8"))
                 count += 1
 
     (target / LICENSE_FILE).write_text(LICENSE_NOTICE, encoding="utf-8")

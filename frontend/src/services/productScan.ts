@@ -26,7 +26,19 @@ const CACHE_KEY = 'glamgenius_scan_cache_v1';
 const QUEUE_KEY = 'glamgenius_scan_queue_v1';
 
 /** Kept short on purpose: a known barcode has to answer in under three seconds. */
-const LOOKUP_TIMEOUT_MS = 2500;
+/**
+ * How long a device request may take.
+ *
+ * This has to sit above the server's own Open Food Facts budget
+ * (OFF_TIMEOUT_SECONDS, 4s) plus its overhead, or a lookup that is working
+ * perfectly well gets abandoned here, shown as an offline answer, and queued
+ * for a sync that has nothing to send. Uncached products are the ones that
+ * take longest, so they were the ones most likely to fail.
+ */
+const LOOKUP_TIMEOUT_MS = 6000;
+
+/** Uploading a photo of a pack is not a lookup and needs longer. */
+const UPLOAD_TIMEOUT_MS = 30000;
 /** How many products the phone keeps for offline use. */
 export const CACHE_LIMIT = 400;
 
@@ -82,6 +94,22 @@ const scanApi = axios.create({
   timeout: LOOKUP_TIMEOUT_MS,
   headers: { 'Content-Type': 'application/json' },
 });
+
+/**
+ * POST a multipart form as this device.
+ *
+ * Device-authenticated, like every other scan call: these endpoints take an
+ * X-Device-Token and nothing else, and sending them through the account client
+ * both fails for want of the header and trips its 401 sign-out on the way.
+ */
+export async function postDeviceForm(path: string, form: FormData): Promise<void> {
+  const headers = await deviceHeaders();
+  if (!headers['X-Device-Token']) throw new Error('no device token');
+  await scanApi.post(path, form, {
+    headers: { ...headers, 'Content-Type': 'multipart/form-data' },
+    timeout: UPLOAD_TIMEOUT_MS,
+  });
+}
 
 const UNKNOWN_CONFIDENCE: Confidence = {
   level: 'not_enough_information',

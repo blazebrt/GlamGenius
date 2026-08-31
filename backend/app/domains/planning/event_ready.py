@@ -347,8 +347,14 @@ async def generate(session: AsyncSession, account_id: uuid.UUID, event_id: uuid.
     actions = _actions(event, day, material, look, look_items or [], status)
     if status != "past":
         event_local_date = date.fromisoformat(_event_payload(event, timezone_name)["local_date"])
+        # The window is about air that has already been measured, so it has to
+        # end today. ``day.plan_date`` is the event's date — a future one for
+        # any event still ahead — and a window ending there is either full of
+        # gaps or, where forecasts happen to be stored, describes days that
+        # have not happened as air that "has been" Poor. The event's date is
+        # still what says how far away it is.
         actions.extend(await _environment_actions(
-            session, account_id=account_id, plan_date=day.plan_date,
+            session, account_id=account_id, plan_date=day.now_local.date(),
             days_until=(event_local_date - day.now_local.date()).days,
         ))
     old = {row.action_key: row for row in (await session.execute(select(EventReadyAction).where(EventReadyAction.event_ready_plan_id == plan.id))).scalars().all()}

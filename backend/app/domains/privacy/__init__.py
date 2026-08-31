@@ -236,6 +236,10 @@ REGISTRY: dict[str, Classification] = {
     # What we know about a barcode is the same for everybody: a product, its
     # confidence, its FSSAI licence. Nobody's personal data is in it.
     "product_records": Classification.NOT_USER_OWNED,
+    # A confirmed reading of a physical pack. Contributed by whoever scanned it
+    # and true of the product rather than of the person, so it stays when they
+    # leave — the same treatment as the product record it belongs to.
+    "product_label_facts": Classification.NOT_USER_OWNED,
     # A person's own scan history is theirs. Exported by the ``product_scans``
     # domain in export.py. Scans made anonymously carry no account and belong
     # to nobody, so they are not in anybody's export.

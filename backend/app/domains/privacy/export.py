@@ -62,7 +62,7 @@ from app.domains.planning.models import (
     WeeklyPlan,
 )
 from app.domains.privacy import EXPORT_SCHEMA_VERSION, REGISTRY, Classification
-from app.domains.product.models import ScanEvent
+from app.domains.product.models import LabelErrorReport, ScanEvent
 from app.domains.profile.models import (
     AppearanceGoal,
     AppearanceProfile,
@@ -292,10 +292,13 @@ async def _scans(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]
 
 
 async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
-    """Barcodes this account has scanned.
+    """Barcodes this account has scanned, and the corrections they sent us.
 
-    Only scans linked to the account. A scan made before signing up carries no
-    account and belongs to nobody, so it is in nobody's export.
+    Only rows linked to the account. A scan or report made before signing up
+    carries no account and belongs to nobody, so it is in nobody's export.
+
+    The report photo is referenced by its storage key, never inlined — the
+    same rule the rest of this module follows for media.
     """
     rows = await _fetch(
         session,
@@ -304,7 +307,17 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
         .order_by(ScanEvent.created_at.desc()),
     )
     fields = [c.name for c in ScanEvent.__table__.columns]
-    return {"scans": [_row_dict(r, fields) for r in rows]}
+    reports = await _fetch(
+        session,
+        select(LabelErrorReport)
+        .where(LabelErrorReport.account_id == account_id)
+        .order_by(LabelErrorReport.created_at.desc()),
+    )
+    report_fields = [c.name for c in LabelErrorReport.__table__.columns]
+    return {
+        "scans": [_row_dict(r, fields) for r in rows],
+        "label_error_reports": [_row_dict(r, report_fields) for r in reports],
+    }
 
 
 async def _quiz_and_styling(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:

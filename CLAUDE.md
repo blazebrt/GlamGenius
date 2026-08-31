@@ -63,7 +63,7 @@ backend/
   pytest.ini                 # testpaths = tests, session-scoped event loop
   pyproject.toml             # Ruff config (line-length 120, py311)
   requirements.txt
-  migrations/versions/       # 21 Alembic revisions, one linear chain
+  migrations/versions/       # 22 Alembic revisions, one linear chain
   app/
     config.py                # every env var, plus validate_production_configuration()
     release.py               # `python -m app.release` — lock, migrate, seed, verify
@@ -261,7 +261,7 @@ Health: `GET /api/v2/health` (served from `backend/app/api/v2/config.py`, not `h
 ### Migrations
 
 Alembic, one linear chain, `backend/migrations/versions/`. The current head is
-`r8s9t0u1v2` (label error reports). `0001_initial_glamgenius_v2.py` is the
+`s9t0u1v2w3` (confirmed label facts). `0001_initial_glamgenius_v2.py` is the
 consolidated greenfield baseline.
 
 ```bash

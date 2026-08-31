@@ -348,6 +348,25 @@ def test_rule_10_needs_the_poor_stretch_not_just_rain():
     assert evaluate_environment(window) is None
 
 
+def test_rule_10_needs_the_rain_to_have_actually_cleared_the_air():
+    """Rain on a day that is still Very Poor is not a window to resume.
+
+    Both rules would otherwise be true at once, and because a restore is
+    preferred as the supporting note the day would defer strong actives in its
+    headline and invite them back underneath.
+    """
+    window = EnvironmentWindow(
+        today=_day(aqi=340, category="Very Poor", precipitation=90, condition="rainy"),
+        history=_run(3, "Poor", 260),
+    )
+    decision = evaluate_environment(window)
+    assert decision is not None
+    assert decision.rule_id != "care.env.rain_recovery_window"
+    assert decision.action is not EnvironmentAction.RESTORE
+    if decision.note is not None:
+        assert "available again" not in decision.note
+
+
 # ---------------------------------------------------------------------------
 # Precedence: exactly one primary decision
 # ---------------------------------------------------------------------------

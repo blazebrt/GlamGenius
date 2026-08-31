@@ -15,14 +15,14 @@ response. Nothing writes the pair anywhere: that is the ODbL wall, and
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.off import client as off_client
-from app.domains.off.join import join_on_barcode, read_off_product
+from app.domains.off.join import join_on_barcode, read_off_product, read_off_product_with_age
 from app.domains.off.models import OffProduct
 from app.domains.off.store import get_off_sessionmaker
 from app.domains.product.confidence import (
@@ -31,7 +31,12 @@ from app.domains.product.confidence import (
     ProductConfidence,
 )
 from app.domains.product.fssai import find_licence, is_valid_licence
-from app.domains.product.models import LabelErrorReport, ProductRecord, ScanEvent
+from app.domains.product.models import (
+    LabelErrorReport,
+    ProductLabelFacts,
+    ProductRecord,
+    ScanEvent,
+)
 from app.shared.database.base import utcnow
 
 OUTCOME_LOCAL = "found_local"
@@ -49,6 +54,37 @@ async def _own_record(session: AsyncSession, barcode: str) -> ProductRecord | No
     return (await session.execute(
         select(ProductRecord).where(ProductRecord.barcode == barcode)
     )).scalar_one_or_none()
+
+
+async def _label_facts(session: AsyncSession, barcode: str) -> ProductLabelFacts | None:
+    return (await session.execute(
+        select(ProductLabelFacts).where(ProductLabelFacts.barcode == barcode)
+    )).scalar_one_or_none()
+
+
+def label_block(row: ProductLabelFacts | None) -> dict[str, Any] | None:
+    """Our confirmed reading of a pack, shaped for a response.
+
+    Store B data throughout. It never travels into Store A and is never merged
+    with the Open Food Facts half on disk — the two are still only paired for
+    the length of one response.
+    """
+    if row is None:
+        return None
+    return {
+        "product_name": row.printed_name,
+        "brand": row.printed_brand,
+        "ingredients_text": row.printed_ingredients,
+        "nutrition_per_100g": row.printed_nutrition or {},
+        "serving_size": row.printed_serving_size,
+        "net_quantity": row.printed_net_quantity,
+        "veg_mark": row.printed_veg_mark,
+        "allergen_text": row.printed_allergens,
+        "confidence": row.transcription_confidence,
+        "uncertain_fields": (row.uncertain_fields or {}).get("fields", []),
+        "confirmed_at": row.confirmed_at.isoformat() if row.confirmed_at else None,
+        "source": "label_capture",
+    }
 
 
 async def _cache_off_product(barcode: str, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -73,19 +109,40 @@ async def _cache_off_product(barcode: str, payload: dict[str, Any]) -> dict[str,
         return await read_off_product(session, barcode)
 
 
+#: How long a cached Open Food Facts record is served before we look again.
+#:
+#: Their contributors correct records and manufacturers reformulate packs, so a
+#: copy kept forever pins a product's grade to whatever the label said the first
+#: time anybody scanned it. A refresh is best-effort in both directions: the
+#: cached copy is still what we answer with when their API is slow, down, or
+#: the phone is offline, so re-checking costs a stale answer nothing.
+OFF_CACHE_TTL = timedelta(days=30)
+
+
+def _is_stale(fetched_at: datetime | None) -> bool:
+    if fetched_at is None:
+        return True
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - fetched_at) >= OFF_CACHE_TTL
+
+
 async def _off_half(barcode: str, *, allow_network: bool = True) -> tuple[dict[str, Any] | None, bool]:
     """Store A first, their API second. Returns (record, came_from_network)."""
     factory = get_off_sessionmaker()
     async with factory() as session:
-        cached = await read_off_product(session, barcode)
-    if cached is not None:
+        cached, fetched_at = await read_off_product_with_age(session, barcode)
+    if cached is not None and not _is_stale(fetched_at):
         return cached, False
     if not allow_network:
-        return None, False
+        # Offline, a stale copy is a better answer than none, and the response
+        # already carries the confidence level that says how far to trust it.
+        return cached, False
     payload = await off_client.fetch_product(barcode)
     if payload is None:
-        return None, False
-    return await _cache_off_product(barcode, payload), True
+        return cached, False
+    refreshed = await _cache_off_product(barcode, payload)
+    return (refreshed if refreshed is not None else cached), True
 
 
 async def lookup(
@@ -97,9 +154,10 @@ async def lookup(
     """Look one barcode up. Always answers; never raises for a missing product."""
     barcode = (barcode or "").strip()
     record = await _own_record(session, barcode)
+    label = label_block(await _label_facts(session, barcode))
     off_record, from_network = await _off_half(barcode, allow_network=allow_network)
 
-    if record is None and off_record is None:
+    if record is None and off_record is None and label is None:
         return {
             "barcode": barcode,
             "found": False,
@@ -111,6 +169,7 @@ async def lookup(
             "open_food_facts": None,
             "attribution": None,
             "glamgenius": None,
+            "label": None,
         }
 
     level = record.confidence if record else ProductConfidence.UNVERIFIED.value
@@ -124,13 +183,21 @@ async def lookup(
         } if (record or off_record) else None,
     )
     body = joined.as_dict()
+    # Ours, alongside the pair rather than merged into it. A confirmed reading
+    # answers for a pack Open Food Facts has never heard of, and completes one
+    # whose record is missing the ingredient list.
+    body["label"] = label
+    have_ingredients = bool(
+        (off_record or {}).get("ingredients_text")
+        or (label or {}).get("ingredients_text")
+    )
     body.update({
         "found": True,
         "outcome": OUTCOME_LOCAL if record is not None else OUTCOME_OFF,
         "confidence": confidence_block(level),
         "from_network": from_network,
         # Incomplete data is still worth offering the label capture for.
-        "can_capture_label": off_record is None or not off_record.get("ingredients_text"),
+        "can_capture_label": not have_ingredients,
     })
     return body
 
@@ -193,6 +260,7 @@ async def apply_confirmed_label(
     barcode: str,
     facts: dict[str, Any],
     confirmed_by: str | None = None,
+    count_confirmation: bool = True,
 ) -> ProductRecord:
     """Take a label a person has confirmed and update our half of the record.
 
@@ -202,6 +270,11 @@ async def apply_confirmed_label(
 
     Confirmations accumulate: enough independent ones promote the record from
     unverified to community. A team member confirming makes it verified outright.
+
+    ``count_confirmation`` is how a replayed offline queue stays honest. The
+    caller has already asked ``record_scan`` whether this confirmation is new;
+    a repeat sends False, so one person tapping once cannot promote a record to
+    community confidence by losing their connection five times.
     """
     record = await _own_record(session, barcode)
     if record is None:
@@ -213,7 +286,14 @@ async def apply_confirmed_label(
     if licence and is_valid_licence(licence):
         record.fssai_licence = licence
 
-    record.confirmation_count += 1
+    # Keep the reading itself, not just the licence off it. Without this the
+    # transcription lives only on the scan event, no later lookup can see it,
+    # and the pack the person photographed stays unanswerable — which is the
+    # one thing the label capture exists to fix.
+    await _store_label_facts(session, barcode=barcode, facts=facts)
+
+    if count_confirmation:
+        record.confirmation_count += 1
     if confirmed_by:
         record.confidence = ProductConfidence.VERIFIED.value
         record.verified_at = utcnow()
@@ -226,6 +306,43 @@ async def apply_confirmed_label(
         )
     await session.flush()
     return record
+
+
+async def _store_label_facts(
+    session: AsyncSession, *, barcode: str, facts: dict[str, Any],
+) -> ProductLabelFacts:
+    """Write the confirmed reading of a pack, replacing any earlier one.
+
+    Ours, in Store B. A person read a physical label; nothing here came from
+    Open Food Facts, so no derived database is created and the wall is not
+    touched. Only fields the transcription actually carried are written, so a
+    confirmation that could not read the nutrition panel does not blank out a
+    panel an earlier confirmation did read.
+    """
+    row = await _label_facts(session, barcode)
+    if row is None:
+        row = ProductLabelFacts(barcode=barcode)
+        session.add(row)
+
+    def _set(attribute: str, value: Any) -> None:
+        if value not in (None, "", {}, []):
+            setattr(row, attribute, value)
+
+    _set("printed_name", facts.get("product_name"))
+    _set("printed_brand", facts.get("brand"))
+    _set("printed_ingredients", facts.get("ingredients_text"))
+    _set("printed_nutrition", facts.get("nutrition_per_100g"))
+    _set("printed_serving_size", facts.get("serving_size"))
+    _set("printed_net_quantity", facts.get("net_quantity"))
+    _set("printed_veg_mark", facts.get("veg_mark"))
+    _set("printed_allergens", facts.get("allergen_text"))
+    _set("transcription_confidence", facts.get("confidence"))
+    uncertain = facts.get("uncertain_fields")
+    if uncertain:
+        row.uncertain_fields = {"fields": list(uncertain)}
+    row.confirmed_at = utcnow()
+    await session.flush()
+    return row
 
 
 #: Where a report photo lives. Not under an account prefix: the person who

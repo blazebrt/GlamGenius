@@ -31,6 +31,7 @@ from app.domains.nutrition.grading import nova
 from app.domains.nutrition.grading.rules import (
     ADDED_SUGAR_ENERGY_DEMERIT_PCT,
     ADDED_SUGAR_ENERGY_SEVERE_PCT,
+    ADDED_SUGAR_INGREDIENTS,
     BAND_HIGH,
     BAND_LOW,
     BAND_MEDIUM,
@@ -201,8 +202,36 @@ PURITY_NOTES: dict[str, str] = {
 }
 
 
+#: Words a pack puts around a culinary ingredient without changing what it is.
+#: "Pure Cow Ghee" is ghee; "Ghee Roast Snacks" is a snack that mentions ghee.
+_CULINARY_QUALIFIERS: frozenset[str] = frozenset({
+    "pure", "natural", "organic", "premium", "fresh", "raw", "100", "percent",
+    "desi", "cow", "buffalo", "filtered", "unrefined", "refined", "double",
+    "cold", "pressed", "wood", "kachi", "ghani", "iodised", "iodized",
+    "table", "edible", "grade", "food", "classic", "original", "traditional",
+})
+
+
+def _name_is_only(name: str, token: str) -> bool:
+    """True when the pack name is this ingredient and nothing else.
+
+    Containment is not enough. "Honey Oat Cereal" contains "honey" and
+    "Brown Sugar Cookies" contains "sugar", and both are packaged foods that
+    must go through the processing, nutrient and additive gates rather than
+    leaving by step 0. So everything in the name that is not the ingredient
+    itself has to be a word that merely qualifies it.
+    """
+    leftover = set(name.split()) - set(token.split())
+    return not (leftover - _CULINARY_QUALIFIERS)
+
+
 def _match_culinary(product: ProductInput) -> CulinaryIngredient | None:
-    """Is this product a cooking ingredient rather than a food?"""
+    """Is this product a cooking ingredient rather than a food?
+
+    Two ways to be sure, and containment in the name is not one of them: the
+    label declares a single ingredient and that ingredient is a culinary one,
+    or the pack name is the ingredient itself.
+    """
     name = nova.normalise(product.name)
     ingredients = [nova.normalise(row) for row in product.ingredients]
     single_ingredient = ingredients[0] if len(ingredients) == 1 else None
@@ -212,8 +241,13 @@ def _match_culinary(product: ProductInput) -> CulinaryIngredient | None:
             token = nova.normalise(alias)
             if not token:
                 continue
-            hit = nova._contains(name, token) or (
-                single_ingredient is not None and nova._contains(single_ingredient, token)
+            hit = (
+                (nova._contains(name, token) and _name_is_only(name, token))
+                or (
+                    single_ingredient is not None
+                    and nova._contains(single_ingredient, token)
+                    and _name_is_only(single_ingredient, token)
+                )
             )
             if hit and (best is None or len(token) > best[0]):
                 best = (len(token), ingredient)
@@ -419,8 +453,27 @@ def _step2(
     return bands, penalty, positives
 
 
+def _declares_added_sugar(product: ProductInput) -> bool:
+    """Does the ingredient list actually name a sugar that was added?"""
+    joined = nova.normalise(" ; ".join(product.ingredients))
+    return any(nova._contains(joined, token) for token in ADDED_SUGAR_INGREDIENTS)
+
+
 def _added_sugar_energy_share(product: ProductInput) -> Decimal | None:
-    sugar = product.added_sugar_g if product.added_sugar_g is not None else product.total_sugar_g
+    """Added sugar as a share of energy, or None when it cannot be known.
+
+    Indian panels usually declare total sugar and nothing more, so the total is
+    the only figure available. It is a fair stand-in for added sugar when the
+    ingredient list names a sugar that was added, and simply wrong when it does
+    not: the sugar in plain milk, curd or a pure fruit juice is intrinsic, and
+    charging it here would send those to the automatic-E gate meant for sugar
+    water. Unknown stays unknown — step 5 is where missing data is answered.
+    """
+    sugar = product.added_sugar_g
+    if sugar is None:
+        if not _declares_added_sugar(product):
+            return None
+        sugar = product.total_sugar_g
     if sugar is None or not product.energy_kcal:
         return None
     return (sugar * KCAL_PER_G_SUGAR / product.energy_kcal) * Decimal("100")

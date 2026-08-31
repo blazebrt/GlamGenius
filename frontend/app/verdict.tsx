@@ -28,6 +28,7 @@ import {
   flushReports, makeReport, submitReport, type ReportReason,
 } from '../src/services/errorReports';
 import { getProductVerdict } from '../src/services/verdictClient';
+import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import {
   ComponentRow, GradeBlock, IngredientList, NotGradedCard, ReportSheet,
   UnknownCard, VerdictActions, VerdictLines,
@@ -39,6 +40,7 @@ export default function VerdictScreen() {
   const { barcode } = useLocalSearchParams<{ barcode?: string }>();
 
   const [source, setSource] = useState<VerdictSource | null>(null);
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [tab, setTab] = useState<'verdict' | 'why' | 'ingredients'>('verdict');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [speaking, setSpeaking] = useState(false);
@@ -47,12 +49,19 @@ export default function VerdictScreen() {
   const [reportBusy, setReportBusy] = useState(false);
   const [reportStatus, setReportStatus] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!barcode) return;
-    void getProductVerdict(barcode).then(setSource).catch(() => setSource(null));
+    setLoadState('loading');
+    void getProductVerdict(barcode)
+      .then((next) => { setSource(next); setLoadState('ready'); })
+      .catch(() => { setSource(null); setLoadState('failed'); });
+  }, [barcode]);
+
+  useEffect(() => {
+    load();
     // Anything held from a previous session goes now.
     void flushReports().catch(() => undefined);
-  }, [barcode]);
+  }, [load]);
 
   useEffect(() => () => { void stopSpeaking(); }, []);
 
@@ -102,7 +111,30 @@ export default function VerdictScreen() {
   }, [barcode, photoUri, reportSubject]);
 
   if (!view || !source) {
-    return <View style={[styles.container, { paddingTop: insets.top }]} />;
+    return (
+      <View style={[styles.container, styles.centred, { paddingTop: insets.top }]}>
+        {loadState === 'loading' ? (
+          <Text style={styles.stateBody}>{S.loading.working}</Text>
+        ) : (
+          <>
+            <Text style={styles.stateTitle}>{S.loading.failedTitle}</Text>
+            <Text style={styles.stateBody}>{S.loading.failedBody}</Text>
+            <TouchableOpacity
+              accessibilityRole="button" accessibilityLabel={S.loading.retry}
+              onPress={load} style={styles.stateButton}
+            >
+              <Text style={styles.stateButtonText}>{S.loading.retry}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              accessibilityRole="button" accessibilityLabel={S.loading.back}
+              onPress={() => router.back()} style={styles.link}
+            >
+              <Text style={styles.linkText}>{S.loading.back}</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </View>
+    );
   }
 
   return (
@@ -195,6 +227,13 @@ export default function VerdictScreen() {
             <Text style={styles.linkText}>{S.primary.scanAnother}</Text>
           </TouchableOpacity>
         )}
+
+        {/*
+          A licence condition, not a footer. The name, ingredients and
+          nutrition on all three tabs can come from Open Food Facts, so where
+          they do, this renders with them.
+        */}
+        {!!source.attribution && <OpenFoodFactsAttribution />}
       </ScrollView>
 
       <Modal
@@ -219,6 +258,22 @@ export default function VerdictScreen() {
 }
 
 const styles = StyleSheet.create({
+  centred: { alignItems: 'center', justifyContent: 'center', padding: SPACING.lg },
+  stateTitle: {
+    color: COLORS.textPrimary, fontFamily: FONTS.family.heading, fontSize: 22,
+    marginBottom: SPACING.sm, textAlign: 'center',
+  },
+  stateBody: {
+    color: COLORS.textMuted, fontFamily: FONTS.family.body, fontSize: 15,
+    lineHeight: 22, marginBottom: SPACING.lg, textAlign: 'center',
+  },
+  stateButton: {
+    backgroundColor: COLORS.primary, borderRadius: 12,
+    paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md,
+  },
+  stateButtonText: {
+    color: COLORS.textInverse, fontFamily: FONTS.family.bodySemibold, fontSize: 16,
+  },
   container: { flex: 1, backgroundColor: COLORS.background },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

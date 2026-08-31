@@ -14,6 +14,7 @@ there to keep it that way.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -63,10 +64,25 @@ def _serialise(product: OffProduct) -> dict[str, Any]:
 
 async def read_off_product(session: AsyncSession, barcode: str) -> dict[str, Any] | None:
     """Read one product from Store A. Uses Store A's session, never Store B's."""
+    record, _fetched_at = await read_off_product_with_age(session, barcode)
+    return record
+
+
+async def read_off_product_with_age(
+    session: AsyncSession, barcode: str,
+) -> tuple[dict[str, Any] | None, datetime | None]:
+    """The record and when we last fetched it, for deciding whether to refresh.
+
+    ``fetched_at`` is ours in the sense that we recorded it, but it is a fact
+    about the cached copy rather than anything proprietary, so it stays in
+    Store A and never travels with the record into a response.
+    """
     product = (await session.execute(
         select(OffProduct).where(OffProduct.barcode == barcode)
     )).scalar_one_or_none()
-    return _serialise(product) if product else None
+    if product is None:
+        return None, None
+    return _serialise(product), product.fetched_at
 
 
 def join_on_barcode(

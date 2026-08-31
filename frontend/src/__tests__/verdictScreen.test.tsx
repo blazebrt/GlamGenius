@@ -398,3 +398,37 @@ describe('the strings', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// The everyday number must describe the quantity it was actually measured on
+// ---------------------------------------------------------------------------
+describe('the converted number names a real quantity', () => {
+  it('says "one packet" only when the pack size is known', () => {
+    const sentence = everydayNumber({ ...base, packSizeG: 75 });
+    expect(sentence).toContain('one packet');
+    // 22.5 g/100 g across a 75 g pack is ~17 g, which is 3 spoons.
+    expect(sentence).toContain('3');
+  });
+
+  it('falls back to the panel figure rather than inventing a packet', () => {
+    const sentence = everydayNumber({ ...base, packSizeG: null });
+    expect(sentence).not.toContain('packet');
+    expect(sentence).toContain('100 g');
+  });
+
+  it('says millilitres for a drink with no stated quantity', () => {
+    const sentence = everydayNumber({
+      ...base, packSizeG: null, basis: 'drink', totalSugarG: 10.6,
+    });
+    expect(sentence).not.toContain('packet');
+    expect(sentence).toContain('100 ml');
+  });
+
+  it('scales to the pack it was given, not to 100 g', () => {
+    const sachet = everydayNumber({ ...base, packSizeG: 20 });
+    const family = everydayNumber({ ...base, packSizeG: 500 });
+    expect(sachet).not.toEqual(family);
+    // 22.5 g/100 g over 500 g is 112.5 g of sugar — 23 spoons, not 4.
+    expect(family).toContain('23');
+  });
+});

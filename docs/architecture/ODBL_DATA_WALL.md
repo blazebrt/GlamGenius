@@ -91,6 +91,29 @@ and the attribution renders with it. It stops being fine the moment the same
 join is written on a server — a shared cache, a warm-up job, an analytics
 table. Keep the pairing on the phone and in the response, and nowhere else.
 
+### A label somebody photographed is not one of these
+
+`product_label_facts` (Store B) holds a product name, an ingredient list and a
+nutrition panel — the same *kinds* of field Store A holds — and it is not a
+breach, because of where they came from. A person pointed a camera at a
+physical pack we had no record of, checked the transcription and confirmed it.
+ODbL covers the database Open Food Facts publishes, not the packet on the
+shelf, so our own reading of that packet is independently sourced and creates
+no derived database.
+
+Two things keep that true, and both are worth preserving:
+
+- The columns are named for what they are (`printed_name`, `printed_ingredients`,
+  `printed_nutrition`) rather than borrowed from Open Food Facts, so the
+  distinction stays visible to whoever reads the schema next.
+- Nothing copies between the two. `apply_confirmed_label()` writes only Store
+  B; the OFF cache writes only Store A; `from_scan.build()` reads both and
+  pairs them in memory for one response, exactly like every other join here.
+
+If a confirmed label were ever *populated from* an Open Food Facts record
+rather than from a photograph, it would stop being ours and this section would
+stop being true.
+
 ## What we give back
 
 `python -m app.domains.off.export` publishes our copy of the Open Food Facts

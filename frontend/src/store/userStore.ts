@@ -196,7 +196,11 @@ export const useUserStore = create<UserStore>((set, get) => ({
     try {
       const res = await getMe();
       const me = res.profile;
-      const isAdmin = false; // Is Admin isn't on the new MeResponse, or we could handle it via account
+      // From the server, which is the only thing that decides it. This flag
+      // is a routing convenience so an operator can reach the admin screens;
+      // every admin endpoint still checks the caller itself, so a client that
+      // lied about this would get nothing but 403s.
+      const isAdmin = res.account?.is_admin === true;
       if (me && typeof me === 'object') {
         set({
           user: { ...emptyProfile(get().userId), ...me },

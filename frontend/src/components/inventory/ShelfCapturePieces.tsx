@@ -102,17 +102,26 @@ export function CandidateRow({
 export function CaptureDone({
   kept,
   dropped,
+  unsent = false,
+  onRetryUnsent,
   onScanAnother,
   onOpenInventory,
 }: {
   kept: number;
   dropped: number;
+  /** True when taps are still queued, so the count above is not the whole story. */
+  unsent?: boolean;
+  onRetryUnsent?: () => void;
   onScanAnother: () => void;
   onOpenInventory: () => void;
 }) {
   return (
     <View style={styles.done} accessibilityLabel="Capture finished">
-      <Ionicons name="checkmark-circle-outline" size={28} color={COLORS.success} />
+      <Ionicons
+        name={unsent ? 'cloud-offline-outline' : 'checkmark-circle-outline'}
+        size={28}
+        color={unsent ? COLORS.warning : COLORS.success}
+      />
       <Text style={styles.doneTitle}>
         {kept} {kept === 1 ? 'item is' : 'items are'} on your shelf
       </Text>
@@ -121,6 +130,22 @@ export function CaptureDone({
           ? `${dropped} ${dropped === 1 ? 'suggestion was' : 'suggestions were'} dropped and saved nothing.`
           : 'Everything the photo found was kept.'}
       </Text>
+      {unsent && (
+        <>
+          {/* Saying "saved" when it is not is the one thing this must not do. */}
+          <Text style={styles.body}>
+            Some of your taps have not reached us yet. They are still here.
+          </Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Send the rest"
+            onPress={onRetryUnsent}
+            style={styles.linkButton}
+          >
+            <Text style={styles.linkText}>Send the rest</Text>
+          </TouchableOpacity>
+        </>
+      )}
       <TouchableOpacity
         accessibilityRole="button"
         accessibilityLabel="Photograph another shelf"
