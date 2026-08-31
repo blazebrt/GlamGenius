@@ -145,8 +145,9 @@ export function toVerdictSource(
     // rendering their fields with no notice at all.
     attribution: wire.attribution?.text ?? null,
     components,
-    lowers: wire.lowers ?? [],
-    helps: wire.helps ?? [],
+    // The label is a key the string file resolves; it is never the rule id.
+    lowers: (wire.lowers ?? []).map((row) => ({ ...row, label: row.label ?? row.key })),
+    helps: (wire.helps ?? []).map((row) => ({ ...row, label: row.label ?? row.key })),
     ingredients,
     alternative,
     quantityGuidance: wire.quantity_guidance,

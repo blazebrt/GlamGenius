@@ -79,6 +79,39 @@ export const S = {
     lower_salt: 'The label shows a salt flag.', lower_fat: 'The label shows a fat flag.',
     lower_additive: 'An ingredient on the label is flagged.', lower_naming: 'The name and declared ingredient details do not fully match.',
     lower_label_fact: 'A label fact lowered the grade.',
+
+    /**
+     * The name of the thing each row is about.
+     *
+     * Without these the row shows a status and a number with nothing to attach
+     * them to — "High. 26.4 g per 100 g" of what?
+     */
+    label_sugar: 'Sugar', label_salt: 'Salt', label_sodium: 'Sodium',
+    label_saturated_fat: 'Saturated fat', label_total_fat: 'Total fat',
+    label_processing: 'Processing', label_refined_grain: 'Refined grain',
+    label_trans_fat: 'Trans fat', label_added_sugar_share: 'Added sugar',
+    label_named_ingredient: 'Named ingredient',
+    label_protein: 'Protein', label_fibre: 'Fibre',
+
+    /** What each finding means, in the words the row prints. */
+    high: 'High',
+    moderate: 'Moderate',
+    high_sugar: 'High in sugar',
+    high_salt: 'High in salt',
+    high_sodium: 'High in sodium',
+    high_saturated_fat: 'High in saturated fat',
+    high_total_fat: 'High in total fat',
+    highly_processed: 'Highly processed',
+    processed: 'Processed',
+    refined_grain_main_ingredient: 'The main ingredient is a refined grain.',
+    partially_hydrogenated_oil: 'The label lists partially hydrogenated oil.',
+    added_sugar_dominates_energy: 'Added sugar supplies most of the energy.',
+    additive_black: 'Not permitted in food sold here.',
+    additive_red: 'Usage is regulated; this rule flags it.',
+    additive_amber: 'Worth knowing about.',
+    named_ingredient_share: 'Less of the named ingredient than the name suggests.',
+    named_ingredient_not_declared: 'The pack does not declare how much of it there is.',
+    of_product: 'of the product',
   },
 
   // -----------------------------------------------------------------------

@@ -682,13 +682,14 @@ export interface VerdictEvidenceSourceWire {
 
 export interface VerdictFactorWire {
   key: string;
+  /** The customer-facing name of the thing: "sugar", not "grade.step2.sugar". */
+  label: string;
   status: string;
   band: 'green' | 'yellow' | 'red';
   quantity: {
-    label: string;
     value: number;
     unit: string;
-    basis: 'per_100_g' | 'per_100_ml' | 'pack';
+    basis: 'per_100_g' | 'per_100_ml' | 'of_product';
   } | null;
   explanation: string;
   rule: string | null;

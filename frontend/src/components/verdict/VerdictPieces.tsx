@@ -242,6 +242,14 @@ export function FactorSection({
         <View key={row.key} style={styles.factor}>
           <View style={[styles.dot, { backgroundColor: BAND_COLOURS[row.band].fill }]} />
           <View style={{ flex: 1, gap: 2 }}>
+            {/*
+              The name of the thing comes first. A row that opens with "High"
+              and a number leaves the reader to work out high *what* — which is
+              the one question the row exists to answer.
+            */}
+            <Text style={styles.factorName}>
+              {S.factors[`label_${row.label}` as keyof typeof S.factors] ?? row.label}
+            </Text>
             <Text style={styles.factorStatus}>{S.factors[row.status as keyof typeof S.factors] ?? row.status}</Text>
             {!!row.quantity && (
               <Text style={styles.factorQuantity}>
@@ -507,6 +515,9 @@ export function ReportSheet({
 }
 
 const styles = StyleSheet.create({
+  factorName: {
+    color: COLORS.textPrimary, fontFamily: FONTS.family.bodySemibold, fontSize: 16,
+  },
   ingredientActions: {
     flexDirection: 'row', gap: SPACING.md, marginTop: 6, flexWrap: 'wrap',
   },

@@ -186,13 +186,16 @@ describe('factor quantities', () => {
         onExplain={jest.fn()}
         rows={[{
           key: 'sugar', label: 'sugar', status: 'high', band: 'red',
-          quantity: { label: 'sugar', value: 26.4, unit: 'g', basis: 'per_100_g' },
+          quantity: { value: 26.4, unit: 'g', basis: 'per_100_g' },
           explanation: 'high_sugar', rule: 'grade.step2.sugar', sources: [],
         }]}
       />,
     );
 
     expect(screen.getByText('26.4 g per 100 g')).toBeTruthy();
+    // The name of the thing, resolved from the label key. A row that
+    // shows only "High" and a number does not say high what.
+    expect(screen.getByText(S.factors.label_sugar)).toBeTruthy();
   });
 });
 

@@ -25,13 +25,19 @@ export interface VerdictEvidenceSource {
 
 export interface VerdictFactor {
   key: string;
+  /**
+   * The customer-facing name of the thing this row is about.
+   *
+   * A string key the app resolves to words — never the rule id. "Sugar" is
+   * what a person holding a biscuit can act on; "grade.step2.sugar" is not.
+   */
+  label: string;
   status: string;
   band: ColourBand;
   quantity: {
-    label: string;
     value: number;
     unit: string;
-    basis: 'per_100_g' | 'per_100_ml' | 'pack';
+    basis: 'per_100_g' | 'per_100_ml' | 'of_product';
   } | null;
   explanation: string;
   rule: string | null;
