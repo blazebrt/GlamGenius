@@ -26,6 +26,7 @@ from app.domains.nutrition import models as nutrition_models
 from app.domains.planning import models as planning_models
 from app.domains.privacy.models import AccountDeletionJob
 from app.domains.product.models import (
+    FssaiComplaintHandoff,
     LabelErrorReport,
     ProductRecord,
     ScanDevice,

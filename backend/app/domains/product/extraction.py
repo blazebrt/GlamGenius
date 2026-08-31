@@ -48,6 +48,7 @@ class ExtractedLabel(BaseModel):
     serving_size: str | None = Field(default=None, max_length=80)
     net_quantity: str | None = Field(default=None, max_length=80)
     fssai_licence: str | None = Field(default=None, max_length=20)
+    batch_number: str | None = Field(default=None, max_length=80)
     veg_mark: str | None = Field(default=None, max_length=24)
     allergen_text: str | None = Field(default=None, max_length=1000)
     confidence: float | None = Field(default=None, ge=0, le=1)
@@ -58,7 +59,7 @@ class ExtractedLabel(BaseModel):
 def prompt() -> str:
     return """Transcribe this packaged food label.
 Return one JSON object with product_name, brand, ingredients_text,
-nutrition_per_100g, serving_size, net_quantity, fssai_licence, veg_mark,
+nutrition_per_100g, serving_size, net_quantity, fssai_licence, batch_number, veg_mark,
 allergen_text, confidence, uncertain_fields and photo_quality_notes.
 Copy the nutrition table exactly as printed, per 100 g or per 100 ml, keeping the
 units. Copy the ingredient list in the order printed. The FSSAI licence is a

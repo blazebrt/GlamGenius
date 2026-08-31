@@ -103,6 +103,8 @@ class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):
     device_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("scan_devices.id", ondelete="CASCADE"),
     )
+
+
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("accounts.id", ondelete="CASCADE"),
     )
@@ -121,6 +123,50 @@ class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):
         UniqueConstraint("device_id", "client_report_id", name="uq_label_report_device_client_id"),
         Index("ix_label_error_reports_barcode", "barcode", "created_at"),
         Index("ix_label_error_reports_open", "resolved_at"),
+    )
+
+
+class FssaiComplaintHandoff(UUIDPrimaryKey, TimestampMixin, Base):
+    """A structured, user-confirmed preparation for the official portal.
+
+    This is not a complaint filing and never represents that FSSAI accepted a
+    complaint. The person reviews the pack facts here, then completes the
+    submission in FSSAI's own authenticated system.
+    """
+
+    __tablename__ = "fssai_complaint_handoffs"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    barcode: Mapped[str] = mapped_column(String(64), nullable=False)
+    # food_safety | label_information | misleading_claim | packaging
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    product_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    brand: Mapped[str] = mapped_column(String(160), nullable=False)
+    batch_number: Mapped[str] = mapped_column(String(80), nullable=False)
+    fssai_licence: Mapped[str] = mapped_column(String(20), nullable=False)
+    photo_asset_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("media_assets.id", ondelete="RESTRICT"), nullable=False
+    )
+    # reviewed | official_portal_opened. Neither means "filed".
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="reviewed", server_default="reviewed"
+    )
+    official_portal_opened_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "reason IN ('food_safety', 'label_information', 'misleading_claim', 'packaging')",
+            name="ck_fssai_handoff_reason",
+        ),
+        CheckConstraint(
+            "status IN ('reviewed', 'official_portal_opened')",
+            name="ck_fssai_handoff_status",
+        ),
+        Index("ix_fssai_handoff_status_created", "status", "created_at"),
     )
 
 

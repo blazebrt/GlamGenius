@@ -7,11 +7,12 @@ up. A device token reaches product data and nothing else.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.media.storage import factory as storage_factory
@@ -20,10 +21,10 @@ from app.domains.nutrition.grading.production_rules import (
     enforce_published_required_rules,
     resolve_production_ruleset,
 )
-from app.domains.product import devices, extraction, service
+from app.domains.product import complaints, devices, extraction, service
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
-from app.domains.product.models import ScanDevice
+from app.domains.product.models import FssaiComplaintHandoff, ScanDevice
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account
@@ -258,6 +259,85 @@ async def read_product_verdict(
     # there is no pack size to work from.
     payload["basis"] = product.basis
     return payload
+
+
+class FssaiComplaintPreviewBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    barcode: str = Field(min_length=6, max_length=64)
+    reason: str = Field(pattern="^(food_safety|label_information|misleading_claim|packaging)$")
+    photo_asset_id: uuid.UUID | None = None
+
+
+@router.post("/reports/fssai/preview")
+async def preview_fssai_complaint(
+    body: FssaiComplaintPreviewBody,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Return a reviewable request from confirmed pack facts only.
+
+    This does not file anything. Missing pack facts stay visibly missing rather
+    than being inferred from an external catalogue.
+    """
+    del current
+    snapshot = await service.latest_label_snapshot(session, body.barcode)
+    facts = snapshot.facts if snapshot is not None else {}
+    fields = complaints.prepared_fields(facts, str(body.photo_asset_id) if body.photo_asset_id else None)
+    return {
+        "ready_for_official_handoff": not complaints.missing_preparation_fields(fields),
+        "missing_fields": complaints.missing_preparation_fields(fields),
+        "reason": body.reason,
+        "request_text": complaints.REQUEST_TEMPLATES[body.reason],
+        "pack_fields": fields,
+        "official_portal_url": complaints.FSSAI_CONSUMER_GRIEVANCE_URL,
+        "filing_status": "not_filed",
+    }
+
+
+@router.post("/reports/fssai/confirm", status_code=status.HTTP_201_CREATED)
+async def confirm_fssai_complaint_handoff(
+    body: FssaiComplaintPreviewBody,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Record that the person reviewed a request before opening FSSAI.
+
+    The browser/app handoff is not a government submission; its status remains
+    ``not_filed`` until the person completes the official portal themselves.
+    """
+    if body.photo_asset_id is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "photo_required"})
+    from app.domains.media import service as media_service
+
+    await media_service.get_owned_asset(session, account_id=current.account_id, asset_id=body.photo_asset_id)
+    snapshot = await service.latest_label_snapshot(session, body.barcode)
+    fields = complaints.prepared_fields(snapshot.facts if snapshot is not None else {}, str(body.photo_asset_id))
+    missing = complaints.missing_preparation_fields(fields)
+    if missing:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "pack_fields_missing", "fields": missing})
+    handoff = FssaiComplaintHandoff(
+        account_id=current.account_id,
+        barcode=body.barcode,
+        reason=body.reason,
+        product_name=str(fields["product_name"]),
+        brand=str(fields["brand"]),
+        batch_number=str(fields["batch_number"]),
+        fssai_licence=str(fields["fssai_licence"]),
+        photo_asset_id=body.photo_asset_id,
+        status="official_portal_opened",
+        official_portal_opened_at=datetime.now(UTC),
+    )
+    session.add(handoff)
+    await session.commit()
+    return {"id": str(handoff.id), "filing_status": "not_filed", "official_portal_url": complaints.FSSAI_CONSUMER_GRIEVANCE_URL}
+
+
+@router.get("/reports/fssai/public-count")
+async def public_fssai_handoff_count(session: AsyncSession = Depends(get_session)):
+    """A privacy-preserving count of reviewed official-portal handoffs."""
+    count = await session.scalar(select(func.count(FssaiComplaintHandoff.id)))
+    return {"reviewed_official_handoffs": int(count or 0), "filed_count_known": False}
 
 
 @router.post("/reports/label-error", status_code=status.HTTP_201_CREATED)
