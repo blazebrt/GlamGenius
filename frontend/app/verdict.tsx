@@ -30,6 +30,7 @@ import {
   flushReports, makeReport, submitReport, type ReportReason,
 } from '../src/services/errorReports';
 import { getProductVerdict } from '../src/services/verdictClient';
+import { buildVerdictShareText } from '../src/services/verdictShare';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import {
   ComponentRow, FactorSection, GradeBlock, IngredientDetail, IngredientList,
@@ -86,9 +87,9 @@ export default function VerdictScreen() {
   }, [speaking, view]);
 
   const onShare = useCallback(() => {
-    if (!view) return;
-    void Share.share({ message: `${view.verdict}. ${view.action} ${view.everydayNumber}`.trim() });
-  }, [view]);
+    if (!source || !view) return;
+    void Share.share({ message: buildVerdictShareText(source, view) });
+  }, [source, view]);
 
   const openReport = useCallback((subject: string) => {
     setReportSubject(subject);

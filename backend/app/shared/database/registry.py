@@ -18,6 +18,7 @@ from app.domains.beta_access.models import (
 )
 from app.domains.consent.models import Consent
 from app.domains.evidence import models as evidence_models
+from app.domains.family import models as family_models
 from app.domains.identity.models import Account
 from app.domains.inventory import models as inventory_models
 from app.domains.media.models import MediaAsset
@@ -100,5 +101,6 @@ __all__ = [
     "IngredientSensitivityRule",
     "InventorySubtypeDefinition",
     "evidence_models",
+    "family_models",
     "supplement_models",
 ]
