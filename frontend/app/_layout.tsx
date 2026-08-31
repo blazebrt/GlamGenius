@@ -23,6 +23,11 @@ import { useConfigStore } from '../src/store/configStore';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { initSentry, wrapRoot } from '../src/monitoring';
 import { notificationTarget } from '../src/navigation/notifications';
+import { respondToRoutineNotification } from '../src/services/apiV2';
+
+const ROUTINE_ACTION_CATEGORY = 'routine-adherence';
+const ROUTINE_DONE = 'routine_done';
+const ROUTINE_SKIP = 'routine_skip';
 
 // Fire Sentry init before the root component mounts so a rendering error
 // inside <RootLayout /> itself is still captured. Safe to call with no
@@ -54,8 +59,25 @@ function RootLayout() {
   }, []);
 
   useEffect(() => {
+    if (Platform.OS === 'web') return;
+    // Button actions deliberately do not foreground a screen. The server
+    // validates the delivery and owns the step/date, so this is safe to retry.
+    void Notifications.setNotificationCategoryAsync(ROUTINE_ACTION_CATEGORY, [
+      { identifier: ROUTINE_DONE, buttonTitle: 'Done', options: { opensAppToForeground: false } },
+      { identifier: ROUTINE_SKIP, buttonTitle: 'Skip', options: { opensAppToForeground: false } },
+    ]).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     if (Platform.OS === 'web' || typeof Notifications.addNotificationResponseReceivedListener !== 'function') return undefined;
     const open = (response: Notifications.NotificationResponse) => {
+      const data = response.notification.request.content.data as Record<string, unknown>;
+      const action = response.actionIdentifier === ROUTINE_DONE ? 'done'
+        : response.actionIdentifier === ROUTINE_SKIP ? 'skip' : null;
+      if (action && typeof data.delivery_id === 'string') {
+        void respondToRoutineNotification(data.delivery_id, action).catch(() => undefined);
+        return;
+      }
       const target = notificationTarget(response.notification.request.content.data);
       if (target.params) router.push({ pathname: target.destination, params: target.params });
       else router.push(target.destination as never);

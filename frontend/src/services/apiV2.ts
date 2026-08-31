@@ -2210,6 +2210,12 @@ export const completeRoutineStep = async (
 ): Promise<{ step_id: string; completed: boolean; note: string }> =>
   (await api.post(`${V2}/routines/steps/${stepId}/complete`, { completed, done_on })).data;
 
+/** Records a native Done / Skip action against the server-owned notification. */
+export const respondToRoutineNotification = async (
+  deliveryId: string, action: 'done' | 'skip'
+): Promise<{ completed: boolean }> =>
+  (await api.post(`${V2}/routines/notifications/${encodeURIComponent(deliveryId)}/action`, { action })).data;
+
 export const getImproveOverview = async (): Promise<ImproveOverview> =>
   (await api.get<ImproveOverview>(`${V2}/routines/improve`)).data;
 
