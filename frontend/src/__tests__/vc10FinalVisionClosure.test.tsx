@@ -33,18 +33,18 @@ jest.mock('../services/apiV2', () => ({
 
 describe('VC-10 final vision closure', () => {
   it('keeps the five-tab appearance OS and customer category terminology', () => {
-    expect(PRIMARY_TAB_LABELS).toEqual(['Today', 'Style', 'Care', 'Plan', 'You']);
+    expect(PRIMARY_TAB_LABELS).toEqual(['Scan', 'You']);
     expect(CATEGORY_META.beauty.label).toBe('Skin Care');
     expect(CATEGORY_META.hair.label).toBe('Hair Care');
   });
 
   it('renders the final entry language without the retired coach surface', () => {
     render(<><EntryBrandTagline /><EntryHero /><EntryFeatures /></>);
-    expect(screen.getByText('Know what to wear.\nKnow what needs attention.')).toBeTruthy();
-    expect(screen.getByText('STYLE · CARE · PLAN')).toBeTruthy();
-    expect(screen.getByText('Today, decided')).toBeTruthy();
-    expect(screen.getByText('Style from your wardrobe')).toBeTruthy();
-    expect(screen.getByText('Care and planning together')).toBeTruthy();
+    expect(screen.getByText('Know what you are buying.\nDecide with confidence.')).toBeTruthy();
+    expect(screen.getByText('SCAN · DECIDE · UNDERSTAND')).toBeTruthy();
+    expect(screen.getByText('Scan a product')).toBeTruthy();
+    expect(screen.getByText('Get a clear decision')).toBeTruthy();
+    expect(screen.getByText('Keep learning')).toBeTruthy();
     expect(screen.queryByText('Fashion stylist')).toBeNull();
     expect(screen.queryByText('Wellness coach')).toBeNull();
   });
@@ -66,8 +66,8 @@ describe('VC-10 final vision closure', () => {
     ['style quiz', StyleQuizRedirect, '/my-appearance'],
     ['advice', GetAdviceRedirect, '/style-me'],
     ['recommendations', RecommendationsRedirect, '/style-me'],
-    ['scan', ScanRedirect, '/my-appearance'],
-    ['scan tab', ScanTabRedirect, '/my-appearance'],
+    ['scan', ScanRedirect, '/scan-product'],
+    ['scan tab', ScanTabRedirect, '/scan-product'],
     ['history', HistoryRedirect, '/progress'],
   ])('renders the retired %s route as a deterministic redirect', (_name, Route, destination) => {
     render(<Route />);

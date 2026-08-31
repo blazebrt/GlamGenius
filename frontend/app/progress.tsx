@@ -149,7 +149,7 @@ export default function ProgressScreen() {
             title="Nothing to measure yet"
             body="Catalogue a few things and log what you wear, and these fill in on their own."
             actionLabel="Open inventory"
-            onPress={() => router.push('/(tabs)/style')}
+            onPress={() => router.push('/(tabs)/inventory')}
           />
         )}
 

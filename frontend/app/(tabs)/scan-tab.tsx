@@ -1,7 +1,7 @@
 import React from 'react';
 import { Redirect } from 'expo-router';
 
-/** Retired tab kept only for deterministic legacy deep links. */
+/** Legacy tab path now returns to the canonical scanner. */
 export default function ScanTabRedirect() {
-  return <Redirect href="/my-appearance" />;
+  return <Redirect href="/scan-product" />;
 }

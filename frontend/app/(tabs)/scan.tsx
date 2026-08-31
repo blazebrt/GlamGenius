@@ -1,7 +1,7 @@
 import React from 'react';
 import { Redirect } from 'expo-router';
 
-/** Compatibility entry point for the canonical scanner. */
-export default function ScanRedirect() {
+/** Primary tab entry: the scanner is the product home. */
+export default function ScanTab() {
   return <Redirect href="/scan-product" />;
 }

@@ -6,7 +6,8 @@ import { COLORS, FONTS } from '../../src/theme/colors';
 import { LEGACY_HIDDEN_TAB_ROUTES } from '../../src/navigation/finalIA';
 
 /**
- * Final primary navigation: Today · Style · Care · Plan · You.
+ * The scanner is the primary product surface. Account/profile is the only
+ * secondary destination in this shell; retained domain routes stay hidden.
  *
  * Home and Today are one screen now — opening the app should answer "what do I
  * wear today", not present a menu. The skin check, salon ideas and history are
@@ -24,34 +25,7 @@ export default function TabLayout() {
         tabBarLabelStyle: styles.tabBarLabel,
       }}
     >
-      <Tabs.Screen
-        name="today"
-        options={{
-          title: 'Today',
-          tabBarIcon: ({ color }) => <Ionicons name="sunny-outline" size={22} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="style"
-        options={{
-          title: 'Style',
-          tabBarIcon: ({ color }) => <Ionicons name="shirt-outline" size={22} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="care"
-        options={{
-          title: 'Care',
-          tabBarIcon: ({ color }) => <Ionicons name="leaf-outline" size={22} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="plan"
-        options={{
-          title: 'Plan',
-          tabBarIcon: ({ color }) => <Ionicons name="calendar-outline" size={22} color={color} />,
-        }}
-      />
+      <Tabs.Screen name="scan" options={{ title: 'Scan', tabBarIcon: ({ color }) => <Ionicons name="barcode-outline" size={22} color={color} /> }} />
       <Tabs.Screen
         name="you"
         options={{
@@ -59,6 +33,8 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <Ionicons name="person-outline" size={22} color={color} />,
         }}
       />
+
+      {(['today', 'style', 'care', 'plan'] as const).map((name) => <Tabs.Screen key={name} name={name} options={{ href: null }} />)}
 
       {/* Compatibility routes remain routable but are never primary tabs. */}
       {LEGACY_HIDDEN_TAB_ROUTES.map((name) => <Tabs.Screen key={name} name={name} options={{ href: null }} />)}

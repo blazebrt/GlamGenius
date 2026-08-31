@@ -128,15 +128,12 @@ describe('VC-03 Event Ready screen', () => {
     expect(screen.queryByLabelText('Choose a look')).toBeNull();
   });
 
-  it('passes canonical Event Mode fields to Style and opens the Care destination', async () => {
+  it('keeps Event Ready product-focused and opens the Care destination', async () => {
     mockGetEventReady.mockResolvedValue(ready({ status: 'preparing', care: { hair_wash: { status: 'not_due' } } as any }));
     render(<EventReadyScreen />);
     await screen.findByText('YOUR LOOK');
-    fireEvent.press(screen.getByLabelText('Choose a look'));
-    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/style-me', params: {
-      eventReadyEventId: 'event-1', occasionKey: 'wedding', eventDate: '2030-09-12',
-      eventTitle: 'Wedding', dressCode: 'black_tie', location: 'Hall',
-    } });
+    fireEvent.press(screen.getByLabelText('Scan a product'));
+    expect(mockRouter.push).toHaveBeenCalledWith('/scan-product');
     fireEvent.press(screen.getByLabelText('Open Care'));
     expect(mockRouter.push).toHaveBeenCalledWith('/(tabs)/care');
   });

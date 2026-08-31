@@ -20,7 +20,7 @@ const { width } = Dimensions.get('window');
 export default function WelcomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [loading, setLoading] = useState(true);
+  const [loading] = useState(true);
   const { userId } = useUserStore();
 
   useEffect(() => {
@@ -34,13 +34,11 @@ export default function WelcomeScreen() {
     try {
       // Clear any orphaned installation identifier.
       await AsyncStorage.removeItem('glamgenius_user_id').catch(() => {});
-      if (useUserStore.getState().userId) {
-        setTimeout(() => router.replace('/(tabs)/today'), 900);
-      } else {
-        setLoading(false);
-      }
+      // The scanner is home for every person. Sign-in adds retained history
+      // and controls; it never changes the product's first impression.
+      setTimeout(() => router.replace('/scan-product'), 300);
     } catch {
-      setLoading(false);
+      router.replace('/scan-product');
     }
   };
 
@@ -54,7 +52,7 @@ export default function WelcomeScreen() {
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingLogo}>GlamGenius</Text>
-          <Text style={styles.loadingTagline}>YOUR APPEARANCE · ORGANISED</Text>
+          <Text style={styles.loadingTagline}>PRODUCTS · UNDERSTOOD</Text>
           <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 24 }} />
         </View>
       </View>
@@ -104,23 +102,23 @@ export default function WelcomeScreen() {
 }
 
 export function EntryBrandTagline() {
-  return <Text style={styles.brandTagline}>STYLE · CARE · PLAN</Text>;
+  return <Text style={styles.brandTagline}>SCAN · DECIDE · UNDERSTAND</Text>;
 }
 
 export function EntryHero() {
   return <>
-    <Text style={styles.heroTitle}>Know what to wear.{"\n"}Know what needs attention.</Text>
+    <Text style={styles.heroTitle}>Know what you are buying.{"\n"}Decide with confidence.</Text>
     <Text style={styles.heroSubtitle}>
-      GlamGenius brings your wardrobe, care shelf, routines, occasions and preferences into one calm daily plan — starting with what you already own.
+      GlamGenius helps you understand products from their facts and evidence, then choose a clearer next step.
     </Text>
   </>;
 }
 
 export function EntryFeatures() {
   return <>
-    <FeatureItem icon="sunny-outline" title="Today, decided" description="A clear owned-first outfit and the few things worth your attention." />
-    <FeatureItem icon="shirt-outline" title="Style from your wardrobe" description="Occasion looks and purchase decisions without buying pressure." />
-    <FeatureItem icon="leaf-outline" title="Care and planning together" description="Routines, upkeep, events and progress in one place." />
+    <FeatureItem icon="barcode-outline" title="Scan a product" description="Start without an account and see what the label tells us." />
+    <FeatureItem icon="checkmark-circle-outline" title="Get a clear decision" description="See the facts, evidence and what to do next." />
+    <FeatureItem icon="repeat-outline" title="Keep learning" description="Scan again whenever a product decision matters." />
   </>;
 }
 

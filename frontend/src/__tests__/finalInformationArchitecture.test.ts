@@ -9,10 +9,10 @@ import {
 
 describe('VC-08 final information architecture', () => {
   it('has exactly five visible peer tabs with customer-facing labels', () => {
-    expect(PRIMARY_TABS).toEqual(['today', 'style', 'care', 'plan', 'you']);
-    expect(PRIMARY_TAB_LABELS).toEqual(['Today', 'Style', 'Care', 'Plan', 'You']);
-    expect(PRIMARY_TABS).toHaveLength(5);
-    expect(PRIMARY_TAB_LABELS.join(' ')).not.toMatch(/Inventory|Style Me|Planner|Services|Beauty/);
+    expect(PRIMARY_TABS).toEqual(['scan', 'you']);
+    expect(PRIMARY_TAB_LABELS).toEqual(['Scan', 'You']);
+    expect(PRIMARY_TABS).toHaveLength(2);
+    expect(PRIMARY_TAB_LABELS.join(' ')).not.toMatch(/Today|Style|Care|Plan|Inventory|Style Me|Planner|Services|Beauty/);
   });
 
   it('keeps legacy destinations routable but outside primary navigation', () => {

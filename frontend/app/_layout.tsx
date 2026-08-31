@@ -71,7 +71,7 @@ function RootLayout() {
     return (
       <View style={styles.loadingContainer}>
         <Text style={styles.loadingLogo}>GlamGenius</Text>
-        <Text style={styles.loadingTagline}>YOUR APPEARANCE · ORGANISED</Text>
+        <Text style={styles.loadingTagline}>PRODUCTS · UNDERSTOOD</Text>
         <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 24 }} />
       </View>
     );
@@ -99,6 +99,7 @@ function RootLayout() {
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="(auth)" />
             <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal' }} />
+            <Stack.Screen name="scan-product" options={{ presentation: 'fullScreenModal' }} />
             <Stack.Screen name="style-quiz" />
             <Stack.Screen name="get-advice" />
             <Stack.Screen name="recommendations" />
