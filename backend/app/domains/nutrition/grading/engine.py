@@ -64,7 +64,10 @@ FOOD_GRADE_ENGINE_VERSION = "food-grade-v1"
 #: and fats, in force from January 2022.
 TRANS_FAT_LIMIT_PCT_OF_FAT = Decimal("2")
 
-PHO_MARKERS = ("partially hydrogenated", "vanaspati", "hydrogenated vegetable")
+# Fully hydrogenated vegetable oil is not the same textual claim as partially
+# hydrogenated industrial trans fat.  Only the label terms that establish the
+# latter can trigger the automatic rule.
+PHO_MARKERS = ("partially hydrogenated", "vanaspati")
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +215,13 @@ def _match_culinary(product: ProductInput) -> CulinaryIngredient | None:
             token = nova.normalise(alias)
             if not token:
                 continue
-            hit = nova._contains(name, token) or (
-                single_ingredient is not None and nova._contains(single_ingredient, token)
+            # A culinary ingredient has to be the product itself (or the sole
+            # declared ingredient), not merely a word in a composite product
+            # name such as "Honey Cookies".
+            hit = name == token or (
+                single_ingredient is not None
+                and nova._contains(name, token)
+                and nova._contains(single_ingredient, token)
             )
             if hit and (best is None or len(token) > best[0]):
                 best = (len(token), ingredient)
@@ -460,16 +468,13 @@ def _automatic_e(product: ProductInput, trace: list[TraceEntry]) -> str | None:
                 FSSAI_TRANSFAT.name, effect="Automatic E.",
             ))
             return f"The ingredient list contains {marker} oil."
-    if product.trans_fat_g is not None and product.total_fat_g:
-        share = (product.trans_fat_g / product.total_fat_g) * Decimal("100")
-        if share > TRANS_FAT_LIMIT_PCT_OF_FAT:
-            trace.append(TraceEntry(
-                2, "Nutrient bands", "grade.step2.trans_fat_over_limit",
-                f"Trans fat is about {share:.1f}% of the fat in this product. The FSSAI "
-                f"limit is {TRANS_FAT_LIMIT_PCT_OF_FAT}%.",
-                FSSAI_TRANSFAT.name, effect="Automatic E.",
-            ))
-            return "Trans fat is above the FSSAI limit."
+    if product.trans_fat_g is not None:
+        trace.append(TraceEntry(
+            2, "Nutrient bands", "grade.step2.trans_fat_denominator_missing",
+            "The label gives trans fat, but not the verified oils-and-fats denominator required "
+            "for the regulatory calculation.",
+            FSSAI_TRANSFAT.name, effect="Recorded as missing regulatory information.",
+        ))
     return None
 
 
@@ -661,11 +666,11 @@ def _severe_added_sugar(product: ProductInput, trace: list[TraceEntry]) -> str |
 
 
 _HEADLINES: dict[Grade, str] = {
-    Grade.A: "Grade A. A whole food.",
-    Grade.B: "Grade B. A simple processed food.",
-    Grade.C: "Grade C. Processed; fine occasionally.",
-    Grade.D: "Grade D. Heavily processed.",
-    Grade.E: "Grade E. Ultra-processed, and little else.",
+    Grade.A: "Grade A. Fewer product flags.",
+    Grade.B: "Grade B. Some processing flags.",
+    Grade.C: "Grade C. Product facts need consideration.",
+    Grade.D: "Grade D. Multiple product flags.",
+    Grade.E: "Grade E. Strong product concern.",
 }
 
 

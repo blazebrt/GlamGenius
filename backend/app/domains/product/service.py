@@ -25,13 +25,9 @@ from app.domains.off import client as off_client
 from app.domains.off.join import join_on_barcode, read_off_product
 from app.domains.off.models import OffProduct
 from app.domains.off.store import get_off_sessionmaker
-from app.domains.product.confidence import (
-    COMMUNITY_THRESHOLD,
-    CONFIDENCE_TEXT,
-    ProductConfidence,
-)
+from app.domains.product.confidence import CONFIDENCE_TEXT, ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
-from app.domains.product.models import LabelErrorReport, ProductRecord, ScanEvent
+from app.domains.product.models import LabelErrorReport, LabelSnapshot, ProductRecord, ScanEvent
 from app.shared.database.base import utcnow
 
 OUTCOME_LOCAL = "found_local"
@@ -49,6 +45,24 @@ async def _own_record(session: AsyncSession, barcode: str) -> ProductRecord | No
     return (await session.execute(
         select(ProductRecord).where(ProductRecord.barcode == barcode)
     )).scalar_one_or_none()
+
+
+async def latest_label_snapshot(session: AsyncSession, barcode: str) -> LabelSnapshot | None:
+    return (await session.execute(
+        select(LabelSnapshot).where(LabelSnapshot.barcode == barcode).order_by(LabelSnapshot.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+
+
+async def store_label_snapshot(
+    session: AsyncSession, *, barcode: str, facts: dict[str, Any], device_id: uuid.UUID, scan_event_id: uuid.UUID,
+) -> LabelSnapshot:
+    row = LabelSnapshot(
+        barcode=barcode, device_id=device_id, scan_event_id=scan_event_id, facts=facts,
+        confidence=ProductConfidence.UNVERIFIED.value,
+    )
+    session.add(row)
+    await session.flush()
+    return row
 
 
 async def _cache_off_product(barcode: str, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -200,8 +214,10 @@ async def apply_confirmed_label(
     and nutrition belong to Store A and are written there by the OFF path, never
     copied across — see the ODbL wall.
 
-    Confirmations accumulate: enough independent ones promote the record from
-    unverified to community. A team member confirming makes it verified outright.
+    Anonymous captures retain label facts but do not create a community claim:
+    a device identity is not a person identity.  Only an accountable reviewer
+    can promote a captured fact to verified until a future, separately reviewed
+    independent-identity workflow exists.
     """
     record = await _own_record(session, barcode)
     if record is None:
@@ -213,17 +229,13 @@ async def apply_confirmed_label(
     if licence and is_valid_licence(licence):
         record.fssai_licence = licence
 
-    record.confirmation_count += 1
     if confirmed_by:
+        record.confirmation_count += 1
         record.confidence = ProductConfidence.VERIFIED.value
         record.verified_at = utcnow()
         record.verified_by = confirmed_by[:160]
     elif record.confidence != ProductConfidence.VERIFIED.value:
-        record.confidence = (
-            ProductConfidence.COMMUNITY.value
-            if record.confirmation_count >= COMMUNITY_THRESHOLD
-            else ProductConfidence.UNVERIFIED.value
-        )
+        record.confidence = ProductConfidence.UNVERIFIED.value
     await session.flush()
     return record
 
@@ -245,7 +257,6 @@ async def record_label_error(
     subject: str,
     reason: str,
     barcode: str | None = None,
-    note: str | None = None,
     photo_key: str | None = None,
     device_id: uuid.UUID | None = None,
     account_id: uuid.UUID | None = None,
@@ -261,7 +272,7 @@ async def record_label_error(
         return existing, False
     row = LabelErrorReport(
         device_id=device_id, account_id=account_id, client_report_id=client_report_id,
-        barcode=barcode, subject=subject[:200], reason=reason, note=note,
+        barcode=barcode, subject=subject[:200], reason=reason,
         photo_key=photo_key,
     )
     session.add(row)

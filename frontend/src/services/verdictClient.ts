@@ -95,6 +95,7 @@ export function toVerdictSource(
     band: row.band,
     rule: row.rule ?? row.finding ?? '',
     source: row.source ?? '',
+    sourceUrl: row.source_url ?? null,
     term: TERMS[row.key],
   }));
 

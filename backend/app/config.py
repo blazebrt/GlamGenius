@@ -347,6 +347,10 @@ def validate_production_configuration() -> None:
 
     if not POSTGRES_URL:
         raise RuntimeError("CRITICAL: POSTGRES_URL must be set in production.")
+    if not OFF_DATABASE_URL:
+        raise RuntimeError("CRITICAL: OFF_DATABASE_URL is required in staging and production.")
+    if OFF_DATABASE_URL == POSTGRES_URL:
+        raise RuntimeError("CRITICAL: OFF_DATABASE_URL must be physically distinct from POSTGRES_URL.")
     
     import ipaddress
     parsed = urllib.parse.urlparse(POSTGRES_URL)

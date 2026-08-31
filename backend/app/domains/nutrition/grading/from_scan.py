@@ -18,7 +18,10 @@ from app.domains.nutrition.grading.engine import ProductInput
 
 #: Open Food Facts nutriment keys, in the order we prefer them.
 _NUTRIMENT_KEYS: dict[str, tuple[str, ...]] = {
-    "energy_kcal": ("energy-kcal_100g", "energy_100g"),
+    # ``energy_100g`` has historically been supplied in different units.  Do
+    # not silently put it in a kcal field: use the explicit kcal value, or an
+    # explicit kJ value with the documented conversion below.
+    "energy_kcal": ("energy-kcal_100g",),
     "protein_g": ("proteins_100g",),
     "total_fat_g": ("fat_100g",),
     "saturated_fat_g": ("saturated-fat_100g",),
@@ -39,6 +42,14 @@ def _decimal(value: Any) -> Decimal | None:
         return Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError):
         return None
+
+
+def _energy_kcal(nutriments: dict[str, Any]) -> Decimal | None:
+    explicit_kcal = _decimal(nutriments.get("energy-kcal_100g"))
+    if explicit_kcal is not None:
+        return explicit_kcal
+    kj = _decimal(nutriments.get("energy-kj_100g"))
+    return (kj / Decimal("4.184")) if kj is not None else None
 
 
 def split_ingredients(text: str | None) -> tuple[str, ...]:
@@ -101,6 +112,7 @@ def build(
         values[field] = next(
             (v for v in (_decimal(nutriments.get(key)) for key in keys) if v is not None), None
         )
+    values["energy_kcal"] = _energy_kcal(nutriments)
     ingredients = split_ingredients(off.get("ingredients_text"))
     percentages = declared_percentages(ingredients)
     promised = name_promises

@@ -29,7 +29,6 @@ export interface ErrorReport {
   /** What was on screen when they tapped: "sugar", "grade", an ingredient name. */
   subject: string;
   reason: ReportReason;
-  note?: string;
   /** A local photo URI, uploaded with the report when there is a connection. */
   photo_uri?: string | null;
   reported_at: string;
@@ -70,7 +69,6 @@ async function post(report: ErrorReport): Promise<void> {
   form.append('subject', report.subject);
   form.append('reason', report.reason);
   if (report.barcode) form.append('barcode', report.barcode);
-  if (report.note) form.append('note', report.note);
   if (report.photo_uri) {
     form.append('photo', {
       uri: report.photo_uri, name: 'pack.jpg', type: 'image/jpeg',

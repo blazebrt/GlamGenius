@@ -24,11 +24,11 @@ export const S = {
   // The letter itself. Three words at most: the colour has already answered.
   // -----------------------------------------------------------------------
   grade: {
-    A: { verdict: 'Take it', band: 'green' },
-    B: { verdict: 'Take it', band: 'green' },
-    C: { verdict: 'Think', band: 'yellow' },
-    D: { verdict: 'Leave it', band: 'red' },
-    E: { verdict: 'Leave it', band: 'red' },
+    A: { verdict: 'BUY', band: 'green' },
+    B: { verdict: 'BUY', band: 'green' },
+    C: { verdict: 'WAIT', band: 'yellow' },
+    D: { verdict: 'SKIP', band: 'red' },
+    E: { verdict: 'SKIP', band: 'red' },
   },
 
   // -----------------------------------------------------------------------
@@ -36,12 +36,12 @@ export const S = {
   // -----------------------------------------------------------------------
   primary: {
     /** Line 1. Under ten words, and it says what to DO. */
-    actionA: 'A good everyday food. Keep it.',
-    actionB: 'Simple and fine. Keep it.',
-    actionC: 'Fine once in a while, not daily.',
-    actionD: 'Better to put this back.',
-    actionE: 'Put this back.',
-    actionNotGraded: 'Cooking item. Use a small amount.',
+    actionA: 'The label has fewer decision flags.',
+    actionB: 'The label has some processing flags.',
+    actionC: 'The label has product facts to consider.',
+    actionD: 'The label has multiple product flags.',
+    actionE: 'The label has a strong product concern.',
+    actionNotGraded: 'Cooking ingredient. No letter applies.',
     actionUnknown: 'We could not read this label.',
 
     /** Line 2. One number, in something you can picture. */
@@ -174,7 +174,6 @@ export const S = {
     addPhoto: 'Add a photo of the pack',
     retakePhoto: 'Take it again',
     photoAdded: 'Photo added',
-    notePlaceholder: 'Anything you want to add (not required)',
     submit: 'Send',
     sending: 'Sending',
     sent: 'Sent. Thank you — we check every one.',

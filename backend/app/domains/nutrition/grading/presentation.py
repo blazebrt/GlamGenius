@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.domains.nutrition.food_reference import ADDITIVES
+from app.domains.nutrition.food_reference import ADDITIVES, FSA_FOP, FSSAI_ADDITIVES, FSSAI_LABELLING, FSSAI_TRANSFAT
 from app.domains.nutrition.grading.engine import GradeResult, ProductInput
 from app.domains.nutrition.grading.nova import normalise
 from app.domains.nutrition.grading.rules import BAND_HIGH, Grade
@@ -26,6 +26,12 @@ BAND_FOR_GRADE: dict[str, str] = {
 
 #: The four components, in the order the Why screen lists them.
 COMPONENT_KEYS = ("processing", "nutrients", "additives", "naming")
+
+_SOURCE_URLS = {source.name: source.url for source in (FSA_FOP, FSSAI_ADDITIVES, FSSAI_LABELLING, FSSAI_TRANSFAT)}
+
+
+def _source_url(source: str | None) -> str | None:
+    return _SOURCE_URLS.get(source or "")
 
 def _processing_component(result: GradeResult) -> dict[str, Any]:
     group = result.nova_group or 1
@@ -40,6 +46,7 @@ def _processing_component(result: GradeResult) -> dict[str, Any]:
         "rule": entry.effect if entry and entry.effect else None,
         "finding": entry.finding if entry else None,
         "source": entry.source if entry else None,
+        "source_url": _source_url(entry.source if entry else None),
     }
 
 
@@ -58,6 +65,7 @@ def _nutrient_component(result: GradeResult) -> dict[str, Any]:
         "rule": entries[0].effect if entries else None,
         "finding": entries[0].finding if entries else None,
         "source": entries[0].source if entries else None,
+        "source_url": _source_url(entries[0].source if entries else None),
     }
 
 
@@ -77,6 +85,7 @@ def _additive_component(product: ProductInput, result: GradeResult) -> dict[str,
         "rule": flagged[0].effect if flagged else (entries[0].effect if entries else None),
         "finding": flagged[0].finding if flagged else (entries[0].finding if entries else None),
         "source": entries[0].source if entries else None,
+        "source_url": _source_url(entries[0].source if entries else None),
     }
 
 
@@ -103,6 +112,7 @@ def _naming_component(product: ProductInput, result: GradeResult) -> dict[str, A
         "rule": entry.effect if entry else None,
         "finding": entry.finding if entry else None,
         "source": entry.source if entry else None,
+        "source_url": _source_url(entry.source if entry else None),
     }
 
 

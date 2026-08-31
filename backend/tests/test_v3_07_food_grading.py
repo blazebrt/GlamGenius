@@ -311,14 +311,15 @@ def test_partially_hydrogenated_oil_is_automatic_e():
     assert any("partially_hydrogenated" in entry.rule_id for entry in result.trace)
 
 
-def test_trans_fat_above_the_fssai_limit_is_automatic_e():
+def test_trans_fat_without_the_regulatory_oils_and_fats_denominator_is_not_automatic_e():
     result = grade_product(P(
         name="Bakery Shortening Cake",
         ingredients=("refined wheat flour (maida)", "sugar", "edible vegetable oil"),
         energy_kcal=D("400"), total_fat_g=D("20"), trans_fat_g=D("1.2"),
         saturated_fat_g=D("8"), total_sugar_g=D("18"), sodium_g=D("0.2"),
     ))
-    assert result.grade is Grade.E
+    assert result.grade is not Grade.E
+    assert any(entry.rule_id == "grade.step2.trans_fat_denominator_missing" for entry in result.trace)
     assert any("trans_fat" in entry.rule_id for entry in result.trace)
 
 

@@ -206,6 +206,21 @@ class EntryBody(BaseModel):
         )
 
 
+class PublicationVerificationBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_opened: bool
+    founder_verified_fact: bool
+    claude_review_completed: bool
+    codex_review_completed: bool
+    independent_reviews_agree: bool
+    adversarial_review_passed: bool
+    unresolved_doubt: bool = False
+
+    def to_input(self) -> authoring.VerificationInput:
+        return authoring.VerificationInput(**self.model_dump())
+
+
 class RejectBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -309,6 +324,20 @@ async def publish_knowledge_entry(
     session: AsyncSession = Depends(get_session),
 ):
     entry = await authoring.publish(session, entry_id, publisher=_author(current))
+    await session.commit()
+    return entry
+
+
+@router.post("/knowledge/entries/{entry_id}/publication-verification")
+async def record_knowledge_publication_verification(
+    entry_id: uuid.UUID,
+    body: PublicationVerificationBody,
+    current: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    entry = await authoring.record_publication_verification(
+        session, entry_id, verification=body.to_input(), actor=_author(current),
+    )
     await session.commit()
     return entry
 

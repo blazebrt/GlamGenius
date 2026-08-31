@@ -663,6 +663,7 @@ interface VerdictComponentWire {
   rule: string | null;
   finding: string | null;
   source: string | null;
+  source_url?: string | null;
   high?: { nutrient: string; attribution: string | null }[];
   exempt?: string[];
   ingredient?: string | null;

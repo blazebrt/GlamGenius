@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.product.models import ScanDevice
 from app.shared.database.base import utcnow
+from app.shared.errors.exceptions import ConflictError
 
 TOKEN_BYTES = 32
 
@@ -28,7 +29,7 @@ def _hash(token: str) -> str:
 
 
 async def register(
-    session: AsyncSession, *, device_key: str, platform: str | None = None,
+    session: AsyncSession, *, device_key: str, platform: str | None = None, proof_token: str | None = None,
 ) -> tuple[ScanDevice, str]:
     """Register a device, or re-issue a token for one that already exists.
 
@@ -43,6 +44,8 @@ async def register(
         device = ScanDevice(device_key=device_key, token_hash=_hash(token), platform=platform)
         session.add(device)
     else:
+        if not proof_token or device.token_hash != _hash(proof_token):
+            raise ConflictError("A known device key requires its current device token before it can rotate.")
         device.token_hash = _hash(token)
         if platform:
             device.platform = platform
@@ -65,6 +68,8 @@ async def resolve(session: AsyncSession, token: str | None) -> ScanDevice | None
 
 async def claim(session: AsyncSession, *, device: ScanDevice, account_id) -> ScanDevice:
     """Attach a device to an account, so scans made before signing up follow along."""
+    if device.claimed_by_account_id is not None and device.claimed_by_account_id != account_id:
+        raise ConflictError("This device is already claimed by another account.")
     device.claimed_by_account_id = account_id
     await session.flush()
     return device

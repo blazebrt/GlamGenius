@@ -16,15 +16,6 @@ export type GradeLetter = 'A' | 'B' | 'C' | 'D' | 'E';
 export type ColourBand = 'green' | 'yellow' | 'red';
 export type Outcome = 'graded' | 'not_graded' | 'not_enough_information';
 
-/** One teaspoon of sugar, in grams. The conversion everyone already knows. */
-export const SUGAR_G_PER_SPOON = 5;
-/** A pinch of salt, in grams. Used because "grams of salt" means nothing. */
-export const SALT_G_PER_PINCH = 0.4;
-/** One tablespoon of oil, in grams. */
-export const OIL_G_PER_SPOON = 14;
-/** Protein in one katori of cooked dal, in grams. */
-export const PROTEIN_G_PER_BOWL = 6;
-
 export interface VerdictComponent {
   key: 'processing' | 'nutrients' | 'additives' | 'naming';
   label: string;
@@ -32,6 +23,7 @@ export interface VerdictComponent {
   band: ColourBand;
   rule: string;
   source: string;
+  sourceUrl?: string | null;
   /** A technical word and the words that explain it, shown side by side. */
   term?: { word: string; plain: string };
 }
@@ -100,37 +92,13 @@ export const rupees = (paise: number): string => {
  * screen exists to replace.
  */
 export function everydayNumber(source: VerdictSource): string {
-  const pack = source.packSizeG && source.packSizeG > 0 ? source.packSizeG : 100;
-  const per = (per100: number) => (per100 * pack) / 100;
-
-  const sugar = source.totalSugarG ?? 0;
-  const salt = source.saltG ?? 0;
-  const fat = source.totalFatG ?? 0;
-  const protein = source.proteinG ?? 0;
-
-  const spoonsOfSugar = Math.round(per(sugar) / SUGAR_G_PER_SPOON);
-  const pinchesOfSalt = Math.round(per(salt) / SALT_G_PER_PINCH);
-  const spoonsOfOil = Math.round(per(fat) / OIL_G_PER_SPOON);
-  const bowlsOfDal = Math.round(per(protein) / PROTEIN_G_PER_BOWL);
-
-  // Ordered by what a person would want to know first about a poor product,
-  // and only shown when the number is big enough to be worth a sentence.
-  if (spoonsOfSugar >= 2) {
-    return t(spoonsOfSugar === 1 ? S.primary.sugarSpoonsOne : S.primary.sugarSpoons,
-      { spoons: spoonsOfSugar });
-  }
-  if (pinchesOfSalt >= 4) {
-    return t(pinchesOfSalt === 1 ? S.primary.saltPinchesOne : S.primary.saltPinches,
-      { pinches: pinchesOfSalt });
-  }
-  if (spoonsOfOil >= 2) {
-    return t(spoonsOfOil === 1 ? S.primary.oilSpoonsOne : S.primary.oilSpoons,
-      { spoons: spoonsOfOil });
-  }
-  // For a good product the number worth showing is the good one.
-  if (bowlsOfDal >= 2) {
-    return t(S.primary.proteinBowls, { bowls: bowlsOfDal });
-  }
+  // The current response does not carry a reviewed familiar-unit conversion
+  // or a compatible pack quantity.  Preserve the verified label fact instead
+  // of manufacturing oil, dal, pinch, or packet comparisons.
+  if (typeof source.totalSugarG === 'number') return `${source.totalSugarG} g total sugar per 100 g`;
+  if (typeof source.saltG === 'number') return `${source.saltG} g salt per 100 g`;
+  if (typeof source.totalFatG === 'number') return `${source.totalFatG} g total fat per 100 g`;
+  if (typeof source.proteinG === 'number') return `${source.proteinG} g protein per 100 g`;
   return S.primary.noEverydayNumber;
 }
 

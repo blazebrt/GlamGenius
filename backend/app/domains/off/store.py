@@ -22,6 +22,7 @@ from app.domains.off.models import OFF_SCHEMA, OffBase
 from app.domains.off.wall import (
     assert_no_cross_store_foreign_keys,
     assert_no_proprietary_fields,
+    guard_off_session,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,8 @@ _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
 
 def off_database_url() -> str:
+    if config.APP_ENV in {"production", "staging"} and not is_separate_store():
+        raise RuntimeError("OFF_DATABASE_URL must be configured separately from POSTGRES_URL outside development/test.")
     return config.OFF_DATABASE_URL or config.POSTGRES_URL
 
 
@@ -54,8 +57,13 @@ def get_off_engine() -> AsyncEngine:
 def get_off_sessionmaker() -> async_sessionmaker[AsyncSession]:
     global _sessionmaker
     if _sessionmaker is None:
+        class GuardedOffSession(AsyncSession):
+            def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003
+                super().__init__(*args, **kwargs)
+                guard_off_session(self.sync_session)
+
         _sessionmaker = async_sessionmaker(
-            bind=get_off_engine(), expire_on_commit=False, class_=AsyncSession,
+            bind=get_off_engine(), expire_on_commit=False, class_=GuardedOffSession,
         )
     return _sessionmaker
 

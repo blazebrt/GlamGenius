@@ -83,11 +83,12 @@ async def current_device(
 @router.post("/scan/device", status_code=status.HTTP_201_CREATED)
 async def register_device(
     body: DeviceRegisterBody,
+    x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
     session: AsyncSession = Depends(get_session),
 ):
     """Register the phone. Called once on first launch, before anything else."""
     device, token = await devices.register(
-        session, device_key=body.device_key, platform=body.platform,
+        session, device_key=body.device_key, platform=body.platform, proof_token=x_device_token,
     )
     await session.commit()
     return {"device_id": str(device.id), "token": token}
@@ -159,13 +160,23 @@ async def confirm_label(
     """Accept a transcribed label. One tap, the VC-07 draft-to-confirmed pattern."""
     if not body.facts:
         raise ValidationFailedError("There is nothing to confirm.", field="facts")
-    record = await service.apply_confirmed_label(session, barcode=body.barcode, facts=body.facts)
-    await service.record_scan(
+    event, created = await service.record_scan(
         session,
         barcode=body.barcode, outcome=service.OUTCOME_LABEL,
         client_scan_id=body.client_scan_id, device_id=device.id,
         account_id=device.claimed_by_account_id, label_facts=body.facts,
     )
+    # Idempotency is established before changing any fact confidence.  A queued
+    # replay therefore cannot create a second confirmation or snapshot.
+    if created:
+        record = await service.apply_confirmed_label(session, barcode=body.barcode, facts=body.facts)
+        await service.store_label_snapshot(
+            session, barcode=body.barcode, facts=body.facts, device_id=device.id, scan_event_id=event.id,
+        )
+    else:
+        record = await service._own_record(session, body.barcode)
+        if record is None:  # defensive: an older malformed event must not gain confidence
+            raise ValidationFailedError("The original confirmation has no stored label fact.")
     await session.commit()
     return {
         "barcode": record.barcode,
@@ -220,12 +231,15 @@ async def read_product_verdict(
     written anywhere together — the ODbL wall, same as every other join.
     """
     found = await service.lookup(session, barcode)
-    off_half = found.get("open_food_facts")
-    name = (off_half or {}).get("product_name") or barcode
+    snapshot = await service.latest_label_snapshot(session, barcode)
+    # Store B is selected at query time and never copied into ODbL Store A.
+    off_half = snapshot.facts if snapshot is not None else found.get("open_food_facts")
+    name = (off_half or {}).get("product_name") or (off_half or {}).get("name") or barcode
     product = from_scan.build(barcode=barcode, name=name, off_half=off_half)
     result = grade_product(product)
     payload = presentation.present(product, result)
-    payload["confidence"] = found["confidence"]
+    payload["confidence"] = service.confidence_block(snapshot.confidence) if snapshot else found["confidence"]
+    payload["facts_provenance"] = "confirmed_label_snapshot" if snapshot else "open_food_facts"
     payload["attribution"] = found.get("attribution")
     return payload
 
@@ -236,7 +250,6 @@ async def report_label_error(
     subject: str = Form(..., min_length=1, max_length=200),
     reason: str = Form(...),
     barcode: str | None = Form(default=None),
-    note: str | None = Form(default=None),
     photo: UploadFile | None = File(default=None),
     device: ScanDevice = Depends(current_device),
     session: AsyncSession = Depends(get_session),
@@ -270,7 +283,7 @@ async def report_label_error(
     report, created = await service.record_label_error(
         session,
         client_report_id=client_report_id, subject=subject, reason=reason,
-        barcode=barcode, note=note, photo_key=photo_key,
+        barcode=barcode, photo_key=photo_key,
         device_id=device.id, account_id=device.claimed_by_account_id,
     )
     await session.commit()

@@ -11,7 +11,7 @@
  * inline.
  */
 import React from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { S, t } from '../../strings/verdict';
@@ -183,6 +183,17 @@ export function ComponentRow({
           size={18} color={COLORS.textMuted}
         />
       </TouchableOpacity>
+
+      {(component.band === 'red' || component.band === 'yellow') && !!component.source && (
+        <TouchableOpacity
+          accessibilityRole="link"
+          accessibilityLabel={`${S.why.sourceLead}: ${component.source}`}
+          disabled={!component.sourceUrl}
+          onPress={() => { if (component.sourceUrl) void Linking.openURL(component.sourceUrl); }}
+        >
+          <Text style={styles.bodySource}>{component.source}</Text>
+        </TouchableOpacity>
+      )}
 
       {expanded && (
         <View style={styles.componentBody}>
