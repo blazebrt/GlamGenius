@@ -58,10 +58,53 @@ async def test_an_entry_goes_draft_to_approved_to_published(db_clean, app_client
     assert approved.json()["status"] == ReviewStatus.APPROVED.value
     assert approved.json()["reviewed_by"]
 
+    # Publishing is gated on the verification checkpoints, so the path runs
+    # through them rather than around them.
+    blocked = await app_client.post(f"{ADMIN}/entries/{entry_id}/publish", headers=auth(admin_token))
+    assert blocked.status_code == 422, "an unverified entry must not publish"
+    assert blocked.json()["detail"]["field"] == "verification"
+
+    recorded = await app_client.post(
+        f"{ADMIN}/entries/{entry_id}/publication-verification", headers=auth(admin_token),
+        json={
+            "source_opened": True,
+            "founder_verified_fact": True,
+            "claude_review_completed": True,
+            "codex_review_completed": True,
+            "independent_reviews_agree": True,
+            "adversarial_review_passed": True,
+            "unresolved_doubt": False,
+        },
+    )
+    assert recorded.status_code == 200, recorded.text
+
     published = await app_client.post(f"{ADMIN}/entries/{entry_id}/publish", headers=auth(admin_token))
     assert published.status_code == 200, published.text
     assert published.json()["status"] == ReviewStatus.PUBLISHED.value
     assert published.json()["published_at"]
+
+
+@pytest.mark.asyncio
+async def test_unresolved_doubt_alone_blocks_publication(db_clean, app_client, admin_token):
+    """Every checkpoint passing is not enough while a doubt is still open."""
+    created = await app_client.post(ADMIN + "/entries", headers=auth(admin_token), json=entry_body())
+    entry_id = created.json()["id"]
+    await app_client.post(f"{ADMIN}/entries/{entry_id}/approve", headers=auth(admin_token))
+    await app_client.post(
+        f"{ADMIN}/entries/{entry_id}/publication-verification", headers=auth(admin_token),
+        json={
+            "source_opened": True,
+            "founder_verified_fact": True,
+            "claude_review_completed": True,
+            "codex_review_completed": True,
+            "independent_reviews_agree": True,
+            "adversarial_review_passed": True,
+            "unresolved_doubt": True,
+        },
+    )
+    blocked = await app_client.post(f"{ADMIN}/entries/{entry_id}/publish", headers=auth(admin_token))
+    assert blocked.status_code == 422
+    assert blocked.json()["detail"]["field"] == "verification"
 
 
 @pytest.mark.asyncio

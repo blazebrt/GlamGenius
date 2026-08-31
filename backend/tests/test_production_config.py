@@ -16,6 +16,10 @@ def run_config_test(env_vars: dict) -> subprocess.CompletedProcess:
         "SUPABASE_JWKS_URL": "https://valid.supabase.co/auth/v1/.well-known/jwks.json",
         "SUPABASE_JWT_ISSUER": "https://valid.supabase.co/auth/v1",
         "POSTGRES_URL": "postgresql://user:pass@db.example.com:5432/db",
+        # A different host on purpose: OFF_DATABASE_URL is what makes the ODbL
+        # separation physical rather than notional, so a valid production
+        # config is one where Store A is genuinely somewhere else.
+        "OFF_DATABASE_URL": "postgresql://user:pass@off.example.com:5432/off",
         "SUPABASE_STORAGE_BUCKET": "bucket",
         "GEMINI_API_KEY": "key",
         "SENTRY_BACKEND_DSN": "https://user@sentry.io/123",
@@ -47,6 +51,18 @@ def test_valid_production_config():
     res = run_config_test({})
     assert res.returncode == 0
     assert "OK" in res.stdout
+
+
+def test_production_refuses_to_start_without_a_separate_off_store():
+    """Store A sharing the application database is a development convenience.
+
+    In production it is the difference between the two stores being physically
+    apart and merely intending to be, so a missing OFF_DATABASE_URL stops the
+    boot rather than silently falling back.
+    """
+    res = run_config_test({"OFF_DATABASE_URL": ""})
+    assert res.returncode != 0
+    assert "OFF_DATABASE_URL" in res.stderr
 
 @pytest.mark.parametrize("bad_postgres", [
     "postgresql://postgres:postgres@db.example.com/db",
