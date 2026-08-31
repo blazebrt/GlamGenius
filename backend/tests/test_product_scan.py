@@ -194,14 +194,27 @@ async def test_confirming_a_label_creates_a_record_and_raises_confidence(
     assert body["confidence"]["level"] == ProductConfidence.UNVERIFIED.value
     # Read off the label rather than asked for separately.
     assert body["fssai_licence"] == "10012345678901"
-    assert body["confirmations"] == 1
+    # Anonymous confirmations are kept but do not count towards a community
+    # claim, so the record stays unverified and the count stays at zero until
+    # an accountable reviewer promotes it.
+    assert body["confirmations"] == 0
 
 
 @pytest.mark.asyncio
-async def test_a_second_person_confirming_promotes_it_to_community(db_clean, off_clean, app_client):
+async def test_repeated_anonymous_confirmations_do_not_make_a_community_claim(
+    db_clean, off_clean, app_client,
+):
+    """A device identity is not a person identity.
+
+    Confirmations from anonymous devices are kept — the label facts are worth
+    having — but they do not accumulate into a community claim, because
+    nothing here can tell two people apart from one person with two phones, or
+    from one phone replaying a queue. Only an accountable reviewer promotes a
+    record, and that is asserted below.
+    """
     factory = get_sessionmaker()
     async with factory() as session:
-        for _ in range(2):
+        for _ in range(3):
             await service.apply_confirmed_label(
                 session, barcode=UNKNOWN, facts={"product_name": "Namkeen"},
             )
@@ -209,8 +222,26 @@ async def test_a_second_person_confirming_promotes_it_to_community(db_clean, off
         record = (await session.execute(
             select(ProductRecord).where(ProductRecord.barcode == UNKNOWN)
         )).scalar_one()
-    assert record.confidence == ProductConfidence.COMMUNITY.value
-    assert record.confirmation_count == 2
+    assert record.confidence == ProductConfidence.UNVERIFIED.value
+    assert record.confirmation_count == 0
+
+
+@pytest.mark.asyncio
+async def test_an_accountable_reviewer_is_what_promotes_a_record(db_clean, off_clean, app_client):
+    """The one path to verified, and it carries a name."""
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await service.apply_confirmed_label(
+            session, barcode=UNKNOWN, facts={"product_name": "Namkeen"},
+            confirmed_by="reviewer@glamgenius",
+        )
+        await session.commit()
+        record = (await session.execute(
+            select(ProductRecord).where(ProductRecord.barcode == UNKNOWN)
+        )).scalar_one()
+    assert record.confidence == ProductConfidence.VERIFIED.value
+    assert record.verified_by == "reviewer@glamgenius"
+    assert record.verified_at is not None
 
 
 # ---------------------------------------------------------------------------
