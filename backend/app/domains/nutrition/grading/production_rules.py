@@ -25,10 +25,11 @@ until a person walks them through the authoring tool.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
-from app.domains.evidence.enums import EvidenceDomain, RuleKind
+from app.domains.evidence.enums import EvidenceDomain, ReviewStatus, RuleKind
+from app.domains.evidence.models import EvidenceClaim
 from app.domains.evidence.service import assess_rule_evidence
 from app.domains.nutrition.food_reference import (
     FSA_FOP,
@@ -39,6 +40,8 @@ from app.domains.nutrition.food_reference import (
     MONTEIRO_NOVA_2019,
     Source,
 )
+from app.domains.nutrition.grading.engine import GradeResult
+from app.domains.nutrition.grading.rules import GradeOutcome
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -189,9 +192,10 @@ async def resolve_production_ruleset(session: AsyncSession) -> ProductionRuleset
     """Ask the evidence domain which grading rules may speak to a customer.
 
     Fail-closed throughout: a rule with no link, an incomplete support path, or
-    an unapproved claim stays a candidate. ``assess_rule_evidence`` already
-    treats a published claim as satisfying approval, so publishing does not
-    remove a rule from production.
+    a claim that has not reached the final ``published`` lifecycle stage stays
+    a candidate. Behaviour eligibility deliberately permits approved claims in
+    other domains; this production boundary is stricter and never promotes one
+    of those interim claims into a customer-facing verdict rule.
     """
     resolved: dict[str, RuleProvenance] = {}
     for rule in GRADING_RULES:
@@ -202,17 +206,51 @@ async def resolve_production_ruleset(session: AsyncSession) -> ProductionRuleset
             rule_id=rule.rule_id,
             rule_version=rule.rule_version,
         )
-        published = assessment.behavior_evidence_eligible
+        published_claims: list[EvidenceClaim] = []
+        for path in assessment.behavior_eligible_paths:
+            claim = await session.get(EvidenceClaim, path.claim_id)
+            if claim is not None and claim.review_status == ReviewStatus.PUBLISHED.value:
+                published_claims.append(claim)
+        published_claims.sort(key=lambda claim: str(claim.id))
+        published = bool(published_claims)
         resolved[rule.rule_id] = RuleProvenance(
             rule_id=rule.rule_id,
             rule_version=rule.rule_version,
             status=STATUS_PUBLISHED if published else STATUS_CANDIDATE,
             required=rule.required,
             source=rule.candidate_source,
-            claim_ids=tuple(assessment.claim_ids) if published else (),
-            claim_version=None,
+            claim_ids=tuple(claim.id for claim in published_claims),
+            claim_version=published_claims[0].claim_version if len(published_claims) == 1 else None,
         )
     return ProductionRuleset(provenance=resolved)
+
+
+def enforce_published_required_rules(
+    result: GradeResult, ruleset: ProductionRuleset,
+) -> GradeResult:
+    """Prevent candidate constants from producing a customer grade.
+
+    The deterministic engine remains useful for authoring and review, but a
+    production letter is only truthful when every required lowering rule has
+    completed its evidence lifecycle.  This is intentionally an outcome
+    boundary rather than a presentation hint: a candidate rule must not still
+    decide D/E while merely being labelled ``candidate`` in the response.
+    """
+    missing_rules = ruleset.unpublished_required
+    if result.outcome is not GradeOutcome.GRADED or not missing_rules:
+        return result
+    return replace(
+        result,
+        outcome=GradeOutcome.NOT_ENOUGH_INFORMATION,
+        grade=None,
+        ceiling=None,
+        headline="Not enough published evidence to grade this.",
+        detail=(
+            "Required production grading rules are not yet published. "
+            "We do not turn candidate reference constants into a customer grade."
+        ),
+        missing=tuple(sorted(set(result.missing).union(missing_rules))),
+    )
 
 
 __all__ = [
@@ -227,5 +265,6 @@ __all__ = [
     "ProductionRuleset",
     "RuleProvenance",
     "candidate_ruleset",
+    "enforce_published_required_rules",
     "resolve_production_ruleset",
 ]

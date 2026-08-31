@@ -16,7 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.media.storage import factory as storage_factory
 from app.domains.nutrition.grading import from_scan, grade_product, presentation
-from app.domains.nutrition.grading.production_rules import resolve_production_ruleset
+from app.domains.nutrition.grading.production_rules import (
+    enforce_published_required_rules,
+    resolve_production_ruleset,
+)
 from app.domains.product import devices, extraction, service
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
@@ -237,11 +240,11 @@ async def read_product_verdict(
     off_half = snapshot.facts if snapshot is not None else found.get("open_food_facts")
     name = (off_half or {}).get("product_name") or (off_half or {}).get("name") or barcode
     product = from_scan.build(barcode=barcode, name=name, off_half=off_half)
-    result = grade_product(product)
     # The customer path asks the evidence domain which rules have finished the
     # lifecycle. Every row then states its own footing, so a number resting on
     # an unreviewed constant is never shown as though a reviewer stood behind it.
     ruleset = await resolve_production_ruleset(session)
+    result = enforce_published_required_rules(grade_product(product), ruleset)
     payload = presentation.present(product, result, ruleset)
     payload["confidence"] = service.confidence_block(snapshot.confidence) if snapshot else found["confidence"]
     payload["facts_provenance"] = "confirmed_label_snapshot" if snapshot else "open_food_facts"

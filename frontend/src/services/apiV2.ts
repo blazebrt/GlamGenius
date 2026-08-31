@@ -684,7 +684,12 @@ export interface VerdictFactorWire {
   key: string;
   status: string;
   band: 'green' | 'yellow' | 'red';
-  quantity: { label: string; value: number; unit: string } | null;
+  quantity: {
+    label: string;
+    value: number;
+    unit: string;
+    basis: 'per_100_g' | 'per_100_ml' | 'pack';
+  } | null;
   explanation: string;
   rule: string | null;
   sources: VerdictEvidenceSourceWire[];

@@ -74,6 +74,7 @@ export const S = {
     worth_caution: 'Worth caution', flagged: 'Flagged', not_permitted: 'Not permitted',
     not_enough_information: 'Not enough information', lower_processing_group: 'Less processing on this label.',
     declared_on_label: 'This amount is declared on the label.',
+    per_100_g: 'per 100 g', per_100_ml: 'per 100 ml', pack: 'per pack',
     lower_processing: 'This product has more processing flags.', lower_sugar: 'The label shows a sugar flag.',
     lower_salt: 'The label shows a salt flag.', lower_fat: 'The label shows a fat flag.',
     lower_additive: 'An ingredient on the label is flagged.', lower_naming: 'The name and declared ingredient details do not fully match.',

@@ -27,7 +27,12 @@ export interface VerdictFactor {
   key: string;
   status: string;
   band: ColourBand;
-  quantity: { label: string; value: number; unit: string } | null;
+  quantity: {
+    label: string;
+    value: number;
+    unit: string;
+    basis: 'per_100_g' | 'per_100_ml' | 'pack';
+  } | null;
   explanation: string;
   rule: string | null;
   sources: VerdictEvidenceSource[];

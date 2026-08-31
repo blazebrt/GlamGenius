@@ -12,7 +12,7 @@ import { render, screen, fireEvent } from '@testing-library/react-native';
 
 import {
   BAND_COLOURS, ComponentRow, GradeBlock, IngredientList, REPORT_OPTIONS,
-  ReportSheet, VerdictActions, VerdictLines,
+  FactorSection, ReportSheet, VerdictActions, VerdictLines,
 } from '../components/verdict/VerdictPieces';
 import { S, t } from '../strings/verdict';
 import {
@@ -174,6 +174,25 @@ describe('the primary screen', () => {
     expect(screen.getByLabelText(S.a11y.why)).toBeTruthy();
     expect(screen.getByLabelText(S.a11y.listen)).toBeTruthy();
     expect(screen.getByLabelText(S.a11y.share)).toBeTruthy();
+  });
+});
+
+describe('factor quantities', () => {
+  it('states the verified quantity and its per-100 basis together', () => {
+    render(
+      <FactorSection
+        title={S.factors.lowers}
+        empty={S.factors.noLowers}
+        onExplain={jest.fn()}
+        rows={[{
+          key: 'sugar', label: 'sugar', status: 'high', band: 'red',
+          quantity: { label: 'sugar', value: 26.4, unit: 'g', basis: 'per_100_g' },
+          explanation: 'high_sugar', rule: 'grade.step2.sugar', sources: [],
+        }]}
+      />,
+    );
+
+    expect(screen.getByText('26.4 g per 100 g')).toBeTruthy();
   });
 });
 

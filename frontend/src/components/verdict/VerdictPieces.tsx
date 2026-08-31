@@ -243,7 +243,11 @@ export function FactorSection({
           <View style={[styles.dot, { backgroundColor: BAND_COLOURS[row.band].fill }]} />
           <View style={{ flex: 1, gap: 2 }}>
             <Text style={styles.factorStatus}>{S.factors[row.status as keyof typeof S.factors] ?? row.status}</Text>
-            {!!row.quantity && <Text style={styles.factorQuantity}>{`${row.quantity.value} ${row.quantity.unit}`}</Text>}
+            {!!row.quantity && (
+              <Text style={styles.factorQuantity}>
+                {`${row.quantity.value} ${row.quantity.unit} ${S.factors[row.quantity.basis]}`}
+              </Text>
+            )}
             <Text style={styles.ingredientDescription}>{S.factors[row.explanation as keyof typeof S.factors] ?? row.explanation}</Text>
             {row.sources.map((source) => (
               <TouchableOpacity key={source.name} accessibilityRole="link" disabled={!source.url}

@@ -20,6 +20,7 @@ from app.domains.nutrition.grading.presentation import (
 from app.domains.nutrition.grading.production_rules import (
     GRADING_RULES,
     candidate_ruleset,
+    enforce_published_required_rules,
 )
 
 # ---------------------------------------------------------------------------
@@ -258,3 +259,15 @@ def test_the_candidate_ruleset_names_every_required_rule_it_is_missing():
     ruleset = candidate_ruleset()
     assert ruleset.unpublished, "a candidate ruleset reported nothing unpublished"
     assert ruleset.unpublished_required, "required rules were not distinguished"
+
+
+def test_candidate_required_rules_cannot_issue_a_customer_grade():
+    """Candidate constants are authoring input, never a production verdict."""
+    result = grade_product(BISCUIT)
+    assert result.grade is not None
+
+    bounded = enforce_published_required_rules(result, candidate_ruleset())
+
+    assert bounded.outcome.value == "not_enough_information"
+    assert bounded.grade is None
+    assert set(candidate_ruleset().unpublished_required).issubset(bounded.missing)
