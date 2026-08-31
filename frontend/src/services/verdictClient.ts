@@ -96,6 +96,7 @@ export function toVerdictSource(
     rule: row.rule ?? row.finding ?? '',
     source: row.source ?? '',
     sourceUrl: row.source_url ?? null,
+    sources: row.sources ?? [],
     term: TERMS[row.key],
   }));
 
@@ -104,6 +105,9 @@ export function toVerdictSource(
     tier: (row.tier as VerdictIngredient['tier']) ?? 'plain',
     tierLabel: TIER_LABELS[row.tier] ?? S.ingredients.tierPlain,
     description: row.description ?? S.ingredients.unknownIngredient,
+    status: row.status,
+    whyFlagged: row.why_flagged,
+    sources: row.sources ?? [],
   }));
 
   const missing = wire.missing.map((row) =>
@@ -114,12 +118,16 @@ export function toVerdictSource(
     outcome: wire.outcome,
     grade: wire.grade,
     productName: wire.product_name,
+    taxonomy: wire.taxonomy,
+    decision: { action: wire.decision.action, reasonKey: wire.decision.reason_key },
     totalSugarG: wire.nutrition.total_sugar_g,
     saltG: wire.nutrition.salt_g,
     totalFatG: wire.nutrition.total_fat_g,
     proteinG: wire.nutrition.protein_g,
     packSizeG,
     components,
+    lowers: wire.lowers ?? [],
+    helps: wire.helps ?? [],
     ingredients,
     alternative,
     quantityGuidance: wire.quantity_guidance,

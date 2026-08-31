@@ -96,6 +96,9 @@ class ProductInput:
     sodium_g: Decimal | None = None
     salt_g: Decimal | None = None
     basis: str = "solid"                    # solid | drink
+    #: Producer category text, used only to select a customer-facing taxonomy
+    #: path.  It never changes the evidence or grade.
+    categories: str | None = None
     #: Declared percentages, keyed by ingredient: {"atta": 30}
     declared_percentages: dict[str, Decimal] = field(default_factory=dict)
     #: The ingredient the product's own name promises, if any.

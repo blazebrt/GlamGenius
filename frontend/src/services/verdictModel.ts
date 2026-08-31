@@ -16,6 +16,23 @@ export type GradeLetter = 'A' | 'B' | 'C' | 'D' | 'E';
 export type ColourBand = 'green' | 'yellow' | 'red';
 export type Outcome = 'graded' | 'not_graded' | 'not_enough_information';
 
+export interface VerdictEvidenceSource {
+  name: string;
+  url: string | null;
+  publisher: string | null;
+  version: string | null;
+}
+
+export interface VerdictFactor {
+  key: string;
+  status: string;
+  band: ColourBand;
+  quantity: { label: string; value: number; unit: string } | null;
+  explanation: string;
+  rule: string | null;
+  sources: VerdictEvidenceSource[];
+}
+
 export interface VerdictComponent {
   key: 'processing' | 'nutrients' | 'additives' | 'naming';
   label: string;
@@ -24,6 +41,7 @@ export interface VerdictComponent {
   rule: string;
   source: string;
   sourceUrl?: string | null;
+  sources?: VerdictEvidenceSource[];
   /** A technical word and the words that explain it, shown side by side. */
   term?: { word: string; plain: string };
 }
@@ -33,6 +51,9 @@ export interface VerdictIngredient {
   tier: 'plain' | 'green' | 'amber' | 'red' | 'black';
   tierLabel: string;
   description: string;
+  status?: string;
+  whyFlagged?: string | null;
+  sources?: VerdictEvidenceSource[];
 }
 
 export interface Alternative {
@@ -45,6 +66,8 @@ export interface VerdictSource {
   outcome: Outcome;
   grade: GradeLetter | null;
   productName: string;
+  taxonomy?: { domain: string; category: string; subcategory: string };
+  decision?: { action: 'buy' | 'wait' | 'skip'; reasonKey: string };
   /** Per 100 g / 100 ml, straight off the panel. */
   totalSugarG?: number | null;
   saltG?: number | null;
@@ -53,6 +76,8 @@ export interface VerdictSource {
   /** Grams in the pack, so "one packet" means this packet. */
   packSizeG?: number | null;
   components: VerdictComponent[];
+  lowers?: VerdictFactor[];
+  helps?: VerdictFactor[];
   ingredients: VerdictIngredient[];
   alternative?: Alternative | null;
   quantityGuidance?: string | null;

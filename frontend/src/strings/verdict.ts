@@ -68,6 +68,24 @@ export const S = {
     ingredients: 'What is in it',
     scanAnother: 'Scan another',
   },
+  taxonomy: {
+    packaged_food: 'Packaged food', whole_minimally_processed: 'Whole or minimally processed food',
+    culinary_ingredient: 'Cooking ingredient', biscuit: 'Biscuit', cereal: 'Cereal',
+    beverage: 'Beverage', dal: 'Dal', ghee: 'Ghee', cooking_oil: 'Cooking oil', salt: 'Salt',
+    other_packaged_food: 'Packaged food',
+  },
+  factors: {
+    lowers: 'What lowers it', helps: 'What helps', noLowers: 'No product flags were found in the available label facts.',
+    noHelps: 'No positive label facts were available.', source: 'Source', details: 'What this means',
+    declared: 'Declared on label', no_concern_found: 'No concern found', worth_knowing: 'Worth knowing',
+    worth_caution: 'Worth caution', flagged: 'Flagged', not_permitted: 'Not permitted',
+    not_enough_information: 'Not enough information', lower_processing_group: 'Less processing on this label.',
+    declared_on_label: 'This amount is declared on the label.',
+    lower_processing: 'This product has more processing flags.', lower_sugar: 'The label shows a sugar flag.',
+    lower_salt: 'The label shows a salt flag.', lower_fat: 'The label shows a fat flag.',
+    lower_additive: 'An ingredient on the label is flagged.', lower_naming: 'The name and declared ingredient details do not fully match.',
+    lower_label_fact: 'A label fact lowered the grade.',
+  },
 
   // -----------------------------------------------------------------------
   // Not graded, and not known. Both are answers, not failures.
@@ -154,6 +172,12 @@ export const S = {
     tierRed: 'We flag this one',
     tierBlack: 'Should not be in food sold here',
     tierPlain: 'Food',
+    noConcernFound: 'No concern found',
+    worthKnowing: 'Worth knowing',
+    worthCaution: 'Worth caution',
+    flagged: 'Flagged',
+    notPermitted: 'Not permitted',
+    notEnoughInformation: 'Not enough information',
     empty: 'The pack did not carry an ingredient list.',
   },
 

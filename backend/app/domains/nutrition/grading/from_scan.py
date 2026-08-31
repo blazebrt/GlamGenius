@@ -134,6 +134,7 @@ def build(
         sodium_g=values["sodium_g"],
         salt_g=values["salt_g"],
         basis=basis_for(off.get("categories"), name),
+        categories=off.get("categories"),
         declared_percentages=percentages,
         name_promises=promised,
         marketed_to_children=marketed_to_children,

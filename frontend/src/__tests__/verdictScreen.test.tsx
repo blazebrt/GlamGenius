@@ -16,7 +16,7 @@ import {
 } from '../components/verdict/VerdictPieces';
 import { S, t } from '../strings/verdict';
 import {
-  buildVerdict, everydayNumber, rupees, TECHNICAL_TERMS, type VerdictSource,
+  buildVerdict, everydayNumber, rupees, type VerdictSource,
 } from '../services/verdictModel';
 
 /** Only the words rendered on screen — not props, styles or role names. */
@@ -125,34 +125,33 @@ describe('the primary screen', () => {
     }
   });
 
-  it('uses no technical term anywhere a person reads', () => {
+  it('shows the verified label quantity rather than a familiar-unit conversion', () => {
     const view = buildVerdict(base);
     render(<VerdictLines view={view} onReport={jest.fn()} />);
     const shown = JSON.stringify(screen.toJSON()).toLowerCase();
-    for (const term of TECHNICAL_TERMS) {
-      expect(shown).not.toContain(term);
-    }
+    expect(shown).toContain('22.5 g total sugar per 100 g');
+    expect(shown).not.toContain('spoons of sugar');
   });
 
-  it('converts the number into something you can picture', () => {
+  it('keeps unverified familiar-unit conversions disabled', () => {
     expect(everydayNumber({ ...base, totalSugarG: 22.5, packSizeG: 100 }))
-      .toBe(t(S.primary.sugarSpoons, { spoons: 5 }));
+      .toBe('22.5 g total sugar per 100 g');
     expect(everydayNumber({ ...base, totalSugarG: 22.5, packSizeG: 60 }))
-      .toBe(t(S.primary.sugarSpoons, { spoons: 3 }));
+      .toBe('22.5 g total sugar per 100 g');
   });
 
-  it('shows the good number for a good product', () => {
+  it('shows the declared label fact without a made-up comparison', () => {
     const dal = {
       ...base, grade: 'A' as const, totalSugarG: 2.4, saltG: 0.04,
       totalFatG: 1.7, proteinG: 22, packSizeG: 100,
     };
-    expect(everydayNumber(dal)).toBe(t(S.primary.proteinBowls, { bowls: 4 }));
+    expect(everydayNumber(dal)).toBe('2.4 g total sugar per 100 g');
   });
 
-  it('says so plainly when no number stands out', () => {
+  it('keeps a declared label fact visible when no reviewed comparison exists', () => {
     expect(everydayNumber({
       ...base, totalSugarG: 1, saltG: 0.1, totalFatG: 2, proteinG: 3,
-    })).toBe(S.primary.noEverydayNumber);
+    })).toBe('1 g total sugar per 100 g');
   });
 
   it('shows one better product with its price and its letter', () => {
@@ -186,7 +185,7 @@ describe('voice', () => {
     const view = buildVerdict(base);
     expect(view.spoken).toContain(view.verdict);
     expect(view.spoken).toContain(view.action);
-    expect(view.spoken).toContain('5 spoons of sugar');
+    expect(view.spoken).toContain('22.5 g total sugar per 100 g');
     expect(view.spoken).toContain('Marie Light');
     expect(view.spoken).toContain('30 rupees');
   });
@@ -297,7 +296,7 @@ describe('the why screen', () => {
     render(<ComponentRow component={component} expanded onToggle={jest.fn()} />);
     expect(screen.getByText(S.why.ruleLead)).toBeTruthy();
     expect(screen.getByText(S.why.sourceLead)).toBeTruthy();
-    expect(screen.getByText(component.source)).toBeTruthy();
+    expect(screen.getAllByText(component.source).length).toBeGreaterThan(0);
   });
 
   it('never shows a technical word without its explanation beside it', () => {

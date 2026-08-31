@@ -454,6 +454,21 @@ def test_the_screen_payload_carries_four_components_and_a_colour():
     assert all(row["source"] for row in payload["components"])
 
 
+def test_screen_payload_has_customer_taxonomy_and_evidence_fact_sections():
+    """The verdict surface gets category and traceable facts without changing grade rules."""
+    from app.domains.nutrition.grading.presentation import present
+
+    product = next(p for label, p, _ in CASES if label == "Glucose biscuit")
+    payload = present(product, grade_product(product))
+    assert payload["taxonomy"] == {
+        "domain": "consumed", "category": "packaged_food", "subcategory": "biscuit",
+    }
+    assert payload["decision"]["action"] == "skip"
+    assert payload["lowers"]
+    assert all("quantity" in row and "sources" in row for row in payload["lowers"])
+    assert payload["helps"]
+
+
 def test_the_screen_payload_carries_every_ingredient_free():
     from app.domains.nutrition.grading.presentation import present
 

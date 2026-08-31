@@ -664,10 +664,28 @@ interface VerdictComponentWire {
   finding: string | null;
   source: string | null;
   source_url?: string | null;
+  sources?: VerdictEvidenceSourceWire[];
   high?: { nutrient: string; attribution: string | null }[];
   exempt?: string[];
   ingredient?: string | null;
   declared_percent?: number | null;
+}
+
+export interface VerdictEvidenceSourceWire {
+  name: string;
+  url: string | null;
+  publisher: string | null;
+  version: string | null;
+}
+
+export interface VerdictFactorWire {
+  key: string;
+  status: string;
+  band: 'green' | 'yellow' | 'red';
+  quantity: { label: string; value: number; unit: string } | null;
+  explanation: string;
+  rule: string | null;
+  sources: VerdictEvidenceSourceWire[];
 }
 
 export interface ProductVerdictWire {
@@ -676,6 +694,8 @@ export interface ProductVerdictWire {
   grade: 'A' | 'B' | 'C' | 'D' | 'E' | null;
   band: 'green' | 'yellow' | 'red';
   product_name: string;
+  taxonomy: { domain: string; category: string; subcategory: string };
+  decision: { action: 'buy' | 'wait' | 'skip'; reason_key: string };
   nutrition: {
     total_sugar_g: number | null;
     salt_g: number | null;
@@ -683,7 +703,13 @@ export interface ProductVerdictWire {
     protein_g: number | null;
   };
   components: VerdictComponentWire[];
-  ingredients: { name: string; tier: string; description: string | null; source: string | null }[];
+  lowers: VerdictFactorWire[];
+  helps: VerdictFactorWire[];
+  ingredients: {
+    name: string; tier: string; status: string; band: 'green' | 'yellow' | 'red';
+    description: string | null; why_flagged: string | null; source: string | null;
+    sources: VerdictEvidenceSourceWire[];
+  }[];
   quantity_guidance: string | null;
   purity_note: string | null;
   missing: string[];
