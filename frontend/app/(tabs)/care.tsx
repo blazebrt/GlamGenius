@@ -9,7 +9,7 @@ import { CARE_CATEGORIES, countForDomain } from '../../src/navigation/finalIA';
 import {
   AttentionAgenda, CareProductControl, InventoryCategory, InventoryItem, InventorySummary, MaintenanceOverview, Routine,
   completeRoutineStep, getImproveOverview, getInventoryItems, getInventorySummary, getMaintenance,
-  getRoutinesToday, getTodayAgenda, logInventoryUsage, preferCareProduct, recordMaintenanceDone, setEventReadyActionComplete,
+  getRoutinesToday, getTodayAgenda, preferCareProduct, recordMaintenanceDone, setEventReadyActionComplete,
 } from '../../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../src/theme/colors';
 
@@ -33,7 +33,12 @@ export default function CareScreen() {
   useFocusEffect(useCallback(() => { void load(); }, [load]));
   const act = async (key: string, work: () => Promise<unknown>) => { if (busy) return; setBusy(key); try { await work(); await load(); } catch (error) { console.warn('care manager action failed', error); } finally { setBusy(null); } };
   const openCollection = (category?: InventoryCategory) => router.push({ pathname: '/(tabs)/inventory', params: { domain: 'care', ...(category ? { category } : {}) } });
-  const low = daily?.inventory.filter((item) => remaining(item) !== null && remaining(item)! <= 15 && item.usage_count > 0) ?? [];
+  const low = (daily?.inventory ?? []).flatMap((item) => {
+    if (remaining(item) === null || remaining(item)! > 15 || item.usage_count === 0) return [];
+    const current = daily?.controls.find((control) => control.inventory_item_id === item.id); const category = controlCategory(item.category);
+    const alternative = category && current?.slot ? daily?.controls.find((control) => control.category === category && control.slot === current.slot && control.inventory_item_id !== item.id && control.eligible && !control.paused) : undefined;
+    return alternative ? [{ item, alternative }] : [];
+  });
   const events = daily?.agenda?.items.filter((item) => item.source_kind === 'event_ready_action' && item.domain === 'care' && !item.completed) ?? [];
   const dueMaintenance = daily?.maintenance?.kinds.filter((item) => item.status === 'due') ?? [];
   return <View style={[styles.container, { paddingTop: insets.top }]}><ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void load()} />} contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 110 }}>
@@ -42,11 +47,9 @@ export default function CareScreen() {
       <Text style={styles.section}>Today’s routine</Text>
       {daily?.routines.flatMap((routine) => routine.steps.filter((step) => !step.is_gap).map((step) => <DecisionRow key={`${routine.id}:${step.id ?? step.slot}`} title={`${step.completed_today ? 'Done' : 'Do'} · ${step.label}`} reason={step.climate_note || step.plain_english || step.why} action={step.completed_today ? 'Undo' : 'Done'} busy={busy === `step:${step.id}`} onPress={() => step.id && void act(`step:${step.id}`, () => completeRoutineStep(step.id!, !step.completed_today))} />))}
       {!daily?.routines.length && <Empty text="Nothing is due in your routine right now." />}
-      {!!low.length && <><Text style={styles.section}>Use what you already have</Text>{low.map((item) => {
-        const current = daily?.controls.find((control) => control.inventory_item_id === item.id); const category = controlCategory(item.category);
-        const alternative = category && current?.slot ? daily?.controls.find((control) => control.category === category && control.slot === current.slot && control.inventory_item_id !== item.id && control.eligible && !control.paused) : undefined;
+      {!!low.length && <><Text style={styles.section}>Use what you already have</Text>{low.map(({ item, alternative }) => {
         const key = `low:${item.id}`;
-        return <DecisionRow key={key} title={`${item.display_name} is running low`} reason={`${remaining(item)}% remains after ${item.usage_count} recorded uses.${alternative ? ` ${alternative.display_name} is already suitable for this routine step.` : ''}`} action={alternative ? `Use ${alternative.display_name}` : 'Log use'} busy={busy === key} onPress={() => void act(key, () => alternative ? preferCareProduct(alternative.inventory_item_id) : logInventoryUsage(item.id, new Date().toISOString().slice(0, 10)))} />;
+        return <DecisionRow key={key} title={`${item.display_name} is running low`} reason={`${remaining(item)}% remains after ${item.usage_count} recorded uses. ${alternative.display_name} is already suitable for this routine step.`} action={`Use ${alternative.display_name}`} busy={busy === key} onPress={() => void act(key, () => preferCareProduct(alternative.inventory_item_id))} />;
       })}</>}
       {!!dueMaintenance.length && <><Text style={styles.section}>Upkeep due</Text>{dueMaintenance.map((item) => <DecisionRow key={item.kind} title={item.label} reason={item.reason} action="Done" busy={busy === `maintenance:${item.kind}`} onPress={() => void act(`maintenance:${item.kind}`, () => recordMaintenanceDone(item.kind))} />)}</>}
       {!!events.length && <><Text style={styles.section}>For an upcoming event</Text>{events.map((item) => <DecisionRow key={item.key} title={item.title} reason={item.body} action="Done" busy={busy === `event:${item.key}`} onPress={() => item.event_id && item.source_action_id && void act(`event:${item.key}`, () => setEventReadyActionComplete(item.event_id!, item.source_action_id!, true))} />)}</>}
