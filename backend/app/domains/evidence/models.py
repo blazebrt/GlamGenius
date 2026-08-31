@@ -27,7 +27,7 @@ from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
 
 
 def _check(name: str, column: str, values: tuple[str, ...]) -> CheckConstraint:
-    literal = ", ".join("'%s'" % value for value in values)
+    literal = ", ".join(f"'{value}'" for value in values)
     return CheckConstraint(f"{column} IN ({literal})", name=name)
 
 

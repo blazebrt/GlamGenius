@@ -254,12 +254,10 @@ class GoogleCalendarProvider(CalendarProvider):
         try:
             async with httpx.AsyncClient(transport=self.transport, timeout=GOOGLE_CALENDAR_TIMEOUT_SECONDS) as client:
                 response = await client.post(GOOGLE_OAUTH_REVOCATION_ENDPOINT, data={"token": refresh_token})
-            if response.status_code == 200:
-                return True
             # Only HTTP 200 confirms revocation. Provider errors, including
             # invalid_token, remain unresolved so the Vault reference is
             # retained for a later retry.
-            return False
+            return response.status_code == 200
         except httpx.HTTPError:
             return False
 
