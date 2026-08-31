@@ -36,9 +36,19 @@ TIER_AVOID = "avoid"
 
 @dataclass(frozen=True)
 class Source:
+    """One publication a rule can rest on.
+
+    ``url`` is a condition of use rather than a convenience: a rule that lowers
+    somebody's grade has to show them what it is based on, so a source with
+    nothing to open cannot support a negative claim. ``publisher`` is stated
+    rather than parsed out of the citation, because splitting a citation string
+    on its first full stop is a guess that breaks on the first author list.
+    """
+
     name: str
     url: str
     identifier: str
+    publisher: str = ""
 
 
 # --- Sources ---------------------------------------------------------------
@@ -47,40 +57,56 @@ FSA_FOP = Source(
     "(FoP) nutrition label for pre-packed products sold through retail outlets. 2016.",
     "https://www.gov.uk/government/publications/front-of-pack-nutrition-labelling-guidance",
     "UK-FSA-FOP-2016",
+    "UK Food Standards Agency",
 )
 ICMR_NIN_2024 = Source(
     "ICMR-NIN. Dietary Guidelines for Indians, 2024. National Institute of Nutrition, "
     "Hyderabad. Table 15.1 (label reading thresholds).",
     "https://www.nin.res.in/dietaryguidelines/pdfjs/locale/DGI07052024P.pdf",
     "ICMR-NIN-DGI-2024",
+    "ICMR-National Institute of Nutrition",
 )
 FSSAI_LABELLING = Source(
     "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the "
     "subsequent front-of-pack nutrition labelling amendments.",
     "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
     "FSSAI-LABELLING-2020",
+    "FSSAI",
 )
 FSSAI_ADDITIVES = Source(
     "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) "
     "Regulations, 2011, as amended.",
     "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
     "FSSAI-ADDITIVES-2011",
+    "FSSAI",
 )
 FSSAI_TRANSFAT = Source(
     "FSSAI. Food Safety and Standards (Prohibition and Restrictions on Sales) Amendment "
     "Regulations, 2021 — industrial trans fatty acids limit.",
     "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
     "FSSAI-TFA-2021",
+    "FSSAI",
 )
 FSSAI_BROMATE = Source(
     "FSSAI. Removal of potassium bromate from the list of permitted food additives, "
     "notification dated 20 June 2016.",
     "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
     "FSSAI-BROMATE-2016",
+    "FSSAI",
+)
+MONTEIRO_NOVA_2019 = Source(
+    "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how "
+    "to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+    # The DOI resolver rather than a publisher landing page: it is the citation's
+    # canonical address and does not move when the publisher reorganises.
+    "https://doi.org/10.1017/S1368980018003762",
+    "MONTEIRO-NOVA-2019",
+    "Public Health Nutrition (Cambridge University Press)",
 )
 WHO_SALT = Source(
     "World Health Organization. Guideline: Sodium intake for adults and children. 2012.",
     "https://www.who.int/publications/i/item/9789241504836", "WHO-SODIUM-2012",
+    "World Health Organization",
 )
 
 

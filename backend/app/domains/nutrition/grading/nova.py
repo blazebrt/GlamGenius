@@ -25,15 +25,18 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.domains.nutrition.food_reference import MONTEIRO_NOVA_2019, Source
+
 NOVA_UNPROCESSED = 1
 NOVA_CULINARY_INGREDIENT = 2
 NOVA_PROCESSED = 3
 NOVA_ULTRA_PROCESSED = 4
 
-NOVA_SOURCE = (
-    "Monteiro CA et al., Ultra-processed foods: what they are and how to "
-    "identify them, Public Health Nutrition 22(5), 2019"
-)
+#: The published classification behind every processing finding.
+#:
+#: The ``Source`` itself, not its name: the processing gate lowers grades, and
+#: a lowering factor has to show the customer something they can open.
+NOVA_SOURCE = MONTEIRO_NOVA_2019
 
 #: Group 4 markers, keyed by the family the product named. The values are the
 #: label wordings that mean the same thing on an Indian pack.
@@ -98,7 +101,7 @@ class NovaResult:
     #: Culinary additions found in the ingredient list.
     culinary_additions: tuple[str, ...]
     reason: str
-    source: str = NOVA_SOURCE
+    source: Source = NOVA_SOURCE
 
 
 def normalise(text: str) -> str:

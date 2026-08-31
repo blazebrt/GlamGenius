@@ -264,10 +264,11 @@ export function FactorSection({
 
 /** Every ingredient, free, with what it does in plain words. */
 export function IngredientList({
-  ingredients, onReport,
+  ingredients, onReport, onExplain,
 }: {
   ingredients: VerdictIngredient[];
   onReport: (subject: string) => void;
+  onExplain: (ingredient: VerdictIngredient) => void;
 }) {
   if (ingredients.length === 0) {
     return <Text style={styles.empty}>{S.ingredients.empty}</Text>;
@@ -275,37 +276,119 @@ export function IngredientList({
   return (
     <View>
       <Text style={styles.orderNote}>{S.ingredients.orderNote}</Text>
-      {ingredients.map((row, index) => (
-        <View
-          key={`${row.name}-${index}`}
-          style={styles.ingredient}
-          accessibilityLabel={t(S.a11y.ingredientRow, {
-            name: row.name, tier: TIER_LABELS[row.tier], description: row.description,
-          })}
-        >
-          <View style={[styles.dot, { backgroundColor: TIER_DOTS[row.tier] }]} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.ingredientName}>{row.name}</Text>
-            <Text style={styles.ingredientTier}>{INGREDIENT_STATUS[row.status ?? ''] ?? TIER_LABELS[row.tier]}</Text>
-            <Text style={styles.ingredientDescription}>{row.description}</Text>
-            {!!row.whyFlagged && <Text style={styles.ingredientDescription}>{row.whyFlagged}</Text>}
-            {row.sources?.map((source) => (
-              <TouchableOpacity key={source.name} accessibilityRole="link" disabled={!source.url}
-                onPress={() => { if (source.url) void Linking.openURL(source.url); }}>
-                <Text style={styles.bodySource}>{source.name}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel={t(S.a11y.report, { subject: row.name })}
-            onPress={() => onReport(row.name)}
-            hitSlop={12}
+      {ingredients.map((row, index) => {
+        const shown = row.label || row.name;
+        const source = row.sources?.find((entry) => !!entry.url) ?? null;
+        return (
+          <View
+            key={`${row.name}-${index}`}
+            style={styles.ingredient}
+            accessibilityLabel={t(S.a11y.ingredientRow, {
+              name: shown, tier: TIER_LABELS[row.tier], description: row.description,
+            })}
           >
-            <Text style={styles.reportInline}>{S.report.triggerShort}</Text>
-          </TouchableOpacity>
+            <View style={[styles.dot, { backgroundColor: TIER_DOTS[row.tier] }]} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.ingredientName}>{shown}</Text>
+              <Text style={styles.ingredientTier}>
+                {INGREDIENT_STATUS[row.status ?? ''] ?? TIER_LABELS[row.tier]}
+              </Text>
+              {/*
+                The row explains itself. Everything below this line is an extra
+                a person may reach for, never the only place the basic
+                explanation exists.
+              */}
+              <Text style={styles.ingredientDescription}>{row.description}</Text>
+              {!!row.whyFlagged && (
+                <Text style={styles.ingredientDescription}>{row.whyFlagged}</Text>
+              )}
+
+              {/*
+                Three separate controls, three separate handlers. Opening an
+                authority, asking us to explain ourselves, and telling us we
+                are wrong are different requests and must not share a target.
+              */}
+              <View style={styles.ingredientActions}>
+                {!!source && (
+                  <TouchableOpacity
+                    accessibilityRole="link"
+                    accessibilityLabel={t(S.a11y.openSource, { name: shown })}
+                    onPress={() => { if (source.url) void Linking.openURL(source.url); }}
+                    hitSlop={8}
+                  >
+                    <Text style={styles.actionLink}>{S.why.sourceLink}</Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={t(S.a11y.explain, { name: shown })}
+                  onPress={() => onExplain(row)}
+                  hitSlop={8}
+                >
+                  <Text style={styles.actionLink}>{S.ingredients.explainAction}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={t(S.a11y.report, { subject: shown })}
+                  onPress={() => onReport(shown)}
+                  hitSlop={8}
+                >
+                  <Text style={styles.actionLink}>{S.report.triggerShort}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * What the `?` opens: the full basis for one ingredient row.
+ *
+ * Seven sections, each present only when there is something true to put in it.
+ * A missing section says so rather than being filled with a guess.
+ */
+export function IngredientDetail({ ingredient }: { ingredient: VerdictIngredient }) {
+  const detail = ingredient.detail;
+  const shown = ingredient.label || ingredient.name;
+  const source = detail?.source ?? ingredient.sources?.find((row) => !!row.url) ?? null;
+  const sections: { lead: string; body: string }[] = [
+    { lead: S.ingredients.whatItDoes, body: detail?.whatItDoes || ingredient.description },
+    { lead: S.ingredients.whyFlagged, body: detail?.whyFlagged || S.ingredients.noNote },
+    { lead: S.ingredients.exactRule, body: detail?.rule || S.ingredients.noRule },
+    {
+      lead: S.ingredients.authorityPosition,
+      body: detail?.authorityPosition || source?.name || S.ingredients.noAuthority,
+    },
+    {
+      lead: S.ingredients.ourInterpretation,
+      body: detail?.interpretation || S.ingredients.noInterpretation,
+    },
+    {
+      lead: S.ingredients.evidenceStatus,
+      body: detail?.evidenceStatus || S.ingredients.unreviewedRule,
+    },
+  ];
+  return (
+    <View style={styles.card} accessibilityLabel={S.ingredients.explainTitle}>
+      <Text style={styles.cardTitle}>{shown}</Text>
+      {sections.map((section) => (
+        <View key={section.lead}>
+          <Text style={styles.bodyLead}>{section.lead}</Text>
+          <Text style={styles.bodyText}>{section.body}</Text>
         </View>
       ))}
+      {!!source?.url && (
+        <TouchableOpacity
+          accessibilityRole="link"
+          accessibilityLabel={t(S.a11y.openSource, { name: shown })}
+          onPress={() => void Linking.openURL(source.url as string)}
+        >
+          <Text style={styles.bodySource}>{S.ingredients.openSource}</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -420,6 +503,12 @@ export function ReportSheet({
 }
 
 const styles = StyleSheet.create({
+  ingredientActions: {
+    flexDirection: 'row', gap: SPACING.md, marginTop: 6, flexWrap: 'wrap',
+  },
+  actionLink: {
+    color: COLORS.primary, fontFamily: FONTS.family.bodySemibold, fontSize: 13,
+  },
   block: {
     borderRadius: RADIUS.lg, alignItems: 'center', justifyContent: 'center',
     paddingVertical: SPACING.xl, gap: 4,

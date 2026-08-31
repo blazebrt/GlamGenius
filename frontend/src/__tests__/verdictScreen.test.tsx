@@ -235,7 +235,7 @@ describe('report an error', () => {
 
   it('is one tap from any ingredient', () => {
     const report = jest.fn();
-    render(<IngredientList ingredients={base.ingredients} onReport={report} />);
+    render(<IngredientList ingredients={base.ingredients} onReport={report} onExplain={jest.fn()} />);
     fireEvent.press(screen.getByLabelText(t(S.a11y.report, { subject: 'Emulsifier (INS 322)' })));
     expect(report).toHaveBeenCalledWith('Emulsifier (INS 322)');
   });
@@ -316,19 +316,19 @@ describe('the why screen', () => {
 
 describe('the ingredient list', () => {
   it('shows every ingredient with a tier and a plain description', () => {
-    render(<IngredientList ingredients={base.ingredients} onReport={jest.fn()} />);
+    render(<IngredientList ingredients={base.ingredients} onReport={jest.fn()} onExplain={jest.fn()} />);
     expect(screen.getByText('Refined wheat flour (maida)')).toBeTruthy();
     expect(screen.getByText('Keeps oil and water mixed.')).toBeTruthy();
     expect(screen.getByText(S.ingredients.orderNote)).toBeTruthy();
   });
 
   it('says so when we have no description rather than inventing one', () => {
-    render(<IngredientList ingredients={base.ingredients} onReport={jest.fn()} />);
+    render(<IngredientList ingredients={base.ingredients} onReport={jest.fn()} onExplain={jest.fn()} />);
     expect(screen.getByText(S.ingredients.unknownIngredient)).toBeTruthy();
   });
 
   it('says so when the pack carried no ingredient list', () => {
-    render(<IngredientList ingredients={[]} onReport={jest.fn()} />);
+    render(<IngredientList ingredients={[]} onReport={jest.fn()} onExplain={jest.fn()} />);
     expect(screen.getByText(S.ingredients.empty)).toBeTruthy();
   });
 });

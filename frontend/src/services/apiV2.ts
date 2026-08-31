@@ -708,9 +708,22 @@ export interface ProductVerdictWire {
   lowers: VerdictFactorWire[];
   helps: VerdictFactorWire[];
   ingredients: {
-    name: string; tier: string; status: string; band: 'green' | 'yellow' | 'red';
+    name: string; label: string | null;
+    tier: string; status: string; band: 'green' | 'yellow' | 'red';
     description: string | null; why_flagged: string | null; source: string | null;
     sources: VerdictEvidenceSourceWire[];
+    /** What the `?` control opens. Null when there is nothing more to say. */
+    detail: {
+      what_it_does: string | null;
+      why_flagged: string | null;
+      rule: string | null;
+      authority_position: string | null;
+      interpretation: string | null;
+      evidence_status: string | null;
+      source: VerdictEvidenceSourceWire | null;
+    } | null;
+    /** Which of the three controls this row can actually offer. */
+    actions: { source: boolean; explain: boolean; report: boolean };
   }[];
   quantity_guidance: string | null;
   purity_note: string | null;

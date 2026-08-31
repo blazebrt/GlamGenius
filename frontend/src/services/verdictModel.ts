@@ -33,15 +33,6 @@ export interface VerdictFactor {
   sources: VerdictEvidenceSource[];
 }
 
-/** One teaspoon of sugar, in grams. The conversion everyone already knows. */
-export const SUGAR_G_PER_SPOON = 5;
-/** A pinch of salt, in grams. Used because "grams of salt" means nothing. */
-export const SALT_G_PER_PINCH = 0.4;
-/** One tablespoon of oil, in grams. */
-export const OIL_G_PER_SPOON = 14;
-/** Protein in one katori of cooked dal, in grams. */
-export const PROTEIN_G_PER_BOWL = 6;
-
 export interface VerdictComponent {
   key: 'processing' | 'nutrients' | 'additives' | 'naming';
   label: string;
@@ -55,14 +46,28 @@ export interface VerdictComponent {
   term?: { word: string; plain: string };
 }
 
+export interface VerdictIngredientDetail {
+  whatItDoes?: string | null;
+  whyFlagged?: string | null;
+  rule?: string | null;
+  authorityPosition?: string | null;
+  interpretation?: string | null;
+  evidenceStatus?: string | null;
+  source?: VerdictEvidenceSource | null;
+}
+
 export interface VerdictIngredient {
   name: string;
+  /** What the row prints: the additive's own name and INS where it has one. */
+  label?: string;
   tier: 'plain' | 'green' | 'amber' | 'red' | 'black';
   tierLabel: string;
   description: string;
   status?: string;
   whyFlagged?: string | null;
   sources?: VerdictEvidenceSource[];
+  /** What the `?` control opens. Absent when there is nothing more to say. */
+  detail?: VerdictIngredientDetail | null;
 }
 
 export interface Alternative {
@@ -134,11 +139,13 @@ export const rupees = (paise: number): string => {
  * screen exists to replace.
  */
 export function everydayNumber(source: VerdictSource): string {
-  // A familiar-unit conversion is only honest with a pack quantity behind it.
-  // ``packSizeG`` now carries one where the label states a net quantity (see
-  // pack_size_g in the grading module), so re-enabling the spoons-and-pinches
-  // wording is a reviewed change away rather than a rewrite — but until that
-  // review happens the declared label fact is what is shown.
+  // The declared label fact, stated with the basis it was measured on.
+  //
+  // The familiar-unit wordings ("6 spoons of sugar in one packet") are not
+  // here and are not importable from here: they live in
+  // src/strings/quarantine/familiarUnits.ts with the conditions they would
+  // have to meet first. Every one of them claims something about a packet,
+  // and this screen is reading a per-100 g panel.
   if (typeof source.totalSugarG === 'number') return `${source.totalSugarG} g total sugar per 100 g`;
   if (typeof source.saltG === 'number') return `${source.saltG} g salt per 100 g`;
   if (typeof source.totalFatG === 'number') return `${source.totalFatG} g total fat per 100 g`;

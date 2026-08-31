@@ -2,7 +2,7 @@
  * The verdict screen.
  *
  * Three seconds, no reading. The colour block fills the top of the screen and
- * carries the answer on its own — green take it, yellow think, red leave it —
+ * carries the answer on its own — green is BUY, yellow is WAIT, red is SKIP —
  * so somebody who has never seen this app knows what to do before their eye
  * has focused on the letter, let alone the sentence under it.
  *
@@ -22,7 +22,9 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { S, t } from '../src/strings/verdict';
 import { COLORS, FONTS, SPACING } from '../src/theme/colors';
-import { buildVerdict, type VerdictSource } from '../src/services/verdictModel';
+import {
+  buildVerdict, type VerdictIngredient, type VerdictSource,
+} from '../src/services/verdictModel';
 import { isSpeechAvailable, speak, stopSpeaking } from '../src/services/speech';
 import {
   flushReports, makeReport, submitReport, type ReportReason,
@@ -30,8 +32,8 @@ import {
 import { getProductVerdict } from '../src/services/verdictClient';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import {
-  ComponentRow, FactorSection, GradeBlock, IngredientList, NotGradedCard, ReportSheet,
-  UnknownCard, VerdictActions, VerdictLines,
+  ComponentRow, FactorSection, GradeBlock, IngredientDetail, IngredientList,
+  NotGradedCard, ReportSheet, UnknownCard, VerdictActions, VerdictLines,
 } from '../src/components/verdict/VerdictPieces';
 
 export default function VerdictScreen() {
@@ -47,6 +49,7 @@ export default function VerdictScreen() {
   const [reportSubject, setReportSubject] = useState<string | null>(null);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [reportBusy, setReportBusy] = useState(false);
+  const [explaining, setExplaining] = useState<VerdictIngredient | null>(null);
   const [reportStatus, setReportStatus] = useState<string | null>(null);
   const [explanation, setExplanation] = useState<{ explanation: string; rule: string | null } | null>(null);
 
@@ -223,7 +226,11 @@ export default function VerdictScreen() {
           <>
             <Text style={styles.sectionTitle}>{S.ingredients.title}</Text>
             <Text style={styles.sectionSubtitle}>{S.ingredients.subtitle}</Text>
-            <IngredientList ingredients={source.ingredients} onReport={openReport} />
+            <IngredientList
+              ingredients={source.ingredients}
+              onReport={openReport}
+              onExplain={setExplaining}
+            />
           </>
         )}
 
@@ -243,6 +250,27 @@ export default function VerdictScreen() {
         */}
         {!!source.attribution && <OpenFoodFactsAttribution />}
       </ScrollView>
+
+      <Modal
+        visible={explaining !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setExplaining(null)}
+      >
+        <View style={styles.explanationBackdrop}>
+          <View style={styles.explanationCard}>
+            {explaining && <IngredientDetail ingredient={explaining} />}
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={S.report.cancel}
+              onPress={() => setExplaining(null)}
+              style={styles.link}
+            >
+              <Text style={styles.linkText}>{S.report.cancel}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={reportSubject !== null}

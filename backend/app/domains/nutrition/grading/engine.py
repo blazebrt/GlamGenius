@@ -26,6 +26,7 @@ from app.domains.nutrition.food_reference import (
     TIER_BLACK,
     TIER_RED,
     CulinaryIngredient,
+    Source,
 )
 from app.domains.nutrition.grading import nova
 from app.domains.nutrition.grading.rules import (
@@ -124,21 +125,45 @@ class ProductInput:
 
 @dataclass(frozen=True)
 class TraceEntry:
+    """One step of the reasoning, and what it was based on.
+
+    ``source`` takes the published ``Source`` itself wherever a rule rests on
+    one, and a plain sentence only where the rule is our own policy and there
+    is nothing external to open. Carrying the object rather than its name is
+    what lets a screen show an openable link and a version, and what lets a
+    customer report an error against the exact basis of the decision — a name
+    string would have to be looked up against a hand-maintained list, and a
+    hand-maintained list silently loses whichever source nobody added.
+    """
+
     step: int
     step_name: str
     rule_id: str
     finding: str
-    source: str
+    source: Source | str
     #: What this step did to the grade, if anything.
     effect: str | None = None
 
+    @property
+    def source_name(self) -> str:
+        """The source as text, whichever way it was given."""
+        return self.source.name if isinstance(self.source, Source) else self.source
+
+    @property
+    def reference(self) -> Source | None:
+        """The published source behind this step, when there is one."""
+        return self.source if isinstance(self.source, Source) else None
+
     def as_payload(self) -> dict[str, Any]:
+        reference = self.reference
         return {
             "step": self.step,
             "step_name": self.step_name,
             "rule_id": self.rule_id,
             "finding": self.finding,
-            "source": self.source,
+            "source": self.source_name,
+            "source_id": reference.identifier if reference else None,
+            "source_url": reference.url if reference else None,
             "effect": self.effect,
         }
 
@@ -364,7 +389,7 @@ def _step2(
                 2, "Nutrient bands", f"grade.step2.high_{nutrient.replace(' ', '_')}",
                 f"High {nutrient}{where}."
                 + (" More than twice the high threshold." if severe else ""),
-                threshold.source.name,
+                threshold.source,
                 effect=f"Down {steps} step{'s' if steps > 1 else ''}.",
             ))
         return steps
@@ -405,13 +430,13 @@ def _step2(
             finding = f"High total sugars, {product.total_sugar_g} g per 100 g."
             if sugar_band_steps == 2:
                 finding += " More than twice the high threshold."
-            source_name = _threshold("total sugars", basis).source.name
+            sugar_source = _threshold("total sugars", basis).source
         else:
             finding = f"Added sugar supplies about {share:.0f}% of the energy in this product."
-            source_name = FSSAI_SUGAR_ENERGY_SOURCE.name
+            sugar_source = FSSAI_SUGAR_ENERGY_SOURCE
         trace.append(TraceEntry(
             2, "Nutrient bands", "grade.step2.sugar",
-            finding, source_name,
+            finding, sugar_source,
             effect=f"Down {sugar_steps} step{'s' if sugar_steps > 1 else ''}. "
                    "Sugar is charged once, on whichever reading is worse.",
         ))
@@ -488,7 +513,7 @@ def _automatic_e(product: ProductInput, trace: list[TraceEntry]) -> str | None:
             trace.append(TraceEntry(
                 2, "Nutrient bands", "grade.step2.partially_hydrogenated_oil",
                 f"The ingredient list contains {marker} oil.",
-                FSSAI_TRANSFAT.name, effect="Automatic E.",
+                FSSAI_TRANSFAT, effect="Automatic E.",
             ))
             return f"The ingredient list contains {marker} oil."
     if product.trans_fat_g is not None:
@@ -496,7 +521,7 @@ def _automatic_e(product: ProductInput, trace: list[TraceEntry]) -> str | None:
             2, "Nutrient bands", "grade.step2.trans_fat_denominator_missing",
             "The label gives trans fat, but not the verified oils-and-fats denominator required "
             "for the regulatory calculation.",
-            FSSAI_TRANSFAT.name, effect="Recorded as missing regulatory information.",
+            FSSAI_TRANSFAT, effect="Recorded as missing regulatory information.",
         ))
     return None
 
@@ -524,7 +549,7 @@ def _step3(product: ProductInput, trace: list[TraceEntry]) -> tuple[Grade | None
             trace.append(TraceEntry(
                 3, "Additives", "grade.step3.black_tier",
                 f"{additive.name} is present. {additive.note or ''}".strip(),
-                additive.source.name, effect="Automatic E.",
+                additive.source, effect="Automatic E.",
             ))
             automatic = f"{additive.name} is present."
         elif additive.tier == TIER_RED:
@@ -532,7 +557,7 @@ def _step3(product: ProductInput, trace: list[TraceEntry]) -> tuple[Grade | None
             trace.append(TraceEntry(
                 3, "Additives", "grade.step3.red_tier",
                 f"{additive.name} is present. {additive.function}",
-                additive.source.name, effect=f"Ceiling {RED_TIER_CEILING.value}.",
+                additive.source, effect=f"Ceiling {RED_TIER_CEILING.value}.",
             ))
 
     if product.marketed_to_children:
@@ -542,13 +567,13 @@ def _step3(product: ProductInput, trace: list[TraceEntry]) -> tuple[Grade | None
             trace.append(TraceEntry(
                 3, "Additives", "grade.step3.child_marketed_synthetic_colour",
                 f"A synthetic colour ({colours[0]}) in a product sold to children.",
-                FSSAI_ADDITIVES.name, effect=f"Flagged. Ceiling {CHILD_COLOUR_CEILING.value}.",
+                FSSAI_ADDITIVES, effect=f"Flagged. Ceiling {CHILD_COLOUR_CEILING.value}.",
             ))
     if ceiling is None and automatic is None:
         trace.append(TraceEntry(
             3, "Additives", "grade.step3.no_capping_additive",
             "No red-tier or black-tier additive on the label.",
-            FSSAI_ADDITIVES.name,
+            FSSAI_ADDITIVES,
         ))
     return ceiling, automatic
 
@@ -681,7 +706,7 @@ def _severe_added_sugar(product: ProductInput, trace: list[TraceEntry]) -> str |
         2, "Nutrient bands", "grade.step2.added_sugar_dominates",
         f"Added sugar supplies about {share:.0f}% of the energy, and the product contains "
         f"{food if food is not None else 0}% whole food.",
-        FSSAI_SUGAR_ENERGY_SOURCE.name,
+        FSSAI_SUGAR_ENERGY_SOURCE,
         effect="Automatic E.",
     ))
     return (f"Added sugar supplies about {share:.0f}% of the energy in this product, "

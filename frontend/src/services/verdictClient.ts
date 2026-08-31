@@ -102,12 +102,24 @@ export function toVerdictSource(
 
   const ingredients: VerdictIngredient[] = wire.ingredients.map((row) => ({
     name: row.name,
+    label: row.label ?? row.name,
     tier: (row.tier as VerdictIngredient['tier']) ?? 'plain',
     tierLabel: TIER_LABELS[row.tier] ?? S.ingredients.tierPlain,
     description: row.description ?? S.ingredients.unknownIngredient,
     status: row.status,
     whyFlagged: row.why_flagged,
     sources: row.sources ?? [],
+    detail: row.detail
+      ? {
+        whatItDoes: row.detail.what_it_does,
+        whyFlagged: row.detail.why_flagged,
+        rule: row.detail.rule,
+        authorityPosition: row.detail.authority_position,
+        interpretation: row.detail.interpretation,
+        evidenceStatus: row.detail.evidence_status,
+        source: row.detail.source,
+      }
+      : null,
   }));
 
   const missing = wire.missing.map((row) =>

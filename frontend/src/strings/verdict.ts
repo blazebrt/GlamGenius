@@ -15,7 +15,7 @@
  *   6. Show the source with a negative.  every red thing names its rule
  */
 
-/** Interpolation: `t(S.primary.sugarSpoons, { spoons: 6 })`. */
+/** Interpolation: `t(S.why.nutrients.highSaturatedFat, { source: 'palm oil' })`. */
 export const t = (template: string, values: Record<string, string | number> = {}): string =>
   template.replace(/\{(\w+)\}/g, (_, key) => String(values[key] ?? `{${key}}`));
 
@@ -44,14 +44,7 @@ export const S = {
     actionNotGraded: 'Cooking ingredient. No letter applies.',
     actionUnknown: 'We could not read this label.',
 
-    /** Line 2. One number, in something you can picture. */
-    sugarSpoons: '{spoons} spoons of sugar in one packet',
-    sugarSpoonsOne: '1 spoon of sugar in one packet',
-    saltPinches: '{pinches} pinches of salt in one packet',
-    saltPinchesOne: '1 pinch of salt in one packet',
-    oilSpoons: '{spoons} spoons of oil in one packet',
-    oilSpoonsOne: '1 spoon of oil in one packet',
-    proteinBowls: 'Protein of about {bowls} bowls of dal',
+    /** Line 2. One declared number, with the basis it was measured on. */
     noEverydayNumber: 'Nothing on this label stands out.',
 
     /** Line 3. A better one, with its price and its letter. */
@@ -123,6 +116,7 @@ export const S = {
   // -----------------------------------------------------------------------
   why: {
     title: 'Why this letter',
+    sourceLink: 'Source',
     subtitle: 'Four things decide it. Tap any one to see the rule behind it.',
     tapToExpand: 'Tap to see the rule',
     ruleLead: 'The rule',
@@ -191,6 +185,28 @@ export const S = {
     notPermitted: 'Not permitted',
     notEnoughInformation: 'Not enough information',
     empty: 'The pack did not carry an ingredient list.',
+
+    /**
+     * The deeper explanation behind the `?` on an ingredient row.
+     *
+     * This is the fuller answer, never the only one: the row itself already
+     * says what the ingredient is and what it does. Somebody who never taps
+     * `?` has still been told the useful thing.
+     */
+    explainAction: 'What this means',
+    explainTitle: 'About this ingredient',
+    whatItDoes: 'What it does',
+    whyFlagged: 'Why it is flagged',
+    exactRule: 'The exact rule we applied',
+    authorityPosition: 'What the authority says',
+    ourInterpretation: 'How we read it',
+    evidenceStatus: 'How settled this is',
+    openSource: 'Open the source',
+    noRule: 'No rule of ours flags this one.',
+    noInterpretation: 'We add nothing to what the authority says here.',
+    noNote: 'The pack states it; we carry no further note on it.',
+    noAuthority: 'No authority position is recorded for this one yet.',
+    unreviewedRule: 'This rule has not completed review yet.',
   },
 
   // -----------------------------------------------------------------------
@@ -246,6 +262,8 @@ export const S = {
     ingredientRow: '{name}. {tier}. {description}',
     expandComponent: 'Show the rule behind {label}',
     collapseComponent: 'Hide the rule behind {label}',
+    openSource: 'Open the source for {name}',
+    explain: 'Explain {name}',
   },
 } as const;
 

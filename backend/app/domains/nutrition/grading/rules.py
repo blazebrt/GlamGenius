@@ -18,7 +18,12 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from app.domains.nutrition.food_reference import FSA_FOP, FSSAI_LABELLING, Source
+from app.domains.nutrition.food_reference import (
+    FSA_FOP,
+    FSSAI_LABELLING,
+    ICMR_NIN_2024,
+    Source,
+)
 
 
 class Grade(StrEnum):
@@ -147,10 +152,14 @@ REFINED_GRAINS: tuple[str, ...] = (
     "corn flour", "refined corn flour",
 )
 REFINED_GRAIN_CEILING = Grade.C
-REFINED_GRAIN_SOURCE = (
-    "GlamGenius product policy, informed by ICMR-NIN Dietary Guidelines for "
-    "Indians (2024) guidance to prefer whole grains over refined grains"
-)
+#: The published guidance behind the refined-grain ceiling.
+#:
+#: A ``Source`` rather than a sentence, because this rule lowers a grade and a
+#: negative claim has to be openable: the customer sees the ceiling, taps the
+#: source, and reads the guidance we are relying on. The interpretation — that
+#: a refined grain as the main ingredient caps the grade — is ours, and is
+#: named as ours in the rule's own explanation.
+REFINED_GRAIN_SOURCE = ICMR_NIN_2024
 
 
 # ---------------------------------------------------------------------------
@@ -185,10 +194,9 @@ NAMED_INGREDIENT_RULES: tuple[NamedIngredientRule, ...] = (
                         "The name promises an ingredient that is barely in it."),
 )
 
-NAMED_INGREDIENT_SOURCE = (
-    "FSSAI Food Safety and Standards (Labelling and Display) Regulations, 2020 — "
-    "declaration of the percentage of an ingredient emphasised on the label"
-)
+#: The regulation that requires an emphasised ingredient's percentage to be
+#: declared. A ``Source`` for the same reason as above: step 4 lowers grades.
+NAMED_INGREDIENT_SOURCE = FSSAI_LABELLING
 
 
 def named_ingredient_rule(declared_pct: Decimal) -> NamedIngredientRule:
