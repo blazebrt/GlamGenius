@@ -274,7 +274,7 @@ async def test_feature_flag_defaults_seeded(db_clean):
     async with factory() as session:
         await run_seed(session)
         keys = (await session.execute(select(FeatureFlag.key))).scalars().all()
-    from app.shared.flags.service import KNOWN_FLAGS, STABLE_BETA_DEFAULTS
+    from app.shared.flags.service import KNOWN_FLAGS, resolved_default
 
     # Every flag the code understands has a database row, and no row names a
     # flag the code has never heard of.
@@ -284,12 +284,54 @@ async def test_feature_flag_defaults_seeded(db_clean):
         rows = (await session.execute(select(FeatureFlag))).scalars().all()
     by_key = {row.key: row for row in rows}
     for key in KNOWN_FLAGS:
-        assert by_key[key].enabled is STABLE_BETA_DEFAULTS[key], key
+        # The seeded row is what the documented precedence resolves to, not
+        # the stable default on its own. Seeding writes a database row, and a
+        # database row outranks V2_FEATURES — so seeding the raw stable
+        # default would make the environment variable inert the moment any
+        # deployment seeded.
+        assert by_key[key].enabled is resolved_default(key), key
         assert by_key[key].description, key
 
-    # Unfinished features stay off: no provider, no flag.
+    # Unfinished features stay off: no provider, no flag. Neither is in the
+    # test environment's V2_FEATURES, so the stable default stands.
     assert by_key["v2_virtual_tryon"].enabled is False
     assert by_key["v2_packing"].enabled is False
+
+
+async def test_seeding_does_not_overrule_an_explicit_feature_environment(db_clean, monkeypatch):
+    """V2_FEATURES has to survive a seed, or it means nothing.
+
+    The precedence is database row, then environment, then stable default. A
+    seed writes a database row. If that row carried the stable default, an
+    operator who set the environment variable would watch it be overruled by
+    the safety net it is supposed to sit above.
+    """
+    from app.bootstrap import seed_feature_flags
+    from app.shared.flags.service import STABLE_BETA_DEFAULTS
+
+    # A flag the stable default turns off, switched on by the environment.
+    off_by_default = next(
+        key for key, value in STABLE_BETA_DEFAULTS.items() if value is False
+    )
+    monkeypatch.setenv("V2_FEATURES", off_by_default)
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await seed_feature_flags(session)
+        await session.commit()
+        rows = (await session.execute(select(FeatureFlag))).scalars().all()
+
+    by_key = {row.key: row for row in rows}
+    assert by_key[off_by_default].enabled is True, (
+        f"{off_by_default} was seeded off despite V2_FEATURES enabling it"
+    )
+    # And a flag the environment leaves out is off, even if the stable default
+    # would have enabled it — an explicit list is an exhaustive one.
+    on_by_default = next(
+        key for key, value in STABLE_BETA_DEFAULTS.items()
+        if value is True and key != off_by_default
+    )
+    assert by_key[on_by_default].enabled is False
 
 
 async def test_metric_definitions_and_milestone_rules_seeded(db_clean):

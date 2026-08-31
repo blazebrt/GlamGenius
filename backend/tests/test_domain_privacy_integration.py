@@ -327,7 +327,8 @@ async def test_export_declares_what_it_deliberately_leaves_out(
     summary = export["registry_summary"]
     published = set(
         summary["included_tables"] + summary["not_user_owned"]
-        + summary["operational_only"] + summary["legally_retained"]
+        + summary["secret_excluded"] + summary["operational_only"]
+        + summary["legally_retained"]
     )
     assert published == set(REGISTRY)
     assert set(summary["included_tables"]) == {
