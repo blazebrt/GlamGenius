@@ -49,7 +49,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow GlamGenius to access your camera for skin and hair checks",
+          "cameraPermission": "Allow GlamGenius to use the camera to scan product barcodes and read labels you photograph",
           "recordAudioAndroid": false
         }
       ],

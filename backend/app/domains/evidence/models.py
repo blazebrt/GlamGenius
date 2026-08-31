@@ -15,6 +15,7 @@ from app.domains.evidence.enums import (
     CLAIM_TYPES,
     EVIDENCE_DOMAINS,
     EVIDENCE_STRENGTHS,
+    EVIDENCE_TIERS,
     REGULATORY_CONTEXTS,
     REVIEW_STATUSES,
     RULE_EVIDENCE_RELATIONSHIPS,
@@ -26,7 +27,7 @@ from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
 
 
 def _check(name: str, column: str, values: tuple[str, ...]) -> CheckConstraint:
-    literal = ", ".join("'%s'" % value for value in values)
+    literal = ", ".join(f"'{value}'" for value in values)
     return CheckConstraint(f"{column} IN ({literal})", name=name)
 
 
@@ -80,6 +81,18 @@ class EvidenceClaim(UUIDPrimaryKey, TimestampMixin, Base):
     regulatory_context: Mapped[str] = mapped_column(String(48), nullable=False, default="unknown", server_default="unknown")
     structured_value: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     ai_generated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # --- Authoring tool fields -------------------------------------------
+    # The tier an author picks, and the number the entry carries. Kept as
+    # columns rather than inside structured_value because the queue filters and
+    # the publish gate read them on every request.
+    evidence_tier: Mapped[str | None] = mapped_column(String(32))
+    value_text: Mapped[str | None] = mapped_column(String(256))
+    value_unit: Mapped[str | None] = mapped_column(String(64))
+    notes: Mapped[str | None] = mapped_column(Text)
+    # Set only when review_status is rejected, and required in that case.
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_by: Mapped[str | None] = mapped_column(String(160))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reviewed_by: Mapped[str | None] = mapped_column(String(160))
     last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -97,9 +110,17 @@ class EvidenceClaim(UUIDPrimaryKey, TimestampMixin, Base):
         CheckConstraint("evidence_strength IS NULL OR (strength_rationale IS NOT NULL AND btrim(strength_rationale) <> '')", name="ck_evidence_claims_strength_rationale"),
         _check("ck_evidence_claims_status", "claim_status", CLAIM_STATUSES),
         _check("ck_evidence_claims_review_status", "review_status", REVIEW_STATUSES),
+        _check("ck_evidence_claims_tier", "evidence_tier", EVIDENCE_TIERS),
+        # A rejection without a reason is not a decision anybody can act on.
+        CheckConstraint(
+            "review_status <> 'rejected' OR (rejection_reason IS NOT NULL AND btrim(rejection_reason) <> '')",
+            name="ck_evidence_claims_rejection_reason",
+        ),
         _check("ck_evidence_claims_regulatory_context", "regulatory_context", REGULATORY_CONTEXTS),
         CheckConstraint("supersedes_claim_id IS NULL OR supersedes_claim_id <> id", name="ck_evidence_claims_not_self_supersede"),
         Index("ix_evidence_claims_subject", "domain", "subject_type", "subject_key"),
+        # The authoring queue filters on exactly this pair.
+        Index("ix_evidence_claims_subject_type_review_status", "subject_type", "review_status"),
     )
 
 

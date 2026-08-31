@@ -212,12 +212,10 @@ async def test_critical_journey_through_the_api(
     assert "image_base64" not in str(history)
 
     # --- Quiz ---------------------------------------------------------
-    # The style vibe quiz is a rejected product surface and v2_quiz is off by
-    # default, so the journey no longer walks it. A switched-off feature must
-    # look absent rather than forbidden.
-    quiz_latest = await app_client.get("/api/v2/quiz/latest", headers=auth(token))
-    assert quiz_latest.status_code == 404
-    assert quiz_latest.json()["detail"]["feature"] == "v2_quiz"
+    latest = ok(await app_client.get("/api/v2/quiz/latest", headers=auth(token)))
+    assert latest["submission"]["id"] == created["quiz"]["id"]
+    assert latest["submission"]["derived_style_vibe"] == created["quiz"]["derived_style_vibe"]
+    assert latest["submission"]["schema_version"] == created["quiz"]["schema_version"]
 
     # --- Occasion styling ---------------------------------------------
     occasion = created["styling"]["occasion"]
@@ -523,6 +521,7 @@ async def test_critical_journey_through_the_api(
         "/api/v2/inventory/items",
         "/api/v2/consent",
         "/api/v2/scan/history",
+        "/api/v2/quiz/latest",
         "/api/v2/today",
         "/api/v2/planner/week",
         "/api/v2/progress",

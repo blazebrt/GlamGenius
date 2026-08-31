@@ -16,6 +16,7 @@ from app.bootstrap import SEED_VERSION
 from app.bootstrap import run as seed_run
 from app.config import validate_production_configuration
 from app.domains.inventory.models import InventoryCategory
+from app.domains.off.store import create_off_schema, dispose_off_engine
 from app.domains.routines.models import Ingredient
 from app.shared.database.sql import get_engine, get_sessionmaker
 from app.shared.flags.models import FeatureFlag
@@ -54,6 +55,17 @@ async def release() -> None:
                 logger.error(f"Alembic check failed:\n{result.stderr}\n{result.stdout}")
                 sys.exit(1)
 
+            # Provision Store A. It is deliberately outside the Alembic chain
+            # (a migration written for the product must not be able to reach
+            # into it), so nothing else creates it — without this step the
+            # first barcode lookup on a fresh database hits a missing schema.
+            # create_off_schema() re-checks the ODbL wall before it writes, so
+            # a broken wall stops the release here rather than in production.
+            # get_off_engine() already warns when the two stores share a
+            # database, so this does not repeat it.
+            logger.info("Provisioning the Open Food Facts store...")
+            await create_off_schema()
+
             # Seed reference data
             logger.info("Seeding reference data...")
             sessionmaker = get_sessionmaker()
@@ -88,6 +100,7 @@ async def release() -> None:
         finally:
             logger.info("Releasing advisory lock...")
             await conn.execute(text(f"SELECT pg_advisory_unlock({LOCK_ID})"))
+            await dispose_off_engine()
             await engine.dispose()
 
 

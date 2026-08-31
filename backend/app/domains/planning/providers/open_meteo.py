@@ -21,6 +21,13 @@ from app.config import (
     OPEN_METEO_TIMEOUT_SECONDS,
 )
 from app.domains.planning import clock
+from app.domains.planning.environment import (
+    NAQI_BASIS_PM_ONLY,
+    NAQI_INDEX_SYSTEM,
+    NAQI_SOURCE,
+    naqi_category,
+    naqi_from_particulates,
+)
 from app.domains.planning.providers.base import (
     AirQualityReading,
     ProviderUnavailable,
@@ -342,16 +349,41 @@ class OpenMeteoProvider:
             pollutant_maxima = {
                 key: max(values) for key, values in pollutant_aqi[day].items() if values
             }
+            # Which pollutant is worst today, compared on the one common scale
+            # the provider gives for all five. This names a pollutant; the index
+            # itself is Indian and computed below.
             prominent = next(
                 (key for key in constituent_keys if pollutant_maxima.get(key) == max(pollutant_maxima.values())),
                 None,
             ) if pollutant_maxima else None
+            # CPCB breakpoints are defined on 24-hour average concentrations, so
+            # the daily mean is the input, not the peak hour.
+            mean_pm25 = (sum(pm25[day]) / len(pm25[day])) if pm25[day] else None
+            mean_pm10 = (sum(pm10[day]) / len(pm10[day])) if pm10[day] else None
+            naqi, naqi_particulate = naqi_from_particulates(mean_pm25, mean_pm10)
+            raw: dict[str, Any] = {
+                # Kept as a fallback and for provenance. Never the displayed
+                # category: a European band cannot describe Indian air.
+                "european_aqi": value,
+                "european_aqi_category": _aqi_category(value),
+                "pm2_5_max": max(pm25[day]) if pm25[day] else None,
+                "pm10_max": max(pm10[day]) if pm10[day] else None,
+            }
+            if naqi is not None:
+                raw.update({
+                    "naqi_basis": NAQI_BASIS_PM_ONLY,
+                    "naqi_source": NAQI_SOURCE,
+                    "naqi_particulate": naqi_particulate,
+                })
             output.append(AirQualityReading(
-                for_date=day, aqi=value, index_system="european_aqi", category=_aqi_category(value),
+                for_date=day,
+                aqi=naqi if naqi is not None else value,
+                index_system=NAQI_INDEX_SYSTEM if naqi is not None else "european_aqi",
+                category=naqi_category(naqi) if naqi is not None else _aqi_category(value),
                 location=target.display_name, prominent_pollutant=prominent,
-                pm2_5=max(pm25[day]) if pm25[day] else None,
-                pm10=max(pm10[day]) if pm10[day] else None, provider=self.name,
+                pm2_5=mean_pm25, pm10=mean_pm10, provider=self.name,
                 source="external_provider", attribution="Air quality · Open-Meteo / CAMS",
+                raw=raw,
             ))
         return output
 

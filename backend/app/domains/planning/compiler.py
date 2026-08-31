@@ -30,10 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.care import cadence as care_cadence
 from app.domains.care import decisions as care_decisions
+from app.domains.care import environment_service
 from app.domains.care import maintenance as care_maintenance
 from app.domains.care import maintenance_service as care_maintenance_service
 from app.domains.care import routine_plan as care_routine_plan
 from app.domains.care import service as care_service
+from app.domains.care.environment_decision import EnvironmentDecision
 from app.domains.care.schemas import CareContext
 from app.domains.inventory import service as inventory_service
 from app.domains.planning import clock
@@ -491,6 +493,28 @@ def _weather_action(context: DayContext) -> list[dict[str, Any]]:
     return []
 
 
+def _environment_action(decision: EnvironmentDecision | None) -> list[dict[str, Any]]:
+    """The environment's one decision for today, with its reason beneath it.
+
+    Never a row of readings. A person does not need to be told the temperature,
+    the humidity, the UV index and the AQI and left to work out what to do —
+    that is a dashboard, and a dashboard is what this replaces.
+    """
+    if decision is None:
+        return []
+    row: dict[str, Any] = {
+        "module": MODULE_SKINCARE if decision.rule_id.startswith("care.env.") and "hair" not in decision.rule_id
+        else MODULE_HAIR,
+        "action_type": "environment_decision",
+        # Above the routine actions it modifies, below a blocked product.
+        "priority": 25,
+        "title": decision.headline,
+        "body": decision.reason,
+        "relevance": decision.note or f"Rule {decision.rule_id}.",
+    }
+    return [row]
+
+
 def _event_action(context: DayContext) -> list[dict[str, Any]]:
     event = context.primary_event
     if event is None:
@@ -916,6 +940,9 @@ async def compile_day(
         session, context, care_context=care_context, decisions=care_decision_set,
         care_plan=care_plan,
     )
+    environment_decision = await environment_service.decide_for_day(
+        session, account_id=context.account_id, plan_date=context.plan_date,
+    )
     actions: list[dict[str, Any]] = []
     actions.extend(_outfit_actions(context, ranked))
     actions.extend(_appearance_action(
@@ -923,6 +950,7 @@ async def compile_day(
         care_context=care_context, decisions=care_decision_set,
     ))
     actions.extend(_weather_action(context))
+    actions.extend(_environment_action(environment_decision))
     actions.extend(_event_action(context))
     actions.extend(_routine_actions(
         context, module_material["beauty"], module_material["hair"], module_material["perfumes"],

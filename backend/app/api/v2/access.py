@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import INVITE_REQUIRED
 from app.domains.beta_access import service as beta
+from app.domains.beta_access.entitlements import beta_entitlement_matrix
 from app.domains.beta_access.models import Invite, InviteRedemption
 from app.domains.identity import service as identity
 from app.shared.database.sql import get_session
@@ -257,6 +258,15 @@ async def get_usage(
 ):
     """Neutral beta usage summary. No plans, no upgrade CTA, no pricing."""
     return await beta.usage_summary(session, account_id=current.account_id)
+
+
+@router.get("/access/beta-entitlements")
+async def get_beta_entitlements(
+    current: CurrentAccount = Depends(get_current_account),
+) -> dict[str, object]:
+    """Current beta access, deliberately separate from usage cost controls."""
+    del current
+    return beta_entitlement_matrix()
 
 
 # ---------------------------------------------------------------------------

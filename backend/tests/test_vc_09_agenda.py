@@ -202,8 +202,22 @@ async def test_worker_commits_suppressed_decision(monkeypatch):
         return None
     async def suppressed(*args, **kwargs):
         return decision
+    async def no_crossing(*args, **kwargs):
+        return None
     monkeypatch.setattr(worker.context_stage, "gather", no_context)
     monkeypatch.setattr(worker.compiler, "compile_day", no_compile)
+    # Every trigger the worker offers before the agenda is stubbed to produce
+    # nothing, so the agenda is unambiguously what produces the suppressed
+    # decision under test. A trigger added to the worker without a stub here
+    # reaches this fake session and fails on a real query, which is what
+    # happened when the protocol-day trigger landed.
+    for earlier in (
+        "queue_for_environment_crossing",
+        "queue_for_protocol_day",
+        "queue_for_running_out",
+        "queue_for_deferred_purchase_relevance",
+    ):
+        monkeypatch.setattr(notifications, earlier, no_crossing)
     monkeypatch.setattr(notifications, "queue_for_agenda", suppressed)
     session = Session()
     assert await worker.process_account(session, preference, now=utcnow()) == 0

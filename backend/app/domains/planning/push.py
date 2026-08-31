@@ -50,6 +50,7 @@ class PushMessage:
     title: str
     body: str
     data: dict | None = None
+    category_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -108,7 +109,7 @@ async def send(messages: list[PushMessage]) -> PushResult:
     for start in range(0, len(messages), _MAX_PER_REQUEST):
         batch = messages[start : start + _MAX_PER_REQUEST]
         payload = [
-            {"to": m.to, "title": m.title, "body": m.body, **({"data": m.data} if m.data else {})}
+            {"to": m.to, "title": m.title, "body": m.body, **({"data": m.data} if m.data else {}), **({"categoryId": m.category_id} if m.category_id else {})}
             for m in batch
         ]
         try:

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.evidence import authoring
+from app.domains.evidence.enums import EvidenceDomain, EvidenceTier, ReviewStatus
 from app.domains.system.models import WorkerStatus
 from app.shared.database.sql import get_session
 from app.shared.security.deps import CurrentAccount, get_current_account
@@ -169,3 +173,219 @@ async def list_workers(
             "oldest_pending_job_age_seconds": oldest_age,
         }
     }
+
+
+# ---------------------------------------------------------------------------
+# Knowledge authoring — the admin tool
+# ---------------------------------------------------------------------------
+# Every route is admin-only and writes through app.domains.evidence.authoring,
+# which owns the workflow rules. Nothing here decides whether an entry may be
+# approved; it asks the service, so a script and this API cannot disagree.
+
+
+class EntryBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subject_type: str = Field(min_length=1, max_length=64)
+    subject: str = Field(min_length=1, max_length=200)
+    claim: str = Field(min_length=1, max_length=4000)
+    value: str | None = Field(default=None, max_length=256)
+    unit: str | None = Field(default=None, max_length=64)
+    source_name: str = Field(min_length=1, max_length=512)
+    source_url: str | None = Field(default=None, max_length=2000)
+    evidence_tier: str = Field(min_length=1, max_length=32)
+    notes: str | None = Field(default=None, max_length=8000)
+    domain: str = Field(default=EvidenceDomain.NUTRITION.value, max_length=32)
+
+    def to_input(self) -> authoring.EntryInput:
+        return authoring.EntryInput(
+            subject_type=self.subject_type, subject_key=self.subject, claim=self.claim,
+            value=self.value, unit=self.unit, source_name=self.source_name,
+            source_url=self.source_url or "", evidence_tier=self.evidence_tier,
+            notes=self.notes, domain=self.domain,
+        )
+
+
+class PublicationVerificationBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_opened: bool
+    founder_verified_fact: bool
+    claude_review_completed: bool
+    codex_review_completed: bool
+    independent_reviews_agree: bool
+    adversarial_review_passed: bool
+    unresolved_doubt: bool = False
+
+    def to_input(self) -> authoring.VerificationInput:
+        return authoring.VerificationInput(**self.model_dump())
+
+
+class RejectBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+def _author(current: CurrentAccount) -> str:
+    return current.account_id_str
+
+
+@router.get("/knowledge/vocabulary")
+async def knowledge_vocabulary(
+    _: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """What the form may offer. Served from the enums so the two cannot drift."""
+    return {
+        "evidence_tiers": [t.value for t in EvidenceTier],
+        "statuses": [
+            ReviewStatus.DRAFT.value, ReviewStatus.APPROVED.value,
+            ReviewStatus.PUBLISHED.value, ReviewStatus.REJECTED.value,
+            ReviewStatus.SUPERSEDED.value,
+        ],
+        "domains": [d.value for d in EvidenceDomain],
+        "subject_types": await authoring.subject_types(session),
+        "csv_columns": list(authoring.CSV_COLUMNS),
+    }
+
+
+@router.get("/knowledge/entries")
+async def list_knowledge_entries(
+    subject_type: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    _: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    return await authoring.list_entries(
+        session, subject_type=subject_type, status=status, limit=limit, offset=offset,
+    )
+
+
+@router.post("/knowledge/entries", status_code=status.HTTP_201_CREATED)
+async def create_knowledge_entry(
+    body: EntryBody,
+    current: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    entry = await authoring.create_draft(session, body.to_input(), author=_author(current))
+    await session.commit()
+    return entry
+
+
+@router.get("/knowledge/entries/{entry_id}")
+async def read_knowledge_entry(
+    entry_id: uuid.UUID,
+    _: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    return await authoring.get_entry(session, entry_id)
+
+
+@router.get("/knowledge/entries/{entry_id}/versions")
+async def read_knowledge_entry_versions(
+    entry_id: uuid.UUID,
+    _: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    return await authoring.versions_of(session, entry_id)
+
+
+@router.put("/knowledge/entries/{entry_id}")
+async def edit_knowledge_entry(
+    entry_id: uuid.UUID,
+    body: EntryBody,
+    current: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Edit. A published or approved entry gains a new version; nothing is overwritten."""
+    entry = await authoring.edit(session, entry_id, body.to_input(), author=_author(current))
+    await session.commit()
+    return entry
+
+
+@router.post("/knowledge/entries/{entry_id}/approve")
+async def approve_knowledge_entry(
+    entry_id: uuid.UUID,
+    current: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    entry = await authoring.approve(session, entry_id, reviewer=_author(current))
+    await session.commit()
+    return entry
+
+
+@router.post("/knowledge/entries/{entry_id}/publish")
+async def publish_knowledge_entry(
+    entry_id: uuid.UUID,
+    current: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    entry = await authoring.publish(session, entry_id, publisher=_author(current))
+    await session.commit()
+    return entry
+
+
+@router.post("/knowledge/entries/{entry_id}/publication-verification")
+async def record_knowledge_publication_verification(
+    entry_id: uuid.UUID,
+    body: PublicationVerificationBody,
+    current: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    entry = await authoring.record_publication_verification(
+        session, entry_id, verification=body.to_input(), actor=_author(current),
+    )
+    await session.commit()
+    return entry
+
+
+@router.post("/knowledge/entries/{entry_id}/reject")
+async def reject_knowledge_entry(
+    entry_id: uuid.UUID,
+    body: RejectBody,
+    current: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    entry = await authoring.reject(
+        session, entry_id, reviewer=_author(current), reason=body.reason,
+    )
+    await session.commit()
+    return entry
+
+
+class ImportTextBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    csv: str = Field(min_length=1, max_length=1_000_000)
+
+
+@router.post("/knowledge/import-text", status_code=status.HTTP_201_CREATED)
+async def import_knowledge_csv_text(
+    body: ImportTextBody,
+    current: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Same importer, for CSV pasted into the tool rather than uploaded.
+
+    A phone has no comfortable file picker, and the rule is identical: every
+    row lands as a draft.
+    """
+    outcome = await authoring.import_csv(session, body.csv, author=_author(current))
+    await session.commit()
+    return outcome.as_dict()
+
+
+@router.post("/knowledge/import", status_code=status.HTTP_201_CREATED)
+async def import_knowledge_csv(
+    file: UploadFile = File(...),
+    current: CurrentAccount = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Bulk import. Every row lands as a draft — this route cannot publish."""
+    raw = (await file.read()).decode("utf-8-sig", errors="replace")
+    outcome = await authoring.import_csv(session, raw, author=_author(current))
+    await session.commit()
+    return outcome.as_dict()

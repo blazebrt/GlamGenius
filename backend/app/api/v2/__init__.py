@@ -11,6 +11,7 @@ from app.api.v2 import (
     admin,
     config,
     consent,
+    family,
     integrations,
     inventory,
     jobs,
@@ -20,6 +21,7 @@ from app.api.v2 import (
     onboarding,
     planner,
     privacy,
+    product,
     profile,
     progress,
     quiz,
@@ -38,6 +40,7 @@ router.include_router(config.router, tags=["v2-config"])
 router.include_router(me.router, tags=["v2-me"])
 router.include_router(access.router, tags=["v2-access"])
 router.include_router(consent.router, tags=["v2-consent"])
+router.include_router(family.router, tags=["v2-family"])
 router.include_router(media.router, tags=["v2-media"])
 router.include_router(jobs.router, tags=["v2-jobs"])
 router.include_router(privacy.router, tags=["v2-privacy"])
@@ -46,6 +49,7 @@ router.include_router(onboarding.router, tags=["v2-onboarding"])
 router.include_router(inventory.router, tags=["v2-inventory"])
 router.include_router(supplements.router, tags=["v2-supplements"])
 router.include_router(scan.router, tags=["v2-scan"])
+router.include_router(product.router, tags=["v2-product-scan"])
 router.include_router(quiz.router, tags=["v2-quiz"])
 router.include_router(style.router, tags=["v2-style"])
 router.include_router(shopping.router, tags=["v2-shopping"])

@@ -23,6 +23,11 @@ import { useConfigStore } from '../src/store/configStore';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { initSentry, wrapRoot } from '../src/monitoring';
 import { notificationTarget } from '../src/navigation/notifications';
+import { respondToRoutineNotification } from '../src/services/apiV2';
+
+const ROUTINE_ACTION_CATEGORY = 'routine-adherence';
+const ROUTINE_DONE = 'routine_done';
+const ROUTINE_SKIP = 'routine_skip';
 
 // Fire Sentry init before the root component mounts so a rendering error
 // inside <RootLayout /> itself is still captured. Safe to call with no
@@ -54,8 +59,25 @@ function RootLayout() {
   }, []);
 
   useEffect(() => {
+    if (Platform.OS === 'web') return;
+    // Button actions deliberately do not foreground a screen. The server
+    // validates the delivery and owns the step/date, so this is safe to retry.
+    void Notifications.setNotificationCategoryAsync(ROUTINE_ACTION_CATEGORY, [
+      { identifier: ROUTINE_DONE, buttonTitle: 'Done', options: { opensAppToForeground: false } },
+      { identifier: ROUTINE_SKIP, buttonTitle: 'Skip', options: { opensAppToForeground: false } },
+    ]).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     if (Platform.OS === 'web' || typeof Notifications.addNotificationResponseReceivedListener !== 'function') return undefined;
     const open = (response: Notifications.NotificationResponse) => {
+      const data = response.notification.request.content.data as Record<string, unknown>;
+      const action = response.actionIdentifier === ROUTINE_DONE ? 'done'
+        : response.actionIdentifier === ROUTINE_SKIP ? 'skip' : null;
+      if (action && typeof data.delivery_id === 'string') {
+        void respondToRoutineNotification(data.delivery_id, action).catch(() => undefined);
+        return;
+      }
       const target = notificationTarget(response.notification.request.content.data);
       if (target.params) router.push({ pathname: target.destination, params: target.params });
       else router.push(target.destination as never);
@@ -96,17 +118,25 @@ function RootLayout() {
             }}
           >
             <Stack.Screen name="index" />
+            {/* The scanner is the launch screen: camera first, no account. */}
+            <Stack.Screen name="scan-product" options={{ animation: 'none' }} />
+            {/* The answer. Colour first, three lines of text, nothing else. */}
+            <Stack.Screen name="verdict" />
+            <Stack.Screen name="intro" />
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="(auth)" />
             <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal' }} />
             <Stack.Screen name="onboarding" />
             <Stack.Screen name="my-appearance" />
             <Stack.Screen name="inventory-add" />
+            {/* One shelf photo, one tap per thing on it. */}
+            <Stack.Screen name="inventory-batch" options={{ presentation: 'fullScreenModal' }} />
             <Stack.Screen name="inventory-item" />
             <Stack.Screen name="inventory-insights" />
             <Stack.Screen name="event-add" />
             <Stack.Screen name="event-ready" />
             <Stack.Screen name="notifications" />
+            <Stack.Screen name="admin-knowledge" />
           </Stack>
         </ErrorBoundary>
       </SafeAreaProvider>

@@ -28,13 +28,33 @@ import {
   setUnauthorizedHandler,
 } from '../services/api';
 import {
+  claimScanDevice,
   finalizeRegistration,
   reserveInvite,
   getMe,
   patchAppearanceProfile,
 } from '../services/apiV2';
+import { markDeviceClaimed, tokenToClaimFor } from '../services/productScan';
 
 const CHALLENGE_STORAGE_KEY = '@glamgenius/registration_challenge_v2';
+
+/**
+ * Hand this phone's earlier scans to the account that has just signed in.
+ *
+ * Deliberately silent on failure: someone signing in should not be stopped
+ * because a scan could not be re-filed. It is retried on the next sign-in.
+ */
+async function claimScanDeviceForAccount(accountId: string): Promise<void> {
+  if (!accountId) return;
+  try {
+    const token = await tokenToClaimFor(accountId);
+    if (!token) return;
+    await claimScanDevice(token);
+    await markDeviceClaimed(accountId);
+  } catch {
+    // Best effort.
+  }
+}
 
 export type RegistrationState =
   | 'signed_out'
@@ -176,7 +196,11 @@ export const useUserStore = create<UserStore>((set, get) => ({
     try {
       const res = await getMe();
       const me = res.profile;
-      const isAdmin = false; // Is Admin isn't on the new MeResponse, or we could handle it via account
+      // From the server, which is the only thing that decides it. This flag
+      // is a routing convenience so an operator can reach the admin screens;
+      // every admin endpoint still checks the caller itself, so a client that
+      // lied about this would get nothing but 403s.
+      const isAdmin = res.account?.is_admin === true;
       if (me && typeof me === 'object') {
         set({
           user: { ...emptyProfile(get().userId), ...me },
@@ -186,6 +210,10 @@ export const useUserStore = create<UserStore>((set, get) => ({
       } else {
         set({ registrationState: 'registered', isAdmin });
       }
+      // The phone may have been scanning before anyone signed in. Those scans
+      // belong to this person now. Best-effort: a failure here must never stop
+      // someone signing in.
+      void claimScanDeviceForAccount(get().userId);
     } catch (err) {
       if (isRegistrationRequired(err)) {
         set({ registrationState: 'registration_pending', isAdmin: false });

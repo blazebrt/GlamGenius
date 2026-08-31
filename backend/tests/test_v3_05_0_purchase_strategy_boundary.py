@@ -88,19 +88,19 @@ def test_style_roi_is_unchanged_and_guarded_before_factor_work(monkeypatch):
     assert roi.ROI_VERSION == "appearance-roi-v1"
     assert roi.BUY_THRESHOLD == 0.65
     assert roi.WAIT_THRESHOLD == 0.45
-    assert {
+    assert roi.FACTOR_WEIGHTS == {  # noqa: SIM300
         "new_combinations": 0.22, "category_gap": 0.16, "duplicate_penalty": 0.16,
         "occasion_relevance": 0.12, "colour_compatibility": 0.12,
         "climate_suitability": 0.08, "expected_use_frequency": 0.08,
         "versatility": 0.06, "price_context": 0.10,
-    } == roi.FACTOR_WEIGHTS
-    assert {
+    }
+    assert roi.FACTOR_LABELS == {  # noqa: SIM300
         "new_combinations": "New outfit combinations", "category_gap": "Fills a gap",
         "duplicate_penalty": "How different it is from what you own",
         "occasion_relevance": "Occasions it covers", "colour_compatibility": "Colour fit with your wardrobe",
         "climate_suitability": "Suits your climate", "expected_use_frequency": "How often you would wear it",
         "versatility": "Versatility", "price_context": "Price against expected wears",
-    } == roi.FACTOR_LABELS
+    }
     for category in STYLE_PURCHASE_CATEGORIES:
         result = roi.evaluate(roi.Candidate(category=category, display_name="test item"), [])
         assert result.version == "appearance-roi-v1"

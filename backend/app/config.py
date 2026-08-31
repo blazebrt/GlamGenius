@@ -209,6 +209,31 @@ NOTIFICATION_TEST_ACCOUNT_IDS = {
 
 
 # ---------------------------------------------------------------------------
+# Open Food Facts (Store A) — see docs/architecture/ODBL_DATA_WALL.md
+# ---------------------------------------------------------------------------
+# Open Food Facts data is ODbL licensed with a share-alike clause. Combining it
+# with proprietary data into one database would oblige us to publish the whole
+# thing. OFF_DATABASE_URL is what keeps the two stores physically apart: point
+# it at a different server in production. Left empty it falls back to the
+# application database, which is fine for development and logs a warning.
+OFF_DATABASE_URL = _to_async_url(_env_str("OFF_DATABASE_URL")) if _env_str("OFF_DATABASE_URL") else ""
+
+# Open Food Facts asks every API caller to identify itself. These build the
+# User-Agent header; anonymous traffic gets rate-limited or blocked.
+OFF_APP_NAME = _env_str("OFF_APP_NAME", "GlamGenius")
+OFF_APP_VERSION = _env_str("OFF_APP_VERSION", "1.0")
+OFF_CONTACT_EMAIL = _env_str("OFF_CONTACT_EMAIL")
+# Kept below the app's own lookup timeout (LOOKUP_TIMEOUT_MS in
+# frontend/src/services/productScan.ts). A budget the client will not wait
+# out is worse than a short one: the phone abandons a lookup that was
+# about to succeed, shows an offline answer and queues a sync for it.
+OFF_TIMEOUT_SECONDS = _env_float("OFF_TIMEOUT_SECONDS", 4.0)
+
+# Where the ODbL export job writes the redistributable dataset.
+OFF_EXPORT_DIR = _env_str("OFF_EXPORT_DIR", "/data/off-export")
+
+
+# ---------------------------------------------------------------------------
 # Policy and Support URLs
 # ---------------------------------------------------------------------------
 PRIVACY_POLICY_URL = _env_str("PRIVACY_POLICY_URL", "https://glamgenius.placeholder/privacy")
@@ -326,6 +351,10 @@ def validate_production_configuration() -> None:
 
     if not POSTGRES_URL:
         raise RuntimeError("CRITICAL: POSTGRES_URL must be set in production.")
+    if not OFF_DATABASE_URL:
+        raise RuntimeError("CRITICAL: OFF_DATABASE_URL is required in staging and production.")
+    if OFF_DATABASE_URL == POSTGRES_URL:
+        raise RuntimeError("CRITICAL: OFF_DATABASE_URL must be physically distinct from POSTGRES_URL.")
     
     import ipaddress
     parsed = urllib.parse.urlparse(POSTGRES_URL)

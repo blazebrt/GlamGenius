@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.nutrition import service as nutrition_service
 from app.domains.nutrition.schemas import HydrationPreferencePatch, NutritionPreferencePatch
+from app.domains.planning.models import NotificationDelivery
 from app.domains.recommendation.occasions import OCCASION_KEYS
 from app.domains.routines import service
 from app.domains.routines.schemas import (
@@ -23,6 +24,7 @@ from app.domains.routines.schemas import (
     ObservationInput,
     PerfumeQuery,
     RoutineGenerateRequest,
+    RoutineNotificationAction,
     RoutineStepComplete,
 )
 from app.shared.database.sql import get_session
@@ -138,6 +140,33 @@ async def complete_step(
     """Mark a step done for a day. Consistency, not streaks."""
     result = await service.complete_step(
         session, account_id=current.account_id, step_id=step_id, body=body,
+    )
+    await session.commit()
+    return result
+
+
+@router.post("/routines/notifications/{delivery_id}/action")
+async def complete_step_from_notification(
+    delivery_id: uuid.UUID,
+    body: RoutineNotificationAction,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Record a Done / Skip tap without trusting client-owned step details."""
+    delivery = await session.get(NotificationDelivery, delivery_id)
+    if delivery is None or delivery.account_id != current.account_id:
+        raise ValidationFailedError("We could not find that notification.")
+    params = delivery.destination_params or {}
+    if delivery.source_kind != "routine_due" or params.get("routine_action") != "complete_step":
+        raise ValidationFailedError("This notification does not have a routine action.")
+    try:
+        step_id = uuid.UUID(str(params["step_id"]))
+        done_on = date.fromisoformat(str(params["done_on"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValidationFailedError("This routine reminder is no longer valid.") from exc
+    result = await service.complete_step(
+        session, account_id=current.account_id, step_id=step_id,
+        body=RoutineStepComplete(done_on=done_on, completed=body.action == "done"),
     )
     await session.commit()
     return result

@@ -229,6 +229,28 @@ export function OutfitCard({ plan, onSwap, onWore, onNotForMe, onUnavailable }: 
 
 // --- Actions ----------------------------------------------------------------
 
+/**
+ * The environment's one decision for today.
+ *
+ * Deliberately not a row of readings. A person does not need to be shown the
+ * temperature, the humidity, the UV index and the AQI and left to work out what
+ * to do with them — that is a dashboard, and this replaces it. One decision,
+ * the reason beneath it, and nothing to tick off.
+ */
+export function EnvironmentDecisionCard({ action }: { action: PlanAction }) {
+  return (
+    <View style={styles.environment} accessibilityLabel={`Environment decision: ${action.title}`}>
+      <View style={styles.environmentHead}>
+        <Ionicons name="leaf-outline" size={16} color={COLORS.primary} />
+        <Text style={styles.environmentEyebrow}>TODAY&apos;S CONDITIONS</Text>
+      </View>
+      <Text style={styles.environmentTitle}>{action.title}</Text>
+      <Text style={styles.environmentReason}>{action.body}</Text>
+      {!!action.relevance && <Text style={styles.environmentNote}>{action.relevance}</Text>}
+    </View>
+  );
+}
+
 export function ActionRow({ action, onComplete }: { action: PlanAction; onComplete?: () => void }) {
   const meta = MODULE_META[action.module];
   return (
@@ -297,6 +319,17 @@ export function MissingInformation({ plan }: { plan: DailyPlan }) {
 }
 
 const styles = StyleSheet.create({
+  environment: {
+    backgroundColor: COLORS.primaryLight, borderRadius: RADIUS.lg, padding: SPACING.md,
+    marginTop: SPACING.sm, gap: 4, borderWidth: 1, borderColor: COLORS.primaryMuted,
+  },
+  environmentHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  environmentEyebrow: {
+    fontFamily: FONTS.family.bodySemibold, fontSize: 10, letterSpacing: 1.3, color: COLORS.primary,
+  },
+  environmentTitle: { fontFamily: FONTS.family.headingMedium, fontSize: 16, color: COLORS.textPrimary },
+  environmentReason: { fontFamily: FONTS.family.body, fontSize: 13, lineHeight: 19, color: COLORS.textSecondary },
+  environmentNote: { fontFamily: FONTS.family.bodyMedium, fontSize: 12, color: COLORS.textSecondary, marginTop: 2 },
   centre: { alignItems: 'center', gap: SPACING.sm, padding: SPACING.xl },
   eyebrow: { fontFamily: FONTS.family.bodySemibold, color: COLORS.primary, fontSize: 10, letterSpacing: 1.3 },
   title: { fontFamily: FONTS.family.heading, color: COLORS.textPrimary, fontSize: 28, marginTop: 4 },

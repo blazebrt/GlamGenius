@@ -28,7 +28,8 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service")
 os.environ.setdefault("SUPABASE_JWT_ISSUER", "https://test.supabase.co/auth/v1")
 os.environ.setdefault(
     "V2_FEATURES",
-    "v2_scan,v2_quiz,v2_profile,v2_inventory,v2_recommendations,v2_media,"
+    "v2_scan,v2_quiz,v2_profile,v2_inventory,v2_inventory_batch,"
+    "v2_recommendations,v2_media,"
     "v2_privacy,v2_consent,v2_ai_gateway,v2_progress,v2_routines,v2_today,"
     "v2_planner,v2_shopping_decisions,v2_onboarding,v2_beta_access",
 )

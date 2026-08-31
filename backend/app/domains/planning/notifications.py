@@ -24,9 +24,11 @@ from typing import Any
 from sqlalchemy import and_, func, not_, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.care.environment_decision import evaluate_environment
 from app.domains.planning import clock
 from app.domains.planning.models import (
     MODULE_MAINTENANCE,
+    MODULE_SKINCARE,
     MODULES,
     DailyPlan,
     DailyPlanAction,
@@ -95,6 +97,15 @@ def _target(destination: str | None, params: dict[str, Any] | None) -> tuple[str
         if not isinstance(event_id, str) or not event_id:
             return "/(tabs)/plan", {}
         return destination, {"eventId": event_id}
+    if destination == "/(tabs)/care" and (params or {}).get("routine_action") == "complete_step":
+        step_id = (params or {}).get("step_id")
+        done_on = (params or {}).get("done_on")
+        if not isinstance(step_id, str) or not isinstance(done_on, str):
+            return destination, {}
+        return destination, {
+            "routine_action": "complete_step", "step_id": step_id, "done_on": done_on,
+            "category_id": "routine-adherence",
+        }
     return destination, {}
 
 
@@ -280,6 +291,165 @@ async def queue_for_plan(
         body=body if body is not None else f"{action.title}. {action.body}".strip(),
         module=action.module, timezone_name=timezone_name, moment=moment,
     )
+
+
+async def queue_for_environment_crossing(
+    session: AsyncSession, *, account_id: uuid.UUID, plan_date: date,
+    timezone_name: str, moment: datetime | None = None,
+) -> NotificationDelivery | None:
+    """Notify only when the air actually crossed a band, in either direction.
+
+    A daily "the air is bad" message trains people to ignore it. This fires on
+    the day something changed — into Poor or worse, or back out of it — and
+    stays silent through the middle of a long stretch.
+
+    The crossing decides *whether* to queue. Everything about *when* a person
+    is reachable — the hourly batch, the due check, quiet hours, the daily cap
+    and the claim-before-send boundary — belongs to the worker and to
+    :func:`queue`, and is untouched here.
+    """
+    from app.domains.care import environment_service
+    from app.domains.planning.environment import naqi_at_least
+
+    window = await environment_service.load_window(
+        session, account_id=account_id, plan_date=plan_date,
+    )
+    today = window.today
+    yesterday = window.history[-1] if window.history else None
+    if not today.is_indian_reading or yesterday is None or not yesterday.is_indian_reading:
+        return None
+    today_bad = naqi_at_least(today.category, "Poor")
+    yesterday_bad = naqi_at_least(yesterday.category, "Poor")
+    if today_bad == yesterday_bad:
+        return None
+    allowed = await environment_service.allowed_environment_rule_ids(session)
+    decision = evaluate_environment(window, allowed_rule_ids=allowed)
+    if decision is None:
+        return None
+    return await queue(
+        session, account_id=account_id, plan_date=plan_date,
+        notification_key=f"environment_crossing:{today.category}",
+        title=decision.headline, body=decision.reason,
+        module=MODULE_SKINCARE, topic="care", timezone_name=timezone_name, moment=moment,
+    )
+
+
+async def queue_for_running_out(
+    session: AsyncSession, *, account_id: uuid.UUID, plan_date: date,
+    timezone_name: str, moment: datetime | None = None,
+) -> NotificationDelivery | None:
+    """Queue one evidence-based low-supply reminder.
+
+    A low percentage alone is not a usage-rate signal.  We require recorded
+    usage events as well as a current, user-recorded remaining percentage, so
+    a never-used or guessed shelf item cannot create a purchase nudge.
+    """
+    from app.domains.inventory.models import (
+        BeautyProductDetail,
+        HairProductDetail,
+        InventoryItem,
+        ItemUsageEvent,
+    )
+    from app.domains.planning import notification_strings as strings
+
+    usage_counts = (
+        select(ItemUsageEvent.item_id.label("item_id"), func.sum(ItemUsageEvent.quantity).label("uses"))
+        .group_by(ItemUsageEvent.item_id)
+        .subquery()
+    )
+    rows = (await session.execute(
+        select(InventoryItem, BeautyProductDetail.remaining_percent, HairProductDetail.remaining_percent, usage_counts.c.uses)
+        .outerjoin(BeautyProductDetail, BeautyProductDetail.item_id == InventoryItem.id)
+        .outerjoin(HairProductDetail, HairProductDetail.item_id == InventoryItem.id)
+        .join(usage_counts, usage_counts.c.item_id == InventoryItem.id)
+        .where(InventoryItem.account_id == account_id, InventoryItem.status == "active")
+        .order_by(usage_counts.c.uses.desc(), InventoryItem.display_name)
+    )).all()
+    for item, beauty_remaining, hair_remaining, uses in rows:
+        remaining = beauty_remaining if beauty_remaining is not None else hair_remaining
+        if remaining is None or remaining > 15 or not uses:
+            continue
+        return await queue(
+            session, account_id=account_id, plan_date=plan_date,
+            notification_key=f"running_low:{item.id}:{remaining}",
+            title=strings.RUNNING_LOW_TITLE.format(name=item.display_name),
+            body=strings.RUNNING_LOW_BODY.format(uses=int(uses), remaining=remaining),
+            module=MODULE_SKINCARE, topic="care", timezone_name=timezone_name, moment=moment,
+            deep_link="/(tabs)/care", source_kind="running_low", source_id=str(item.id),
+        )
+    return None
+
+
+async def queue_for_protocol_day(
+    session: AsyncSession, *, account_id: uuid.UUID, plan_date: date,
+    timezone_name: str, moment: datetime | None = None,
+) -> NotificationDelivery | None:
+    """Offer the first due routine step with idempotent Done / Skip actions."""
+    from app.domains.planning import notification_strings as strings
+    from app.domains.routines import service as routines_service
+
+    today = await routines_service.routines_today(session, account_id=account_id, on=plan_date)
+    for routine in today["routines"]:
+        for step in routine["steps"]:
+            if step.get("is_gap") or step.get("completed_today"):
+                continue
+            return await queue(
+                session, account_id=account_id, plan_date=plan_date,
+                notification_key=f"routine_due:{routine['id']}:{step['slot']}",
+                title=strings.ROUTINE_DUE_TITLE.format(routine=routine["label"]),
+                body=strings.ROUTINE_DUE_BODY.format(step=step["label"]),
+                module=MODULE_SKINCARE, topic="care", timezone_name=timezone_name, moment=moment,
+                deep_link="/(tabs)/care", source_kind="routine_due", source_id=step["id"],
+                destination_params={
+                    "routine_action": "complete_step", "step_id": step["id"],
+                    "done_on": plan_date.isoformat(), "category_id": "routine-adherence",
+                },
+            )
+    return None
+
+
+async def queue_for_deferred_purchase_relevance(
+    session: AsyncSession, *, account_id: uuid.UUID, plan_date: date,
+    timezone_name: str, moment: datetime | None = None,
+) -> NotificationDelivery | None:
+    """Revisit a Care purchase only after its recorded environmental wait clears."""
+    from app.domains.planning import notification_strings as strings
+    from app.domains.purchase import check_service
+    from app.domains.recommendation.models import PurchaseDecision
+
+    rows = (await session.execute(
+        select(PurchaseDecision).where(
+            PurchaseDecision.account_id == account_id,
+            PurchaseDecision.strategy_key == "care_purchase",
+            PurchaseDecision.decision == "waiting",
+        ).order_by(PurchaseDecision.updated_at.desc())
+    )).scalars().all()
+    for row in rows:
+        snapshot = row.recommendation_snapshot or {}
+        # Only a recorded temporary environmental deferment is eligible.  A
+        # generic wait is intentionally not reinterpreted by the worker.
+        historical_environment = snapshot.get("environment") or {}
+        if not historical_environment.get("currently_deferred"):
+            continue
+        try:
+            current = await check_service.resolve_care_purchase_check(
+                session, account_id=account_id, account_id_str=str(account_id),
+                candidate_id=row.candidate_id, plan_date=plan_date,
+            )
+        except Exception:  # A removed/untrusted candidate is never a prompt.
+            continue
+        current_environment = (current.get("verdict") or {}).get("environment") or {}
+        if current_environment.get("currently_deferred"):
+            continue
+        return await queue(
+            session, account_id=account_id, plan_date=plan_date,
+            notification_key=f"purchase_relevant:{row.id}",
+            title=strings.PURCHASE_RELEVANT_TITLE,
+            body=strings.PURCHASE_RELEVANT_BODY,
+            module=MODULE_SKINCARE, topic="care", timezone_name=timezone_name, moment=moment,
+            deep_link="/(tabs)/care", source_kind="purchase_relevance", source_id=str(row.candidate_id),
+        )
+    return None
 
 
 async def queue_for_agenda(

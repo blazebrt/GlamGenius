@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.evidence.applicability import EvidenceApplicability, parse_behavior_applicability
 from app.domains.evidence.enums import (
+    APPROVED_REVIEW_STATUSES,
     EVIDENCE_STRENGTHS,
     ClaimSourceRelationship,
     ClaimStatus,
@@ -186,6 +187,16 @@ async def assert_rule_exists(
         if domain != "skin_care" or row is None:
             raise EvidenceRuleResolutionError(f"unknown contraindication rule {rule_id}/{rule_version}")
         return
+    if rule_kind == "environment_response":
+        from app.domains.care.environment_rules import (
+            CARE_ENVIRONMENT_RULESET_VERSION,
+            ENVIRONMENT_RULE_BY_ID,
+        )
+
+        rule = ENVIRONMENT_RULE_BY_ID.get(rule_id)
+        if rule is None or rule.domain != domain or rule_version != CARE_ENVIRONMENT_RULESET_VERSION:
+            raise EvidenceRuleResolutionError(f"unknown environment rule {rule_id}/{rule_version}")
+        return
     if rule_kind == "routine_guidance":
         from app.domains.care.guidance_rules import GUIDANCE_RULE_BY_ID
         from app.domains.care.home_care_rules import HOME_CARE_RULE_BY_ID
@@ -214,8 +225,8 @@ async def assert_claim_approvable(session: AsyncSession, claim: EvidenceClaim) -
     This is intentionally a service assertion rather than a public endpoint.
     Draft records can exist freely; only an explicit human review can pass it.
     """
-    if claim.review_status != ReviewStatus.APPROVED.value:
-        raise EvidenceApprovalError("claim review_status must be approved")
+    if claim.review_status not in APPROVED_REVIEW_STATUSES:
+        raise EvidenceApprovalError("claim review_status must be approved or published")
     if not claim.reviewed_by or not claim.reviewed_at:
         raise EvidenceApprovalError("approved claims require reviewer and reviewed_at")
     if not claim.claim_status:
@@ -241,6 +252,13 @@ async def assert_claim_approvable(session: AsyncSession, claim: EvidenceClaim) -
             raise EvidenceApprovalError("approved claims require active sources")
         if not link.reviewed_at or not link.reviewed_by:
             raise EvidenceApprovalError("every non-background source link must be reviewed")
+
+    # NOTE: the source-URL requirement is enforced in
+    # ``app.domains.evidence.authoring.assert_has_openable_source`` for entries
+    # written through the authoring tool, not here. Extending it to every claim
+    # would also condemn the seeded release evidence, some of which cites works
+    # that have no URL — a classical text, for instance. Making the rule global
+    # means backfilling those sources first, and that is its own decision.
 
 
 async def evidence_state_for_rule(

@@ -7,6 +7,11 @@
 >
 > **Writing or changing any user-facing string? `LEGAL_RULES.md` governs it.**
 > Every legal risk in this product lives in sentences.
+>
+> **Touching Open Food Facts data? Read `docs/architecture/ODBL_DATA_WALL.md` first.**
+> Their licence is share-alike. Combining their data with ours into one database
+> obliges us to publish ours — the whole product — openly. Two stores, joined only
+> in memory, on barcode. Never write one into the other.
 
 GlamGenius is a decision engine for everything that enters or touches the human body —
 food, cosmetics, supplements, cookware and salon upkeep. The customer scans a product;
@@ -58,13 +63,13 @@ backend/
   pytest.ini                 # testpaths = tests, session-scoped event loop
   pyproject.toml             # Ruff config (line-length 120, py311)
   requirements.txt
-  migrations/versions/       # 15 Alembic revisions, one linear chain
+  migrations/versions/       # 23 Alembic revisions, one linear chain
   app/
     config.py                # every env var, plus validate_production_configuration()
     release.py               # `python -m app.release` — lock, migrate, seed, verify
     release_readiness.py     # `python -m app.release_readiness` — honest readiness report
-    api/v2/                  # 23 route modules mounted by api/v2/__init__.py (health.py is an empty orphan)
-    domains/                 # 23 domain packages — see §3
+    api/v2/                  # 24 route modules mounted by api/v2/__init__.py (health.py is an empty orphan)
+    domains/                 # 25 domain packages — see §3
     workers/                 # notifications.py, account_deletion.py — see §6
     bootstrap/               # reference_data.py — versioned seed catalogue
     shared/
@@ -74,13 +79,14 @@ backend/
       errors/                # exceptions, handlers, codes
       observability/         # logging, request_id, sentry_bootstrap, sentry_privacy
       validation/media.py
-  tests/                     # 92 pytest modules (~1,330 tests) + conftest.py
+  tests/                     # 102 pytest modules (~1,800 tests) + conftest.py
 frontend/
   app/                       # expo-router routes; (tabs)/ is Today · Style · Care · Plan · You
   src/services/              # api.ts, apiV2.ts (typed V2 client), supabase.ts, notify.ts
+  src/strings/               # every user-facing string, keyed. No copy lives in a component
   src/components/            # per-area component folders
   src/store/                 # zustand stores
-  src/__tests__/             # 36 Jest suites (~320 tests)
+  src/__tests__/             # 42 Jest suites (~415 tests)
 docs/                        # architecture, engineering checklists, ADRs, operations, reports
 ```
 
@@ -89,7 +95,7 @@ startup checks. Real work lives under `backend/app/`.
 
 ## 3. The domains
 
-All 23 packages under `backend/app/domains/`:
+All 25 packages under `backend/app/domains/`:
 
 | Domain | Owns |
 | --- | --- |
@@ -102,20 +108,22 @@ All 23 packages under `backend/app/domains/`:
 | `media` | Uploads, ownership, deletion; storage adapters (`storage/supabase.py`, `storage/local.py`) |
 | `ai_gateway` | The one controlled path to Gemini. Every AI run is recorded |
 | `profile` | The appearance digital twin: attributes, observations inbox, onboarding, baseline |
-| `inventory` | All seven categories: Wardrobe, Shoes, Accessories, Skin Care, Hair Care, Perfumes, Supplements |
+| `inventory` | All seven categories: Wardrobe, Shoes, Accessories, Skin Care, Hair Care, Perfumes, Supplements. **Multi-item capture: one shelf photo, one tap per candidate** |
 | `scan` | Photo analysis history. **No image is ever stored** — see §4 |
 | `quiz` | Versioned style quiz questions and submissions |
 | `recommendation` | Occasion styling and the decision engine (candidates, ranking, ROI, explanation) |
 | `purchase` | "Should I buy this?" — care, fragrance and style purchase verdicts, decision memory |
 | `routines` | Routine compilation, shelf, perfume, adherence, and `safety.py` — the medical boundary |
-| `care` | Care context, deterministic decisions, guidance, home care, **maintenance timing (VC-06)** |
+| `care` | Care context, deterministic decisions, guidance, home care, **maintenance timing (VC-06)**, the ten environment rules and their precedence |
 | `supplements` | **Owned-supplement label facts, component overlap, safety boundaries (VC-07)** |
-| `nutrition` | Opt-in appearance-adjacent food context. No diets, no calories, no RDA maths |
+| `nutrition` | Opt-in appearance-adjacent food context. No diets, no calories, no RDA maths. **`grading/` is the Indian food grading engine: six gates in order, never a weighted average** |
 | `evidence` | Release-owned evidence provenance, claims, rule support and applicability |
 | `reference` | Versioned global reference data written by the seed bootstrap |
-| `planning` | **Today engine, weekly planner, events, calendar sync, weather/air quality, notifications** |
+| `planning` | **Today engine, weekly planner, events, calendar sync, weather/air quality (Indian NAQI from CPCB breakpoints), notifications** |
 | `progress` | Explainable metrics, milestones, comparison and controlled long-term memory |
 | `system` | `system_worker_status` — worker heartbeats and last-error state |
+| `off` | Store A: the Open Food Facts copy, behind the ODbL wall — see §5a |
+| `product` | Barcode scanning: anonymous device identity, our product record, scan events, label transcription |
 
 Every ORM model module must be imported in `backend/app/shared/database/registry.py`.
 A model that is not imported there is invisible to Alembic and its table is silently
@@ -166,6 +174,44 @@ cite rather than assert, compare products rather than advise the person, never m
 brand, state missing data rather than fill it, and show the source with every negative
 statement. Read it before writing or changing any copy.
 
+## 5a. The ODbL wall: two stores that never become one
+
+Open Food Facts data is licensed under ODbL, which is **share-alike**. If their
+database and ours are combined into one derived database, we are obliged to publish
+the combined thing openly — the absorption knowledge base, the thresholds, the
+scores, the decision memory. The whole product, given away.
+
+So they stay apart:
+
+- **Store A** (`backend/app/domains/off/`) holds Open Food Facts data and nothing
+  else: barcode, product name, brand, ingredients, nutrition values, categories,
+  images. Its own `MetaData`, its own engine (`OFF_DATABASE_URL`), outside the main
+  Alembic chain.
+- **Store B** is everything else — the rest of this repository.
+- They meet **only in memory, at query time, on barcode**
+  (`app/domains/off/join.py`). The pair is discarded with the response.
+
+Never do any of these. Each one creates a derived database:
+
+- Add a column of ours to a Store A table, or an Open Food Facts field to one of ours.
+- Add a foreign key in either direction between the stores.
+- Build a view, cache or table spanning both.
+- Copy `nutriments` into a scoring table to make a query faster. This is the one
+  that looks like an optimisation and is a licence breach.
+
+Four things enforce it: separate metadata, a separate connection, the `OFF_FIELDS`
+allowlist in `app/domains/off/wall.py`, and a write guard on the Store A session.
+`backend/tests/test_odbl_data_wall.py` holds them up. **If one of those tests fails,
+do not adjust the test** — the failure means the change would put the product under
+ODbL.
+
+Attribution is a licence condition, not copy: every surface showing this data renders
+"Contains information from Open Food Facts, made available under the Open Database
+License (ODbL)", verbatim. Every API call carries an identifying User-Agent, which
+Open Food Facts requires.
+
+Full explanation: `docs/architecture/ODBL_DATA_WALL.md`.
+
 ## 6. Running things
 
 ### Tests — the definition of done
@@ -215,8 +261,8 @@ Health: `GET /api/v2/health` (served from `backend/app/api/v2/config.py`, not `h
 ### Migrations
 
 Alembic, one linear chain, `backend/migrations/versions/`. The current head is
-`l2m3n4o5p6` (VC-09 notifications). `0001_initial_glamgenius_v2.py` is the consolidated
-greenfield baseline.
+`t0u1v2w3x4` (confirmed label snapshots). `0001_initial_glamgenius_v2.py` is the
+consolidated greenfield baseline.
 
 ```bash
 cd backend
@@ -286,6 +332,8 @@ decision needs their input, ask one clear question with the options spelled out.
 - `docs/OPERATIONS.md` — running it in production, including the worker schedule
 - `docs/engineering/` — review policy, branching, checklists (migration, privacy, security,
   AI safety, evidence, external integration, mobile UX)
+- `docs/architecture/ODBL_DATA_WALL.md` — why Open Food Facts data lives in its own
+  database, and what would happen if it did not
 - `docs/engineering/adrs/` — why the non-obvious choices were made
 - `docs/reports/` — the phase and stabilisation reports (historical records)
 - Feature-area specs: `docs/VC-05_GOOGLE_CALENDAR.md`, `docs/VC-06_MAINTENANCE.md`,

@@ -91,6 +91,10 @@ REGISTRY: dict[str, Classification] = {
     "inventory_events": Classification.INCLUDED,
     "inventory_item_images": Classification.INCLUDED,  # via inventory_items
     "inventory_import_jobs": Classification.INCLUDED,
+    # What a shelf photo appeared to show, and what the person did about
+    # each one. A rejected candidate is theirs too: it is the record of a
+    # guess we made about them and they refused.
+    "inventory_import_candidates": Classification.INCLUDED,
     "inventory_value_events": Classification.INCLUDED,  # via inventory_items
     "item_condition_events": Classification.INCLUDED,  # via inventory_items
     "item_expiry_events": Classification.INCLUDED,  # via inventory_items
@@ -220,6 +224,41 @@ REGISTRY: dict[str, Classification] = {
     "evidence_claims": Classification.NOT_USER_OWNED,
     "evidence_claim_sources": Classification.NOT_USER_OWNED,
     "rule_evidence_links": Classification.NOT_USER_OWNED,
+    # The supplement absorption knowledge base is the same kind of thing: one
+    # row per compound form, shipped with the release and identical for every
+    # account. A customer's own label transcriptions live in
+    # supplement_label_components, which is account-owned and exported.
+    "supplement_component_knowledge": Classification.NOT_USER_OWNED,
+    # --- Barcode scanning ---
+    # A device row carries the hash of the token that authenticates the phone.
+    # It authenticates, so it never leaves in an export.
+    "scan_devices": Classification.SECRET_EXCLUDED,
+    # What we know about a barcode is the same for everybody: a product, its
+    # confidence, its FSSAI licence. Nobody's personal data is in it.
+    # The account's own Family Circle. Account-local by construction — the
+    # circle has a unique account_id and the profiles hang off it — so it
+    # leaves with the account and belongs in their export.
+    "family_circles": Classification.INCLUDED,
+    "family_profiles": Classification.INCLUDED,
+    # A person's own preparation for the FSSAI portal: what they saw on the
+    # pack and chose to raise. Theirs, exported with them, and removed when
+    # they go — it is a draft they never filed, not a regulatory record we
+    # are obliged to keep.
+    "fssai_complaint_handoffs": Classification.INCLUDED,
+    "product_records": Classification.NOT_USER_OWNED,
+    # A confirmed reading of a physical pack. True of the product rather than
+    # of the person who photographed it, and the whole point is that the next
+    # person to scan that barcode gets an answer — so it stays when an account
+    # goes, exactly like the product record it belongs to. The device link is
+    # severed with the device, and no account id is stored on it.
+    "product_label_snapshots": Classification.NOT_USER_OWNED,
+    # A person's own scan history is theirs. Exported by the ``product_scans``
+    # domain in export.py. Scans made anonymously carry no account and belong
+    # to nobody, so they are not in anybody's export.
+    "scan_events": Classification.INCLUDED,
+    # A report somebody filed about a pack. Theirs, and exported with their
+    # scans; the photo lives in storage and is referenced by key, never inlined.
+    "label_error_reports": Classification.INCLUDED,
 }
 
 

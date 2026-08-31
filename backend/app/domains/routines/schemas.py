@@ -129,6 +129,14 @@ class RoutineStepComplete(BaseModel):
     note: str | None = Field(default=None, max_length=240)
 
 
+class RoutineNotificationAction(BaseModel):
+    """The two explicit actions exposed by a routine push notification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["done", "skip"]
+
+
 class ObservationInput(BaseModel):
     """Something the user noticed, in their own words.
 

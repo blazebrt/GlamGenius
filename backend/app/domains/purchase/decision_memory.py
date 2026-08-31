@@ -116,6 +116,7 @@ async def save_care_decision(
         "assessment_fingerprint": verdict.get("assessment_fingerprint"),
         "evidence_projection_fingerprint": verdict.get("evidence_projection_fingerprint"),
         "value_fingerprint": verdict.get("value_fingerprint"),
+        "environment": verdict.get("environment"),
     }
     if row is None:
         row = PurchaseDecision(

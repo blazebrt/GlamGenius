@@ -43,6 +43,8 @@ from app.domains.identity.models import Account
 from app.domains.inventory.models import (
     InventoryAttribute,
     InventoryEvent,
+    InventoryImportCandidate,
+    InventoryImportJob,
     InventoryItem,
     SupplementDetail,
 )
@@ -60,6 +62,7 @@ from app.domains.planning.models import (
     WeeklyPlan,
 )
 from app.domains.privacy import EXPORT_SCHEMA_VERSION, REGISTRY, Classification
+from app.domains.product.models import LabelErrorReport, ScanEvent
 from app.domains.profile.models import (
     AppearanceGoal,
     AppearanceProfile,
@@ -239,6 +242,16 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
         session,
         select(SupplementDetail).where(SupplementDetail.item_id.in_(item_ids)),
     ) if item_ids else []
+    # Photo captures and what each one offered. A rejected candidate stays in
+    # the export: it is a record of a guess made about this person.
+    imports = await _fetch(
+        session,
+        select(InventoryImportJob).where(InventoryImportJob.account_id == account_id),
+    )
+    candidates = await _fetch(
+        session,
+        select(InventoryImportCandidate).where(InventoryImportCandidate.account_id == account_id),
+    )
     return {
         "items": [_row_dict(i, [c.name for c in InventoryItem.__table__.columns]) for i in items],
         "attributes": [_row_dict(a, [c.name for c in InventoryAttribute.__table__.columns]) for a in attrs],
@@ -246,6 +259,14 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
         "supplement_details": [
             _row_dict(row, [c.name for c in SupplementDetail.__table__.columns])
             for row in supplement_details
+        ],
+        "import_jobs": [
+            _row_dict(row, [c.name for c in InventoryImportJob.__table__.columns])
+            for row in imports
+        ],
+        "import_candidates": [
+            _row_dict(row, [c.name for c in InventoryImportCandidate.__table__.columns])
+            for row in candidates
         ],
     }
 
@@ -268,6 +289,35 @@ async def _scans(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]
     # Scan rows never contain raw image bytes — face/hair/hand photos are
     # transient request data. We keep the analysis result reference.
     return {"scans": [_row_dict(r, [c.name for c in Scan.__table__.columns]) for r in rows]}
+
+
+async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
+    """Barcodes this account has scanned, and the corrections they sent us.
+
+    Only rows linked to the account. A scan or report made before signing up
+    carries no account and belongs to nobody, so it is in nobody's export.
+
+    The report photo is referenced by its storage key, never inlined — the
+    same rule the rest of this module follows for media.
+    """
+    rows = await _fetch(
+        session,
+        select(ScanEvent)
+        .where(ScanEvent.account_id == account_id)
+        .order_by(ScanEvent.created_at.desc()),
+    )
+    fields = [c.name for c in ScanEvent.__table__.columns]
+    reports = await _fetch(
+        session,
+        select(LabelErrorReport)
+        .where(LabelErrorReport.account_id == account_id)
+        .order_by(LabelErrorReport.created_at.desc()),
+    )
+    report_fields = [c.name for c in LabelErrorReport.__table__.columns]
+    return {
+        "scans": [_row_dict(r, fields) for r in rows],
+        "label_error_reports": [_row_dict(r, report_fields) for r in reports],
+    }
 
 
 async def _quiz_and_styling(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
@@ -535,6 +585,7 @@ DOMAIN_HANDLERS: dict[str, DomainHandler] = {
     "inventory": _inventory,
     "media": _media,
     "scans": _scans,
+    "product_scans": _product_scans,
     "quiz_and_styling": _quiz_and_styling,
     "shopping": _shopping,
     "planning": _planning,

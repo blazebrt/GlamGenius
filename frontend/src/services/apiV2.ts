@@ -180,6 +180,8 @@ export interface MeResponse {
   account: {
     id: string;
     status: 'active' | 'deletion_requested' | 'deleted';
+    /** Server-decided. The client mirrors it; it never grants it. */
+    is_admin: boolean;
     deletion_requested_at: string | null;
   };
   consent: ConsentSummary;
@@ -237,6 +239,51 @@ export const uploadMedia = async (
 
   const response = await api.post<MediaAsset>(`${V2}/media/upload`, form, {
     headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return response.data;
+};
+
+// --- Product scanning -------------------------------------------------------
+
+/**
+ * Attach the phone to the account that has just signed in, so scans made before
+ * signing up follow the person. Needs both identities: the account's token and
+ * the device's.
+ */
+export const claimScanDevice = async (
+  deviceToken: string
+): Promise<{ claimed: boolean; scans_attached: number }> => {
+  const response = await api.post<{ claimed: boolean; scans_attached: number }>(
+    `${V2}/scan/device/claim`,
+    {},
+    { headers: { 'X-Device-Token': deviceToken } }
+  );
+  return response.data;
+};
+
+// --- Product label transcription -------------------------------------------
+
+export interface TranscribedLabelResponse {
+  barcode: string;
+  facts: Record<string, unknown>;
+  fssai_licence: string | null;
+  /** Always false: a transcription is shown to the person before it is kept. */
+  stored: boolean;
+  confidence: { level: string; text: string };
+  provenance: Record<string, unknown>;
+}
+
+/**
+ * Read one label photo. Signed in, unlike the rest of scanning, because a model
+ * call costs money and is counted against an account.
+ */
+export const transcribeProductLabel = async (
+  barcode: string,
+  mediaAssetId: string
+): Promise<TranscribedLabelResponse> => {
+  const response = await api.post<TranscribedLabelResponse>(`${V2}/scan/label/transcribe`, {
+    barcode,
+    media_asset_id: mediaAssetId,
   });
   return response.data;
 };
@@ -563,6 +610,160 @@ export interface InventoryExtraction {
   photo_quality_notes: string;
   message: string;
 }
+
+// --- Multi-item capture -----------------------------------------------------
+
+export interface ImportCandidate {
+  id: string;
+  position: number;
+  category: InventoryCategory;
+  subcategory: string | null;
+  display_name: string;
+  brand: string | null;
+  confidence: number;
+  details: Record<string, any>;
+  attributes: { key: string; value: any; confidence: number }[];
+  uncertain_fields: string[];
+  photo_quality_notes: string | null;
+  /** Nothing is on the shelf until this leaves 'pending'. */
+  state: 'pending' | 'confirmed' | 'rejected';
+  item_id: string | null;
+  decided_at: string | null;
+}
+
+export interface InventoryImport {
+  job_id: string;
+  status: string;
+  capture_type: string;
+  detected_count: number;
+  pending_count: number;
+  confirmed_count: number;
+  rejected_count: number;
+  candidates: ImportCandidate[];
+  photo_quality_notes: string | null;
+  /** Things in the photo that could not be identified. Stated, not hidden. */
+  unreadable_count: number | null;
+  message: string;
+}
+
+/** One photo of a shelf. Produces candidates; creates no items. */
+export const extractInventoryBatch = async (
+  media_asset_id: string,
+  category_hint?: InventoryCategory,
+  capture_type: 'shelf_photo' | 'wardrobe_photo' | 'counter_photo' = 'shelf_photo'
+): Promise<InventoryImport> =>
+  (await api.post<InventoryImport>(`${V2}/inventory/extract/batch`, {
+    media_asset_id, category_hint, capture_type,
+  })).data;
+
+// --- Product verdict --------------------------------------------------------
+
+interface VerdictComponentWire {
+  key: 'processing' | 'nutrients' | 'additives' | 'naming';
+  band: 'green' | 'yellow' | 'red';
+  state: string;
+  rule: string | null;
+  finding: string | null;
+  source: string | null;
+  source_url?: string | null;
+  sources?: VerdictEvidenceSourceWire[];
+  high?: { nutrient: string; attribution: string | null }[];
+  exempt?: string[];
+  ingredient?: string | null;
+  declared_percent?: number | null;
+}
+
+export interface VerdictEvidenceSourceWire {
+  name: string;
+  url: string | null;
+  publisher: string | null;
+  version: string | null;
+}
+
+export interface VerdictFactorWire {
+  key: string;
+  /** The customer-facing name of the thing: "sugar", not "grade.step2.sugar". */
+  label: string;
+  status: string;
+  band: 'green' | 'yellow' | 'red';
+  quantity: {
+    value: number;
+    unit: string;
+    basis: 'per_100_g' | 'per_100_ml' | 'of_product';
+  } | null;
+  explanation: string;
+  rule: string | null;
+  sources: VerdictEvidenceSourceWire[];
+}
+
+export interface ProductVerdictWire {
+  engine_version: string;
+  outcome: 'graded' | 'not_graded' | 'not_enough_information';
+  grade: 'A' | 'B' | 'C' | 'D' | 'E' | null;
+  band: 'green' | 'yellow' | 'red';
+  product_name: string;
+  taxonomy: { domain: string; category: string; subcategory: string };
+  decision: { action: 'buy' | 'wait' | 'skip'; reason_key: string };
+  nutrition: {
+    total_sugar_g: number | null;
+    salt_g: number | null;
+    total_fat_g: number | null;
+    protein_g: number | null;
+  };
+  components: VerdictComponentWire[];
+  lowers: VerdictFactorWire[];
+  helps: VerdictFactorWire[];
+  ingredients: {
+    name: string; label: string | null;
+    tier: string; status: string; band: 'green' | 'yellow' | 'red';
+    description: string | null; why_flagged: string | null; source: string | null;
+    sources: VerdictEvidenceSourceWire[];
+    /** What the `?` control opens. Null when there is nothing more to say. */
+    detail: {
+      what_it_does: string | null;
+      why_flagged: string | null;
+      rule: string | null;
+      authority_position: string | null;
+      interpretation: string | null;
+      evidence_status: string | null;
+      source: VerdictEvidenceSourceWire | null;
+    } | null;
+    /** Which of the three controls this row can actually offer. */
+    actions: { source: boolean; explain: boolean; report: boolean };
+  }[];
+  quantity_guidance: string | null;
+  purity_note: string | null;
+  missing: string[];
+  confidence: { level: string; text: string };
+  attribution: { text: string } | null;
+  /** Grams in the pack, when either source states a net quantity. */
+  pack_size_g: number | null;
+  /** "solid" or "drink" — which unit the per-100 panel is stated in. */
+  basis: string;
+}
+
+/** The graded verdict for one barcode, shaped for the verdict screen. */
+export const readProductVerdict = async (barcode: string): Promise<ProductVerdictWire> =>
+  (await api.get<ProductVerdictWire>(`${V2}/scan/verdict/${encodeURIComponent(barcode)}`)).data;
+
+export const readInventoryImport = async (jobId: string): Promise<InventoryImport> =>
+  (await api.get<InventoryImport>(`${V2}/inventory/imports/${jobId}`)).data;
+
+/** One tap. `accept` is the whole decision. */
+export const decideImportCandidate = async (
+  jobId: string, candidateId: string, accept: boolean
+): Promise<ImportCandidate> =>
+  (await api.post<ImportCandidate>(
+    `${V2}/inventory/imports/${jobId}/candidates/${candidateId}/${accept ? 'confirm' : 'reject'}`
+  )).data;
+
+/** Several taps at once, for when they outrun the network. */
+export const decideImportCandidates = async (
+  jobId: string, decisions: { candidate_id: string; accept: boolean }[]
+): Promise<InventoryImport & { decided: ImportCandidate[] }> =>
+  (await api.post<InventoryImport & { decided: ImportCandidate[] }>(
+    `${V2}/inventory/imports/${jobId}/decisions`, { decisions }
+  )).data;
 
 export const extractInventoryItem = async (
   media_asset_id: string, category_hint?: InventoryCategory, capture_type: 'item_photo' | 'screenshot' = 'item_photo'
@@ -2009,6 +2210,12 @@ export const completeRoutineStep = async (
 ): Promise<{ step_id: string; completed: boolean; note: string }> =>
   (await api.post(`${V2}/routines/steps/${stepId}/complete`, { completed, done_on })).data;
 
+/** Records a native Done / Skip action against the server-owned notification. */
+export const respondToRoutineNotification = async (
+  deliveryId: string, action: 'done' | 'skip'
+): Promise<{ completed: boolean }> =>
+  (await api.post(`${V2}/routines/notifications/${encodeURIComponent(deliveryId)}/action`, { action })).data;
+
 export const getImproveOverview = async (): Promise<ImproveOverview> =>
   (await api.get<ImproveOverview>(`${V2}/routines/improve`)).data;
 
@@ -2448,3 +2655,117 @@ export const replaceMaintenanceDone = async (
   newDate: string,
 ): Promise<MaintenanceOverview> =>
   (await api.patch<MaintenanceOverview>(`${V2}/maintenance/${kind}/history/${oldDate}`, { done_on: newDate })).data;
+
+// --- Knowledge authoring (admin only) ---------------------------------------
+// The internal tool for adding and approving knowledge entries. Every call is
+// admin-gated server-side; the screen also guards itself so a non-admin who
+// deep-links never sees the form.
+
+export type EvidenceTier =
+  | 'clinically_studied' | 'classical_text' | 'traditional_use'
+  | 'not_enough_information' | 'avoid';
+
+export type KnowledgeStatus =
+  | 'draft' | 'approved' | 'published' | 'rejected' | 'superseded';
+
+export interface KnowledgeEntry {
+  id: string;
+  claim_key: string;
+  version: number;
+  domain: string;
+  subject_type: string;
+  subject: string;
+  claim: string;
+  value: string | null;
+  unit: string | null;
+  evidence_tier: EvidenceTier | null;
+  notes: string | null;
+  status: KnowledgeStatus;
+  rejection_reason: string | null;
+  supersedes_id: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  published_by: string | null;
+  published_at: string | null;
+  created_at: string | null;
+  source: { name: string; url: string | null; publisher: string } | null;
+}
+
+export interface KnowledgeEntryInput {
+  subject_type: string;
+  subject: string;
+  claim: string;
+  value?: string | null;
+  unit?: string | null;
+  source_name: string;
+  source_url?: string | null;
+  evidence_tier: string;
+  notes?: string | null;
+  domain?: string;
+}
+
+export interface KnowledgeVocabulary {
+  evidence_tiers: EvidenceTier[];
+  statuses: KnowledgeStatus[];
+  domains: string[];
+  subject_types: string[];
+  csv_columns: string[];
+}
+
+export interface KnowledgeQueue {
+  entries: KnowledgeEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface KnowledgeImportResult {
+  created_count: number;
+  error_count: number;
+  status: KnowledgeStatus;
+  created: KnowledgeEntry[];
+  errors: { line: number; message: string }[];
+}
+
+const KNOWLEDGE = `${V2}/admin/knowledge`;
+
+export const getKnowledgeVocabulary = async (): Promise<KnowledgeVocabulary> =>
+  (await api.get<KnowledgeVocabulary>(`${KNOWLEDGE}/vocabulary`)).data;
+
+export const listKnowledgeEntries = async (
+  filters: { subject_type?: string; status?: string } = {},
+): Promise<KnowledgeQueue> => {
+  const query = new URLSearchParams();
+  if (filters.subject_type) query.set('subject_type', filters.subject_type);
+  if (filters.status) query.set('status', filters.status);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return (await api.get<KnowledgeQueue>(`${KNOWLEDGE}/entries${suffix}`)).data;
+};
+
+export const createKnowledgeEntry = async (body: KnowledgeEntryInput): Promise<KnowledgeEntry> =>
+  (await api.post<KnowledgeEntry>(`${KNOWLEDGE}/entries`, body)).data;
+
+export const editKnowledgeEntry = async (
+  id: string, body: KnowledgeEntryInput,
+): Promise<KnowledgeEntry> =>
+  (await api.put<KnowledgeEntry>(`${KNOWLEDGE}/entries/${id}`, body)).data;
+
+export const approveKnowledgeEntry = async (id: string): Promise<KnowledgeEntry> =>
+  (await api.post<KnowledgeEntry>(`${KNOWLEDGE}/entries/${id}/approve`)).data;
+
+export const publishKnowledgeEntry = async (id: string): Promise<KnowledgeEntry> =>
+  (await api.post<KnowledgeEntry>(`${KNOWLEDGE}/entries/${id}/publish`)).data;
+
+export const rejectKnowledgeEntry = async (id: string, reason: string): Promise<KnowledgeEntry> =>
+  (await api.post<KnowledgeEntry>(`${KNOWLEDGE}/entries/${id}/reject`, { reason })).data;
+
+export const getKnowledgeVersions = async (
+  id: string,
+): Promise<{ claim_key: string; versions: KnowledgeEntry[] }> =>
+  (await api.get<{ claim_key: string; versions: KnowledgeEntry[] }>(
+    `${KNOWLEDGE}/entries/${id}/versions`,
+  )).data;
+
+/** Import pasted CSV. Every row lands as a draft; this cannot publish. */
+export const importKnowledgeCsv = async (csv: string): Promise<KnowledgeImportResult> =>
+  (await api.post<KnowledgeImportResult>(`${KNOWLEDGE}/import-text`, { csv })).data;

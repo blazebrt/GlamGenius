@@ -101,10 +101,22 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
     # GET /today, without coupling notification delivery to a screen open.
     context = await context_stage.gather(session, account_id=preference.account_id, plan_date=plan_date)
     await compiler.compile_day(session, context=context, force=False, trigger="notification_worker")
-    decision = await notifications.queue_for_agenda(
-        session, account_id=preference.account_id, plan_date=plan_date,
-        timezone_name=preference.timezone_name, moment=now,
-    )
+    # Ordered, real conditions.  The shared outbox still enforces one daily
+    # delivery, quiet hours and repeat safety no matter which condition wins.
+    decision = None
+    for trigger in (
+        notifications.queue_for_environment_crossing,
+        notifications.queue_for_protocol_day,
+        notifications.queue_for_running_out,
+        notifications.queue_for_deferred_purchase_relevance,
+        notifications.queue_for_agenda,
+    ):
+        decision = await trigger(
+            session, account_id=preference.account_id, plan_date=plan_date,
+            timezone_name=preference.timezone_name, moment=now,
+        )
+        if decision is not None:
+            break
     if decision is None or decision.status not in {
         notifications.STATUS_QUEUED, notifications.STATUS_SENDING,
     }:
@@ -122,7 +134,8 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
     await session.commit()
     messages = [push.PushMessage(
         to=device.expo_push_token, title=decision.title, body=decision.body,
-        data=({"destination": decision.deep_link, **(decision.destination_params or {})} if decision.deep_link else None),
+        data=({"delivery_id": str(decision.id), "destination": decision.deep_link, **(decision.destination_params or {})} if decision.deep_link else None),
+        category_id=(decision.destination_params or {}).get("category_id"),
     ) for device in devices]
     result = await push.send(messages)
     async with session.begin():
