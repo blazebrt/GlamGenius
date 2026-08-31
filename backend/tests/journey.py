@@ -183,10 +183,15 @@ async def run_scan(client, token, *, scan_type: str = "face") -> dict[str, Any]:
     ), 201)
 
 
-# The style vibe quiz is a rejected product surface (PRODUCT_CONSTITUTION.md) and
-# v2_quiz is off by default, so the quiz is deliberately not part of what a
-# populated account looks like. The quiz backend and its export path still
-# exist; test_domain_quiz_style.py covers them directly.
+async def submit_quiz(client, token) -> dict[str, Any]:
+    questions = ok(await client.get("/api/v2/quiz/questions", headers=auth(token)))
+    answers = {
+        question["id"]: question["options"][0]["value"]
+        for question in questions["questions"]
+    }
+    return ok(await client.post(
+        "/api/v2/quiz/submit", headers=auth(token), json={"answers": answers}
+    ), 200, 201)
 
 
 async def create_occasion_and_style(client, token) -> dict[str, Any]:
@@ -302,6 +307,7 @@ async def populate_every_domain(client, token) -> dict[str, Any]:
         json={"used_on": JOURNEY_DATE.isoformat()},
     ))
     created["scan"] = await run_scan(client, token)
+    created["quiz"] = await submit_quiz(client, token)
     created["styling"] = await create_occasion_and_style(client, token)
     created["shopping"] = await evaluate_a_purchase(client, token)
     created["planning"] = await plan_the_day(client, token)
