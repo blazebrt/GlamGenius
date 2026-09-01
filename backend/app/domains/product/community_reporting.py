@@ -237,6 +237,7 @@ async def aggregate_evidence(
         select(CommunityObservationReport).where(
             CommunityObservationReport.barcode == barcode,
             CommunityObservationReport.observation_code == observation_code,
+            CommunityObservationReport.account_id.is_not(None),
             CommunityObservationReport.status == "accepted",
             CommunityObservationReport.validity_state == "valid",
         )

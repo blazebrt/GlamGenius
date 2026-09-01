@@ -12,7 +12,7 @@ from app.domains.product.community_signals import SignalScope, evaluate_signal
 from app.domains.product.models import CommunityObservationReport
 from app.shared.database.sql import get_sessionmaker
 from app.shared.errors.exceptions import ConflictError, ValidationFailedError
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from tests.conftest import auth
 
@@ -104,8 +104,8 @@ async def test_independence_uses_claimed_account_otherwise_device_and_keeps_repe
         await session.commit()
         evidence = await community_reporting.aggregate_evidence(session, barcode=BARCODE, observation_code="barcode_mismatch")
 
-    # Four durable rows, but one claimed account plus one anonymous device.
-    assert evidence.active.independent_reporters == 2
+    # Four durable rows, but only the claimed account is public-eligible.
+    assert evidence.active.independent_reporters == 1
 
 
 @pytest.mark.asyncio
@@ -113,8 +113,8 @@ async def test_active_and_historical_windows_and_batch_distribution_are_independ
     now = datetime.now(UTC)
     factory = get_sessionmaker()
     async with factory() as session:
-        old = await _device(session)
-        fresh = await _device(session)
+        old = await _device(session, account_id=uuid.uuid4())
+        fresh = await _device(session, account_id=uuid.uuid4())
         await _submit(
             session, old, code="pack_leaking", client_id="old-batch", batch="OLD-1",
             observed_at=now - timedelta(days=91),
@@ -167,7 +167,7 @@ async def test_public_api_returns_aggregate_policy_only_and_cannot_change_produc
     factory = get_sessionmaker()
     async with factory() as session:
         for number in range(5):
-            device = await _device(session)
+            device = await _device(session, account_id=uuid.uuid4())
             await _submit(session, device, code="barcode_mismatch", client_id=f"public-{number}")
         await session.commit()
 
@@ -187,6 +187,21 @@ async def test_public_api_returns_aggregate_policy_only_and_cannot_change_produc
     decision = evaluate_signal("barcode_mismatch", evidence)
     assert decision.analysis_score_eligible is False
     assert decision.official_finding is False
+
+
+@pytest.mark.asyncio
+async def test_unclaimed_devices_are_collected_but_never_mature_public_evidence(db_clean, app_client):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        for number in range(15):
+            device = await _device(session)
+            await _submit(session, device, client_id=f"anonymous-{number}")
+        await session.commit()
+        stored = await session.scalar(select(func.count(CommunityObservationReport.id)))
+        evidence = await community_reporting.aggregate_evidence(session, barcode=BARCODE, observation_code="barcode_mismatch")
+    assert stored == 15
+    assert evidence.active.independent_reporters == 0
+    assert (await app_client.get(f"/api/v2/products/{BARCODE}/community-signals")).json()["signals"] == []
 
 
 @pytest.mark.asyncio
@@ -272,4 +287,9 @@ def test_concurrent_winner_resolution_rejects_different_observed_at():
         community_reporting.assert_same_submission_or_conflict(
             winner, barcode=BARCODE, observation_code="barcode_mismatch", batch_number=None,
             context=None, photo_asset_id=None, observed_at=observed_at + timedelta(seconds=1),
+        )
+    with pytest.raises(ConflictError):
+        community_reporting.assert_same_submission_or_conflict(
+            winner, barcode="8909999999999", observation_code="barcode_mismatch", batch_number=None,
+            context=None, photo_asset_id=None, observed_at=observed_at,
         )
