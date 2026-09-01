@@ -11,7 +11,10 @@ from app.domains.product import community_reporting, devices
 from app.domains.product.community_signals import SignalScope, evaluate_signal
 from app.domains.product.models import CommunityObservationReport
 from app.shared.database.sql import get_sessionmaker
+from app.shared.errors.exceptions import ConflictError, ValidationFailedError
 from sqlalchemy import select
+
+from tests.conftest import auth
 
 BARCODE = "8901058000191"
 
@@ -184,3 +187,66 @@ async def test_public_api_returns_aggregate_policy_only_and_cannot_change_produc
     decision = evaluate_signal("barcode_mismatch", evidence)
     assert decision.analysis_score_eligible is False
     assert decision.official_finding is False
+
+
+@pytest.mark.asyncio
+async def test_claim_backfills_reports_export_and_preserves_one_person_identity(
+    db_clean, app_client, registered_supabase_user,
+):
+    device_response = await app_client.post("/api/v2/scan/device", json={"device_key": uuid.uuid4().hex})
+    device_headers = {"X-Device-Token": device_response.json()["token"]}
+    first = {"client_report_id": "claim-first", "barcode": BARCODE, "observation_code": "barcode_mismatch"}
+    assert (await app_client.post("/api/v2/products/community-observations", headers=device_headers, json=first)).status_code == 201
+
+    token, account_id = await registered_supabase_user()
+    claimed = await app_client.post("/api/v2/scan/device/claim", headers={**device_headers, **auth(token)})
+    assert claimed.status_code == 200
+    assert claimed.json()["community_reports_attached"] == 1
+    assert (await app_client.post(
+        "/api/v2/products/community-observations", headers=device_headers,
+        json={**first, "client_report_id": "claim-second"},
+    )).status_code == 201
+
+    from app.domains.privacy import export as export_service
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        evidence = await community_reporting.aggregate_evidence(session, barcode=BARCODE, observation_code="barcode_mismatch")
+        exported = await export_service.build_export(session, account_id)
+    assert evidence.active.independent_reporters == 1
+    reports = exported["domains"]["product_scans"]["community_observation_reports"]
+    assert len(reports) == 2
+    assert all("device_id" not in row for row in reports)
+
+
+@pytest.mark.asyncio
+async def test_idempotency_key_collision_and_rate_limit_are_rejected(db_clean):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        device = await _device(session)
+        await _submit(session, device, client_id="same-report")
+        with pytest.raises(ConflictError):
+            await _submit(session, device, client_id="same-report", code="ingredients_changed")
+        for number in range(community_reporting.MAX_REPORTS_PER_DEVICE_PER_HOUR - 1):
+            await _submit(session, device, client_id=f"rate-{number}")
+        with pytest.raises(ValidationFailedError):
+            await _submit(session, device, client_id="over-the-limit")
+
+
+@pytest.mark.asyncio
+async def test_account_deletion_cascades_claimed_reports_but_keeps_never_claimed_anonymous_evidence(db_clean):
+    account_id = uuid.uuid4()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        claimed_device = await _device(session, account_id=account_id)
+        anonymous_device = await _device(session)
+        claimed, _ = await _submit(session, claimed_device, client_id="deleted-account-report")
+        anonymous, _ = await _submit(session, anonymous_device, client_id="anonymous-retained-report")
+        await session.commit()
+        account = await session.get(Account, account_id)
+        await session.delete(account)
+        await session.commit()
+        assert await session.get(CommunityObservationReport, claimed.id) is None
+        retained = await session.get(CommunityObservationReport, anonymous.id)
+    assert retained is not None
+    assert retained.account_id is None

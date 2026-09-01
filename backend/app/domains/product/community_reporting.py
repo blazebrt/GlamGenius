@@ -22,7 +22,7 @@ from app.domains.product.community_signals import (
 )
 from app.domains.product.models import CommunityObservationReport, ScanDevice
 from app.shared.database.base import utcnow
-from app.shared.errors.exceptions import ValidationFailedError
+from app.shared.errors.exceptions import ConflictError, ValidationFailedError
 
 MAX_REPORTS_PER_DEVICE_PER_HOUR = 30
 
@@ -68,6 +68,20 @@ def _context_payload(context: ConditionContext | None) -> dict[str, str] | None:
     }
 
 
+def _same_submission(
+    row: CommunityObservationReport,
+    *, barcode: str, observation_code: str, batch_number: str | None,
+    context: ConditionContext | None, photo_asset_id: uuid.UUID | None,
+) -> bool:
+    return (
+        row.barcode == barcode.strip()
+        and row.observation_code == observation_code
+        and row.batch_number == normalize_batch_number(batch_number)
+        and row.condition_context == _context_payload(context)
+        and row.photo_asset_id == photo_asset_id
+    )
+
+
 async def submit(
     session: AsyncSession,
     *,
@@ -99,6 +113,11 @@ async def submit(
         )
     )).scalar_one_or_none()
     if existing is not None:
+        if not _same_submission(
+            existing, barcode=barcode, observation_code=observation_code,
+            batch_number=batch_number, context=context, photo_asset_id=photo_asset_id,
+        ):
+            raise ConflictError("This report identifier belongs to a different observation.")
         return existing, False
 
     recent_count = await session.scalar(

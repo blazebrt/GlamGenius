@@ -138,7 +138,7 @@ class CommunityObservationReport(UUIDPrimaryKey, TimestampMixin, Base):
         ForeignKey("scan_devices.id", ondelete="CASCADE"), nullable=False
     )
     account_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("accounts.id", ondelete="SET NULL")
+        ForeignKey("accounts.id", ondelete="CASCADE")
     )
     client_report_id: Mapped[str] = mapped_column(String(64), nullable=False)
     barcode: Mapped[str] = mapped_column(String(64), nullable=False)

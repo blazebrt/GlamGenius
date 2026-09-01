@@ -463,7 +463,7 @@ async def test_signing_up_later_brings_the_phones_earlier_scans_along(
         "/api/v2/scan/device/claim", headers={**device, **auth(token)},
     )
     assert claimed.status_code == 200, claimed.text
-    assert claimed.json() == {"claimed": True, "scans_attached": 2}
+    assert claimed.json() == {"claimed": True, "scans_attached": 2, "community_reports_attached": 0}
 
     async with factory() as session:
         after = (await session.execute(select(ScanEvent))).scalars().all()
@@ -485,7 +485,9 @@ async def test_a_scan_nobody_claimed_is_in_nobodys_export(
     factory = get_sessionmaker()
     async with factory() as session:
         payload = await export_service.build_export(session, account_id)
-    assert payload["domains"]["product_scans"] == {"scans": [], "label_error_reports": []}
+    assert payload["domains"]["product_scans"] == {
+        "scans": [], "label_error_reports": [], "community_observation_reports": [],
+    }
 
 
 @pytest.mark.asyncio

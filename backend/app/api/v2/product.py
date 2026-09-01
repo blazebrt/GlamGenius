@@ -142,8 +142,11 @@ async def claim_device(
     moved = await service.attach_scans_to_account(
         session, device_id=device.id, account_id=current.account_id,
     )
+    community_reports_moved = await service.attach_community_reports_to_account(
+        session, device_id=device.id, account_id=current.account_id,
+    )
     await session.commit()
-    return {"claimed": True, "scans_attached": moved}
+    return {"claimed": True, "scans_attached": moved, "community_reports_attached": community_reports_moved}
 
 
 @router.post("/products/community-observations", status_code=status.HTTP_201_CREATED)
@@ -178,14 +181,10 @@ async def submit_community_observation(
         photo_asset_id=body.photo_asset_id,
         observed_at=body.observed_at,
     )
-    evidence = await community_reporting.aggregate_evidence(
-        session, barcode=report.barcode, observation_code=report.observation_code
-    )
-    decision = community_reporting.evaluate_signal(report.observation_code, evidence)
     await session.commit()
     return {
         "report_id": str(report.id),
-        "status": "already_received" if not created else "under_review" if decision.internal_review else "received",
+        "status": "already_received" if not created else "received",
         "created": created,
     }
 
