@@ -24,16 +24,30 @@ def upgrade() -> None:
         ),
     )
     op.add_column("product_label_snapshots", sa.Column("completeness", sa.String(length=32), server_default="incomplete_for_grading", nullable=False))
-    op.execute("UPDATE product_label_snapshots SET content_fingerprint = md5(facts::text) WHERE content_fingerprint IS NULL")
+    op.execute("""
+        UPDATE product_label_snapshots
+        SET content_fingerprint = md5(facts::text)
+        WHERE content_fingerprint IS NULL
+    """)
+    op.execute("""
+        WITH numbered AS (
+            SELECT id, ROW_NUMBER() OVER (PARTITION BY barcode ORDER BY created_at, id) AS number
+            FROM product_label_snapshots
+        )
+        UPDATE product_label_snapshots AS snapshots
+        SET version_number = numbered.number
+        FROM numbered
+        WHERE snapshots.id = numbered.id
+    """)
     op.alter_column("product_label_snapshots", "content_fingerprint", nullable=False)
     op.create_foreign_key("fk_product_label_snapshots_previous", "product_label_snapshots", "product_label_snapshots", ["previous_snapshot_id"], ["id"], ondelete="SET NULL")
     op.create_check_constraint("ck_product_label_snapshots_completeness", "product_label_snapshots", "completeness IN ('complete_for_grading', 'incomplete_for_grading', 'identity_only')")
-    op.create_unique_constraint("uq_product_label_snapshots_content", "product_label_snapshots", ["barcode", "content_fingerprint"])
+    op.create_index("ix_product_label_snapshots_barcode_fingerprint", "product_label_snapshots", ["barcode", "content_fingerprint"])
     op.create_unique_constraint("uq_product_label_snapshots_version", "product_label_snapshots", ["barcode", "version_number"])
 
 def downgrade() -> None:
     op.drop_constraint("uq_product_label_snapshots_version", "product_label_snapshots", type_="unique")
-    op.drop_constraint("uq_product_label_snapshots_content", "product_label_snapshots", type_="unique")
+    op.drop_index("ix_product_label_snapshots_barcode_fingerprint", table_name="product_label_snapshots")
     op.drop_constraint("ck_product_label_snapshots_completeness", "product_label_snapshots", type_="check")
     op.drop_constraint("fk_product_label_snapshots_previous", "product_label_snapshots", type_="foreignkey")
     for name in ("completeness", "changed_fields", "previous_snapshot_id", "version_number", "content_fingerprint"):

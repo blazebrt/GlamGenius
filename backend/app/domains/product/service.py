@@ -92,7 +92,12 @@ async def store_label_snapshot(
     session: AsyncSession, *, barcode: str, facts: dict[str, Any], device_id: uuid.UUID, scan_event_id: uuid.UUID,
 ) -> LabelSnapshot:
     fingerprint = label_content_fingerprint(facts)
-    existing = (await session.execute(select(LabelSnapshot).where(LabelSnapshot.barcode == barcode, LabelSnapshot.content_fingerprint == fingerprint))).scalar_one_or_none()
+    existing = (await session.execute(
+        select(LabelSnapshot).where(
+            LabelSnapshot.barcode == barcode,
+            LabelSnapshot.content_fingerprint == fingerprint,
+        ).order_by(LabelSnapshot.version_number).limit(1)
+    )).scalars().first()
     if existing is not None:
         return existing
     # The unique version constraint closes the race between two confirmations.
@@ -118,8 +123,8 @@ async def store_label_snapshot(
                 select(LabelSnapshot).where(
                     LabelSnapshot.barcode == barcode,
                     LabelSnapshot.content_fingerprint == fingerprint,
-                )
-            )).scalar_one_or_none()
+                ).order_by(LabelSnapshot.version_number).limit(1)
+            )).scalars().first()
             if existing is not None:
                 return existing
     raise RuntimeError("Could not allocate a unique observed label version")

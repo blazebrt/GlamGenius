@@ -222,7 +222,7 @@ class LabelSnapshot(UUIDPrimaryKey, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint(f"confidence IN ({_CONFIDENCE_IN})", name="ck_product_label_snapshots_confidence"),
         CheckConstraint("completeness IN ('complete_for_grading', 'incomplete_for_grading', 'identity_only')", name="ck_product_label_snapshots_completeness"),
-        UniqueConstraint("barcode", "content_fingerprint", name="uq_product_label_snapshots_content"),
+        Index("ix_product_label_snapshots_barcode_fingerprint", "barcode", "content_fingerprint"),
         UniqueConstraint("barcode", "version_number", name="uq_product_label_snapshots_version"),
         Index("ix_product_label_snapshots_barcode_created", "barcode", "created_at"),
     )
