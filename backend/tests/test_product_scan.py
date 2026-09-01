@@ -5,12 +5,20 @@ written against the API a phone actually calls.
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 import pytest_asyncio
 from app.domains.ai_gateway.gateway import AIResult
+from app.domains.nutrition.grading.production_rules import (
+    STATUS_PUBLISHED,
+    ProductionRuleset,
+    candidate_ruleset,
+)
 from app.domains.off.models import OffBase, OffProduct
 from app.domains.off.store import create_off_schema, get_off_engine, get_off_sessionmaker
 from app.domains.product import service
@@ -245,21 +253,226 @@ async def test_confirmed_label_content_versions_are_deduplicated_and_linked(
         )
         assert response.status_code == 201, response.text
 
-    await confirm(first)
-    await confirm({**first, "batch_number": "B-2"})
-    await confirm({**first, "nutrition_per_100g": {"energy_kcal": "520", "sugars_g": "4.2"}})
-    await confirm({**first, "nutrition_per_100g": {"energy_kcal": "520", "sugars_g": "4.2"}, "batch_number": "B-3"})
+    second = {
+        **first,
+        "nutrition_per_100g": {"energy_kcal": "520", "sugars_g": "4.2"},
+    }
+    await confirm(first)  # A -> V1
+    await confirm({**first, "batch_number": "B-2"})  # A -> reuse V1
+    await confirm(second)  # B -> V2
+    await confirm({**second, "batch_number": "B-3"})  # B -> reuse V2
+    await confirm({**first, "batch_number": "B-4"})  # A -> V3, not historic V1
 
     factory = get_sessionmaker()
     async with factory() as session:
         snapshots = (await session.execute(
             select(LabelSnapshot).where(LabelSnapshot.barcode == UNKNOWN).order_by(LabelSnapshot.version_number)
         )).scalars().all()
-    assert [snapshot.version_number for snapshot in snapshots] == [1, 2]
+        events = (await session.execute(
+            select(ScanEvent).where(ScanEvent.barcode == UNKNOWN)
+        )).scalars().all()
+    assert [snapshot.version_number for snapshot in snapshots] == [1, 2, 3]
     assert snapshots[0].previous_snapshot_id is None
     assert snapshots[1].previous_snapshot_id == snapshots[0].id
+    assert snapshots[2].previous_snapshot_id == snapshots[1].id
     assert snapshots[1].changed_fields == ["nutrition"]
+    assert snapshots[2].changed_fields == ["nutrition"]
     assert snapshots[0].content_fingerprint != snapshots[1].content_fingerprint
+    assert snapshots[2].content_fingerprint == snapshots[0].content_fingerprint
+    assert len(events) == 5, "same semantic content must not erase observations"
+
+    verdict = await app_client.get(f"/api/v2/scan/verdict/{UNKNOWN}", headers=device)
+    assert verdict.status_code == 200, verdict.text
+    assert verdict.json()["label_version"]["version_number"] == 3
+
+
+def _published_ruleset() -> ProductionRuleset:
+    candidate = candidate_ruleset()
+    return ProductionRuleset(provenance={
+        rule_id: replace(row, status=STATUS_PUBLISHED)
+        for rule_id, row in candidate.provenance.items()
+    })
+
+
+@pytest.mark.asyncio
+async def test_unknown_confirmed_pack_facts_feed_the_real_grader_without_off_copy(
+    db_clean, off_clean, app_client, device, monkeypatch,
+):
+    from app.api.v2 import product as product_api
+
+    facts = {
+        "product_name": "Regional millet snack",
+        "brand": "Local Foods",
+        "ingredients_text": "millet flour, chickpea flour, sugar, edible oil, salt",
+        "nutrition_per_100g": {
+            "energy_kcal": "440",
+            "protein_g": "9",
+            "total_fat_g": "14",
+            "saturated_fat_g": "3",
+            "trans_fat_g": "0",
+            "sugars_g": "12",
+            "fibre_g": "6",
+            "sodium_g": "0.32",
+        },
+        "net_quantity": "180 g",
+        "serving_size": "30 g",
+    }
+    captured = {}
+    real_grade_product = product_api.grade_product
+
+    def capture_product(product):
+        captured["product"] = product
+        return real_grade_product(product)
+
+    async def published_rules(_session):
+        return _published_ruleset()
+
+    monkeypatch.setattr(product_api, "grade_product", capture_product)
+    monkeypatch.setattr(product_api, "resolve_production_ruleset", published_rules)
+    confirmed = await app_client.post(
+        "/api/v2/scan/label/confirm",
+        headers=device,
+        json={"barcode": UNKNOWN, "facts": facts, "client_scan_id": uuid.uuid4().hex},
+    )
+    assert confirmed.status_code == 201, confirmed.text
+
+    response = await app_client.get(f"/api/v2/scan/verdict/{UNKNOWN}", headers=device)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    product = captured["product"]
+    assert product.total_sugar_g == Decimal("12")
+    assert product.saturated_fat_g == Decimal("3")
+    assert product.sodium_g == Decimal("0.32")
+    assert body["outcome"] == "graded"
+    assert body["facts_provenance"] == "confirmed_label_snapshot"
+    assert body["label_version"]["version_number"] == 1
+    assert body["label_version"]["completeness"] == "complete_for_grading"
+    assert body["pack_size_g"] == 180.0
+
+    factory = get_off_sessionmaker()
+    async with factory() as session:
+        assert await session.get(OffProduct, UNKNOWN) is None
+
+
+@pytest.mark.asyncio
+async def test_insufficient_confirmed_pack_remains_not_enough_information(
+    db_clean, off_clean, app_client, device,
+):
+    facts = {
+        "product_name": "Energy-only snack",
+        "ingredients_text": "millet flour, salt",
+        "nutrition_per_100g": {"energy_kcal": "440"},
+    }
+    confirmed = await app_client.post(
+        "/api/v2/scan/label/confirm",
+        headers=device,
+        json={"barcode": UNKNOWN, "facts": facts, "client_scan_id": uuid.uuid4().hex},
+    )
+    assert confirmed.status_code == 201, confirmed.text
+    body = (await app_client.get(
+        f"/api/v2/scan/verdict/{UNKNOWN}", headers=device
+    )).json()
+    assert body["outcome"] == "not_enough_information"
+    assert "nutrition panel" in body["missing"]
+    assert body["label_version"]["completeness"] == "incomplete_for_grading"
+
+
+async def _seed_label_events(barcode: str, count: int) -> list[uuid.UUID]:
+    factory = get_sessionmaker()
+    ids: list[uuid.UUID] = []
+    async with factory() as session:
+        for index in range(count):
+            event = ScanEvent(
+                barcode=barcode,
+                outcome=service.OUTCOME_LABEL,
+                client_scan_id=f"concurrent-{uuid.uuid4().hex}-{index}",
+                scanned_at=datetime.now(UTC),
+                label_facts={"observation": index},
+            )
+            session.add(event)
+            await session.flush()
+            ids.append(event.id)
+        await session.commit()
+    return ids
+
+
+async def _store_concurrently(
+    barcode: str, event_id: uuid.UUID, facts: dict, start: asyncio.Event,
+) -> int:
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await start.wait()
+        snapshot = await service.store_label_snapshot(
+            session,
+            barcode=barcode,
+            facts=facts,
+            device_id=None,
+            scan_event_id=event_id,
+        )
+        await session.commit()
+        return snapshot.version_number
+
+
+@pytest.mark.asyncio
+async def test_concurrent_confirmations_allocate_one_ordered_semantic_lineage(
+    db_clean, off_clean, app_client, device,
+):
+    barcode = "8907777777777"
+    first = {
+        "product_name": "Concurrent snack",
+        "ingredients_text": "millet, salt",
+        "nutrition_per_100g": {"sugars_g": "1"},
+    }
+    same_responses = await asyncio.gather(*(
+        app_client.post(
+            "/api/v2/scan/label/confirm",
+            headers=device,
+            json={
+                "barcode": barcode,
+                "facts": first,
+                "client_scan_id": f"same-{uuid.uuid4().hex}",
+            },
+        )
+        for _ in range(2)
+    ))
+    assert [response.status_code for response in same_responses] == [201, 201], [
+        response.text for response in same_responses
+    ]
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        same_snapshots = (await session.execute(
+            select(LabelSnapshot).where(LabelSnapshot.barcode == barcode)
+        )).scalars().all()
+        same_events = (await session.execute(
+            select(ScanEvent).where(ScanEvent.barcode == barcode)
+        )).scalars().all()
+    assert [row.version_number for row in same_snapshots] == [1]
+    assert len(same_events) == 2
+
+    event_ids = await _seed_label_events(barcode, 2)
+    second = {**first, "nutrition_per_100g": {"sugars_g": "2"}}
+    third = {**first, "nutrition_per_100g": {"sugars_g": "3"}}
+    start = asyncio.Event()
+    tasks = (
+        asyncio.create_task(_store_concurrently(barcode, event_ids[0], second, start)),
+        asyncio.create_task(_store_concurrently(barcode, event_ids[1], third, start)),
+    )
+    start.set()
+    assert sorted(await asyncio.gather(*tasks)) == [2, 3]
+
+    async with factory() as session:
+        snapshots = (await session.execute(
+            select(LabelSnapshot)
+            .where(LabelSnapshot.barcode == barcode)
+            .order_by(LabelSnapshot.version_number)
+        )).scalars().all()
+        latest = await service.latest_label_snapshot(session, barcode)
+    assert [row.version_number for row in snapshots] == [1, 2, 3]
+    assert len({row.version_number for row in snapshots}) == 3
+    assert snapshots[1].previous_snapshot_id == snapshots[0].id
+    assert snapshots[2].previous_snapshot_id == snapshots[1].id
+    assert latest is not None and latest.id == snapshots[2].id
 
 
 @pytest.mark.asyncio

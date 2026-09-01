@@ -20,10 +20,11 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.nutrition.grading import from_scan, required_grading_data_missing
 from app.domains.off import client as off_client
 from app.domains.off.join import join_on_barcode, read_off_product, read_off_product_with_age
 from app.domains.off.models import OffProduct
@@ -78,9 +79,16 @@ def label_content_fingerprint(facts: dict[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 def label_completeness(facts: dict[str, Any]) -> str:
-    if not facts.get("product_name") and not facts.get("brand"):
+    has_identity = bool(facts.get("product_name") or facts.get("brand"))
+    has_analytical_content = bool(facts.get("ingredients_text") or facts.get("nutrition_per_100g"))
+    if has_identity and not has_analytical_content:
         return "identity_only"
-    return "complete_for_grading" if facts.get("ingredients_text") and facts.get("nutrition_per_100g") else "incomplete_for_grading"
+    product = from_scan.build_confirmed_label(barcode="label-completeness", facts=facts)
+    return (
+        "incomplete_for_grading"
+        if required_grading_data_missing(product)
+        else "complete_for_grading"
+    )
 
 def label_changed_fields(previous: dict[str, Any], current: dict[str, Any]) -> list[str]:
     old, new = canonical_label_facts(previous), canonical_label_facts(current)
@@ -88,23 +96,30 @@ def label_changed_fields(previous: dict[str, Any], current: dict[str, Any]) -> l
     return [mapping[key] for key in CONTENT_FACT_FIELDS if old.get(key) != new.get(key)]
 
 
+async def lock_label_version(session: AsyncSession, barcode: str) -> None:
+    """Serialize one barcode's confirmation/version transaction in PostgreSQL."""
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:barcode, 0))"),
+        {"barcode": barcode},
+    )
+
+
 async def store_label_snapshot(
-    session: AsyncSession, *, barcode: str, facts: dict[str, Any], device_id: uuid.UUID, scan_event_id: uuid.UUID,
+    session: AsyncSession, *, barcode: str, facts: dict[str, Any], device_id: uuid.UUID | None, scan_event_id: uuid.UUID,
 ) -> LabelSnapshot:
     fingerprint = label_content_fingerprint(facts)
-    existing = (await session.execute(
-        select(LabelSnapshot).where(
-            LabelSnapshot.barcode == barcode,
-            LabelSnapshot.content_fingerprint == fingerprint,
-        ).order_by(LabelSnapshot.version_number).limit(1)
-    )).scalars().first()
-    if existing is not None:
-        return existing
+    # Serialize semantic-version allocation for this barcode across processes
+    # and database sessions. The transaction-scoped PostgreSQL lock releases
+    # automatically on commit/rollback; the unique version constraint remains
+    # the final invariant and the retry handles any pre-lock legacy writer.
+    await lock_label_version(session, barcode)
     # The unique version constraint closes the race between two confirmations.
     # A savepoint lets us recover from that constraint without poisoning the
     # caller's transaction (which also contains the idempotent scan event).
     for _ in range(3):
         current = await latest_label_snapshot(session, barcode)
+        if current is not None and current.content_fingerprint == fingerprint:
+            return current
         row = LabelSnapshot(
             barcode=barcode, device_id=device_id, scan_event_id=scan_event_id, facts=facts,
             confidence=ProductConfidence.UNVERIFIED.value, content_fingerprint=fingerprint,
@@ -119,14 +134,12 @@ async def store_label_snapshot(
                 await session.flush()
             return row
         except IntegrityError:
-            existing = (await session.execute(
-                select(LabelSnapshot).where(
-                    LabelSnapshot.barcode == barcode,
-                    LabelSnapshot.content_fingerprint == fingerprint,
-                ).order_by(LabelSnapshot.version_number).limit(1)
-            )).scalars().first()
-            if existing is not None:
-                return existing
+            # READ COMMITTED sees the winner after the unique-index wait. The
+            # next iteration re-fetches the latest semantic version: same
+            # content is idempotent; different content receives the next
+            # version number. Historic equal fingerprints are intentionally
+            # ignored so A -> B -> A remains representable.
+            continue
     raise RuntimeError("Could not allocate a unique observed label version")
 
 
@@ -296,9 +309,10 @@ async def apply_confirmed_label(
 ) -> ProductRecord:
     """Take a label a person has confirmed and update our half of the record.
 
-    Only our fields are written here. The transcribed product name, ingredients
-    and nutrition belong to Store A and are written there by the OFF path, never
-    copied across — see the ODbL wall.
+    Only ProductRecord's own confidence/licence fields are written here.
+    Confirmed physical-pack facts live separately in LabelSnapshot (Store B);
+    Open Food Facts fields remain in Store A and are never copied across — see
+    the ODbL wall.
 
     Anonymous captures retain label facts but do not create a community claim:
     a device identity is not a person identity.  Only an accountable reviewer

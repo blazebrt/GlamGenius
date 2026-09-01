@@ -165,6 +165,9 @@ async def confirm_label(
     """Accept a transcribed label. One tap, the VC-07 draft-to-confirmed pattern."""
     if not body.facts:
         raise ValidationFailedError("There is nothing to confirm.", field="facts")
+    # Protect the full Store-B confirmation transaction, including first-time
+    # ProductRecord creation and semantic version allocation, across workers.
+    await service.lock_label_version(session, body.barcode)
     event, created = await service.record_scan(
         session,
         barcode=body.barcode, outcome=service.OUTCOME_LABEL,
@@ -238,9 +241,15 @@ async def read_product_verdict(
     found = await service.lookup(session, barcode)
     snapshot = await service.latest_label_snapshot(session, barcode)
     # Store B is selected at query time and never copied into ODbL Store A.
-    off_half = snapshot.facts if snapshot is not None else found.get("open_food_facts")
-    name = (off_half or {}).get("product_name") or (off_half or {}).get("name") or barcode
-    product = from_scan.build(barcode=barcode, name=name, off_half=off_half)
+    # Its schema is adapted explicitly; it is not disguised as an OFF record
+    # and missing physical-pack values are never filled from Store A.
+    source_half = snapshot.facts if snapshot is not None else found.get("open_food_facts")
+    name = (source_half or {}).get("product_name") or (source_half or {}).get("name") or barcode
+    product = (
+        from_scan.build_confirmed_label(barcode=barcode, facts=snapshot.facts)
+        if snapshot is not None
+        else from_scan.build(barcode=barcode, name=name, off_half=source_half)
+    )
     # The customer path asks the evidence domain which rules have finished the
     # lifecycle. Every row then states its own footing, so a number resting on
     # an unreviewed constant is never shown as though a reviewer stood behind it.
@@ -250,7 +259,7 @@ async def read_product_verdict(
     # Identity is factual scan context, not a name inferred by the client.
     # Keep absent catalogue values absent instead of manufacturing a brand.
     payload["barcode"] = barcode
-    payload["brand"] = (off_half or {}).get("brands") or (off_half or {}).get("brand") or None
+    payload["brand"] = (source_half or {}).get("brands") or (source_half or {}).get("brand") or None
     payload["confidence"] = service.confidence_block(snapshot.confidence) if snapshot else found["confidence"]
     payload["facts_provenance"] = "confirmed_label_snapshot" if snapshot else "open_food_facts"
     payload["label_version"] = ({
@@ -263,7 +272,12 @@ async def read_product_verdict(
     # What the pack actually holds, so "one packet" on the screen means this
     # packet. Absent when neither source states a net quantity, and the screen
     # then says "in 100 g" rather than inventing a pack.
-    size = from_scan.pack_size_g((off_half or {}).get("quantity"))
+    quantity = (
+        (source_half or {}).get("net_quantity")
+        if snapshot is not None
+        else (source_half or {}).get("quantity")
+    )
+    size = from_scan.pack_size_g(quantity)
     payload["pack_size_g"] = float(size) if size is not None else None
     # Solid or drink, so the screen can say "100 g" or "100 ml" honestly when
     # there is no pack size to work from.

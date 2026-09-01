@@ -11,6 +11,7 @@ from app.domains.nutrition.grading.engine import (
     GradeResult,
     ProductInput,
     grade_product,
+    required_grading_data_missing,
 )
 from app.domains.nutrition.grading.rules import Grade, GradeOutcome
 
@@ -21,4 +22,5 @@ __all__ = [
     "GradeResult",
     "ProductInput",
     "grade_product",
+    "required_grading_data_missing",
 ]

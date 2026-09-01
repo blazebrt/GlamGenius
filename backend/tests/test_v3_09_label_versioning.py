@@ -1,4 +1,12 @@
 """Pure invariants for observed label content identity."""
+from decimal import Decimal
+
+from app.domains.nutrition.grading import (
+    GradeOutcome,
+    from_scan,
+    grade_product,
+    required_grading_data_missing,
+)
 from app.domains.product.service import (
     canonical_label_facts,
     label_changed_fields,
@@ -61,9 +69,81 @@ def test_supported_content_fields_and_closed_diff_vocabulary():
 def test_completeness_is_closed_and_does_not_invent_missing_facts():
     from app.domains.product.service import label_completeness
 
-    assert label_completeness({}) == "identity_only"
-    assert label_completeness({"product_name": "Oats"}) == "incomplete_for_grading"
-    assert label_completeness({"brand": "Acme", "ingredients_text": "oats", "nutrition_per_100g": {"energy": "370"}}) == "complete_for_grading"
+    assert label_completeness({}) == "incomplete_for_grading"
+    assert label_completeness({"product_name": "Oats"}) == "identity_only"
+    assert label_completeness(
+        {"product_name": "Oats", "ingredients_text": "oats"}
+    ) == "incomplete_for_grading"
+    assert label_completeness({
+        "product_name": "Oats",
+        "ingredients_text": "oats",
+        "nutrition_per_100g": {"energy_kcal": "370"},
+    }) == "incomplete_for_grading"
+    assert label_completeness({
+        "product_name": "Oats",
+        "ingredients_text": "oats",
+        "nutrition_per_100g": {"energy_kcal": "370", "sugars_g": "1"},
+    }) == "complete_for_grading"
+
+
+def test_confirmed_label_adapter_maps_declared_values_without_inference():
+    product = from_scan.build_confirmed_label(
+        barcode="8900000000001",
+        facts={
+            "product_name": "Seed mix",
+            "ingredients_text": "seeds, salt",
+            "nutrition_per_100g": {
+                "energy_kcal": "410 kcal",
+                "protein_g": "18 g",
+                "total_fat_g": "22 g",
+                "saturated_fat_g": "3 g",
+                "trans_fat_g": "0 g",
+                "total_sugar_g": "2 g",
+                "added_sugar_g": "0 g",
+                "fibre_g": "11 g",
+                "sodium_g": "0.2 g",
+                "salt_g": "0.5 g",
+            },
+            "net_quantity": "250 g",
+            "serving_size": "25 g",
+        },
+    )
+
+    assert product.name == "Seed mix"
+    assert product.ingredients == ("seeds", "salt")
+    assert product.energy_kcal == Decimal("410")
+    assert product.protein_g == Decimal("18")
+    assert product.total_fat_g == Decimal("22")
+    assert product.saturated_fat_g == Decimal("3")
+    assert product.trans_fat_g == Decimal("0")
+    assert product.total_sugar_g == Decimal("2")
+    assert product.added_sugar_g == Decimal("0")
+    assert product.fibre_g == Decimal("11")
+    assert product.sodium_g == Decimal("0.2")
+    assert product.salt_g == Decimal("0.5")
+
+
+def test_completeness_and_grader_share_required_data_semantics():
+    from app.domains.product.service import label_completeness
+
+    cases = (
+        {
+            "product_name": "Energy only",
+            "ingredients_text": "wheat flour",
+            "nutrition_per_100g": {"energy_kcal": "400"},
+        },
+        {
+            "product_name": "Declared sugar",
+            "ingredients_text": "wheat flour, sugar",
+            "nutrition_per_100g": {"energy_kcal": "400", "sugars_g": "20"},
+        },
+    )
+    for facts in cases:
+        product = from_scan.build_confirmed_label(barcode="test", facts=facts)
+        missing = required_grading_data_missing(product)
+        result = grade_product(product)
+        assert (label_completeness(facts) == "complete_for_grading") is (not missing)
+        assert (result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION) is bool(missing)
 
 def test_ingredient_order_and_content_changes_are_meaningful():
     reordered = {**BASE, "ingredients_text": "salt, oats"}
