@@ -21,7 +21,12 @@ from app.domains.nutrition.grading.production_rules import (
     enforce_published_required_rules,
     resolve_production_ruleset,
 )
-from app.domains.product import complaints, devices, extraction, service
+from app.domains.product import community_reporting, complaints, devices, extraction, service
+from app.domains.product.community_signals import (
+    ObservationTimingCategory,
+    PreparationUseConditionCategory,
+    StorageConditionCategory,
+)
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
 from app.domains.product.models import FssaiComplaintHandoff, ScanDevice
@@ -66,6 +71,28 @@ class ConfirmLabelBody(BaseModel):
     barcode: str = Field(min_length=6, max_length=64)
     facts: dict[str, Any] = Field(default_factory=dict)
     client_scan_id: str = Field(min_length=6, max_length=64)
+
+
+class CommunityConditionContextBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    storage_condition: StorageConditionCategory
+    observation_timing: ObservationTimingCategory
+    preparation_or_use_condition: PreparationUseConditionCategory
+
+
+class CommunityObservationBody(BaseModel):
+    """Closed structured observation contract; intentionally has no free text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_report_id: str = Field(min_length=6, max_length=64)
+    barcode: str = Field(min_length=6, max_length=64)
+    observation_code: str = Field(min_length=1, max_length=80)
+    batch_number: str | None = Field(default=None, max_length=80)
+    photo_asset_id: uuid.UUID | None = None
+    condition_context: CommunityConditionContextBody | None = None
+    observed_at: datetime | None = None
 
 
 async def current_device(
@@ -117,6 +144,76 @@ async def claim_device(
     )
     await session.commit()
     return {"claimed": True, "scans_attached": moved}
+
+
+@router.post("/products/community-observations", status_code=status.HTTP_201_CREATED)
+async def submit_community_observation(
+    body: CommunityObservationBody,
+    device: ScanDevice = Depends(current_device),
+    session: AsyncSession = Depends(get_session),
+):
+    """Accept one device-authenticated structured pack observation.
+
+    A photo is an existing controlled media asset, never an arbitrary URL.
+    Anonymous scanning remains supported, but attaching an account-owned media
+    asset naturally requires the device to have been claimed by that account.
+    """
+    if body.photo_asset_id is not None:
+        if device.claimed_by_account_id is None:
+            raise ValidationFailedError("A signed-in account is required to attach that photo.", field="photo_asset_id")
+        from app.domains.media import service as media_service
+
+        await media_service.get_owned_asset(
+            session, account_id=device.claimed_by_account_id, asset_id=body.photo_asset_id
+        )
+
+    report, created = await community_reporting.submit(
+        session,
+        device=device,
+        client_report_id=body.client_report_id,
+        barcode=body.barcode,
+        observation_code=body.observation_code,
+        batch_number=body.batch_number,
+        condition_context=body.condition_context.model_dump(mode="json") if body.condition_context else None,
+        photo_asset_id=body.photo_asset_id,
+        observed_at=body.observed_at,
+    )
+    evidence = await community_reporting.aggregate_evidence(
+        session, barcode=report.barcode, observation_code=report.observation_code
+    )
+    decision = community_reporting.evaluate_signal(report.observation_code, evidence)
+    await session.commit()
+    return {
+        "report_id": str(report.id),
+        "status": "already_received" if not created else "under_review" if decision.internal_review else "received",
+        "created": created,
+    }
+
+
+@router.get("/products/{barcode}/community-signals")
+async def read_public_community_signals(
+    barcode: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Expose policy-safe aggregates only; individual reports never leave Store B."""
+    signals = await community_reporting.public_signals(session, barcode=barcode)
+    return {
+        "barcode": barcode,
+        "signals": [
+            {
+                "observation_code": decision.observation_code,
+                "signal_kind": decision.signal_kind.value,
+                "stage": decision.stage.value,
+                "scope": decision.scope.value,
+                "policy_version": decision.policy_version,
+                "independent_reporters": decision.evidence_summary.active.independent_reporters,
+                "active_window_days": decision.evidence_summary.active_window_days,
+                "reason_keys": decision.reason_keys,
+                "disclosure_keys": decision.disclosure_keys,
+            }
+            for decision in signals
+        ],
+    }
 
 
 @router.get("/scan/lookup/{barcode}")
