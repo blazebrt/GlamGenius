@@ -259,6 +259,9 @@ REGISTRY: dict[str, Classification] = {
     # A report somebody filed about a pack. Theirs, and exported with their
     # scans; the photo lives in storage and is referenced by key, never inlined.
     "label_error_reports": Classification.INCLUDED,
+    # Structured pack observations are the claimant's own submissions.  They
+    # are exported after device claim and cascade away with the account.
+    "community_observation_reports": Classification.INCLUDED,
 }
 
 

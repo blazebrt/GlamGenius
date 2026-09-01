@@ -27,7 +27,13 @@ from app.domains.off.models import OffProduct
 from app.domains.off.store import get_off_sessionmaker
 from app.domains.product.confidence import CONFIDENCE_TEXT, ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
-from app.domains.product.models import LabelErrorReport, LabelSnapshot, ProductRecord, ScanEvent
+from app.domains.product.models import (
+    CommunityObservationReport,
+    LabelErrorReport,
+    LabelSnapshot,
+    ProductRecord,
+    ScanEvent,
+)
 from app.shared.database.base import utcnow
 
 OUTCOME_LOCAL = "found_local"
@@ -217,6 +223,18 @@ async def attach_scans_to_account(
     result = await session.execute(
         update(ScanEvent)
         .where(ScanEvent.device_id == device_id, ScanEvent.account_id.is_(None))
+        .values(account_id=account_id)
+    )
+    return result.rowcount or 0
+
+
+async def attach_community_reports_to_account(
+    session: AsyncSession, *, device_id: uuid.UUID, account_id: uuid.UUID,
+) -> int:
+    """Claim anonymous observations with the device, preserving ownership."""
+    result = await session.execute(
+        update(CommunityObservationReport)
+        .where(CommunityObservationReport.device_id == device_id, CommunityObservationReport.account_id.is_(None))
         .values(account_id=account_id)
     )
     return result.rowcount or 0

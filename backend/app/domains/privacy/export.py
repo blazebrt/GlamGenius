@@ -62,7 +62,7 @@ from app.domains.planning.models import (
     WeeklyPlan,
 )
 from app.domains.privacy import EXPORT_SCHEMA_VERSION, REGISTRY, Classification
-from app.domains.product.models import LabelErrorReport, ScanEvent
+from app.domains.product.models import CommunityObservationReport, LabelErrorReport, ScanEvent
 from app.domains.profile.models import (
     AppearanceGoal,
     AppearanceProfile,
@@ -314,9 +314,20 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
         .order_by(LabelErrorReport.created_at.desc()),
     )
     report_fields = [c.name for c in LabelErrorReport.__table__.columns]
+    community_reports = await _fetch(
+        session,
+        select(CommunityObservationReport)
+        .where(CommunityObservationReport.account_id == account_id)
+        .order_by(CommunityObservationReport.created_at.desc()),
+    )
+    community_fields = [
+        column.name for column in CommunityObservationReport.__table__.columns
+        if column.name not in {"device_id"}
+    ]
     return {
         "scans": [_row_dict(r, fields) for r in rows],
         "label_error_reports": [_row_dict(r, report_fields) for r in reports],
+        "community_observation_reports": [_row_dict(r, community_fields) for r in community_reports],
     }
 
 

@@ -1,9 +1,9 @@
 """Anonymous device identity.
 
 The camera has to open on first launch with nothing set up, so the phone
-identifies itself instead of a person. That keeps every lookup attributable and
-rate-limitable without anybody signing up, and without opening a public
-endpoint that anyone can scrape.
+identifies itself instead of a person. That keeps lookups and structured
+community observations attributable and rate-limitable without anybody signing
+up, and without opening a public endpoint that anyone can scrape.
 
 The token is random, stored hashed, and grants exactly one thing: reading
 product data and recording scans. It cannot reach an account, a profile, an

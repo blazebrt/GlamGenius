@@ -103,8 +103,6 @@ class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):
     device_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("scan_devices.id", ondelete="CASCADE"),
     )
-
-
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("accounts.id", ondelete="CASCADE"),
     )
@@ -123,6 +121,52 @@ class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):
         UniqueConstraint("device_id", "client_report_id", name="uq_label_report_device_client_id"),
         Index("ix_label_error_reports_barcode", "barcode", "created_at"),
         Index("ix_label_error_reports_open", "resolved_at"),
+    )
+
+
+class CommunityObservationReport(UUIDPrimaryKey, TimestampMixin, Base):
+    """One structured pack observation, never a review or product conclusion.
+
+    The policy module consumes normalized aggregates from these rows.  Nothing
+    on this model can update canonical product facts, scientific scoring, or an
+    official record.
+    """
+
+    __tablename__ = "community_observation_reports"
+
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scan_devices.id", ondelete="CASCADE"), nullable=False
+    )
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE")
+    )
+    client_report_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    barcode: Mapped[str] = mapped_column(String(64), nullable=False)
+    observation_code: Mapped[str] = mapped_column(String(80), nullable=False)
+    batch_number: Mapped[str | None] = mapped_column(String(80))
+    photo_asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("media_assets.id", ondelete="SET NULL")
+    )
+    condition_context: Mapped[dict | None] = mapped_column(JSONB)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # accepted | rejected | under_review. Only accepted rows are aggregated.
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="accepted", server_default="accepted"
+    )
+    # valid | invalid. Kept separately from moderation so invalid records can
+    # remain auditable without becoming policy evidence.
+    validity_state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="valid", server_default="valid"
+    )
+
+    __table_args__ = (
+        CheckConstraint("status IN ('accepted', 'rejected', 'under_review')", name="ck_community_report_status"),
+        CheckConstraint("validity_state IN ('valid', 'invalid')", name="ck_community_report_validity"),
+        UniqueConstraint("device_id", "client_report_id", name="uq_community_report_device_client_id"),
+        Index("ix_community_report_barcode_code_created", "barcode", "observation_code", "created_at"),
+        Index("ix_community_report_batch_aggregate", "barcode", "observation_code", "batch_number", "created_at"),
+        Index("ix_community_report_validity_created", "status", "validity_state", "created_at"),
+        Index("ix_community_report_account", "account_id", "created_at"),
     )
 
 
