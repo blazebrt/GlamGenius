@@ -17,7 +17,7 @@ from app.domains.product import service
 from app.domains.product.confidence import CONFIDENCE_LEVELS, ProductConfidence
 from app.domains.product.extraction import SYSTEM as LABEL_SYSTEM
 from app.domains.product.fssai import find_licence, is_valid_licence
-from app.domains.product.models import ProductRecord, ScanEvent
+from app.domains.product.models import LabelSnapshot, ProductRecord, ScanEvent
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import select
 
@@ -223,6 +223,71 @@ async def test_confirming_a_label_creates_a_record_and_raises_confidence(
     # claim, so the record stays unverified and the count stays at zero until
     # an accountable reviewer promotes it.
     assert body["confirmations"] == 0
+
+
+@pytest.mark.asyncio
+async def test_confirmed_label_content_versions_are_deduplicated_and_linked(
+    db_clean, off_clean, app_client, device,
+):
+    """Repeated observations reuse a semantic version; content gets a lineage."""
+    first = {
+        "product_name": "Regional namkeen",
+        "brand": "Acme",
+        "ingredients_text": "besan, edible oil, salt",
+        "nutrition_per_100g": {"energy_kcal": "520", "sugars_g": "3.1"},
+        "batch_number": "B-1",
+    }
+
+    async def confirm(facts):
+        response = await app_client.post(
+            "/api/v2/scan/label/confirm", headers=device,
+            json={"barcode": UNKNOWN, "facts": facts, "client_scan_id": uuid.uuid4().hex},
+        )
+        assert response.status_code == 201, response.text
+
+    await confirm(first)
+    await confirm({**first, "batch_number": "B-2"})
+    await confirm({**first, "nutrition_per_100g": {"energy_kcal": "520", "sugars_g": "4.2"}})
+    await confirm({**first, "nutrition_per_100g": {"energy_kcal": "520", "sugars_g": "4.2"}, "batch_number": "B-3"})
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        snapshots = (await session.execute(
+            select(LabelSnapshot).where(LabelSnapshot.barcode == UNKNOWN).order_by(LabelSnapshot.version_number)
+        )).scalars().all()
+    assert [snapshot.version_number for snapshot in snapshots] == [1, 2]
+    assert snapshots[0].previous_snapshot_id is None
+    assert snapshots[1].previous_snapshot_id == snapshots[0].id
+    assert snapshots[1].changed_fields == ["nutrition"]
+    assert snapshots[0].content_fingerprint != snapshots[1].content_fingerprint
+
+
+@pytest.mark.asyncio
+async def test_replayed_label_confirmation_is_idempotent_for_event_and_version(
+    db_clean, off_clean, app_client, device,
+):
+    facts = {
+        "product_name": "Replay-safe oats",
+        "ingredients_text": "oats",
+        "nutrition_per_100g": {"energy_kcal": "370"},
+    }
+    client_scan_id = uuid.uuid4().hex
+    payload = {"barcode": UNKNOWN, "facts": facts, "client_scan_id": client_scan_id}
+    for _ in range(2):
+        response = await app_client.post("/api/v2/scan/label/confirm", headers=device, json=payload)
+        assert response.status_code == 201, response.text
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        events = (await session.execute(
+            select(ScanEvent).where(ScanEvent.client_scan_id == client_scan_id)
+        )).scalars().all()
+        snapshots = (await session.execute(
+            select(LabelSnapshot).where(LabelSnapshot.barcode == UNKNOWN)
+        )).scalars().all()
+    assert len(events) == 1
+    assert len(snapshots) == 1
+    assert snapshots[0].version_number == 1
 
 
 @pytest.mark.asyncio

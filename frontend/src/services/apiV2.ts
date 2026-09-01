@@ -745,6 +745,7 @@ export interface ProductVerdictWire {
   missing: string[];
   confidence: { level: string; text: string };
   facts_provenance?: 'confirmed_label_snapshot' | 'open_food_facts' | string;
+  label_version?: { id: string; version_number: number; observed_at: string; changed_fields: string[]; completeness: string } | null;
   attribution: { text: string } | null;
   /** Grams in the pack, when either source states a net quantity. */
   pack_size_g: number | null;

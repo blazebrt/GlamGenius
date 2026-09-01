@@ -98,6 +98,7 @@ export interface VerdictSource {
   decision?: { action: 'buy' | 'wait' | 'skip' | null; reasonKey: string };
   confidence?: { level: string; text: string } | null;
   factsProvenance?: 'confirmed_label_snapshot' | 'open_food_facts' | string | null;
+  labelVersion?: { id: string; versionNumber: number; observedAt: string; changedFields: string[]; completeness: string } | null;
   /** Per 100 g / 100 ml, straight off the panel. */
   totalSugarG?: number | null;
   saltG?: number | null;

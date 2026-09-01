@@ -211,8 +211,18 @@ class LabelSnapshot(UUIDPrimaryKey, TimestampMixin, Base):
     scan_event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_events.id", ondelete="RESTRICT"), nullable=False, unique=True)
     facts: Mapped[dict] = mapped_column(JSONB, nullable=False)
     confidence: Mapped[str] = mapped_column(String(32), nullable=False, default=ProductConfidence.UNVERIFIED.value)
+    content_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    previous_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("product_label_snapshots.id", ondelete="SET NULL")
+    )
+    changed_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    completeness: Mapped[str] = mapped_column(String(32), nullable=False, default="incomplete_for_grading", server_default="incomplete_for_grading")
 
     __table_args__ = (
         CheckConstraint(f"confidence IN ({_CONFIDENCE_IN})", name="ck_product_label_snapshots_confidence"),
+        CheckConstraint("completeness IN ('complete_for_grading', 'incomplete_for_grading', 'identity_only')", name="ck_product_label_snapshots_completeness"),
+        UniqueConstraint("barcode", "content_fingerprint", name="uq_product_label_snapshots_content"),
+        UniqueConstraint("barcode", "version_number", name="uq_product_label_snapshots_version"),
         Index("ix_product_label_snapshots_barcode_created", "barcode", "created_at"),
     )

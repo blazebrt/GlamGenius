@@ -253,6 +253,12 @@ async def read_product_verdict(
     payload["brand"] = (off_half or {}).get("brands") or (off_half or {}).get("brand") or None
     payload["confidence"] = service.confidence_block(snapshot.confidence) if snapshot else found["confidence"]
     payload["facts_provenance"] = "confirmed_label_snapshot" if snapshot else "open_food_facts"
+    payload["label_version"] = ({
+        "id": str(snapshot.id), "version_number": snapshot.version_number,
+        "observed_at": snapshot.created_at.isoformat(),
+        "changed_fields": snapshot.changed_fields,
+        "completeness": snapshot.completeness,
+    } if snapshot else None)
     payload["attribution"] = found.get("attribution")
     # What the pack actually holds, so "one packet" on the screen means this
     # packet. Absent when neither source states a net quantity, and the screen

@@ -14,11 +14,14 @@ response. Nothing writes the pair anywhere: that is the ODbL wall, and
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.off import client as off_client
@@ -49,20 +52,77 @@ async def _own_record(session: AsyncSession, barcode: str) -> ProductRecord | No
 
 async def latest_label_snapshot(session: AsyncSession, barcode: str) -> LabelSnapshot | None:
     return (await session.execute(
-        select(LabelSnapshot).where(LabelSnapshot.barcode == barcode).order_by(LabelSnapshot.created_at.desc()).limit(1)
+        select(LabelSnapshot).where(LabelSnapshot.barcode == barcode).order_by(LabelSnapshot.version_number.desc()).limit(1)
     )).scalar_one_or_none()
+
+CONTENT_FACT_FIELDS = (
+    "product_name", "brand", "ingredients_text", "nutrition_per_100g",
+    "serving_size", "net_quantity", "fssai_licence", "veg_mark", "allergen_text",
+)
+def _normalise(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _normalise(v) for k, v in sorted(value.items()) if v not in (None, "")}
+    if isinstance(value, list):
+        return [_normalise(v) for v in value]
+    if isinstance(value, str):
+        collapsed = " ".join(value.split())
+        return collapsed or None
+    return value
+
+def canonical_label_facts(facts: dict[str, Any]) -> dict[str, Any]:
+    """Canonical content only; batch and extraction metadata are observations."""
+    return _normalise({key: facts.get(key) for key in CONTENT_FACT_FIELDS})
+
+def label_content_fingerprint(facts: dict[str, Any]) -> str:
+    encoded = json.dumps(canonical_label_facts(facts), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+def label_completeness(facts: dict[str, Any]) -> str:
+    if not facts.get("product_name") and not facts.get("brand"):
+        return "identity_only"
+    return "complete_for_grading" if facts.get("ingredients_text") and facts.get("nutrition_per_100g") else "incomplete_for_grading"
+
+def label_changed_fields(previous: dict[str, Any], current: dict[str, Any]) -> list[str]:
+    old, new = canonical_label_facts(previous), canonical_label_facts(current)
+    mapping = {"product_name": "product_name", "brand": "brand", "ingredients_text": "ingredients", "nutrition_per_100g": "nutrition", "serving_size": "serving_size", "net_quantity": "net_quantity", "fssai_licence": "fssai_licence", "veg_mark": "veg_mark", "allergen_text": "allergen_text"}
+    return [mapping[key] for key in CONTENT_FACT_FIELDS if old.get(key) != new.get(key)]
 
 
 async def store_label_snapshot(
     session: AsyncSession, *, barcode: str, facts: dict[str, Any], device_id: uuid.UUID, scan_event_id: uuid.UUID,
 ) -> LabelSnapshot:
-    row = LabelSnapshot(
-        barcode=barcode, device_id=device_id, scan_event_id=scan_event_id, facts=facts,
-        confidence=ProductConfidence.UNVERIFIED.value,
-    )
-    session.add(row)
-    await session.flush()
-    return row
+    fingerprint = label_content_fingerprint(facts)
+    existing = (await session.execute(select(LabelSnapshot).where(LabelSnapshot.barcode == barcode, LabelSnapshot.content_fingerprint == fingerprint))).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    # The unique version constraint closes the race between two confirmations.
+    # A savepoint lets us recover from that constraint without poisoning the
+    # caller's transaction (which also contains the idempotent scan event).
+    for _ in range(3):
+        current = await latest_label_snapshot(session, barcode)
+        row = LabelSnapshot(
+            barcode=barcode, device_id=device_id, scan_event_id=scan_event_id, facts=facts,
+            confidence=ProductConfidence.UNVERIFIED.value, content_fingerprint=fingerprint,
+            version_number=(current.version_number + 1 if current else 1),
+            previous_snapshot_id=current.id if current else None,
+            changed_fields=label_changed_fields(current.facts, facts) if current else [],
+            completeness=label_completeness(facts),
+        )
+        try:
+            async with session.begin_nested():
+                session.add(row)
+                await session.flush()
+            return row
+        except IntegrityError:
+            existing = (await session.execute(
+                select(LabelSnapshot).where(
+                    LabelSnapshot.barcode == barcode,
+                    LabelSnapshot.content_fingerprint == fingerprint,
+                )
+            )).scalar_one_or_none()
+            if existing is not None:
+                return existing
+    raise RuntimeError("Could not allocate a unique observed label version")
 
 
 async def _cache_off_product(barcode: str, payload: dict[str, Any]) -> dict[str, Any] | None:
