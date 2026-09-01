@@ -195,6 +195,11 @@ function primaryReasonFor(source: VerdictSource): string {
   if (key === 'sugar') return S.primary.reasonSugar;
   if (key === 'salt' || key === 'sodium') return S.primary.reasonSalt;
   if (key === 'processing') return S.primary.reasonProcessing;
+  if (key === 'refined_grain') return S.primary.reasonRefinedGrain;
+  if (key === 'saturated_fat') return S.primary.reasonSaturatedFat;
+  if (key === 'total_fat') return S.primary.reasonTotalFat;
+  if (key === 'added_sugar_share') return S.primary.reasonAddedSugarShare;
+  if (key === 'trans_fat') return S.primary.reasonTransFat;
   if (key?.startsWith('additive:')) return S.primary.reasonAdditive;
   if (key === 'naming') return S.primary.reasonNaming;
   return S.primary.reasonLabelFacts;

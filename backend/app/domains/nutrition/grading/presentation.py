@@ -641,10 +641,14 @@ def present(
     action = {
         Grade.A: "buy", Grade.B: "buy", Grade.C: "wait", Grade.D: "skip", Grade.E: "skip",
     }.get(result.grade)
-    reason_key = (
-        negatives[0]["key"] if negatives
-        else ("not_graded" if result.outcome.value == "not_graded" else "not_enough_information")
-    )
+    if negatives:
+        reason_key = negatives[0]["key"]
+    elif result.outcome.value == "graded":
+        reason_key = "label_facts"
+    elif result.outcome.value == "not_graded":
+        reason_key = "not_graded"
+    else:
+        reason_key = "not_enough_information"
     return {
         "engine_version": result.engine_version,
         "outcome": result.outcome.value,

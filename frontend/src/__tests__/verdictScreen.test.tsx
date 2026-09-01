@@ -217,6 +217,19 @@ describe('factor quantities', () => {
     expect(buildVerdict({ ...base, decision: { action: 'wait', reasonKey: 'label_facts' } }).primaryReason)
       .toBe(S.primary.reasonLabelFacts);
   });
+
+  it.each([
+    ['sugar', S.primary.reasonSugar], ['salt', S.primary.reasonSalt],
+    ['processing', S.primary.reasonProcessing], ['refined_grain', S.primary.reasonRefinedGrain],
+    ['saturated_fat', S.primary.reasonSaturatedFat], ['total_fat', S.primary.reasonTotalFat],
+    ['added_sugar_share', S.primary.reasonAddedSugarShare], ['trans_fat', S.primary.reasonTransFat],
+    ['additive:319', S.primary.reasonAdditive], ['naming', S.primary.reasonNaming],
+    ['label_facts', S.primary.reasonLabelFacts], ['future_rule', S.primary.reasonLabelFacts],
+  ])('maps current reason key %s through reviewed copy', (reasonKey, reason) => {
+    const view = buildVerdict({ ...base, decision: { action: 'skip', reasonKey } });
+    expect(view.primaryReason).toBe(reason);
+    expect(view.primaryReason).not.toContain('grade.');
+  });
 });
 
 // ---------------------------------------------------------------------------

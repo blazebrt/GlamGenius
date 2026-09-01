@@ -81,6 +81,22 @@ def test_non_decision_outcomes_do_not_be_misclassified_as_wait():
     assert unknown_payload["decision"] == {"action": None, "reason_key": "not_enough_information"}
 
 
+def test_reason_key_is_explicit_for_each_outcome_class():
+    payload = present(BISCUIT, grade_product(BISCUIT), candidate_ruleset())
+    assert payload["decision"]["reason_key"] == payload["negatives"][0]["key"]
+
+    plain = ProductInput(
+        name="Plain oats", categories="cereal", ingredients=("oats",),
+        energy_kcal=D("370"), protein_g=D("13"), total_fat_g=D("7"),
+        saturated_fat_g=D("1"), total_sugar_g=D("1"), sodium_g=D("0.01"),
+    )
+    graded = present(plain, grade_product(plain), candidate_ruleset())
+    assert graded["outcome"] == "graded"
+    assert graded["grade"] is not None
+    assert graded["negatives"] == []
+    assert graded["decision"] == {"action": "buy", "reason_key": "label_facts"}
+
+
 def test_product_result_contract_v1_has_one_canonical_factor_path(payload):
     assert payload["result_contract_version"] == "v1"
     assert payload["negatives"] is payload["lowers"]
