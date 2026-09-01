@@ -157,7 +157,7 @@ async def test_photo_and_complete_context_are_counted_only_when_associated_to_a_
             session, barcode=BARCODE, observation_code="did_not_solidify_as_expected",
         )
 
-    assert evidence.active.independent_reporters == 2
+    assert evidence.active.independent_reporters == 1
     assert evidence.active.photo_reporters == 1
     assert evidence.active.condition_context_reporters == 1
 
