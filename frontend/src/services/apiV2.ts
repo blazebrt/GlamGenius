@@ -706,7 +706,7 @@ export interface ProductVerdictWire {
   band: 'green' | 'yellow' | 'red';
   product_name: string;
   taxonomy: { domain: string; category: string; subcategory: string };
-  decision: { action: 'buy' | 'wait' | 'skip'; reason_key: string };
+  decision: { action: 'buy' | 'wait' | 'skip' | null; reason_key: string };
   nutrition: {
     total_sugar_g: number | null;
     salt_g: number | null;
@@ -744,6 +744,7 @@ export interface ProductVerdictWire {
   purity_note: string | null;
   missing: string[];
   confidence: { level: string; text: string };
+  facts_provenance?: 'confirmed_label_snapshot' | 'open_food_facts' | string;
   attribution: { text: string } | null;
   /** Grams in the pack, when either source states a net quantity. */
   pack_size_g: number | null;

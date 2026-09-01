@@ -169,6 +169,9 @@ export default function VerdictScreen() {
             {!!source.taxonomy && (
               <Text style={styles.category}>{`${S.taxonomy[source.taxonomy.category as keyof typeof S.taxonomy]} · ${S.taxonomy[source.taxonomy.subcategory as keyof typeof S.taxonomy]}`}</Text>
             )}
+            <Text style={styles.category}>{source.factsProvenance === 'confirmed_label_snapshot'
+              ? S.provenance.confirmed
+              : source.factsProvenance === 'open_food_facts' ? S.provenance.catalogue : S.provenance.unknown}</Text>
             <GradeBlock view={view} />
             {source.outcome === 'graded' && (
               <VerdictLines view={view} onReport={openReport} />

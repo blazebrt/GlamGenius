@@ -640,7 +640,11 @@ def present(
     negatives, positives = _factor_rows(product, result, ruleset)
     action = {
         Grade.A: "buy", Grade.B: "buy", Grade.C: "wait", Grade.D: "skip", Grade.E: "skip",
-    }.get(result.grade, "wait")
+    }.get(result.grade)
+    reason_key = (
+        negatives[0]["key"] if negatives
+        else ("not_graded" if result.outcome.value == "not_graded" else "not_enough_information")
+    )
     return {
         "engine_version": result.engine_version,
         "outcome": result.outcome.value,
@@ -650,7 +654,7 @@ def present(
         "taxonomy": _taxonomy(product, result),
         "decision": {
             "action": action,
-            "reason_key": (negatives[0]["key"] if negatives else "label_facts"),
+            "reason_key": reason_key,
         },
         "evidence": {
             "ruleset_version": FOOD_RULE_VERSION,

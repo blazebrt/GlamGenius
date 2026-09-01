@@ -46,6 +46,12 @@ export const S = {
     decisionBuy: 'BUY',
     decisionWait: 'WAIT',
     decisionSkip: 'SKIP',
+    reasonSugar: 'Sugar is the main negative.',
+    reasonSalt: 'Salt is the main negative.',
+    reasonProcessing: 'Processing is the main negative.',
+    reasonAdditive: 'An additive is the main negative.',
+    reasonNaming: 'The name needs more detail.',
+    reasonLabelFacts: 'The label has product facts to consider.',
 
     /** Line 2. One declared number, with the basis it was measured on. */
     noEverydayNumber: 'Nothing on this label stands out.',
@@ -69,6 +75,11 @@ export const S = {
     culinary_ingredient: 'Cooking ingredient', biscuit: 'Biscuit', cereal: 'Cereal',
     beverage: 'Beverage', dal: 'Dal', ghee: 'Ghee', cooking_oil: 'Cooking oil', salt: 'Salt',
     other_packaged_food: 'Packaged food',
+  },
+  provenance: {
+    confirmed: 'Confirmed from pack',
+    catalogue: 'Catalogue data',
+    unknown: 'Product data source unavailable',
   },
   factors: {
     negatives: 'Negatives', positives: 'Positives', noNegatives: 'No product flags were found in the available label facts.',

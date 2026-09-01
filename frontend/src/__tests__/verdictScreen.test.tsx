@@ -207,7 +207,15 @@ describe('factor quantities', () => {
 
   it('uses the server decision action instead of inferring it from the grade', () => {
     const view = buildVerdict({ ...base, grade: 'A', decision: { action: 'skip', reasonKey: 'sugar' } });
-    expect(view.action).toBe(S.primary.decisionSkip);
+    expect(view.decisionAction).toBe(S.primary.decisionSkip);
+    expect(view.primaryReason).toBe(S.primary.reasonSugar);
+  });
+
+  it('resolves additive and fallback reason keys without exposing rule ids', () => {
+    expect(buildVerdict({ ...base, decision: { action: 'skip', reasonKey: 'additive:319' } }).primaryReason)
+      .toBe(S.primary.reasonAdditive);
+    expect(buildVerdict({ ...base, decision: { action: 'wait', reasonKey: 'label_facts' } }).primaryReason)
+      .toBe(S.primary.reasonLabelFacts);
   });
 });
 
@@ -375,6 +383,7 @@ describe('answers that are not a letter', () => {
     const view = buildVerdict({ ...base, outcome: 'not_graded', grade: null });
     expect(view.letter).toBeNull();
     expect(view.action).toBe(S.primary.actionNotGraded);
+    expect(view.decisionAction).toBeNull();
   });
 
   it('shows no letter and no guess when the label was incomplete', () => {
@@ -382,6 +391,7 @@ describe('answers that are not a letter', () => {
     expect(view.letter).toBeNull();
     expect(view.everydayNumber).toBe('');
     expect(view.spoken).toBe(S.voice.unknown);
+    expect(view.decisionAction).toBeNull();
   });
 });
 

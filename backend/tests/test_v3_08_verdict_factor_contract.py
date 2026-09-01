@@ -69,6 +69,18 @@ def test_the_biscuit_is_a_packaged_food_and_a_skip(payload):
     assert payload["decision"]["action"] == "skip"
 
 
+def test_non_decision_outcomes_do_not_be_misclassified_as_wait():
+    culinary = ProductInput(name="Salt", ingredients=("salt",))
+    culinary_payload = present(culinary, grade_product(culinary), candidate_ruleset())
+    assert culinary_payload["outcome"] == "not_graded"
+    assert culinary_payload["decision"] == {"action": None, "reason_key": "not_graded"}
+
+    unknown = ProductInput(name="Unknown packet", ingredients=())
+    unknown_payload = present(unknown, grade_product(unknown), candidate_ruleset())
+    assert unknown_payload["outcome"] == "not_enough_information"
+    assert unknown_payload["decision"] == {"action": None, "reason_key": "not_enough_information"}
+
+
 def test_product_result_contract_v1_has_one_canonical_factor_path(payload):
     assert payload["result_contract_version"] == "v1"
     assert payload["negatives"] is payload["lowers"]

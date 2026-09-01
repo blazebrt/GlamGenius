@@ -134,6 +134,8 @@ export function toVerdictSource(
     brand: wire.brand ?? null,
     taxonomy: wire.taxonomy,
     decision: { action: wire.decision.action, reasonKey: wire.decision.reason_key },
+    confidence: wire.confidence ?? null,
+    factsProvenance: wire.facts_provenance ?? null,
     totalSugarG: wire.nutrition.total_sugar_g,
     saltG: wire.nutrition.salt_g,
     totalFatG: wire.nutrition.total_fat_g,
