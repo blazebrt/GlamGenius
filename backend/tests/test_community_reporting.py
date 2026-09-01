@@ -17,7 +17,7 @@ BARCODE = "8901058000191"
 
 
 async def _device(session, *, account_id: uuid.UUID | None = None):
-    if account_id is not None:
+    if account_id is not None and await session.get(Account, account_id) is None:
         session.add(Account(id=account_id))
         await session.flush()
     device, _ = await devices.register(session, device_key=uuid.uuid4().hex, platform="test")
