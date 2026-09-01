@@ -1,12 +1,13 @@
 import React from 'react';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, render, screen, waitFor } from '@testing-library/react-native';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import * as apiV2 from '../services/apiV2';
 import { DuplicateCandidate, InventoryItem, InventorySummary } from '../services/apiV2';
 import InventoryScreen from '../../app/(tabs)/inventory';
 import InventoryAddScreen from '../../app/inventory-add';
 import InventoryInsightsScreen from '../../app/inventory-insights';
+import InventoryItemScreen from '../../app/inventory-item';
 
 let mockRouteParams: Record<string, string> = {};
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => false };
@@ -75,14 +76,22 @@ describe('VC-08 final IA domain boundaries', () => {
     expect(screen.queryByLabelText('Wardrobe')).toBeNull(); expect(screen.queryByLabelText('Shoes')).toBeNull(); expect(screen.queryByLabelText('Accessories')).toBeNull();
   });
 
-  it('quarantines inventory-add without an explicit Care category', () => {
-    mockRouteParams = {};
+  it('keeps Care add traffic with a missing category inside the safe Care default', () => {
+    mockRouteParams = { domain: 'care' };
     render(<InventoryAddScreen />);
-    expect(screen.toJSON()).toBe('/scan-product');
+    expect(screen.getByLabelText('Skin Care').props.accessibilityState.selected).toBe(true);
+    expect(screen.queryByLabelText('Wardrobe')).toBeNull(); expect(screen.queryByLabelText('Shoes')).toBeNull(); expect(screen.queryByLabelText('Accessories')).toBeNull();
   });
 
-  it('quarantines invalid domain/category pairs deterministically', () => {
-    mockRouteParams = { domain: 'style', category: 'supplements' };
+  it('keeps Care add traffic with an invalid category inside the safe Care default', () => {
+    mockRouteParams = { domain: 'care', category: 'wardrobe' };
+    render(<InventoryAddScreen />);
+    expect(screen.getByLabelText('Skin Care').props.accessibilityState.selected).toBe(true);
+    expect(screen.queryByLabelText('Wardrobe')).toBeNull(); expect(screen.queryByLabelText('Shoes')).toBeNull(); expect(screen.queryByLabelText('Accessories')).toBeNull();
+  });
+
+  it('quarantines inventory-add without a Care domain', () => {
+    mockRouteParams = {};
     render(<InventoryAddScreen />);
     expect(screen.toJSON()).toBe('/scan-product');
   });
@@ -113,6 +122,15 @@ describe('VC-08 final IA domain boundaries', () => {
     render(<InventoryInsightsScreen />);
     await waitFor(() => expect(screen.getByText('Serum')).toBeTruthy());
     expect(screen.queryByText('Kurta')).toBeNull();
+  });
+
+  it('returns a failed retained Care item load to the Care collection', async () => {
+    mockRouteParams = { id: 'missing-care-item' };
+    jest.spyOn(apiV2, 'getInventoryItem').mockRejectedValue(new Error('not found'));
+    render(<InventoryItemScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Add an item instead')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Add an item instead'));
+    expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/(tabs)/inventory', params: { domain: 'care' } });
   });
 
   const duplicate = (id: string, item_a: InventoryItem, item_b: InventoryItem): DuplicateCandidate => ({

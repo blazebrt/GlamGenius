@@ -32,7 +32,7 @@ export default function InventoryItemScreen() {
   const removeLabelFact = async (factId: string) => { if (!item) return; try { await deleteSupplementLabelFact(item.id, factId); setLabelFacts((current) => current.filter((fact) => fact.id !== factId)); } catch (err) { setFactMessage(errorMessage(err, 'Could not remove that label fact.')); } };
   const confirmLabelFact = async (factId: string) => { if (!item) return; try { const row = await confirmSupplementLabelFact(item.id, factId); setLabelFacts((current) => current.map((fact) => fact.id === row.id ? row : fact)); } catch (err) { setFactMessage(errorMessage(err, 'Could not confirm that label fact.')); } };
   if (loading) return <View style={styles.center}><ActivityIndicator color={COLORS.primary} /></View>;
-  if (error || !item) return <View style={styles.center}><InventoryRecovery onRetry={() => void load()} onAdd={() => router.replace('/inventory-add')} /></View>;
+  if (error || !item) return <View style={styles.center}><InventoryRecovery onRetry={() => void load()} onAdd={() => router.replace({ pathname: '/(tabs)/inventory', params: { domain: 'care' } })} /></View>;
   if (!['beauty', 'hair', 'perfumes', 'supplements'].includes(item.category)) return <Redirect href="/scan-product" />;
   const detailEntries = Object.entries(item.details).filter(([key]) => key !== 'safety_disclaimer' && key !== 'user_entered_purpose');
   const careItem = canRecordCareExperienceForCategory(item.category);

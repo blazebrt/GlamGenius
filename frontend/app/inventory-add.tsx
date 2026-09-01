@@ -20,8 +20,7 @@ const EXTRA_FIELD: Record<InventoryCategory, { key: string; label: string; place
 
 export default function InventoryAddScreen() {
   const params = useLocalSearchParams<{ category?: string; domain?: string }>();
-  const allowedCategories = categoriesForDomain(params.domain);
-  if (params.domain !== 'care' || !allowedCategories?.includes(params.category as InventoryCategory)) return <Redirect href="/scan-product" />;
+  if (params.domain !== 'care') return <Redirect href="/scan-product" />;
   return <CareInventoryAddScreen />;
 }
 
