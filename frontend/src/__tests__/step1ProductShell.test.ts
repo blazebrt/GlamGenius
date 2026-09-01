@@ -29,4 +29,21 @@ describe('Step 1 scan-first product shell', () => {
     expect(style).toContain('<Redirect href="/scan-product"');
     expect(legacyScan).toContain('<Redirect href="/scan-product"');
   });
+
+  it('keeps only explicit Care inventory entry points and quarantines retired routes', () => {
+    const home = readFileSync(join(appRoot, '(tabs)', 'home.tsx'), 'utf8');
+    const today = readFileSync(join(appRoot, '(tabs)', 'today.tsx'), 'utf8');
+    const inventory = readFileSync(join(appRoot, '(tabs)', 'inventory.tsx'), 'utf8');
+    const add = readFileSync(join(appRoot, 'inventory-add.tsx'), 'utf8');
+    const insights = readFileSync(join(appRoot, 'inventory-insights.tsx'), 'utf8');
+    const item = readFileSync(join(appRoot, 'inventory-item.tsx'), 'utf8');
+    const batch = readFileSync(join(appRoot, 'inventory-batch.tsx'), 'utf8');
+    expect(home).toContain('<Redirect href="/scan-product" />');
+    expect(today).toContain('<Redirect href="/scan-product" />');
+    expect(inventory).toContain("params.domain !== 'care'");
+    expect(add).toContain("params.domain !== 'care'");
+    expect(insights).toContain("params.domain !== 'care'");
+    expect(item).toContain("['beauty', 'hair', 'perfumes', 'supplements']");
+    expect(batch).toContain('<Redirect href="/scan-product" />');
+  });
 });

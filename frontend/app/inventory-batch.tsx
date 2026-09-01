@@ -24,7 +24,7 @@ import {
   View,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -47,6 +47,10 @@ import {
 type Stage = 'camera' | 'reading' | 'review' | 'done';
 
 export default function InventoryBatchScreen() {
+  return <Redirect href="/scan-product" />;
+}
+
+export function RetiredInventoryBatchScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();

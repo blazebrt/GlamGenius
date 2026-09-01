@@ -41,13 +41,8 @@ export default function LaunchScreen() {
     // Register the phone and flush any scans it held, whether or not anyone is
     // signed in. Neither call blocks the screen: scanning works offline.
     void ensureDevice().then(() => syncQueue()).catch(() => undefined);
-    try {
-      // Clear any orphaned installation identifier.
-      await AsyncStorage.removeItem('glamgenius_user_id').catch(() => {});
-      setTimeout(() => router.replace('/scan-product'), 300);
-    } catch {
-      // Fall through to the scanner: it needs nothing to work.
-    }
+    // Clear any orphaned installation identifier without delaying launch.
+    await AsyncStorage.removeItem('glamgenius_user_id').catch(() => {});
     router.replace('/scan-product');
   };
 

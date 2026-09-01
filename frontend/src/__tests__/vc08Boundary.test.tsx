@@ -1,7 +1,7 @@
 import React from 'react';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { cleanup, render, screen, waitFor } from '@testing-library/react-native';
 import * as apiV2 from '../services/apiV2';
 import { DuplicateCandidate, InventoryItem, InventorySummary } from '../services/apiV2';
 import InventoryScreen from '../../app/(tabs)/inventory';
@@ -62,11 +62,10 @@ describe('VC-08 final IA domain boundaries', () => {
     expect(source).toContain('<Redirect href="/scan-product" />');
   });
 
-  it('limits Style add flow to Style categories and preserves domain/category on entry', async () => {
+  it('quarantines Style inventory-add traffic', async () => {
     mockRouteParams = { domain: 'style', category: 'wardrobe' };
     render(<InventoryAddScreen />);
-    expect(screen.getByLabelText('Wardrobe')).toBeTruthy(); expect(screen.getByLabelText('Shoes')).toBeTruthy(); expect(screen.getByLabelText('Accessories')).toBeTruthy();
-    expect(screen.queryByLabelText('Skin Care')).toBeNull(); expect(screen.queryByLabelText('Hair Care')).toBeNull(); expect(screen.queryByLabelText('Perfumes')).toBeNull(); expect(screen.queryByLabelText('Supplements')).toBeNull();
+    expect(screen.toJSON()).toBe('/scan-product');
   });
 
   it('limits Care add flow to Care categories', () => {
@@ -76,31 +75,36 @@ describe('VC-08 final IA domain boundaries', () => {
     expect(screen.queryByLabelText('Wardrobe')).toBeNull(); expect(screen.queryByLabelText('Shoes')).toBeNull(); expect(screen.queryByLabelText('Accessories')).toBeNull();
   });
 
-  it('keeps direct InventoryAdd legacy behavior for all seven categories', () => {
+  it('quarantines inventory-add without an explicit Care category', () => {
     mockRouteParams = {};
     render(<InventoryAddScreen />);
-    ['Wardrobe', 'Shoes', 'Accessories', 'Skin Care', 'Hair Care', 'Perfumes', 'Supplements'].forEach((label) => {
-      expect(screen.getByLabelText(label)).toBeTruthy();
-    });
+    expect(screen.toJSON()).toBe('/scan-product');
   });
 
-  it('rejects an invalid domain/category pair deterministically', () => {
+  it('quarantines invalid domain/category pairs deterministically', () => {
     mockRouteParams = { domain: 'style', category: 'supplements' };
     render(<InventoryAddScreen />);
-    expect(screen.getByLabelText('Wardrobe').props.accessibilityState.selected).toBe(true);
-    expect(screen.queryByLabelText('Supplements')).toBeNull();
+    expect(screen.toJSON()).toBe('/scan-product');
   });
 
-  it('filters domain inventory results and retains Style insight entry points', async () => {
+  it('quarantines Style inventory and its insight entry points', async () => {
     mockRouteParams = { domain: 'style' };
     jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({ wardrobe: 1, beauty: 1 }));
     jest.spyOn(apiV2, 'getInventoryItems').mockResolvedValue(listing([item('wardrobe', 'Kurta'), item('beauty', 'Serum')]));
     render(<InventoryScreen />);
-    await waitFor(() => expect(screen.getByText('Kurta')).toBeTruthy());
-    expect(screen.queryByText('Serum')).toBeNull();
-    expect(screen.getByLabelText('Open style low-use products')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('Open style low-use products'));
-    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/inventory-insights', params: { view: 'low-use', domain: 'style' } });
+    expect(screen.toJSON()).toBe('/scan-product');
+  });
+
+  it('quarantines inventory without an explicit Care domain', () => {
+    mockRouteParams = {};
+    render(<InventoryScreen />);
+    expect(screen.toJSON()).toBe('/scan-product');
+  });
+
+  it('quarantines insights without an explicit Care domain', () => {
+    mockRouteParams = {};
+    render(<InventoryInsightsScreen />);
+    expect(screen.toJSON()).toBe('/scan-product');
   });
 
   it('filters Care low-use rows to the requested domain', async () => {
@@ -115,17 +119,14 @@ describe('VC-08 final IA domain boundaries', () => {
     id, confidence: .92, reason: 'similar name', status: 'open', item_a, item_b,
   });
 
-  it('shows only all-Style duplicate candidates and their actions on Style', async () => {
+  it('quarantines Style inventory insights', async () => {
     mockRouteParams = { domain: 'style', view: 'duplicates' };
     const stylePair = duplicate('style-pair', item('wardrobe', 'Jacket'), item('shoes', 'Boots'));
     const carePair = duplicate('care-pair', item('beauty', 'Serum'), item('hair', 'Shampoo'));
     const mixedPair = duplicate('mixed-pair', item('accessories', 'Watch'), item('beauty', 'Moisturiser'));
     jest.spyOn(apiV2, 'getInventoryDuplicates').mockResolvedValue([stylePair, carePair, mixedPair]);
     render(<InventoryInsightsScreen />);
-    await waitFor(() => expect(screen.getByText('Jacket · Boots')).toBeTruthy());
-    expect(screen.getByLabelText('Keep both Jacket and Boots')).toBeTruthy();
-    expect(screen.queryByText('Serum · Shampoo')).toBeNull();
-    expect(screen.queryByText('Watch · Moisturiser')).toBeNull();
+    expect(screen.toJSON()).toBe('/scan-product');
   });
 
   it('shows only all-Care duplicate candidates and their actions on Care', async () => {

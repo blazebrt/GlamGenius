@@ -7,7 +7,7 @@
  */
 import React, { useCallback, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { Redirect, useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -26,6 +26,10 @@ import {
 import { COLORS, FONTS, RADIUS, SPACING } from '../../src/theme/colors';
 
 export default function TodayScreen() {
+  return <Redirect href="/scan-product" />;
+}
+
+export function RetiredTodayScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [plan, setPlan] = useState<DailyPlan | null>(null);
