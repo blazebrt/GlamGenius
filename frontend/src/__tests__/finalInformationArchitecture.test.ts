@@ -7,17 +7,17 @@ import {
   categoriesForDomain,
 } from '../navigation/finalIA';
 
-describe('VC-08 final information architecture', () => {
-  it('has exactly five visible peer tabs with customer-facing labels', () => {
-    expect(PRIMARY_TABS).toEqual(['today', 'style', 'care', 'plan', 'you']);
-    expect(PRIMARY_TAB_LABELS).toEqual(['Today', 'Style', 'Care', 'Plan', 'You']);
-    expect(PRIMARY_TABS).toHaveLength(5);
-    expect(PRIMARY_TAB_LABELS.join(' ')).not.toMatch(/Inventory|Style Me|Planner|Services|Beauty/);
+describe('Step 1 product-shell information architecture', () => {
+  it('keeps Scan dominant and removes the appearance OS from visible tabs', () => {
+    expect(PRIMARY_TABS).toEqual(['scan', 'you']);
+    expect(PRIMARY_TAB_LABELS).toEqual(['Scan', 'You']);
+    expect(PRIMARY_TABS).toHaveLength(2);
+    expect(PRIMARY_TAB_LABELS.join(' ')).not.toMatch(/Today|Style|Care|Plan|Inventory|Style Me|Planner|Services|Beauty/);
   });
 
   it('keeps legacy destinations routable but outside primary navigation', () => {
     expect(LEGACY_HIDDEN_TAB_ROUTES).toEqual(expect.arrayContaining([
-      'home', 'inventory', 'planner', 'profile', 'services', 'scan-tab', 'history',
+      'home', 'inventory', 'planner', 'profile', 'services', 'scan-tab', 'history', 'today', 'style', 'care', 'plan',
     ]));
     expect(PRIMARY_TABS).not.toEqual(expect.arrayContaining(LEGACY_HIDDEN_TAB_ROUTES));
     // Retired with the standalone Style Me entry points; no longer routable.

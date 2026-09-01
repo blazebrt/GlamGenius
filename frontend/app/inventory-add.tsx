@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -19,6 +19,12 @@ const EXTRA_FIELD: Record<InventoryCategory, { key: string; label: string; place
 };
 
 export default function InventoryAddScreen() {
+  const params = useLocalSearchParams<{ category?: string; domain?: string }>();
+  if (params.domain !== 'care') return <Redirect href="/scan-product" />;
+  return <CareInventoryAddScreen />;
+}
+
+function CareInventoryAddScreen() {
   const router = useRouter(); const insets = useSafeAreaInsets(); const params = useLocalSearchParams<{ category?: string; domain?: string }>();
   const allowedCategories = categoriesForDomain(params.domain);
   const initial = allowedCategories

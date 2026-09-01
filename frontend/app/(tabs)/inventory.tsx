@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -10,6 +10,12 @@ import { COLORS, FONTS, RADIUS, SPACING } from '../../src/theme/colors';
 import { categoriesForDomain } from '../../src/navigation/finalIA';
 
 export default function InventoryScreen() {
+  const params = useLocalSearchParams<{ domain?: string }>();
+  if (params.domain !== 'care') return <Redirect href="/scan-product" />;
+  return <CareInventoryScreen />;
+}
+
+function CareInventoryScreen() {
   const router = useRouter(); const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ domain?: string; category?: string }>();
   const domain = typeof params.domain === 'string' ? params.domain : undefined;

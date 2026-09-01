@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -15,6 +15,12 @@ const matchesDomain = (item: InventoryItem, allowedCategories: readonly Inventor
   !allowedCategories || allowedCategories.includes(item.category);
 
 export default function InventoryInsightsScreen() {
+  const params = useLocalSearchParams<{ domain?: string }>();
+  if (params.domain !== 'care') return <Redirect href="/scan-product" />;
+  return <CareInventoryInsightsScreen />;
+}
+
+function CareInventoryInsightsScreen() {
   const params = useLocalSearchParams<{ view?: string; domain?: string }>(); const view = (Object.keys(TITLES).includes(params.view || '') ? params.view : 'low-use') as ViewName;
   const allowedCategories = categoriesForDomain(params.domain);
   const router = useRouter(); const insets = useSafeAreaInsets(); const [items, setItems] = useState<InventoryItem[]>([]); const [duplicates, setDuplicates] = useState<DuplicateCandidate[]>([]); const [value, setValue] = useState<ValueToRecover | null>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(false);

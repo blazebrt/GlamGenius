@@ -196,11 +196,11 @@ export default function ScanProductScreen() {
             <Text style={styles.overlayBrand}>GlamGenius</Text>
             <TouchableOpacity
               accessibilityRole="button"
-              accessibilityLabel={userId ? 'Go to Today' : 'About GlamGenius'}
-              onPress={() => router.push(userId ? '/(tabs)/today' : '/intro')}
+              accessibilityLabel={userId ? 'Open account' : 'About GlamGenius'}
+              onPress={() => router.push(userId ? '/(tabs)/you' : '/intro')}
               style={styles.topButton}
             >
-              <Text style={styles.topButtonText}>{userId ? 'Today' : 'About'}</Text>
+              <Text style={styles.topButtonText}>{userId ? 'Account' : 'About'}</Text>
             </TouchableOpacity>
           </View>
 

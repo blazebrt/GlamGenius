@@ -1,12 +1,13 @@
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import * as apiV2 from '../services/apiV2';
 import { DuplicateCandidate, InventoryItem, InventorySummary } from '../services/apiV2';
-import StyleScreen from '../../app/(tabs)/style';
-import CareScreen from '../../app/(tabs)/care';
 import InventoryScreen from '../../app/(tabs)/inventory';
 import InventoryAddScreen from '../../app/inventory-add';
 import InventoryInsightsScreen from '../../app/inventory-insights';
+import InventoryItemScreen from '../../app/inventory-item';
 
 let mockRouteParams: Record<string, string> = {};
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => false };
@@ -22,6 +23,7 @@ jest.mock('expo-router', () => {
     useLocalSearchParams: () => mockRouteParams,
     useRouter: () => mockRouter,
     useFocusEffect: mockUseFocusEffect,
+    Redirect: ({ href }: { href: string }) => <>{href}</>,
   };
 });
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
@@ -56,51 +58,15 @@ describe('VC-08 final IA domain boundaries', () => {
   });
   afterEach(() => { cleanup(); jest.restoreAllMocks(); });
 
-  it('shows Style empty state from Style counts only, even when Care has items', async () => {
-    jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({ beauty: 2 }));
-    render(<StyleScreen />);
-    expect(screen.queryByText('Start with one thing you already wear')).toBeNull();
-    await waitFor(() => expect(screen.getByText('Start with one thing you already wear')).toBeTruthy());
-    fireEvent.press(screen.getByLabelText('Add a wardrobe item'));
-    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/inventory-add', params: { domain: 'style', category: 'wardrobe' } });
+  it('keeps the retired Style tab as a deterministic Scan redirect', () => {
+    const source = readFileSync(join(process.cwd(), 'app', '(tabs)', 'style.tsx'), 'utf8');
+    expect(source).toContain('<Redirect href="/scan-product" />');
   });
 
-  it('suppresses Style empty state when a Style category has an item', async () => {
-    jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({ wardrobe: 1, beauty: 2 }));
-    render(<StyleScreen />);
-    await waitFor(() => expect(screen.getByText('Your wearable appearance')).toBeTruthy());
-    expect(screen.queryByText('Start with one thing you already wear')).toBeNull();
-  });
-
-  it('shows Care empty state from Care counts only, even when Style has items', async () => {
-    jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({ wardrobe: 1 }));
-    render(<CareScreen />);
-    await waitFor(() => expect(screen.getByText('Start with one product you already own')).toBeTruthy());
-    fireEvent.press(screen.getByLabelText('Add a Skin Care item'));
-    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/inventory-add', params: { domain: 'care', category: 'beauty' } });
-  });
-
-  it('suppresses Care empty state when a Care category has an item', async () => {
-    jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({ beauty: 1, wardrobe: 1 }));
-    render(<CareScreen />);
-    await waitFor(() => expect(screen.getByText('Your routines and shelf')).toBeTruthy());
-    expect(screen.queryByText('Start with one product you already own')).toBeNull();
-  });
-
-  it('does not show a domain empty CTA while summary is still loading', async () => {
-    let resolveSummary!: (value: InventorySummary) => void;
-    jest.spyOn(apiV2, 'getInventorySummary').mockReturnValue(new Promise((resolve) => { resolveSummary = resolve; }));
-    render(<StyleScreen />);
-    expect(screen.queryByText('Start with one thing you already wear')).toBeNull();
-    resolveSummary(summary({ beauty: 1 }));
-    await waitFor(() => expect(screen.getByText('Start with one thing you already wear')).toBeTruthy());
-  });
-
-  it('limits Style add flow to Style categories and preserves domain/category on entry', async () => {
+  it('quarantines Style inventory-add traffic', async () => {
     mockRouteParams = { domain: 'style', category: 'wardrobe' };
     render(<InventoryAddScreen />);
-    expect(screen.getByLabelText('Wardrobe')).toBeTruthy(); expect(screen.getByLabelText('Shoes')).toBeTruthy(); expect(screen.getByLabelText('Accessories')).toBeTruthy();
-    expect(screen.queryByLabelText('Skin Care')).toBeNull(); expect(screen.queryByLabelText('Hair Care')).toBeNull(); expect(screen.queryByLabelText('Perfumes')).toBeNull(); expect(screen.queryByLabelText('Supplements')).toBeNull();
+    expect(screen.toJSON()).toBe('/scan-product');
   });
 
   it('limits Care add flow to Care categories', () => {
@@ -110,31 +76,44 @@ describe('VC-08 final IA domain boundaries', () => {
     expect(screen.queryByLabelText('Wardrobe')).toBeNull(); expect(screen.queryByLabelText('Shoes')).toBeNull(); expect(screen.queryByLabelText('Accessories')).toBeNull();
   });
 
-  it('keeps direct InventoryAdd legacy behavior for all seven categories', () => {
+  it('keeps Care add traffic with a missing category inside the safe Care default', () => {
+    mockRouteParams = { domain: 'care' };
+    render(<InventoryAddScreen />);
+    expect(screen.getByLabelText('Skin Care').props.accessibilityState.selected).toBe(true);
+    expect(screen.queryByLabelText('Wardrobe')).toBeNull(); expect(screen.queryByLabelText('Shoes')).toBeNull(); expect(screen.queryByLabelText('Accessories')).toBeNull();
+  });
+
+  it('keeps Care add traffic with an invalid category inside the safe Care default', () => {
+    mockRouteParams = { domain: 'care', category: 'wardrobe' };
+    render(<InventoryAddScreen />);
+    expect(screen.getByLabelText('Skin Care').props.accessibilityState.selected).toBe(true);
+    expect(screen.queryByLabelText('Wardrobe')).toBeNull(); expect(screen.queryByLabelText('Shoes')).toBeNull(); expect(screen.queryByLabelText('Accessories')).toBeNull();
+  });
+
+  it('quarantines inventory-add without a Care domain', () => {
     mockRouteParams = {};
     render(<InventoryAddScreen />);
-    ['Wardrobe', 'Shoes', 'Accessories', 'Skin Care', 'Hair Care', 'Perfumes', 'Supplements'].forEach((label) => {
-      expect(screen.getByLabelText(label)).toBeTruthy();
-    });
+    expect(screen.toJSON()).toBe('/scan-product');
   });
 
-  it('rejects an invalid domain/category pair deterministically', () => {
-    mockRouteParams = { domain: 'style', category: 'supplements' };
-    render(<InventoryAddScreen />);
-    expect(screen.getByLabelText('Wardrobe').props.accessibilityState.selected).toBe(true);
-    expect(screen.queryByLabelText('Supplements')).toBeNull();
-  });
-
-  it('filters domain inventory results and retains Style insight entry points', async () => {
+  it('quarantines Style inventory and its insight entry points', async () => {
     mockRouteParams = { domain: 'style' };
     jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({ wardrobe: 1, beauty: 1 }));
     jest.spyOn(apiV2, 'getInventoryItems').mockResolvedValue(listing([item('wardrobe', 'Kurta'), item('beauty', 'Serum')]));
     render(<InventoryScreen />);
-    await waitFor(() => expect(screen.getByText('Kurta')).toBeTruthy());
-    expect(screen.queryByText('Serum')).toBeNull();
-    expect(screen.getByLabelText('Open style low-use products')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('Open style low-use products'));
-    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/inventory-insights', params: { view: 'low-use', domain: 'style' } });
+    expect(screen.toJSON()).toBe('/scan-product');
+  });
+
+  it('quarantines inventory without an explicit Care domain', () => {
+    mockRouteParams = {};
+    render(<InventoryScreen />);
+    expect(screen.toJSON()).toBe('/scan-product');
+  });
+
+  it('quarantines insights without an explicit Care domain', () => {
+    mockRouteParams = {};
+    render(<InventoryInsightsScreen />);
+    expect(screen.toJSON()).toBe('/scan-product');
   });
 
   it('filters Care low-use rows to the requested domain', async () => {
@@ -145,21 +124,27 @@ describe('VC-08 final IA domain boundaries', () => {
     expect(screen.queryByText('Kurta')).toBeNull();
   });
 
+  it('returns a failed retained Care item load to the Care collection', async () => {
+    mockRouteParams = { id: 'missing-care-item' };
+    jest.spyOn(apiV2, 'getInventoryItem').mockRejectedValue(new Error('not found'));
+    render(<InventoryItemScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Add an item instead')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Add an item instead'));
+    expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/(tabs)/inventory', params: { domain: 'care' } });
+  });
+
   const duplicate = (id: string, item_a: InventoryItem, item_b: InventoryItem): DuplicateCandidate => ({
     id, confidence: .92, reason: 'similar name', status: 'open', item_a, item_b,
   });
 
-  it('shows only all-Style duplicate candidates and their actions on Style', async () => {
+  it('quarantines Style inventory insights', async () => {
     mockRouteParams = { domain: 'style', view: 'duplicates' };
     const stylePair = duplicate('style-pair', item('wardrobe', 'Jacket'), item('shoes', 'Boots'));
     const carePair = duplicate('care-pair', item('beauty', 'Serum'), item('hair', 'Shampoo'));
     const mixedPair = duplicate('mixed-pair', item('accessories', 'Watch'), item('beauty', 'Moisturiser'));
     jest.spyOn(apiV2, 'getInventoryDuplicates').mockResolvedValue([stylePair, carePair, mixedPair]);
     render(<InventoryInsightsScreen />);
-    await waitFor(() => expect(screen.getByText('Jacket · Boots')).toBeTruthy());
-    expect(screen.getByLabelText('Keep both Jacket and Boots')).toBeTruthy();
-    expect(screen.queryByText('Serum · Shampoo')).toBeNull();
-    expect(screen.queryByText('Watch · Moisturiser')).toBeNull();
+    expect(screen.toJSON()).toBe('/scan-product');
   });
 
   it('shows only all-Care duplicate candidates and their actions on Care', async () => {

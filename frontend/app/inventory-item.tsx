@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -24,8 +24,7 @@ export default function InventoryItemScreen() {
   const confirm = async () => { if (!item) return; try { setItem(await confirmInventoryItem(item.id)); } catch (err) { setMessage(errorMessage(err, 'Could not confirm this draft.')); } };
   const used = async () => { if (!item) return; try { setItem(await logInventoryUsage(item.id, new Date().toISOString().slice(0, 10))); } catch (err) { setMessage(errorMessage(err, 'Could not log usage.')); } };
   const condition = async (value: string) => { if (!item) return; try { setItem(await setInventoryCondition(item.id, value)); } catch (err) { setMessage(errorMessage(err, 'Could not update condition.')); } };
-  const returnToDomain = (): '/(tabs)/style' | '/(tabs)/care' =>
-    item && ['wardrobe', 'shoes', 'accessories'].includes(item.category) ? '/(tabs)/style' : '/(tabs)/care';
+  const returnToDomain = (): '/(tabs)/care' => '/(tabs)/care';
   const remove = () => item && Alert.alert('Remove this item?', 'It will leave active inventory, while its history is retained.', [{ text: 'Keep item', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: () => void deleteInventoryItem(item.id).then(() => router.replace(returnToDomain())) }]);
   const addLabelFact = async () => { if (!item || !factName.trim() || factSaving) return; setFactSaving(true); setFactMessage(''); try { const row = await createSupplementLabelFact(item.id, { raw_name: factName.trim(), amount: factAmount.trim() || null, unit: factUnit.trim() || null, serving_text: factServing.trim() || null, client_mutation_id: factMutationId.current }); setLabelFacts((current) => [...current.filter((fact) => fact.id !== row.id), row].sort((a, b) => a.raw_name.localeCompare(b.raw_name))); setFactName(''); setFactAmount(''); setFactUnit(''); setFactServing(''); factMutationId.current = nextFactMutationId(); } catch (err) { setFactMessage(errorMessage(err, 'Could not save that label fact. Your entries are still here so you can retry.')); } finally { setFactSaving(false); } };
   const startFactEdit = (fact: SupplementLabelFact) => { setEditingFact(fact.id); setEditFactName(fact.raw_name); setEditFactAmount(fact.amount || ''); setEditFactUnit(fact.unit || ''); setEditFactServing(fact.serving_text || ''); setFactMessage(''); };
@@ -33,7 +32,8 @@ export default function InventoryItemScreen() {
   const removeLabelFact = async (factId: string) => { if (!item) return; try { await deleteSupplementLabelFact(item.id, factId); setLabelFacts((current) => current.filter((fact) => fact.id !== factId)); } catch (err) { setFactMessage(errorMessage(err, 'Could not remove that label fact.')); } };
   const confirmLabelFact = async (factId: string) => { if (!item) return; try { const row = await confirmSupplementLabelFact(item.id, factId); setLabelFacts((current) => current.map((fact) => fact.id === row.id ? row : fact)); } catch (err) { setFactMessage(errorMessage(err, 'Could not confirm that label fact.')); } };
   if (loading) return <View style={styles.center}><ActivityIndicator color={COLORS.primary} /></View>;
-  if (error || !item) return <View style={styles.center}><InventoryRecovery onRetry={() => void load()} onAdd={() => router.replace('/inventory-add')} /></View>;
+  if (error || !item) return <View style={styles.center}><InventoryRecovery onRetry={() => void load()} onAdd={() => router.replace({ pathname: '/(tabs)/inventory', params: { domain: 'care' } })} /></View>;
+  if (!['beauty', 'hair', 'perfumes', 'supplements'].includes(item.category)) return <Redirect href="/scan-product" />;
   const detailEntries = Object.entries(item.details).filter(([key]) => key !== 'safety_disclaimer' && key !== 'user_entered_purpose');
   const careItem = canRecordCareExperienceForCategory(item.category);
   return <View style={[styles.container, { paddingTop: insets.top }]}><View style={styles.top}><TouchableOpacity accessibilityRole="button" accessibilityLabel="Back to your items" onPress={() => router.canGoBack() ? router.back() : router.replace(returnToDomain())}><Ionicons name="arrow-back" size={24} color={COLORS.textPrimary} /></TouchableOpacity><Text style={styles.topTitle}>Item details</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel={`Edit ${item.display_name}`} onPress={() => setEditing(!editing)}><Text style={styles.edit}>{editing ? 'Cancel' : 'Edit'}</Text></TouchableOpacity></View><ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 50 }}>

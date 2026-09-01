@@ -6,7 +6,7 @@ import * as apiV2 from '../services/apiV2';
 import { INVENTORY_CATEGORIES, InventoryItem, InventorySummary } from '../services/apiV2';
 import InventoryItemScreen from '../../app/inventory-item';
 
-jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: 'supplement-1' }), useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => false }) }));
+jest.mock('expo-router', () => ({ Redirect: ({ href }: { href: string }) => <>{href}</>, useLocalSearchParams: () => ({ id: 'supplement-1', domain: 'care' }), useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => false }) }));
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 
 const item: InventoryItem = {
@@ -32,7 +32,7 @@ describe('complete inventory UI', () => {
     fireEvent.press(screen.getByLabelText('Skin Care, 4 items')); expect(press).toHaveBeenCalled();
   });
 
-  it('uses customer category labels while preserving the internal Skin Care API key', async () => {
+  it('uses customer category labels while preserving the internal Skin Care API key in Care inventory', async () => {
     jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary);
     const getItems = jest.spyOn(apiV2, 'getInventoryItems').mockResolvedValue({ items: [], pagination: { total: 0, page: 1, page_size: 20, pages: 0 } });
     render(<InventoryScreen />);
@@ -61,6 +61,12 @@ describe('complete inventory UI', () => {
   it('item card clearly marks unverified drafts', () => {
     const open = jest.fn(); render(<InventoryItemCard item={item} onPress={open} />);
     expect(screen.getByText('Review')).toBeTruthy(); fireEvent.press(screen.getByLabelText('Open Teal work kurta')); expect(open).toHaveBeenCalled();
+  });
+
+  it('quarantines a fetched Style inventory item before it can render details', async () => {
+    jest.spyOn(apiV2, 'getInventoryItem').mockResolvedValue(item);
+    render(<InventoryItemScreen />);
+    await waitFor(() => expect(screen.toJSON()).toBe('/scan-product'));
   });
 
   it('value language is transparent and never judgmental', () => {
