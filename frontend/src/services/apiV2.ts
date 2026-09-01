@@ -697,6 +697,9 @@ export interface VerdictFactorWire {
 }
 
 export interface ProductVerdictWire {
+  result_contract_version?: 'v1';
+  barcode?: string;
+  brand?: string | null;
   engine_version: string;
   outcome: 'graded' | 'not_graded' | 'not_enough_information';
   grade: 'A' | 'B' | 'C' | 'D' | 'E' | null;
@@ -711,8 +714,14 @@ export interface ProductVerdictWire {
     protein_g: number | null;
   };
   components: VerdictComponentWire[];
-  lowers: VerdictFactorWire[];
-  helps: VerdictFactorWire[];
+  /** Nullable until a deterministic alternative is available. */
+  better_next_action?: { name: string; price_paise: number; grade: 'A' | 'B' | 'C' | 'D' | 'E' } | null;
+  /** Canonical Product Result Contract V1 factor groups. */
+  negatives?: VerdictFactorWire[];
+  positives?: VerdictFactorWire[];
+  /** Temporary compatibility aliases, generated from the canonical arrays. */
+  lowers?: VerdictFactorWire[];
+  helps?: VerdictFactorWire[];
   ingredients: {
     name: string; label: string | null;
     tier: string; status: string; band: 'green' | 'yellow' | 'red';

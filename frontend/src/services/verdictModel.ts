@@ -88,6 +88,9 @@ export interface Alternative {
 }
 
 export interface VerdictSource {
+  resultContractVersion?: 'v1';
+  barcode?: string;
+  brand?: string | null;
   outcome: Outcome;
   grade: GradeLetter | null;
   productName: string;
@@ -109,6 +112,9 @@ export interface VerdictSource {
    */
   attribution?: string | null;
   components: VerdictComponent[];
+  negatives?: VerdictFactor[];
+  positives?: VerdictFactor[];
+  /** Temporary compatibility aliases of the canonical Product Result V1 arrays. */
   lowers?: VerdictFactor[];
   helps?: VerdictFactor[];
   ingredients: VerdictIngredient[];
@@ -172,6 +178,12 @@ const ACTION_BY_GRADE: Record<GradeLetter, string> = {
   E: S.primary.actionE,
 };
 
+const ACTION_BY_DECISION: Record<NonNullable<VerdictSource['decision']>['action'], string> = {
+  buy: S.primary.decisionBuy,
+  wait: S.primary.decisionWait,
+  skip: S.primary.decisionSkip,
+};
+
 export function buildVerdict(source: VerdictSource): VerdictView {
   if (source.outcome === 'not_graded') {
     return {
@@ -198,7 +210,11 @@ export function buildVerdict(source: VerdictSource): VerdictView {
 
   const letter = source.grade;
   const meta = S.grade[letter];
-  const action = ACTION_BY_GRADE[letter];
+  // A deterministic backend decision is authoritative. Grade mapping only
+  // supports legacy sources that predate Product Result Contract V1.
+  const action = source.decision
+    ? ACTION_BY_DECISION[source.decision.action]
+    : ACTION_BY_GRADE[letter];
   const number = everydayNumber(source);
   const alternative = source.alternative
     ? t(S.primary.alternative, {

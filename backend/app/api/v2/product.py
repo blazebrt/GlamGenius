@@ -247,6 +247,10 @@ async def read_product_verdict(
     ruleset = await resolve_production_ruleset(session)
     result = enforce_published_required_rules(grade_product(product), ruleset)
     payload = presentation.present(product, result, ruleset)
+    # Identity is factual scan context, not a name inferred by the client.
+    # Keep absent catalogue values absent instead of manufacturing a brand.
+    payload["barcode"] = barcode
+    payload["brand"] = (off_half or {}).get("brands") or (off_half or {}).get("brand") or None
     payload["confidence"] = service.confidence_block(snapshot.confidence) if snapshot else found["confidence"]
     payload["facts_provenance"] = "confirmed_label_snapshot" if snapshot else "open_food_facts"
     payload["attribution"] = found.get("attribution")

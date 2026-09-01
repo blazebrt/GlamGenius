@@ -43,6 +43,9 @@ export const S = {
     actionE: 'The label has a strong product concern.',
     actionNotGraded: 'Cooking ingredient. No letter applies.',
     actionUnknown: 'We could not read this label.',
+    decisionBuy: 'BUY',
+    decisionWait: 'WAIT',
+    decisionSkip: 'SKIP',
 
     /** Line 2. One declared number, with the basis it was measured on. */
     noEverydayNumber: 'Nothing on this label stands out.',
@@ -68,8 +71,8 @@ export const S = {
     other_packaged_food: 'Packaged food',
   },
   factors: {
-    lowers: 'What lowers it', helps: 'What helps', noLowers: 'No product flags were found in the available label facts.',
-    noHelps: 'No positive label facts were available.', source: 'Source', details: 'What this means',
+    negatives: 'Negatives', positives: 'Positives', noNegatives: 'No product flags were found in the available label facts.',
+    noPositives: 'No positive label facts were available.', source: 'Source', details: 'What this means',
     declared: 'Declared on label', no_concern_found: 'No concern found', worth_knowing: 'Worth knowing',
     worth_caution: 'Worth caution', flagged: 'Flagged', not_permitted: 'Not permitted',
     not_enough_information: 'Not enough information', lower_processing_group: 'Less processing on this label.',

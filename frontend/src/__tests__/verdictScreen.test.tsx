@@ -181,8 +181,8 @@ describe('factor quantities', () => {
   it('states the verified quantity and its per-100 basis together', () => {
     render(
       <FactorSection
-        title={S.factors.lowers}
-        empty={S.factors.noLowers}
+        title={S.factors.negatives}
+        empty={S.factors.noNegatives}
         onExplain={jest.fn()}
         rows={[{
           key: 'sugar', label: 'sugar', status: 'high', band: 'red',
@@ -196,6 +196,18 @@ describe('factor quantities', () => {
     // The name of the thing, resolved from the label key. A row that
     // shows only "High" and a number does not say high what.
     expect(screen.getByText(S.factors.label_sugar)).toBeTruthy();
+  });
+
+  it('locks customer factor headings to Negatives and Positives', () => {
+    expect(S.factors.negatives).toBe('Negatives');
+    expect(S.factors.positives).toBe('Positives');
+    expect(Object.values(S.factors)).not.toContain('What lowers it');
+    expect(Object.values(S.factors)).not.toContain('What helps');
+  });
+
+  it('uses the server decision action instead of inferring it from the grade', () => {
+    const view = buildVerdict({ ...base, grade: 'A', decision: { action: 'skip', reasonKey: 'sugar' } });
+    expect(view.action).toBe(S.primary.decisionSkip);
   });
 });
 
