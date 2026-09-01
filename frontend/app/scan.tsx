@@ -1,7 +1,7 @@
 import React from 'react';
 import { Redirect } from 'expo-router';
 
-/** Retired scan entry point; review appearance context in My Appearance. */
+/** Legacy scan entry point now returns to the scanner. */
 export default function ScanRedirect() {
-  return <Redirect href="/my-appearance" />;
+  return <Redirect href="/scan-product" />;
 }

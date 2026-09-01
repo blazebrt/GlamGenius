@@ -72,7 +72,7 @@ export default function IntroScreen() {
         <Text style={styles.secondaryLink}>Already have an account? Sign in</Text>
       </TouchableOpacity>
 
-      <Text style={styles.disclaimer}>General wellness &amp; style guidance — not medical advice.</Text>
+      <Text style={styles.disclaimer}>Product facts and evidence, not medical advice.</Text>
     </ScrollView>
   );
 }

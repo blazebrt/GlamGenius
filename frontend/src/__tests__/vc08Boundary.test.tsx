@@ -1,9 +1,9 @@
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import * as apiV2 from '../services/apiV2';
 import { DuplicateCandidate, InventoryItem, InventorySummary } from '../services/apiV2';
-import StyleScreen from '../../app/(tabs)/style';
-import CareScreen from '../../app/(tabs)/care';
 import InventoryScreen from '../../app/(tabs)/inventory';
 import InventoryAddScreen from '../../app/inventory-add';
 import InventoryInsightsScreen from '../../app/inventory-insights';
@@ -22,6 +22,7 @@ jest.mock('expo-router', () => {
     useLocalSearchParams: () => mockRouteParams,
     useRouter: () => mockRouter,
     useFocusEffect: mockUseFocusEffect,
+    Redirect: ({ href }: { href: string }) => <>{href}</>,
   };
 });
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
@@ -56,44 +57,9 @@ describe('VC-08 final IA domain boundaries', () => {
   });
   afterEach(() => { cleanup(); jest.restoreAllMocks(); });
 
-  it('shows Style empty state from Style counts only, even when Care has items', async () => {
-    jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({ beauty: 2 }));
-    render(<StyleScreen />);
-    expect(screen.queryByText('Start with one thing you already wear')).toBeNull();
-    await waitFor(() => expect(screen.getByText('Start with one thing you already wear')).toBeTruthy());
-    fireEvent.press(screen.getByLabelText('Add a wardrobe item'));
-    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/inventory-add', params: { domain: 'style', category: 'wardrobe' } });
-  });
-
-  it('suppresses Style empty state when a Style category has an item', async () => {
-    jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({ wardrobe: 1, beauty: 2 }));
-    render(<StyleScreen />);
-    await waitFor(() => expect(screen.getByText('Your wearable appearance')).toBeTruthy());
-    expect(screen.queryByText('Start with one thing you already wear')).toBeNull();
-  });
-
-  it('shows Care empty state from Care counts only, even when Style has items', async () => {
-    jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({ wardrobe: 1 }));
-    render(<CareScreen />);
-    await waitFor(() => expect(screen.getByText('Start with one product you already own')).toBeTruthy());
-    fireEvent.press(screen.getByLabelText('Add a Skin Care item'));
-    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/inventory-add', params: { domain: 'care', category: 'beauty' } });
-  });
-
-  it('suppresses Care empty state when a Care category has an item', async () => {
-    jest.spyOn(apiV2, 'getInventorySummary').mockResolvedValue(summary({ beauty: 1, wardrobe: 1 }));
-    render(<CareScreen />);
-    await waitFor(() => expect(screen.getByText('Your routines and shelf')).toBeTruthy());
-    expect(screen.queryByText('Start with one product you already own')).toBeNull();
-  });
-
-  it('does not show a domain empty CTA while summary is still loading', async () => {
-    let resolveSummary!: (value: InventorySummary) => void;
-    jest.spyOn(apiV2, 'getInventorySummary').mockReturnValue(new Promise((resolve) => { resolveSummary = resolve; }));
-    render(<StyleScreen />);
-    expect(screen.queryByText('Start with one thing you already wear')).toBeNull();
-    resolveSummary(summary({ beauty: 1 }));
-    await waitFor(() => expect(screen.getByText('Start with one thing you already wear')).toBeTruthy());
+  it('keeps the retired Style tab as a deterministic Scan redirect', () => {
+    const source = readFileSync(join(process.cwd(), 'app', '(tabs)', 'style.tsx'), 'utf8');
+    expect(source).toContain('<Redirect href="/scan-product" />');
   });
 
   it('limits Style add flow to Style categories and preserves domain/category on entry', async () => {

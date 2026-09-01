@@ -2,9 +2,8 @@
  * Launch.
  *
  * The camera is the first screen. Someone standing in a shop holding a packet
- * should get an answer before they are asked to sign up, so a signed-out launch
- * goes straight to the scanner and the introduction sits one tap away at
- * `/intro`. A signed-in launch goes to Today, exactly as before.
+ * should get an answer before they are asked to sign up. Authentication adds
+ * account capabilities without changing the product home.
  *
  * The three entry components below are the introduction's content. They live
  * here because `/intro` composes them and the closure test reads them from
@@ -28,7 +27,7 @@ import { COLORS, FONTS, SPACING } from '../src/theme/colors';
 export default function LaunchScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [loading, setLoading] = useState(true);
+  const [loading] = useState(true);
   const { userId } = useUserStore();
 
   useEffect(() => {
@@ -45,14 +44,10 @@ export default function LaunchScreen() {
     try {
       // Clear any orphaned installation identifier.
       await AsyncStorage.removeItem('glamgenius_user_id').catch(() => {});
-      if (useUserStore.getState().userId) {
-        setTimeout(() => router.replace('/(tabs)/today'), 900);
-        return;
-      }
+      setTimeout(() => router.replace('/scan-product'), 300);
     } catch {
       // Fall through to the scanner: it needs nothing to work.
     }
-    setLoading(false);
     router.replace('/scan-product');
   };
 
@@ -60,7 +55,7 @@ export default function LaunchScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.loadingContainer}>
         <Text style={styles.loadingLogo}>GlamGenius</Text>
-        <Text style={styles.loadingTagline}>YOUR APPEARANCE · ORGANISED</Text>
+        <Text style={styles.loadingTagline}>PRODUCTS · UNDERSTOOD</Text>
         {(loading || userId) && (
           <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 24 }} />
         )}
@@ -70,23 +65,23 @@ export default function LaunchScreen() {
 }
 
 export function EntryBrandTagline() {
-  return <Text style={styles.brandTagline}>STYLE · CARE · PLAN</Text>;
+  return <Text style={styles.brandTagline}>SCAN · DECIDE · UNDERSTAND</Text>;
 }
 
 export function EntryHero() {
   return <>
-    <Text style={styles.heroTitle}>Know what to wear.{"\n"}Know what needs attention.</Text>
+    <Text style={styles.heroTitle}>Scan a product.{"\n"}Make a clearer decision.</Text>
     <Text style={styles.heroSubtitle}>
-      GlamGenius brings your wardrobe, care shelf, routines, occasions and preferences into one calm daily plan — starting with what you already own.
+      GlamGenius helps you understand products from product facts and evidence.
     </Text>
   </>;
 }
 
 export function EntryFeatures() {
   return <>
-    <FeatureItem icon="sunny-outline" title="Today, decided" description="A clear owned-first outfit and the few things worth your attention." />
-    <FeatureItem icon="shirt-outline" title="Style from your wardrobe" description="Occasion looks and purchase decisions without buying pressure." />
-    <FeatureItem icon="leaf-outline" title="Care and planning together" description="Routines, upkeep, events and progress in one place." />
+    <FeatureItem icon="barcode-outline" title="Scan a product" description="Start without an account and read what the pack can support." />
+    <FeatureItem icon="checkmark-circle-outline" title="See the decision" description="Read the facts, source material and next action together." />
+    <FeatureItem icon="repeat-outline" title="Scan again" description="Use the same product decision flow whenever it matters." />
   </>;
 }
 

@@ -30,7 +30,7 @@ import * as path from 'path';
  * Lower this — never raise it — as the physical-device sweep and follow-up PRs fix
  * screens. A PR that reduces the count updates this constant in the same diff.
  */
-const BASELINE = 15;
+const BASELINE = 8;
 
 /** Screens / files we deliberately do not enforce this check on. */
 const ALLOWLIST: string[] = [
