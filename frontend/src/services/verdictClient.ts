@@ -130,8 +130,12 @@ export function toVerdictSource(
     outcome: wire.outcome,
     grade: wire.grade,
     productName: wire.product_name,
+    barcode: wire.barcode,
+    brand: wire.brand ?? null,
     taxonomy: wire.taxonomy,
     decision: { action: wire.decision.action, reasonKey: wire.decision.reason_key },
+    confidence: wire.confidence ?? null,
+    factsProvenance: wire.facts_provenance ?? null,
     totalSugarG: wire.nutrition.total_sugar_g,
     saltG: wire.nutrition.salt_g,
     totalFatG: wire.nutrition.total_fat_g,
@@ -146,10 +150,21 @@ export function toVerdictSource(
     attribution: wire.attribution?.text ?? null,
     components,
     // The label is a key the string file resolves; it is never the rule id.
-    lowers: (wire.lowers ?? []).map((row) => ({ ...row, label: row.label ?? row.key })),
-    helps: (wire.helps ?? []).map((row) => ({ ...row, label: row.label ?? row.key })),
+    resultContractVersion: wire.result_contract_version,
+    negatives: (wire.negatives ?? wire.lowers ?? []).map((row) => ({ ...row, label: row.label ?? row.key })),
+    positives: (wire.positives ?? wire.helps ?? []).map((row) => ({ ...row, label: row.label ?? row.key })),
+    // Existing view consumers can migrate gradually; both aliases derive from
+    // the canonical V1 arrays above and cannot diverge.
+    lowers: (wire.negatives ?? wire.lowers ?? []).map((row) => ({ ...row, label: row.label ?? row.key })),
+    helps: (wire.positives ?? wire.helps ?? []).map((row) => ({ ...row, label: row.label ?? row.key })),
     ingredients,
-    alternative,
+    alternative: alternative ?? (wire.better_next_action
+      ? {
+        name: wire.better_next_action.name,
+        pricePaise: wire.better_next_action.price_paise,
+        grade: wire.better_next_action.grade,
+      }
+      : null),
     quantityGuidance: wire.quantity_guidance,
     purityNote: wire.purity_note,
     missing,

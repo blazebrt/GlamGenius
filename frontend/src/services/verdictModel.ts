@@ -88,11 +88,16 @@ export interface Alternative {
 }
 
 export interface VerdictSource {
+  resultContractVersion?: 'v1';
+  barcode?: string;
+  brand?: string | null;
   outcome: Outcome;
   grade: GradeLetter | null;
   productName: string;
   taxonomy?: { domain: string; category: string; subcategory: string };
-  decision?: { action: 'buy' | 'wait' | 'skip'; reasonKey: string };
+  decision?: { action: 'buy' | 'wait' | 'skip' | null; reasonKey: string };
+  confidence?: { level: string; text: string } | null;
+  factsProvenance?: 'confirmed_label_snapshot' | 'open_food_facts' | string | null;
   /** Per 100 g / 100 ml, straight off the panel. */
   totalSugarG?: number | null;
   saltG?: number | null;
@@ -109,6 +114,9 @@ export interface VerdictSource {
    */
   attribution?: string | null;
   components: VerdictComponent[];
+  negatives?: VerdictFactor[];
+  positives?: VerdictFactor[];
+  /** Temporary compatibility aliases of the canonical Product Result V1 arrays. */
   lowers?: VerdictFactor[];
   helps?: VerdictFactor[];
   ingredients: VerdictIngredient[];
@@ -123,6 +131,10 @@ export interface VerdictView {
   letter: GradeLetter | null;
   /** Two or three words. The colour has already answered. */
   verdict: string;
+  /** Server-authoritative purchase action; absent for non-decision outcomes. */
+  decisionAction: string | null;
+  /** Deterministic, customer-facing explanation of the action. */
+  primaryReason: string;
   /** Line 1: what to do, under ten words. */
   action: string;
   /** Line 2: one number, in something you can picture. */
@@ -172,12 +184,35 @@ const ACTION_BY_GRADE: Record<GradeLetter, string> = {
   E: S.primary.actionE,
 };
 
+const ACTION_BY_DECISION: Record<Exclude<NonNullable<VerdictSource['decision']>['action'], null>, string> = {
+  buy: S.primary.decisionBuy,
+  wait: S.primary.decisionWait,
+  skip: S.primary.decisionSkip,
+};
+
+function primaryReasonFor(source: VerdictSource): string {
+  const key = source.decision?.reasonKey;
+  if (key === 'sugar') return S.primary.reasonSugar;
+  if (key === 'salt' || key === 'sodium') return S.primary.reasonSalt;
+  if (key === 'processing') return S.primary.reasonProcessing;
+  if (key === 'refined_grain') return S.primary.reasonRefinedGrain;
+  if (key === 'saturated_fat') return S.primary.reasonSaturatedFat;
+  if (key === 'total_fat') return S.primary.reasonTotalFat;
+  if (key === 'added_sugar_share') return S.primary.reasonAddedSugarShare;
+  if (key === 'trans_fat') return S.primary.reasonTransFat;
+  if (key?.startsWith('additive:')) return S.primary.reasonAdditive;
+  if (key === 'naming') return S.primary.reasonNaming;
+  return S.primary.reasonLabelFacts;
+}
+
 export function buildVerdict(source: VerdictSource): VerdictView {
   if (source.outcome === 'not_graded') {
     return {
       band: 'yellow',
       letter: null,
       verdict: S.notGraded.title,
+      decisionAction: null,
+      primaryReason: S.primary.actionNotGraded,
       action: S.primary.actionNotGraded,
       everydayNumber: source.quantityGuidance || '',
       alternativeLine: null,
@@ -189,6 +224,8 @@ export function buildVerdict(source: VerdictSource): VerdictView {
       band: 'yellow',
       letter: null,
       verdict: S.unknown.title,
+      decisionAction: null,
+      primaryReason: S.primary.actionUnknown,
       action: S.primary.actionUnknown,
       everydayNumber: '',
       alternativeLine: null,
@@ -198,7 +235,12 @@ export function buildVerdict(source: VerdictSource): VerdictView {
 
   const letter = source.grade;
   const meta = S.grade[letter];
-  const action = ACTION_BY_GRADE[letter];
+  // A deterministic backend decision is authoritative. Grade mapping only
+  // supports legacy sources that predate Product Result Contract V1.
+  const decisionAction = source.decision?.action
+    ? ACTION_BY_DECISION[source.decision.action]
+    : ACTION_BY_GRADE[letter];
+  const primaryReason = primaryReasonFor(source);
   const number = everydayNumber(source);
   const alternative = source.alternative
     ? t(S.primary.alternative, {
@@ -210,18 +252,20 @@ export function buildVerdict(source: VerdictSource): VerdictView {
 
   const spoken = source.alternative
     ? t(S.voice.withAlternative, {
-        verdict: meta.verdict, action, number,
+        verdict: meta.verdict, action: primaryReason, number,
         alternative: source.alternative.name,
         price: rupees(source.alternative.pricePaise),
         grade: source.alternative.grade,
       })
-    : t(S.voice.graded, { verdict: meta.verdict, action, number });
+    : t(S.voice.graded, { verdict: meta.verdict, action: primaryReason, number });
 
   return {
     band: meta.band as ColourBand,
     letter,
     verdict: meta.verdict,
-    action,
+    decisionAction,
+    primaryReason,
+    action: primaryReason,
     everydayNumber: number,
     alternativeLine: alternative,
     spoken,

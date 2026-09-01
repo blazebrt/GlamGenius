@@ -132,6 +132,31 @@ async def test_a_known_barcode_returns_a_product(db_clean, off_clean, app_client
 
 
 @pytest.mark.asyncio
+async def test_verdict_exposes_product_result_contract_identity_and_provenance(
+    db_clean, off_clean, app_client, device,
+):
+    """The result surface keeps the scan identity and its source footing."""
+    await _seed_off_product(
+        KNOWN, product_name="Parle-G Biscuits", brands="Parle",
+        ingredients_text="wheat flour, sugar, palm oil",
+        nutriments={"sugars_100g": 22.5, "salt_100g": 0.7},
+    )
+
+    response = await app_client.get(f"/api/v2/scan/verdict/{KNOWN}", headers=device)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["result_contract_version"] == "v1"
+    assert body["barcode"] == KNOWN
+    assert body["product_name"] == "Parle-G Biscuits"
+    assert body["brand"] == "Parle"
+    assert body["facts_provenance"] == "open_food_facts"
+    assert "Open Food Facts" in body["attribution"]["text"]
+    assert body["negatives"] == body["lowers"]
+    assert body["positives"] == body["helps"]
+
+
+@pytest.mark.asyncio
 async def test_a_known_barcode_answers_from_the_cache_without_the_network(
     db_clean, off_clean, app_client, device, monkeypatch,
 ):

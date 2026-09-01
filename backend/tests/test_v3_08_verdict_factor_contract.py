@@ -56,7 +56,7 @@ def payload():
 
 
 def _row(payload, key):
-    return next((row for row in payload["lowers"] if row["key"] == key), None)
+    return next((row for row in payload["negatives"] if row["key"] == key), None)
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +67,43 @@ def test_the_biscuit_is_a_packaged_food_and_a_skip(payload):
     assert payload["taxonomy"]["subcategory"] == "biscuit"
     assert payload["grade"] in {"D", "E"}
     assert payload["decision"]["action"] == "skip"
+
+
+def test_non_decision_outcomes_do_not_be_misclassified_as_wait():
+    culinary = ProductInput(name="Salt", ingredients=("salt",))
+    culinary_payload = present(culinary, grade_product(culinary), candidate_ruleset())
+    assert culinary_payload["outcome"] == "not_graded"
+    assert culinary_payload["decision"] == {"action": None, "reason_key": "not_graded"}
+
+    unknown = ProductInput(name="Unknown packet", ingredients=())
+    unknown_payload = present(unknown, grade_product(unknown), candidate_ruleset())
+    assert unknown_payload["outcome"] == "not_enough_information"
+    assert unknown_payload["decision"] == {"action": None, "reason_key": "not_enough_information"}
+
+
+def test_reason_key_is_explicit_for_each_outcome_class():
+    payload = present(BISCUIT, grade_product(BISCUIT), candidate_ruleset())
+    assert payload["decision"]["reason_key"] == payload["negatives"][0]["key"]
+
+    plain = ProductInput(
+        name="Plain oats", categories="cereal", ingredients=("oats",),
+        energy_kcal=D("370"), protein_g=D("13"), total_fat_g=D("7"),
+        saturated_fat_g=D("1"), total_sugar_g=D("1"), sodium_g=D("0.01"),
+    )
+    graded = present(plain, grade_product(plain), candidate_ruleset())
+    assert graded["outcome"] == "graded"
+    assert graded["grade"] is not None
+    assert graded["negatives"] == []
+    assert graded["decision"] == {"action": "buy", "reason_key": "label_facts"}
+
+
+def test_product_result_contract_v1_has_one_canonical_factor_path(payload):
+    assert payload["result_contract_version"] == "v1"
+    assert payload["negatives"] is payload["lowers"]
+    assert payload["positives"] is payload["helps"]
+    assert payload["better_next_action"] is None
+    assert payload["negatives"]
+    assert payload["positives"]
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +166,7 @@ def test_processing_appears_with_its_finding(payload):
 
 def test_the_flagged_additive_is_named_the_way_the_pack_names_it(payload):
     additive = next(
-        (row for row in payload["lowers"] if row["key"].startswith("additive:")), None,
+        (row for row in payload["negatives"] if row["key"].startswith("additive:")), None,
     )
     assert additive is not None, "the flagged additive did not appear"
     assert "319" in additive["label"], "the additive row does not name the INS number"
@@ -138,7 +175,7 @@ def test_the_flagged_additive_is_named_the_way_the_pack_names_it(payload):
 
 
 def test_protein_is_a_declared_label_fact_with_its_quantity(payload):
-    protein = next((row for row in payload["helps"] if row["key"] == "protein"), None)
+    protein = next((row for row in payload["positives"] if row["key"] == "protein"), None)
     assert protein is not None
     assert protein["status"] == "declared"
     assert protein["quantity"]["value"] == 7.0
@@ -149,8 +186,8 @@ def test_protein_is_a_declared_label_fact_with_its_quantity(payload):
 # The properties that must hold for every row, on every product
 # ---------------------------------------------------------------------------
 def test_every_lowering_row_is_complete(payload):
-    assert payload["lowers"], "a grade E product produced no reasons"
-    for row in payload["lowers"]:
+    assert payload["negatives"], "a grade E product produced no reasons"
+    for row in payload["negatives"]:
         assert row["key"], row
         assert row["label"] and not row["label"].startswith("grade."), row
         assert row["status"] in STATUSES, row
@@ -160,7 +197,7 @@ def test_every_lowering_row_is_complete(payload):
 
 
 def test_statuses_do_not_all_collapse_to_one_word(payload):
-    statuses = {row["status"] for row in payload["lowers"]}
+    statuses = {row["status"] for row in payload["negatives"]}
     assert len(statuses) > 1, f"every lowering row reads the same: {statuses}"
 
 
@@ -176,9 +213,9 @@ def test_a_prohibited_additive_does_not_look_like_a_high_nutrient():
     )
     payload = present(product, grade_product(product), candidate_ruleset())
     prohibited = next(
-        (r for r in payload["lowers"] if r["status"] == "not_permitted"), None,
+        (r for r in payload["negatives"] if r["status"] == "not_permitted"), None,
     )
-    high = next((r for r in payload["lowers"] if r["status"] == "high"), None)
+    high = next((r for r in payload["negatives"] if r["status"] == "high"), None)
     assert prohibited is not None, "a black-tier additive did not read as not permitted"
     assert high is not None, "no high nutrient in a product that has one"
     assert prohibited["status"] != high["status"]
@@ -237,7 +274,7 @@ def test_a_prohibited_additive_does_not_look_like_a_high_nutrient():
 )
 def test_no_negative_factor_renders_without_an_openable_source(label, product):
     payload = present(product, grade_product(product), candidate_ruleset())
-    for row in payload["lowers"]:
+    for row in payload["negatives"]:
         assert row["sources"], f"{label}: {row['key']} lowered the grade with no source"
         for source in row["sources"]:
             assert source["url"], f"{label}: {row['key']} has a source with nothing to open"
@@ -257,7 +294,7 @@ def test_every_registered_grading_rule_has_an_openable_candidate_source():
 # ---------------------------------------------------------------------------
 def test_no_rule_is_presented_as_published_until_it_is(payload):
     """Nothing here marks the static catalogue as reviewed."""
-    for row in payload["lowers"]:
+    for row in payload["negatives"]:
         assert row["evidence"]["status"] == "candidate", row["key"]
     assert payload["evidence"]["unpublished_rules"], (
         "the payload does not say which of its rules are still candidates"

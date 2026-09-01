@@ -169,13 +169,16 @@ export default function VerdictScreen() {
             {!!source.taxonomy && (
               <Text style={styles.category}>{`${S.taxonomy[source.taxonomy.category as keyof typeof S.taxonomy]} · ${S.taxonomy[source.taxonomy.subcategory as keyof typeof S.taxonomy]}`}</Text>
             )}
+            <Text style={styles.category}>{source.factsProvenance === 'confirmed_label_snapshot'
+              ? S.provenance.confirmed
+              : source.factsProvenance === 'open_food_facts' ? S.provenance.catalogue : S.provenance.unknown}</Text>
             <GradeBlock view={view} />
             {source.outcome === 'graded' && (
               <VerdictLines view={view} onReport={openReport} />
             )}
-            <FactorSection title={S.factors.lowers} rows={source.lowers ?? []} empty={S.factors.noLowers}
+            <FactorSection title={S.factors.negatives} rows={source.negatives ?? source.lowers ?? []} empty={S.factors.noNegatives}
               onExplain={(row) => setExplanation(row)} />
-            <FactorSection title={S.factors.helps} rows={source.helps ?? []} empty={S.factors.noHelps}
+            <FactorSection title={S.factors.positives} rows={source.positives ?? source.helps ?? []} empty={S.factors.noPositives}
               onExplain={(row) => setExplanation(row)} />
             {source.outcome === 'not_graded' && (
               <NotGradedCard quantity={source.quantityGuidance} purity={source.purityNote} />

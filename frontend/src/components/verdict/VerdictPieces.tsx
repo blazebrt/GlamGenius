@@ -66,7 +66,7 @@ export function GradeBlock({ view }: { view: VerdictView }) {
       style={[styles.block, { backgroundColor: colour.fill }]}
       accessibilityLabel={
         view.letter
-          ? t(S.a11y.gradeBadge, { letter: view.letter, verdict: view.verdict })
+          ? t(S.a11y.gradeBadge, { letter: view.letter, verdict: view.decisionAction ?? view.verdict })
           : view.verdict
       }
     >
@@ -75,7 +75,7 @@ export function GradeBlock({ view }: { view: VerdictView }) {
       ) : (
         <Ionicons name="help-outline" size={72} color={colour.ink} />
       )}
-      <Text style={[styles.verdictWord, { color: colour.ink }]}>{view.verdict}</Text>
+      <Text style={[styles.verdictWord, { color: colour.ink }]}>{view.decisionAction ?? view.verdict}</Text>
     </View>
   );
 }
@@ -89,7 +89,7 @@ export function VerdictLines({
 }) {
   return (
     <View style={styles.lines}>
-      <Text style={styles.action}>{view.action}</Text>
+      <Text style={styles.action}>{view.primaryReason}</Text>
 
       {!!view.everydayNumber && (
         <View style={styles.numberRow}>

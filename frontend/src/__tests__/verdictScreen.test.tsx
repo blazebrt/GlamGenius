@@ -181,8 +181,8 @@ describe('factor quantities', () => {
   it('states the verified quantity and its per-100 basis together', () => {
     render(
       <FactorSection
-        title={S.factors.lowers}
-        empty={S.factors.noLowers}
+        title={S.factors.negatives}
+        empty={S.factors.noNegatives}
         onExplain={jest.fn()}
         rows={[{
           key: 'sugar', label: 'sugar', status: 'high', band: 'red',
@@ -196,6 +196,39 @@ describe('factor quantities', () => {
     // The name of the thing, resolved from the label key. A row that
     // shows only "High" and a number does not say high what.
     expect(screen.getByText(S.factors.label_sugar)).toBeTruthy();
+  });
+
+  it('locks customer factor headings to Negatives and Positives', () => {
+    expect(S.factors.negatives).toBe('Negatives');
+    expect(S.factors.positives).toBe('Positives');
+    expect(Object.values(S.factors)).not.toContain('What lowers it');
+    expect(Object.values(S.factors)).not.toContain('What helps');
+  });
+
+  it('uses the server decision action instead of inferring it from the grade', () => {
+    const view = buildVerdict({ ...base, grade: 'A', decision: { action: 'skip', reasonKey: 'sugar' } });
+    expect(view.decisionAction).toBe(S.primary.decisionSkip);
+    expect(view.primaryReason).toBe(S.primary.reasonSugar);
+  });
+
+  it('resolves additive and fallback reason keys without exposing rule ids', () => {
+    expect(buildVerdict({ ...base, decision: { action: 'skip', reasonKey: 'additive:319' } }).primaryReason)
+      .toBe(S.primary.reasonAdditive);
+    expect(buildVerdict({ ...base, decision: { action: 'wait', reasonKey: 'label_facts' } }).primaryReason)
+      .toBe(S.primary.reasonLabelFacts);
+  });
+
+  it.each([
+    ['sugar', S.primary.reasonSugar], ['salt', S.primary.reasonSalt],
+    ['processing', S.primary.reasonProcessing], ['refined_grain', S.primary.reasonRefinedGrain],
+    ['saturated_fat', S.primary.reasonSaturatedFat], ['total_fat', S.primary.reasonTotalFat],
+    ['added_sugar_share', S.primary.reasonAddedSugarShare], ['trans_fat', S.primary.reasonTransFat],
+    ['additive:319', S.primary.reasonAdditive], ['naming', S.primary.reasonNaming],
+    ['label_facts', S.primary.reasonLabelFacts], ['future_rule', S.primary.reasonLabelFacts],
+  ])('maps current reason key %s through reviewed copy', (reasonKey, reason) => {
+    const view = buildVerdict({ ...base, decision: { action: 'skip', reasonKey } });
+    expect(view.primaryReason).toBe(reason);
+    expect(view.primaryReason).not.toContain('grade.');
   });
 });
 
@@ -363,6 +396,7 @@ describe('answers that are not a letter', () => {
     const view = buildVerdict({ ...base, outcome: 'not_graded', grade: null });
     expect(view.letter).toBeNull();
     expect(view.action).toBe(S.primary.actionNotGraded);
+    expect(view.decisionAction).toBeNull();
   });
 
   it('shows no letter and no guess when the label was incomplete', () => {
@@ -370,6 +404,7 @@ describe('answers that are not a letter', () => {
     expect(view.letter).toBeNull();
     expect(view.everydayNumber).toBe('');
     expect(view.spoken).toBe(S.voice.unknown);
+    expect(view.decisionAction).toBeNull();
   });
 });
 

@@ -637,10 +637,18 @@ def present(
     production path passes the resolved one.
     """
     ruleset = ruleset if ruleset is not None else candidate_ruleset()
-    lowers, helps = _factor_rows(product, result, ruleset)
+    negatives, positives = _factor_rows(product, result, ruleset)
     action = {
         Grade.A: "buy", Grade.B: "buy", Grade.C: "wait", Grade.D: "skip", Grade.E: "skip",
-    }.get(result.grade, "wait")
+    }.get(result.grade)
+    if negatives:
+        reason_key = negatives[0]["key"]
+    elif result.outcome.value == "graded":
+        reason_key = "label_facts"
+    elif result.outcome.value == "not_graded":
+        reason_key = "not_graded"
+    else:
+        reason_key = "not_enough_information"
     return {
         "engine_version": result.engine_version,
         "outcome": result.outcome.value,
@@ -650,14 +658,14 @@ def present(
         "taxonomy": _taxonomy(product, result),
         "decision": {
             "action": action,
-            "reason_key": (lowers[0]["key"] if lowers else "label_facts"),
+            "reason_key": reason_key,
         },
         "evidence": {
             "ruleset_version": FOOD_RULE_VERSION,
             # Named, so nobody has to infer it from the rows: which of the
             # rules that actually fired are still resting on a candidate.
             "unpublished_rules": [
-                row["rule"] for row in lowers
+                row["rule"] for row in negatives
                 if row["rule"] and row["evidence"]["status"] != "published"
             ],
         },
@@ -673,9 +681,17 @@ def present(
             _additive_component(product, result),
             _naming_component(product, result),
         ],
-        "lowers": lowers,
-        "helps": helps,
+        # Product Result Contract V1. These canonical arrays are the one
+        # presentation calculation path; legacy names below are aliases only.
+        "result_contract_version": "v1",
+        "negatives": negatives,
+        "positives": positives,
+        "lowers": negatives,
+        "helps": positives,
         "ingredients": _ingredient_rows(product),
+        # The place for a future deterministic alternative is explicit. This
+        # milestone deliberately does not manufacture one from grading facts.
+        "better_next_action": None,
         "trace": _trace_payload(result, ruleset),
         "quantity_guidance": result.quantity_guidance,
         "purity_note": result.purity_note,
