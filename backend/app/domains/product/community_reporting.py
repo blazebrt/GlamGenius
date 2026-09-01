@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -68,10 +68,19 @@ def _context_payload(context: ConditionContext | None) -> dict[str, str] | None:
     }
 
 
+def normalize_observed_at(value: datetime | None) -> datetime | None:
+    """Require an offset and compare event instants at microsecond UTC precision."""
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValidationFailedError("The observation time needs a timezone offset.", field="observed_at")
+    return value.astimezone(UTC)
+
+
 def _same_submission(
     row: CommunityObservationReport,
     *, barcode: str, observation_code: str, batch_number: str | None,
-    context: ConditionContext | None, photo_asset_id: uuid.UUID | None,
+    context: ConditionContext | None, photo_asset_id: uuid.UUID | None, observed_at: datetime | None,
 ) -> bool:
     return (
         row.barcode == barcode.strip()
@@ -79,7 +88,21 @@ def _same_submission(
         and row.batch_number == normalize_batch_number(batch_number)
         and row.condition_context == _context_payload(context)
         and row.photo_asset_id == photo_asset_id
+        and row.observed_at == observed_at
     )
+
+
+def assert_same_submission_or_conflict(
+    row: CommunityObservationReport,
+    *, barcode: str, observation_code: str, batch_number: str | None,
+    context: ConditionContext | None, photo_asset_id: uuid.UUID | None, observed_at: datetime | None,
+) -> None:
+    if not _same_submission(
+        row, barcode=barcode, observation_code=observation_code,
+        batch_number=batch_number, context=context, photo_asset_id=photo_asset_id,
+        observed_at=observed_at,
+    ):
+        raise ConflictError("This report identifier belongs to a different observation.", current_version=0)
 
 
 async def submit(
@@ -103,6 +126,7 @@ async def submit(
     context = context_from_payload(condition_context)
     if definition.requires_condition_context and context is None:
         raise ValidationFailedError("This observation needs structured context.", field="condition_context")
+    observed_at = normalize_observed_at(observed_at)
     if observed_at is not None and observed_at > utcnow() + timedelta(minutes=5):
         raise ValidationFailedError("The observation time cannot be in the future.", field="observed_at")
 
@@ -113,11 +137,10 @@ async def submit(
         )
     )).scalar_one_or_none()
     if existing is not None:
-        if not _same_submission(
+        assert_same_submission_or_conflict(
             existing, barcode=barcode, observation_code=observation_code,
-            batch_number=batch_number, context=context, photo_asset_id=photo_asset_id,
-        ):
-            raise ConflictError("This report identifier belongs to a different observation.")
+            batch_number=batch_number, context=context, photo_asset_id=photo_asset_id, observed_at=observed_at,
+        )
         return existing, False
 
     recent_count = await session.scalar(
@@ -155,6 +178,10 @@ async def submit(
                 CommunityObservationReport.client_report_id == client_report_id,
             )
         )).scalar_one()
+        assert_same_submission_or_conflict(
+            existing, barcode=barcode, observation_code=observation_code,
+            batch_number=batch_number, context=context, photo_asset_id=photo_asset_id, observed_at=observed_at,
+        )
         return existing, False
     return row, True
 

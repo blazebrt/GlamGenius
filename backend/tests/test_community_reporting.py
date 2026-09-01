@@ -250,3 +250,26 @@ async def test_account_deletion_cascades_claimed_reports_but_keeps_never_claimed
         retained = await session.get(CommunityObservationReport, anonymous.id)
     assert retained is not None
     assert retained.account_id is None
+
+
+def test_observed_at_is_timezone_aware_utc_canonical_idempotency_data():
+    utc_time = community_reporting.normalize_observed_at(datetime(2026, 9, 1, 10, tzinfo=UTC))
+    offset_time = community_reporting.normalize_observed_at(
+        datetime.fromisoformat("2026-09-01T15:30:00+05:30")
+    )
+    assert utc_time == offset_time == datetime(2026, 9, 1, 10, tzinfo=UTC)
+    with pytest.raises(ValidationFailedError):
+        community_reporting.normalize_observed_at(datetime(2026, 9, 1, 10))
+
+
+def test_concurrent_winner_resolution_rejects_different_observed_at():
+    observed_at = datetime(2026, 9, 1, 10, tzinfo=UTC)
+    winner = CommunityObservationReport(
+        device_id=uuid.uuid4(), client_report_id="race-report", barcode=BARCODE,
+        observation_code="barcode_mismatch", observed_at=observed_at,
+    )
+    with pytest.raises(ConflictError):
+        community_reporting.assert_same_submission_or_conflict(
+            winner, barcode=BARCODE, observation_code="barcode_mismatch", batch_number=None,
+            context=None, photo_asset_id=None, observed_at=observed_at + timedelta(seconds=1),
+        )
