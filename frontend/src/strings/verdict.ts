@@ -75,6 +75,42 @@ export const S = {
     ingredients: 'What is in it',
     scanAnother: 'Scan another',
   },
+  // -----------------------------------------------------------------------
+  // The comparable alternative. One product, compared on facts.
+  //
+  // Every word here was chosen against LEGAL_RULES.md and against what this
+  // feature can actually prove. Three things it must never say:
+  //
+  //   - "healthier", "safer", "cleaner", "best" — characterisation, and a
+  //     claim about a body we have made no measurement of. The comparison is
+  //     between two grades, and it says so.
+  //   - anything about stock, price or where to buy. The source says the
+  //     product is sold in India; it does not say it is on a shelf near
+  //     anybody, and it says nothing at all about money.
+  //   - "no alternatives found". Our cached data is not the Indian market, so
+  //     the honest missing line is about what we know, not about what exists.
+  // -----------------------------------------------------------------------
+  betterOption: {
+    // Neutral and premium. Not "Healthier swap", not "Smart Swap".
+    heading: 'Better option',
+    // States the two letters. It does not characterise either product.
+    comparison: 'Grade {candidate} instead of Grade {current}',
+    // Neutral about who decided the category: we read theirs, we did not
+    // author or certify it.
+    sameCategory: 'Same category, as listed by Open Food Facts.',
+    // What the source says, which is not the same as what a shop has today.
+    availability: 'Listed for India by Open Food Facts.',
+    viewAction: 'View this product',
+    // Rule 5: absence of data is stated, never filled. This says what we do
+    // not have — it does not say nothing better exists.
+    notEnoughInformation: 'Not enough information to suggest a comparable alternative yet.',
+    a11y: {
+      card: '{name}. Grade {candidate} instead of Grade {current}. Same category.',
+      view: 'View {name}',
+      // Spoken where the missing line is only a sentence on screen.
+      missing: 'Not enough information to suggest a comparable alternative yet.',
+    },
+  },
   officialRecords: {
     title: 'Official FSSAI record',
     recallFound: 'This exact pack appears in an official FSSAI food recall record.',

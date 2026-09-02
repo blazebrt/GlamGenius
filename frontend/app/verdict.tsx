@@ -34,6 +34,7 @@ import { buildVerdictShareText } from '../src/services/verdictShare';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import { OfficialRecords } from '../src/components/verdict/OfficialRecords';
 import { CommunityObservations } from '../src/components/verdict/CommunityObservations';
+import { BetterOption } from '../src/components/verdict/BetterOption';
 import { CommunityReportSheet, BATCH_SCOPED_CODES } from '../src/components/verdict/CommunityReportSheet';
 import { useUserStore } from '../src/store/userStore';
 import {
@@ -239,6 +240,14 @@ export default function VerdictScreen() {
     }
   }, [refreshOwnReports]);
 
+  // Straight to that product's ordinary Product Result. Deliberately a plain
+  // navigation and nothing else: reading about a pack is not scanning one, so
+  // no scan is recorded, no scan count moves, and the physical-pack layers keep
+  // failing closed on a product this phone has never actually seen.
+  const openAlternative = useCallback((candidateBarcode: string) => {
+    router.push({ pathname: '/verdict', params: { barcode: candidateBarcode } });
+  }, [router]);
+
   const captureLabelForBatch = useCallback(() => {
     setCommunityOpen(false);
     // Into the label capture that already exists. No second batch scanner, and
@@ -340,6 +349,11 @@ export default function VerdictScreen() {
             >
               <Text style={styles.linkText}>{S.communityObservations.reportAction}</Text>
             </TouchableOpacity>
+            {/* Last of the layers, immediately above the closing actions. It
+                sits below the evidence and below the shopper observations
+                because it is the least of them: a comparison with one other
+                product, not a finding about this one. */}
+            <BetterOption alternative={source.comparableAlternative} onView={openAlternative} />
             <VerdictActions
               onWhy={() => setTab('why')}
               onListen={onListen}

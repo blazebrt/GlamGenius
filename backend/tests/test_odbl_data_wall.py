@@ -33,6 +33,7 @@ from app.domains.off.wall import (
 )
 from app.shared.database.registry import Base
 from sqlalchemy import Column, String, Table
+from sqlalchemy import select as sa_select
 
 
 @pytest_asyncio.fixture
@@ -286,3 +287,168 @@ def test_the_off_product_table_matches_the_allowlist_exactly():
     assert columns == OFF_FIELDS, (
         f"only on the table: {columns - OFF_FIELDS}; only on the allowlist: {OFF_FIELDS - columns}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The comparable alternative (Step 6A) reads both stores and combines neither
+# ---------------------------------------------------------------------------
+#: The Store B tables a barcode scan writes to. These are where a cached
+#: Open Food Facts value would land if anybody ever decided the runtime join was
+#: too slow, so they are the ones worth pinning.
+#:
+#: Provenance decides what is a breach, not the name of a column — a nutrition
+#: panel somebody photographed is ours however much it resembles theirs, which
+#: is why ``product_label_facts`` names its columns ``printed_*``. What follows
+#: is therefore scoped to the scan tables and to the field names that could only
+#: have come from the catalogue.
+_SCAN_TABLES = ("product_records", "scan_events", "product_label_snapshots")
+
+#: Names that could only be a copy of an Open Food Facts field, including the
+#: two a category cache would introduce.
+_OFF_DERIVED_COLUMN_NAMES = frozenset({
+    "brands", "nutriments", "categories", "category_key", "canonical_category",
+    "countries", "availability", "image_url", "off_last_modified_t",
+    "off_product_name", "off_brand", "alternative_barcode",
+})
+
+
+def test_the_scan_tables_have_grown_no_open_food_facts_column():
+    """The alternative reads their category and country. It stores neither.
+
+    A ``canonical_category`` or an ``availability`` column on a scan table would
+    be an Open Food Facts value written into one of ours — a derived database,
+    and the share-alike obligation with it. That is the change that looks like a
+    performance improvement and is a licence breach, so the comparison is
+    recomputed per request and the column never has to exist.
+    """
+    present = [name for name in _SCAN_TABLES if name in Base.metadata.tables]
+    assert present == list(_SCAN_TABLES), (
+        f"a scan table was renamed or removed; update this test: {present}"
+    )
+    offenders = [
+        f"{name}.{column.name}"
+        for name in present
+        for column in Base.metadata.tables[name].columns
+        if column.name in _OFF_DERIVED_COLUMN_NAMES
+    ]
+    assert not offenders, (
+        "these Store B columns hold Open Food Facts fields: " + ", ".join(offenders)
+    )
+
+
+def test_no_store_b_table_caches_an_alternative():
+    """Runtime computation is allowed; a persisted alternative is not.
+
+    A table of chosen alternatives is a join between the two stores written
+    down. Durable decision memory belongs to its own milestone and to Store B
+    data of our own, not to a cached pairing of their rows with our grades.
+    """
+    offenders = [
+        name for name in Base.metadata.tables
+        if "alternative" in name.lower() or "comparable" in name.lower()
+    ]
+    assert not offenders, f"the alternative was persisted into Store B: {offenders}"
+
+
+def test_the_alternative_domain_reads_store_a_and_never_writes_it():
+    """The one contact point is a read, and the code says so structurally."""
+    import ast
+    import inspect
+
+    from app.domains.alternatives import service as alternatives_service
+
+    source = inspect.getsource(alternatives_service)
+    tree = ast.parse(source)
+    called = {
+        node.func.attr for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    # Nothing that could put a row into either store.
+    for writer in ("add", "add_all", "commit", "flush", "merge", "delete", "bulk_save_objects"):
+        assert writer not in called, f"the alternative service calls session.{writer}()"
+    # And it reaches Store A through Store A's own guarded sessionmaker.
+    assert "get_off_sessionmaker" in source
+
+
+@pytest.mark.asyncio
+async def test_the_alternative_pairing_exists_only_for_one_response(off_clean):
+    """Their half and ours are assembled together and thrown away together.
+
+    The candidate a shopper sees carries a product name and a brand from Open
+    Food Facts beside a grade of ours. That pairing is a response, not a record:
+    it is built in memory, returned, and never written down. The proof is that
+    Store A is byte-identical afterwards and Store B gained nothing at all.
+    """
+    from dataclasses import replace as dataclass_replace
+
+    from app.domains.alternatives.service import comparable_alternative_envelope
+    from app.domains.nutrition.grading import from_scan, grade_product
+    from app.domains.nutrition.grading.production_rules import (
+        STATUS_PUBLISHED,
+        ProductionRuleset,
+        candidate_ruleset,
+        enforce_published_required_rules,
+    )
+
+    current_off = {
+        "product_name": "Northstar Corn Flakes", "brands": "Northstar",
+        "ingredients_text": "maize, sugar, salt, flavouring, emulsifier (ins 322)",
+        "nutriments": {
+            "energy-kcal_100g": 380, "sugars_100g": 8, "saturated-fat_100g": 1,
+            "salt_100g": 0.5, "proteins_100g": 7, "fiber_100g": 3,
+        },
+        "categories": "Foods, Breakfasts, Breakfast cereals", "countries": "India",
+    }
+    factory = get_off_sessionmaker()
+    async with factory() as session:
+        session.add(OffProduct(
+            barcode="8901000000001", product_name=current_off["product_name"],
+            brands=current_off["brands"], ingredients_text=current_off["ingredients_text"],
+            nutriments=current_off["nutriments"], categories=current_off["categories"],
+            countries="India", fetched_at=datetime.now(UTC),
+        ))
+        session.add(OffProduct(
+            barcode="8901000000002", product_name="Sunfield Oat Porridge", brands="Sunfield",
+            ingredients_text="whole grain oats, salt",
+            nutriments={
+                "energy-kcal_100g": 370, "sugars_100g": 2, "saturated-fat_100g": 1.2,
+                "salt_100g": 0.3, "proteins_100g": 12, "fiber_100g": 9,
+            },
+            categories="Plant foods, Breakfast cereals", countries="India",
+            fetched_at=datetime.now(UTC),
+        ))
+        await session.commit()
+
+    published = ProductionRuleset(provenance={
+        rule_id: dataclass_replace(row, status=STATUS_PUBLISHED)
+        for rule_id, row in candidate_ruleset().provenance.items()
+    })
+    product = from_scan.build(
+        barcode="8901000000001", name=current_off["product_name"], off_half=current_off,
+    )
+    result = enforce_published_required_rules(grade_product(product), published)
+
+    async def store_a_rows():
+        async with factory() as session:
+            rows = (await session.execute(
+                sa_select(OffProduct).order_by(OffProduct.barcode)
+            )).scalars().all()
+            return [
+                (row.barcode, row.product_name, row.brands, row.ingredients_text,
+                 row.nutriments, row.categories, row.countries, row.image_url,
+                 row.quantity, row.off_last_modified_t, row.fetched_at)
+                for row in rows
+            ]
+
+    before = await store_a_rows()
+    envelope = await comparable_alternative_envelope(
+        barcode="8901000000001", current_off_half=current_off,
+        current_product=product, current_result=result, ruleset=published,
+    )
+    # Their half and ours did meet — that is the feature.
+    assert envelope["candidate"]["product_name"] == "Sunfield Oat Porridge"
+    assert envelope["candidate"]["grade"] == "B"
+    assert envelope["candidate"]["attribution"]["text"] == ATTRIBUTION_TEXT
+    # And Store A is exactly as it was. No grade of ours was written beside
+    # their row, and no row of theirs was copied anywhere.
+    assert await store_a_rows() == before

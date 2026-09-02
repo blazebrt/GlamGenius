@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, VERIFICATION_USER_CONFIRMED, AIRun, AIRunOutput
+from app.domains.alternatives import service as alternatives_service
 from app.domains.community import service as community_service
 from app.domains.media.storage import factory as storage_factory
 from app.domains.nutrition.grading import from_scan, grade_product, presentation
@@ -315,6 +316,19 @@ async def read_product_verdict(
     # this device itself confirmed.
     payload["community_observations"] = await community_service.community_observations_envelope(
         session, barcode=barcode, device_id=device.id,
+    )
+    # A fifth envelope, additive and last: at most one comparable alternative,
+    # decided by the same ruleset that graded the product above it. It reads the
+    # Open Food Facts half already paired here for the source's own category —
+    # a runtime read on barcode, never written back — and consults no account,
+    # no shopper observation and no official record. Free for an anonymous
+    # device, identical for everybody, and computed without asking any AI.
+    payload["alternative"] = await alternatives_service.comparable_alternative_envelope(
+        barcode=barcode,
+        current_off_half=found.get("open_food_facts"),
+        current_product=product,
+        current_result=result,
+        ruleset=ruleset,
     )
     return payload
 

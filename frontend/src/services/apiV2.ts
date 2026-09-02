@@ -832,6 +832,34 @@ export interface ProductVerdictWire {
       official_finding: false;
     }[];
   } | null;
+  /**
+   * At most one comparable alternative, or an honest reason there is not one.
+   *
+   * Deliberately shaped as zero-or-one and not a list: the free tier carries a
+   * single comparable option, and there is nowhere here for a ranked set to
+   * appear. Nothing about price, stock or the shopper reaches this envelope.
+   */
+  alternative?: {
+    policy_version: string;
+    status: 'available' | 'not_enough_information';
+    reason_key: string;
+    candidate: {
+      barcode: string;
+      product_name: string | null;
+      brand: string | null;
+      grade: 'A' | 'B' | 'C' | 'D' | 'E';
+      band: 'green' | 'yellow' | 'red';
+      decision: 'buy' | 'wait' | 'skip';
+      comparison: {
+        category_match: 'exact_source_leaf';
+        category_source: 'open_food_facts';
+        current_grade: 'A' | 'B' | 'C' | 'D' | 'E';
+        candidate_grade: 'A' | 'B' | 'C' | 'D' | 'E';
+        basis: 'per_100g' | 'per_100ml' | null;
+      };
+      attribution: { text: string } | null;
+    } | null;
+  } | null;
 }
 
 /** The graded verdict for one barcode, shaped for the verdict screen. */
