@@ -215,7 +215,7 @@ export function LabelReview({
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Nutrition, exactly as printed</Text>
           <View style={styles.factRow}>
-            <Text style={styles.factLabel}>Basis</Text>
+            <Text style={styles.factLabel}>{S.labelReview.basis}</Text>
             <Text style={styles.factValue}>{basisLabel}</Text>
           </View>
           {Object.entries(nutrition).map(([key, value]) => (

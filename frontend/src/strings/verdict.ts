@@ -76,6 +76,7 @@ export const S = {
     scanAnother: 'Scan another',
   },
   labelReview: {
+    basis: 'Basis',
     basisPer100g: 'Per 100 g',
     basisPer100ml: 'Per 100 ml',
     basisMissing: 'Basis could not be read',
