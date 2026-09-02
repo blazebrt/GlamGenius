@@ -125,6 +125,12 @@ export interface VerdictSource {
   quantityGuidance?: string | null;
   purityNote?: string | null;
   missing?: string[];
+  officialRecords?: {
+    authority: string;
+    record_type: 'food_recall';
+    source_url: string;
+    records: Array<{ id: string; recall_id: string; source_url: string; match_state: 'matched'; [key: string]: unknown }>;
+  } | null;
 }
 
 export interface VerdictView {

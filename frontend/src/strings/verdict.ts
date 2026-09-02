@@ -75,6 +75,14 @@ export const S = {
     ingredients: 'What is in it',
     scanAnother: 'Scan another',
   },
+  officialRecords: {
+    title: 'Official FSSAI record',
+    recallFound: 'This exact pack appears in an official FSSAI food recall record.',
+    recallId: 'Recall ID',
+    status: 'Recall status',
+    reason: 'Reason recorded by FSSAI',
+    openSource: 'Open official FSSAI record',
+  },
   labelReview: {
     basis: 'Basis',
     basisPer100g: 'Per 100 g',

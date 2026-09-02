@@ -21,6 +21,7 @@ from app.domains.nutrition.grading.production_rules import (
     enforce_published_required_rules,
     resolve_production_ruleset,
 )
+from app.domains.official_records import service as official_records_service
 from app.domains.product import complaints, devices, extraction, service
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
@@ -129,7 +130,15 @@ async def lookup_barcode(
 
     Always answers, always with a confidence level.
     """
-    return await service.lookup(session, barcode)
+    result = await service.lookup(session, barcode)
+    snapshot = await service.latest_label_snapshot(session, barcode)
+    result["official_records"] = {
+        "authority": "FSSAI / FoSCoS",
+        "record_type": "food_recall",
+        "source_url": "https://foscos.fssai.gov.in/food-recall",
+        "records": await official_records_service.recalls_for_pack(session, snapshot.facts) if snapshot else [],
+    }
+    return result
 
 
 @router.post("/scan/events", status_code=status.HTTP_201_CREATED)
@@ -296,6 +305,15 @@ async def read_product_verdict(
     # Solid or drink, so the screen can say "100 g" or "100 ml" honestly when
     # there is no pack size to work from.
     payload["basis"] = product.basis
+    # Official records are a separate, additive envelope. Matching is allowed
+    # only against the confirmed physical-pack snapshot; OFF cannot supply a
+    # licence or batch and therefore cannot manufacture a recall match.
+    payload["official_records"] = {
+        "authority": "FSSAI / FoSCoS",
+        "record_type": "food_recall",
+        "source_url": "https://foscos.fssai.gov.in/food-recall",
+        "records": await official_records_service.recalls_for_pack(session, snapshot.facts) if snapshot else [],
+    }
     return payload
 
 
