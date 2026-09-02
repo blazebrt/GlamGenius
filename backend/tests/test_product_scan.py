@@ -14,6 +14,7 @@ from decimal import Decimal
 import pytest
 import pytest_asyncio
 from app.domains.ai_gateway.gateway import AIResult
+from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, AIRun, AIRunOutput
 from app.domains.nutrition.grading.production_rules import (
     STATUS_PUBLISHED,
     ProductionRuleset,
@@ -67,6 +68,21 @@ def _fake_ai_result(data):
         prompt_version="scan-label.v1", schema_version="scan-label.v1",
         confidence=data.confidence, latency_ms=12, estimated_cost_usd=None,
     )
+
+
+async def _seed_label_run(facts: dict, account_id: uuid.UUID) -> uuid.UUID:
+    factory = get_sessionmaker()
+    async with factory() as session:
+        run = AIRun(
+            account_id=account_id, feature="product_label_transcribe", provider="test",
+            model="test-model", prompt_version="scan-label.v1", schema_version="scan-label.v1",
+            status=AI_STATUS_SUCCEEDED, validation_passed=True,
+        )
+        session.add(run)
+        await session.flush()
+        session.add(AIRunOutput(ai_run_id=run.id, schema_version="scan-label.v1", payload=facts))
+        await session.commit()
+        return run.id
 
 
 async def _seed_off_product(barcode: str, **fields):
@@ -210,17 +226,21 @@ async def test_a_product_with_no_ingredients_still_offers_label_capture(
 
 @pytest.mark.asyncio
 async def test_confirming_a_label_creates_a_record_and_raises_confidence(
-    db_clean, off_clean, app_client, device,
+    db_clean, off_clean, app_client, device, registered_supabase_user,
 ):
     """One tap to accept, the VC-07 draft-to-confirmed shape."""
     facts = {
         "product_name": "Regional namkeen",
         "ingredients_text": "besan, edible oil, salt, spices. FSSAI Lic. No. 10012345678901",
         "nutrition_per_100g": {"energy_kcal": "520", "sugars_g": "3.1"},
+        "nutrition_basis": "per_100g",
     }
+    token, account_id = await registered_supabase_user()
+    run_id = await _seed_label_run(facts, account_id)
     response = await app_client.post(
-        "/api/v2/scan/label/confirm", headers=device,
-        json={"barcode": UNKNOWN, "facts": facts, "client_scan_id": uuid.uuid4().hex},
+        "/api/v2/scan/label/confirm",
+        json={"barcode": UNKNOWN, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
+        headers={**device, **auth(token)},
     )
     body = response.json()
     assert response.status_code == 201, response.text
@@ -235,7 +255,7 @@ async def test_confirming_a_label_creates_a_record_and_raises_confidence(
 
 @pytest.mark.asyncio
 async def test_confirmed_label_content_versions_are_deduplicated_and_linked(
-    db_clean, off_clean, app_client, device,
+    db_clean, off_clean, app_client, device, registered_supabase_user,
 ):
     """Repeated observations reuse a semantic version; content gets a lineage."""
     first = {
@@ -243,13 +263,16 @@ async def test_confirmed_label_content_versions_are_deduplicated_and_linked(
         "brand": "Acme",
         "ingredients_text": "besan, edible oil, salt",
         "nutrition_per_100g": {"energy_kcal": "520", "sugars_g": "3.1"},
+        "nutrition_basis": "per_100g",
         "batch_number": "B-1",
     }
 
+    token, account_id = await registered_supabase_user()
     async def confirm(facts):
+        run_id = await _seed_label_run(facts, account_id)
         response = await app_client.post(
-            "/api/v2/scan/label/confirm", headers=device,
-            json={"barcode": UNKNOWN, "facts": facts, "client_scan_id": uuid.uuid4().hex},
+            "/api/v2/scan/label/confirm", headers={**device, **auth(token)},
+            json={"barcode": UNKNOWN, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
         )
         assert response.status_code == 201, response.text
 
@@ -296,7 +319,7 @@ def _published_ruleset() -> ProductionRuleset:
 
 @pytest.mark.asyncio
 async def test_unknown_confirmed_pack_facts_feed_the_real_grader_without_off_copy(
-    db_clean, off_clean, app_client, device, monkeypatch,
+    db_clean, off_clean, app_client, device, monkeypatch, registered_supabase_user,
 ):
     from app.api.v2 import product as product_api
 
@@ -314,6 +337,7 @@ async def test_unknown_confirmed_pack_facts_feed_the_real_grader_without_off_cop
             "fibre_g": "6",
             "sodium_g": "0.32",
         },
+        "nutrition_basis": "per_100g",
         "net_quantity": "180 g",
         "serving_size": "30 g",
     }
@@ -329,10 +353,12 @@ async def test_unknown_confirmed_pack_facts_feed_the_real_grader_without_off_cop
 
     monkeypatch.setattr(product_api, "grade_product", capture_product)
     monkeypatch.setattr(product_api, "resolve_production_ruleset", published_rules)
+    token, account_id = await registered_supabase_user()
+    run_id = await _seed_label_run(facts, account_id)
     confirmed = await app_client.post(
         "/api/v2/scan/label/confirm",
-        headers=device,
-        json={"barcode": UNKNOWN, "facts": facts, "client_scan_id": uuid.uuid4().hex},
+        headers={**device, **auth(token)},
+        json={"barcode": UNKNOWN, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
     )
     assert confirmed.status_code == 201, confirmed.text
 
@@ -356,17 +382,19 @@ async def test_unknown_confirmed_pack_facts_feed_the_real_grader_without_off_cop
 
 @pytest.mark.asyncio
 async def test_insufficient_confirmed_pack_remains_not_enough_information(
-    db_clean, off_clean, app_client, device,
+    db_clean, off_clean, app_client, device, registered_supabase_user,
 ):
     facts = {
         "product_name": "Energy-only snack",
         "ingredients_text": "millet flour, salt",
         "nutrition_per_100g": {"energy_kcal": "440"},
     }
+    token, account_id = await registered_supabase_user()
+    run_id = await _seed_label_run(facts, account_id)
     confirmed = await app_client.post(
         "/api/v2/scan/label/confirm",
-        headers=device,
-        json={"barcode": UNKNOWN, "facts": facts, "client_scan_id": uuid.uuid4().hex},
+        headers={**device, **auth(token)},
+        json={"barcode": UNKNOWN, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
     )
     assert confirmed.status_code == 201, confirmed.text
     body = (await app_client.get(
@@ -415,21 +443,24 @@ async def _store_concurrently(
 
 @pytest.mark.asyncio
 async def test_concurrent_confirmations_allocate_one_ordered_semantic_lineage(
-    db_clean, off_clean, app_client, device,
+    db_clean, off_clean, app_client, device, registered_supabase_user,
 ):
     barcode = "8907777777777"
     first = {
         "product_name": "Concurrent snack",
         "ingredients_text": "millet, salt",
         "nutrition_per_100g": {"sugars_g": "1"},
+        "nutrition_basis": "per_100g",
     }
+    token, account_id = await registered_supabase_user()
+    run_id = await _seed_label_run(first, account_id)
     same_responses = await asyncio.gather(*(
         app_client.post(
             "/api/v2/scan/label/confirm",
-            headers=device,
+            headers={**device, **auth(token)},
             json={
                 "barcode": barcode,
-                "facts": first,
+                "ai_run_id": str(run_id),
                 "client_scan_id": f"same-{uuid.uuid4().hex}",
             },
         )
@@ -477,17 +508,20 @@ async def test_concurrent_confirmations_allocate_one_ordered_semantic_lineage(
 
 @pytest.mark.asyncio
 async def test_replayed_label_confirmation_is_idempotent_for_event_and_version(
-    db_clean, off_clean, app_client, device,
+    db_clean, off_clean, app_client, device, registered_supabase_user,
 ):
     facts = {
         "product_name": "Replay-safe oats",
         "ingredients_text": "oats",
         "nutrition_per_100g": {"energy_kcal": "370"},
+        "nutrition_basis": "per_100g",
     }
+    token, account_id = await registered_supabase_user()
+    run_id = await _seed_label_run(facts, account_id)
     client_scan_id = uuid.uuid4().hex
-    payload = {"barcode": UNKNOWN, "facts": facts, "client_scan_id": client_scan_id}
+    payload = {"barcode": UNKNOWN, "ai_run_id": str(run_id), "client_scan_id": client_scan_id}
     for _ in range(2):
-        response = await app_client.post("/api/v2/scan/label/confirm", headers=device, json=payload)
+        response = await app_client.post("/api/v2/scan/label/confirm", headers={**device, **auth(token)}, json=payload)
         assert response.status_code == 201, response.text
 
     factory = get_sessionmaker()

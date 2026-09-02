@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import base64
 import uuid
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.ai_gateway import gateway
@@ -44,7 +45,8 @@ class ExtractedLabel(BaseModel):
     brand: str | None = Field(default=None, max_length=160)
     ingredients_text: str | None = Field(default=None, max_length=4000)
     #: Nutrition exactly as printed: {"energy_kcal": "480", "sugars_g": "22.5"}.
-    nutrition_per_100g: dict[str, str] | None = None
+    nutrition_per_100g: dict[str, str] | None = Field(default=None, max_length=24)
+    nutrition_basis: Literal["per_100g", "per_100ml"] | None = None
     serving_size: str | None = Field(default=None, max_length=80)
     net_quantity: str | None = Field(default=None, max_length=80)
     fssai_licence: str | None = Field(default=None, max_length=20)
@@ -52,17 +54,37 @@ class ExtractedLabel(BaseModel):
     veg_mark: str | None = Field(default=None, max_length=24)
     allergen_text: str | None = Field(default=None, max_length=1000)
     confidence: float | None = Field(default=None, ge=0, le=1)
-    uncertain_fields: list[str] = Field(default_factory=list)
+    uncertain_fields: list[str] = Field(default_factory=list, max_length=24)
     photo_quality_notes: str | None = Field(default=None, max_length=400)
+
+    @field_validator("nutrition_per_100g")
+    @classmethod
+    def _bounded_nutrition(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if value is None:
+            return None
+        for key, item in value.items():
+            if len(key) > 64 or len(item) > 64:
+                raise ValueError("nutrition entries are too long")
+        return value
+
+    @field_validator("uncertain_fields")
+    @classmethod
+    def _bounded_uncertainty(cls, value: list[str]) -> list[str]:
+        if any(len(item) > 80 for item in value):
+            raise ValueError("uncertain field names are too long")
+        return value
 
 
 def prompt() -> str:
     return """Transcribe this packaged food label.
 Return one JSON object with product_name, brand, ingredients_text,
-nutrition_per_100g, serving_size, net_quantity, fssai_licence, batch_number, veg_mark,
+nutrition_per_100g, nutrition_basis, serving_size, net_quantity, fssai_licence, batch_number, veg_mark,
 allergen_text, confidence, uncertain_fields and photo_quality_notes.
-Copy the nutrition table exactly as printed, per 100 g or per 100 ml, keeping the
-units. Copy the ingredient list in the order printed. The FSSAI licence is a
+Copy the nutrition table exactly as printed. Set nutrition_basis to per_100g only
+when "per 100 g" is visibly printed, or per_100ml only when "per 100 ml" is visibly
+printed. If the basis is absent or unreadable, omit it and include nutrition_basis
+in uncertain_fields; never infer it from the product name. Copy the ingredient list
+in the order printed. The FSSAI licence is a
 fourteen-digit number, usually near the words Lic. No. Omit anything you cannot
 read clearly and name it in uncertain_fields."""
 

@@ -58,7 +58,7 @@ async def latest_label_snapshot(session: AsyncSession, barcode: str) -> LabelSna
 
 CONTENT_FACT_FIELDS = (
     "product_name", "brand", "ingredients_text", "nutrition_per_100g",
-    "serving_size", "net_quantity", "fssai_licence", "veg_mark", "allergen_text",
+    "nutrition_basis", "serving_size", "net_quantity", "fssai_licence", "veg_mark", "allergen_text",
 )
 def _normalise(value: Any) -> Any:
     if isinstance(value, dict):
@@ -92,7 +92,7 @@ def label_completeness(facts: dict[str, Any]) -> str:
 
 def label_changed_fields(previous: dict[str, Any], current: dict[str, Any]) -> list[str]:
     old, new = canonical_label_facts(previous), canonical_label_facts(current)
-    mapping = {"product_name": "product_name", "brand": "brand", "ingredients_text": "ingredients", "nutrition_per_100g": "nutrition", "serving_size": "serving_size", "net_quantity": "net_quantity", "fssai_licence": "fssai_licence", "veg_mark": "veg_mark", "allergen_text": "allergen_text"}
+    mapping = {"product_name": "product_name", "brand": "brand", "ingredients_text": "ingredients", "nutrition_per_100g": "nutrition", "nutrition_basis": "nutrition_basis", "serving_size": "serving_size", "net_quantity": "net_quantity", "fssai_licence": "fssai_licence", "veg_mark": "veg_mark", "allergen_text": "allergen_text"}
     return [mapping[key] for key in CONTENT_FACT_FIELDS if old.get(key) != new.get(key)]
 
 
@@ -259,6 +259,7 @@ async def record_scan(
     queued_offline: bool = False,
     scanned_at: datetime | None = None,
     label_facts: dict[str, Any] | None = None,
+    ai_run_id: uuid.UUID | None = None,
 ) -> tuple[ScanEvent, bool]:
     """Record one scan, once.
 
@@ -277,7 +278,7 @@ async def record_scan(
     event = ScanEvent(
         device_id=device_id, account_id=account_id, barcode=barcode, outcome=outcome,
         client_scan_id=client_scan_id, queued_offline=queued_offline,
-        scanned_at=scanned_at or utcnow(), label_facts=label_facts,
+        scanned_at=scanned_at or utcnow(), label_facts=label_facts, ai_run_id=ai_run_id,
     )
     session.add(event)
     await session.flush()

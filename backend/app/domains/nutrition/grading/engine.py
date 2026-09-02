@@ -624,6 +624,8 @@ def required_grading_data_missing(product: ProductInput) -> tuple[str, ...]:
         missing.append("ingredient list")
     if not product.has_nutrition_panel or product.total_sugar_g is None and product.saturated_fat_g is None and product.salt_equivalent_g is None:
         missing.append("nutrition panel")
+    if product.has_nutrition_panel and product.basis not in {"solid", "drink"}:
+        missing.append("nutrition basis")
     return tuple(missing)
 
 

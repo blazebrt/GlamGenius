@@ -7,6 +7,7 @@ from app.domains.nutrition.grading import (
     grade_product,
     required_grading_data_missing,
 )
+from app.domains.product.extraction import ExtractedLabel
 from app.domains.product.service import (
     canonical_label_facts,
     label_changed_fields,
@@ -16,6 +17,7 @@ from app.domains.product.service import (
 BASE = {
     "product_name": " Oats  ", "brand": "Acme", "ingredients_text": "oats, salt",
     "nutrition_per_100g": {"sugars_g": "1", "energy_kcal": "370"},
+    "nutrition_basis": "per_100g",
     "allergen_text": "",
     "batch_number": "B-1", "confidence": 0.3, "device_id": "device-a",
 }
@@ -81,9 +83,10 @@ def test_completeness_is_closed_and_does_not_invent_missing_facts():
     }) == "incomplete_for_grading"
     assert label_completeness({
         "product_name": "Oats",
-        "ingredients_text": "oats",
-        "nutrition_per_100g": {"energy_kcal": "370", "sugars_g": "1"},
-    }) == "complete_for_grading"
+            "ingredients_text": "oats",
+            "nutrition_per_100g": {"energy_kcal": "370", "sugars_g": "1"},
+            "nutrition_basis": "per_100g",
+        }) == "complete_for_grading"
 
 
 def test_confirmed_label_adapter_maps_declared_values_without_inference():
@@ -123,6 +126,33 @@ def test_confirmed_label_adapter_maps_declared_values_without_inference():
     assert product.salt_g == Decimal("0.5")
 
 
+def test_extracted_label_uses_a_closed_explicit_nutrition_basis():
+    assert ExtractedLabel(nutrition_basis="per_100g").nutrition_basis == "per_100g"
+    assert ExtractedLabel(nutrition_basis="per_100ml").nutrition_basis == "per_100ml"
+    assert ExtractedLabel().nutrition_basis is None
+    import pytest
+    with pytest.raises(ValueError):
+        ExtractedLabel(nutrition_basis="from_name")
+
+
+def test_confirmed_basis_is_not_inferred_and_changes_grading_identity():
+    facts = {
+        "product_name": "Fruit drink",
+        "ingredients_text": "water, sugar",
+        "nutrition_per_100g": {"energy_kcal": "40", "sugars_g": "10"},
+    }
+    missing = from_scan.build_confirmed_label(barcode="x", facts=facts)
+    assert missing.basis == "unknown"
+    assert required_grading_data_missing(missing) == ("nutrition basis",)
+    per_100g = {**facts, "nutrition_basis": "per_100g"}
+    per_100ml = {**facts, "nutrition_basis": "per_100ml"}
+    assert from_scan.build_confirmed_label(barcode="x", facts=per_100g).basis == "solid"
+    assert from_scan.build_confirmed_label(barcode="x", facts=per_100ml).basis == "drink"
+    from app.domains.product.service import label_changed_fields
+    assert label_content_fingerprint(per_100g) != label_content_fingerprint(per_100ml)
+    assert "nutrition_basis" in label_changed_fields(per_100g, per_100ml)
+
+
 def test_completeness_and_grader_share_required_data_semantics():
     from app.domains.product.service import label_completeness
 
@@ -155,4 +185,4 @@ def test_structural_diff_has_closed_fields_and_excludes_batch():
     assert label_changed_fields(BASE, {**BASE, "batch_number": "B-2"}) == []
     assert label_changed_fields(BASE, {**BASE, "allergen_text": "contains nuts"}) == ["allergen_text"]
     assert label_changed_fields(BASE, {**BASE, "nutrition_per_100g": {"sugars_g": "2"}}) == ["nutrition"]
-    assert set(canonical_label_facts(BASE)) <= {"product_name", "brand", "ingredients_text", "nutrition_per_100g", "allergen_text"}
+    assert set(canonical_label_facts(BASE)) <= {"product_name", "brand", "ingredients_text", "nutrition_per_100g", "nutrition_basis", "allergen_text"}

@@ -29,6 +29,7 @@ _CONTENT_FIELDS = (
     "brand",
     "ingredients_text",
     "nutrition_per_100g",
+    "nutrition_basis",
     "serving_size",
     "net_quantity",
     "fssai_licence",
@@ -40,6 +41,7 @@ _DIFF_NAMES = {
     "brand": "brand",
     "ingredients_text": "ingredients",
     "nutrition_per_100g": "nutrition",
+    "nutrition_basis": "nutrition_basis",
     "serving_size": "serving_size",
     "net_quantity": "net_quantity",
     "fssai_licence": "fssai_licence",
@@ -140,7 +142,7 @@ def _completeness_v1(facts: dict[str, Any]) -> str:
             "sodium_g",
         )
     )
-    if _has_ingredients_v1(facts.get("ingredients_text")) and has_required_nutrition:
+    if _has_ingredients_v1(facts.get("ingredients_text")) and has_required_nutrition and facts.get("nutrition_basis") in {"per_100g", "per_100ml"}:
         return "complete_for_grading"
     return "incomplete_for_grading"
 
@@ -199,6 +201,8 @@ def _backfill_semantic_versions() -> None:
 
 
 def upgrade() -> None:
+    op.add_column("scan_events", sa.Column("ai_run_id", sa.Uuid(), nullable=True))
+    op.create_foreign_key("fk_scan_events_ai_run", "scan_events", "ai_runs", ["ai_run_id"], ["id"], ondelete="SET NULL")
     op.add_column(
         "product_label_snapshots",
         sa.Column("content_fingerprint", sa.String(length=64), nullable=True),
@@ -264,6 +268,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_constraint("fk_scan_events_ai_run", "scan_events", type_="foreignkey")
+    op.drop_column("scan_events", "ai_run_id")
     op.drop_constraint(
         "uq_product_label_snapshots_version",
         "product_label_snapshots",

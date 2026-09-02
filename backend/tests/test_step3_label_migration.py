@@ -145,9 +145,9 @@ async def test_legacy_observations_upgrade_to_consecutive_semantic_versions(db_c
         assert snapshots[1].changed_fields == ["ingredients", "nutrition"]
         assert snapshots[2].changed_fields == ["ingredients", "nutrition"]
         assert [row.completeness for row in snapshots] == [
-            "complete_for_grading",
-            "complete_for_grading",
-            "complete_for_grading",
+            "incomplete_for_grading",
+            "incomplete_for_grading",
+            "incomplete_for_grading",
         ]
         assert event_count == 5
         assert latest is not None and latest.id == snapshots[2].id

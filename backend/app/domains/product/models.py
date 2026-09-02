@@ -194,6 +194,7 @@ class ScanEvent(UUIDPrimaryKey, TimestampMixin, Base):
     #: Set when the phone had been offline and is catching up.
     queued_offline: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
     label_facts: Mapped[dict | None] = mapped_column(JSONB)
+    ai_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL"))
 
     __table_args__ = (
         UniqueConstraint("device_id", "client_scan_id", name="uq_scan_event_device_client_id"),

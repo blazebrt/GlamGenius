@@ -248,7 +248,7 @@ def build_confirmed_label(
         fibre_g=values["fibre_g"],
         sodium_g=values["sodium_g"],
         salt_g=values["salt_g"],
-        basis=basis_for(None, name),
+        basis={"per_100g": "solid", "per_100ml": "drink"}.get(facts.get("nutrition_basis"), "unknown"),
         declared_percentages=percentages,
         name_promises=promised,
         marketed_to_children=marketed_to_children,
