@@ -212,7 +212,7 @@ export const setConsent = async (granted: boolean): Promise<ConsentSummary> => {
 // --- Media ------------------------------------------------------------------
 
 // Face/person analysis photos are transient request data and never enter media storage.
-export type MediaPurpose = 'inventory_item';
+export type MediaPurpose = 'inventory_item' | 'community_observation';
 
 export interface MediaAsset {
   id: string;
@@ -242,6 +242,57 @@ export const uploadMedia = async (
   });
   return response.data;
 };
+
+// --- Community observations -------------------------------------------------
+
+/** Whether this device currently has a lot number. Decided by the server. */
+export interface CommunityPackContext {
+  barcode: string;
+  has_current_scan_context: boolean;
+  batch_context_available: boolean;
+  batch_number: string | null;
+  batch_scoped_observation_codes: string[];
+}
+
+/** One of the caller's own reports. Never anybody else's. */
+export interface CommunityOwnReport {
+  id: string;
+  barcode: string;
+  observation_code: string;
+  scope: 'product' | 'batch';
+  batch_number: string | null;
+  status: 'accepted' | 'withdrawn' | 'under_review' | 'invalid';
+  created_at: string | null;
+  withdrawn_at: string | null;
+}
+
+export const readCommunityPackContext = async (barcode: string): Promise<CommunityPackContext> =>
+  (await api.get<CommunityPackContext>(`${V2}/community/observations/context/${barcode}`)).data;
+
+export const readOwnCommunityReports = async (barcode: string): Promise<CommunityOwnReport[]> =>
+  (await api.get<{ reports: CommunityOwnReport[] }>(
+    `${V2}/community/observations/mine/${barcode}`,
+  )).data.reports;
+
+/**
+ * Send one structured observation.
+ *
+ * The body carries no identity and no prose: who is reporting comes from the
+ * session and the device token, and what they saw is one code from the closed
+ * list. There is no field here for free text or a typed batch, by design.
+ */
+export const submitCommunityObservation = async (body: {
+  client_report_id: string;
+  barcode: string;
+  observation_code: string;
+  photo_asset_id: string;
+}): Promise<CommunityOwnReport & { created: boolean }> =>
+  (await api.post<CommunityOwnReport & { created: boolean }>(
+    `${V2}/community/observations`, body,
+  )).data;
+
+export const withdrawCommunityObservation = async (reportId: string): Promise<CommunityOwnReport> =>
+  (await api.delete<CommunityOwnReport>(`${V2}/community/observations/${reportId}`)).data;
 
 // --- Product scanning -------------------------------------------------------
 
@@ -762,6 +813,23 @@ export interface ProductVerdictWire {
       recall_status?: string | null; recall_start_date?: string | null;
       recall_termination_date?: string | null; nature_of_recall?: string | null;
       source_url: string; source_last_seen_at?: string | null; match_state: 'matched';
+    }[];
+  } | null;
+  /** Shopper observations. Additive, thresholded, and never a graded finding. */
+  community_observations?: {
+    policy_version: string;
+    public_enabled: boolean;
+    active_window_days: number;
+    brand_reply_url: string | null;
+    signals: {
+      observation_code: string;
+      scope: 'product' | 'batch';
+      batch_number: string | null;
+      independent_reporters: number;
+      first_reported_at: string | null;
+      last_reported_at: string | null;
+      analysis_score_eligible: false;
+      official_finding: false;
     }[];
   } | null;
 }

@@ -227,6 +227,10 @@ REGISTRY: dict[str, Classification] = {
     # Official FSSAI records are global regulatory data, not account-owned
     # content. Fetch attempts and immutable revisions remain auditable but are
     # never included in a person's privacy export.
+    # A shopper's own structured observations. Account-owned content: it goes
+    # into their export and leaves with them when the account is deleted. Only
+    # thresholded aggregates ever cross the account boundary.
+    "community_observation_reports": Classification.INCLUDED,
     "official_source_fetches": Classification.NOT_USER_OWNED,
     "official_records": Classification.NOT_USER_OWNED,
     "official_record_revisions": Classification.NOT_USER_OWNED,

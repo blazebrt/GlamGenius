@@ -125,6 +125,22 @@ export interface VerdictSource {
   quantityGuidance?: string | null;
   purityNote?: string | null;
   missing?: string[];
+  communityObservations?: {
+    policy_version: string;
+    public_enabled: boolean;
+    active_window_days: number;
+    brand_reply_url: string | null;
+    signals: {
+      observation_code: string;
+      scope: 'product' | 'batch';
+      batch_number: string | null;
+      independent_reporters: number;
+      first_reported_at: string | null;
+      last_reported_at: string | null;
+      analysis_score_eligible: false;
+      official_finding: false;
+    }[];
+  } | null;
   officialRecords?: {
     authority: string;
     record_type: 'food_recall';

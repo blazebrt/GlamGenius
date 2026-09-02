@@ -93,6 +93,52 @@ export const S = {
     lastObserved: 'Record last observed in FSSAI export',
     openSource: 'Open official FSSAI record',
   },
+  communityObservations: {
+    // "Observations" and "reported", never "problems", "issues" or "warnings".
+    // A shopper saw something; that is the whole claim being made.
+    heading: 'Shopper observations',
+    // Shown with every block, never behind a tap: what this is, and what it
+    // is not. The two things it is not are the two it could be mistaken for.
+    disclosure: 'Reported by shoppers. Not laboratory testing or an official finding.',
+    checked: 'Reported in the last 90 days',
+    batch: 'Batch',
+    reportAction: 'Report what you saw',
+    signInToReport: 'Sign in on this phone to send a report.',
+    photoRequired: 'Add a photo of what you saw.',
+    photoAction: 'Add photo',
+    batchCaptureRequired: 'Capture the pack label first so the batch can be matched.',
+    captureLabelAction: 'Capture pack label',
+    // "Saved", never "verified" or "confirmed": we know a shopper sent it, and
+    // nothing more than that.
+    reportSaved: 'Observation saved.',
+    withdrawn: 'Observation withdrawn.',
+    yourObservations: 'Your observations',
+    // Backend prose never becomes customer copy; unrecognised reasons land here.
+    submitFailed: 'That did not send. Please try again.',
+    submit: 'Send observation',
+    cancel: 'Cancel',
+    withdraw: 'Withdraw my observation',
+    brandRightOfReply: 'Brand right of reply',
+    chooseObservation: 'What did you see?',
+    // One line per code. Each states what was seen, and stops there.
+    observation: {
+      barcode_result_differs_from_pack: 'the barcode result looked different from the pack',
+      ingredients_list_differs_from_app: 'the ingredient list looked different',
+      nutrition_panel_differs_from_app: 'the nutrition panel looked different',
+      pack_size_differs_from_app: 'the pack size looked different',
+      date_marking_unreadable: 'the date marking could not be read',
+      seal_broken: 'a broken seal',
+      pack_leaking: 'a leaking pack',
+      pack_swollen: 'a swollen pack',
+      // States what was seen. Whether the material belongs there, and whether
+      // that makes anything unsafe, are conclusions the app does not draw.
+      visible_foreign_material: 'visible material inside the pack',
+      insect_observed: 'an insect',
+    } as Record<string, string>,
+    // "3 shoppers reported a broken seal". A count and an observation.
+    reportedBy: (count: number, observation: string) =>
+      `${count} ${count === 1 ? 'shopper' : 'shoppers'} reported ${observation}`,
+  },
   labelReview: {
     basis: 'Basis',
     basisPer100g: 'Per 100 g',
