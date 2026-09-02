@@ -108,6 +108,12 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
+    // A stale device token is a scan-identity failure, not an account-auth
+    // failure. Let the caller re-register the device without signing out.
+    if (status === 401 && code === 'DEVICE_UNKNOWN') {
+      return Promise.reject(error);
+    }
+
     if (status === 401) {
       await signOut().catch(() => {});
       onUnauthorized?.();

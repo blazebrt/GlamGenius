@@ -131,7 +131,8 @@ export default function ScanProductScreen() {
       const read = await transcribeProductLabel(result.barcode, asset.id);
       const aiRunId = read.provenance?.ai_run_id;
       if (typeof aiRunId !== 'string' || !aiRunId.trim()) {
-        throw new Error('The label read is missing its confirmation reference. Please try again.');
+        setLabelError(S.labelReview.missingConfirmationReference);
+        return;
       }
       setLabelDraft({ facts: read.facts, aiRunId });
     } catch (err) {
@@ -154,7 +155,7 @@ export default function ScanProductScreen() {
     try {
       const saved = await confirmLabel(result.barcode, labelDraft.aiRunId);
       if (!saved) {
-        setLabelError('We could not save that just now. Check your connection and try again.');
+        setLabelError(S.labelReview.saveFailed);
         return;
       }
       setConfirmed(`Saved. ${saved.confidence.text}`);

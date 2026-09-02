@@ -75,6 +75,13 @@ export const S = {
     ingredients: 'What is in it',
     scanAnother: 'Scan another',
   },
+  labelReview: {
+    basisPer100g: 'Per 100 g',
+    basisPer100ml: 'Per 100 ml',
+    basisMissing: 'Basis could not be read',
+    missingConfirmationReference: 'We could not keep a confirmation reference for that read. Try again.',
+    saveFailed: 'We could not save that just now. Check your connection and try again.',
+  },
   taxonomy: {
     packaged_food: 'Packaged food', whole_minimally_processed: 'Whole or minimally processed food',
     culinary_ingredient: 'Cooking ingredient', biscuit: 'Biscuit', cereal: 'Cereal',

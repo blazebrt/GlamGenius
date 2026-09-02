@@ -366,10 +366,26 @@ export async function confirmLabel(
   }
   const headers = await deviceHeaders();
   if (!headers['X-Device-Token']) return null;
-  const response = await api.post('/api/v2/scan/label/confirm', {
+  const clientScanId = newScanId();
+  const body = {
     barcode,
     ai_run_id: aiRunId,
-    client_scan_id: newScanId(),
-  }, { headers });
-  return response.data;
+    client_scan_id: clientScanId,
+  };
+  try {
+    const response = await api.post('/api/v2/scan/label/confirm', body, { headers });
+    return response.data;
+  } catch (error) {
+    const code = (error as { response?: { data?: { detail?: { code?: string } } } })
+      ?.response?.data?.detail?.code;
+    if (code !== 'DEVICE_UNKNOWN') throw error;
+
+    // The account is still valid; only the scan-device credential needs
+    // replacement. Retry once with the same idempotency key and run reference.
+    await forgetDevice();
+    const refreshedHeaders = await deviceHeaders();
+    if (!refreshedHeaders['X-Device-Token']) throw error;
+    const retry = await api.post('/api/v2/scan/label/confirm', body, { headers: refreshedHeaders });
+    return retry.data;
+  }
 }
