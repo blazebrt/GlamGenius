@@ -9,7 +9,11 @@ from sqlalchemy import select
 
 from app.domains.official_records import service
 from app.domains.official_records.matching import match_recall
-from app.domains.official_records.models import OfficialRecord, OfficialRecordRevision, OfficialSourceFetch
+from app.domains.official_records.models import (
+    OfficialRecord,
+    OfficialRecordRevision,
+    OfficialSourceFetch,
+)
 from app.domains.official_records.source import SOURCE_ADAPTER_VERSION, SOURCE_URL, parse_recall_rows
 from app.shared.database.sql import get_sessionmaker
 

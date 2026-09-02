@@ -38,7 +38,7 @@ export function OfficialRecords({ officialRecords }: { officialRecords: VerdictS
 
 const styles = StyleSheet.create({
   container: { marginTop: SPACING.md },
-  card: { backgroundColor: COLORS.surface, borderColor: COLORS.border, borderRadius: RADIUS.md, borderWidth: 1, padding: SPACING.md },
+  card: { backgroundColor: COLORS.card, borderColor: COLORS.border, borderRadius: RADIUS.md, borderWidth: 1, padding: SPACING.md },
   title: { color: COLORS.textPrimary, fontFamily: FONTS.family.heading, fontSize: 17, marginBottom: SPACING.xs },
   detail: { color: COLORS.textSecondary, fontFamily: FONTS.family.body, fontSize: 14, lineHeight: 20 },
   context: { color: COLORS.textMuted, fontFamily: FONTS.family.body, fontSize: 12, marginTop: SPACING.sm },
