@@ -5,8 +5,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
-
 from app.domains.official_records import service
 from app.domains.official_records.matching import match_recall
 from app.domains.official_records.models import (
@@ -16,6 +14,7 @@ from app.domains.official_records.models import (
 )
 from app.domains.official_records.source import SOURCE_ADAPTER_VERSION, SOURCE_URL, parse_recall_rows
 from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import select
 
 FIXTURE = Path(__file__).parent / "fixtures" / "fssai_food_recall_v1.json"
 LICENCE = "10012345678901"
