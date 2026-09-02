@@ -10,13 +10,53 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .models import OfficialRecord, OfficialRecordRevision, OfficialSourceFetch
 from .source import (
     AUTHORITY_FSSAI_FOSCOS,
+    ERROR_CONFLICTING_SOURCE_CHECK,
+    ERROR_DUPLICATE_SOURCE_CHECK,
+    ERROR_OUT_OF_ORDER_SOURCE_CHECK,
     RECORD_TYPE_FOOD_RECALL,
     SOURCE_ADAPTER_VERSION,
     SOURCE_FORMAT,
     SOURCE_URL,
+    SourceError,
     parse_recall_xlsx,
     stable_content_hash,
 )
+
+
+async def latest_successful_source_check(session: AsyncSession) -> OfficialSourceFetch | None:
+    """The newest official artifact we have accepted, by the operator's source time."""
+    return (await session.execute(
+        select(OfficialSourceFetch).where(
+            OfficialSourceFetch.authority == AUTHORITY_FSSAI_FOSCOS,
+            OfficialSourceFetch.record_type == RECORD_TYPE_FOOD_RECALL,
+            OfficialSourceFetch.status == "succeeded",
+        ).order_by(desc(OfficialSourceFetch.source_checked_at), desc(OfficialSourceFetch.created_at)).limit(1)
+    )).scalars().first()
+
+
+def _guard_source_order(
+    latest: OfficialSourceFetch | None, source_checked_at: datetime, source_file_sha256: str,
+) -> None:
+    """Official source time only ever moves forward.
+
+    Replaying an older export would overwrite canonical status and reason with
+    content the register has already superseded, bump ``latest_revision`` with
+    stale text and pull ``last_seen_at`` backwards while
+    ``last_successful_check_at`` still reported the newer check. Equal source
+    times are refused outright — V1 picks no winner between two artifacts that
+    claim the same instant, whether or not their bytes agree.
+    """
+    if latest is None:
+        return
+    if source_checked_at < latest.source_checked_at:
+        raise SourceError(ERROR_OUT_OF_ORDER_SOURCE_CHECK, source_file_sha256=source_file_sha256)
+    if source_checked_at == latest.source_checked_at:
+        raise SourceError(
+            ERROR_DUPLICATE_SOURCE_CHECK
+            if source_file_sha256 == latest.source_file_sha256
+            else ERROR_CONFLICTING_SOURCE_CHECK,
+            source_file_sha256=source_file_sha256,
+        )
 
 
 async def ingest_recall_xlsx(
@@ -24,6 +64,9 @@ async def ingest_recall_xlsx(
 ) -> tuple[OfficialSourceFetch, dict[str, int]]:
     """Insert one manually acquired public FoSCoS XLSX artifact atomically."""
     rows, source_file_sha256 = parse_recall_xlsx(path)
+    # Both gates run before any canonical mutation, and before the successful
+    # fetch row exists, so a refused artifact leaves the register untouched.
+    _guard_source_order(await latest_successful_source_check(session), source_checked_at, source_file_sha256)
     fetch = OfficialSourceFetch(
         authority=AUTHORITY_FSSAI_FOSCOS, record_type=RECORD_TYPE_FOOD_RECALL,
         source_url=SOURCE_URL, adapter_version=SOURCE_ADAPTER_VERSION,
@@ -58,6 +101,9 @@ async def ingest_recall_xlsx(
             ))
             counts["records_created"] += 1
             continue
+        # Observation history and semantic revision history are different things:
+        # seeing the same record again always advances last_seen, and only
+        # changed content earns a revision.
         record.last_seen_at = source_checked_at
         record.last_seen_fetch_id = fetch.id
         latest = (await session.execute(select(OfficialRecordRevision).where(
@@ -81,14 +127,31 @@ async def ingest_recall_xlsx(
 
 async def record_fetch_failure(
     session: AsyncSession, *, source_checked_at: datetime, error_code: str,
+    original_filename: str | None = None, source_file_sha256: str | None = None,
+    source_format: str | None = None,
 ) -> OfficialSourceFetch:
+    """Write the failure ledger row. It never advances successful freshness."""
     fetch = OfficialSourceFetch(
         authority=AUTHORITY_FSSAI_FOSCOS, record_type=RECORD_TYPE_FOOD_RECALL,
         source_url=SOURCE_URL, adapter_version=SOURCE_ADAPTER_VERSION,
         source_checked_at=source_checked_at, status="failed", error_code=error_code,
+        original_filename=original_filename[:256] if original_filename else None,
+        source_file_sha256=source_file_sha256, source_format=source_format,
     )
     session.add(fetch)
     return fetch
+
+
+async def record_source_error(
+    session: AsyncSession, error: SourceError, *, source_checked_at: datetime, path: Path,
+) -> OfficialSourceFetch:
+    """Keep a rejected official artifact auditable: whatever provenance survived, plus a closed code."""
+    return await record_fetch_failure(
+        session, source_checked_at=source_checked_at, error_code=error.code,
+        original_filename=path.name,
+        source_file_sha256=error.source_file_sha256,
+        source_format=SOURCE_FORMAT if error.source_file_sha256 else None,
+    )
 
 
 async def recalls_for_pack(session: AsyncSession, facts: dict[str, Any]) -> list[dict[str, Any]]:
