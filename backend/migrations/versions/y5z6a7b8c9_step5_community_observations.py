@@ -80,6 +80,13 @@ def upgrade() -> None:
             f"moderation_reason IS NULL OR {_in_list('moderation_reason', MODERATION_REASONS)}",
             name="ck_community_moderation_reason",
         ),
+        # Withdrawal is terminal and self-consistent: the status and its
+        # timestamp move together, so nothing can quietly clear one and
+        # resurrect a report the shopper retracted.
+        sa.CheckConstraint(
+            "(status = 'withdrawn' AND withdrawn_at IS NOT NULL) OR (status <> 'withdrawn' AND withdrawn_at IS NULL)",
+            name="ck_community_withdrawn_consistency",
+        ),
     )
     op.create_index(
         "ix_community_report_product_signal", "community_observation_reports",

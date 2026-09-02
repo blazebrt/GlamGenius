@@ -74,6 +74,16 @@ Rate limits (10/account/hour, 20/account/day, 10/device/hour) are enforced behin
 
 Aggregation reads current rows on every request rather than a cached count, so a withdrawal, a moderation, a deleted photo or a deleted account takes effect on the next response instead of leaving a stale public claim standing. Deleting an account removes its reports by `ON DELETE CASCADE`; if that drops three reporters to two, the signal disappears.
 
+### Withdrawal is terminal
+
+A moderator may move a report between `accepted`, `under_review` and `invalid` in either direction — a finding can be reconsidered. A report the shopper withdrew is out of reach: any moderation attempt is refused with `report_withdrawn`, because setting it back to `accepted` would republish a person's claim about a brand after they retracted it. Their withdrawal outranks ours. A database check keeps `status = 'withdrawn'` and `withdrawn_at IS NOT NULL` in lockstep, so nothing can quietly clear one field and revive the row.
+
+The shopper reaches their own rows through `GET /api/v2/community/observations/mine/{barcode}` — their reports for one barcode, and nothing else. Not a feed, not anybody else's history, not a profile. It exists so a person can manage the content they created after closing and reopening the screen, rather than depending on state that died with the modal.
+
+### One draft, one key
+
+The client sends a `client_report_id` that is stable for one logical draft — this pack, this observation, this photograph. Retrying after a lost response reuses it, so the server recognises the retry instead of storing a second identical report from one person. Deliberately changing the observation or replacing the photograph is a different draft and earns a new key.
+
 ## Publication fails closed
 
 Two settings gate display, and both must be right:
@@ -81,7 +91,7 @@ Two settings gate display, and both must be right:
 - `COMMUNITY_PUBLIC_SIGNALS_ENABLED` — **false by default**.
 - `COMMUNITY_BRAND_REPLY_URL` — a valid HTTPS address. No support address is invented here; the operator configures the real channel.
 
-Missing, non-HTTPS or malformed, and public display switches off silently rather than publishing anyway: the Constitution requires a visible right of reply before any user-generated content is shown. Collection, moderation and aggregation all keep working while display is off — publication is the only thing gated. Every rendered block carries a visible **Brand right of reply** control. This is not a brand response system; Step 5 builds no brand accounts.
+Missing, non-HTTPS or malformed, and public display switches off silently rather than publishing anyway. The client applies the same rule to what it renders: the card requires `public_enabled`, at least one signal, and a valid HTTPS reply address, and renders nothing otherwise — publishing the claim while merely omitting the link is the failure this guards against. The separate **Report what you saw** action stays available throughout, because collection and publication are different things: the Constitution requires a visible right of reply before any user-generated content is shown. Collection, moderation and aggregation all keep working while display is off — publication is the only thing gated. Every rendered block carries a visible **Brand right of reply** control. This is not a brand response system; Step 5 builds no brand accounts.
 
 ## The public shape
 

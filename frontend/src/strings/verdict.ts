@@ -112,6 +112,7 @@ export const S = {
     // nothing more than that.
     reportSaved: 'Observation saved.',
     withdrawn: 'Observation withdrawn.',
+    yourObservations: 'Your observations',
     // Backend prose never becomes customer copy; unrecognised reasons land here.
     submitFailed: 'That did not send. Please try again.',
     submit: 'Send observation',

@@ -2,6 +2,7 @@ import React from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
+import type { CommunityOwnReport } from '../../services/apiV2';
 import { S } from '../../strings/verdict';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 
@@ -38,7 +39,7 @@ export const OBSERVATION_CODES = [...PRODUCT_DATA_CODES, ...BATCH_SCOPED_CODES];
 
 export function CommunityReportSheet({
   selected, onSelect, onAddPhoto, onSubmit, onCancel, onCaptureLabel, onWithdraw,
-  photoAdded, busy, status, signedIn, batchRequired,
+  ownReports, photoAdded, busy, status, signedIn, batchRequired,
 }: {
   selected: string | null;
   onSelect: (code: string) => void;
@@ -46,8 +47,10 @@ export function CommunityReportSheet({
   onSubmit: () => void;
   onCancel: () => void;
   onCaptureLabel: () => void;
-  /** Present only once this shopper has a report of their own to retract. */
-  onWithdraw?: () => void;
+  /** Retract one named row. Only ever this account's own. */
+  onWithdraw: (reportId: string) => void;
+  /** This account's own reports for this pack. Not a feed, not a history. */
+  ownReports: CommunityOwnReport[];
   photoAdded: boolean;
   busy: boolean;
   status: string | null;
@@ -55,6 +58,8 @@ export function CommunityReportSheet({
   batchRequired: boolean;
 }) {
   const canSubmit = !!selected && photoAdded && signedIn && !batchRequired && !busy;
+  // A retraction is final, so a withdrawn row is offered no action at all.
+  const retractable = ownReports.filter((report) => report.status !== 'withdrawn');
   return (
     <ScrollView style={styles.sheet} contentContainerStyle={{ paddingBottom: SPACING.lg }}>
       <Text style={styles.title} accessibilityRole="header">{S.communityObservations.heading}</Text>
@@ -122,13 +127,32 @@ export function CommunityReportSheet({
 
       {!!status && <Text accessibilityLiveRegion="polite" style={styles.status}>{status}</Text>}
 
-      {!!onWithdraw && (
-        <TouchableOpacity
-          accessibilityRole="button" accessibilityLabel={S.communityObservations.withdraw}
-          onPress={onWithdraw} disabled={busy}
-        >
-          <Text style={styles.action}>{S.communityObservations.withdraw}</Text>
-        </TouchableOpacity>
+      {/* The shopper's own content, so anything they sent stays retractable
+          after this sheet is closed and reopened. Their rows only: no other
+          account appears here, and there is no profile, history or feed. */}
+      {retractable.length > 0 && (
+        <View style={styles.ownSection}>
+          <Text style={styles.ownHeading} accessibilityRole="header">
+            {S.communityObservations.yourObservations}
+          </Text>
+          {retractable.map((report) => (
+            <View key={report.id} style={styles.ownRow}>
+              <Text style={styles.ownLabel}>
+                {S.communityObservations.observation[report.observation_code] ?? report.observation_code}
+              </Text>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel={`${S.communityObservations.withdraw}: ${
+                  S.communityObservations.observation[report.observation_code] ?? report.observation_code
+                }`}
+                onPress={() => onWithdraw(report.id)}
+                disabled={busy}
+              >
+                <Text style={styles.action}>{S.communityObservations.withdraw}</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
       )}
 
       <TouchableOpacity
@@ -157,6 +181,10 @@ const styles = StyleSheet.create({
   optionText: { color: COLORS.textPrimary, flex: 1, fontFamily: FONTS.family.body, fontSize: 14 },
   photoButton: { alignItems: 'center', flexDirection: 'row', gap: SPACING.xs, marginTop: SPACING.md },
   notice: { color: COLORS.textMuted, fontFamily: FONTS.family.body, fontSize: 13, marginTop: SPACING.xs },
+  ownSection: { borderTopColor: COLORS.border, borderTopWidth: 1, marginTop: SPACING.lg, paddingTop: SPACING.md },
+  ownHeading: { color: COLORS.textPrimary, fontFamily: FONTS.family.heading, fontSize: 15, marginBottom: SPACING.xs },
+  ownRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingVertical: SPACING.xs },
+  ownLabel: { color: COLORS.textSecondary, flexShrink: 1, fontFamily: FONTS.family.body, fontSize: 14 },
   action: { color: COLORS.primary, fontFamily: FONTS.family.body, fontSize: 14, marginTop: SPACING.sm },
   submit: {
     alignItems: 'center', backgroundColor: COLORS.primary, borderRadius: RADIUS.md,

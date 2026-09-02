@@ -636,3 +636,94 @@ async def test_the_report_row_has_nowhere_to_put_free_text(db_clean):
         if str(column.type).upper().startswith("TEXT")
     ]
     assert text_like == []
+
+
+# ---------------------------------------------------------------------------
+# A retraction is final
+# ---------------------------------------------------------------------------
+
+async def moderate(app_client, admin_token, report_id, status, reason="policy_violation"):
+    return await app_client.post(
+        f"/api/v2/admin/community/observations/{report_id}/moderate",
+        headers=auth(admin_token), json={"status": status, "moderation_reason": reason},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_moderator_cannot_republish_what_a_shopper_took_back(
+    db_clean, off_clean, app_client, registered_supabase_user, public_display,
+):
+    """The person's withdrawal outranks moderator state, in every direction.
+
+    Otherwise a shopper could retract a claim about a brand and have it put
+    back into public circulation over their head.
+    """
+    shoppers = await three_reporters(app_client, registered_supabase_user)
+    viewer, (owner, target) = shoppers[0][0], shoppers[2]
+    assert len(await signals(app_client, viewer.headers())) == 1
+
+    withdrawn = await app_client.delete(
+        f"/api/v2/community/observations/{target['id']}", headers=auth(owner.token),
+    )
+    assert withdrawn.status_code == 200
+    withdrawn_at = withdrawn.json()["withdrawn_at"]
+    assert withdrawn_at is not None
+    assert await signals(app_client, viewer.headers()) == []
+
+    admin_token, _ = await registered_supabase_user(admin=True)
+    factory = get_sessionmaker()
+    for attempt in ("accepted", "under_review", "invalid"):
+        response = await moderate(app_client, admin_token, target["id"], attempt)
+        assert response.status_code == 409, attempt
+        assert response.json()["detail"]["reason"] == "report_withdrawn"
+        async with factory() as session:
+            row = await session.get(CommunityObservationReport, uuid.UUID(target["id"]))
+        assert row.status == "withdrawn"
+        assert row.withdrawn_at.isoformat() == withdrawn_at
+        assert await signals(app_client, viewer.headers()) == []
+
+
+@pytest.mark.asyncio
+async def test_moderation_can_still_reconsider_a_report_nobody_retracted(
+    db_clean, off_clean, app_client, registered_supabase_user, public_display,
+):
+    """Terminal withdrawal must not cost the moderator their own undo."""
+    shoppers = await three_reporters(app_client, registered_supabase_user)
+    viewer, (_, target) = shoppers[0][0], shoppers[2]
+    admin_token, _ = await registered_supabase_user(admin=True)
+
+    assert (await moderate(app_client, admin_token, target["id"], "under_review")).status_code == 200
+    assert await signals(app_client, viewer.headers()) == []
+    assert (await moderate(app_client, admin_token, target["id"], "accepted")).status_code == 200
+    assert len(await signals(app_client, viewer.headers())) == 1
+
+    assert (await moderate(app_client, admin_token, target["id"], "invalid")).status_code == 200
+    assert await signals(app_client, viewer.headers()) == []
+    assert (await moderate(app_client, admin_token, target["id"], "accepted")).status_code == 200
+    assert len(await signals(app_client, viewer.headers())) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_database_will_not_hold_an_inconsistent_withdrawal(db_clean):
+    """The status and its timestamp move together, or the row does not write."""
+    from app.domains.identity import service as identity
+    from sqlalchemy.exc import IntegrityError
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        account = await identity.register_account(session, uuid.uuid4())
+        await session.commit()
+        account_id = account.id
+
+    async def _insert(**changes):
+        async with factory() as session:
+            session.add(CommunityObservationReport(
+                account_id=account_id, client_report_id=uuid.uuid4().hex,
+                barcode=BARCODE, observation_code=OBSERVATION_INGREDIENTS_DIFFER, **changes,
+            ))
+            await session.commit()
+
+    # Withdrawn without a time, and a time without being withdrawn.
+    for changes in ({"status": "withdrawn"}, {"status": "accepted", "withdrawn_at": datetime.now(UTC)}):
+        with pytest.raises(IntegrityError):
+            await _insert(**changes)

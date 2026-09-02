@@ -13,7 +13,7 @@
  * copy can be reviewed against LEGAL_RULES.md and translated without anyone
  * opening a component.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Platform, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -38,7 +38,8 @@ import { CommunityReportSheet, BATCH_SCOPED_CODES } from '../src/components/verd
 import { useUserStore } from '../src/store/userStore';
 import {
   readCommunityPackContext, submitCommunityObservation, uploadMedia,
-  withdrawCommunityObservation, type CommunityPackContext,
+  readOwnCommunityReports, withdrawCommunityObservation,
+  type CommunityOwnReport, type CommunityPackContext,
 } from '../src/services/apiV2';
 import {
   ComponentRow, FactorSection, GradeBlock, IngredientDetail, IngredientList,
@@ -73,7 +74,11 @@ export default function VerdictScreen() {
   const [communityBusy, setCommunityBusy] = useState(false);
   const [communityStatus, setCommunityStatus] = useState<string | null>(null);
   const [communityContext, setCommunityContext] = useState<CommunityPackContext | null>(null);
-  const [ownReportId, setOwnReportId] = useState<string | null>(null);
+  const [ownReports, setOwnReports] = useState<CommunityOwnReport[]>([]);
+  // One logical draft keeps one idempotency key across retries. Minting a new
+  // one per attempt is how a lost response becomes two identical reports from
+  // one person — which the backend cannot tell from two genuine ones.
+  const draftKey = useRef<{ signature: string; id: string } | null>(null);
 
   const load = useCallback(() => {
     if (!barcode) return;
@@ -136,6 +141,15 @@ export default function VerdictScreen() {
     setTimeout(() => setReportSubject(null), 1600);
   }, [barcode, photoUri, reportSubject]);
 
+  const refreshOwnReports = useCallback(async () => {
+    if (!barcode) return;
+    try {
+      setOwnReports(await readOwnCommunityReports(barcode));
+    } catch {
+      setOwnReports([]);
+    }
+  }, [barcode]);
+
   // Whether this device has a lot number is the server's answer, never a guess
   // from the label version on screen — that may be a stranger's capture.
   const openCommunityReport = useCallback(() => {
@@ -144,13 +158,14 @@ export default function VerdictScreen() {
     setCommunityCode(null);
     setCommunityPhotoId(null);
     setCommunityStatus(null);
-    setOwnReportId(null);
-    if (barcode) {
-      void readCommunityPackContext(barcode)
-        .then(setCommunityContext)
-        .catch(() => setCommunityContext(null));
-    }
-  }, [barcode, router, signedIn]);
+    if (!barcode) return;
+    void readCommunityPackContext(barcode)
+      .then(setCommunityContext)
+      .catch(() => setCommunityContext(null));
+    // Their own rows, so a report stays retractable after the sheet is closed
+    // and reopened. Only this account's; never anybody else's.
+    void refreshOwnReports();
+  }, [barcode, refreshOwnReports, router, signedIn]);
 
   const addCommunityPhoto = useCallback(async () => {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
@@ -176,12 +191,23 @@ export default function VerdictScreen() {
   const sendCommunityObservation = useCallback(async () => {
     if (!barcode || !communityCode || !communityPhotoId) return;
     setCommunityBusy(true);
+    // The draft is what the shopper composed: this pack, this observation,
+    // this photograph. Retrying it reuses the key; deliberately changing the
+    // observation or replacing the photo is a different draft and earns a new
+    // one.
+    const signature = `${barcode}|${communityCode}|${communityPhotoId}`;
+    if (draftKey.current?.signature !== signature) {
+      draftKey.current = {
+        signature,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      };
+    }
     try {
-      const saved = await submitCommunityObservation({
-        client_report_id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      await submitCommunityObservation({
+        client_report_id: draftKey.current.id,
         barcode, observation_code: communityCode, photo_asset_id: communityPhotoId,
       });
-      setOwnReportId(saved.id);
+      await refreshOwnReports();
       // "Saved", never "verified": we know a shopper sent it, nothing more.
       setCommunityStatus(S.communityObservations.reportSaved);
     } catch (error) {
@@ -198,21 +224,20 @@ export default function VerdictScreen() {
     } finally {
       setCommunityBusy(false);
     }
-  }, [barcode, communityCode, communityPhotoId]);
+  }, [barcode, communityCode, communityPhotoId, refreshOwnReports]);
 
-  const withdrawOwnObservation = useCallback(async () => {
-    if (!ownReportId) return;
+  const withdrawOwnObservation = useCallback(async (reportId: string) => {
     setCommunityBusy(true);
     try {
-      await withdrawCommunityObservation(ownReportId);
-      setOwnReportId(null);
+      await withdrawCommunityObservation(reportId);
+      await refreshOwnReports();
       setCommunityStatus(S.communityObservations.withdrawn);
     } catch {
       setCommunityStatus(S.communityObservations.submitFailed);
     } finally {
       setCommunityBusy(false);
     }
-  }, [ownReportId]);
+  }, [refreshOwnReports]);
 
   const captureLabelForBatch = useCallback(() => {
     setCommunityOpen(false);
@@ -432,7 +457,8 @@ export default function VerdictScreen() {
             onSubmit={() => void sendCommunityObservation()}
             onCancel={() => setCommunityOpen(false)}
             onCaptureLabel={captureLabelForBatch}
-            onWithdraw={ownReportId ? () => void withdrawOwnObservation() : undefined}
+            ownReports={ownReports}
+            onWithdraw={(reportId) => void withdrawOwnObservation(reportId)}
             photoAdded={communityPhotoId !== null}
             busy={communityBusy}
             status={communityStatus}

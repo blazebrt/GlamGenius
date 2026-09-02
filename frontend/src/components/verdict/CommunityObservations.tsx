@@ -16,6 +16,17 @@ import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
  * No alarm styling, no photographs, no names. A count, what was seen, and a
  * visible way for the brand to answer.
  */
+/** An openable HTTPS address, or the brand has no visible way to answer. */
+export function isBrandReplyUrl(url: string | null | undefined): url is string {
+  if (typeof url !== 'string' || url.trim() === '') return false;
+  try {
+    const parsed = new URL(url.trim());
+    return parsed.protocol === 'https:' && parsed.host !== '';
+  } catch {
+    return false;
+  }
+}
+
 export function CommunityObservations({
   communityObservations,
   onReport,
@@ -24,8 +35,17 @@ export function CommunityObservations({
   onReport?: () => void;
 }) {
   const signals = communityObservations?.signals ?? [];
-  if (signals.length === 0) return null;
   const replyUrl = communityObservations?.brand_reply_url ?? null;
+  // Defence in depth. The server already fails closed, but the constitutional
+  // rule — a visible right of reply before any shopper claim is published —
+  // belongs to the rendered surface too. If the brand has no openable HTTPS
+  // address here, the card does not render at all: publishing the claim and
+  // merely omitting the link is the failure this guards against.
+  const canPublish =
+    communityObservations?.public_enabled === true
+    && signals.length > 0
+    && isBrandReplyUrl(replyUrl);
+  if (!canPublish) return null;
   return (
     <View style={styles.container} accessible={false}>
       <Text style={styles.heading} accessibilityRole="header">{S.communityObservations.heading}</Text>

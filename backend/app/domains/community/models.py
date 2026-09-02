@@ -102,6 +102,13 @@ class CommunityObservationReport(UUIDPrimaryKey, TimestampMixin, Base):
             f"moderation_reason IS NULL OR {_in_list('moderation_reason', MODERATION_REASONS)}",
             name="ck_community_moderation_reason",
         ),
+        # A retraction is a fact about the row, not a label on it: the status
+        # and its timestamp move together or the row is not writable. Belt and
+        # braces for the service guard that makes withdrawal terminal.
+        CheckConstraint(
+            "(status = 'withdrawn' AND withdrawn_at IS NOT NULL) OR (status <> 'withdrawn' AND withdrawn_at IS NULL)",
+            name="ck_community_withdrawn_consistency",
+        ),
         Index("ix_community_report_product_signal", "barcode", "observation_code", "status", "created_at"),
         Index("ix_community_report_batch_signal", "barcode", "observation_code", "batch_number", "status", "created_at"),
         Index("ix_community_report_account", "account_id", "created_at"),

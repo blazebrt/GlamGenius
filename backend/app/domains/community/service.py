@@ -59,6 +59,10 @@ MAX_REPORTS_PER_ACCOUNT_PER_DAY = 20
 MAX_REPORTS_PER_DEVICE_PER_HOUR = 10
 
 
+#: Named before the exceptions that carry it.
+REASON_REPORT_WITHDRAWN = "report_withdrawn"
+
+
 class CommunityReportRejected(AppError):
     """A submission we will not accept, with a key the app can act on."""
 
@@ -81,6 +85,21 @@ class CommunityReportConflict(AppError):
             "That report was already sent with different details.", extra={"reason": reason},
         )
         self.reason = reason
+
+
+class CommunityReportWithdrawn(AppError):
+    """A retraction is final. Nothing may put the report back into circulation."""
+
+    status_code = 409
+    code = ErrorCode.CONFLICT
+    retryable = False
+
+    def __init__(self) -> None:
+        super().__init__(
+            "That report was withdrawn by the person who sent it.",
+            extra={"reason": REASON_REPORT_WITHDRAWN},
+        )
+        self.reason = REASON_REPORT_WITHDRAWN
 
 
 class CommunityRateLimited(AppError):
@@ -412,6 +431,9 @@ async def withdraw_observation(
     if report.status != REPORT_STATUS_WITHDRAWN:
         report.status = REPORT_STATUS_WITHDRAWN
         report.withdrawn_at = utcnow()
+        # The moderation reason is cleared: whatever a moderator had concluded,
+        # the row is now the shopper's retraction and nothing else.
+        report.moderation_reason = None
         await session.flush()
     return report
 
@@ -419,12 +441,22 @@ async def withdraw_observation(
 async def moderate_observation(
     session: AsyncSession, *, report_id: uuid.UUID, status: str, moderation_reason: str,
 ) -> CommunityObservationReport:
-    """An administrator stops a demonstrably bad report from contributing."""
+    """An administrator stops a demonstrably bad report from contributing.
+
+    Moderation may move a report between accepted, under review and invalid in
+    either direction — a finding can be reconsidered. It may not touch a report
+    the shopper has retracted.
+    """
     if status not in (REPORT_STATUS_UNDER_REVIEW, REPORT_STATUS_INVALID, REPORT_STATUS_ACCEPTED):
         raise ValidationFailedError("That is not a moderation status we accept.", field="status")
     report = await session.get(CommunityObservationReport, report_id)
     if report is None:
         raise NotFoundError("We could not find that report.")
+    if report.status == REPORT_STATUS_WITHDRAWN:
+        # A person who takes back what they said has taken it back. Letting a
+        # moderator set it to accepted would republish a shopper's claim about
+        # a brand after they retracted it — their withdrawal outranks us.
+        raise CommunityReportWithdrawn()
     report.status = status
     report.moderation_reason = moderation_reason
     await session.flush()

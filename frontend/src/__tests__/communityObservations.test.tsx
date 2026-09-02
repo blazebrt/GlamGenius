@@ -104,7 +104,8 @@ describe('shopper observations on the verdict surface', () => {
 describe('the report flow', () => {
   const props = {
     selected: null, onSelect: jest.fn(), onAddPhoto: jest.fn(), onSubmit: jest.fn(),
-    onCancel: jest.fn(), onCaptureLabel: jest.fn(), photoAdded: false, busy: false,
+    onCancel: jest.fn(), onCaptureLabel: jest.fn(), onWithdraw: jest.fn(),
+    ownReports: [], photoAdded: false, busy: false,
     status: null, signedIn: true, batchRequired: false,
   };
 
