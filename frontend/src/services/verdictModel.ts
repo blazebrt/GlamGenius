@@ -130,7 +130,15 @@ export interface VerdictSource {
     record_type: 'food_recall';
     source_url: string;
     last_successful_check_at: string | null;
-    records: { recall_id: string; source_url: string; match_state: 'matched'; [key: string]: unknown }[];
+    records: {
+      recall_id: string;
+      source_url: string;
+      match_state: 'matched';
+      /** When this record itself was last observed in an export, not when we last checked. */
+      source_last_seen_at?: string | null;
+      seen_in_latest_successful_check?: boolean;
+      [key: string]: unknown;
+    }[];
   } | null;
 }
 

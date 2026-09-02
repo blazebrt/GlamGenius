@@ -16,6 +16,12 @@ export function OfficialRecords({ officialRecords }: { officialRecords: VerdictS
         const started = typeof record.recall_start_date === 'string' ? record.recall_start_date : null;
         const ended = typeof record.recall_termination_date === 'string' ? record.recall_termination_date : null;
         const nature = typeof record.nature_of_recall === 'string' ? record.nature_of_recall : null;
+        // When this record was last observed, which is not when the source was
+        // last checked. A record absent from the newest export is still shown,
+        // dated honestly, and never described as withdrawn or cleared.
+        const seenInLatest = record.seen_in_latest_successful_check === true;
+        const lastObserved =
+          typeof record.source_last_seen_at === 'string' ? record.source_last_seen_at.slice(0, 10) : null;
         return (
           <View key={record.recall_id} style={styles.card} accessible accessibilityLabel={`${S.officialRecords.title}. ${S.officialRecords.recallId} ${record.recall_id}. ${S.officialRecords.status} ${status ?? S.officialRecords.statusUnavailable}`}>
             <Text style={styles.title}>{S.officialRecords.title}</Text>
@@ -25,6 +31,11 @@ export function OfficialRecords({ officialRecords }: { officialRecords: VerdictS
             {!!ended && <Text style={styles.detail}>{S.officialRecords.terminationDate}: {ended}</Text>}
             {!!reason && <Text style={styles.detail}>{S.officialRecords.reason}: {reason}</Text>}
             {!!nature && <Text style={styles.detail}>{S.officialRecords.nature}: {nature}</Text>}
+            {seenInLatest ? (
+              <Text style={styles.context}>{S.officialRecords.observedInLatest}</Text>
+            ) : (
+              !!lastObserved && <Text style={styles.context}>{S.officialRecords.lastObserved}: {lastObserved}</Text>
+            )}
             {!!officialRecords?.last_successful_check_at && <Text style={styles.context}>{S.officialRecords.checked}: {officialRecords.last_successful_check_at.slice(0, 10)}</Text>}
             <TouchableOpacity accessibilityRole="link" accessibilityLabel={S.officialRecords.openSource} onPress={() => void Linking.openURL(record.source_url)}>
               <Text style={styles.link}>{S.officialRecords.openSource}</Text>

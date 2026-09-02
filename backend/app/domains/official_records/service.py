@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import OfficialRecord, OfficialRecordRevision, OfficialSourceFetch
@@ -21,6 +21,25 @@ from .source import (
     parse_recall_xlsx,
     stable_content_hash,
 )
+
+#: One fixed advisory-lock name for this official source. Two imports of the
+#: same register must not interleave: without it both could read the same
+#: "latest successful check", both pass the chronology guard, and both mutate
+#: canonical records — which would make "source time only ever moves forward" a
+#: claim the code does not actually keep.
+SOURCE_LOCK_NAME = f"official_source:{AUTHORITY_FSSAI_FOSCOS}:{RECORD_TYPE_FOOD_RECALL}"
+
+
+async def lock_official_source(session: AsyncSession) -> None:
+    """Serialize official imports for this source across processes and sessions.
+
+    The lock is transaction-scoped, so PostgreSQL releases it on commit or
+    rollback. It is deliberately not a Python lock: a second uvicorn worker, a
+    second operator, or a cron run on another host would not see one.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:name, 0))"), {"name": SOURCE_LOCK_NAME},
+    )
 
 
 async def latest_successful_source_check(session: AsyncSession) -> OfficialSourceFetch | None:
@@ -64,6 +83,10 @@ async def ingest_recall_xlsx(
 ) -> tuple[OfficialSourceFetch, dict[str, int]]:
     """Insert one manually acquired public FoSCoS XLSX artifact atomically."""
     rows, source_file_sha256 = parse_recall_xlsx(path)
+    # Validation first — a malformed workbook should not hold the lock. Then the
+    # lock, and only then the read the chronology guard depends on, so a
+    # concurrent import cannot slip between that read and the mutation below.
+    await lock_official_source(session)
     # Both gates run before any canonical mutation, and before the successful
     # fetch row exists, so a refused artifact leaves the register untouched.
     _guard_source_order(await latest_successful_source_check(session), source_checked_at, source_file_sha256)
@@ -154,32 +177,43 @@ async def record_source_error(
     )
 
 
-async def recalls_for_pack(session: AsyncSession, facts: dict[str, Any]) -> list[dict[str, Any]]:
+async def recalls_for_pack(
+    session: AsyncSession, facts: dict[str, Any], latest_fetch: OfficialSourceFetch | None = None,
+) -> list[dict[str, Any]]:
+    """The official records this confirmed pack resolves to, each stating when it was last seen.
+
+    A record we hold is kept even when a later export omits it, because absence
+    from one download proves nothing about withdrawal, correction or resolution.
+    That makes per-record observation time part of the contract: "this record was
+    last observed on 1 August" is a different sentence from "we last checked the
+    register on 4 August", and the screen must be able to say the first one.
+    """
     rows = (await session.execute(select(OfficialRecord).where(
         OfficialRecord.authority == AUTHORITY_FSSAI_FOSCOS,
         OfficialRecord.record_type == RECORD_TYPE_FOOD_RECALL,
     ).order_by(desc(OfficialRecord.recall_start_date).nulls_last(), OfficialRecord.external_record_id.asc()))).scalars().all()
-    from .matching import match_recall
-    result = []
-    for row in rows:
-        material = {"recall_id": row.external_record_id, "fbo_name": row.fbo_name, "brand_name": row.brand_name,
+    from .matching import resolve_matches
+    material = [
+        {"recall_id": row.external_record_id, "fbo_name": row.fbo_name, "brand_name": row.brand_name,
             "product_name": row.product_name, "batch_lot": row.batch_lot, "licence": row.licence,
             "reason": row.reason, "recall_status": row.recall_status,
             "recall_start_date": row.recall_start_date.isoformat() if row.recall_start_date else None,
             "recall_termination_date": row.recall_termination_date.isoformat() if row.recall_termination_date else None,
-            "nature_of_recall": row.nature_of_recall, "source_url": row.source_url}
-        if match_recall(facts, material) == "matched":
-            material["match_state"] = "matched"
-            result.append(material)
-    return result
+            "nature_of_recall": row.nature_of_recall, "source_url": row.source_url,
+            # Observation provenance for this record alone. Never a conclusion:
+            # "not seen in the latest export" is not "withdrawn" or "resolved".
+            "source_last_seen_at": row.last_seen_at.isoformat(),
+            "seen_in_latest_successful_check": bool(
+                latest_fetch is not None and row.last_seen_fetch_id == latest_fetch.id
+            )}
+        for row in rows
+    ]
+    return [{**record, "match_state": "matched"} for record in resolve_matches(facts, material)]
 
 
 async def official_records_envelope(session: AsyncSession, facts: dict[str, Any] | None) -> dict[str, Any]:
-    last_success = await session.scalar(select(OfficialSourceFetch.source_checked_at).where(
-        OfficialSourceFetch.authority == AUTHORITY_FSSAI_FOSCOS,
-        OfficialSourceFetch.record_type == RECORD_TYPE_FOOD_RECALL,
-        OfficialSourceFetch.status == "succeeded",
-    ).order_by(OfficialSourceFetch.source_checked_at.desc()).limit(1))
+    latest_fetch = await latest_successful_source_check(session)
     return {"authority": "FSSAI / FoSCoS", "record_type": RECORD_TYPE_FOOD_RECALL,
-        "source_url": SOURCE_URL, "last_successful_check_at": last_success.isoformat() if last_success else None,
-        "records": await recalls_for_pack(session, facts) if facts else []}
+        "source_url": SOURCE_URL,
+        "last_successful_check_at": latest_fetch.source_checked_at.isoformat() if latest_fetch else None,
+        "records": await recalls_for_pack(session, facts, latest_fetch) if facts else []}

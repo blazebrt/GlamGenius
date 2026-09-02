@@ -11,6 +11,8 @@ from typing import Any
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
+from app.domains.product.fssai import LICENCE_LENGTH, is_valid_licence
+
 AUTHORITY_FSSAI_FOSCOS = "fssai_foscos"
 RECORD_TYPE_FOOD_RECALL = "food_recall"
 SOURCE_ADAPTER_VERSION = "fssai-foscos-food-recall.xlsx.v1"
@@ -232,8 +234,23 @@ def stable_content_hash(payload: dict[str, Any]) -> str:
 
 
 def normalise_licence(value: Any) -> str | None:
+    """The fourteen printed digits of an FSSAI licence, or nothing.
+
+    Deleting every non-digit from arbitrary text would collapse
+    ``FSSAI 10012345678901``, ``10012345678901X`` and ``10012-345678901`` onto
+    one exact official identifier and invent an exactness the source never
+    stated. Only the digits themselves survive — optionally grouped with spaces,
+    because labels print them that way and the confirmed-label extraction keeps
+    what it read. Anything else is not a licence we can match on.
+    """
     text = _text(value)
-    return "".join(char for char in text if char.isdigit()) if text else None
+    if text is None:
+        return None
+    compact = text.replace(" ", "")
+    if len(compact) != LICENCE_LENGTH or not compact.isdigit():
+        return None
+    # A run of one repeated digit is a placeholder, not a licence.
+    return compact if is_valid_licence(compact) else None
 
 
 def normalise_batch(value: Any) -> str | None:

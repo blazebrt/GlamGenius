@@ -142,7 +142,7 @@ async def test_confirmed_pack_receives_the_exact_matching_official_record(
     assert set(envelope["records"][0]) == {
         "recall_id", "fbo_name", "brand_name", "product_name", "batch_lot", "licence", "reason",
         "recall_status", "recall_start_date", "recall_termination_date", "nature_of_recall",
-        "source_url", "match_state",
+        "source_url", "match_state", "source_last_seen_at", "seen_in_latest_successful_check",
     }
 
 
@@ -255,3 +255,168 @@ async def test_freshness_reports_the_operator_source_check_not_the_database_impo
     reported = body["official_records"]["last_successful_check_at"]
     assert datetime.fromisoformat(reported) == SOURCE_CHECKED_AT
     assert datetime.fromisoformat(reported) != stored.created_at
+
+
+# ---------------------------------------------------------------------------
+# Ambiguity and historical provenance, through the route the phone calls
+# ---------------------------------------------------------------------------
+
+async def ingest_rows(tmp_path: Path, rows, *, checked_at=SOURCE_CHECKED_AT):
+    path = make_export(tmp_path / f"foscos-{uuid.uuid4().hex}.xlsx", rows=rows)
+    factory = get_sessionmaker()
+    async with factory() as session:
+        fetch, counts = await official_records.ingest_recall_xlsx(session, path, source_checked_at=checked_at)
+        await session.commit()
+        return fetch, counts
+
+
+def shared_lot_rows():
+    """Two recalls filed under one licence and one lot, for different products."""
+    return [
+        data_row(recall_id=901, batch=BATCH, brand="Alpha", product="Alpha Oats"),
+        data_row(recall_id=902, batch=BATCH, brand="Beta", product="Beta Juice"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_pack_that_cannot_be_told_apart_receives_no_official_record(
+    db_clean, off_clean, app_client, device, registered_supabase_user, tmp_path,
+):
+    """The licence and lot fit two different products, and the pack names neither."""
+    token, account_id = await registered_supabase_user()
+    await confirm_label(app_client, device, token, account_id, BARCODE,
+                        label_facts(product_name=None, brand=None))
+    _, counts = await ingest_rows(tmp_path, shared_lot_rows())
+    assert counts["records_created"] == 2
+
+    body = await verdict(app_client, device)
+    assert body["official_records"]["records"] == []
+    # The check itself still happened, and the screen may still say so.
+    assert body["official_records"]["last_successful_check_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_an_exactly_identified_pack_receives_only_its_own_record(
+    db_clean, off_clean, app_client, device, registered_supabase_user, tmp_path,
+):
+    token, account_id = await registered_supabase_user()
+    await confirm_label(app_client, device, token, account_id, BARCODE,
+                        label_facts(brand="Beta", product_name="Beta Juice"))
+    await ingest_rows(tmp_path, shared_lot_rows())
+
+    records = (await verdict(app_client, device))["official_records"]["records"]
+    assert [row["recall_id"] for row in records] == ["902"]
+    assert records[0]["brand_name"] == "Beta"
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_licence_cannot_manufacture_an_official_match(
+    db_clean, off_clean, app_client, device, registered_supabase_user, tmp_path,
+):
+    """Deleting characters until fourteen digits appear is not reading a licence."""
+    token, account_id = await registered_supabase_user()
+    await confirm_label(app_client, device, token, account_id, BARCODE,
+                        label_facts(fssai_licence=f"FSSAI {LICENCE}"))
+    await ingest_official_record(tmp_path)
+
+    assert (await verdict(app_client, device))["official_records"]["records"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_retained_record_states_its_own_last_observation_not_the_latest_check(
+    db_clean, off_clean, app_client, device, registered_supabase_user, tmp_path,
+):
+    """Absence from the newest export is not withdrawal, correction or resolution.
+
+    So the record stays, and the payload separates "when this record was last
+    observed" from "when the register was last checked". Collapsing them would
+    claim an observation that never happened.
+    """
+    token, account_id = await registered_supabase_user()
+    await confirm_label(app_client, device, token, account_id, BARCODE, label_facts())
+    second_checked = datetime(2026, 8, 4, 10, 0, tzinfo=UTC)
+    await ingest_rows(tmp_path, [data_row(recall_id=901, batch=BATCH, brand=BRAND, product=PRODUCT)],
+                      checked_at=SOURCE_CHECKED_AT)
+    # A later valid export that simply does not list recall 901.
+    await ingest_rows(tmp_path, [data_row(recall_id=902, batch="Z-999", brand="Other Foods",
+                                          product="Other product")], checked_at=second_checked)
+
+    body = await verdict(app_client, device)
+    envelope = body["official_records"]
+    assert [row["recall_id"] for row in envelope["records"]] == ["901"]
+    record = envelope["records"][0]
+    assert datetime.fromisoformat(record["source_last_seen_at"]) == SOURCE_CHECKED_AT
+    assert record["seen_in_latest_successful_check"] is False
+    # The global freshness is separately visible, and is the later check.
+    assert datetime.fromisoformat(envelope["last_successful_check_at"]) == second_checked
+    # Nothing in the payload characterises the absence.
+    assert not [word for word in ("withdrawn", "removed", "no longer", "resolved", "cleared")
+                if word in str(body).casefold()]
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        assert len((await session.execute(select(OfficialRecord))).scalars().all()) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_record_in_the_latest_export_says_so_and_dates_itself_to_it(
+    db_clean, off_clean, app_client, device, registered_supabase_user, tmp_path,
+):
+    token, account_id = await registered_supabase_user()
+    await confirm_label(app_client, device, token, account_id, BARCODE, label_facts())
+    await ingest_official_record(tmp_path)
+    later = datetime(2026, 8, 4, 10, 0, tzinfo=UTC)
+    await ingest_official_record(tmp_path, checked_at=later)
+
+    record = (await verdict(app_client, device))["official_records"]["records"][0]
+    assert record["seen_in_latest_successful_check"] is True
+    assert datetime.fromisoformat(record["source_last_seen_at"]) == later
+
+
+@pytest.mark.asyncio
+async def test_ambiguity_and_provenance_leave_the_scientific_verdict_untouched(
+    db_clean, off_clean, app_client, device, registered_supabase_user, tmp_path,
+):
+    """Whether a recall resolves or not, the grade is about the food."""
+    token, account_id = await registered_supabase_user()
+    await confirm_label(app_client, device, token, account_id, BARCODE,
+                        label_facts(brand="Alpha", product_name="Alpha Oats"))
+    before = await verdict(app_client, device)
+    await ingest_rows(tmp_path, shared_lot_rows())
+    after = await verdict(app_client, device)
+
+    assert [row["recall_id"] for row in after["official_records"]["records"]] == ["901"]
+    assert after["grade"] == before["grade"]
+    assert after["band"] == before["band"]
+    assert after["decision"] == before["decision"]
+    assert after["negatives"] == before["negatives"]
+    assert after["positives"] == before["positives"]
+    assert after["result_contract_version"] == before["result_contract_version"] == "v1"
+    assert {key for key in after if after[key] != before.get(key)} == {"official_records"}
+
+    # No internal identity is published: not the record's, not the fetch's.
+    factory = get_sessionmaker()
+    async with factory() as session:
+        ids = [str(row.id) for row in (await session.execute(select(OfficialRecord))).scalars().all()]
+        ids += [str(row.id) for row in (await session.execute(select(OfficialSourceFetch))).scalars().all()]
+    assert not [value for value in ids if value in str(after)]
+
+
+@pytest.mark.asyncio
+async def test_open_food_facts_identity_cannot_resolve_a_shared_lot(
+    db_clean, off_clean, app_client, device, tmp_path,
+):
+    """Store A has no licence and no lot, so it never enters the candidate set."""
+    factory = get_off_sessionmaker()
+    async with factory() as session:
+        session.add(OffProduct(
+            barcode=OFF_ONLY, product_name="Alpha Oats", brands="Alpha",
+            ingredients_text="oats, sugar, salt",
+            nutriments={"sugars_100g": 12.0, "salt_100g": 0.8}, fetched_at=datetime.now(UTC),
+        ))
+        await session.commit()
+    await ingest_rows(tmp_path, shared_lot_rows())
+
+    body = await verdict(app_client, device, OFF_ONLY)
+    assert body["facts_provenance"] == "open_food_facts"
+    assert body["official_records"]["records"] == []

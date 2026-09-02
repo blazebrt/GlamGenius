@@ -18,6 +18,30 @@ describe('official records on the canonical verdict surface', () => {
     expect(screen.getByLabelText(/Official FSSAI record.*SYN-RECALL-002.*Published/)).toBeTruthy();
   });
 
+  it('separates when this record was observed from when the source was last checked', () => {
+    // A record still listed in the newest export says so plainly.
+    render(<OfficialRecords officialRecords={{
+      ...records,
+      records: [{ ...records.records[0], source_last_seen_at: '2026-08-02T00:00:00+00:00', seen_in_latest_successful_check: true }],
+    }} />);
+    expect(screen.getByText('Record observed in latest checked FSSAI export')).toBeTruthy();
+    expect(screen.getByText(/Official records last checked: 2026-08-02/)).toBeTruthy();
+  });
+
+  it('dates a record missing from the latest export without characterising its absence', () => {
+    render(<OfficialRecords officialRecords={{
+      ...records,
+      records: [{ ...records.records[0], source_last_seen_at: '2026-08-01T00:00:00+00:00', seen_in_latest_successful_check: false }],
+    }} />);
+    // Absence from one download is not withdrawal, and the copy never says it is.
+    expect(screen.getByText(/Record last observed in FSSAI export: 2026-08-01/)).toBeTruthy();
+    expect(screen.getByText(/Official records last checked: 2026-08-02/)).toBeTruthy();
+    expect(screen.queryByText('Record observed in latest checked FSSAI export')).toBeNull();
+    for (const forbidden of [/withdrawn/i, /cleared/i, /no longer/i, /resolved/i, /safe now/i, /disappeared/i]) {
+      expect(screen.queryByText(forbidden)).toBeNull();
+    }
+  });
+
   it('opens the supplied official source and renders nothing when there is no exact record', () => {
     const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
     render(<OfficialRecords officialRecords={records} />);

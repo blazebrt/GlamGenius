@@ -30,9 +30,31 @@ Before any canonical mutation, a successful import is compared against the newes
 
 Refused imports leave `OfficialRecord`, `OfficialRecordRevision`, `last_seen_at`, `last_seen_fetch_id`, `latest_revision`, canonical status/reason and successful freshness exactly as the last accepted check left them. A failure ledger row may be retained.
 
+That comparison is only true if it cannot be raced. Two concurrent imports could otherwise read the same "latest successful check", both pass the guard, and both mutate. So an import takes a transaction-scoped PostgreSQL advisory lock — `pg_advisory_xact_lock(hashtextextended('official_source:fssai_foscos:food_recall', 0))` — after the workbook is validated and **before** the latest-check read, and holds it until commit or rollback. It is a database lock rather than a Python one because a second worker, a second operator, or a cron run on another host would not see a process-local lock.
+
+## A record we keep after it leaves the export
+
+A record is never deleted because a later export omits it: absence from one download proves nothing about withdrawal, correction or resolution. That makes per-record observation provenance part of the public contract, alongside the source-wide `last_successful_check_at`:
+
+- `source_last_seen_at` — `OfficialRecord.last_seen_at`, when this record itself was last observed in an accepted export.
+- `seen_in_latest_successful_check` — whether `OfficialRecord.last_seen_fetch_id` is the latest successful `OfficialSourceFetch`.
+
+"This record was last observed on 1 August" and "we last checked the register on 4 August" are different sentences, and the screen says whichever is true. No wording derives meaning from absence: the words *withdrawn*, *removed*, *no longer recalled*, *resolved*, *cleared* and *safe* are never emitted unless the official record itself states such a status.
+
 ## Matching a pack to a record
 
 Pack matching requires a valid 14-digit FSSAI licence and a meaningful exact batch/lot on **both** sides. Matching runs only against a confirmed Store B label snapshot; Open Food Facts cannot supply a licence or a batch and therefore cannot manufacture a match.
+
+A licence is its fourteen printed digits, optionally grouped with spaces as labels print them. It is never salvaged by deleting characters: `FSSAI 10012345678901`, `10012345678901X` and `10012-345678901` are not licences, because collapsing them onto one identifier would invent an exactness the source never stated. A run of one repeated digit is a placeholder, not a licence.
+
+One licence and lot can name several rows in the public register, so the candidate set is resolved together rather than row by row:
+
+1. Rows whose normalised licence and batch do not match exactly are not candidates.
+2. Rows whose brand or product conflicts with the pack are dropped.
+3. One survivor is the answer.
+4. Several survivors require the pack to **positively** corroborate an identity — missing text on either side corroborates nothing — and every corroborated row must name that same identity. Otherwise the answer is no match: not the first row, not the newest, not all of them.
+
+Several rows are returned only when they deterministically resolve to the same corroborated pack identity.
 
 Placeholder batches are not matchable, compared case-insensitively after whitespace normalisation: `NA`, `N/A`, `nil`, `none`, `not applicable`, `not available`, `other`, `others`, `-`, `.`, `no`, `loose`, `loose sample`, `sold as loose`, and zero-only strings such as `0`, `00`, `000`. Short real lots stay matchable (`C`, `1`, `0789/55`), and separators are never stripped, so `B-123` and `B 123` remain different identifiers.
 

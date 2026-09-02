@@ -6,6 +6,7 @@ by an older download, and cannot attach a stranger's recall to somebody's shelf.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -17,7 +18,7 @@ from pathlib import Path
 
 import pytest
 from app.domains.official_records import service
-from app.domains.official_records.matching import match_recall
+from app.domains.official_records.matching import match_recall, resolve_matches
 from app.domains.official_records.models import OfficialRecord, OfficialRecordRevision, OfficialSourceFetch
 from app.domains.official_records.source import (
     BATCH_PLACEHOLDERS,
@@ -28,11 +29,12 @@ from app.domains.official_records.source import (
     SourceError,
     normalise_batch,
     normalise_identity_text,
+    normalise_licence,
     parse_recall_xlsx,
 )
 from app.shared.database.sql import get_sessionmaker
 from openpyxl import Workbook
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 LICENCE = "10012345678901"
 FIXTURE = Path(__file__).parent / "fixtures" / "fssai_food_recall_v1.xlsx"
@@ -241,6 +243,25 @@ def test_real_short_batches_stay_meaningful(batch):
     assert match_recall(pack(batch_number=batch), official(batch_lot=batch)) == "matched"
 
 
+@pytest.mark.parametrize("licence", ["10012345678901", "  10012345678901  ", "1001 2345 6789 01"])
+def test_a_licence_is_its_fourteen_printed_digits(licence):
+    """Labels print the number grouped; the digits themselves are the identifier."""
+    assert normalise_licence(licence) == LICENCE
+    assert match_recall(pack(fssai_licence=licence), official()) == "matched"
+
+
+@pytest.mark.parametrize("malformed", [
+    "FSSAI 10012345678901", "10012345678901X", "X10012345678901", "10012-345678901",
+    "1001234567890", "100123456789012", "00000000000000", "1001234567890a",
+])
+def test_a_licence_is_never_salvaged_by_deleting_characters(malformed):
+    """Stripping non-digits would invent an exactness the source never stated."""
+    assert normalise_licence(malformed) is None
+    assert match_recall(pack(fssai_licence=malformed), official()) == "not_matched"
+    # Two equally malformed values are not evidence of the same manufacturer.
+    assert match_recall(pack(fssai_licence=malformed), official(licence=malformed)) == "not_matched"
+
+
 def test_separators_are_not_stripped_so_similar_lots_stay_distinct():
     assert normalise_batch("B-123") != normalise_batch("B 123")
     assert match_recall(pack(batch_number="B-123"), official(batch_lot="B 123")) == "identity_mismatch"
@@ -275,6 +296,57 @@ def test_exact_licence_and_batch_decide_eligibility_and_identity_only_guards_con
     # An invalid licence shape is not an identifier.
     assert match_recall(pack(fssai_licence="123"), official(licence="123")) == "not_matched"
     assert match_recall(pack(fssai_licence="0" * 14), official(licence="0" * 14)) == "not_matched"
+
+
+# ---------------------------------------------------------------------------
+# Several rows can share one licence and lot. Resolving them is a set problem.
+# ---------------------------------------------------------------------------
+
+R1 = {"recall_id": "R1", "licence": LICENCE, "batch_lot": "B-123", "brand_name": "Alpha", "product_name": "Oats"}
+R2 = {"recall_id": "R2", "licence": LICENCE, "batch_lot": "B-123", "brand_name": "Beta", "product_name": "Juice"}
+R3 = {"recall_id": "R3", "licence": LICENCE, "batch_lot": "B-123", "brand_name": "Alpha", "product_name": "Oats"}
+
+
+def resolved(pack_facts, records):
+    return [record["recall_id"] for record in resolve_matches(pack_facts, records)]
+
+
+def test_a_pack_without_identity_does_not_inherit_every_recall_on_its_licence():
+    """Case A. One licence and lot can name several products; a pack is one of them.
+
+    Handing all of them to the customer would present a stranger's recall as
+    theirs, and picking one would be a guess dressed as a fact.
+    """
+    assert resolved(pack(brand=None, product_name=None), [R1, R2]) == []
+
+
+def test_exact_pack_identity_selects_exactly_its_own_record():
+    """Cases B and C."""
+    assert resolved(pack(brand="Alpha", product_name="Oats"), [R1, R2]) == ["R1"]
+    assert resolved(pack(brand="Beta", product_name="Juice"), [R1, R2]) == ["R2"]
+    # Case D: identity that agrees with neither resolves to nothing.
+    assert resolved(pack(brand="Gamma", product_name="Tea"), [R1, R2]) == []
+
+
+def test_several_records_may_be_returned_only_for_one_corroborated_identity():
+    """Case E. Two filings against the same product are both that product's."""
+    assert resolved(pack(brand="Alpha", product_name="Oats"), [R1, R3]) == ["R1", "R3"]
+    # The same two rows without pack identity are still unresolved, not "both".
+    assert resolved(pack(brand=None, product_name=None), [R1, R3]) == []
+    # A single candidate never needs corroboration; nothing else could be meant.
+    assert resolved(pack(brand=None, product_name=None), [R1]) == ["R1"]
+
+
+def test_resolution_never_falls_back_to_first_newest_or_all():
+    ambiguous = [R1, R2, R3]
+    assert resolved(pack(brand=None, product_name=None), ambiguous) == []
+    # Corroborating only one side is enough when it names one identity group.
+    assert resolved(pack(brand="Alpha", product_name=None), ambiguous) == ["R1", "R3"]
+    # Corroborating a side that spans two identities stays unresolved.
+    spanning = [{**R1, "recall_id": "R4", "product_name": "Muesli"}, R1]
+    assert resolved(pack(brand="Alpha", product_name=None), spanning) == []
+    # An unusable licence resolves to nothing however many rows agree.
+    assert resolved(pack(fssai_licence="FSSAI 10012345678901"), ambiguous) == []
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +532,186 @@ async def test_error_codes_written_to_the_ledger_stay_inside_the_closed_vocabula
     assert set(codes) <= SOURCE_ERROR_CODES
     # No openpyxl, zipfile or XML parser text ever reaches the ledger.
     assert all(code and len(code) <= 64 and " " not in code for code in codes)
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: the chronology guard must hold against a real second session
+# ---------------------------------------------------------------------------
+
+async def _ingest_concurrently(path, checked_at, start: asyncio.Event | None = None) -> str:
+    """One import in its own session, released together with the others.
+
+    The connection is opened and its transaction started before the barrier. An
+    unwarmed session spends its first milliseconds on TCP and authentication,
+    which is long enough for the other import to finish — the race would then
+    never actually happen and the test would prove nothing.
+    """
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await session.execute(text("SELECT 1"))
+        if start is not None:
+            await start.wait()
+        try:
+            await service.ingest_recall_xlsx(session, path, source_checked_at=checked_at)
+            await session.commit()
+            return "succeeded"
+        except SourceError as exc:
+            await session.rollback()
+            return exc.code
+
+
+async def _race(*attempts) -> list[str]:
+    start = asyncio.Event()
+    tasks = [asyncio.create_task(_ingest_concurrently(path, when, start)) for path, when in attempts]
+    start.set()
+    return await asyncio.gather(*tasks)
+
+
+async def _fetches():
+    factory = get_sessionmaker()
+    async with factory() as session:
+        return (await session.execute(
+            select(OfficialSourceFetch).order_by(OfficialSourceFetch.created_at)
+        )).scalars().all()
+
+
+@pytest.mark.anyio
+async def test_a_second_import_waits_on_the_database_lock_instead_of_reading_stale_state(tmp_path, db_clean):
+    """The serialization is PostgreSQL's, so it holds across sessions and processes.
+
+    While one transaction holds the source lock, a second import cannot even
+    reach the "latest successful check" its chronology guard depends on. When it
+    finally does, it reads the truth the first import committed.
+    """
+    await _ingest(make_export(tmp_path / "t1.xlsx"), T1)
+    later = make_export(tmp_path / "t2.xlsx")
+    latest = make_export(tmp_path / "t3.xlsx")
+
+    factory = get_sessionmaker()
+    async with factory() as holder:
+        await service.lock_official_source(holder)
+        blocked = asyncio.create_task(_ingest_concurrently(later, T2))
+        # Long enough for an unserialized import to have finished several times.
+        await asyncio.sleep(0.25)
+        assert not blocked.done(), "a second import proceeded while the source lock was held"
+        await service.ingest_recall_xlsx(holder, latest, source_checked_at=T3)
+        await holder.commit()
+
+    # Released, the waiting import now sees T3 and refuses to go backwards.
+    assert await blocked == "out_of_order_source_check"
+    records, revisions, freshness = await _state()
+    assert freshness == T3.isoformat()
+    assert records[0].last_seen_at == T3
+    assert len(revisions) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("newest_first", [False, True])
+async def test_concurrent_imports_cannot_leave_older_content_under_newer_freshness(
+    tmp_path, db_clean, newest_first,
+):
+    """Without database serialization both sessions read the same "latest check",
+    both pass the chronology guard, and both mutate — so the guard's promise
+    would be false exactly when it matters.
+
+    Both arrival orders are exercised. The newest-first order is the one that
+    breaks unserialized: T3 commits, then T2 commits over it, leaving the
+    register holding T2's observation while freshness already reports T3.
+    """
+    await _ingest(make_export(tmp_path / "t1.xlsx"), T1)
+    later = make_export(tmp_path / "t2.xlsx")
+    latest = make_export(tmp_path / "t3.xlsx")
+    attempts = [(latest, T3), (later, T2)] if newest_first else [(later, T2), (latest, T3)]
+
+    outcomes = sorted(await _race(*attempts))
+    # Either order is legitimate; T2 arriving after T3 is simply out of order.
+    assert outcomes in (["out_of_order_source_check", "succeeded"], ["succeeded", "succeeded"]), outcomes
+
+    records, revisions, freshness = await _state()
+    assert freshness == T3.isoformat()
+    assert records[0].last_seen_at == T3
+    # Unchanged content never earns a second revision, however the race ran.
+    assert records[0].latest_revision == 1
+    assert len(revisions) == 1
+    successful = [row for row in await _fetches() if row.status == "succeeded"]
+    assert max(row.source_checked_at for row in successful) == T3
+
+
+@pytest.mark.anyio
+async def test_a_first_import_race_on_identical_bytes_admits_exactly_one(tmp_path, db_clean):
+    """Two operators importing the same download at the same stated instant."""
+    original = make_export(tmp_path / "foscos.xlsx")
+    copy = tmp_path / "foscos-copy.xlsx"
+    copy.write_bytes(original.read_bytes())
+
+    assert sorted(await _race((original, T1), (copy, T1))) == ["duplicate_source_check", "succeeded"]
+
+    records, revisions, _ = await _state()
+    assert len(records) == 1 and len(revisions) == 1
+    fetches = await _fetches()
+    assert [row.status for row in fetches].count("succeeded") == 1
+
+
+@pytest.mark.anyio
+async def test_a_first_import_race_on_differing_bytes_picks_no_winner(tmp_path, db_clean):
+    """Two artifacts claiming the same instant disagree; only one can be accepted."""
+    first = make_export(tmp_path / "a.xlsx", status="Initiated")
+    second = make_export(tmp_path / "b.xlsx", status="Completed")
+
+    assert sorted(await _race((first, T1), (second, T1))) == ["conflicting_source_check", "succeeded"]
+
+    records, revisions, freshness = await _state()
+    assert len(records) == 1 and len(revisions) == 1
+    assert freshness == T1.isoformat()
+    fetches = await _fetches()
+    assert [row.status for row in fetches].count("succeeded") == 1
+    rejected = [row for row in fetches if row.status == "failed"]
+    assert all(row.error_code in SOURCE_ERROR_CODES for row in rejected)
+
+
+# ---------------------------------------------------------------------------
+# A record we keep after it leaves the export
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_a_record_absent_from_the_latest_export_keeps_its_own_observation_date(tmp_path, db_clean):
+    """Absence from one download proves nothing, so the record stays — dated honestly.
+
+    The screen must be able to say "last observed on 1 August" while also saying
+    "we last checked on 4 August". Collapsing those two into one date would claim
+    an observation that never happened.
+    """
+    first = make_export(tmp_path / "t1.xlsx", recall_id=901)
+    second = make_export(tmp_path / "t2.xlsx", recall_id=902)
+    fetch_one, _ = await _ingest(first, T1)
+    fetch_two, second_counts = await _ingest(second, T2)
+    assert second_counts["records_created"] == 1
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        records = {row.external_record_id: row for row in (
+            await session.execute(select(OfficialRecord))
+        ).scalars().all()}
+        revisions = (await session.execute(select(OfficialRecordRevision))).scalars().all()
+        envelope = await service.official_records_envelope(session, pack())
+    # The 1 August record is retained, with its history and its own last-seen state.
+    assert set(records) == {"901", "902"}
+    assert records["901"].last_seen_at == T1
+    assert records["901"].last_seen_fetch_id == fetch_one.id
+    assert records["902"].last_seen_fetch_id == fetch_two.id
+    assert len(revisions) == 2
+
+    assert envelope["last_successful_check_at"] == T2.isoformat()
+    matched = {row["recall_id"]: row for row in envelope["records"]}
+    assert set(matched) == {"901", "902"}
+    assert matched["901"]["source_last_seen_at"] == T1.isoformat()
+    assert matched["901"]["seen_in_latest_successful_check"] is False
+    # A record that was in the latest export says so, and dates itself to it.
+    assert matched["902"]["source_last_seen_at"] == T2.isoformat()
+    assert matched["902"]["seen_in_latest_successful_check"] is True
+    # Nothing in the payload characterises the absence.
+    forbidden = ("withdrawn", "removed", "no longer", "resolved", "cleared", "safe")
+    assert not [word for word in forbidden if word in str(envelope).casefold()]
 
 
 # ---------------------------------------------------------------------------
