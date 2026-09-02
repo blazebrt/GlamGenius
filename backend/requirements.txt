@@ -27,6 +27,7 @@ sentry-sdk[fastapi]==2.66.1
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 alembic==1.14.0
+openpyxl==3.1.5
 # psycopg2-binary is used by Alembic's sync engine for migrations only.
 # Runtime queries all go through asyncpg.
 psycopg2-binary==2.9.10

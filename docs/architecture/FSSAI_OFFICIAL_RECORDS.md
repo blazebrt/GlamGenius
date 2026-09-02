@@ -1,30 +1,9 @@
-# FSSAI Official Records V1
+# FSSAI official Food Recall records
 
-The authoritative public FoSCoS Food Recall surface is
-`https://foscos.fssai.gov.in/food-recall`, whose published columns include
-Recall ID, FBO, brand, batch/lot, product, reason, dates, status, licence and
-nature of recall. It is browser-rendered. V1 does **not** scrape it or claim
-automatic live ingestion: an operator imports a reviewed official FoSCoS JSON
-export with `python -m app.commands.ingest_fssai_recalls <official-export-file>`.
-No captcha, protected endpoint, mirror, cookie/login, or scraping bypass is
-used. The command accepts only the documented `{"rows": [...]}` representation,
-commits atomically, and records success or failure without deleting old data.
+V1 imports only a manually downloaded public FoSCoS **Food Recall → Export to excel** artifact. The source is one XLSX workbook with one `data` sheet, the thirteen FoSCoS headers in their published order, and `DD-MM-YYYY` text dates. `NA` termination dates mean absent; malformed nonblank dates fail the import.
 
-The `fssai-foscos-food-recall.v1` adapter is deterministic and preserves the
-raw payload hash. `official_records` is a dedicated Store-B domain with
-`official_source_fetches`, `official_records`, and immutable
-`official_record_revisions`. Repeated content is idempotent; changed content
-creates a revision; a record is never deleted merely because a later fetch does
-not contain it.
+The operator supplies the real download/review time with `--source-checked-at`; database `created_at` is only import time. There is no scraping, CAPTCHA bypass, private API, or automatic live-source claim.
 
-Exact pack matching requires both an exact normalized FSSAI licence and exact
-normalized batch/lot. Licence normalization applies Unicode compatibility
-normalization and keeps digits; batch normalization applies Unicode
-compatibility normalization, trimming and case folding while preserving
-separators (so `B-123` is not `B 123`). Brand and product are corroboration
-checks. Missing or conflicting identity is not a match.
+The importer stores SHA-256 of the original XLSX bytes, source format, source check time, row count, parser version, and source-fetch lineage. A changed record revision points to the import that produced it. An unchanged re-observation advances `last_seen_fetch_id` without manufacturing a revision.
 
-The Product Result `official_records` envelope is additive and separate from
-the scientific grade, Open Food Facts Store A, and the complaint handoff. It is
-shown only for an exact match and links back to FoSCoS. No health, safety, or
-legal conclusion is inferred from the record; the portal remains authoritative.
+Pack matching requires a valid 14-digit FSSAI licence, a meaningful exact batch/lot, and no brand/product identity conflict. Placeholder batches such as `NA`, `nil`, `other`, and zero-only strings are not matchable. Absence of a match makes no safety claim. Official records remain separate from Product Result grade, decision, community reporting, complaint handoff, and Open Food Facts attribution.

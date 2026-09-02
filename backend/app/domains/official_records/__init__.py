@@ -6,7 +6,7 @@ from .source import (
     RECORD_TYPE_FOOD_RECALL,
     SOURCE_ADAPTER_VERSION,
     SOURCE_URL,
-    parse_recall_rows,
+    parse_recall_xlsx,
 )
 
-__all__ = ["AUTHORITY_FSSAI_FOSCOS", "RECORD_TYPE_FOOD_RECALL", "SOURCE_ADAPTER_VERSION", "SOURCE_URL", "match_recall", "parse_recall_rows"]
+__all__ = ["AUTHORITY_FSSAI_FOSCOS", "RECORD_TYPE_FOOD_RECALL", "SOURCE_ADAPTER_VERSION", "SOURCE_URL", "match_recall", "parse_recall_xlsx"]

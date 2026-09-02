@@ -1,97 +1,73 @@
 from __future__ import annotations
 
-import json
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from app.domains.official_records import service
 from app.domains.official_records.matching import match_recall
-from app.domains.official_records.models import (
-    OfficialRecord,
-    OfficialRecordRevision,
-    OfficialSourceFetch,
-)
-from app.domains.official_records.source import SOURCE_ADAPTER_VERSION, SOURCE_URL, parse_recall_rows
+from app.domains.official_records.models import OfficialRecord, OfficialRecordRevision
+from app.domains.official_records.source import HEADERS, SOURCE_ADAPTER_VERSION, parse_recall_xlsx
 from app.shared.database.sql import get_sessionmaker
+from openpyxl import Workbook
 from sqlalchemy import select
 
-FIXTURE = Path(__file__).parent / "fixtures" / "fssai_food_recall_v1.json"
 LICENCE = "10012345678901"
+FIXTURE = Path(__file__).parent / "fixtures" / "fssai_food_recall_v1.xlsx"
 
 
-def payload() -> dict:
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+def make_export(path, *, status: str = "Initiated", batch: str = "B-123"):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "data"
+    sheet.append(HEADERS)
+    sheet.append([1, 901, " Synthetic Foods ", "Synthetic Brand", batch, "Synthetic cereal", "Synthetic reason", "01-08-2026", status, "NA", LICENCE, "Central License", "Initiated by Authority"])
+    workbook.save(path)
 
 
-def record() -> dict:
-    return parse_recall_rows(payload())[0]
+def pack(**changes):
+    return {"fssai_licence": LICENCE, "batch_number": "B-123", "brand": "Synthetic Brand", "product_name": "Synthetic cereal", **changes}
 
 
-def pack(**changes) -> dict:
-    return {"fssai_licence": LICENCE, "batch_number": "LOT-2026-A", "brand": "Example Brand", "product_name": "Example Cereal", **changes}
+def test_public_xlsx_contract_preserves_identifiers_dates_and_original_bytes():
+    rows, digest = parse_recall_xlsx(FIXTURE)
+    assert digest == hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
+    assert SOURCE_ADAPTER_VERSION.endswith("xlsx.v1")
+    assert rows[0]["fbo_name"] == "Synthetic Foods"
+    assert rows[0]["licence"] == LICENCE
+    assert rows[0]["batch_lot"] == "B-123"
+    assert rows[0]["recall_start_date"].isoformat() == "2026-08-01"
+    assert rows[0]["recall_termination_date"] is None
 
 
-def test_adapter_uses_committed_official_export_shape():
-    row = record()
-    assert SOURCE_URL == "https://foscos.fssai.gov.in/food-recall"
-    assert SOURCE_ADAPTER_VERSION == "fssai-foscos-food-recall.v1"
-    assert row["fbo_name"] == "Example Foods Private Limited"
-
-
-def test_exact_match_requires_valid_licence_batch_and_compatible_identity():
-    source = record()
-    assert match_recall(pack(), source) == "matched"
-    assert match_recall(pack(batch_number="OTHER"), source) == "identity_mismatch"
-    assert match_recall(pack(fssai_licence="10012345678902"), source) == "identity_mismatch"
-    assert match_recall(pack(fssai_licence=None), source) == "not_matched"
-    assert match_recall(pack(batch_number=None), source) == "not_matched"
-    assert match_recall(pack(fssai_licence="123"), {**source, "licence": "123"}) == "not_matched"
-    assert match_recall(pack(fssai_licence="11111111111111"), {**source, "licence": "11111111111111"}) == "not_matched"
-    assert match_recall(pack(brand="Other Brand"), source) == "identity_mismatch"
-
-
-@pytest.mark.anyio
-async def test_ingestion_is_idempotent_revisioned_and_preserves_fbo(db_clean):
-    factory = get_sessionmaker()
-    first = datetime(2026, 8, 1, tzinfo=UTC)
-    second = datetime(2026, 8, 2, tzinfo=UTC)
-    async with factory() as session:
-        await service.ingest_recall_export(session, payload(), fetched_at=first)
-        await session.commit()
-    async with factory() as session:
-        rows = (await session.execute(select(OfficialRecord))).scalars().all()
-        revisions = (await session.execute(select(OfficialRecordRevision))).scalars().all()
-        assert len(rows) == len(revisions) == 1
-        assert rows[0].fbo_name == "Example Foods Private Limited"
-        assert revisions[0].revision_number == 1
-        await service.ingest_recall_export(session, payload(), fetched_at=second)
-        await session.commit()
-    async with factory() as session:
-        row = (await session.execute(select(OfficialRecord))).scalar_one()
-        assert row.latest_revision == 1
-        assert row.last_seen_at == second
+def test_exact_match_rejects_source_placeholders_and_retains_real_short_batches():
+    record = {"licence": LICENCE, "batch_lot": "B-123", "brand_name": "Synthetic Brand", "product_name": "Synthetic cereal"}
+    assert match_recall(pack(), record) == "matched"
+    for placeholder in ("NA", "nil", "other", "00", "0"):
+        assert match_recall(pack(batch_number=placeholder), {**record, "batch_lot": placeholder}) == "not_matched"
+    assert match_recall(pack(batch_number="C"), {**record, "batch_lot": "c"}) == "matched"
+    assert match_recall(pack(batch_number="B-123"), {**record, "batch_lot": "B 123"}) == "identity_mismatch"
 
 
 @pytest.mark.anyio
-async def test_changes_and_failures_preserve_records_and_success_freshness(db_clean):
-    factory = get_sessionmaker()
+async def test_source_checked_lineage_revisions_and_reobservation(tmp_path, db_clean):
+    first_path = tmp_path / "first.xlsx"
+    second_path = tmp_path / "second.xlsx"
+    make_export(first_path)
+    make_export(second_path, status="Completed")
     first = datetime(2026, 8, 1, tzinfo=UTC)
-    changed = datetime(2026, 8, 3, tzinfo=UTC)
-    failed = datetime(2026, 8, 4, tzinfo=UTC)
+    second = datetime(2026, 8, 4, tzinfo=UTC)
+    factory = get_sessionmaker()
     async with factory() as session:
-        await service.ingest_recall_export(session, payload(), fetched_at=first)
-        updated = payload(); updated["rows"][0]["recall_status"] = "Terminated"
-        await service.ingest_recall_export(session, updated, fetched_at=changed)
-        await service.record_fetch_failure(session, fetched_at=failed)
+        fetch_one, created = await service.ingest_recall_xlsx(session, first_path, source_checked_at=first)
         await session.commit()
-    async with factory() as session:
-        row = (await session.execute(select(OfficialRecord))).scalar_one()
+        fetch_two, revised = await service.ingest_recall_xlsx(session, second_path, source_checked_at=second)
+        await session.commit()
+        record = (await session.execute(select(OfficialRecord))).scalar_one()
         revisions = (await session.execute(select(OfficialRecordRevision).order_by(OfficialRecordRevision.revision_number))).scalars().all()
-        assert row.recall_status == "Terminated" and row.latest_revision == 2
-        assert [revision.revision_number for revision in revisions] == [1, 2]
+        assert created["records_created"] == 1 and revised["records_revised"] == 1
+        assert [revision.source_fetch_id for revision in revisions] == [fetch_one.id, fetch_two.id]
+        assert record.last_seen_fetch_id == fetch_two.id
         envelope = await service.official_records_envelope(session, pack())
-        assert envelope["last_successful_check_at"] == changed.isoformat()
-        assert len(envelope["records"]) == 1
-        assert "id" not in envelope["records"][0]
-        assert (await session.execute(select(OfficialSourceFetch).where(OfficialSourceFetch.status == "failed"))).scalar_one()
+        assert envelope["last_successful_check_at"] == second.isoformat()

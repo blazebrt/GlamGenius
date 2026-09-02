@@ -22,11 +22,13 @@ def upgrade() -> None:
         sa.Column("record_type", sa.String(48), nullable=False),
         sa.Column("source_url", sa.Text(), nullable=False),
         sa.Column("adapter_version", sa.String(64), nullable=False),
-        sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("source_checked_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("status", sa.String(24), nullable=False),
         sa.Column("http_status", sa.Integer(), nullable=True),
-        sa.Column("content_hash", sa.String(64), nullable=True),
-        sa.Column("raw_payload", postgresql.JSONB(), nullable=True),
+        sa.Column("source_file_sha256", sa.String(64), nullable=True),
+        sa.Column("source_format", sa.String(16), nullable=True),
+        sa.Column("row_count", sa.Integer(), nullable=True),
+        sa.Column("original_filename", sa.String(256), nullable=True),
         sa.Column("error_code", sa.String(64), nullable=True),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
@@ -34,7 +36,7 @@ def upgrade() -> None:
         sa.CheckConstraint("status IN ('succeeded', 'failed')", name="ck_official_fetch_status"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_official_fetch_authority_fetched", "official_source_fetches", ["authority", "fetched_at"])
+    op.create_index("ix_official_fetch_authority_checked", "official_source_fetches", ["authority", "source_checked_at"])
     op.create_table(
         "official_records",
         sa.Column("authority", sa.String(64), nullable=False), sa.Column("record_type", sa.String(48), nullable=False),
@@ -44,21 +46,22 @@ def upgrade() -> None:
         sa.Column("recall_termination_date", sa.Date()), sa.Column("nature_of_recall", sa.String(256)), sa.Column("license_type", sa.String(80)),
         sa.Column("source_url", sa.Text(), nullable=False), sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("first_seen_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("last_seen_fetch_id", sa.Uuid(), nullable=True),
         sa.Column("latest_revision", sa.Integer(), server_default="1", nullable=False), sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.PrimaryKeyConstraint("id"), sa.UniqueConstraint("authority", "record_type", "external_record_id", name="uq_official_record_identity"),
+        sa.ForeignKeyConstraint(["last_seen_fetch_id"], ["official_source_fetches.id"]), sa.PrimaryKeyConstraint("id"), sa.UniqueConstraint("authority", "record_type", "external_record_id", name="uq_official_record_identity"),
     )
     op.create_index("ix_official_record_pack_match", "official_records", ["licence", "batch_lot"])
     op.create_index("ix_official_record_type_status", "official_records", ["record_type", "recall_status"])
     op.create_table(
         "official_record_revisions",
-        sa.Column("record_id", sa.Uuid(), nullable=False), sa.Column("revision_number", sa.Integer(), nullable=False),
+        sa.Column("record_id", sa.Uuid(), nullable=False), sa.Column("source_fetch_id", sa.Uuid(), nullable=False), sa.Column("revision_number", sa.Integer(), nullable=False),
         sa.Column("observed_at", sa.DateTime(timezone=True), nullable=False), sa.Column("content_hash", sa.String(64), nullable=False),
         sa.Column("payload", postgresql.JSONB(), nullable=False), sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.ForeignKeyConstraint(["record_id"], ["official_records.id"], ondelete="CASCADE"), sa.PrimaryKeyConstraint("id"),
+        sa.ForeignKeyConstraint(["record_id"], ["official_records.id"], ondelete="CASCADE"), sa.ForeignKeyConstraint(["source_fetch_id"], ["official_source_fetches.id"]), sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("record_id", "revision_number", name="uq_official_record_revision"),
     )
     op.create_index("ix_official_revision_record_observed", "official_record_revisions", ["record_id", "observed_at"])
@@ -70,5 +73,5 @@ def downgrade() -> None:
     op.drop_index("ix_official_record_type_status", table_name="official_records")
     op.drop_index("ix_official_record_pack_match", table_name="official_records")
     op.drop_table("official_records")
-    op.drop_index("ix_official_fetch_authority_fetched", table_name="official_source_fetches")
+    op.drop_index("ix_official_fetch_authority_checked", table_name="official_source_fetches")
     op.drop_table("official_source_fetches")

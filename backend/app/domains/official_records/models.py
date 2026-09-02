@@ -29,16 +29,18 @@ class OfficialSourceFetch(UUIDPrimaryKey, TimestampMixin, Base):
     record_type: Mapped[str] = mapped_column(String(48), nullable=False)
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     adapter_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False)
     http_status: Mapped[int | None] = mapped_column(Integer)
-    content_hash: Mapped[str | None] = mapped_column(String(64))
-    raw_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    source_file_sha256: Mapped[str | None] = mapped_column(String(64))
+    source_format: Mapped[str | None] = mapped_column(String(16))
+    row_count: Mapped[int | None] = mapped_column(Integer)
+    original_filename: Mapped[str | None] = mapped_column(String(256))
     error_code: Mapped[str | None] = mapped_column(String(64))
 
     __table_args__ = (
         CheckConstraint("status IN ('succeeded', 'failed')", name="ck_official_fetch_status"),
-        Index("ix_official_fetch_authority_fetched", "authority", "fetched_at"),
+        Index("ix_official_fetch_authority_checked", "authority", "source_checked_at"),
     )
 
 
@@ -63,6 +65,7 @@ class OfficialRecord(UUIDPrimaryKey, TimestampMixin, Base):
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_fetch_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("official_source_fetches.id"))
     latest_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
     __table_args__ = (
@@ -77,6 +80,7 @@ class OfficialRecordRevision(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "official_record_revisions"
     record_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("official_records.id", ondelete="CASCADE"), nullable=False)
+    source_fetch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("official_source_fetches.id"), nullable=False)
     revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
