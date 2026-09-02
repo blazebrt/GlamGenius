@@ -63,3 +63,7 @@ Placeholder batches are not matchable, compared case-insensitively after whitesp
 Brand and product use a separate `normalise_identity_text` — NFKC, whitespace collapse, casefold — and deliberately do **not** inherit the batch placeholder vocabulary or the zero-only rule: a brand may legitimately be called `Other`. Licence and batch establish eligibility; brand and product only block a real conflict. Missing identity on either side is missing information, not disagreement, and identity alone never establishes a match. There is no fuzzy or AI matching.
 
 Absence of a match makes no safety claim. Official records remain separate from Product Result grade, decision, community reporting, complaint handoff, and Open Food Facts attribution.
+
+## Not community observations
+
+Step 5 adds a fourth, separate layer: structured shopper observations. It is not this one. A community report can never create an `OfficialRecord`, set `official_finding`, or claim a regulator said anything — however many people file it. Authority data enters only through the import path above.

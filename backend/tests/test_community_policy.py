@@ -144,3 +144,46 @@ def test_public_display_fails_closed_without_a_way_for_a_brand_to_answer():
 
     _, reasons = policy.public_display_state(enabled=False, brand_reply_url=None)
     assert set(reasons) == {policy.REASON_PUBLIC_DISPLAY_DISABLED, policy.REASON_BRAND_REPLY_URL_MISSING}
+
+
+# ---------------------------------------------------------------------------
+# The layers stay apart
+# ---------------------------------------------------------------------------
+
+def test_no_scientific_or_official_module_imports_community():
+    """A shopper observation must not be able to reach the grade or the register.
+
+    The cheapest way for that boundary to rot is an import, so this walks the
+    packages that own the other epistemic layers and refuses to find one.
+    """
+    import pathlib
+
+    backend = pathlib.Path(__file__).resolve().parent.parent
+    protected = [
+        backend / "app" / "domains" / "nutrition",
+        backend / "app" / "domains" / "evidence",
+        backend / "app" / "domains" / "official_records",
+        backend / "app" / "domains" / "off",
+    ]
+    offenders = []
+    for root in protected:
+        for module in root.rglob("*.py"):
+            text = module.read_text(encoding="utf-8")
+            if "domains.community" in text or "domains import community" in text:
+                offenders.append(str(module.relative_to(backend)))
+    assert offenders == []
+
+
+def test_the_community_domain_reaches_for_no_scoring_or_official_module():
+    """And the dependency does not run the other way either."""
+    import pathlib
+
+    community = pathlib.Path(__file__).resolve().parent.parent / "app" / "domains" / "community"
+    forbidden = ("domains.nutrition", "domains.evidence", "domains.official_records", "domains.off")
+    offenders = [
+        f"{module.name}:{needle}"
+        for module in community.rglob("*.py")
+        for needle in forbidden
+        if needle in module.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
