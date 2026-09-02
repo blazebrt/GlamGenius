@@ -34,6 +34,12 @@ import { buildVerdictShareText } from '../src/services/verdictShare';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import { OfficialRecords } from '../src/components/verdict/OfficialRecords';
 import { CommunityObservations } from '../src/components/verdict/CommunityObservations';
+import { CommunityReportSheet, BATCH_SCOPED_CODES } from '../src/components/verdict/CommunityReportSheet';
+import { useUserStore } from '../src/store/userStore';
+import {
+  readCommunityPackContext, submitCommunityObservation, uploadMedia,
+  withdrawCommunityObservation, type CommunityPackContext,
+} from '../src/services/apiV2';
 import {
   ComponentRow, FactorSection, GradeBlock, IngredientDetail, IngredientList,
   NotGradedCard, ReportSheet, UnknownCard, VerdictActions, VerdictLines,
@@ -55,6 +61,19 @@ export default function VerdictScreen() {
   const [explaining, setExplaining] = useState<VerdictIngredient | null>(null);
   const [reportStatus, setReportStatus] = useState<string | null>(null);
   const [explanation, setExplanation] = useState<{ explanation: string; rule: string | null } | null>(null);
+
+  // The Community flow is deliberately separate state from the label-error
+  // report above it. They look similar and do different jobs: that one corrects
+  // what the app believes, this one records what a shopper saw.
+  const registrationState = useUserStore((state) => state.registrationState);
+  const signedIn = registrationState === 'registered';
+  const [communityOpen, setCommunityOpen] = useState(false);
+  const [communityCode, setCommunityCode] = useState<string | null>(null);
+  const [communityPhotoId, setCommunityPhotoId] = useState<string | null>(null);
+  const [communityBusy, setCommunityBusy] = useState(false);
+  const [communityStatus, setCommunityStatus] = useState<string | null>(null);
+  const [communityContext, setCommunityContext] = useState<CommunityPackContext | null>(null);
+  const [ownReportId, setOwnReportId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     if (!barcode) return;
@@ -116,6 +135,95 @@ export default function VerdictScreen() {
     setReportBusy(false);
     setTimeout(() => setReportSubject(null), 1600);
   }, [barcode, photoUri, reportSubject]);
+
+  // Whether this device has a lot number is the server's answer, never a guess
+  // from the label version on screen — that may be a stranger's capture.
+  const openCommunityReport = useCallback(() => {
+    if (!signedIn) { router.push('/(auth)/welcome'); return; }
+    setCommunityOpen(true);
+    setCommunityCode(null);
+    setCommunityPhotoId(null);
+    setCommunityStatus(null);
+    setOwnReportId(null);
+    if (barcode) {
+      void readCommunityPackContext(barcode)
+        .then(setCommunityContext)
+        .catch(() => setCommunityContext(null));
+    }
+  }, [barcode, router, signedIn]);
+
+  const addCommunityPhoto = useCallback(async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) return;
+    const shot = await ImagePicker.launchCameraAsync({ quality: 0.6 });
+    const uri = shot.canceled ? null : shot.assets[0]?.uri;
+    if (!uri) return;
+    setCommunityBusy(true);
+    try {
+      // Uploaded under its own purpose, so an inventory or analysis photo can
+      // never end up behind a public claim about a brand.
+      const asset = await uploadMedia(
+        { uri, name: 'observation.jpg', type: 'image/jpeg' }, 'community_observation',
+      );
+      setCommunityPhotoId(asset.id);
+    } catch {
+      setCommunityStatus(S.communityObservations.photoRequired);
+    } finally {
+      setCommunityBusy(false);
+    }
+  }, []);
+
+  const sendCommunityObservation = useCallback(async () => {
+    if (!barcode || !communityCode || !communityPhotoId) return;
+    setCommunityBusy(true);
+    try {
+      const saved = await submitCommunityObservation({
+        client_report_id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        barcode, observation_code: communityCode, photo_asset_id: communityPhotoId,
+      });
+      setOwnReportId(saved.id);
+      // "Saved", never "verified": we know a shopper sent it, nothing more.
+      setCommunityStatus(S.communityObservations.reportSaved);
+    } catch (error) {
+      // Backend prose never becomes customer copy. Stable reason keys map to
+      // the string registry; anything unrecognised falls back to a keyed line.
+      const reason = (error as { response?: { data?: { detail?: { reason?: string } } } })
+        ?.response?.data?.detail?.reason;
+      setCommunityStatus(
+        reason === 'batch_capture_required' ? S.communityObservations.batchCaptureRequired
+          : reason === 'photo_required' ? S.communityObservations.photoRequired
+          : reason === 'device_not_claimed_by_account' ? S.communityObservations.signInToReport
+          : S.communityObservations.submitFailed,
+      );
+    } finally {
+      setCommunityBusy(false);
+    }
+  }, [barcode, communityCode, communityPhotoId]);
+
+  const withdrawOwnObservation = useCallback(async () => {
+    if (!ownReportId) return;
+    setCommunityBusy(true);
+    try {
+      await withdrawCommunityObservation(ownReportId);
+      setOwnReportId(null);
+      setCommunityStatus(S.communityObservations.withdrawn);
+    } catch {
+      setCommunityStatus(S.communityObservations.submitFailed);
+    } finally {
+      setCommunityBusy(false);
+    }
+  }, [ownReportId]);
+
+  const captureLabelForBatch = useCallback(() => {
+    setCommunityOpen(false);
+    // Into the label capture that already exists. No second batch scanner, and
+    // never a box for the shopper to type the lot into.
+    router.push({ pathname: '/scan-product', params: { barcode: barcode ?? '' } });
+  }, [barcode, router]);
+
+  const batchRequired = !!communityCode
+    && (BATCH_SCOPED_CODES as readonly string[]).includes(communityCode)
+    && communityContext?.batch_context_available !== true;
 
   if (!view || !source) {
     return (
@@ -196,6 +304,17 @@ export default function VerdictScreen() {
                 must not compete with the verdict, the regulator's record, or
                 the negatives — so it sits here and stays quiet. */}
             <CommunityObservations communityObservations={source.communityObservations} />
+            {/* Its own row, deliberately outside the signal card: the first
+                reporter necessarily sees no public signal, and reporting must
+                not depend on the display flag, the threshold, or a reply URL. */}
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={S.communityObservations.reportAction}
+              onPress={openCommunityReport}
+              style={styles.link}
+            >
+              <Text style={styles.linkText}>{S.communityObservations.reportAction}</Text>
+            </TouchableOpacity>
             <VerdictActions
               onWhy={() => setTab('why')}
               onListen={onListen}
@@ -297,6 +416,28 @@ export default function VerdictScreen() {
             photoAdded={photoUri !== null}
             busy={reportBusy}
             status={reportStatus}
+          />
+        </View>
+      </Modal>
+      <Modal
+        visible={communityOpen}
+        animationType={Platform.OS === 'web' ? 'none' : 'slide'}
+        onRequestClose={() => setCommunityOpen(false)}
+      >
+        <View style={{ flex: 1, paddingTop: insets.top }}>
+          <CommunityReportSheet
+            selected={communityCode}
+            onSelect={setCommunityCode}
+            onAddPhoto={() => void addCommunityPhoto()}
+            onSubmit={() => void sendCommunityObservation()}
+            onCancel={() => setCommunityOpen(false)}
+            onCaptureLabel={captureLabelForBatch}
+            onWithdraw={ownReportId ? () => void withdrawOwnObservation() : undefined}
+            photoAdded={communityPhotoId !== null}
+            busy={communityBusy}
+            status={communityStatus}
+            signedIn={signedIn}
+            batchRequired={batchRequired}
           />
         </View>
       </Modal>

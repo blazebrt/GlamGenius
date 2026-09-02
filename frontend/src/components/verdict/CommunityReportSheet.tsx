@@ -37,7 +37,7 @@ export const PRODUCT_DATA_CODES = [
 export const OBSERVATION_CODES = [...PRODUCT_DATA_CODES, ...BATCH_SCOPED_CODES];
 
 export function CommunityReportSheet({
-  selected, onSelect, onAddPhoto, onSubmit, onCancel, onCaptureLabel,
+  selected, onSelect, onAddPhoto, onSubmit, onCancel, onCaptureLabel, onWithdraw,
   photoAdded, busy, status, signedIn, batchRequired,
 }: {
   selected: string | null;
@@ -46,6 +46,8 @@ export function CommunityReportSheet({
   onSubmit: () => void;
   onCancel: () => void;
   onCaptureLabel: () => void;
+  /** Present only once this shopper has a report of their own to retract. */
+  onWithdraw?: () => void;
   photoAdded: boolean;
   busy: boolean;
   status: string | null;
@@ -119,6 +121,15 @@ export function CommunityReportSheet({
       </TouchableOpacity>
 
       {!!status && <Text accessibilityLiveRegion="polite" style={styles.status}>{status}</Text>}
+
+      {!!onWithdraw && (
+        <TouchableOpacity
+          accessibilityRole="button" accessibilityLabel={S.communityObservations.withdraw}
+          onPress={onWithdraw} disabled={busy}
+        >
+          <Text style={styles.action}>{S.communityObservations.withdraw}</Text>
+        </TouchableOpacity>
+      )}
 
       <TouchableOpacity
         accessibilityRole="button" accessibilityLabel={S.communityObservations.cancel}

@@ -14,12 +14,23 @@ from app.domains.community.policy import AggregateEvidence
 NOW = datetime(2026, 9, 1, tzinfo=UTC)
 
 
-def evidence(*, accounts: int = 3, photos: int = 3, code: str = observations.OBSERVATION_SEAL_BROKEN,
+def evidence(*, pairing: dict[str, set[str]] | None = None,
+             accounts: int = 3, photos: int = 3,
+             code: str = observations.OBSERVATION_SEAL_BROKEN,
              scope: str = observations.SCOPE_BATCH, batch: str | None = "b-123"):
+    """Evidence for one aggregate key.
+
+    ``pairing`` states who supplied which photograph. The convenience form
+    spreads ``photos`` distinct hashes over ``accounts`` reporters, one each.
+    """
+    if pairing is None:
+        pairing = {
+            f"account-{index}": {f"sha-{index}"} if index < photos else set()
+            for index in range(accounts)
+        }
     return AggregateEvidence(
         observation_code=code, scope=scope, batch_number=batch,
-        reporter_account_ids=frozenset(f"account-{index}" for index in range(accounts)),
-        supporting_photo_hashes=frozenset(f"sha-{index}" for index in range(photos)),
+        reporter_photo_hashes={name: frozenset(hashes) for name, hashes in pairing.items()},
         first_reported_at=NOW - timedelta(days=2), last_reported_at=NOW,
     )
 
@@ -108,9 +119,65 @@ def test_two_reporters_are_never_public_however_the_code_sounds():
 
 
 def test_three_people_holding_one_photograph_between_them_is_not_three_photographs():
-    decision = policy.evaluate(evidence(accounts=3, photos=1))
+    decision = policy.evaluate(evidence(pairing={"a": {"h1"}, "b": {"h1"}, "c": {"h1"}}))
     assert decision.public is False
     assert decision.reason_keys == (policy.REASON_BELOW_PHOTO_THRESHOLD,)
+    assert decision.unique_supporting_photos == 1
+
+
+# ---------------------------------------------------------------------------
+# Who actually photographed anything
+# ---------------------------------------------------------------------------
+
+def test_one_busy_reporter_cannot_lend_photographs_to_two_silent_ones():
+    """The exploit the two-set count missed.
+
+    A uploads three distinct photographs; B and C each re-upload A's first.
+    Counted as sets that is three accounts and three hashes — public. Matched,
+    B and C compete for the one hash they share and only one can hold it, so
+    two people evidenced this, not three.
+    """
+    decision = policy.evaluate(evidence(
+        pairing={"a": {"h1", "h2", "h3"}, "b": {"h1"}, "c": {"h1"}},
+    ))
+    assert decision.independent_reporters == 3
+    assert decision.unique_supporting_photos == 2
+    assert decision.public is False
+    assert decision.reason_keys == (policy.REASON_BELOW_PHOTO_THRESHOLD,)
+
+
+def test_a_pairing_that_genuinely_exists_is_found():
+    """A shares a hash with B but has one of their own, so all three can pair.
+
+    a->h2, b->h1, c->h3. A greedy first-come assignment would give A h1, strand
+    B, and wrongly refuse a signal three people did evidence.
+    """
+    decision = policy.evaluate(evidence(
+        pairing={"a": {"h1", "h2"}, "b": {"h1"}, "c": {"h3"}},
+    ))
+    assert decision.unique_supporting_photos == 3
+    assert decision.public is True
+
+
+def test_ten_photographs_from_one_person_is_one_person():
+    decision = policy.evaluate(evidence(
+        pairing={"a": {f"h{index}" for index in range(10)}},
+    ))
+    assert decision.independent_reporters == 1
+    assert decision.unique_supporting_photos == 1
+    assert decision.public is False
+
+
+def test_the_pairing_is_deterministic_whatever_order_the_rows_arrive_in():
+    """Two shoppers must never see different answers for the same evidence."""
+    pairing = {"a": {"h1", "h2"}, "b": {"h1"}, "c": {"h2", "h3"}, "d": {"h3"}}
+    answers = {
+        policy.max_independent_pairs(
+            {name: frozenset(hashes) for name, hashes in sorted(pairing.items(), reverse=reverse)}
+        )
+        for reverse in (False, True)
+    }
+    assert answers == {3}
 
 
 def test_the_policy_names_itself_and_its_window():

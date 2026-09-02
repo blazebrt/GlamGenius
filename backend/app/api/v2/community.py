@@ -58,6 +58,36 @@ async def read_observation_vocabulary():
     }
 
 
+@router.get("/community/observations/context/{barcode}")
+async def read_pack_context(
+    barcode: str,
+    device: ScanDevice = Depends(current_device),
+    session: AsyncSession = Depends(get_session),
+):
+    """Whether this device currently has a lot number, decided by the server.
+
+    The app must not guess, and must never be handed anybody else's lot. It
+    reads only what this device itself last scanned.
+    """
+    return await community.pack_context_payload(session, barcode=barcode, device_id=device.id)
+
+
+@router.get("/community/observations/mine/{barcode}")
+async def read_own_observations(
+    barcode: str,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """The caller's own reports about one barcode, so they can withdraw one.
+
+    Their rows only. Not a feed, not anybody else's history, not a profile.
+    """
+    reports = await community.own_reports_for_barcode(
+        session, account_id=current.account_id, barcode=barcode,
+    )
+    return {"reports": [community.to_public_report(report) for report in reports]}
+
+
 @router.post("/community/observations", status_code=status.HTTP_201_CREATED)
 async def submit_observation(
     body: ObservationBody,

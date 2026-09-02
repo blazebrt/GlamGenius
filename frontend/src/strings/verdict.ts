@@ -111,6 +111,9 @@ export const S = {
     // "Saved", never "verified" or "confirmed": we know a shopper sent it, and
     // nothing more than that.
     reportSaved: 'Observation saved.',
+    withdrawn: 'Observation withdrawn.',
+    // Backend prose never becomes customer copy; unrecognised reasons land here.
+    submitFailed: 'That did not send. Please try again.',
     submit: 'Send observation',
     cancel: 'Cancel',
     withdraw: 'Withdraw my observation',
@@ -126,7 +129,9 @@ export const S = {
       seal_broken: 'a broken seal',
       pack_leaking: 'a leaking pack',
       pack_swollen: 'a swollen pack',
-      visible_foreign_material: 'something in the pack that should not be there',
+      // States what was seen. Whether the material belongs there, and whether
+      // that makes anything unsafe, are conclusions the app does not draw.
+      visible_foreign_material: 'visible material inside the pack',
       insect_observed: 'an insect',
     } as Record<string, string>,
     // "3 shoppers reported a broken seal". A count and an observation.

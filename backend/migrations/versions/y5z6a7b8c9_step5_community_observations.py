@@ -52,6 +52,9 @@ def upgrade() -> None:
         # later, and the audit row must outlive that without blocking it. A row
         # with no live photo stops supporting a public signal.
         sa.Column("photo_asset_id", postgresql.UUID(as_uuid=True), nullable=True),
+        # The exact scan that established the report's context — the
+        # authoritative physical-pack provenance.
+        sa.Column("scan_event_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("label_snapshot_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("batch_number", sa.String(160), nullable=True),
         sa.Column("status", sa.String(24), nullable=False, server_default="accepted"),
@@ -67,6 +70,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["device_id"], ["scan_devices.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["photo_asset_id"], ["media_assets.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["scan_event_id"], ["scan_events.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["label_snapshot_id"], ["product_label_snapshots.id"], ondelete="SET NULL"),
         sa.UniqueConstraint("account_id", "client_report_id", name="uq_community_report_idempotency"),
         sa.CheckConstraint(_in_list("observation_code", OBSERVATION_CODES),

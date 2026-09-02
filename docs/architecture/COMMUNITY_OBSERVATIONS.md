@@ -34,15 +34,24 @@ Reporter identity is taken from the session and the device token. The request bo
 
 **A photo is not verification.** The system knows one thing: a shopper supplied an image. Nothing looks at it — no Gemini, no vision, no OCR, no perceptual judgement anywhere in acceptance, aggregation or moderation. It is never called verified, proof, confirmed or validated.
 
-## The reporter's own lot
+## The pack in this person's hand
 
-A pack-condition report needs a lot number, and the shopper is never asked to type one. It is read from the facts of **this device's own** confirmation scan (`ScanEvent.label_facts`, selected by `jsonb_typeof(...) = 'object'` — a plain scan stores a JSON `null` there, not a SQL `NULL`).
+A pack-condition report needs a lot number, and the shopper is never asked to type one. It comes from **this device's own most recent scan** of that barcode, ordered `created_at DESC, id DESC` — server time, never the client's `scanned_at`, which an offline queue may backdate.
 
-It is read from the scan rather than from `LabelSnapshot.device_id` because Step 3 deduplicates identical label content into one snapshot owned by whoever captured it first. Two shoppers holding the same lot legitimately share that row, so ownership of it was never the question; whether this phone did the capture is.
+Two rules, and the second is the one that goes wrong quietly:
 
-If the person's own capture yields no meaningful lot, a batch-scoped submission is refused with `batch_capture_required` and the app sends them to the existing label capture. Storing a report that could never become a signal would be quietly wasting their time.
+- The batch comes from **this device's** capture, not the product's newest `LabelSnapshot`. That row may be a stranger's photograph of a stranger's packet, and Step 3 deduplicates identical label content into one snapshot owned by whoever captured it first, so ownership of it was never the question.
+- It comes from the **newest scan only**. If the newest event is a plain scan, a different physical packet is in this person's hand now and its lot is unknown until they capture it. Reaching past that scan to an older capture would attach a report about today's packet to last month's lot, and would keep showing this shopper a signal about a pack they put back on the shelf.
+
+`GET /api/v2/community/observations/context/{barcode}` answers this server-side, so the app never guesses and is never handed anybody else's lot. If the person's own capture yields no meaningful lot, a batch-scoped submission is refused with `batch_capture_required` and the app sends them to the existing label capture.
 
 Lot comparison is this domain's own rule, not an import from the FSSAI adapter: NFKC, whitespace collapsed, casefolded, separators preserved. `B-123` equals `b-123` and does not equal `B 123`. Placeholders (`NA`, `nil`, `other`, `loose`, zero-only strings and the rest) identify nothing and are refused; short real codes such as `C`, `1` and `L0` survive.
+
+## Provenance: the scan, not the snapshot
+
+Every report stores `scan_event_id` — the exact scan that established its context, and the authoritative physical-pack provenance. The report's account, device and barcode must all agree with that event at acceptance.
+
+`label_snapshot_id` is set **only** when a snapshot exists for that exact scan event, and is otherwise null. It is never inferred by matching content fingerprints: Step 3 deliberately excludes `batch_number` from its semantic fingerprint, so two packets from lots B1 and B2 with the same printed label share one fingerprint by design. Pointing a B2 report at somebody else's B1 capture because the semantic content matched would be a physical claim the data does not support. Null is the honest answer.
 
 ## Viewing: your lot, not the newest one
 
@@ -55,9 +64,13 @@ A batch signal is assembled only for a viewer whose **own device** confirmed tha
 A row counts toward a public signal only while it is `accepted`, inside the 90-day active window measured on server time, and backed by a live photo asset. Then:
 
 - **`MIN_PUBLIC_REPORTERS = 3`**, counted as distinct `account_id`. Not rows, not uploads, not devices: ten reports from one person, or one person on three claimed phones, is one reporter.
-- **`MIN_UNIQUE_PHOTOS = 3`**, counted as distinct `MediaAsset.sha256`. Three accounts uploading one identical image is one observation wearing three coats.
+- **`MIN_UNIQUE_PHOTOS = 3`**, counted as the size of the largest **reporter-to-photograph pairing** — a maximum bipartite matching over `MediaAsset.sha256`, not a raw count of distinct hashes.
+
+The matching is what makes the second threshold mean anything. Counting accounts and hashes as two separate sets, one account uploading three distinct photographs while two friends each re-upload the first gives three accounts and three hashes — public, though only one person ever photographed anything. Matched, the two friends compete for the one hash they share and only one can hold it, so the pairing is two. Conversely, when a genuine assignment exists (A has H1 and H2, B has only H1, C has H3), the matching finds `A→H2, B→H1, C→H3` where a greedy pass would strand B and wrongly refuse a signal three people did evidence.
 
 The threshold does not bend because a code sounds serious. That is precisely when a single mistaken or malicious report does the most damage to a brand that has done nothing wrong. One report may be retained internally; it is never public. Two are never public.
+
+Rate limits (10/account/hour, 20/account/day, 10/device/hour) are enforced behind transaction-scoped PostgreSQL advisory locks taken account-then-device, because counting rows and then inserting is not a limit — several requests can all read nine and all pass a limit of ten. The idempotency key is re-read behind the lock, so a concurrent copy of the same retry still resolves as a retry rather than being refused for the quota slot it is itself occupying.
 
 Aggregation reads current rows on every request rather than a cached count, so a withdrawal, a moderation, a deleted photo or a deleted account takes effect on the next response instead of leaving a stale public claim standing. Deleting an account removes its reports by `ON DELETE CASCADE`; if that drops three reporters to two, the signal disappears.
 

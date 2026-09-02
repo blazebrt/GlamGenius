@@ -9,17 +9,17 @@ the same pack — and only once enough of them have.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import config
 from app.domains.media.models import MEDIA_STATUS_ACTIVE, MediaAsset
 from app.domains.product.models import LabelSnapshot, ScanDevice, ScanEvent
-from app.domains.product.service import label_content_fingerprint
 from app.shared.database.base import utcnow
 from app.shared.errors.codes import ErrorCode
 from app.shared.errors.exceptions import AppError, NotFoundError, ValidationFailedError
@@ -107,84 +107,101 @@ REASON_BATCH_CAPTURE_REQUIRED = "batch_capture_required"
 
 
 # ---------------------------------------------------------------------------
-# The reporter's own pack
+# The pack in this person's hand, right now
 # ---------------------------------------------------------------------------
 
-async def own_confirmed_batch(
+@dataclass(frozen=True)
+class PackContext:
+    """What this device is currently holding, as far as the server can tell."""
+
+    scan_event: ScanEvent | None = None
+    batch_number: str | None = None
+    label_snapshot_id: uuid.UUID | None = None
+
+    @property
+    def has_scan(self) -> bool:
+        return self.scan_event is not None
+
+
+async def current_pack_event(
     session: AsyncSession, *, barcode: str, device_id: uuid.UUID | None,
-) -> tuple[uuid.UUID | None, str | None]:
-    """The lot number on the pack *this device itself* confirmed, and nothing else.
+) -> ScanEvent | None:
+    """The newest scan this device made of this barcode. Not the newest capture.
 
-    Not the product's newest label version. That row may have been captured by a
-    stranger's phone in another city from another lot, and using it would show
-    one shopper a warning about a pack they are not holding — precisely the
-    false positive a batch scope exists to prevent.
-
-    Read from this device's own confirmation scan rather than from
-    ``LabelSnapshot.device_id``, because Step 3 deduplicates identical label
-    content into one snapshot owned by whoever captured it first. Two shoppers
-    holding the same lot legitimately share that row, so ownership of it is not
-    the question; whether this phone did the capture is. The scan event records
-    exactly that, per device, and survives the deduplication.
+    Ordered by server time, then by id to break a tie deterministically — never
+    by the client's ``scanned_at``, which an offline queue may backdate and a
+    hostile client may choose.
     """
     if device_id is None:
-        return None, None
-    event = (await session.execute(
+        return None
+    return (await session.execute(
         select(ScanEvent)
-        .where(
-            ScanEvent.barcode == barcode,
-            ScanEvent.device_id == device_id,
-            # A plain scan stores a JSON ``null`` here, not a SQL NULL, so
-            # ``IS NOT NULL`` would match one and treat a barcode glance as a
-            # label capture. Ask the type instead.
-            func.jsonb_typeof(ScanEvent.label_facts) == "object",
-        )
-        .order_by(ScanEvent.created_at.desc())
+        .where(ScanEvent.barcode == barcode, ScanEvent.device_id == device_id)
+        .order_by(ScanEvent.created_at.desc(), ScanEvent.id.desc())
         .limit(1)
     )).scalars().first()
+
+
+async def current_pack_context(
+    session: AsyncSession, *, barcode: str, device_id: uuid.UUID | None,
+) -> PackContext:
+    """The lot number of the pack this device last scanned, if it captured one.
+
+    Two rules, and the second is the one that matters:
+
+    The batch comes from this device's own capture, never from the product's
+    newest ``LabelSnapshot`` — that row may be a stranger's photograph of a
+    stranger's packet, and Step 3 deduplicates identical label content into one
+    snapshot owned by whoever captured it first, so ownership of it was never
+    the question.
+
+    And it comes from the *newest* scan only. A plain scan of the same barcode
+    means a different physical packet is in this person's hand now, and its lot
+    is unknown until they capture it. Reaching past that scan to an older
+    capture would attach a report about today's packet to last month's lot, and
+    would keep showing this shopper a signal about a pack they put back on the
+    shelf.
+    """
+    event = await current_pack_event(session, barcode=barcode, device_id=device_id)
     if event is None:
-        return None, None
-    batch = normalise_batch((event.label_facts or {}).get("batch_number"))
-    # Optional provenance: the canonical snapshot this capture resolved to,
-    # whoever's phone happened to create the row.
+        return PackContext()
+    facts = event.label_facts
+    if not isinstance(facts, dict) or not facts:
+        # A plain scan. A new packet, and no lot until it is captured.
+        return PackContext(scan_event=event)
+    batch = normalise_batch(facts.get("batch_number"))
+    # Provenance is the snapshot Step 3 allocated *for this exact event*, or
+    # nothing. Matching on content fingerprint would be a lie: Step 3
+    # deliberately excludes batch_number from the semantic fingerprint, so two
+    # packets from lots B1 and B2 share one fingerprint by design, and pointing
+    # at the older physical capture would claim provenance we do not have.
     snapshot_id = await session.scalar(
-        select(LabelSnapshot.id)
-        .where(
-            LabelSnapshot.barcode == barcode,
-            LabelSnapshot.content_fingerprint == label_content_fingerprint(event.label_facts or {}),
-        )
-        .order_by(LabelSnapshot.version_number.desc())
-        .limit(1)
+        select(LabelSnapshot.id).where(LabelSnapshot.scan_event_id == event.id)
     )
-    return snapshot_id, batch
+    return PackContext(scan_event=event, batch_number=batch, label_snapshot_id=snapshot_id)
+
+
+async def pack_context_payload(
+    session: AsyncSession, *, barcode: str, device_id: uuid.UUID | None,
+) -> dict[str, Any]:
+    """What the app needs to know before offering a batch-scoped observation.
+
+    Server-authoritative on purpose: the client must not guess whether this
+    device has a current lot, and must never be given anybody else's.
+    """
+    context = await current_pack_context(session, barcode=barcode, device_id=device_id)
+    return {
+        "barcode": barcode,
+        "has_current_scan_context": context.has_scan,
+        "batch_context_available": context.batch_number is not None,
+        "batch_number": context.batch_number,
+        "batch_scoped_observation_codes": sorted(PACK_CONDITION_OBSERVATIONS),
+    }
 
 
 # ---------------------------------------------------------------------------
 # Submission
 # ---------------------------------------------------------------------------
-
-async def _assert_scanned(
-    session: AsyncSession, *, barcode: str, account_id: uuid.UUID, device_id: uuid.UUID,
-) -> None:
-    """This account, on this phone, actually passed a scan over this barcode.
-
-    Without it anyone could walk an enumerated barcode list and file reports
-    against products they have never held.
-    """
-    scanned = await session.scalar(
-        select(func.count())
-        .select_from(ScanEvent)
-        .where(
-            ScanEvent.barcode == barcode,
-            ScanEvent.account_id == account_id,
-            ScanEvent.device_id == device_id,
-        )
-    )
-    if not scanned:
-        raise CommunityReportRejected(
-            REASON_NO_SCAN, "Scan this pack first, then tell us what you saw.",
-        )
-
 
 async def _assert_photo(
     session: AsyncSession, *, account_id: uuid.UUID, photo_asset_id: uuid.UUID,
@@ -215,13 +232,27 @@ async def _assert_photo(
     return asset
 
 
+async def _lock_reporter(session: AsyncSession, *, account_id: uuid.UUID, device_id: uuid.UUID) -> None:
+    """Serialize this account's and this device's submissions in PostgreSQL.
+
+    Counting rows and then inserting is not a limit: several requests can all
+    read nine and all pass a limit of ten. The locks are transaction-scoped and
+    always taken account-then-device, so two requests sharing both can never
+    deadlock by taking them in opposite orders.
+    """
+    for name in (f"community_reporter:{account_id}", f"community_device:{device_id}"):
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:name, 0))"), {"name": name},
+        )
+
+
 async def _assert_within_rate_limits(
     session: AsyncSession, *, account_id: uuid.UUID, device_id: uuid.UUID, now: datetime,
 ) -> None:
     """Deterministic, database-backed, and no new dataset about the person.
 
-    Counted from rows we already store, so an idempotent retry — which creates
-    no row — costs a reporter nothing.
+    Counted from rows we already store. Callers hold the reporter locks, so the
+    count cannot go stale between here and the insert.
     """
     async def _count(*conditions) -> int:
         return int(await session.scalar(
@@ -252,6 +283,15 @@ def _same_submission(report: CommunityObservationReport, *, barcode: str, code: 
         and report.observation_code == code
         and report.photo_asset_id == photo
     )
+
+
+def _resolve_retry(
+    existing: CommunityObservationReport, barcode: str, code: str, photo: uuid.UUID,
+) -> CommunityObservationReport:
+    """Same key, same content is the same report. Same key, different content is a bug."""
+    if not _same_submission(existing, barcode=barcode, code=code, photo=photo):
+        raise CommunityReportConflict()
+    return existing
 
 
 async def _existing_report(
@@ -285,17 +325,22 @@ async def submit_observation(
             REASON_DEVICE_NOT_CLAIMED, "Sign in on this phone before sending a report.",
         )
 
+    # Cheap path first: an offline queue re-sending a report it already sent
+    # should not wait on a lock, and should never be told it is rate limited.
     existing = await _existing_report(session, account_id=account_id, client_report_id=client_report_id)
     if existing is not None:
-        if not _same_submission(existing, barcode=barcode, code=observation_code, photo=photo_asset_id):
-            raise CommunityReportConflict()
-        return existing, False
+        return _resolve_retry(existing, barcode, observation_code, photo_asset_id), False
 
-    await _assert_scanned(session, barcode=barcode, account_id=account_id, device_id=device.id)
     await _assert_photo(session, account_id=account_id, photo_asset_id=photo_asset_id)
-
-    snapshot_id, batch = await own_confirmed_batch(session, barcode=barcode, device_id=device.id)
-    if is_batch_scoped(observation_code) and batch is None:
+    context = await current_pack_context(session, barcode=barcode, device_id=device.id)
+    event = context.scan_event
+    # The report is anchored to the exact scan that established its context, and
+    # that scan must be this person's, on this phone, of this pack.
+    if event is None or event.account_id != account_id or event.barcode != barcode:
+        raise CommunityReportRejected(
+            REASON_NO_SCAN, "Scan this pack first, then tell us what you saw.",
+        )
+    if is_batch_scoped(observation_code) and context.batch_number is None:
         # Refuse rather than store a pack-condition report that could never
         # become a signal: the person deserves to know their report would go
         # nowhere, and the app can send them to capture the label instead.
@@ -304,12 +349,20 @@ async def submit_observation(
             "Capture the pack label first so we can match the batch.",
         )
 
+    await _lock_reporter(session, account_id=account_id, device_id=device.id)
+    # Re-read behind the lock: a concurrent copy of this same retry may have
+    # won while we waited, and it must still resolve as a retry rather than be
+    # refused for consuming the quota slot it is itself occupying.
+    winner = await _existing_report(session, account_id=account_id, client_report_id=client_report_id)
+    if winner is not None:
+        return _resolve_retry(winner, barcode, observation_code, photo_asset_id), False
     await _assert_within_rate_limits(session, account_id=account_id, device_id=device.id, now=utcnow())
 
     report = CommunityObservationReport(
         account_id=account_id, device_id=device.id, client_report_id=client_report_id,
         barcode=barcode, observation_code=observation_code, photo_asset_id=photo_asset_id,
-        label_snapshot_id=snapshot_id, batch_number=batch, status=REPORT_STATUS_ACCEPTED,
+        scan_event_id=event.id, label_snapshot_id=context.label_snapshot_id,
+        batch_number=context.batch_number, status=REPORT_STATUS_ACCEPTED,
     )
     try:
         # A savepoint so a lost race does not poison the caller's transaction.
@@ -317,15 +370,31 @@ async def submit_observation(
             session.add(report)
             await session.flush()
     except IntegrityError:
-        winner = await _existing_report(
+        raced = await _existing_report(
             session, account_id=account_id, client_report_id=client_report_id,
         )
-        if winner is None:
+        if raced is None:
             raise
-        if not _same_submission(winner, barcode=barcode, code=observation_code, photo=photo_asset_id):
-            raise CommunityReportConflict() from None
-        return winner, False
+        return _resolve_retry(raced, barcode, observation_code, photo_asset_id), False
     return report, True
+
+
+async def own_reports_for_barcode(
+    session: AsyncSession, *, account_id: uuid.UUID, barcode: str,
+) -> list[CommunityObservationReport]:
+    """This account's own reports about one barcode, so they can withdraw one.
+
+    Their rows only. Not a feed, not a history of anybody else, not a profile —
+    the single purpose is letting a person manage the content they created.
+    """
+    return list((await session.execute(
+        select(CommunityObservationReport)
+        .where(
+            CommunityObservationReport.account_id == account_id,
+            CommunityObservationReport.barcode == barcode,
+        )
+        .order_by(CommunityObservationReport.created_at.desc())
+    )).scalars().all())
 
 
 async def withdraw_observation(
@@ -387,7 +456,12 @@ async def _qualifying_rows(session: AsyncSession, *, barcode: str, now: datetime
 
 
 def _aggregate(rows: list[Any], *, viewer_batch: str | None) -> list[AggregateEvidence]:
-    """Group into aggregate keys, keeping batches apart and counting people."""
+    """Group into aggregate keys, keeping batches apart and keeping the pairing.
+
+    Each reporter carries the photographs *they* supplied, so the policy can ask
+    whether three people independently evidenced this rather than whether three
+    names and three hashes happen to appear.
+    """
     buckets: dict[tuple[str, str, str | None], dict[str, Any]] = {}
     for report, sha256 in rows:
         scope = observation_scope(report.observation_code)
@@ -396,17 +470,17 @@ def _aggregate(rows: list[Any], *, viewer_batch: str | None) -> list[AggregateEv
         if scope == SCOPE_BATCH and (report.batch_number is None or report.batch_number != viewer_batch):
             continue
         key = (report.observation_code, scope, report.batch_number if scope == SCOPE_BATCH else None)
-        bucket = buckets.setdefault(key, {"accounts": set(), "photos": set(), "first": None, "last": None})
-        bucket["accounts"].add(str(report.account_id))
-        bucket["photos"].add(sha256)
+        bucket = buckets.setdefault(key, {"reporters": {}, "first": None, "last": None})
+        bucket["reporters"].setdefault(str(report.account_id), set()).add(sha256)
         seen_at = report.created_at
         bucket["first"] = seen_at if bucket["first"] is None else min(bucket["first"], seen_at)
         bucket["last"] = seen_at if bucket["last"] is None else max(bucket["last"], seen_at)
     return [
         AggregateEvidence(
             observation_code=code, scope=scope, batch_number=batch,
-            reporter_account_ids=frozenset(bucket["accounts"]),
-            supporting_photo_hashes=frozenset(bucket["photos"]),
+            reporter_photo_hashes={
+                account: frozenset(photos) for account, photos in bucket["reporters"].items()
+            },
             first_reported_at=bucket["first"], last_reported_at=bucket["last"],
         )
         for (code, scope, batch), bucket in buckets.items()
@@ -466,7 +540,9 @@ async def community_observations_envelope(
     if not enabled:
         return envelope
     now = utcnow()
-    _, viewer_batch = await own_confirmed_batch(session, barcode=barcode, device_id=device_id)
+    viewer_batch = (await current_pack_context(
+        session, barcode=barcode, device_id=device_id,
+    )).batch_number
     rows = await _qualifying_rows(session, barcode=barcode, now=now)
     decisions = [evaluate(evidence) for evidence in _aggregate(rows, viewer_batch=viewer_batch)]
     envelope["signals"] = _ordered([_public_signal(d) for d in decisions if d.public])

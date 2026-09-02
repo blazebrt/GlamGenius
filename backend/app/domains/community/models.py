@@ -71,9 +71,17 @@ class CommunityObservationReport(UUIDPrimaryKey, TimestampMixin, Base):
         ForeignKey("media_assets.id", ondelete="SET NULL"),
     )
 
-    # The reporter's own confirmed pack, and the lot number read off it. Never
-    # typed in, never taken from another person's capture, never from Open Food
-    # Facts — which has no lot number to give.
+    # The exact scan that established this report's context. This, not the
+    # snapshot, is the authoritative physical-pack provenance: Step 3 excludes
+    # batch_number from its semantic fingerprint, so two packets from different
+    # lots legitimately share one snapshot, and only the scan event says which
+    # packet was in this person's hand.
+    scan_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("scan_events.id", ondelete="SET NULL"),
+    )
+    # Present only when Step 3 allocated a snapshot for that exact scan. When it
+    # deduplicated the semantic label onto an existing row, this stays null,
+    # which is the honest answer.
     label_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("product_label_snapshots.id", ondelete="SET NULL"),
     )

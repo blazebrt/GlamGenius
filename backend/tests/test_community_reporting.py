@@ -533,10 +533,10 @@ async def test_a_report_outside_the_active_window_stops_counting(
 
 
 @pytest.mark.asyncio
-async def test_a_deleted_account_stops_contributing_to_a_public_signal(
+async def test_the_foreign_key_takes_a_departing_account_s_reports_with_it(
     db_clean, off_clean, app_client, registered_supabase_user, public_display,
 ):
-    """A contribution that outlived its owner would be a secret identifying trace."""
+    """The schema-level half of the guarantee, isolated from the worker."""
     shoppers = await three_reporters(app_client, registered_supabase_user)
     viewer = shoppers[0][0]
     assert len(await signals(app_client, viewer.headers())) == 1
@@ -553,6 +553,46 @@ async def test_a_deleted_account_stops_contributing_to_a_public_signal(
     async with factory() as session:
         remaining = (await session.execute(select(CommunityObservationReport))).scalars().all()
     assert len(remaining) == 2
+    assert await signals(app_client, viewer.headers()) == []
+
+
+@pytest.mark.asyncio
+async def test_the_real_deletion_lifecycle_removes_a_reporter_from_the_public_count(
+    db_clean, off_clean, app_client, registered_supabase_user, public_display, media_root,
+):
+    """Through the actual deletion state machine, not a hand-written DELETE.
+
+    A foreign key proves the rows can go. It does not prove the job that
+    customers actually trigger reaches the same state — and a contribution that
+    outlived its owner would be a secret identifying trace of somebody who
+    asked to be forgotten.
+    """
+    from app.domains.privacy import deletion_service
+
+    shoppers = await three_reporters(app_client, registered_supabase_user)
+    viewer = shoppers[0][0]
+    assert len(await signals(app_client, viewer.headers())) == 1
+
+    leaving = shoppers[2][0]
+    factory = get_sessionmaker()
+    async with factory() as session:
+        job = await deletion_service.request_deletion(session, leaving.account_id)
+        await session.commit()
+    assert job.state == "requested"
+
+    async with factory() as session:
+        processed = await deletion_service.drain_all(session)
+        await session.commit()
+    assert processed >= 1
+
+    async with factory() as session:
+        remaining = (await session.execute(select(CommunityObservationReport))).scalars().all()
+        gone = (await session.execute(select(CommunityObservationReport).where(
+            CommunityObservationReport.account_id == leaving.account_id
+        ))).scalars().all()
+    assert gone == []
+    assert len(remaining) == 2
+    # Three reporters became two, so the signal is no longer public.
     assert await signals(app_client, viewer.headers()) == []
 
 

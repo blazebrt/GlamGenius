@@ -9,6 +9,7 @@ counts, and the string file decides how a person reads them.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
@@ -36,15 +37,60 @@ REASON_BRAND_REPLY_URL_MISSING = "brand_reply_url_missing"
 
 @dataclass(frozen=True)
 class AggregateEvidence:
-    """Normalised, already-deduplicated evidence for one aggregate key."""
+    """Normalised, already-deduplicated evidence for one aggregate key.
+
+    ``reporter_photo_hashes`` maps each reporter to the photographs *they*
+    supplied. The mapping matters: counting accounts and hashes as two separate
+    sets says three people and three photographs even when one person supplied
+    all three and the other two passed round a copy of the first.
+    """
 
     observation_code: str
     scope: str
     batch_number: str | None
-    reporter_account_ids: frozenset[str] = field(default_factory=frozenset)
-    supporting_photo_hashes: frozenset[str] = field(default_factory=frozenset)
+    reporter_photo_hashes: Mapping[str, frozenset[str]] = field(default_factory=dict)
     first_reported_at: datetime | None = None
     last_reported_at: datetime | None = None
+
+    @property
+    def reporter_account_ids(self) -> frozenset[str]:
+        return frozenset(self.reporter_photo_hashes)
+
+    @property
+    def supporting_photo_hashes(self) -> frozenset[str]:
+        return frozenset().union(*self.reporter_photo_hashes.values()) if self.reporter_photo_hashes else frozenset()
+
+
+def max_independent_pairs(reporter_photo_hashes: Mapping[str, frozenset[str]]) -> int:
+    """The largest set of reporters that can each be given a photograph of their own.
+
+    A maximum bipartite matching, by augmenting paths — small, deterministic,
+    and no dependency. It answers the question the threshold actually asks: how
+    many people independently *evidenced* this, rather than how many people
+    spoke and how many pictures exist anywhere among them.
+
+    The exploit it closes: one account uploads three distinct photographs and
+    two friends each re-upload the first. Three accounts, three hashes, and a
+    public signal — but only one person ever photographed anything. Matched,
+    the two friends compete for the one hash they share and only one can take
+    it, so the pairing is two, not three.
+    """
+    assigned: dict[str, str] = {}  # photo hash -> reporter holding it
+
+    def _assign(reporter: str, seen: set[str]) -> bool:
+        for photo in sorted(reporter_photo_hashes[reporter]):
+            if photo in seen:
+                continue
+            seen.add(photo)
+            holder = assigned.get(photo)
+            if holder is None or _assign(holder, seen):
+                assigned[photo] = reporter
+                return True
+        return False
+
+    for reporter in sorted(reporter_photo_hashes):
+        _assign(reporter, set())
+    return len(assigned)
 
 
 @dataclass(frozen=True)
@@ -56,6 +102,7 @@ class SignalDecision:
     scope: str
     batch_number: str | None
     independent_reporters: int
+    #: The size of the largest reporter-to-photograph pairing, not a raw hash count.
     unique_supporting_photos: int
     first_reported_at: datetime | None
     last_reported_at: datetime | None
@@ -71,15 +118,15 @@ def active_window_start(now: datetime) -> datetime:
 
 
 def evaluate(evidence: AggregateEvidence) -> SignalDecision:
-    """Decide one aggregate key. Counts people and photographs, never rows."""
+    """Decide one aggregate key. Counts people and their own photographs."""
     reporters = len(evidence.reporter_account_ids)
-    photos = len(evidence.supporting_photo_hashes)
+    pairs = max_independent_pairs(evidence.reporter_photo_hashes)
     reasons: list[str] = []
     if reporters < MIN_PUBLIC_REPORTERS:
         reasons.append(REASON_BELOW_REPORTER_THRESHOLD)
-    # Three accounts uploading one identical image is one observation wearing
-    # three coats, so photographs are counted by content, not by upload.
-    if photos < MIN_UNIQUE_PHOTOS:
+    # Not "three accounts and three hashes somewhere between them" — three
+    # accounts that can each be paired with a photograph nobody else is using.
+    if pairs < MIN_UNIQUE_PHOTOS:
         reasons.append(REASON_BELOW_PHOTO_THRESHOLD)
     return SignalDecision(
         public=not reasons,
@@ -87,7 +134,7 @@ def evaluate(evidence: AggregateEvidence) -> SignalDecision:
         scope=evidence.scope,
         batch_number=evidence.batch_number,
         independent_reporters=reporters,
-        unique_supporting_photos=photos,
+        unique_supporting_photos=pairs,
         first_reported_at=evidence.first_reported_at,
         last_reported_at=evidence.last_reported_at,
         reason_keys=tuple(reasons) if reasons else (REASON_THRESHOLD_MET,),
