@@ -173,6 +173,7 @@ export function toVerdictSource(
     quantityGuidance: wire.quantity_guidance,
     purityNote: wire.purity_note,
     missing,
+    officialRecords: wire.official_records ?? null,
   };
 }
 

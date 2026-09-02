@@ -75,6 +75,18 @@ export interface ScanResult {
   open_food_facts?: OpenFoodFactsHalf | null;
   attribution?: { text: string; source_url?: string; license_url?: string } | null;
   glamgenius?: { confidence?: string; fssai_licence?: string | null; origin?: string } | null;
+  official_records?: {
+    authority: string; last_successful_check_at: string | null;
+    record_type: 'food_recall';
+    source_url: string;
+    records: {
+      recall_id: string; fbo_name?: string | null; brand_name?: string | null; product_name?: string | null;
+      batch_lot?: string | null; licence?: string | null; reason?: string | null;
+      recall_status?: string | null; recall_start_date?: string | null;
+      recall_termination_date?: string | null; nature_of_recall?: string | null;
+      source_url: string; source_last_seen_at?: string | null; match_state: 'matched';
+    }[];
+  } | null;
   /** True when this came off the phone rather than the server. */
   from_cache?: boolean;
   /** True when the phone could not reach the server at all. */

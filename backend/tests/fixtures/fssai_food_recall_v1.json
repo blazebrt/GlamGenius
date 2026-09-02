@@ -1,0 +1,18 @@
+{
+  "rows": [
+    {
+      "recall_id": "SYN-RECALL-002",
+      "fbo_name": "Example Foods Private Limited",
+      "brand_name": "Example Brand",
+      "batch_lot_no": "LOT-2026-A",
+      "product": "Example Cereal",
+      "reason_for_recall": "Synthetic quality-control record for automated tests.",
+      "recall_start_date": "2026-08-01",
+      "recall_status": "Published",
+      "recall_termination_date": null,
+      "license_no": "10012345678901",
+      "license_type": "Central",
+      "nature_of_recall": "Voluntary"
+    }
+  ]
+}

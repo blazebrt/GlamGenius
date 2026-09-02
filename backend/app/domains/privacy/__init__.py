@@ -224,6 +224,12 @@ REGISTRY: dict[str, Classification] = {
     "evidence_claims": Classification.NOT_USER_OWNED,
     "evidence_claim_sources": Classification.NOT_USER_OWNED,
     "rule_evidence_links": Classification.NOT_USER_OWNED,
+    # Official FSSAI records are global regulatory data, not account-owned
+    # content. Fetch attempts and immutable revisions remain auditable but are
+    # never included in a person's privacy export.
+    "official_source_fetches": Classification.NOT_USER_OWNED,
+    "official_records": Classification.NOT_USER_OWNED,
+    "official_record_revisions": Classification.NOT_USER_OWNED,
     # The supplement absorption knowledge base is the same kind of thing: one
     # row per compound form, shipped with the release and identical for every
     # account. A customer's own label transcriptions live in

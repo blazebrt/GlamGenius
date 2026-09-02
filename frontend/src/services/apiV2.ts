@@ -754,6 +754,16 @@ export interface ProductVerdictWire {
   pack_size_g: number | null;
   /** "solid" or "drink" — which unit the per-100 panel is stated in. */
   basis: string;
+  official_records?: {
+    authority: string; record_type: 'food_recall'; source_url: string; last_successful_check_at: string | null;
+    records: {
+      recall_id: string; fbo_name?: string | null; brand_name?: string | null; product_name?: string | null;
+      batch_lot?: string | null; licence?: string | null; reason?: string | null;
+      recall_status?: string | null; recall_start_date?: string | null;
+      recall_termination_date?: string | null; nature_of_recall?: string | null;
+      source_url: string; source_last_seen_at?: string | null; match_state: 'matched';
+    }[];
+  } | null;
 }
 
 /** The graded verdict for one barcode, shaped for the verdict screen. */

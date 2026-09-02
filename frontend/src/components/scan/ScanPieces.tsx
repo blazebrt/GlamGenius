@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 import type { Confidence, ScanResult } from '../../services/productScan';
 import { OpenFoodFactsAttribution } from '../common/OpenFoodFactsAttribution';
+import { OfficialRecords } from '../verdict/OfficialRecords';
 import { S } from '../../strings/verdict';
 
 const BADGE_COLOUR: Record<string, string> = {
@@ -80,6 +81,7 @@ export function ProductResult({
   const licence = result.glamgenius?.fssai_licence;
   const name = off?.product_name?.trim();
   const brand = off?.brands?.trim();
+  const officialRecords = result.official_records?.records ?? [];
 
   return (
     <View style={styles.card}>
@@ -97,6 +99,7 @@ export function ProductResult({
         </View>
       )}
       {!!licence && <FssaiLine licence={licence} />}
+      {officialRecords.length > 0 && <OfficialRecords officialRecords={result.official_records} />}
       {!!off && <OpenFoodFactsAttribution />}
 
       {result.can_capture_label && (

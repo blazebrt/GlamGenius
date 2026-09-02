@@ -23,6 +23,7 @@ from app.domains.identity.models import Account
 from app.domains.inventory import models as inventory_models
 from app.domains.media.models import MediaAsset
 from app.domains.nutrition import models as nutrition_models
+from app.domains.official_records import models as official_records_models
 from app.domains.planning import models as planning_models
 from app.domains.privacy.models import AccountDeletionJob
 from app.domains.product.models import (
@@ -102,6 +103,7 @@ __all__ = [
     "IngredientSensitivityRule",
     "InventorySubtypeDefinition",
     "evidence_models",
+    "official_records_models",
     "family_models",
     "supplement_models",
 ]

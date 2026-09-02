@@ -75,6 +75,24 @@ export const S = {
     ingredients: 'What is in it',
     scanAnother: 'Scan another',
   },
+  officialRecords: {
+    title: 'Official FSSAI record',
+    recallFound: 'This exact pack appears in an official FSSAI food recall record.',
+    recallId: 'Recall ID',
+    status: 'Recall status',
+    statusUnavailable: 'Not stated',
+    startDate: 'Recall start date',
+    terminationDate: 'Recall termination date',
+    reason: 'Reason recorded by FSSAI',
+    nature: 'Nature of recall',
+    checked: 'Official records last checked',
+    // Observation, never conclusion. A record missing from the latest export
+    // has not been withdrawn, cleared or resolved — it simply was not in that
+    // download, and saying more than that would be inventing a fact.
+    observedInLatest: 'Record observed in latest checked FSSAI export',
+    lastObserved: 'Record last observed in FSSAI export',
+    openSource: 'Open official FSSAI record',
+  },
   labelReview: {
     basis: 'Basis',
     basisPer100g: 'Per 100 g',
