@@ -174,6 +174,7 @@ export function toVerdictSource(
     purityNote: wire.purity_note,
     missing,
     officialRecords: wire.official_records ?? null,
+    communityObservations: wire.community_observations ?? null,
   };
 }
 

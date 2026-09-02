@@ -764,6 +764,23 @@ export interface ProductVerdictWire {
       source_url: string; source_last_seen_at?: string | null; match_state: 'matched';
     }[];
   } | null;
+  /** Shopper observations. Additive, thresholded, and never a graded finding. */
+  community_observations?: {
+    policy_version: string;
+    public_enabled: boolean;
+    active_window_days: number;
+    brand_reply_url: string | null;
+    signals: {
+      observation_code: string;
+      scope: 'product' | 'batch';
+      batch_number: string | null;
+      independent_reporters: number;
+      first_reported_at: string | null;
+      last_reported_at: string | null;
+      analysis_score_eligible: false;
+      official_finding: false;
+    }[];
+  } | null;
 }
 
 /** The graded verdict for one barcode, shaped for the verdict screen. */

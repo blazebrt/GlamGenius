@@ -33,6 +33,7 @@ import { getProductVerdict } from '../src/services/verdictClient';
 import { buildVerdictShareText } from '../src/services/verdictShare';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import { OfficialRecords } from '../src/components/verdict/OfficialRecords';
+import { CommunityObservations } from '../src/components/verdict/CommunityObservations';
 import {
   ComponentRow, FactorSection, GradeBlock, IngredientDetail, IngredientList,
   NotGradedCard, ReportSheet, UnknownCard, VerdictActions, VerdictLines,
@@ -191,6 +192,10 @@ export default function VerdictScreen() {
                 onSendPhoto={() => openReport(source.productName)}
               />
             )}
+            {/* Below the scientific evidence, above the closing actions. It
+                must not compete with the verdict, the regulator's record, or
+                the negatives — so it sits here and stays quiet. */}
+            <CommunityObservations communityObservations={source.communityObservations} />
             <VerdictActions
               onWhy={() => setTab('why')}
               onListen={onListen}

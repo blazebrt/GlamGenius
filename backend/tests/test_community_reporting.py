@@ -11,8 +11,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-import pytest_asyncio
-from app import config
 from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, AIRun, AIRunOutput
 from app.domains.community import service as community
 from app.domains.community.models import (
@@ -26,8 +24,6 @@ from app.domains.community.observations import (
 )
 from app.domains.community.service import MEDIA_PURPOSE_COMMUNITY_OBSERVATION
 from app.domains.media.models import MEDIA_STATUS_DELETED, MediaAsset
-from app.domains.off.models import OffBase
-from app.domains.off.store import create_off_schema, get_off_engine
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import select
 
@@ -35,25 +31,6 @@ from tests.conftest import auth, png_bytes
 
 BARCODE = "8901058000191"
 BATCH = "B-123"
-BRAND_REPLY_URL = "https://example.org/report-a-concern"
-
-
-@pytest_asyncio.fixture
-async def off_clean():
-    from sqlalchemy import text
-
-    await create_off_schema()
-    async with get_off_engine().begin() as conn:
-        names = ", ".join(f'"{t.schema}"."{t.name}"' for t in reversed(OffBase.metadata.sorted_tables))
-        await conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
-    yield
-
-
-@pytest.fixture
-def public_display(monkeypatch):
-    """Switch public display on, the way an operator would."""
-    monkeypatch.setattr(config, "COMMUNITY_PUBLIC_SIGNALS_ENABLED", True)
-    monkeypatch.setattr(config, "COMMUNITY_BRAND_REPLY_URL", BRAND_REPLY_URL)
 
 
 async def register_device(app_client) -> dict[str, str]:

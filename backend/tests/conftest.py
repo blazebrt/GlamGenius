@@ -245,6 +245,43 @@ def png_bytes() -> bytes:
 # ---------------------------------------------------------------------------
 
 @pytest_asyncio.fixture
+async def off_clean() -> AsyncIterator[None]:
+    """Store A has its own cleanup — see the ODbL wall.
+
+    Modules that predate this shared fixture still define their own; pytest
+    prefers the closer definition, so nothing about them changes.
+    """
+    from app.domains.off.models import OffBase
+    from app.domains.off.store import create_off_schema, get_off_engine
+    from sqlalchemy import text
+
+    await create_off_schema()
+    async with get_off_engine().begin() as conn:
+        names = ", ".join(
+            f'"{table.schema}"."{table.name}"'
+            for table in reversed(OffBase.metadata.sorted_tables)
+        )
+        await conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+    yield
+
+
+COMMUNITY_BRAND_REPLY_URL = "https://example.org/report-a-concern"
+
+
+@pytest.fixture
+def public_display(monkeypatch):
+    """Switch public community signals on, the way an operator would.
+
+    They are off by default and stay off without a brand reply URL, so every
+    test that wants a public signal has to say so explicitly.
+    """
+    from app import config
+
+    monkeypatch.setattr(config, "COMMUNITY_PUBLIC_SIGNALS_ENABLED", True)
+    monkeypatch.setattr(config, "COMMUNITY_BRAND_REPLY_URL", COMMUNITY_BRAND_REPLY_URL)
+
+
+@pytest_asyncio.fixture
 async def db_clean() -> AsyncIterator[None]:
     """Truncate every table before yielding. Requires migrations applied."""
     from app.shared.database.registry import Base

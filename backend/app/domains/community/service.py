@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import config
 from app.domains.media.models import MEDIA_STATUS_ACTIVE, MediaAsset
 from app.domains.product.models import LabelSnapshot, ScanDevice, ScanEvent
+from app.domains.product.service import label_content_fingerprint
 from app.shared.database.base import utcnow
 from app.shared.errors.codes import ErrorCode
 from app.shared.errors.exceptions import AppError, NotFoundError, ValidationFailedError
@@ -112,24 +113,50 @@ REASON_BATCH_CAPTURE_REQUIRED = "batch_capture_required"
 async def own_confirmed_batch(
     session: AsyncSession, *, barcode: str, device_id: uuid.UUID | None,
 ) -> tuple[uuid.UUID | None, str | None]:
-    """The lot number on the pack *this device* confirmed, and nothing else.
+    """The lot number on the pack *this device itself* confirmed, and nothing else.
 
-    Not the product's newest label version, which may have been captured by a
-    stranger's phone in another city from another lot. Using that would show one
-    shopper a warning about a pack they are not holding, which is precisely the
+    Not the product's newest label version. That row may have been captured by a
+    stranger's phone in another city from another lot, and using it would show
+    one shopper a warning about a pack they are not holding — precisely the
     false positive a batch scope exists to prevent.
+
+    Read from this device's own confirmation scan rather than from
+    ``LabelSnapshot.device_id``, because Step 3 deduplicates identical label
+    content into one snapshot owned by whoever captured it first. Two shoppers
+    holding the same lot legitimately share that row, so ownership of it is not
+    the question; whether this phone did the capture is. The scan event records
+    exactly that, per device, and survives the deduplication.
     """
     if device_id is None:
         return None, None
-    snapshot = (await session.execute(
-        select(LabelSnapshot)
-        .where(LabelSnapshot.barcode == barcode, LabelSnapshot.device_id == device_id)
+    event = (await session.execute(
+        select(ScanEvent)
+        .where(
+            ScanEvent.barcode == barcode,
+            ScanEvent.device_id == device_id,
+            # A plain scan stores a JSON ``null`` here, not a SQL NULL, so
+            # ``IS NOT NULL`` would match one and treat a barcode glance as a
+            # label capture. Ask the type instead.
+            func.jsonb_typeof(ScanEvent.label_facts) == "object",
+        )
+        .order_by(ScanEvent.created_at.desc())
+        .limit(1)
+    )).scalars().first()
+    if event is None:
+        return None, None
+    batch = normalise_batch((event.label_facts or {}).get("batch_number"))
+    # Optional provenance: the canonical snapshot this capture resolved to,
+    # whoever's phone happened to create the row.
+    snapshot_id = await session.scalar(
+        select(LabelSnapshot.id)
+        .where(
+            LabelSnapshot.barcode == barcode,
+            LabelSnapshot.content_fingerprint == label_content_fingerprint(event.label_facts or {}),
+        )
         .order_by(LabelSnapshot.version_number.desc())
         .limit(1)
-    )).scalar_one_or_none()
-    if snapshot is None:
-        return None, None
-    return snapshot.id, normalise_batch((snapshot.facts or {}).get("batch_number"))
+    )
+    return snapshot_id, batch
 
 
 # ---------------------------------------------------------------------------
