@@ -181,6 +181,15 @@ MEDIA_ALLOW_LOCAL_IN_PRODUCTION = _env_bool("MEDIA_ALLOW_LOCAL_IN_PRODUCTION", F
 # Consent
 # ---------------------------------------------------------------------------
 REQUIRE_ANALYSIS_CONSENT = _env_bool("REQUIRE_ANALYSIS_CONSENT", True)
+
+# --- Community observations -------------------------------------------------
+# Public display of shopper observations is off until an operator switches it
+# on AND supplies a real address where a brand can answer. The Constitution
+# requires a visible right of reply before any user-generated content is shown,
+# so this fails closed: collection and moderation work regardless, publication
+# does not. No support address is invented here.
+COMMUNITY_PUBLIC_SIGNALS_ENABLED = _env_bool("COMMUNITY_PUBLIC_SIGNALS_ENABLED", False)
+COMMUNITY_BRAND_REPLY_URL = _env_str("COMMUNITY_BRAND_REPLY_URL")
 CONSENT_VERSION = _env_str("CONSENT_VERSION", "2026-01-01")
 
 

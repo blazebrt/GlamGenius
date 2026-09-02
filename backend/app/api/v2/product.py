@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, VERIFICATION_USER_CONFIRMED, AIRun, AIRunOutput
+from app.domains.community import service as community_service
 from app.domains.media.storage import factory as storage_factory
 from app.domains.nutrition.grading import from_scan, grade_product, presentation
 from app.domains.nutrition.grading.production_rules import (
@@ -307,6 +308,13 @@ async def read_product_verdict(
     # licence or batch and therefore cannot manufacture a recall match.
     payload["official_records"] = await official_records_service.official_records_envelope(
         session, snapshot.facts if snapshot else None,
+    )
+    # Shopper observations are a fourth, separate layer: not a label fact, not
+    # a graded finding, not a government record. They are additive, they never
+    # touch anything above, and a batch signal is assembled only for the lot
+    # this device itself confirmed.
+    payload["community_observations"] = await community_service.community_observations_envelope(
+        session, barcode=barcode, device_id=device.id,
     )
     return payload
 

@@ -15,6 +15,7 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import MEDIA_MAX_BYTES
+from app.domains.community.service import MEDIA_PURPOSE_COMMUNITY_OBSERVATION
 from app.domains.media import service as media_service
 from app.domains.media.models import MEDIA_PURPOSE_INVENTORY
 from app.shared.database.sql import get_session
@@ -31,7 +32,7 @@ router = APIRouter(dependencies=[Depends(require_flag("v2_media"))])
 # The media domain stores user-owned product/inventory images. Photos supplied
 # for face, hair, hands, or full-person analysis are transient request data and
 # must never enter object storage.
-ALLOWED_PURPOSES = {MEDIA_PURPOSE_INVENTORY}
+ALLOWED_PURPOSES = {MEDIA_PURPOSE_INVENTORY, MEDIA_PURPOSE_COMMUNITY_OBSERVATION}
 
 # Refuse a stream that overruns the limit rather than buffering it all first.
 # Reading an unbounded upload into memory is a denial-of-service in one line.

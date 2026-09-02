@@ -38,6 +38,7 @@ from app.domains.beta_access.models import (
     Invite,
     InviteRedemption,
 )
+from app.domains.community.models import CommunityObservationReport
 from app.domains.consent.models import Consent
 from app.domains.identity.models import Account
 from app.domains.inventory.models import (
@@ -320,6 +321,24 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
     }
 
 
+async def _community(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
+    """The person's own structured observations, and nobody else's.
+
+    Their rows only. No other shopper's report, no moderator identity, and no
+    aggregate about other accounts — those are the whole reason aggregation
+    exists, and handing them out here would undo it. The supporting photo is
+    referenced by asset id, following the same rule as the rest of this module.
+    """
+    rows = await _fetch(
+        session,
+        select(CommunityObservationReport)
+        .where(CommunityObservationReport.account_id == account_id)
+        .order_by(CommunityObservationReport.created_at.desc()),
+    )
+    fields = [c.name for c in CommunityObservationReport.__table__.columns]
+    return {"observation_reports": [_row_dict(r, fields) for r in rows]}
+
+
 async def _quiz_and_styling(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     submissions = await _fetch(
         session,
@@ -586,6 +605,7 @@ DOMAIN_HANDLERS: dict[str, DomainHandler] = {
     "media": _media,
     "scans": _scans,
     "product_scans": _product_scans,
+    "community": _community,
     "quiz_and_styling": _quiz_and_styling,
     "shopping": _shopping,
     "planning": _planning,
