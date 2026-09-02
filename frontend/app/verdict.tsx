@@ -32,6 +32,7 @@ import {
 import { getProductVerdict } from '../src/services/verdictClient';
 import { buildVerdictShareText } from '../src/services/verdictShare';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
+import { OfficialRecords } from '../src/components/verdict/OfficialRecords';
 import {
   ComponentRow, FactorSection, GradeBlock, IngredientDetail, IngredientList,
   NotGradedCard, ReportSheet, UnknownCard, VerdictActions, VerdictLines,
@@ -176,6 +177,7 @@ export default function VerdictScreen() {
             {source.outcome === 'graded' && (
               <VerdictLines view={view} onReport={openReport} />
             )}
+            <OfficialRecords officialRecords={source.officialRecords} />
             <FactorSection title={S.factors.negatives} rows={source.negatives ?? source.lowers ?? []} empty={S.factors.noNegatives}
               onExplain={(row) => setExplanation(row)} />
             <FactorSection title={S.factors.positives} rows={source.positives ?? source.helps ?? []} empty={S.factors.noPositives}

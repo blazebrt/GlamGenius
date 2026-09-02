@@ -9,12 +9,13 @@
  *   because the licence requires it (docs/architecture/ODBL_DATA_WALL.md).
  */
 import React from 'react';
-import { Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 import type { Confidence, ScanResult } from '../../services/productScan';
 import { OpenFoodFactsAttribution } from '../common/OpenFoodFactsAttribution';
+import { OfficialRecords } from '../verdict/OfficialRecords';
 import { S } from '../../strings/verdict';
 
 const BADGE_COLOUR: Record<string, string> = {
@@ -98,23 +99,7 @@ export function ProductResult({
         </View>
       )}
       {!!licence && <FssaiLine licence={licence} />}
-      {officialRecords.map((record) => (
-        <View key={record.id} style={styles.section} accessible accessibilityLabel={S.officialRecords.title}>
-          <Text style={styles.sectionTitle}>{S.officialRecords.title}</Text>
-          <Text style={styles.body}>{S.officialRecords.recallFound}</Text>
-          <Text style={styles.detail}>{S.officialRecords.recallId}: {record.recall_id}</Text>
-          {!!record.recall_status && <Text style={styles.detail}>{S.officialRecords.status}: {record.recall_status}</Text>}
-          {!!record.reason && <Text style={styles.detail}>{S.officialRecords.reason}: {record.reason}</Text>}
-          <TouchableOpacity
-            accessibilityRole="link"
-            accessibilityLabel={S.officialRecords.openSource}
-            onPress={() => void Linking.openURL(record.source_url)}
-            style={styles.secondaryButton}
-          >
-            <Text style={styles.secondaryText}>{S.officialRecords.openSource}</Text>
-          </TouchableOpacity>
-        </View>
-      ))}
+      {officialRecords.length > 0 && <OfficialRecords officialRecords={result.official_records} />}
       {!!off && <OpenFoodFactsAttribution />}
 
       {result.can_capture_label && (

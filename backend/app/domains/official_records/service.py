@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import OfficialRecord, OfficialRecordRevision, OfficialSourceFetch
@@ -97,22 +97,37 @@ async def recalls_for_pack(session: AsyncSession, facts: dict[str, Any]) -> list
     rows = (await session.execute(select(OfficialRecord).where(
         OfficialRecord.authority == AUTHORITY_FSSAI_FOSCOS,
         OfficialRecord.record_type == RECORD_TYPE_FOOD_RECALL,
-    ))).scalars().all()
+    ).order_by(desc(OfficialRecord.recall_start_date).nulls_last(), OfficialRecord.external_record_id.asc()))).scalars().all()
     from .matching import match_recall
     result = []
     for row in rows:
         material = {
-            "id": str(row.id), "recall_id": row.external_record_id,
+            "recall_id": row.external_record_id, "fbo_name": row.fbo_name,
             "brand_name": row.brand_name, "product_name": row.product_name,
             "batch_lot": row.batch_lot, "licence": row.licence,
             "reason": row.reason, "recall_status": row.recall_status,
             "recall_start_date": row.recall_start_date.isoformat() if row.recall_start_date else None,
             "recall_termination_date": row.recall_termination_date.isoformat() if row.recall_termination_date else None,
             "nature_of_recall": row.nature_of_recall, "source_url": row.source_url,
-            "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
+            "source_last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
         }
         state = match_recall(facts, material)
         if state == "matched":
             material["match_state"] = state
             result.append(material)
     return result
+
+
+async def official_records_envelope(session: AsyncSession, facts: dict[str, Any] | None) -> dict[str, Any]:
+    """Public provenance envelope. A failed read never advances freshness."""
+    last_success = await session.scalar(select(OfficialSourceFetch.fetched_at).where(
+        OfficialSourceFetch.authority == AUTHORITY_FSSAI_FOSCOS,
+        OfficialSourceFetch.record_type == RECORD_TYPE_FOOD_RECALL,
+        OfficialSourceFetch.status == "succeeded",
+    ).order_by(OfficialSourceFetch.fetched_at.desc()).limit(1))
+    return {
+        "authority": "FSSAI / FoSCoS", "record_type": RECORD_TYPE_FOOD_RECALL,
+        "source_url": SOURCE_URL,
+        "last_successful_check_at": last_success.isoformat() if last_success else None,
+        "records": await recalls_for_pack(session, facts) if facts else [],
+    }

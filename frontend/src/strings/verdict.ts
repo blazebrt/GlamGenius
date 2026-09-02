@@ -80,7 +80,12 @@ export const S = {
     recallFound: 'This exact pack appears in an official FSSAI food recall record.',
     recallId: 'Recall ID',
     status: 'Recall status',
+    statusUnavailable: 'Not stated',
+    startDate: 'Recall start date',
+    terminationDate: 'Recall termination date',
     reason: 'Reason recorded by FSSAI',
+    nature: 'Nature of recall',
+    checked: 'Official records last checked',
     openSource: 'Open official FSSAI record',
   },
   labelReview: {

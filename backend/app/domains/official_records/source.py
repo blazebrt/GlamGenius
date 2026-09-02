@@ -53,7 +53,12 @@ def canonical_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def parse_recall_rows(payload: dict[str, Any] | list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Parse a reviewed FoSCoS export/fixture without scraping or fuzzy logic."""
-    rows = payload if isinstance(payload, list) else payload.get("rows", payload.get("records", []))
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("rows"), list):
+        rows = payload["rows"]
+    else:
+        raise ValueError("official recall payload must contain a rows list")
     if not isinstance(rows, list):
         raise ValueError("official recall payload must contain rows")
     return [canonical_row(row) for row in rows if isinstance(row, dict)]

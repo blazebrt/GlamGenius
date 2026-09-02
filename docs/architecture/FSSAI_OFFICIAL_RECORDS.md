@@ -1,11 +1,14 @@
 # FSSAI Official Records V1
 
-GlamGenius reads the public FoSCoS Food Recall surface at
+The authoritative public FoSCoS Food Recall surface is
 `https://foscos.fssai.gov.in/food-recall`, whose published columns include
 Recall ID, FBO, brand, batch/lot, product, reason, dates, status, licence and
-nature of recall. The page is a browser-facing public access point; no captcha,
-protected endpoint, mirror, or scraping bypass is used. The ingestion boundary
-accepts a reviewed official export or fixture and records the fetch attempt.
+nature of recall. It is browser-rendered. V1 does **not** scrape it or claim
+automatic live ingestion: an operator imports a reviewed official FoSCoS JSON
+export with `python -m app.commands.ingest_fssai_recalls <official-export-file>`.
+No captcha, protected endpoint, mirror, cookie/login, or scraping bypass is
+used. The command accepts only the documented `{"rows": [...]}` representation,
+commits atomically, and records success or failure without deleting old data.
 
 The `fssai-foscos-food-recall.v1` adapter is deterministic and preserves the
 raw payload hash. `official_records` is a dedicated Store-B domain with

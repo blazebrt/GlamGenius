@@ -5,7 +5,6 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
-    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -50,6 +49,7 @@ class OfficialRecord(UUIDPrimaryKey, TimestampMixin, Base):
     authority: Mapped[str] = mapped_column(String(64), nullable=False)
     record_type: Mapped[str] = mapped_column(String(48), nullable=False)
     external_record_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    fbo_name: Mapped[str | None] = mapped_column(String(256))
     licence: Mapped[str | None] = mapped_column(String(32))
     batch_lot: Mapped[str | None] = mapped_column(String(160))
     brand_name: Mapped[str | None] = mapped_column(String(256))
@@ -63,7 +63,6 @@ class OfficialRecord(UUIDPrimaryKey, TimestampMixin, Base):
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     latest_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
     __table_args__ = (

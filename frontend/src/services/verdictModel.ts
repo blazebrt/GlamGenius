@@ -129,7 +129,8 @@ export interface VerdictSource {
     authority: string;
     record_type: 'food_recall';
     source_url: string;
-    records: { id: string; recall_id: string; source_url: string; match_state: 'matched'; [key: string]: unknown }[];
+    last_successful_check_at: string | null;
+    records: { recall_id: string; source_url: string; match_state: 'matched'; [key: string]: unknown }[];
   } | null;
 }
 

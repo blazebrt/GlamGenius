@@ -132,12 +132,9 @@ async def lookup_barcode(
     """
     result = await service.lookup(session, barcode)
     snapshot = await service.latest_label_snapshot(session, barcode)
-    result["official_records"] = {
-        "authority": "FSSAI / FoSCoS",
-        "record_type": "food_recall",
-        "source_url": "https://foscos.fssai.gov.in/food-recall",
-        "records": await official_records_service.recalls_for_pack(session, snapshot.facts) if snapshot else [],
-    }
+    result["official_records"] = await official_records_service.official_records_envelope(
+        session, snapshot.facts if snapshot else None,
+    )
     return result
 
 
@@ -308,12 +305,9 @@ async def read_product_verdict(
     # Official records are a separate, additive envelope. Matching is allowed
     # only against the confirmed physical-pack snapshot; OFF cannot supply a
     # licence or batch and therefore cannot manufacture a recall match.
-    payload["official_records"] = {
-        "authority": "FSSAI / FoSCoS",
-        "record_type": "food_recall",
-        "source_url": "https://foscos.fssai.gov.in/food-recall",
-        "records": await official_records_service.recalls_for_pack(session, snapshot.facts) if snapshot else [],
-    }
+    payload["official_records"] = await official_records_service.official_records_envelope(
+        session, snapshot.facts if snapshot else None,
+    )
     return payload
 
 
