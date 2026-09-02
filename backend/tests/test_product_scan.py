@@ -254,6 +254,24 @@ async def test_confirming_a_label_creates_a_record_and_raises_confidence(
 
 
 @pytest.mark.asyncio
+async def test_label_confirmation_rejects_client_supplied_facts(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """The confirmation route accepts only a server-owned transcription run."""
+    token, _account_id = await registered_supabase_user()
+    response = await app_client.post(
+        "/api/v2/scan/label/confirm",
+        json={
+            "barcode": UNKNOWN,
+            "facts": {"product_name": "client supplied"},
+            "client_scan_id": uuid.uuid4().hex,
+        },
+        headers={**device, **auth(token)},
+    )
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.asyncio
 async def test_confirmed_label_content_versions_are_deduplicated_and_linked(
     db_clean, off_clean, app_client, device, registered_supabase_user,
 ):

@@ -18,6 +18,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 
 import { getInstallationId } from './deviceIdentity';
+import { api } from './api';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
@@ -355,24 +356,19 @@ export async function scanBarcode(barcode: string): Promise<ScanResult> {
 
 // --- Reading a label --------------------------------------------------------
 
-export interface TranscribedLabel {
-  barcode: string;
-  facts: Record<string, unknown>;
-  fssai_licence?: string | null;
-  stored: boolean;
-  confidence: Confidence;
-}
-
 /** Confirm a label a person has checked. The VC-07 shape: one tap, then it counts. */
 export async function confirmLabel(
   barcode: string,
-  facts: Record<string, unknown>,
+  aiRunId: string,
 ): Promise<{ confidence: Confidence; fssai_licence?: string | null; confirmations: number } | null> {
+  if (typeof aiRunId !== 'string' || !aiRunId.trim()) {
+    throw new Error('The label read is missing its confirmation reference. Please try again.');
+  }
   const headers = await deviceHeaders();
   if (!headers['X-Device-Token']) return null;
-  const response = await scanApi.post('/api/v2/scan/label/confirm', {
+  const response = await api.post('/api/v2/scan/label/confirm', {
     barcode,
-    facts,
+    ai_run_id: aiRunId,
     client_scan_id: newScanId(),
   }, { headers });
   return response.data;

@@ -123,6 +123,12 @@ describe('the label review', () => {
     expect(screen.getByText('384')).toBeTruthy();
   });
 
+  it('shows label facts without exposing the transcription run reference', () => {
+    render(<LabelReview facts={{ ...facts, ai_run_id: 'run-a' }} onConfirm={jest.fn()} onRetake={jest.fn()} />);
+    expect(screen.getByText('Masala Oats')).toBeTruthy();
+    expect(screen.queryByText('run-a')).toBeNull();
+  });
+
   it('names what it could not read instead of guessing', () => {
     render(<LabelReview facts={facts} onConfirm={jest.fn()} onRetake={jest.fn()} />);
     expect(screen.getByText(/Could not read clearly: serving_size/i)).toBeTruthy();

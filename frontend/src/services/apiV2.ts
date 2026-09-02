@@ -270,7 +270,10 @@ export interface TranscribedLabelResponse {
   /** Always false: a transcription is shown to the person before it is kept. */
   stored: boolean;
   confidence: { level: string; text: string };
-  provenance: Record<string, unknown>;
+  provenance: {
+    ai_run_id: string;
+    [key: string]: unknown;
+  };
 }
 
 /**

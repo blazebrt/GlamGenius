@@ -45,6 +45,11 @@ const BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'itf14'] as
 
 type Stage = 'camera' | 'looking' | 'result' | 'label';
 
+type LabelDraft = {
+  facts: Record<string, unknown>;
+  aiRunId: string;
+};
+
 export default function ScanProductScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -54,7 +59,7 @@ export default function ScanProductScreen() {
   const [stage, setStage] = useState<Stage>('camera');
   const [result, setResult] = useState<ScanResult | null>(null);
   const [queued, setQueued] = useState(0);
-  const [labelFacts, setLabelFacts] = useState<Record<string, unknown> | null>(null);
+  const [labelDraft, setLabelDraft] = useState<LabelDraft | null>(null);
   const [labelBusy, setLabelBusy] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<string | null>(null);
@@ -94,7 +99,7 @@ export default function ScanProductScreen() {
 
   const scanAgain = useCallback(() => {
     setResult(null);
-    setLabelFacts(null);
+    setLabelDraft(null);
     setLabelError(null);
     setConfirmed(null);
     setStage('camera');
@@ -108,7 +113,7 @@ export default function ScanProductScreen() {
       return;
     }
     setStage('label');
-    setLabelFacts(null);
+    setLabelDraft(null);
   }, [router, userId]);
 
   /** Take the photo, read it, and show what came back. Nothing is saved yet. */
@@ -124,7 +129,11 @@ export default function ScanProductScreen() {
         'inventory_item',
       );
       const read = await transcribeProductLabel(result.barcode, asset.id);
-      setLabelFacts(read.facts);
+      const aiRunId = read.provenance?.ai_run_id;
+      if (typeof aiRunId !== 'string' || !aiRunId.trim()) {
+        throw new Error('The label read is missing its confirmation reference. Please try again.');
+      }
+      setLabelDraft({ facts: read.facts, aiRunId });
     } catch (err) {
       setLabelError(errorMessage(err, 'We could not read that photo. Try again with more light.'));
     } finally {
@@ -139,14 +148,17 @@ export default function ScanProductScreen() {
    * confirmation actually produced, rather than being told it worked.
    */
   const acceptLabel = useCallback(async () => {
-    if (!result || !labelFacts) return;
+    if (!result || !labelDraft) return;
     setLabelBusy(true);
+    setLabelError(null);
     try {
-      const saved = await confirmLabel(result.barcode, labelFacts);
-      setConfirmed(saved
-        ? `Saved. ${saved.confidence.text}`
-        : 'Saved on this phone. It will sync when you are back online.');
-      setLabelFacts(null);
+      const saved = await confirmLabel(result.barcode, labelDraft.aiRunId);
+      if (!saved) {
+        setLabelError('We could not save that just now. Check your connection and try again.');
+        return;
+      }
+      setConfirmed(`Saved. ${saved.confidence.text}`);
+      setLabelDraft(null);
       setResult(await scanBarcode(result.barcode));
       setStage('result');
     } catch (err) {
@@ -154,7 +166,7 @@ export default function ScanProductScreen() {
     } finally {
       setLabelBusy(false);
     }
-  }, [labelFacts, result]);
+  }, [labelDraft, result]);
 
   if (permission && !permission.granted && !permission.canAskAgain) {
     return (
@@ -227,7 +239,7 @@ export default function ScanProductScreen() {
       style={styles.container}
       contentContainerStyle={{ paddingTop: insets.top + SPACING.md, paddingBottom: insets.bottom + SPACING.xl, gap: SPACING.md }}
     >
-      {stage === 'label' && !labelFacts && Platform.OS !== 'web' && permission?.granted && (
+      {stage === 'label' && !labelDraft && Platform.OS !== 'web' && permission?.granted && (
         <View style={styles.labelPreview}>
           <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" testID="label-camera" />
         </View>
@@ -257,16 +269,16 @@ export default function ScanProductScreen() {
         </TouchableOpacity>
       )}
 
-      {stage === 'label' && labelFacts && (
+      {stage === 'label' && labelDraft && (
         <LabelReview
-          facts={labelFacts}
+          facts={labelDraft.facts}
           busy={labelBusy}
           onConfirm={acceptLabel}
-          onRetake={() => { setLabelFacts(null); setLabelError(null); }}
+          onRetake={() => { setLabelDraft(null); setLabelError(null); }}
         />
       )}
 
-      {stage === 'label' && !labelFacts && (
+      {stage === 'label' && !labelDraft && (
         <View style={styles.card}>
           <Ionicons name="camera-outline" size={24} color={COLORS.primary} />
           <Text style={styles.title}>Photograph the label</Text>
