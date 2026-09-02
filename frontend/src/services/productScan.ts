@@ -79,13 +79,13 @@ export interface ScanResult {
     authority: string;
     record_type: 'food_recall';
     source_url: string;
-    records: Array<{
+    records: {
       id: string; recall_id: string; brand_name?: string | null; product_name?: string | null;
       batch_lot?: string | null; licence?: string | null; reason?: string | null;
       recall_status?: string | null; recall_start_date?: string | null;
       recall_termination_date?: string | null; nature_of_recall?: string | null;
       source_url: string; last_seen_at?: string | null; match_state: 'matched';
-    }>;
+    }[];
   } | null;
   /** True when this came off the phone rather than the server. */
   from_cache?: boolean;

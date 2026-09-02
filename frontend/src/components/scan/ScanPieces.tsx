@@ -9,8 +9,7 @@
  *   because the licence requires it (docs/architecture/ODBL_DATA_WALL.md).
  */
 import React from 'react';
-import { Linking } from 'react-native';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
