@@ -16,6 +16,7 @@ import {
   readQueue,
   scanBarcode,
   syncQueue,
+  confirmLabel,
   tokenToClaimFor,
   withConfidence,
   type ScanResult,
@@ -25,6 +26,10 @@ jest.mock('axios', () => {
   const instance = {
     get: jest.fn(),
     post: jest.fn(),
+    interceptors: {
+      request: { use: jest.fn() },
+      response: { use: jest.fn() },
+    },
   };
   return { __esModule: true, default: { create: jest.fn(() => instance) }, create: jest.fn(() => instance) };
 });
@@ -203,6 +208,67 @@ describe('scan ids', () => {
   it('are unique, which is what makes the queue safe to replay', () => {
     const ids = new Set(Array.from({ length: 200 }, () => newScanId()));
     expect(ids.size).toBe(200);
+  });
+});
+
+describe('label confirmation', () => {
+  it('uses the authenticated client with the device token and never sends client facts', async () => {
+    await registeredDevice();
+    http.post.mockResolvedValueOnce({
+      data: { confidence: { level: 'unverified', text: 'Confirmed.' }, confirmations: 0 },
+    });
+
+    await expect(confirmLabel(UNKNOWN, 'run-a')).resolves.toEqual({
+      confidence: { level: 'unverified', text: 'Confirmed.' },
+      confirmations: 0,
+    });
+    const [, body, config] = http.post.mock.calls[1];
+    expect(body).toEqual(expect.objectContaining({ barcode: UNKNOWN, ai_run_id: 'run-a' }));
+    expect(body).not.toHaveProperty('facts');
+    expect(body.client_scan_id).toEqual(expect.any(String));
+    expect(config.headers).toEqual({ 'X-Device-Token': 'device-token' });
+  });
+
+  it('does not pretend an offline confirmation was saved', async () => {
+    await registeredDevice();
+    http.post.mockRejectedValueOnce(new Error('offline'));
+    await expect(confirmLabel(UNKNOWN, 'run-a')).rejects.toThrow('offline');
+  });
+
+  it('blocks confirmation when the transcription reference is missing', async () => {
+    await expect(confirmLabel(UNKNOWN, '')).rejects.toThrow(/missing its confirmation reference/i);
+    expect(http.post).not.toHaveBeenCalled();
+  });
+
+  it('re-registers once for DEVICE_UNKNOWN and preserves the idempotency key', async () => {
+    await registeredDevice();
+    const firstError = { response: { status: 401, data: { detail: { code: 'DEVICE_UNKNOWN' } } } };
+    http.post.mockRejectedValueOnce(firstError);
+    http.post.mockResolvedValueOnce({ data: { device_id: 'd2', token: 'new-device-token' } });
+    http.post.mockResolvedValueOnce({
+      data: { confidence: { level: 'unverified', text: 'Confirmed.' }, confirmations: 0 },
+    });
+
+    await expect(confirmLabel(UNKNOWN, 'run-a')).resolves.toEqual({
+      confidence: { level: 'unverified', text: 'Confirmed.' },
+      confirmations: 0,
+    });
+    const firstBody = http.post.mock.calls[1][1];
+    const retryBody = http.post.mock.calls[3][1];
+    expect(retryBody).toEqual(firstBody);
+    expect(http.post.mock.calls[3][2].headers).toEqual({ 'X-Device-Token': 'new-device-token' });
+    expect(http.post).toHaveBeenCalledTimes(4);
+  });
+
+  it('surfaces a second DEVICE_UNKNOWN failure without looping', async () => {
+    await registeredDevice();
+    const deviceError = { response: { status: 401, data: { detail: { code: 'DEVICE_UNKNOWN' } } } };
+    http.post.mockRejectedValueOnce(deviceError);
+    http.post.mockResolvedValueOnce({ data: { device_id: 'd2', token: 'new-device-token' } });
+    http.post.mockRejectedValueOnce(deviceError);
+
+    await expect(confirmLabel(UNKNOWN, 'run-a')).rejects.toBe(deviceError);
+    expect(http.post).toHaveBeenCalledTimes(4);
   });
 });
 

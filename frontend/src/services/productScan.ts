@@ -18,6 +18,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 
 import { getInstallationId } from './deviceIdentity';
+import { api } from './api';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
@@ -355,25 +356,36 @@ export async function scanBarcode(barcode: string): Promise<ScanResult> {
 
 // --- Reading a label --------------------------------------------------------
 
-export interface TranscribedLabel {
-  barcode: string;
-  facts: Record<string, unknown>;
-  fssai_licence?: string | null;
-  stored: boolean;
-  confidence: Confidence;
-}
-
 /** Confirm a label a person has checked. The VC-07 shape: one tap, then it counts. */
 export async function confirmLabel(
   barcode: string,
-  facts: Record<string, unknown>,
+  aiRunId: string,
 ): Promise<{ confidence: Confidence; fssai_licence?: string | null; confirmations: number } | null> {
+  if (typeof aiRunId !== 'string' || !aiRunId.trim()) {
+    throw new Error('The label read is missing its confirmation reference. Please try again.');
+  }
   const headers = await deviceHeaders();
   if (!headers['X-Device-Token']) return null;
-  const response = await scanApi.post('/api/v2/scan/label/confirm', {
+  const clientScanId = newScanId();
+  const body = {
     barcode,
-    facts,
-    client_scan_id: newScanId(),
-  }, { headers });
-  return response.data;
+    ai_run_id: aiRunId,
+    client_scan_id: clientScanId,
+  };
+  try {
+    const response = await api.post('/api/v2/scan/label/confirm', body, { headers });
+    return response.data;
+  } catch (error) {
+    const code = (error as { response?: { data?: { detail?: { code?: string } } } })
+      ?.response?.data?.detail?.code;
+    if (code !== 'DEVICE_UNKNOWN') throw error;
+
+    // The account is still valid; only the scan-device credential needs
+    // replacement. Retry once with the same idempotency key and run reference.
+    await forgetDevice();
+    const refreshedHeaders = await deviceHeaders();
+    if (!refreshedHeaders['X-Device-Token']) throw error;
+    const retry = await api.post('/api/v2/scan/label/confirm', body, { headers: refreshedHeaders });
+    return retry.data;
+  }
 }

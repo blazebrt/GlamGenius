@@ -136,6 +136,11 @@ export function toVerdictSource(
     decision: { action: wire.decision.action, reasonKey: wire.decision.reason_key },
     confidence: wire.confidence ?? null,
     factsProvenance: wire.facts_provenance ?? null,
+    labelVersion: wire.label_version ? {
+      id: wire.label_version.id, versionNumber: wire.label_version.version_number,
+      observedAt: wire.label_version.observed_at, changedFields: wire.label_version.changed_fields,
+      completeness: wire.label_version.completeness,
+    } : null,
     totalSugarG: wire.nutrition.total_sugar_g,
     saltG: wire.nutrition.salt_g,
     totalFatG: wire.nutrition.total_fat_g,

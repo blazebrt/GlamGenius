@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 import type { Confidence, ScanResult } from '../../services/productScan';
 import { OpenFoodFactsAttribution } from '../common/OpenFoodFactsAttribution';
+import { S } from '../../strings/verdict';
 
 const BADGE_COLOUR: Record<string, string> = {
   verified: COLORS.success,
@@ -189,6 +190,12 @@ export function LabelReview({
     .filter(([key]) => typeof facts[key] === 'string' && (facts[key] as string).trim())
     .map(([key, label]) => ({ key, label, value: facts[key] as string }));
   const nutrition = (facts.nutrition_per_100g as Record<string, string> | undefined) ?? {};
+  const nutritionBasis = facts.nutrition_basis;
+  const basisLabel = nutritionBasis === 'per_100g'
+    ? S.labelReview.basisPer100g
+    : nutritionBasis === 'per_100ml'
+      ? S.labelReview.basisPer100ml
+      : S.labelReview.basisMissing;
 
   return (
     <View style={styles.card}>
@@ -204,9 +211,13 @@ export function LabelReview({
         </View>
       ))}
 
-      {Object.keys(nutrition).length > 0 && (
+      {(Object.keys(nutrition).length > 0 || nutritionBasis !== undefined) && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Nutrition, exactly as printed</Text>
+          <View style={styles.factRow}>
+            <Text style={styles.factLabel}>{S.labelReview.basis}</Text>
+            <Text style={styles.factValue}>{basisLabel}</Text>
+          </View>
           {Object.entries(nutrition).map(([key, value]) => (
             <View key={key} style={styles.factRow}>
               <Text style={styles.factLabel}>{key.replace(/_/g, ' ')}</Text>

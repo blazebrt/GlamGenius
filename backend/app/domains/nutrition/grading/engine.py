@@ -612,12 +612,25 @@ def _step4(product: ProductInput, trace: list[TraceEntry]) -> Grade | None:
 # ---------------------------------------------------------------------------
 # Step 5 — confidence
 # ---------------------------------------------------------------------------
-def _step5(product: ProductInput, trace: list[TraceEntry]) -> tuple[str, ...]:
+def required_grading_data_missing(product: ProductInput) -> tuple[str, ...]:
+    """Return the exact label data Step 5 requires before showing a grade.
+
+    This is deliberately the single source of truth for both the grading
+    result and observed-label completeness.  Callers must build a
+    ``ProductInput`` first, so every source is judged by the same semantics.
+    """
     missing: list[str] = []
     if not product.has_ingredient_list or not product.ingredients:
         missing.append("ingredient list")
     if not product.has_nutrition_panel or product.total_sugar_g is None and product.saturated_fat_g is None and product.salt_equivalent_g is None:
         missing.append("nutrition panel")
+    if product.has_nutrition_panel and product.basis not in {"solid", "drink"}:
+        missing.append("nutrition basis")
+    return tuple(missing)
+
+
+def _step5(product: ProductInput, trace: list[TraceEntry]) -> tuple[str, ...]:
+    missing = required_grading_data_missing(product)
     if missing:
         trace.append(TraceEntry(
             5, "Confidence", "grade.step5.not_enough_information",
@@ -631,7 +644,7 @@ def _step5(product: ProductInput, trace: list[TraceEntry]) -> tuple[str, ...]:
             "The label carried both an ingredient list and a nutrition panel.",
             "GlamGenius product policy",
         ))
-    return tuple(missing)
+    return missing
 
 
 # ---------------------------------------------------------------------------
@@ -746,4 +759,5 @@ __all__ = [
     "ProductInput",
     "TraceEntry",
     "grade_product",
+    "required_grading_data_missing",
 ]

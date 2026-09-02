@@ -123,6 +123,29 @@ describe('the label review', () => {
     expect(screen.getByText('384')).toBeTruthy();
   });
 
+  it('shows label facts without exposing the transcription run reference', () => {
+    render(<LabelReview facts={{ ...facts, ai_run_id: 'run-a' }} onConfirm={jest.fn()} onRetake={jest.fn()} />);
+    expect(screen.getByText('Masala Oats')).toBeTruthy();
+    expect(screen.queryByText('run-a')).toBeNull();
+  });
+
+  it.each([
+    ['per_100g', 'Per 100 g'],
+    ['per_100ml', 'Per 100 ml'],
+  ])('renders the declared nutrition basis without exposing the enum (%s)', (basis, label) => {
+    render(<LabelReview facts={{ ...facts, nutrition_basis: basis }} onConfirm={jest.fn()} onRetake={jest.fn()} />);
+    expect(screen.getByText(label)).toBeTruthy();
+    expect(screen.queryByText(basis)).toBeNull();
+    expect(screen.getByText('384')).toBeTruthy();
+  });
+
+  it('identifies a missing nutrition basis without defaulting to per 100 g', () => {
+    render(<LabelReview facts={facts} onConfirm={jest.fn()} onRetake={jest.fn()} />);
+    expect(screen.getByText('Basis could not be read')).toBeTruthy();
+    expect(screen.queryByText('Per 100 g')).toBeNull();
+    expect(screen.getByText('3.4')).toBeTruthy();
+  });
+
   it('names what it could not read instead of guessing', () => {
     render(<LabelReview facts={facts} onConfirm={jest.fn()} onRetake={jest.fn()} />);
     expect(screen.getByText(/Could not read clearly: serving_size/i)).toBeTruthy();

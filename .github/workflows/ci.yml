@@ -75,7 +75,9 @@ jobs:
     needs: scope
     if: needs.scope.outputs.backend == 'true' || needs.scope.outputs.schema == 'true' || (github.event_name == 'pull_request' && needs.scope.outputs.python_deps == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The canonical PostgreSQL suite now includes the Step 3 migration-data and
+    # independent-transaction concurrency proofs and exceeds the former cap.
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:16-alpine

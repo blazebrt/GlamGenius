@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, VERIFICATION_USER_CONFIRMED, AIRun, AIRunOutput
 from app.domains.media.storage import factory as storage_factory
 from app.domains.nutrition.grading import from_scan, grade_product, presentation
 from app.domains.nutrition.grading.production_rules import (
@@ -64,7 +64,7 @@ class ConfirmLabelBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     barcode: str = Field(min_length=6, max_length=64)
-    facts: dict[str, Any] = Field(default_factory=dict)
+    ai_run_id: uuid.UUID
     client_scan_id: str = Field(min_length=6, max_length=64)
 
 
@@ -160,24 +160,41 @@ async def record_scan_event(
 async def confirm_label(
     body: ConfirmLabelBody,
     device: ScanDevice = Depends(current_device),
+    current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
     """Accept a transcribed label. One tap, the VC-07 draft-to-confirmed pattern."""
-    if not body.facts:
-        raise ValidationFailedError("There is nothing to confirm.", field="facts")
+    run = await session.get(AIRun, body.ai_run_id)
+    output = (await session.execute(select(AIRunOutput).where(AIRunOutput.ai_run_id == body.ai_run_id))).scalar_one_or_none()
+    if (
+        run is None or output is None or run.account_id != current.account_id
+        or run.status != AI_STATUS_SUCCEEDED or run.validation_passed is not True
+        or run.feature != extraction.FEATURE or run.schema_version != extraction.SCHEMA_VERSION
+        or output.schema_version != extraction.SCHEMA_VERSION
+    ):
+        raise ValidationFailedError("This label transcription is not available for confirmation.", field="ai_run_id")
+    try:
+        facts = extraction.ExtractedLabel.model_validate(output.payload).model_dump(exclude_none=True)
+    except ValidationError as exc:
+        raise ValidationFailedError("This label transcription is not available for confirmation.", field="ai_run_id") from exc
+    # Protect the full Store-B confirmation transaction, including first-time
+    # ProductRecord creation and semantic version allocation, across workers.
+    await service.lock_label_version(session, body.barcode)
     event, created = await service.record_scan(
         session,
         barcode=body.barcode, outcome=service.OUTCOME_LABEL,
         client_scan_id=body.client_scan_id, device_id=device.id,
-        account_id=device.claimed_by_account_id, label_facts=body.facts,
+        account_id=current.account_id, label_facts=facts,
+        ai_run_id=body.ai_run_id,
     )
     # Idempotency is established before changing any fact confidence.  A queued
     # replay therefore cannot create a second confirmation or snapshot.
     if created:
-        record = await service.apply_confirmed_label(session, barcode=body.barcode, facts=body.facts)
+        record = await service.apply_confirmed_label(session, barcode=body.barcode, facts=facts)
         await service.store_label_snapshot(
-            session, barcode=body.barcode, facts=body.facts, device_id=device.id, scan_event_id=event.id,
+            session, barcode=body.barcode, facts=facts, device_id=device.id, scan_event_id=event.id,
         )
+        output.verification_status = VERIFICATION_USER_CONFIRMED
     else:
         record = await service._own_record(session, body.barcode)
         if record is None:  # defensive: an older malformed event must not gain confidence
@@ -238,9 +255,15 @@ async def read_product_verdict(
     found = await service.lookup(session, barcode)
     snapshot = await service.latest_label_snapshot(session, barcode)
     # Store B is selected at query time and never copied into ODbL Store A.
-    off_half = snapshot.facts if snapshot is not None else found.get("open_food_facts")
-    name = (off_half or {}).get("product_name") or (off_half or {}).get("name") or barcode
-    product = from_scan.build(barcode=barcode, name=name, off_half=off_half)
+    # Its schema is adapted explicitly; it is not disguised as an OFF record
+    # and missing physical-pack values are never filled from Store A.
+    source_half = snapshot.facts if snapshot is not None else found.get("open_food_facts")
+    name = (source_half or {}).get("product_name") or (source_half or {}).get("name") or barcode
+    product = (
+        from_scan.build_confirmed_label(barcode=barcode, facts=snapshot.facts)
+        if snapshot is not None
+        else from_scan.build(barcode=barcode, name=name, off_half=source_half)
+    )
     # The customer path asks the evidence domain which rules have finished the
     # lifecycle. Every row then states its own footing, so a number resting on
     # an unreviewed constant is never shown as though a reviewer stood behind it.
@@ -250,14 +273,25 @@ async def read_product_verdict(
     # Identity is factual scan context, not a name inferred by the client.
     # Keep absent catalogue values absent instead of manufacturing a brand.
     payload["barcode"] = barcode
-    payload["brand"] = (off_half or {}).get("brands") or (off_half or {}).get("brand") or None
+    payload["brand"] = (source_half or {}).get("brands") or (source_half or {}).get("brand") or None
     payload["confidence"] = service.confidence_block(snapshot.confidence) if snapshot else found["confidence"]
     payload["facts_provenance"] = "confirmed_label_snapshot" if snapshot else "open_food_facts"
+    payload["label_version"] = ({
+        "id": str(snapshot.id), "version_number": snapshot.version_number,
+        "observed_at": snapshot.created_at.isoformat(),
+        "changed_fields": snapshot.changed_fields,
+        "completeness": snapshot.completeness,
+    } if snapshot else None)
     payload["attribution"] = found.get("attribution")
     # What the pack actually holds, so "one packet" on the screen means this
     # packet. Absent when neither source states a net quantity, and the screen
     # then says "in 100 g" rather than inventing a pack.
-    size = from_scan.pack_size_g((off_half or {}).get("quantity"))
+    quantity = (
+        (source_half or {}).get("net_quantity")
+        if snapshot is not None
+        else (source_half or {}).get("quantity")
+    )
+    size = from_scan.pack_size_g(quantity)
     payload["pack_size_g"] = float(size) if size is not None else None
     # Solid or drink, so the screen can say "100 g" or "100 ml" honestly when
     # there is no pack size to work from.

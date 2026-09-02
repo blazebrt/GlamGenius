@@ -193,7 +193,71 @@ def build(
     )
 
 
+_CONFIRMED_NUTRIENT_KEYS: dict[str, tuple[str, ...]] = {
+    "energy_kcal": ("energy_kcal",),
+    "protein_g": ("protein_g",),
+    "total_fat_g": ("total_fat_g",),
+    "saturated_fat_g": ("saturated_fat_g",),
+    "trans_fat_g": ("trans_fat_g",),
+    "total_sugar_g": ("total_sugar_g", "sugars_g"),
+    "added_sugar_g": ("added_sugar_g",),
+    "fibre_g": ("fibre_g", "fiber_g"),
+    "sodium_g": ("sodium_g",),
+    "salt_g": ("salt_g",),
+}
+
+
+def build_confirmed_label(
+    *,
+    barcode: str,
+    facts: dict[str, Any],
+    name_promises: str | None = None,
+    marketed_to_children: bool = False,
+) -> ProductInput:
+    """Build from Store-B facts confirmed against the physical pack.
+
+    The confirmed-label schema is intentionally adapted explicitly instead of
+    being disguised as an Open Food Facts payload. Missing values remain
+    missing and no Store-A value is consulted or copied.
+    """
+    nutrition = facts.get("nutrition_per_100g") or {}
+    values: dict[str, Decimal | None] = {}
+    for field, keys in _CONFIRMED_NUTRIENT_KEYS.items():
+        values[field] = next(
+            (value for value in (_decimal(nutrition.get(key)) for key in keys) if value is not None),
+            None,
+        )
+
+    name = str(facts.get("product_name") or barcode)
+    ingredients = split_ingredients(facts.get("ingredients_text"))
+    percentages = declared_percentages(ingredients)
+    promised = name_promises
+    if promised is None:
+        promised = next((key for key in percentages if key in name.lower()), None)
+
+    return ProductInput(
+        name=name,
+        ingredients=ingredients,
+        energy_kcal=values["energy_kcal"],
+        protein_g=values["protein_g"],
+        total_fat_g=values["total_fat_g"],
+        saturated_fat_g=values["saturated_fat_g"],
+        trans_fat_g=values["trans_fat_g"],
+        total_sugar_g=values["total_sugar_g"],
+        added_sugar_g=values["added_sugar_g"],
+        fibre_g=values["fibre_g"],
+        sodium_g=values["sodium_g"],
+        salt_g=values["salt_g"],
+        basis={"per_100g": "solid", "per_100ml": "drink"}.get(facts.get("nutrition_basis"), "unknown"),
+        declared_percentages=percentages,
+        name_promises=promised,
+        marketed_to_children=marketed_to_children,
+        has_ingredient_list=bool(ingredients),
+        has_nutrition_panel=any(value is not None for value in values.values()),
+    )
+
+
 __all__ = [
-    "basis_for", "build", "declared_percentages", "pack_size_g",
+    "basis_for", "build", "build_confirmed_label", "declared_percentages", "pack_size_g",
     "split_ingredients",
 ]
