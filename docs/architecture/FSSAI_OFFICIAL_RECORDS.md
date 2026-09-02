@@ -50,9 +50,11 @@ A licence is its fourteen printed digits, optionally grouped with spaces as labe
 One licence and lot can name several rows in the public register, so the candidate set is resolved together rather than row by row:
 
 1. Rows whose normalised licence and batch do not match exactly are not candidates.
-2. Rows whose brand or product conflicts with the pack are dropped.
+2. Rows whose brand or product **explicitly conflicts** with the pack are ruled out. A conflict is two stated identities that disagree.
 3. One survivor is the answer.
-4. Several survivors require the pack to **positively** corroborate an identity — missing text on either side corroborates nothing — and every corroborated row must name that same identity. Otherwise the answer is no match: not the first row, not the newest, not all of them.
+4. Several survivors: **every** one must be positively corroborated by the pack, and all must name the same exact identity. Otherwise the answer is no match — not the first row, not the newest, not all of them.
+
+Step 4 rests on a distinction that decides whether a customer is shown somebody else's recall. A row stating a *different* brand has been ruled out. A row stating *no* brand has not: missing official identity is uncertainty, never evidence against the row. So a candidate that cannot be corroborated is not discarded — it keeps the set unresolved and nothing is published. Publishing the one row we could confirm, while a row we could neither confirm nor exclude sits beside it, would present a guess as a fact.
 
 Several rows are returned only when they deterministically resolve to the same corroborated pack identity.
 

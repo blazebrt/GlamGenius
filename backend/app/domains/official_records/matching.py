@@ -76,21 +76,29 @@ def resolve_matches(pack: dict[str, Any], records: list[dict[str, Any]]) -> list
     customer as theirs. So the set is resolved together:
 
     1. Rows whose licence and batch do not match exactly are not candidates.
-    2. Rows whose brand or product conflicts with the pack are dropped.
+    2. Rows whose brand or product explicitly conflicts with the pack are ruled
+       out. A conflict is two stated identities that disagree.
     3. One survivor is the answer.
-    4. Several survivors need the pack to positively corroborate an identity,
-       and every corroborated row must name that same identity. Otherwise the
-       honest answer is no match — not the first row, not the newest, not all
-       of them.
+    4. Several survivors: every one of them must be positively corroborated by
+       the pack, and all must name the same exact identity. Otherwise no match.
+
+    Step 4 turns on a distinction that decides whether a customer is shown
+    somebody else's recall. A row stating a different brand has been *ruled
+    out*. A row stating no brand at all has not: missing official identity is
+    uncertainty, never evidence against the row. So a candidate that cannot be
+    corroborated is not discarded — it keeps the set unresolved, and nothing is
+    published. Publishing the one row we could confirm, while a row we could
+    neither confirm nor exclude sits beside it, would present a guess as a fact.
 
     Nothing here is fuzzy: identity is compared as exact normalised text.
     """
     eligible = [record for record in records if match_recall(pack, record) == "matched"]
     if len(eligible) <= 1:
         return eligible
-    corroborated = [record for record in eligible if _corroborated(pack, record)]
-    if not corroborated:
+    # Not "drop the ones that fail to corroborate" — one uncorroborated survivor
+    # means the set was never resolved.
+    if not all(_corroborated(pack, record) for record in eligible):
         return []
-    if len({_record_identity(record) for record in corroborated}) != 1:
+    if len({_record_identity(record) for record in eligible}) != 1:
         return []
-    return corroborated
+    return eligible

@@ -420,3 +420,74 @@ async def test_open_food_facts_identity_cannot_resolve_a_shared_lot(
     body = await verdict(app_client, device, OFF_ONLY)
     assert body["facts_provenance"] == "open_food_facts"
     assert body["official_records"]["records"] == []
+
+
+@pytest.mark.asyncio
+async def test_an_unidentified_competing_record_withholds_the_one_we_could_confirm(
+    db_clean, off_clean, app_client, device, registered_supabase_user, tmp_path,
+):
+    """A row the register left unidentified is uncertainty, not a ruled-out row.
+
+    The customer's pack matches R1 exactly. R2 shares the licence and lot and
+    names no brand or product, so it can be neither confirmed nor excluded.
+    Publishing R1 alone would present a guess as a fact, so nothing is published.
+    """
+    token, account_id = await registered_supabase_user()
+    await confirm_label(app_client, device, token, account_id, BARCODE,
+                        label_facts(brand="Alpha", product_name="Alpha Oats"))
+    await ingest_rows(tmp_path, [
+        data_row(recall_id=901, batch=BATCH, brand="Alpha", product="Alpha Oats"),
+        data_row(recall_id=902, batch=BATCH, brand=None, product=None),
+    ])
+
+    body = await verdict(app_client, device)
+    assert body["official_records"]["records"] == []
+    # The check happened and stays visible; only the match is withheld.
+    assert body["official_records"]["last_successful_check_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_a_conflicting_competing_record_is_ruled_out_and_the_match_resolves(
+    db_clean, off_clean, app_client, device, registered_supabase_user, tmp_path,
+):
+    """The same shape as above, except R2 now states an identity that disagrees.
+
+    Stated and different is ruled out. Not stated is not. That is the whole
+    difference between showing this customer their recall and showing them
+    somebody else's.
+    """
+    token, account_id = await registered_supabase_user()
+    await confirm_label(app_client, device, token, account_id, BARCODE,
+                        label_facts(brand="Alpha", product_name="Alpha Oats"))
+    await ingest_rows(tmp_path, [
+        data_row(recall_id=901, batch=BATCH, brand="Alpha", product="Alpha Oats"),
+        data_row(recall_id=902, batch=BATCH, brand="Beta", product="Beta Juice"),
+    ])
+
+    records = (await verdict(app_client, device))["official_records"]["records"]
+    assert [row["recall_id"] for row in records] == ["901"]
+    assert records[0]["brand_name"] == "Alpha"
+
+
+@pytest.mark.asyncio
+async def test_withholding_an_unresolved_match_changes_no_part_of_the_verdict(
+    db_clean, off_clean, app_client, device, registered_supabase_user, tmp_path,
+):
+    token, account_id = await registered_supabase_user()
+    await confirm_label(app_client, device, token, account_id, BARCODE,
+                        label_facts(brand="Alpha", product_name="Alpha Oats"))
+    before = await verdict(app_client, device)
+    await ingest_rows(tmp_path, [
+        data_row(recall_id=901, batch=BATCH, brand="Alpha", product="Alpha Oats"),
+        data_row(recall_id=902, batch=BATCH, brand=None, product=None),
+    ])
+    after = await verdict(app_client, device)
+
+    assert after["official_records"]["records"] == []
+    assert after["grade"] == before["grade"]
+    assert after["band"] == before["band"]
+    assert after["decision"] == before["decision"]
+    assert after["negatives"] == before["negatives"]
+    assert after["positives"] == before["positives"]
+    assert after["result_contract_version"] == before["result_contract_version"] == "v1"
+    assert {key for key in after if after[key] != before.get(key)} == {"official_records"}

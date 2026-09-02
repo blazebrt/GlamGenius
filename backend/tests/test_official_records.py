@@ -329,12 +329,52 @@ def test_exact_pack_identity_selects_exactly_its_own_record():
 
 
 def test_several_records_may_be_returned_only_for_one_corroborated_identity():
-    """Case E. Two filings against the same product are both that product's."""
+    """Case 3. Two filings against the same product are both that product's."""
     assert resolved(pack(brand="Alpha", product_name="Oats"), [R1, R3]) == ["R1", "R3"]
+    # Case 4: a pack naming only its brand cannot choose between two products.
+    assert resolved(pack(brand="Alpha", product_name=None),
+                    [R1, {**R2, "brand_name": "Alpha"}]) == []
     # The same two rows without pack identity are still unresolved, not "both".
     assert resolved(pack(brand=None, product_name=None), [R1, R3]) == []
     # A single candidate never needs corroboration; nothing else could be meant.
     assert resolved(pack(brand=None, product_name=None), [R1]) == ["R1"]
+
+
+def test_a_candidate_the_register_leaves_unidentified_keeps_the_set_unresolved():
+    """Case 1. Missing official identity is uncertainty, not evidence against a row.
+
+    The register filed a second recall on this licence and lot and named no
+    brand or product for it. That row cannot be confirmed as this pack's — and
+    it cannot be excluded either. Publishing the row we *could* confirm, while
+    that one sits beside it unresolved, would present a guess as a fact.
+    """
+    blank = {"recall_id": "R0", "licence": LICENCE, "batch_lot": "B-123",
+             "brand_name": None, "product_name": None}
+    assert resolved(pack(brand="Alpha", product_name="Oats"), [R1, blank]) == []
+    # Alone, that same row is still the only thing the licence and lot can mean.
+    assert resolved(pack(brand="Alpha", product_name="Oats"), [blank]) == ["R0"]
+
+
+def test_a_partly_identified_candidate_is_not_completed_by_inference():
+    """Case 2. A row naming only the product is not thereby the same product identity.
+
+    Filling in the missing brand from the other candidate would be inventing the
+    fact that decides whether these two rows are one product or two.
+    """
+    partial = {"recall_id": "R0", "licence": LICENCE, "batch_lot": "B-123",
+               "brand_name": None, "product_name": "Oats"}
+    assert resolved(pack(brand="Alpha", product_name="Oats"), [R1, partial]) == []
+
+
+def test_ruled_out_and_unidentified_candidates_are_not_the_same_thing():
+    """Case 5 against Case 1. This distinction decides what a customer is shown."""
+    conflicting = {"recall_id": "R0", "licence": LICENCE, "batch_lot": "B-123",
+                   "brand_name": "Beta", "product_name": "Juice"}
+    unidentified = {**conflicting, "brand_name": None, "product_name": None}
+    # A row stating a different brand has been ruled out; the set resolves.
+    assert resolved(pack(brand="Alpha", product_name="Oats"), [R1, conflicting]) == ["R1"]
+    # A row stating no brand has not been ruled out; the set stays unresolved.
+    assert resolved(pack(brand="Alpha", product_name="Oats"), [R1, unidentified]) == []
 
 
 def test_resolution_never_falls_back_to_first_newest_or_all():
