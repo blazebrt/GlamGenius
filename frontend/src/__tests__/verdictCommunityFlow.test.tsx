@@ -90,6 +90,20 @@ beforeEach(() => {
   mockWithdraw.mockResolvedValue({ id: 'report-1', status: 'withdrawn' });
 });
 
+/**
+ * The first render in this file pays for the whole verdict screen's module
+ * graph — every component, string table and service it imports — before a
+ * single assertion runs. Locally that is a few hundred milliseconds; on a
+ * contended CI runner it has been measured close to Jest's 5-second default,
+ * and a suite that fails on machine speed rather than on behaviour tells
+ * nobody anything.
+ *
+ * This raises the clock for that one render and nothing else. Every assertion
+ * is unchanged, and a screen that genuinely stops rendering the action still
+ * fails the test.
+ */
+const FIRST_RENDER_TIMEOUT_MS = 20_000;
+
 describe('the community action on the real verdict screen', () => {
   it('offers reporting when there is no public signal at all', async () => {
     // The first reporter necessarily sees nothing published. If the action
@@ -97,7 +111,7 @@ describe('the community action on the real verdict screen', () => {
     await renderScreen(null);
     expect(screen.queryByText(S.communityObservations.heading)).toBeNull();
     expect(screen.getByLabelText(S.communityObservations.reportAction)).toBeTruthy();
-  });
+  }, FIRST_RENDER_TIMEOUT_MS);
 
   it('offers reporting when public display is switched off', async () => {
     await renderScreen({ ...publicSignals, public_enabled: false, signals: [] });

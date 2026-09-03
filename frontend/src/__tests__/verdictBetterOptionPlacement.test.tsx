@@ -117,6 +117,14 @@ function orderedText(): string[] {
   return found;
 }
 
+/**
+ * The first render in this file pays for the whole verdict screen's module
+ * graph before any assertion runs — the same cost, and the same CI-runner
+ * exposure, as the Community flow suite next door. The clock is raised for
+ * that one render; every assertion is unchanged.
+ */
+const FIRST_RENDER_TIMEOUT_MS = 20_000;
+
 describe('where the alternative sits', () => {
   it('renders below every evidence layer and above the closing actions', async () => {
     await renderScreen({ comparableAlternative });
@@ -138,7 +146,7 @@ describe('where the alternative sits', () => {
     expect(heading).toBeGreaterThan(reportWhatYouSaw);
     // And above the closing actions.
     expect(heading).toBeLessThan(closingActions);
-  });
+  }, FIRST_RENDER_TIMEOUT_MS);
 
   it('leaves the verdict, the negatives and the closing actions unchanged', async () => {
     await renderScreen({ comparableAlternative });
