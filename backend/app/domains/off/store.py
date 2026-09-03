@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.schema import CreateColumn, CreateIndex
 
 from app import config
 from app.domains.off.models import OFF_SCHEMA, OffBase
@@ -76,6 +78,56 @@ async def dispose_off_engine() -> None:
     _sessionmaker = None
 
 
+def _evolve_off_tables(connection: Connection) -> None:
+    """Bring an existing Store A table up to the model, additively.
+
+    ``create_all`` creates what is missing and then leaves an existing table
+    completely alone, so a table created by an earlier release never grows the
+    columns or indexes a later one declares. Store A is deliberately outside
+    the application's Alembic chain — a migration written for the product must
+    not be able to reach in here — so this is where its schema moves forward.
+
+    Three rules, and they are what make it safe to run on every startup:
+
+    * **Additive only.** Columns and indexes are added; nothing is dropped,
+      renamed, retyped or rewritten. A value Open Food Facts gave us is never
+      edited by a deployment.
+    * **Idempotent.** Every statement is conditional, so a fresh database, a
+      half-migrated one and an already-current one all converge, and two
+      workers starting together cannot fight.
+    * **Backfill nothing.** A row copied before a column existed keeps NULL.
+      For the canonical taxonomy columns that is the entire point: they can
+      only be computed from the taxonomy arrays, and a row fetched before we
+      requested those arrays does not have them. Deriving them from the raw
+      ``categories`` text to fill the gap would reintroduce the defect the
+      canonical columns exist to remove, so such a row stays ineligible until
+      an ordinary refresh re-fetches it.
+    """
+    inspector = inspect(connection)
+    for table in OffBase.metadata.sorted_tables:
+        if not inspector.has_table(table.name, schema=table.schema):
+            continue  # create_all has just made it, in full.
+        present = {column["name"] for column in inspector.get_columns(table.name, schema=table.schema)}
+        for column in table.columns:
+            if column.name in present:
+                continue
+            if not column.nullable and column.server_default is None:
+                # Adding one to a populated table would fail, and inventing a
+                # value for rows Open Food Facts never gave one for is worse.
+                raise RuntimeError(
+                    f"{table.name}.{column.name} must be nullable or carry a server_default: "
+                    f"Store A evolves additively and never fabricates a value for an existing row.",
+                )
+            definition = CreateColumn(column).compile(dialect=connection.dialect)
+            connection.execute(text(
+                f'ALTER TABLE "{table.schema}"."{table.name}" ADD COLUMN IF NOT EXISTS {definition}',
+            ))
+        known = {index["name"] for index in inspector.get_indexes(table.name, schema=table.schema)}
+        for index in table.indexes:
+            if index.name not in known:
+                connection.execute(CreateIndex(index, if_not_exists=True))
+
+
 async def create_off_schema() -> None:
     """Create Store A's tables, after checking they are still only OFF fields.
 
@@ -88,4 +140,5 @@ async def create_off_schema() -> None:
     async with engine.begin() as conn:
         await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{OFF_SCHEMA}"'))
         await conn.run_sync(OffBase.metadata.create_all)
+        await conn.run_sync(_evolve_off_tables)
     logger.info("off_store_ready separate=%s", is_separate_store())

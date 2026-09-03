@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.nutrition.grading import from_scan, required_grading_data_missing
 from app.domains.off import client as off_client
 from app.domains.off import freshness as off_freshness
+from app.domains.off import taxonomy as off_taxonomy
 from app.domains.off.join import join_on_barcode, read_off_product, read_off_product_with_age
 from app.domains.off.models import OffProduct
 from app.domains.off.store import get_off_sessionmaker
@@ -211,6 +212,15 @@ async def _cache_off_product(barcode: str, payload: dict[str, Any]) -> dict[str,
         existing.image_url = payload.get("image_url")
         existing.quantity = payload.get("quantity")
         existing.countries = payload.get("countries")
+        # The non-lossy taxonomy array, stored verbatim, plus the derived
+        # encodings. The fingerprint and the India flag are computed on the way
+        # in so the discovery query can prune in SQL. They come from
+        # ``categories_hierarchy``/``countries_tags`` alone — never from the raw
+        # ``categories``/``countries`` text, which is untaxonomised prose.
+        existing.categories_hierarchy = payload.get("categories_hierarchy")
+        existing.countries_tags = payload.get("countries_tags")
+        existing.off_category_key = off_taxonomy.category_fingerprint(payload.get("categories_hierarchy"))
+        existing.off_listed_for_india = off_taxonomy.listed_for_india(payload.get("countries_tags"))
         existing.off_last_modified_t = payload.get("last_modified_t")
         existing.fetched_at = datetime.now(UTC)
         await session.commit()

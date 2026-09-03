@@ -22,10 +22,10 @@ from sqlalchemy.orm import Session
 
 from app.domains.off.models import OffBase
 
-# Every field Store A may hold, because Open Food Facts publishes it.
+# Every field Open Food Facts itself publishes and Store A may hold verbatim.
 # Adding to this list means asserting the field is OFF-derived. Nothing else
 # belongs here — see PROPRIETARY_MARKERS for what must never appear.
-OFF_FIELDS: frozenset[str] = frozenset({
+OFF_PUBLISHED_FIELDS: frozenset[str] = frozenset({
     "barcode",
     "product_name",
     "brands",
@@ -35,9 +35,36 @@ OFF_FIELDS: frozenset[str] = frozenset({
     "image_url",
     "quantity",
     "countries",
+    "categories_hierarchy",
+    "countries_tags",
     "off_last_modified_t",
     "fetched_at",
 })
+
+# Deterministic re-encodings of the fields above, stored so the discovery query
+# can be answered and indexed in SQL. They are listed separately because they
+# are the one category of column that deserves an argument rather than a
+# glance, and the argument is this:
+#
+#   A canonical field is Open Food Facts data in a different shape. Every one
+#   is computed by ``app/domains/off/taxonomy.py`` from an Open Food Facts
+#   value alone — no threshold, score, grade, verdict, ruleset, customer fact
+#   or anything else of ours is an input, and a test holds that module to
+#   importing nothing proprietary. Publishing Store A openly, which the ODbL
+#   export does, therefore still publishes only their data.
+#
+# What would make one of these a licence breach is the opposite direction: a
+# column whose value depends on something of ours. ``off_category_key`` restated
+# from our own scoring, or an ``is_better_than`` flag, would turn Store A into
+# a derived database and oblige us to publish the product. That is the line,
+# and it is why this list is short and stays short.
+OFF_CANONICAL_FIELDS: frozenset[str] = frozenset({
+    "off_category_key",
+    "off_listed_for_india",
+})
+
+#: What Store A may hold, in total.
+OFF_FIELDS: frozenset[str] = OFF_PUBLISHED_FIELDS | OFF_CANONICAL_FIELDS
 
 # Words that indicate a proprietary concept. Used to give a clear failure
 # message rather than to do the enforcing — the allowlist does that. A column

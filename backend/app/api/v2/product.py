@@ -24,7 +24,7 @@ from app.domains.nutrition.grading.production_rules import (
     resolve_production_ruleset,
 )
 from app.domains.official_records import service as official_records_service
-from app.domains.product import complaints, devices, extraction, service
+from app.domains.product import complaints, devices, extraction, pack_context, service
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
 from app.domains.product.models import FssaiComplaintHandoff, ScanDevice
@@ -134,9 +134,13 @@ async def lookup_barcode(
     Always answers, always with a confidence level.
     """
     result = await service.lookup(session, barcode)
-    snapshot = await service.latest_label_snapshot(session, barcode)
+    # Matched against this device's own confirmed capture, never against the
+    # newest snapshot for the barcode. That row may be a stranger's photograph
+    # of a stranger's packet, and an exact batch recall matched from it would
+    # attach somebody else's lot to whoever happened to look the barcode up.
+    pack = await pack_context.current_pack(session, barcode=barcode, device_id=device.id)
     result["official_records"] = await official_records_service.official_records_envelope(
-        session, snapshot.facts if snapshot else None,
+        session, pack.label_facts,
     )
     return result
 
@@ -279,9 +283,22 @@ async def read_product_verdict(
     barcode may be a stranger's photograph of a stranger's packet and reading it
     as the caller's own would attach somebody else's recall and somebody else's
     lot to a pack this device has never seen.
+
+    The parameter is a **ceiling, not a grant**. A client sets it by default, an
+    old build sets it always, and a hostile one sets it deliberately, so it can
+    only ever withhold pack authority. The authority itself is established from
+    rows this server wrote: this device's own newest scan of this barcode, and
+    only when that scan captured the label. The response reports what was
+    actually in force rather than what was asked for, so no surface has to
+    reconstruct the difference.
     """
     found = await service.lookup(session, barcode)
     snapshot = await service.latest_label_snapshot(session, barcode)
+    # What this server can prove about the packet in this caller's hand, as
+    # opposed to what the caller asked to be treated as. The request can only
+    # withhold authority; it cannot create it.
+    pack = await pack_context.current_pack(session, barcode=barcode, device_id=device.id)
+    pack_authority = bool(physical_pack_context) and pack.is_proven
     # Store B is selected at query time and never copied into ODbL Store A.
     # Its schema is adapted explicitly; it is not disguised as an OFF record
     # and missing physical-pack values are never filled from Store A.
@@ -329,14 +346,16 @@ async def read_product_verdict(
     # Whether the caller is holding this packet. Stated in the response rather
     # than left to the client to remember, so every surface reads it from the
     # same place and a reference view cannot be styled as a scan by accident.
-    payload["physical_pack_context"] = bool(physical_pack_context)
+    payload["physical_pack_context"] = pack_authority
     # Official records are a separate, additive envelope. Matching is allowed
-    # only against the confirmed physical-pack snapshot; OFF cannot supply a
-    # licence or batch and therefore cannot manufacture a recall match. In
-    # reference mode no pack facts are passed at all: an exact batch recall from
-    # somebody else's capture is not this caller's record to be shown.
+    # only against this device's own confirmed capture of this pack; OFF cannot
+    # supply a licence or batch and therefore cannot manufacture a recall match.
+    # The facts come from the pack context rather than from the global newest
+    # snapshot, because an exact batch recall matched from a stranger's capture
+    # is not this caller's record to be shown — in reference mode, and equally
+    # when this device has never photographed this pack at all.
     payload["official_records"] = await official_records_service.official_records_envelope(
-        session, snapshot.facts if (snapshot and physical_pack_context) else None,
+        session, pack.label_facts if pack_authority else None,
     )
     # Shopper observations are a fourth, separate layer: not a label fact, not
     # a graded finding, not a government record. They are additive, they never
@@ -346,7 +365,7 @@ async def read_product_verdict(
     # are facts about the product and stay visible, while a batch signal is
     # about one lot this caller does not have.
     payload["community_observations"] = await community_service.community_observations_envelope(
-        session, barcode=barcode, device_id=device.id if physical_pack_context else None,
+        session, barcode=barcode, device_id=device.id if pack_authority else None,
     )
     # A fifth envelope, additive and last: at most one comparable alternative,
     # decided by the same ruleset that graded the product above it. Open Food

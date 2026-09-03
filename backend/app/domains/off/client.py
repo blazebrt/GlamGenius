@@ -19,8 +19,16 @@ PRODUCT_PATH = "/api/v2/product/{barcode}.json"
 
 # The fields Store A holds. Asking for these and no more keeps the response
 # aligned with what may legally be stored.
+#
+# ``categories_hierarchy`` is the taxonomy array we compare on, and
+# ``countries_tags`` the one the India gate reads. The *non-lossy*
+# ``categories_hierarchy`` is requested rather than the lossy ``categories_tags``
+# (documented "for search only") because comparing the lossy form can manufacture
+# a false match; the raw ``categories``/``countries`` text is untaxonomised
+# editor's prose. See ``app/domains/off/taxonomy.py`` for the quotations.
 REQUESTED_FIELDS = (
     "code,product_name,brands,ingredients_text,nutriments,categories,"
+    "categories_hierarchy,countries_tags,"
     "image_url,quantity,countries,last_modified_t"
 )
 

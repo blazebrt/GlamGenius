@@ -68,6 +68,14 @@ def _record(product: OffProduct) -> dict[str, Any]:
         "image_url": product.image_url,
         "quantity": product.quantity,
         "countries": product.countries,
+        # The taxonomy arrays and their canonical encodings. Published like
+        # everything else here: they are Open Food Facts data, and an export
+        # that quietly withheld part of Store A would be a worse proof that
+        # Store A holds only their data.
+        "categories_hierarchy": product.categories_hierarchy,
+        "countries_tags": product.countries_tags,
+        "off_category_key": product.off_category_key,
+        "off_listed_for_india": product.off_listed_for_india,
         "off_last_modified_t": product.off_last_modified_t,
     }
 
