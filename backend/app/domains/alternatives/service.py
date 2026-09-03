@@ -9,8 +9,11 @@ built. See ``docs/architecture/ODBL_DATA_WALL.md``.
 
 **The truth boundary.** Each store answers only what it is entitled to answer:
 
-* Store A says which products *might* be comparable — the category the source
-  publishes, the countries it lists, and how recently we copied the row.
+* Store A says which products *might* be comparable — the category the source's
+  own taxonomy publishes, the countries that taxonomy lists, and how recently we
+  copied the row. Its raw ``categories`` and ``countries`` text answer nothing:
+  the source documents them as untaxonomised prose in the last editor's
+  language. See ``app/domains/off/taxonomy.py``.
 * Store B's confirmed label snapshot says what a candidate actually *is* — its
   name, its ingredients, its panel, and crucially the basis that panel was
   printed on.
@@ -19,6 +22,16 @@ The second half is the correction that matters. Open Food Facts does not tell
 us whether a panel was printed per 100 g or per 100 ml; inferring it from words
 in a product name would make ``comparison.basis`` a guess dressed as a fact. A
 confirmed snapshot states it, so a candidate without one is not offered at all.
+
+**The work boundary.** The two above force a third. Store A knows which
+products are the same kind and sold here; only Store B knows which of them
+anybody has ever confirmed a label for, and the licence wall forbids joining
+them in the database. So discovery is a bounded semi-join: pages of rows that
+have already passed every Store A gate, each page costing one batched Store B
+read. Paging rather than a single window is what stops a run of source-qualified
+rows with no usable snapshot hiding every candidate behind them permanently.
+The budget is explicit, and running out of it is reported as its own reason
+rather than as an absence of products.
 
 Three things this deliberately does not do:
 
@@ -39,26 +52,29 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.alternatives import observability
 from app.domains.alternatives.category import (
-    category_leaf,
-    coarse_category_filter,
-    listed_for_india,
+    comparable_category,
+    comparable_category_fingerprint,
 )
 from app.domains.alternatives.policy import (
     COMPARABLE_ALTERNATIVE_POLICY_VERSION,
-    MAX_DISCOVERY_CANDIDATES,
+    DISCOVERY_PAGE_SIZE,
+    MAX_DISCOVERY_PAGES,
     REASON_AVAILABLE,
     REASON_CURRENT_BASIS_NOT_SOURCE_KNOWN,
     REASON_CURRENT_CATEGORY_STALE,
     REASON_CURRENT_CATEGORY_UNAVAILABLE,
     REASON_CURRENT_GRADE_UNAVAILABLE,
     REASON_NO_COMPARABLE_CANDIDATE,
+    REASON_SEARCH_BUDGET_EXHAUSTED,
     STATUS_AVAILABLE,
     STATUS_NOT_ENOUGH_INFORMATION,
     Candidate,
     action_is_no_worse,
     comparable_basis,
     comparison_block,
+    is_unbeatable,
     published_grade,
     source_known_basis,
     strictly_better_grade,
@@ -116,60 +132,96 @@ async def _current_source_row(session: AsyncSession, barcode: str) -> OffProduct
     return await session.get(OffProduct, barcode)
 
 
-async def _discover(session: AsyncSession, *, leaf: str, exclude_barcode: str) -> list[OffProduct]:
-    """A bounded, deterministic read of Store A. Never a full-table scan.
+def _qualifying(*, fingerprint: str, exclude_barcode: str, cutoff: datetime, after: str | None):
+    """Every question Store A is entitled to answer, as one SQL predicate.
 
-    The SQL filter is coarse on purpose — it prunes, it does not decide. Every
-    row it returns is re-tested with the exact category parser in Python before
-    it can be accepted, so a loose pattern can cost recall and can never admit a
-    product from a different category.
+    All four run *before* any row limit, which is the whole point. Filtering in
+    Python after a ``LIMIT`` means a stale row, a row for another country or a
+    row from another category consumes a place in the window and is then thrown
+    away, so the window silently shrinks to something much smaller than the
+    number it names — and the rows it displaced are never reached.
 
-    Ordering by barcode makes the window itself deterministic: the same cached
-    data yields the same candidates whatever order the database would otherwise
-    have chosen, and whatever order the rows were inserted in.
+    ``after`` is a keyset cursor rather than an ``OFFSET``: paging by barcode
+    cannot skip or repeat a row when the underlying data changes between pages,
+    and it reads straight down the discovery index.
     """
-    pattern = coarse_category_filter(leaf)
-    if pattern is None:
-        return []
+    clauses = [
+        OffProduct.barcode != exclude_barcode,
+        # The fixed-size fingerprint of the non-lossy ``categories_hierarchy``.
+        # This only *prunes*: every surviving row's stored hierarchy is
+        # re-compared exactly before it is graded, so the digest is a discovery
+        # key and never the authority. See app/domains/off/taxonomy.py.
+        OffProduct.off_category_key.is_not(None),
+        OffProduct.off_category_key == fingerprint,
+        # The source's own country taxonomy: en:india present.
+        OffProduct.off_listed_for_india.is_(True),
+        # An undated copy is a copy we cannot vouch for, and an expired one may
+        # not support a fresh comparative claim. Same window as everywhere else,
+        # expressed as the cutoff the caller computed from it, so the policy has
+        # one home and SQL and Python cannot drift.
+        OffProduct.fetched_at.is_not(None),
+        OffProduct.fetched_at > cutoff,
+    ]
+    if after is not None:
+        clauses.append(OffProduct.barcode > after)
+    return clauses
+
+
+async def _discover_page(
+    session: AsyncSession,
+    *,
+    fingerprint: str,
+    exclude_barcode: str,
+    cutoff: datetime,
+    after: str | None,
+) -> list[OffProduct]:
+    """One bounded, deterministic page of qualifying Store A rows.
+
+    Every row returned has already passed every gate Store A can apply, so a
+    page is a page of real candidates rather than a window most of which will be
+    discarded. Ordering by barcode makes it deterministic: the same cached data
+    yields the same pages whatever order the database would otherwise choose,
+    and whatever order the rows were inserted in.
+    """
     statement = (
         select(OffProduct)
-        .where(
-            OffProduct.barcode != exclude_barcode,
-            OffProduct.categories.is_not(None),
-            OffProduct.countries.is_not(None),
-            OffProduct.fetched_at.is_not(None),
-            OffProduct.categories.ilike(pattern, escape="\\"),
-        )
+        .where(*_qualifying(
+            fingerprint=fingerprint, exclude_barcode=exclude_barcode,
+            cutoff=cutoff, after=after,
+        ))
         .order_by(OffProduct.barcode.asc())
-        .limit(MAX_DISCOVERY_CANDIDATES)
+        .limit(DISCOVERY_PAGE_SIZE)
     )
     return list((await session.execute(statement)).scalars().all())
 
 
-def _comparable_source_rows(
-    rows: list[OffProduct], *, leaf: str, exclude_barcode: str, now: datetime,
-) -> list[OffProduct]:
-    """The cheap gates, in the order that discards the most for the least work.
+async def _more_rows_exist(
+    session: AsyncSession,
+    *,
+    fingerprint: str,
+    exclude_barcode: str,
+    cutoff: datetime,
+    after: str | None,
+) -> bool:
+    """Is there anything past the last page we were allowed to read?
 
-    A row rejected here is never assembled into a graded product and never costs
-    a Store B read. Each gate is a question Store A alone is entitled to answer:
-    is this the same kind of product, does the source list it for India, and is
-    our copy of that answer recent enough to repeat.
+    Asked only when the page budget runs out, and only so the answer can say
+    which of two different things happened: that the cached data holds nothing
+    comparable, or that we stopped looking before we got to the end of it. One
+    is a fact about the data and the other is a fact about our own limit, and
+    reporting them as the same thing would let a capacity ceiling be read as a
+    statement about the market.
     """
-    kept: list[OffProduct] = []
-    for row in rows:
-        if row.barcode == exclude_barcode:
-            continue
-        if category_leaf(row.categories) != leaf:
-            continue
-        if not listed_for_india(row.countries):
-            continue
-        # An expired copy is not refreshed — no fan-out, ever. It simply does
-        # not qualify to support a comparative claim during this request.
-        if not off_freshness.is_fresh(row.fetched_at, now=now):
-            continue
-        kept.append(row)
-    return kept
+    statement = (
+        select(OffProduct.barcode)
+        .where(*_qualifying(
+            fingerprint=fingerprint, exclude_barcode=exclude_barcode,
+            cutoff=cutoff, after=after,
+        ))
+        .order_by(OffProduct.barcode.asc())
+        .limit(1)
+    )
+    return (await session.execute(statement)).scalars().first() is not None
 
 
 def _gradeable_facts(snapshot: LabelSnapshot | None) -> dict[str, Any] | None:
@@ -302,6 +354,7 @@ async def comparable_alternative_envelope(
         # NOT_GRADED (a cooking ingredient) and NOT_ENOUGH_INFORMATION have no
         # letter to improve on. Offering a "better" oil or ghee here would be
         # manufacturing a comparison the science does not support.
+        observability.record_discovery("current_grade_unavailable")
         return not_enough_information(REASON_CURRENT_GRADE_UNAVAILABLE)
 
     # Both halves of a stated comparison have to be measured on a basis somebody
@@ -310,62 +363,160 @@ async def comparable_alternative_envelope(
     # what was compared, on either side.
     current_facts = (current_snapshot.facts if current_snapshot is not None else None) or {}
     if not source_known_basis(current_facts.get("nutrition_basis")):
+        observability.record_discovery("current_basis_not_source_known")
         return not_enough_information(REASON_CURRENT_BASIS_NOT_SOURCE_KNOWN)
+
+    current_action = presentation.action_for(current_result)
+    # The freshness window, resolved once into the cutoff both the SQL gate and
+    # the current product's own check are expressed against.
+    cutoff = moment - off_freshness.OFF_CACHE_TTL
+
+    best: Candidate | None = None
+    rows_scanned = pages_read = snapshots_read = candidates_evaluated = 0
+    # Which of the three publishable/unpublishable end-states we reached. A
+    # candidate may be published ONLY when the source-qualified set was fully
+    # examined, or when the running winner is provably unbeatable. Reaching the
+    # page budget with rows still unread and no unbeatable winner is neither.
+    source_exhausted = False
+    stopped_unbeatable = False
 
     factory = get_off_sessionmaker()
     async with factory() as off_session:
         source_row = await _current_source_row(off_session, barcode)
-        leaf = category_leaf(source_row.categories if source_row is not None else None)
-        if leaf is None:
-            # No source category, no comparison. It is never inferred from the
-            # product name, the brand, the ingredients, the barcode or an image.
+        current_hierarchy = comparable_category(
+            source_row.categories_hierarchy if source_row is not None else None,
+        )
+        fingerprint = comparable_category_fingerprint(
+            source_row.categories_hierarchy if source_row is not None else None,
+        )
+        if fingerprint is None or current_hierarchy is None:
+            # No usable ``categories_hierarchy``, no comparison. It is never
+            # inferred from the product name, the brand, the ingredients, the
+            # barcode, an image, the lossy ``categories_tags``, or the
+            # untaxonomised ``categories`` text.
+            observability.record_discovery("current_category_unavailable")
             return not_enough_information(REASON_CURRENT_CATEGORY_UNAVAILABLE)
         if not off_freshness.is_fresh(source_row.fetched_at, now=moment):
             # The ordinary Product Result may go on showing this product from an
             # expired copy — a stale answer beats a blank screen. A fresh
             # comparative claim about two products is a different act, and an
             # expired copy of somebody else's category is not enough to make it.
+            observability.record_discovery("current_category_stale")
             return not_enough_information(REASON_CURRENT_CATEGORY_STALE)
-        source_rows = _comparable_source_rows(
-            await _discover(off_session, leaf=leaf, exclude_barcode=barcode),
-            leaf=leaf, exclude_barcode=barcode, now=moment,
+
+        # Paged rather than windowed, and this is the correction that matters.
+        #
+        # Store A can say which products are the same kind and sold here; only
+        # Store B knows which of them anybody has ever photographed the label
+        # of, and the licence wall forbids joining the two in the database. A
+        # single window therefore had a permanent blind spot: if the first fifty
+        # source-qualified rows all lacked a usable snapshot, the fifty-first —
+        # a perfectly good candidate — could never be reached, on this request
+        # or any future one, because the window always started in the same
+        # place. Paging walks past them, one bounded Store B read per page.
+        after: str | None = None
+        while pages_read < MAX_DISCOVERY_PAGES:
+            rows = await _discover_page(
+                off_session, fingerprint=fingerprint, exclude_barcode=barcode,
+                cutoff=cutoff, after=after,
+            )
+            pages_read += 1
+            if not rows:
+                source_exhausted = True
+                break
+            rows_scanned += len(rows)
+            after = rows[-1].barcode
+
+            # One Store B read per page, never one per candidate: a query each
+            # would turn a single Product Result into hundreds of round trips.
+            snapshots = await product_service.latest_label_snapshots(
+                session, [row.barcode for row in rows],
+            )
+            snapshots_read += len(snapshots)
+
+            page: list[Candidate] = []
+            for row in rows:
+                # Revalidate the fingerprint's promise before trusting it. The
+                # digest only pruned; here the candidate's *actual* stored
+                # hierarchy must equal the current product's exactly. A hash
+                # collision, a corrupted key, or an inconsistent Store-A row is
+                # rejected rather than compared. This is a single equality check
+                # per row — no loop, no fan-out.
+                if comparable_category(row.categories_hierarchy) != current_hierarchy:
+                    continue
+                facts = _gradeable_facts(snapshots.get(row.barcode))
+                if facts is None:
+                    continue
+                candidates_evaluated += 1
+                candidate = _evaluate(
+                    barcode=row.barcode,
+                    facts=facts,
+                    current_product=current_product,
+                    current_grade=current_grade,
+                    current_action=current_action,
+                    ruleset=ruleset,
+                )
+                if candidate is not None:
+                    page.append(candidate)
+
+            # Fold rather than accumulate: only the running winner is carried
+            # between pages, so the memory this holds does not grow with the
+            # budget. The comparison is the same lexicographic rank a single
+            # window used, so paging cannot change which candidate is chosen.
+            page_best = select_candidate(page)
+            if page_best is not None and (best is None or page_best.rank < best.rank):
+                best = page_best
+            if best is not None and is_unbeatable(best):
+                # Top of both ladders, and barcode — the only remaining
+                # tie-break — ascends as we scan. Nothing further down can
+                # displace it, so this winner IS the global winner and reading on
+                # would change the bill and not the answer.
+                stopped_unbeatable = True
+                break
+            if len(rows) < DISCOVERY_PAGE_SIZE:
+                source_exhausted = True  # The qualifying set ended, not the budget.
+                break
+        else:
+            # The page budget ran out with each page full. Whether that leaves a
+            # published candidate defensible depends on whether anything remains
+            # unread: if nothing does, we did in fact see everything.
+            if not await _more_rows_exist(
+                off_session, fingerprint=fingerprint, exclude_barcode=barcode,
+                cutoff=cutoff, after=after,
+            ):
+                source_exhausted = True
+
+    counts = {
+        "rows_scanned": rows_scanned,
+        "pages_read": pages_read,
+        "snapshots_read": snapshots_read,
+        "candidates_evaluated": candidates_evaluated,
+    }
+    # A candidate is publishable only when its global rank is established: either
+    # we examined the whole qualifying set, or the winner is provably unbeatable.
+    # A provisional winner found before the budget ran out, with better rows
+    # possibly still unread, is NOT published — a Grade B in hand does not rule
+    # out an unseen Grade A, and publishing it would be a claim we cannot stand
+    # behind.
+    if best is not None and (source_exhausted or stopped_unbeatable):
+        observability.record_discovery("candidate_offered", **counts)
+        return _envelope(
+            STATUS_AVAILABLE,
+            REASON_AVAILABLE,
+            _candidate_payload(best, current_grade=current_grade),
         )
 
-    if not source_rows:
+    # Not publishable. Two honest empty answers, and the difference is real:
+    #   * We examined the whole qualifying set and nothing was offerable.
+    #   * We stopped at the work budget with rows still unread — so we cannot say
+    #     the cached data holds nothing, only that we did not finish looking. A
+    #     provisional winner we found but could not establish as global lands
+    #     here too: it is withheld, not published.
+    if source_exhausted:
+        observability.record_discovery("no_eligible_candidate", **counts)
         return not_enough_information(REASON_NO_COMPARABLE_CANDIDATE)
-
-    current_action = presentation.action_for(current_result)
-
-    # One Store B read for the whole bounded window. A query per candidate would
-    # turn a single Product Result into fifty round trips.
-    snapshots = await product_service.latest_label_snapshots(
-        session, [row.barcode for row in source_rows],
-    )
-
-    eligible: list[Candidate] = []
-    for row in source_rows:
-        facts = _gradeable_facts(snapshots.get(row.barcode))
-        if facts is None:
-            continue
-        candidate = _evaluate(
-            barcode=row.barcode,
-            facts=facts,
-            current_product=current_product,
-            current_grade=current_grade,
-            current_action=current_action,
-            ruleset=ruleset,
-        )
-        if candidate is not None:
-            eligible.append(candidate)
-
-    chosen = select_candidate(eligible)
-    if chosen is None:
-        return not_enough_information(REASON_NO_COMPARABLE_CANDIDATE)
-    return _envelope(
-        STATUS_AVAILABLE,
-        REASON_AVAILABLE,
-        _candidate_payload(chosen, current_grade=current_grade),
-    )
+    observability.record_discovery("search_budget_exhausted", **counts)
+    return not_enough_information(REASON_SEARCH_BUDGET_EXHAUSTED)
 
 
 __all__ = ["COMPLETE_FOR_GRADING", "comparable_alternative_envelope", "not_enough_information"]

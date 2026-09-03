@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import config
 from app.domains.media.models import MEDIA_STATUS_ACTIVE, MediaAsset
+from app.domains.product import pack_context
 from app.domains.product.models import LabelSnapshot, ScanDevice, ScanEvent
 from app.shared.database.base import utcnow
 from app.shared.errors.codes import ErrorCode
@@ -147,18 +148,18 @@ async def current_pack_event(
 ) -> ScanEvent | None:
     """The newest scan this device made of this barcode. Not the newest capture.
 
-    Ordered by server time, then by id to break a tie deterministically — never
-    by the client's ``scanned_at``, which an offline queue may backdate and a
-    hostile client may choose.
+    Delegates to the one canonical resolver in ``app/domains/product``, which
+    every layer that speaks about *this packet* now shares — the official-record
+    match and the verdict screen's own physical-pack flag included. Two copies
+    of this rule would eventually disagree, and the way that failure surfaces is
+    a stranger's recall on somebody's screen.
+
+    Re-exported here rather than removed so this module's existing callers and
+    tests keep their import.
     """
-    if device_id is None:
-        return None
-    return (await session.execute(
-        select(ScanEvent)
-        .where(ScanEvent.barcode == barcode, ScanEvent.device_id == device_id)
-        .order_by(ScanEvent.created_at.desc(), ScanEvent.id.desc())
-        .limit(1)
-    )).scalars().first()
+    return await pack_context.current_pack_event(
+        session, barcode=barcode, device_id=device_id,
+    )
 
 
 async def current_pack_context(
@@ -181,14 +182,14 @@ async def current_pack_context(
     would keep showing this shopper a signal about a pack they put back on the
     shelf.
     """
-    event = await current_pack_event(session, barcode=barcode, device_id=device_id)
+    current = await pack_context.current_pack(session, barcode=barcode, device_id=device_id)
+    event = current.scan_event
     if event is None:
         return PackContext()
-    facts = event.label_facts
-    if not isinstance(facts, dict) or not facts:
+    if not current.is_proven:
         # A plain scan. A new packet, and no lot until it is captured.
         return PackContext(scan_event=event)
-    batch = normalise_batch(facts.get("batch_number"))
+    batch = normalise_batch((current.label_facts or {}).get("batch_number"))
     # Provenance is the snapshot Step 3 allocated *for this exact event*, or
     # nothing. Matching on content fingerprint would be a lie: Step 3
     # deliberately excludes batch_number from the semantic fingerprint, so two
