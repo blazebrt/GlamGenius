@@ -871,6 +871,44 @@ export interface ProductVerdictWire {
       attribution: { text: string } | null;
     } | null;
   } | null;
+  /**
+   * What confirmed pack labels stated as MRP, normalised per 100 g or 100 ml.
+   *
+   * Money arrives as decimal strings, never JSON numbers: binary floating point
+   * cannot hold a rupee exactly, and a client that reads 24.0000000001 and
+   * renders ₹24.00 has been lucky rather than correct. The backend is
+   * authoritative for every figure here — the app formats, it never calculates.
+   *
+   * MRP is the maximum a pack may be sold for, printed on the pack. It is not a
+   * shop price and no surface may present it as one.
+   */
+  value?: {
+    policy_version: string;
+    status: 'available' | 'not_enough_information';
+    reason_key: string;
+    comparison: {
+      basis: 'per_100g' | 'per_100ml';
+      current: PackMrpObservationWire;
+      candidate: PackMrpObservationWire;
+      relationship:
+        | 'candidate_lower_mrp_per_100'
+        | 'same_mrp_per_100'
+        | 'candidate_higher_mrp_per_100';
+      difference_inr_per_100: string;
+    } | null;
+  } | null;
+}
+
+/** One pack, as one confirmed capture recorded it. */
+export interface PackMrpObservationWire {
+  barcode: string;
+  /** Decimal string, two places: "120.00". */
+  mrp_inr: string;
+  quantity: { amount: string; unit: 'g' | 'ml' };
+  /** Decimal string, two places: "24.00". */
+  mrp_per_100_inr: string;
+  observed_at: string;
+  source: 'confirmed_pack_label';
 }
 
 /**

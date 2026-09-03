@@ -1641,7 +1641,10 @@ async def test_finding_an_alternative_changes_no_part_of_the_verdict(
 
     for key in PROTECTED_KEYS:
         assert after.get(key) == before.get(key), key
-    assert {key for key in after if after[key] != before.get(key)} == {"alternative"}
+    # The MRP envelope moves with the candidate, because it describes the very
+    # comparison that just became possible. It is downstream of the choice and
+    # cannot reach back into it — Step 6B's own tests hold that line.
+    assert {key for key in after if after[key] != before.get(key)} == {"alternative", "value"}
 
 
 @pytest.mark.asyncio

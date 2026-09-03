@@ -10,7 +10,7 @@ import {
   readProductVerdict, type ProductVerdictWire,
 } from './apiV2';
 import type {
-  Alternative, VerdictComponent, VerdictIngredient, VerdictSource,
+  Alternative, PackMrpObservation, VerdictComponent, VerdictIngredient, VerdictSource,
 } from './verdictModel';
 
 const TIER_LABELS: Record<string, string> = {
@@ -82,6 +82,20 @@ const TERMS: Record<string, { word: string; plain: string } | undefined> = {
   additives: { word: S.why.additives.term, plain: S.why.additives.termPlain },
   naming: undefined,
 };
+
+/** Rename the wire's fields. Deliberately no arithmetic of any kind. */
+function packMrpObservation(
+  row: NonNullable<NonNullable<ProductVerdictWire['value']>['comparison']>['current'],
+): PackMrpObservation {
+  return {
+    barcode: row.barcode,
+    mrpInr: row.mrp_inr,
+    quantity: row.quantity,
+    mrpPer100Inr: row.mrp_per_100_inr,
+    observedAt: row.observed_at,
+    source: row.source,
+  };
+}
 
 export function toVerdictSource(
   wire: ProductVerdictWire,
@@ -193,6 +207,24 @@ export function toVerdictSource(
               basis: wire.alternative.candidate.comparison.basis,
             },
             attributionText: wire.alternative.candidate.attribution?.text ?? null,
+          }
+          : null,
+      }
+      : null,
+    // Step 6B, passed through exactly as the server computed it. Nothing here
+    // recomputes money: the strings are formatted for display and no more.
+    mrpComparison: wire.value
+      ? {
+        policyVersion: wire.value.policy_version,
+        status: wire.value.status,
+        reasonKey: wire.value.reason_key,
+        comparison: wire.value.comparison
+          ? {
+            basis: wire.value.comparison.basis,
+            current: packMrpObservation(wire.value.comparison.current),
+            candidate: packMrpObservation(wire.value.comparison.candidate),
+            relationship: wire.value.comparison.relationship,
+            differenceInrPer100: wire.value.comparison.difference_inr_per_100,
           }
           : null,
       }

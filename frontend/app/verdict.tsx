@@ -378,7 +378,11 @@ export default function VerdictScreen() {
                 sits below the evidence and below the shopper observations
                 because it is the least of them: a comparison with one other
                 product, not a finding about this one. */}
-            <BetterOption alternative={source.comparableAlternative} onView={openAlternative} />
+            <BetterOption
+              alternative={source.comparableAlternative}
+              onView={openAlternative}
+              mrpComparison={source.mrpComparison}
+            />
             <VerdictActions
               onWhy={() => setTab('why')}
               onListen={onListen}

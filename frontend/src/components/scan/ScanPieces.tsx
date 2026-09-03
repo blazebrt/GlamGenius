@@ -171,6 +171,10 @@ const FACT_LABELS: Record<string, string> = {
   allergen_text: 'Allergens',
   veg_mark: 'Veg mark',
   fssai_licence: 'FSSAI licence',
+  // The transcribed MRP clause, shown before anything is stored so a person
+  // can check it against the pack. There is deliberately no input beside it:
+  // this is what the camera read, not something anybody types.
+  mrp_text: S.labelReview.mrp,
 };
 
 /**

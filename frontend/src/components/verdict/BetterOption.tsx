@@ -27,7 +27,10 @@
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import type { ComparableAlternative } from '../../services/verdictModel';
+import type {
+  ComparableAlternative, MrpComparison as MrpComparisonModel,
+} from '../../services/verdictModel';
+import { MrpComparison } from './MrpComparison';
 import { S, t } from '../../strings/verdict';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 import { OpenFoodFactsAttribution } from '../common/OpenFoodFactsAttribution';
@@ -44,9 +47,18 @@ export const REFERENCE_ALTERNATIVE = 'alternative';
 export function BetterOption({
   alternative,
   onView,
+  mrpComparison,
 }: {
   alternative: ComparableAlternative | null | undefined;
   onView?: (barcode: string) => void;
+  /**
+   * Step 6B, rendered inside this card and beneath everything else in it.
+   *
+   * Money is downstream of the choice above it in every sense: the candidate
+   * was picked on science alone, and what the two packs cost is reported
+   * afterwards without ever having had a say.
+   */
+  mrpComparison?: MrpComparisonModel | null;
 }) {
   // A response that predates this milestone carries no envelope at all. That is
   // not a missing state to explain to anybody — it is simply nothing to render.
@@ -113,6 +125,9 @@ export function BetterOption({
           <Text style={styles.action}>{S.betterOption.viewAction}</Text>
         </TouchableOpacity>
       )}
+      {/* Below the product, the comparison and the action: the least of what
+          this card says, and the last thing it says. */}
+      <MrpComparison value={mrpComparison} />
       {/*
         A licence condition, not a footer. The candidate's name, brand and
         category are Open Food Facts data, and the notice renders with them
