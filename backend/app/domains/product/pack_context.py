@@ -43,11 +43,51 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.product.models import ScanEvent
 from app.domains.product.service import OUTCOME_LABEL
+
+
+def is_confirmed_label_capture(event: ScanEvent | None) -> bool:
+    """Is this row a genuine confirmed label capture?
+
+    The one definition of confirmation provenance, on the three counts spelled
+    out in :func:`current_pack`: the canonical label outcome, a non-empty
+    ``label_facts`` object, and an ``ai_run_id`` proving the row came through
+    the server-authorised confirmation route.
+
+    Lives here, and is imported rather than restated, because every layer that
+    treats a row as "a confirmed pack label" has to mean the same thing by it.
+    A second, looser copy elsewhere is exactly how a forged ``found_local`` row
+    carrying a hand-written ``mrp_text`` ends up being read as a capture.
+    """
+    if event is None:
+        return False
+    facts = event.label_facts
+    return (
+        event.outcome == OUTCOME_LABEL
+        and isinstance(facts, dict)
+        and bool(facts)
+        and event.ai_run_id is not None
+    )
+
+
+def confirmed_label_capture_clauses() -> list[ColumnElement[bool]]:
+    """The same three-part test, as SQL, for queries that select captures.
+
+    ``label_facts`` is JSONB and a plain scan stores JSON ``null`` in it rather
+    than SQL ``NULL``, so ``IS NOT NULL`` would read every plain scan as a
+    capture. The type is therefore asserted explicitly. Emptiness is left to
+    :func:`is_confirmed_label_capture` on the selected row, which keeps the two
+    checks in step and fails closed either way.
+    """
+    return [
+        ScanEvent.outcome == OUTCOME_LABEL,
+        ScanEvent.ai_run_id.is_not(None),
+        func.jsonb_typeof(ScanEvent.label_facts) == "object",
+    ]
 
 
 @dataclass(frozen=True)
@@ -126,18 +166,17 @@ async def current_pack(
     event = await current_pack_event(session, barcode=barcode, device_id=device_id)
     if event is None:
         return CurrentPack()
-    facts = event.label_facts
-    proven = (
-        event.outcome == OUTCOME_LABEL
-        and isinstance(facts, dict)
-        and bool(facts)
-        and event.ai_run_id is not None
-    )
-    if not proven:
+    if not is_confirmed_label_capture(event):
         # A plain scan, a non-label event, or a row without confirmation
         # provenance: a packet the server cannot vouch for.
         return CurrentPack(scan_event=event)
-    return CurrentPack(scan_event=event, label_facts=facts)
+    return CurrentPack(scan_event=event, label_facts=event.label_facts)
 
 
-__all__ = ["CurrentPack", "current_pack", "current_pack_event"]
+__all__ = [
+    "CurrentPack",
+    "confirmed_label_capture_clauses",
+    "current_pack",
+    "current_pack_event",
+    "is_confirmed_label_capture",
+]

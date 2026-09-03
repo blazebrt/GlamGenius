@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -32,6 +33,7 @@ from app.domains.nutrition.grading.production_rules import (
     candidate_ruleset,
 )
 from app.domains.off import client as off_client
+from app.domains.off import taxonomy as off_taxonomy
 from app.domains.off.models import OffBase, OffProduct
 from app.domains.off.store import create_off_schema, get_off_engine, get_off_sessionmaker
 from app.domains.product import extraction
@@ -51,6 +53,18 @@ CANDIDATE_A = "8902000000003"
 
 CEREAL_CATEGORY = "Foods, Breakfasts, Breakfast cereals"
 CEREAL_CATEGORY_OTHER_PATH = "Plant foods, Breakfast cereals"
+
+#: The non-lossy ``categories_hierarchy`` arrays, which are what Step 6A.1 made
+#: the authority for "same kind of product". The two raw cereal strings above
+#: are different English paths to the *same* classification, which is precisely
+#: why the raw text cannot decide comparability and this array must.
+CEREAL_HIERARCHY = ["en:plant-based-foods-and-beverages", "en:cereals-and-potatoes",
+                    "en:breakfast-cereals"]
+INDIA_TAGS = ["en:india"]
+_CATEGORY_HIERARCHIES: dict[str, list[str]] = {
+    CEREAL_CATEGORY: CEREAL_HIERARCHY,
+    CEREAL_CATEGORY_OTHER_PATH: CEREAL_HIERARCHY,
+}
 
 PANEL_C = {"energy_kcal": "380", "sugars_g": "8", "saturated_fat_g": "1",
            "salt_g": "0.5", "protein_g": "7", "fibre_g": "3"}
@@ -140,11 +154,27 @@ def no_off_network(monkeypatch):
 
 
 async def seed_off(barcode: str, *, categories: str = CEREAL_CATEGORY, countries: str = "India") -> None:
+    """One Open Food Facts row in Store A, in Step 6A.1's authoritative shape.
+
+    Comparability comes from ``categories_hierarchy`` and availability from
+    ``countries_tags``; the raw strings are carried along as the source text
+    they are, and decide nothing. The discovery key and the India flag are
+    computed by the very functions the live cache-write path uses, so this
+    fixture cannot drift from production by hand-writing them.
+    """
+    hierarchy = _CATEGORY_HIERARCHIES.get(
+        categories, ["en:" + categories.split(",")[-1].strip().casefold().replace(" ", "-")]
+    )
+    countries_array = INDIA_TAGS if countries == "India" else ["en:" + countries.casefold()]
     factory = get_off_sessionmaker()
     async with factory() as session:
         session.add(OffProduct(
             barcode=barcode, product_name="Catalogue Name", categories=categories,
-            countries=countries, fetched_at=datetime.now(UTC),
+            countries=countries, categories_hierarchy=hierarchy,
+            countries_tags=countries_array,
+            off_category_key=off_taxonomy.category_fingerprint(hierarchy),
+            off_listed_for_india=off_taxonomy.listed_for_india(countries_array),
+            fetched_at=datetime.now(UTC),
         ))
         await session.commit()
 
@@ -155,15 +185,33 @@ async def seed_capture(
 ) -> ScanEvent:
     """One confirmed label capture, written through the real versioning path.
 
+    Carries full confirmation provenance — the canonical label outcome, a
+    non-empty ``label_facts`` object, and a validated ``AIRun`` behind
+    ``ai_run_id`` — because that is what the production confirmation route
+    writes, and what ``pack_context.is_confirmed_label_capture`` requires. A
+    fixture that skipped the run would be quietly asserting a weaker rule than
+    the one the server enforces.
+
     ``age`` rewrites the server timestamp afterwards, which is the only way to
     test a freshness window without a client ever supplying a time.
     """
     factory = get_sessionmaker()
     async with factory() as session:
+        run = AIRun(
+            account_id=account_id, feature=extraction.FEATURE, provider="test",
+            model="test-model", prompt_version=extraction.SCHEMA_VERSION,
+            schema_version=extraction.SCHEMA_VERSION,
+            status=AI_STATUS_SUCCEEDED, validation_passed=True,
+        )
+        session.add(run)
+        await session.flush()
+        session.add(AIRunOutput(
+            ai_run_id=run.id, schema_version=extraction.SCHEMA_VERSION, payload=facts,
+        ))
         event = ScanEvent(
             device_id=device_id, account_id=account_id, barcode=barcode,
             outcome=product_service.OUTCOME_LABEL, client_scan_id=uuid.uuid4().hex,
-            label_facts=facts,
+            label_facts=facts, ai_run_id=run.id,
         )
         session.add(event)
         await session.flush()
@@ -802,6 +850,27 @@ async def _seed_ai_run(
         ))
         await session.commit()
         return run.id
+
+
+async def confirm_on_device(
+    app_client, device_headers: dict, token: str, account_id: uuid.UUID,
+    barcode: str, facts: dict,
+) -> None:
+    """Confirm a pack through the real route, owned by this viewing device.
+
+    The only way to give a *viewer* proven physical-pack authority under Step
+    6A.1: the event has to be this device's newest scan of this barcode, carry
+    the canonical label outcome, and reference a validated AI run. Going through
+    ``/scan/label/confirm`` gets all three by construction, rather than a
+    fixture asserting them by hand.
+    """
+    run_id = await _seed_ai_run(account_id, facts, schema_version=extraction.SCHEMA_VERSION)
+    response = await app_client.post(
+        "/api/v2/scan/label/confirm",
+        headers={**device_headers, **auth(token)},
+        json={"barcode": barcode, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
+    )
+    assert response.status_code == 201, response.text
 
 
 async def _confirmation_side_effects(barcode: str, run_id: uuid.UUID) -> dict:
@@ -1621,38 +1690,165 @@ async def test_an_official_record_can_neither_supply_nor_move_a_price(
         )
         await session.commit()
 
+    # The stranger's capture that supplies the MRP gives this caller no claim on
+    # that lot, so the recall is still withheld: Step 6A.1 decides that, and
+    # Step 6B did not loosen it.
     after = await verdict(app_client, device)
-    assert [row["recall_id"] for row in after["official_records"]["records"]] == ["96001"]
-    assert after["value"] == before["value"]
-    assert after["alternative"] == before["alternative"]
+    assert after["official_records"]["records"] == []
+
+    # Give the viewing device its own proven pack, and the record appears —
+    # which is the state this test actually needs in order to say something
+    # about money surviving it.
+    token, account_id = await registered_supabase_user()
+    await confirm_on_device(app_client, device, token, account_id, CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", brand="Northstar", ingredients=INGREDIENTS_C,
+        panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹120",
+        fssai_licence=LICENCE, batch_number=batch,
+    ))
+    held = await verdict(app_client, device)
+    assert [row["recall_id"] for row in held["official_records"]["records"]] == ["96001"]
+
+    # The recall moved nothing about the money or the science. A government
+    # record is a separate epistemic layer: it cannot supply a price, and it
+    # cannot promote, demote or re-rank the alternative.
+    assert held["value"]["status"] == before["value"]["status"]
+    assert held["value"]["comparison"]["relationship"] == \
+        before["value"]["comparison"]["relationship"]
+    assert held["value"]["comparison"]["difference_inr_per_100"] == \
+        before["value"]["comparison"]["difference_inr_per_100"]
+    assert held["alternative"] == before["alternative"]
+
+
+@pytest.mark.asyncio
+async def test_a_forged_non_label_scan_cannot_manufacture_an_mrp_observation(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+    registered_supabase_user,
+):
+    """Tempting ``label_facts`` on a plain scan are not a confirmed pack label.
+
+    The cheapest possible attack on a public price: write an ordinary
+    ``found_local`` scan and hang an MRP and a pack size off it. It has the
+    shape of a capture and none of the provenance, and the observation must not
+    be built from it — the confirmation route is the authority, not the presence
+    of a convincing-looking dictionary.
+    """
+    factory = get_sessionmaker()
+    forged = {"mrp_text": "MRP ₹120", "net_quantity": "500 g",
+              "product_name": "Northstar Corn Flakes", "ingredients_text": INGREDIENTS_C,
+              "nutrition_basis": "per_100g", "nutrition_panel": PANEL_C}
+    async with factory() as session:
+        session.add(ScanEvent(
+            device_id=None, account_id=None, barcode=CURRENT,
+            outcome=product_service.OUTCOME_LOCAL,      # not a label capture
+            client_scan_id=uuid.uuid4().hex,
+            label_facts=forged,                          # ...however it looks
+        ))
+        await session.commit()
+    await seed_off(CURRENT)
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹100", net_quantity="400 g",
+    )
+
+    # Read directly: the forged row is not an eligible observation at all.
+    async with factory() as session:
+        assert await value_service.latest_confirmed_capture(session, CURRENT) is None
+
+    # And nothing public is built from it. The forged row is not a confirmed
+    # capture, so it supplies neither the science Step 6A needs nor the money
+    # Step 6B needs — the card declines before it ever reaches a price.
+    forged_view = await verdict(app_client, device)
+    assert forged_view["value"]["status"] == "not_enough_information"
+    assert forged_view["value"]["comparison"] is None
+    assert "120" not in json.dumps(forged_view["value"])
+
+    # A genuine confirmation through the real route, and the same product now
+    # has an observation. The rule is about provenance, not about content.
+    token, account_id = await registered_supabase_user()
+    await confirm_on_device(app_client, device, token, account_id, CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", brand="Northstar", ingredients=INGREDIENTS_C,
+        panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹120",
+    ))
+    async with factory() as session:
+        event = await value_service.latest_confirmed_capture(session, CURRENT)
+    assert event is not None and event.ai_run_id is not None
+
+    confirmed_view = await verdict(app_client, device)
+    assert confirmed_view["value"]["status"] == "available"
+    assert confirmed_view["value"]["comparison"]["current"]["mrp_per_100_inr"] == "24.00"
+
+
+@pytest.mark.asyncio
+async def test_a_forged_non_label_scan_cannot_manufacture_a_candidate_observation(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """The same rule on the candidate side of the comparison."""
+    await seed_current()
+    await seed_off(CANDIDATE_B, categories=CEREAL_CATEGORY_OTHER_PATH)
+    # The candidate's science comes from a real confirmed capture...
+    await seed_capture(CANDIDATE_B, label_facts(
+        product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B, panel=PANEL_B,
+        net_quantity="400 g",                    # ...but no MRP on it
+    ))
+    # ...and a later forged plain scan tries to supply the missing price.
+    factory = get_sessionmaker()
+    async with factory() as session:
+        session.add(ScanEvent(
+            device_id=None, account_id=None, barcode=CANDIDATE_B,
+            outcome=product_service.OUTCOME_OFF,
+            client_scan_id=uuid.uuid4().hex,
+            label_facts={"mrp_text": "MRP ₹1", "net_quantity": "400 g"},
+        ))
+        await session.commit()
+
+    body = await verdict(app_client, device)
+    # The candidate is still chosen on its science...
+    assert body["alternative"]["candidate"]["barcode"] == CANDIDATE_B
+    # ...and the forged price neither reaches the card nor overwrites anything.
+    assert body["value"]["status"] == "not_enough_information"
+    assert body["value"]["reason_key"] == "candidate_mrp_unavailable"
 
 
 @pytest.mark.asyncio
 async def test_a_reference_view_keeps_its_restrictions_and_may_still_state_a_dated_price(
     db_clean, off_clean, app_client, device, published_rules, no_off_network, tmp_path,
+    registered_supabase_user,
 ):
-    """MRP is explicitly a dated observation, so it survives reference mode.
+    """The Step 6A.1 / Step 6B boundary, proved in one place.
 
-    What must not survive is anything claiming this is the viewer's own packet.
-    Step 6B may not loosen a single one of those restrictions.
+    Two different authorities are at work and they must not be confused:
+
+    * *Has this viewer proved the packet in their hand?* Gates the physical-pack
+      layers — the exact recall match and the batch signal.
+    * *What did a recent confirmed label for this product state?* A dated public
+      fact about the product, owned by no particular viewer.
+
+    A stranger's legitimate capture may therefore support the public MRP
+    comparison while giving this caller no claim whatsoever on that stranger's
+    lot. Both halves are asserted together, because it is the combination that
+    used to be got wrong.
     """
     from app.domains.official_records import service as official_records
 
     from tests.test_official_records import LICENCE, data_row, make_export
 
     batch = "B-6B-REF"
-    await seed_current()
-    await seed_off(CANDIDATE_B, categories=CEREAL_CATEGORY_OTHER_PATH)
-    # A capture owned by nobody on this device, carrying a licence and a lot.
-    await seed_capture(CANDIDATE_B, label_facts(
-        product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B, panel=PANEL_B,
-        net_quantity="400 g", mrp_text="MRP ₹100",
+    # A capture of the current pack owned by nobody on this device, carrying a
+    # licence and a lot as well as the money.
+    await seed_capture(CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", brand="Northstar", ingredients=INGREDIENTS_C,
+        panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹120",
         fssai_licence=LICENCE, batch_number=batch,
     ))
+    await seed_off(CURRENT)
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹100", net_quantity="400 g",
+    )
     path = make_export(
         tmp_path / f"foscos-{uuid.uuid4().hex}.xlsx",
-        rows=[data_row(recall_id=96002, batch=batch, brand="Sunfield",
-                       product="Sunfield Oat Porridge", status="Initiated", termination="NA")],
+        rows=[data_row(recall_id=96002, batch=batch, brand="Northstar",
+                       product="Northstar Corn Flakes", status="Initiated", termination="NA")],
     )
     factory = get_sessionmaker()
     async with factory() as session:
@@ -1661,15 +1857,57 @@ async def test_a_reference_view_keeps_its_restrictions_and_may_still_state_a_dat
         )
         await session.commit()
 
-    reference = await verdict(app_client, device, barcode=CANDIDATE_B, physical_pack=False)
+    # ---- Four things at once, with no pack proof on the viewing device ----
+    reference = await verdict(app_client, device, physical_pack=False)
     assert reference["physical_pack_context"] is False
-    # Step 4 stays suppressed. Step 6B did not weaken it.
+    # Step 4 stays suppressed: the recall matches a *stranger's* capture.
     assert reference["official_records"]["records"] == []
+    # Step 5 carries no batch signal for a lot this caller is not holding.
     assert [s for s in reference["community_observations"]["signals"]
             if s["scope"] == "batch"] == []
-    # And the ordinary read of the same pack still shows the recall.
-    ordinary = await verdict(app_client, device, barcode=CANDIDATE_B)
-    assert [row["recall_id"] for row in ordinary["official_records"]["records"]] == ["96002"]
+    # ...and the dated public MRP observation survives all of it, because it is
+    # a fact about the product rather than a claim about this viewer's packet.
+    assert reference["value"]["status"] == "available"
+    assert reference["value"]["comparison"]["current"]["mrp_per_100_inr"] == "24.00"
+    assert reference["value"]["comparison"]["candidate"]["mrp_per_100_inr"] == "25.00"
+
+    # An *ordinary* read changes none of the restrictions. Under Step 6A.1
+    # authority comes from this device's own newest capture, and this device has
+    # never photographed this pack, so dropping the reference flag cannot
+    # promote a stranger's lot into this caller's record.
+    ordinary = await verdict(app_client, device)
+    assert ordinary["physical_pack_context"] is False
+    assert ordinary["official_records"]["records"] == []
+    assert ordinary["value"]["comparison"] == reference["value"]["comparison"]
+
+    # ---- Now the viewer legitimately confirms the pack on this device ----
+    token, account_id = await registered_supabase_user()
+    await confirm_on_device(app_client, device, token, account_id, CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", brand="Northstar", ingredients=INGREDIENTS_C,
+        panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹120",
+        fssai_licence=LICENCE, batch_number=batch,
+    ))
+
+    held = await verdict(app_client, device)
+    assert held["physical_pack_context"] is True
+    # The viewer's own pack facts now drive Step 4, and the same lot matches.
+    assert [row["recall_id"] for row in held["official_records"]["records"]] == ["96002"]
+    # And the money reads exactly as it did with no pack authority at all, which
+    # is the whole point: MRP never depended on holding the packet. The
+    # observation *date* legitimately moves forward — this device's confirmation
+    # is now the newest confirmed capture of this product — so the figures are
+    # compared rather than the envelope, and the date is asserted to have moved
+    # rather than quietly ignored.
+    for side in ("current", "candidate"):
+        for figure in ("mrp_inr", "mrp_per_100_inr", "quantity"):
+            assert held["value"]["comparison"][side][figure] == \
+                reference["value"]["comparison"][side][figure], (side, figure)
+    assert held["value"]["comparison"]["relationship"] == \
+        reference["value"]["comparison"]["relationship"]
+    assert held["value"]["comparison"]["difference_inr_per_100"] == \
+        reference["value"]["comparison"]["difference_inr_per_100"]
+    assert held["value"]["comparison"]["current"]["observed_at"] > \
+        reference["value"]["comparison"]["current"]["observed_at"]
 
 
 # ---------------------------------------------------------------------------
@@ -1791,12 +2029,21 @@ async def test_computing_a_price_comparison_asks_no_ai_anything(
         CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
         panel=PANEL_B,
     )
+
+    # The runs behind the confirmed captures are the transcriptions that already
+    # happened; what matters is that *reading* the comparison adds none. Counting
+    # before and after says that directly, where asserting an empty table would
+    # only be asserting that the fixtures happened not to confirm anything.
+    factory = get_sessionmaker()
+    async with factory() as session:
+        before = (await session.execute(select(func.count()).select_from(AIRun))).scalar_one()
+
     body = await verdict(app_client, device)
     assert body["value"]["comparison"]["candidate"]["mrp_per_100_inr"] == "25.00"
 
-    factory = get_sessionmaker()
     async with factory() as session:
-        assert (await session.execute(select(AIRun))).scalars().all() == []
+        after = (await session.execute(select(func.count()).select_from(AIRun))).scalar_one()
+    assert after == before
 
 
 @pytest.mark.asyncio

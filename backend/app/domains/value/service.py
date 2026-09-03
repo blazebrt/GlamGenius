@@ -28,7 +28,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.product.models import ScanEvent
-from app.domains.product.service import OUTCOME_LABEL
+from app.domains.product.pack_context import (
+    confirmed_label_capture_clauses,
+    is_confirmed_label_capture,
+)
 from app.domains.value.parsing import Quantity, parse_mrp_rupees, parse_quantity
 from app.domains.value.policy import (
     PACK_MRP_VALUE_POLICY_VERSION,
@@ -128,6 +131,20 @@ def not_enough_information(reason_key: str) -> dict[str, Any]:
 async def latest_confirmed_capture(session: AsyncSession, barcode: str) -> ScanEvent | None:
     """The newest confirmed label capture for one barcode, by server time.
 
+    **Product-level, not viewer-level.** This deliberately asks a different
+    question from ``pack_context.current_pack``: that one answers "has *this
+    device* proved the packet in its hand", and gates the physical-pack layers.
+    This one answers "what did a recent confirmed label for *this product*
+    state", which is a dated public fact about the product and belongs to no
+    particular viewer. The two must not be collapsed — see
+    ``docs/architecture/PACK_MRP_VALUE.md``.
+
+    **The same bar for what counts as confirmed, though.** Eligibility uses the
+    shared provenance test, so a ``found_local`` row carrying a hand-written
+    ``mrp_text`` is not an observation however convincing its contents look:
+    the canonical label outcome, a non-empty ``label_facts`` object, and an
+    ``ai_run_id`` proving the row came through the confirmation route.
+
     Ordered by ``created_at`` then ``id``, both written by the database. A
     phone's ``scanned_at`` is a client claim and is deliberately not consulted.
 
@@ -135,16 +152,15 @@ async def latest_confirmed_capture(session: AsyncSession, barcode: str) -> ScanE
     not read a price, the truthful statement is that we no longer have a usable
     observation — not that an older photograph once said something convenient.
     """
-    return (await session.execute(
+    event = (await session.execute(
         select(ScanEvent)
-        .where(
-            ScanEvent.barcode == barcode,
-            ScanEvent.outcome == OUTCOME_LABEL,
-            ScanEvent.label_facts.is_not(None),
-        )
+        .where(ScanEvent.barcode == barcode, *confirmed_label_capture_clauses())
         .order_by(ScanEvent.created_at.desc(), ScanEvent.id.desc())
         .limit(1)
-    )).scalar_one_or_none()
+    )).scalars().first()
+    # The SQL narrows to captures; this re-asserts the whole shared test on the
+    # row itself, so the two can never drift apart.
+    return event if is_confirmed_label_capture(event) else None
 
 
 def observation_from(event: ScanEvent | None) -> tuple[PackObservation | None, str | None]:
