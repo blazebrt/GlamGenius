@@ -12,6 +12,11 @@
     "fiber_100g": 3
   },
   "categories": "Snacks, Sweet snacks, Breakfast cereals",
+  "categories_hierarchy": [
+    "en:snacks",
+    "en:sweet-snacks",
+    "en:cereal-bars"
+  ],
   "categories_tags": [
     "en:snacks",
     "en:sweet-snacks",

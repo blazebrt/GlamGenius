@@ -20,15 +20,15 @@ PRODUCT_PATH = "/api/v2/product/{barcode}.json"
 # The fields Store A holds. Asking for these and no more keeps the response
 # aligned with what may legally be stored.
 #
-# ``categories_tags`` and ``countries_tags`` are the taxonomy arrays. They are
-# requested rather than the ``categories``/``countries`` text alone because
-# only the arrays carry Open Food Facts' own classification: their schema
-# describes the text fields as untaxonomised, written in whichever language the
-# last editor was using, and "mostly used for debugging and testing purposes".
-# See ``app/domains/off/taxonomy.py`` for the quotations and the reasoning.
+# ``categories_hierarchy`` is the taxonomy array we compare on, and
+# ``countries_tags`` the one the India gate reads. The *non-lossy*
+# ``categories_hierarchy`` is requested rather than the lossy ``categories_tags``
+# (documented "for search only") because comparing the lossy form can manufacture
+# a false match; the raw ``categories``/``countries`` text is untaxonomised
+# editor's prose. See ``app/domains/off/taxonomy.py`` for the quotations.
 REQUESTED_FIELDS = (
     "code,product_name,brands,ingredients_text,nutriments,categories,"
-    "categories_tags,countries_tags,"
+    "categories_hierarchy,countries_tags,"
     "image_url,quantity,countries,last_modified_t"
 )
 

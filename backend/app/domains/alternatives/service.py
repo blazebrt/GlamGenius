@@ -53,7 +53,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.alternatives import observability
-from app.domains.alternatives.category import comparable_category_key
+from app.domains.alternatives.category import (
+    comparable_category,
+    comparable_category_fingerprint,
+)
 from app.domains.alternatives.policy import (
     COMPARABLE_ALTERNATIVE_POLICY_VERSION,
     DISCOVERY_PAGE_SIZE,
@@ -129,7 +132,7 @@ async def _current_source_row(session: AsyncSession, barcode: str) -> OffProduct
     return await session.get(OffProduct, barcode)
 
 
-def _qualifying(*, category_key: str, exclude_barcode: str, cutoff: datetime, after: str | None):
+def _qualifying(*, fingerprint: str, exclude_barcode: str, cutoff: datetime, after: str | None):
     """Every question Store A is entitled to answer, as one SQL predicate.
 
     All four run *before* any row limit, which is the whole point. Filtering in
@@ -144,12 +147,13 @@ def _qualifying(*, category_key: str, exclude_barcode: str, cutoff: datetime, af
     """
     clauses = [
         OffProduct.barcode != exclude_barcode,
-        # The canonical classification, matched in full. Never the raw
-        # ``categories`` text, which the source documents as untaxonomised
-        # editor's prose — see app/domains/off/taxonomy.py.
+        # The fixed-size fingerprint of the non-lossy ``categories_hierarchy``.
+        # This only *prunes*: every surviving row's stored hierarchy is
+        # re-compared exactly before it is graded, so the digest is a discovery
+        # key and never the authority. See app/domains/off/taxonomy.py.
         OffProduct.off_category_key.is_not(None),
-        OffProduct.off_category_key == category_key,
-        # The source's own country taxonomy, canonicalised on the way in.
+        OffProduct.off_category_key == fingerprint,
+        # The source's own country taxonomy: en:india present.
         OffProduct.off_listed_for_india.is_(True),
         # An undated copy is a copy we cannot vouch for, and an expired one may
         # not support a fresh comparative claim. Same window as everywhere else,
@@ -166,7 +170,7 @@ def _qualifying(*, category_key: str, exclude_barcode: str, cutoff: datetime, af
 async def _discover_page(
     session: AsyncSession,
     *,
-    category_key: str,
+    fingerprint: str,
     exclude_barcode: str,
     cutoff: datetime,
     after: str | None,
@@ -182,7 +186,7 @@ async def _discover_page(
     statement = (
         select(OffProduct)
         .where(*_qualifying(
-            category_key=category_key, exclude_barcode=exclude_barcode,
+            fingerprint=fingerprint, exclude_barcode=exclude_barcode,
             cutoff=cutoff, after=after,
         ))
         .order_by(OffProduct.barcode.asc())
@@ -194,7 +198,7 @@ async def _discover_page(
 async def _more_rows_exist(
     session: AsyncSession,
     *,
-    category_key: str,
+    fingerprint: str,
     exclude_barcode: str,
     cutoff: datetime,
     after: str | None,
@@ -211,7 +215,7 @@ async def _more_rows_exist(
     statement = (
         select(OffProduct.barcode)
         .where(*_qualifying(
-            category_key=category_key, exclude_barcode=exclude_barcode,
+            fingerprint=fingerprint, exclude_barcode=exclude_barcode,
             cutoff=cutoff, after=after,
         ))
         .order_by(OffProduct.barcode.asc())
@@ -369,18 +373,27 @@ async def comparable_alternative_envelope(
 
     best: Candidate | None = None
     rows_scanned = pages_read = snapshots_read = candidates_evaluated = 0
-    budget_exhausted = False
+    # Which of the three publishable/unpublishable end-states we reached. A
+    # candidate may be published ONLY when the source-qualified set was fully
+    # examined, or when the running winner is provably unbeatable. Reaching the
+    # page budget with rows still unread and no unbeatable winner is neither.
+    source_exhausted = False
+    stopped_unbeatable = False
 
     factory = get_off_sessionmaker()
     async with factory() as off_session:
         source_row = await _current_source_row(off_session, barcode)
-        category_key = comparable_category_key(
-            source_row.categories_tags if source_row is not None else None,
+        current_hierarchy = comparable_category(
+            source_row.categories_hierarchy if source_row is not None else None,
         )
-        if category_key is None:
-            # No source classification, no comparison. It is never inferred from
-            # the product name, the brand, the ingredients, the barcode, an
-            # image, or the untaxonomised ``categories`` text.
+        fingerprint = comparable_category_fingerprint(
+            source_row.categories_hierarchy if source_row is not None else None,
+        )
+        if fingerprint is None or current_hierarchy is None:
+            # No usable ``categories_hierarchy``, no comparison. It is never
+            # inferred from the product name, the brand, the ingredients, the
+            # barcode, an image, the lossy ``categories_tags``, or the
+            # untaxonomised ``categories`` text.
             observability.record_discovery("current_category_unavailable")
             return not_enough_information(REASON_CURRENT_CATEGORY_UNAVAILABLE)
         if not off_freshness.is_fresh(source_row.fetched_at, now=moment):
@@ -404,11 +417,12 @@ async def comparable_alternative_envelope(
         after: str | None = None
         while pages_read < MAX_DISCOVERY_PAGES:
             rows = await _discover_page(
-                off_session, category_key=category_key, exclude_barcode=barcode,
+                off_session, fingerprint=fingerprint, exclude_barcode=barcode,
                 cutoff=cutoff, after=after,
             )
             pages_read += 1
             if not rows:
+                source_exhausted = True
                 break
             rows_scanned += len(rows)
             after = rows[-1].barcode
@@ -422,6 +436,14 @@ async def comparable_alternative_envelope(
 
             page: list[Candidate] = []
             for row in rows:
+                # Revalidate the fingerprint's promise before trusting it. The
+                # digest only pruned; here the candidate's *actual* stored
+                # hierarchy must equal the current product's exactly. A hash
+                # collision, a corrupted key, or an inconsistent Store-A row is
+                # rejected rather than compared. This is a single equality check
+                # per row — no loop, no fan-out.
+                if comparable_category(row.categories_hierarchy) != current_hierarchy:
+                    continue
                 facts = _gradeable_facts(snapshots.get(row.barcode))
                 if facts is None:
                     continue
@@ -447,19 +469,22 @@ async def comparable_alternative_envelope(
             if best is not None and is_unbeatable(best):
                 # Top of both ladders, and barcode — the only remaining
                 # tie-break — ascends as we scan. Nothing further down can
-                # displace it, so reading on would change the bill and not
-                # the answer.
+                # displace it, so this winner IS the global winner and reading on
+                # would change the bill and not the answer.
+                stopped_unbeatable = True
                 break
             if len(rows) < DISCOVERY_PAGE_SIZE:
-                break  # The qualifying set is exhausted, not the budget.
+                source_exhausted = True  # The qualifying set ended, not the budget.
+                break
         else:
-            # Every page allowed was read and each was full, so there may well
-            # be more. Ask, rather than assume: "we found nothing" and "we
-            # stopped looking" are different statements to make.
-            budget_exhausted = best is None and await _more_rows_exist(
-                off_session, category_key=category_key, exclude_barcode=barcode,
+            # The page budget ran out with each page full. Whether that leaves a
+            # published candidate defensible depends on whether anything remains
+            # unread: if nothing does, we did in fact see everything.
+            if not await _more_rows_exist(
+                off_session, fingerprint=fingerprint, exclude_barcode=barcode,
                 cutoff=cutoff, after=after,
-            )
+            ):
+                source_exhausted = True
 
     counts = {
         "rows_scanned": rows_scanned,
@@ -467,18 +492,31 @@ async def comparable_alternative_envelope(
         "snapshots_read": snapshots_read,
         "candidates_evaluated": candidates_evaluated,
     }
-    if best is None:
-        outcome = "search_budget_exhausted" if budget_exhausted else "no_eligible_candidate"
-        observability.record_discovery(outcome, **counts)
-        return not_enough_information(
-            REASON_SEARCH_BUDGET_EXHAUSTED if budget_exhausted else REASON_NO_COMPARABLE_CANDIDATE,
+    # A candidate is publishable only when its global rank is established: either
+    # we examined the whole qualifying set, or the winner is provably unbeatable.
+    # A provisional winner found before the budget ran out, with better rows
+    # possibly still unread, is NOT published — a Grade B in hand does not rule
+    # out an unseen Grade A, and publishing it would be a claim we cannot stand
+    # behind.
+    if best is not None and (source_exhausted or stopped_unbeatable):
+        observability.record_discovery("candidate_offered", **counts)
+        return _envelope(
+            STATUS_AVAILABLE,
+            REASON_AVAILABLE,
+            _candidate_payload(best, current_grade=current_grade),
         )
-    observability.record_discovery("candidate_offered", **counts)
-    return _envelope(
-        STATUS_AVAILABLE,
-        REASON_AVAILABLE,
-        _candidate_payload(best, current_grade=current_grade),
-    )
+
+    # Not publishable. Two honest empty answers, and the difference is real:
+    #   * We examined the whole qualifying set and nothing was offerable.
+    #   * We stopped at the work budget with rows still unread — so we cannot say
+    #     the cached data holds nothing, only that we did not finish looking. A
+    #     provisional winner we found but could not establish as global lands
+    #     here too: it is withheld, not published.
+    if source_exhausted:
+        observability.record_discovery("no_eligible_candidate", **counts)
+        return not_enough_information(REASON_NO_COMPARABLE_CANDIDATE)
+    observability.record_discovery("search_budget_exhausted", **counts)
+    return not_enough_information(REASON_SEARCH_BUDGET_EXHAUSTED)
 
 
 __all__ = ["COMPLETE_FOR_GRADING", "comparable_alternative_envelope", "not_enough_information"]

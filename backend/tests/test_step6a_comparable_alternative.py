@@ -77,9 +77,11 @@ CEREAL_CATEGORY = "Foods, Breakfasts, Breakfast cereals"
 CEREAL_CATEGORY_OTHER_PATH = "Plant foods, Breakfast cereals"
 BAR_CATEGORY = "Foods, Cereal bars"
 
-#: The taxonomy arrays, which are what decides one. Both cereal spellings above
-#: carry the same canonical classification, because they describe the same kind
-#: of product — which is the entire reason the raw text cannot be the authority.
+#: The non-lossy ``categories_hierarchy`` arrays, which are what decides
+#: comparability. Both cereal spellings above carry the same classification,
+#: because they describe the same kind of product — which is the entire reason
+#: the raw text cannot be the authority. (Named ``*_TAGS`` for brevity; they are
+#: hierarchy arrays.)
 CEREAL_TAGS = ["en:plant-based-foods-and-beverages", "en:cereals-and-potatoes",
                "en:breakfast-cereals"]
 BAR_TAGS = ["en:snacks", "en:sweet-snacks", "en:cereal-bars"]
@@ -87,9 +89,9 @@ GHEE_TAGS = ["en:fats", "en:clarified-butters"]
 INDIA_TAGS = ["en:india"]
 UK_TAGS = ["en:united-kingdom"]
 
-#: Which taxonomy array goes with which raw text, so a test that varies the raw
+#: Which hierarchy array goes with which raw text, so a test that varies the raw
 #: category still says something meaningful about the canonical one. A test that
-#: needs them to disagree passes ``categories_tags`` explicitly.
+#: needs them to disagree passes ``categories_hierarchy`` explicitly.
 CATEGORY_TAGS: dict[str, list[str]] = {
     CEREAL_CATEGORY: CEREAL_TAGS,
     CEREAL_CATEGORY_OTHER_PATH: CEREAL_TAGS,
@@ -105,7 +107,7 @@ _UNSET = object()
 
 
 def tags_for_category(categories: str | None) -> list[str] | None:
-    """The taxonomy array a raw category string stands in for, in these tests."""
+    """The ``categories_hierarchy`` array a raw category string stands in for."""
     if categories is None:
         return None
     return CATEGORY_TAGS.get(categories, ["en:" + categories.split(",")[-1].strip().casefold().replace(" ", "-")])
@@ -257,8 +259,9 @@ async def seed_off(
     brands: str | None = "Catalogue Brand",
     categories: str | None = CEREAL_CATEGORY,
     countries: str | None = "India",
-    categories_tags: Any = _UNSET,
+    categories_hierarchy: Any = _UNSET,
     countries_tags: Any = _UNSET,
+    off_category_key: Any = _UNSET,
     nutriments: dict | None = None,
     ingredients_text: str | None = INGREDIENTS_B,
     fetched_at: datetime | None = None,
@@ -274,7 +277,7 @@ async def seed_off(
     write path uses — a test that hand-wrote them would be checking its own
     arithmetic rather than the encoder that runs in production.
     """
-    tags = tags_for_category(categories) if categories_tags is _UNSET else categories_tags
+    hierarchy = tags_for_category(categories) if categories_hierarchy is _UNSET else categories_hierarchy
     countries_array = tags_for_country(countries) if countries_tags is _UNSET else countries_tags
     factory = get_off_sessionmaker()
     async with factory() as session:
@@ -282,8 +285,11 @@ async def seed_off(
             barcode=barcode, product_name=name, brands=brands,
             ingredients_text=ingredients_text, nutriments=nutriments,
             categories=categories, countries=countries, quantity="200 g",
-            categories_tags=tags, countries_tags=countries_array,
-            off_category_key=off_taxonomy.category_key(tags),
+            categories_hierarchy=hierarchy, countries_tags=countries_array,
+            off_category_key=(
+                off_taxonomy.category_fingerprint(hierarchy)
+                if off_category_key is _UNSET else off_category_key
+            ),
             off_listed_for_india=off_taxonomy.listed_for_india(countries_array),
             fetched_at=fresh_at() if fetched_at is None else fetched_at,
         ))
@@ -332,8 +338,9 @@ async def seed_candidate(
     brand: str | None = "Sunfield",
     categories: str | None = CEREAL_CATEGORY_OTHER_PATH,
     countries: str | None = "India",
-    categories_tags: Any = _UNSET,
+    categories_hierarchy: Any = _UNSET,
     countries_tags: Any = _UNSET,
+    off_category_key: Any = _UNSET,
     fetched_at: datetime | None = None,
     off_nutriments: dict | None = None,
     with_label: bool = True,
@@ -341,9 +348,9 @@ async def seed_candidate(
     """A comparable product: discoverable in Store A, gradeable from Store B."""
     await seed_off(
         barcode, name="Catalogue Name For " + barcode, categories=categories,
-        countries=countries, categories_tags=categories_tags,
-        countries_tags=countries_tags, fetched_at=fetched_at,
-        nutriments=off_nutriments,
+        countries=countries, categories_hierarchy=categories_hierarchy,
+        countries_tags=countries_tags, off_category_key=off_category_key,
+        fetched_at=fetched_at, nutriments=off_nutriments,
     )
     if with_label:
         await seed_label(barcode, label_facts(
@@ -383,91 +390,48 @@ async def confirm_label_through_api(app_client, device, token, account_id, barco
 
 
 # ---------------------------------------------------------------------------
-# The category key: the source's own taxonomy, in full, and nothing looser
+# The category authority: the non-lossy hierarchy, in full, and nothing looser
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    ("categories_tags", "expected"),
-    [
-        # The whole published classification, sorted. Sorting is what makes the
-        # key independent of the order the source happened to return the array
-        # in — nothing in their schema promises an order, so nothing here relies
-        # on one.
-        (["en:breakfast-cereals", "en:cereals"], "en:breakfast-cereals|en:cereals"),
-        (["en:cereals", "en:breakfast-cereals"], "en:breakfast-cereals|en:cereals"),
-        # Case, padding and repeated internal whitespace all normalise away.
-        (["  EN:Breakfast   Cereals  "], "en:breakfast cereals"),
-        # NFKC folds the compatibility forms together.
-        (["en:\ufb03breakfast-cereals"], "en:ffibreakfast-cereals"),
-        # A repeated entry is one entry: a set, not a bag.
-        (["en:cereals", "en:cereals"], "en:cereals"),
-        # Nothing usable is nothing. It is never filled in from elsewhere, and
-        # in particular never from the raw ``categories`` text.
-        (None, None),
-        ([], None),
-        ("en:breakfast-cereals", None),
-        (["   "], None),
-    ],
-)
-def test_the_category_key_is_the_whole_published_classification(categories_tags, expected):
-    assert category_module.comparable_category_key(categories_tags) == expected
+# The deep source-semantics coverage lives in
+# tests/test_step6a1_discovery_provenance.py. These few pin the domain-level
+# re-exports the rest of this module relies on.
+def test_a_missing_or_malformed_hierarchy_has_no_fingerprint():
+    """Fail closed: no usable ``categories_hierarchy``, no comparison key."""
+    for value in (None, [], "en:breakfast-cereals", 12345, {"en": "x"},
+                  ["en:ok", "nocolon"], ["en:ok", 5], ["   "]):
+        assert category_module.comparable_category_fingerprint(value) is None
 
 
-def test_no_single_tag_is_treated_as_the_specific_one():
-    """There is no documented "most specific" element, so none is picked.
-
-    Open Food Facts' schema describes ``categories_tags`` as an array of tag
-    entries and says nothing about its order. Reading the last one as the leaf
-    is an assumption, and this is the test that stops it coming back: a product
-    classified broadly and one classified specifically are not comparable, in
-    either direction, even though one array is a prefix of the other.
-    """
+def test_two_paths_to_the_same_classification_are_comparable_and_a_sibling_is_not():
+    """Exact whole-set semantics. No parent/child equivalence, no fuzzy distance."""
+    assert category_module.same_comparable_category(CEREAL_TAGS, list(reversed(CEREAL_TAGS)))
+    assert not category_module.same_comparable_category(CEREAL_TAGS, BAR_TAGS)
+    # A broad classification and a specific one are not comparable, in either
+    # direction — no element is privileged as "the leaf".
     broad = ["en:cereals"]
     specific = ["en:cereals", "en:breakfast-cereals"]
     assert not category_module.same_comparable_category(broad, specific)
     assert not category_module.same_comparable_category(specific, broad)
-    # Reversing the arrays changes nothing: no end of the array is privileged.
-    assert not category_module.same_comparable_category(specific[::-1], broad)
-
-
-def test_a_malformed_tag_array_voids_the_key_rather_than_being_repaired():
-    """One entry we cannot read means the classification cannot be read.
-
-    Dropping the bad entry would be the tempting repair and it is the wrong
-    one: it would widen the set of products the row then matches, which is the
-    one direction this design must never fail in.
-    """
-    for value in (12345, {"en": "cereals"}, True, ["en:cereals", 5], ["en:cereals", None]):
-        assert category_module.comparable_category_key(value) is None
-    # A separator inside a tag would make the key ambiguous, so it voids it too
-    # rather than being escaped into something that looks like two tags.
-    assert category_module.comparable_category_key(["en:a|b"]) is None
-
-
-def test_the_raw_category_text_is_not_readable_as_a_category_at_all():
-    """The defect this milestone removes, pinned so it cannot return.
-
-    Open Food Facts documents ``categories`` as untaxonomised, written in the
-    last editor's language, and "mostly used for debugging and testing
-    purposes". There is deliberately no function here that will read one.
-    """
-    for removed in ("category_leaf", "coarse_category_filter",
-                    "same_source_category", "country_tokens", "INDIA_COUNTRY_TOKENS"):
-        assert not hasattr(category_module, removed), removed
-    # And a comma-separated string is not silently accepted as if it were an
-    # array of tags: it is one unusable value, so the key is absent.
-    assert category_module.comparable_category_key(CEREAL_CATEGORY) is None
-
-
-def test_two_paths_to_the_same_classification_are_comparable_and_a_sibling_is_not():
-    """Exact set semantics. No parent/child equivalence, no fuzzy distance."""
-    assert category_module.same_comparable_category(CEREAL_TAGS, list(reversed(CEREAL_TAGS)))
-    assert not category_module.same_comparable_category(CEREAL_TAGS, BAR_TAGS)
     # Near-misses stay misses. Nothing here measures edit distance.
     for near in (["en:breakfast-cereal"], ["en:breakfast_cereals"], ["en:cereals"]):
         assert not category_module.same_comparable_category(CEREAL_TAGS, near), near
-    # And a missing classification never matches another missing one.
+    # A missing classification never matches another missing one.
     assert not category_module.same_comparable_category(None, None)
     assert not category_module.same_comparable_category([], [])
+
+
+def test_the_raw_category_text_and_the_lossy_key_are_not_the_authority():
+    """The two removed authorities, pinned so neither can return.
+
+    The raw ``categories`` text is untaxonomised editor's prose; the old
+    joined-key helper read the lossy ``categories_tags``. Neither function
+    should exist any more, and a comma-separated string is not a hierarchy.
+    """
+    for removed in ("category_leaf", "coarse_category_filter", "same_source_category",
+                    "country_tokens", "INDIA_COUNTRY_TOKENS", "comparable_category_key",
+                    "canonical_tags", "category_key"):
+        assert not hasattr(category_module, removed), removed
+    assert category_module.comparable_category_fingerprint(CEREAL_CATEGORY) is None
 
 
 # ---------------------------------------------------------------------------
@@ -479,10 +443,13 @@ def test_two_paths_to_the_same_classification_are_comparable_and_a_sibling_is_no
         (["en:india"], True),
         (["en:india", "en:united-kingdom"], True),
         (["en:united-kingdom", "en:india"], True),
-        (["  EN:India  "], True),
         (["en:united-kingdom"], False),
         (None, False),
         ([], False),
+        # Exact id only. Country tags are canonical, so a non-canonical spelling
+        # is not accepted — we do not re-normalise and we keep no translation map.
+        (["  EN:India  "], False),
+        (["EN:INDIA"], False),
         # Never inferred from a look-alike. Their taxonomy gives these their own
         # ids, and only the exact India id counts.
         (["en:british-indian-ocean-territory"], False),
@@ -1448,7 +1415,7 @@ async def test_one_page_of_discovery_is_capped(
     factory = get_off_sessionmaker()
     async with factory() as session:
         rows = await alternatives_service._discover_page(
-            session, category_key=off_taxonomy.category_key(CEREAL_TAGS),
+            session, fingerprint=off_taxonomy.category_fingerprint(CEREAL_TAGS),
             exclude_barcode=CURRENT, cutoff=fresh_at() - off_freshness.OFF_CACHE_TTL,
             after=None,
         )
@@ -1481,7 +1448,7 @@ async def test_every_source_gate_runs_before_the_row_limit(
     factory = get_off_sessionmaker()
     async with factory() as session:
         rows = await alternatives_service._discover_page(
-            session, category_key=off_taxonomy.category_key(CEREAL_TAGS),
+            session, fingerprint=off_taxonomy.category_fingerprint(CEREAL_TAGS),
             exclude_barcode=CURRENT, cutoff=fresh_at() - off_freshness.OFF_CACHE_TTL,
             after=None,
         )
@@ -1585,6 +1552,89 @@ async def test_paging_stops_as_soon_as_nothing_left_could_win(
     assert envelope["candidate"]["grade"] == "A"
     # One page was enough. Without the early stop this would be eleven.
     assert len(pages) == 1, pages
+
+
+@pytest.mark.asyncio
+async def test_a_provisional_winner_is_withheld_until_its_rank_is_global(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network, monkeypatch,
+):
+    """A Grade B in hand does not rule out an unseen Grade A.
+
+    Within a tiny budget a valid Grade-B/BUY candidate is found; a valid
+    Grade-A/BUY candidate sits immediately past the budget. Because the B is not
+    provably global — better rows remain unread — it must be **withheld**, and
+    the honest answer is that the budget ran out, not that nothing exists.
+    Raising the budget to reach the rest then yields the A.
+    """
+    monkeypatch.setattr(alternatives_service, "DISCOVERY_PAGE_SIZE", 1)
+    monkeypatch.setattr(alternatives_service, "MAX_DISCOVERY_PAGES", 1)
+    await seed_current()
+    # Barcode order puts the B first (inside the 1-row budget) and the A next.
+    await seed_candidate(
+        "8901000600001", product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B,
+    )
+    await seed_candidate(
+        "8901000600002", product_name="Rolled Oats", ingredients=INGREDIENTS_A, panel=PANEL_A,
+    )
+
+    withheld = (await verdict(app_client, device))["alternative"]
+    assert withheld["status"] == "not_enough_information"
+    assert withheld["reason_key"] == policy_module.REASON_SEARCH_BUDGET_EXHAUSTED
+    assert withheld["candidate"] is None, "a provisional B must not be published"
+
+    # Enough budget to reach the A: the global winner, not the provisional one.
+    monkeypatch.setattr(alternatives_service, "MAX_DISCOVERY_PAGES", 10)
+    resolved = (await verdict(app_client, device))["alternative"]
+    assert resolved["status"] == "available"
+    assert resolved["candidate"]["barcode"] == "8901000600002"
+    assert resolved["candidate"]["grade"] == "A"
+
+
+@pytest.mark.asyncio
+async def test_a_hash_collision_cannot_manufacture_a_match(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """The fingerprint is only a discovery key; the hierarchy is the authority.
+
+    Two candidate rows are given the *same* ``off_category_key`` as the current
+    product by hand — one with the current product's real hierarchy (the
+    control), one with a different hierarchy (the forced collision). Both would
+    grade A. Discovery finds both by the shared key, but the exact-hierarchy
+    revalidation admits only the control, so a digest collision cannot
+    manufacture a comparison.
+    """
+    current_hierarchy = CEREAL_TAGS
+    forced_key = off_taxonomy.category_fingerprint(current_hierarchy)
+    # The collider sorts FIRST, so if revalidation were skipped it would win the
+    # barcode tie-break and be offered — which is exactly what must not happen.
+    collider = "8901000700001"
+    control = "8901000700002"
+
+    await seed_current()  # current row carries CEREAL_TAGS -> forced_key
+    # Control: matching hierarchy, same key.
+    await seed_candidate(
+        control, product_name="Rolled Oats Control", ingredients=INGREDIENTS_A, panel=PANEL_A,
+        categories_hierarchy=list(current_hierarchy),
+    )
+    # Collider: a different hierarchy, but forced onto the same discovery key.
+    await seed_candidate(
+        collider, product_name="Rolled Oats Collider", ingredients=INGREDIENTS_A, panel=PANEL_A,
+        categories_hierarchy=list(BAR_TAGS), off_category_key=forced_key,
+    )
+
+    # Sanity: the two candidates really do share the discovery key.
+    factory = get_off_sessionmaker()
+    async with factory() as session:
+        keys = {
+            bc: (await session.get(OffProduct, bc)).off_category_key
+            for bc in (CURRENT, control, collider)
+        }
+    assert keys[control] == keys[collider] == keys[CURRENT] == forced_key
+
+    envelope = (await verdict(app_client, device))["alternative"]
+    assert envelope["status"] == "available"
+    assert envelope["candidate"]["barcode"] == control, "the collider must be rejected"
 
 
 # ---------------------------------------------------------------------------
@@ -1768,6 +1818,73 @@ async def test_a_real_capture_restores_the_pack_layer(
     # Same science either way. Only the pack-specific layer moved.
     assert reference["grade"] == ordinary["grade"]
     assert reference["decision"] == ordinary["decision"]
+
+
+@pytest.mark.asyncio
+async def test_a_forged_non_label_event_authorises_no_pack_layer(
+    db_clean, off_clean, app_client, published_rules, no_off_network,
+    registered_supabase_user, tmp_path,
+):
+    """Facts that resemble a capture are not a capture.
+
+    A device's newest event is a plain ``found_local`` scan whose ``label_facts``
+    have been stuffed with an FSSAI licence and a batch number that exactly match
+    a real recall — but it never went through the confirmation route, so it has no
+    ``ai_run_id``. It must authorise nothing: not on the verdict route, and not on
+    the lookup route, which share the one pack-context rule. A genuine confirmed
+    capture afterwards restores authority.
+    """
+    barcode = "8901000088801"
+    forged_batch = "B-FORGED"
+    # Register a device and keep its id so we can plant the forged event.
+    reg = await app_client.post(
+        "/api/v2/scan/device", json={"device_key": uuid.uuid4().hex, "platform": "android"},
+    )
+    assert reg.status_code == 201, reg.text
+    device_id = uuid.UUID(reg.json()["device_id"])
+    headers = {"X-Device-Token": reg.json()["token"]}
+
+    await seed_off(barcode, categories=CEREAL_CATEGORY)
+    path = make_export(
+        tmp_path / f"foscos-{uuid.uuid4().hex}.xlsx",
+        rows=[data_row(recall_id=90501, batch=forged_batch, brand="Sunfield",
+                       product="Sunfield Oat Porridge", status="Initiated", termination="NA")],
+    )
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await official_records.ingest_recall_xlsx(
+            session, path, source_checked_at=datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
+        )
+        # The forged event: a plain scan wearing a capture's clothes.
+        session.add(ScanEvent(
+            device_id=device_id, barcode=barcode, outcome="found_local",
+            client_scan_id=uuid.uuid4().hex,
+            label_facts={"fssai_licence": LICENCE, "batch_number": forged_batch},
+            ai_run_id=None,
+        ))
+        await session.commit()
+
+    # Verdict: no pack authority, so no records and no batch community context.
+    forged = await verdict(app_client, headers, barcode=barcode)
+    assert forged["physical_pack_context"] is False
+    assert forged["official_records"]["records"] == []
+    assert [s for s in forged["community_observations"]["signals"] if s["scope"] == "batch"] == []
+
+    # Lookup route shares the rule: the forged event authorises no record there.
+    lookup = await app_client.get(f"/api/v2/scan/lookup/{barcode}", headers=headers)
+    assert lookup.status_code == 200, lookup.text
+    assert lookup.json()["official_records"]["records"] == []
+
+    # A genuine confirmed capture of the same lot restores authority.
+    token, account_id = await registered_supabase_user()
+    facts = label_facts(
+        product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B, panel=PANEL_B,
+        fssai_licence=LICENCE, batch_number=forged_batch,
+    )
+    await confirm_label_through_api(app_client, headers, token, account_id, barcode, facts)
+    restored = await verdict(app_client, headers, barcode=barcode)
+    assert restored["physical_pack_context"] is True
+    assert [row["recall_id"] for row in restored["official_records"]["records"]] == ["90501"]
 
 
 @pytest.mark.asyncio

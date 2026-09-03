@@ -59,29 +59,36 @@ class OffProduct(OffBase):
     image_url: Mapped[str | None] = mapped_column(Text)
     quantity: Mapped[str | None] = mapped_column(Text)
     countries: Mapped[str | None] = mapped_column(Text)
-    # The taxonomy arrays, exactly as published. These are the fields that
-    # actually carry Open Food Facts' own classification — see
-    # ``app/domains/off/taxonomy.py`` for the schema quotations that say so.
-    categories_tags: Mapped[list[str] | None] = mapped_column(JSONB)
+    # The taxonomy arrays that actually carry Open Food Facts' own
+    # classification, stored verbatim. ``categories_hierarchy`` is the
+    # non-lossy one their schema says to use — matched ids plus unmatched
+    # entries kept as-is — and it is the category-comparison authority. The
+    # lossy ``categories_tags`` is deliberately NOT stored: it is documented as
+    # "for search only" and comparing it can manufacture a false match, which is
+    # the defect this milestone corrects. ``countries_tags`` carries the country
+    # taxonomy for the India gate. See ``app/domains/off/taxonomy.py``.
+    categories_hierarchy: Mapped[list[str] | None] = mapped_column(JSONB)
     countries_tags: Mapped[list[str] | None] = mapped_column(JSONB)
-    # Canonical encodings of the two arrays above, stored so the discovery
-    # query can answer every question it is entitled to answer in SQL, before
+    # Derived encodings, stored so the discovery query can prune in SQL before
     # any candidate window is taken. Both are computed by
-    # ``app/domains/off/taxonomy.py`` from Open Food Facts values alone: no
-    # threshold, score, verdict or customer fact reaches them, so neither is a
-    # proprietary column and Store A stays an Open Food Facts database.
+    # ``app/domains/off/taxonomy.py`` from the arrays above alone: no threshold,
+    # score, verdict or customer fact reaches them, so neither is a proprietary
+    # column and Store A stays an Open Food Facts database.
     #
     # NULL and false mean "this row cannot support a comparison". A row copied
-    # before these fields were requested has no arrays to canonicalise, so it
-    # stays excluded until it is refreshed. Filling them from ``categories``
-    # or ``countries`` is exactly the mistake this design corrects.
-    #: Prefixed like ``off_last_modified_t``, and for the same reason: it says
-    #: at a glance that this is Open Food Facts' answer rather than ours. It
-    #: also keeps the name distinct from ``inventory_subtype_definitions.
-    #: category_key``, which is our own wardrobe taxonomy in Store B and has
-    #: nothing to do with food — two unrelated columns sharing a name is how a
-    #: licence boundary gets crossed by somebody who was reading quickly.
-    off_category_key: Mapped[str | None] = mapped_column(Text)
+    # before ``categories_hierarchy`` was requested has no array to canonicalise,
+    # so it stays excluded until it is refreshed. Deriving these from the raw
+    # ``categories``/``countries`` text is exactly the mistake this corrects.
+    #
+    # ``off_category_key`` is a SHA-256 fingerprint of the canonical hierarchy —
+    # a *fixed 64-character* digest, so it can be a B-tree key without indexing an
+    # unbounded joined string. It is only a discovery key: a candidate's stored
+    # ``categories_hierarchy`` is re-compared exactly before it is ever graded, so
+    # a hash collision cannot manufacture a match. The ``off_`` prefix says at a
+    # glance this is Open Food Facts' answer, and keeps the name distinct from
+    # ``inventory_subtype_definitions.category_key`` — our own wardrobe taxonomy
+    # in Store B, which two unrelated columns sharing a name could be mistaken for.
+    off_category_key: Mapped[str | None] = mapped_column(String(64))
     off_listed_for_india: Mapped[bool | None] = mapped_column(Boolean)
     # Provenance of the copy itself, not of the product.
     off_last_modified_t: Mapped[int | None] = mapped_column()

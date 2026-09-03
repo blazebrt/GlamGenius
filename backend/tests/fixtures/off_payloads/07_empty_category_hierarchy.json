@@ -1,5 +1,5 @@
 {
-  "code": "8901000000008",
+  "code": "8901000000007",
   "product_name": "Corn Flakes",
   "brands": "Northstar",
   "ingredients_text": "maize, sugar, salt",
@@ -11,10 +11,12 @@
     "proteins_100g": 7,
     "fiber_100g": 3
   },
-  "categories": "Foods, Chikki",
+  "categories": "Foods, Breakfasts, Breakfast cereals",
+  "categories_hierarchy": [],
   "categories_tags": [
-    "en:foods",
-    "en:chikki"
+    "en:plant-based-foods-and-beverages",
+    "en:cereals-and-potatoes",
+    "en:breakfast-cereals"
   ],
   "countries": "India",
   "countries_tags": [

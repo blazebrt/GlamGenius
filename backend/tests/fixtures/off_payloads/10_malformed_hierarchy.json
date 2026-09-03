@@ -1,5 +1,5 @@
 {
-  "code": "8901000000007",
+  "code": "8901000000010",
   "product_name": "Corn Flakes",
   "brands": "Northstar",
   "ingredients_text": "maize, sugar, salt",
@@ -12,7 +12,15 @@
     "fiber_100g": 3
   },
   "categories": "Foods, Breakfasts, Breakfast cereals",
-  "categories_tags": [],
+  "categories_hierarchy": [
+    "en:breakfast-cereals",
+    42
+  ],
+  "categories_tags": [
+    "en:plant-based-foods-and-beverages",
+    "en:cereals-and-potatoes",
+    "en:breakfast-cereals"
+  ],
   "countries": "India",
   "countries_tags": [
     "en:india"

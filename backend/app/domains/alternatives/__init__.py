@@ -19,7 +19,8 @@ Four properties hold it together, and all four are the point:
 """
 from app.domains.alternatives.category import (
     INDIA_COUNTRY_TAG,
-    comparable_category_key,
+    comparable_category,
+    comparable_category_fingerprint,
     listed_for_india,
     same_comparable_category,
 )
@@ -74,8 +75,8 @@ __all__ = [
     "Candidate",
     "action_is_no_worse",
     "basis_key",
-    "canonical_tags",
-    "comparable_category_key",
+    "comparable_category",
+    "comparable_category_fingerprint",
     "comparable_alternative_envelope",
     "comparable_basis",
     "listed_for_india",

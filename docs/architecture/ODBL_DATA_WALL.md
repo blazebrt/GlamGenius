@@ -66,8 +66,9 @@ a glance:
 * `OFF_PUBLISHED_FIELDS` — fields Open Food Facts publishes, stored verbatim.
 * `OFF_CANONICAL_FIELDS` — deterministic re-encodings of those same fields, so
   the discovery query can be answered and indexed in SQL. Today:
-  `off_category_key` (the sorted `categories_tags` set) and
-  `off_listed_for_india` (whether `countries_tags` carries `en:india`).
+  `off_category_key` (a fixed 64-character SHA-256 fingerprint of the
+  non-lossy `categories_hierarchy`) and `off_listed_for_india` (whether
+  `countries_tags` carries `en:india`).
 
 A canonical field is their data in a different shape. Every one is computed by
 `app/domains/off/taxonomy.py` from an Open Food Facts value alone — no

@@ -25,24 +25,41 @@ All from the `main` branch of `openfoodfacts/openfoodfacts-server`:
 
 | What | URL |
 | --- | --- |
+| `categories_hierarchy` (the non-lossy array — the authority) | https://raw.githubusercontent.com/openfoodfacts/openfoodfacts-server/main/docs/api/ref/schemas/product_tags.yaml |
 | `categories`, `categories_tags`, `countries`, `countries_tags` | https://raw.githubusercontent.com/openfoodfacts/openfoodfacts-server/main/docs/api/ref/schemas/product_base_tags.yaml |
-| `categories_hierarchy`, `categories_lc`, `countries_hierarchy` | https://raw.githubusercontent.com/openfoodfacts/openfoodfacts-server/main/docs/api/ref/schemas/product_tags.yaml |
-| The shape of one taxonomy tag entry | https://raw.githubusercontent.com/openfoodfacts/openfoodfacts-server/main/docs/api/ref/schemas/tags/taxonomy_tag_entry.yaml |
-| The shape of one indexed (search) tag entry | https://raw.githubusercontent.com/openfoodfacts/openfoodfacts-server/main/docs/api/ref/schemas/tags/indexed_taxonomy_tag_entry.yaml |
+| `taxonomy_tag_entry` (non-lossy, kept as-is) | https://raw.githubusercontent.com/openfoodfacts/openfoodfacts-server/main/docs/api/ref/schemas/tags/taxonomy_tag_entry.yaml |
+| `indexed_taxonomy_tag_entry` (lossy, "for search only") | https://raw.githubusercontent.com/openfoodfacts/openfoodfacts-server/main/docs/api/ref/schemas/tags/indexed_taxonomy_tag_entry.yaml |
+| `compared_to_category` | https://raw.githubusercontent.com/openfoodfacts/openfoodfacts-server/main/docs/api/ref/schemas/product_extended.yaml |
 | The country taxonomy, for the canonical India id | https://raw.githubusercontent.com/openfoodfacts/openfoodfacts-server/main/taxonomies/countries.txt |
 
-The quotations that decide the design are reproduced in
-`backend/app/domains/off/taxonomy.py`. The India entry in `countries.txt` reads
-`en: India, Bharat, Hindustan, IN, IND` with `country_code_2:en: IN`, which is
-what makes `en:india` the canonical id.
+## The field decision these fixtures encode
 
-`compared_to_category` appears in none of the schema files above, so it is not
-part of the documented product contract and no fixture carries it.
+`categories_hierarchy` is the authority, because its own schema says it is the
+non-lossy field: "categories not found in taxonomy (as-is, with no
+normalization) ... should be used for display purposes, as it is not lossy."
+
+`categories_tags` is deliberately **not** the authority. Its schema
+(`indexed_taxonomy_tag_entry`) calls it "a lossy representation ... for search
+only", deaccented and lowercased. Two distinct source categories can collapse
+onto one indexed token, so comparing it can *manufacture* a false match — see
+the collision pair below.
+
+`compared_to_category` **exists** (`product_extended.yaml`: "the category to use
+for comparison. **TODO** explain how it is chosen."). Because its own schema
+carries a TODO for how it is generated, and the server assigns it from the lossy
+`categories_tags`, it is not defensible as our comparison authority. It was
+investigated and deliberately not used; no fixture depends on it.
+
+The India entry in `countries.txt` reads `en: India, Bharat, Hindustan, IN, IND`
+with `country_code_2:en: IN`, which is what makes `en:india` the canonical id.
 
 ## The rule these fixtures exist to hold
 
-Each file pairs a raw `categories`/`countries` text with a `categories_tags`/
-`countries_tags` array, and in several files **the two disagree** — because in
-the real data they do, and because every disagreement is a case where reading
-the raw text gives the wrong answer. See `case_index.json` for what each one is
-for.
+Each file pairs a raw `categories`/`countries` text with the taxonomy arrays,
+and in several files **they disagree** — because in the real data they do, and
+because every disagreement is a case where reading the wrong field gives the
+wrong answer. See `case_index.json` for what each one is for. Cases 11 and 12
+are the load-bearing pair: their `categories_hierarchy` values are distinct
+source strings while their `categories_tags` tokens are identical, so a
+comparison on `categories_tags` would call two different products the same and a
+comparison on `categories_hierarchy` correctly does not.

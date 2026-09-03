@@ -212,15 +212,14 @@ async def _cache_off_product(barcode: str, payload: dict[str, Any]) -> dict[str,
         existing.image_url = payload.get("image_url")
         existing.quantity = payload.get("quantity")
         existing.countries = payload.get("countries")
-        # The taxonomy arrays, stored verbatim, and the canonical encodings of
-        # them. Computed on the way in rather than at query time so the
-        # discovery query can filter and index on them in SQL. Both are derived
-        # from these two Open Food Facts arrays and from nothing else — never
-        # from the ``categories``/``countries`` text, which the source
-        # documents as untaxonomised editor's prose.
-        existing.categories_tags = payload.get("categories_tags")
+        # The non-lossy taxonomy array, stored verbatim, plus the derived
+        # encodings. The fingerprint and the India flag are computed on the way
+        # in so the discovery query can prune in SQL. They come from
+        # ``categories_hierarchy``/``countries_tags`` alone — never from the raw
+        # ``categories``/``countries`` text, which is untaxonomised prose.
+        existing.categories_hierarchy = payload.get("categories_hierarchy")
         existing.countries_tags = payload.get("countries_tags")
-        existing.off_category_key = off_taxonomy.category_key(payload.get("categories_tags"))
+        existing.off_category_key = off_taxonomy.category_fingerprint(payload.get("categories_hierarchy"))
         existing.off_listed_for_india = off_taxonomy.listed_for_india(payload.get("countries_tags"))
         existing.off_last_modified_t = payload.get("last_modified_t")
         existing.fetched_at = datetime.now(UTC)

@@ -307,7 +307,8 @@ _SCAN_TABLES = ("product_records", "scan_events", "product_label_snapshots")
 #: two a category cache would introduce.
 _OFF_DERIVED_COLUMN_NAMES = frozenset({
     "brands", "nutriments", "categories", "category_key", "canonical_category",
-    "countries", "availability", "image_url", "off_last_modified_t",
+    "categories_hierarchy", "categories_tags", "off_category_key",
+    "countries", "countries_tags", "availability", "image_url", "off_last_modified_t",
     "off_product_name", "off_brand", "alternative_barcode",
 })
 
@@ -422,21 +423,21 @@ async def test_the_alternative_pairing_exists_only_for_one_response(db_clean, of
         # classification, which is what actually decides comparability. The
         # canonical columns are Open Food Facts data in another shape and are
         # computed from their arrays alone — nothing of ours is an input.
-        cereal_tags = ["en:plant-based-foods-and-beverages", "en:breakfast-cereals"]
+        cereal_hierarchy = ["en:plant-based-foods-and-beverages", "en:breakfast-cereals"]
         india_tags = ["en:india"]
         session.add(OffProduct(
             barcode="8901000000001", product_name="Catalogue Name",
             categories="Foods, Breakfasts, Breakfast cereals", countries="India",
-            categories_tags=cereal_tags, countries_tags=india_tags,
-            off_category_key=off_taxonomy.category_key(cereal_tags),
+            categories_hierarchy=cereal_hierarchy, countries_tags=india_tags,
+            off_category_key=off_taxonomy.category_fingerprint(cereal_hierarchy),
             off_listed_for_india=off_taxonomy.listed_for_india(india_tags),
             fetched_at=datetime.now(UTC),
         ))
         session.add(OffProduct(
             barcode="8901000000002", product_name="Another Catalogue Name",
             categories="Plant foods, Breakfast cereals", countries="India",
-            categories_tags=cereal_tags, countries_tags=india_tags,
-            off_category_key=off_taxonomy.category_key(cereal_tags),
+            categories_hierarchy=cereal_hierarchy, countries_tags=india_tags,
+            off_category_key=off_taxonomy.category_fingerprint(cereal_hierarchy),
             off_listed_for_india=off_taxonomy.listed_for_india(india_tags),
             fetched_at=datetime.now(UTC),
         ))

@@ -8,8 +8,9 @@ One reader means the value a row was indexed under and the value a request
 compares against cannot drift apart.
 
 **The rule.** Two products are comparable when Open Food Facts publishes the
-*same complete category classification* for both — their ``categories_tags``
-taxonomy arrays, normalised and compared as whole sets.
+*same complete category classification* for both — their **non-lossy**
+``categories_hierarchy`` arrays, compared as whole collections of the exact
+source strings.
 
 What that is not, and each of these was a real option that was rejected:
 
@@ -19,6 +20,11 @@ What that is not, and each of these was a real option that was rejected:
   purposes". Reading a comparison out of it means two identical products edited
   by an English and a French contributor never match, while two unrelated
   products that happen to end on the same word do.
+* Not the ``categories_tags`` array. That one is documented as lossy and "for
+  search only": an unmatched entry is deaccented and lowercased, so two distinct
+  source categories can collapse onto one token and manufacture a false match.
+  ``categories_hierarchy`` keeps unmatched entries as-is, which is why it is the
+  authority here.
 * Not "the last tag", or any other single element. Nothing in the published
   schema says the array is ordered broadest-first, so calling the final entry
   the most specific one is an assumption dressed as a reading.
@@ -40,29 +46,37 @@ from __future__ import annotations
 
 from app.domains.off.taxonomy import (
     INDIA_COUNTRY_TAG,
-    canonical_tags,
-    category_key,
+    canonical_hierarchy,
+    category_fingerprint,
     listed_for_india,
     same_category,
 )
 
-#: The comparison key for one product, or ``None`` when the source publishes no
-#: usable classification for it. ``None`` is ineligible, never "matches
-#: anything": an unclassified product is not comparable with another
-#: unclassified product.
-comparable_category_key = category_key
+#: The fixed-size discovery fingerprint for one product's category, or ``None``
+#: when the source publishes no usable ``categories_hierarchy``. It narrows the
+#: SQL scan and nothing more: two rows sharing it are re-compared exactly with
+#: :func:`same_comparable_category` before either is graded, so a hash collision
+#: can never manufacture a comparison. ``None`` is ineligible, never "matches
+#: anything".
+comparable_category_fingerprint = category_fingerprint
+
+#: The exact, non-lossy classification of one product, or ``None``. This is the
+#: authority the fingerprint stands in for, and the revalidation the discovery
+#: loop runs against every candidate.
+comparable_category = canonical_hierarchy
 
 #: Does the source's own country taxonomy list this product for India? A claim
 #: about a database row, never "in stock near you".
 listed_for_india = listed_for_india  # noqa: PLW0127 — re-exported under this domain's name
 
-#: True only when both rows publish a classification and it is identical.
+#: True only when both rows publish a ``categories_hierarchy`` and it is exactly
+#: equal. The backstop that makes the fingerprint safe to use as a mere key.
 same_comparable_category = same_category
 
 __all__ = [
     "INDIA_COUNTRY_TAG",
-    "canonical_tags",
-    "comparable_category_key",
+    "comparable_category",
+    "comparable_category_fingerprint",
     "listed_for_india",
     "same_comparable_category",
 ]

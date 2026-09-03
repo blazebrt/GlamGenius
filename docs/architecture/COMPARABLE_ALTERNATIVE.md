@@ -57,10 +57,11 @@ simply gets no comparative claim.
 
 ```
 current graded product, from its own confirmed label
-  -> canonical category key, from the Open Food Facts row's taxonomy tags
+  -> category fingerprint, from the row's non-lossy categories_hierarchy
   -> that row's copy must be inside the freshness window
   -> PAGED reads of cached Store A candidates, every gate answered in SQL:
-     same canonical category, canonical India tag, dated, fresh, not itself
+     matching category fingerprint (then exact-hierarchy revalidation),
+     canonical India tag, dated, fresh, not itself
   -> ONE batch read of each page's latest label snapshots from Store B
   -> the same adapter, the same grader, the same resolved ruleset
   -> strictly higher grade, no worse a decision, the same printed panel basis
@@ -79,8 +80,8 @@ none of them.
 ## Category comparability is not a scientific claim
 
 Two products are comparable when Open Food Facts publishes the **same complete
-category classification** for both: their `categories_tags` taxonomy arrays,
-normalised and compared as whole sets.
+category classification** for both: their non-lossy `categories_hierarchy`
+arrays, compared as whole collections of the exact source strings.
 
 ### Why not the `categories` text field
 
@@ -102,26 +103,53 @@ Two consequences follow, and both are silent failures rather than errors:
   cereal, and a comparison gets published between two things nobody classified
   together.
 
-`categories_tags` is the array whose taxonomy-matched entries are exact
-canonical ids of the form `en:breakfast-cereals`, independent of the editor's
-language.
+### Why not `categories_tags` either — the correction this milestone made
+
+The obvious fix is to compare the taxonomy tags instead of the text, and the
+first draft of this milestone did exactly that. It was wrong, and the reason is
+worth keeping. `categories_tags` is the **indexed** representation, and Open
+Food Facts documents it as lossy:
+
+> This field is used for search only. It is a lossy representation of the
+> taxonomy tag entry ... for entries that could not be matched to a taxonomy
+> entry: a string ... normalized (deaccented and lowercased, depending on
+> language).
+
+So two genuinely different source categories — say `fr:Müsli maison` and
+`fr:Musli maison` — collapse onto the *same* indexed token `fr:musli-maison`.
+Comparing `categories_tags` would call two different products the same, which is
+worse than missing a match. The earlier claim that "a lossy entry can only cost
+a match, never manufacture one" was simply false.
+
+`categories_hierarchy` is the field to use. Its schema is explicit:
+
+> An array of categories tag entries ... categories not found in taxonomy
+> (**as-is, with no normalization**). This is the field that should be used for
+> display purposes, **as it is not lossy**.
+
+Matched entries are canonical ids of the form `en:breakfast-cereals` (language
+independent); unmatched entries keep their exact source string. We preserve that
+string — no casefold, no deaccent — because re-normalising it here would rebuild
+the lossy form and could re-introduce the collision.
 
 ### Why the whole set, and not "the most specific tag"
 
-Nothing in the published schema says `categories_tags` is ordered
+Nothing in the published schema says `categories_hierarchy` is ordered
 broadest-first. Calling the final entry the leaf is an assumption dressed as a
-reading, so no single element is picked at all: the key is the sorted set of the
-whole array. That is order-independent by construction and is the narrowest
-comparison their documented semantics support — two products match only when
-their entire published classification is identical.
+reading, so no single element is picked at all: comparison is over the whole
+array as an order-independent collection (sorted, duplicates preserved). That is
+the narrowest comparison their documented semantics support — two products match
+only when their entire published classification is identical. False negatives
+are acceptable; a manufactured match is not.
 
-The lossiness their schema warns about applies to entries that matched *no*
-taxonomy entry. Because the whole set must be identical, such an entry has to be
-byte-identical on both sides before it can contribute to a match. It can cost us
-a match; it cannot manufacture one. That is the only direction this may fail in.
+### `compared_to_category` — investigated, deliberately unused
 
-`compared_to_category` appears nowhere in the published product schema, so it is
-not part of the documented contract and nothing depends on it.
+An earlier draft claimed this field "appears nowhere in the published product
+schema". That was wrong: it is in `product_extended.yaml`, described as *"the
+category to use for comparison. **TODO** explain how it is chosen."* Because its
+own schema carries a TODO for how it is generated, and the Open Food Facts server
+assigns it from the lossy `categories_tags`, it is not defensible as our
+comparison authority. It was investigated and deliberately not used.
 
 ### What still may not decide a category
 

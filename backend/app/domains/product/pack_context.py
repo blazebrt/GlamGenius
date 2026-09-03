@@ -47,6 +47,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.product.models import ScanEvent
+from app.domains.product.service import OUTCOME_LABEL
 
 
 @dataclass(frozen=True)
@@ -100,20 +101,41 @@ async def current_pack(
 ) -> CurrentPack:
     """Resolve the pack this device is holding, as far as the server can tell.
 
-    Fails closed at every step: no device, no scan, or a newest scan that is a
-    plain barcode read all produce a context with no proven pack.
+    Fails closed at every step. A pack is proven only when this device's newest
+    scan of this barcode is a genuine confirmed label capture, which the server
+    can attest to on three counts that must all hold:
 
-    ``label_facts`` is required to be a JSON object because a plain scan stores
-    JSON ``null`` there rather than SQL ``NULL`` — a check for "not null" would
-    read every plain scan as a capture.
+    * ``outcome == OUTCOME_LABEL``. Only the ``/scan/label/confirm`` route writes
+      that outcome, so a plain barcode read — or an event of any other kind —
+      does not qualify however its ``label_facts`` happen to look. A row whose
+      ``label_facts`` were set on a non-label event is not a capture; it is at
+      best a mislabelled row and at worst a forged one, and either way it cannot
+      speak for this packet.
+    * ``label_facts`` is a non-empty object. A plain scan stores JSON ``null``
+      here rather than SQL ``NULL``, so a bare "is not null" check would read
+      every plain scan as a capture — the type is checked, not just presence.
+    * ``ai_run_id`` is present. Every legitimate capture is written by the
+      confirmation route from a validated ``AIRun`` (the only production writer
+      of ``OUTCOME_LABEL``), so its absence means the row did not come through
+      the server-authorised path. Requiring it proves provenance rather than
+      mere resemblance.
+
+    Any of the three missing yields a scan context with no proven pack, so the
+    caller shows the product's science and withholds every physical-pack layer.
     """
     event = await current_pack_event(session, barcode=barcode, device_id=device_id)
     if event is None:
         return CurrentPack()
     facts = event.label_facts
-    if not isinstance(facts, dict) or not facts:
-        # A plain scan: a new packet, and nothing proven about it until the
-        # person photographs the label.
+    proven = (
+        event.outcome == OUTCOME_LABEL
+        and isinstance(facts, dict)
+        and bool(facts)
+        and event.ai_run_id is not None
+    )
+    if not proven:
+        # A plain scan, a non-label event, or a row without confirmation
+        # provenance: a packet the server cannot vouch for.
         return CurrentPack(scan_event=event)
     return CurrentPack(scan_event=event, label_facts=facts)
 

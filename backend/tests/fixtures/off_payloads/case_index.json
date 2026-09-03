@@ -1,12 +1,14 @@
 {
-  "01_indian_breakfast_cereal": "The ordinary case: raw text and taxonomy agree, listed for India.",
-  "02_same_kind_edited_in_french": "Same product kind as 01, last edited in French. The raw text differs completely; the taxonomy is identical. Reading the raw text loses this match.",
-  "03_raw_leaf_collision": "A different kind of product whose raw category happens to end on the same words as 01. Reading the raw leaf invents a match that the taxonomy does not support.",
-  "04_india_only_in_the_taxonomy": "Raw countries say 'Inde'. Only the taxonomy tag says en:india. A closed set of English spellings misses it.",
-  "05_raw_says_india_taxonomy_does_not": "Raw countries say 'India' while the taxonomy tags do not. The raw text is the last editor's prose and can disagree with the classification.",
-  "06_no_category_tags": "A category text but no taxonomy array at all. There is no key, so the row cannot support a comparison.",
-  "07_empty_category_tags": "An empty array. Distinct from absent, and equally unusable: two unclassified products are not comparable with each other.",
-  "08_non_taxonomy_category_entry": "A tag that matched no taxonomy entry, so it carries the lossy normalised form. Usable only as an exact match, which can cost recall and can never widen one.",
-  "09_lookalike_country": "en:british-indian-ocean-territory. A different country with its own id, and never India.",
-  "10_malformed_tags": "A non-string entry in the array. One unreadable entry voids the whole classification rather than being dropped, because dropping it would widen what the row matches."
+  "01_indian_breakfast_cereal": "Ordinary case: hierarchy and raw text agree, listed for India.",
+  "02_same_kind_edited_in_french": "Same product kind as 01, last edited in French. Raw categories text differs completely; categories_hierarchy (matched ids) is identical. Reading raw text loses this match.",
+  "03_raw_leaf_collision": "A cereal BAR whose raw categories text ends on 'Breakfast cereals'. Reading the raw leaf invents a match with a cereal that the hierarchy does not support.",
+  "04_india_only_in_the_taxonomy": "Raw countries say 'Inde'; only countries_tags carries en:india. A closed set of English spellings would miss it.",
+  "05_raw_says_india_taxonomy_does_not": "Raw countries say 'India' while countries_tags do not. The raw text is editor prose and can disagree with the taxonomy.",
+  "06_no_category_hierarchy": "categories_hierarchy absent. No key, so the row cannot support a comparison.",
+  "07_empty_category_hierarchy": "categories_hierarchy empty. Distinct from absent and equally unusable: two unclassified products are not comparable.",
+  "08_unmatched_hierarchy_entry": "A taxonomy-unmatched entry kept AS-IS in categories_hierarchy ('fr:Chikki Maison') vs deaccented/lowercased in categories_tags. Usable only as an exact match.",
+  "09_lookalike_country": "en:british-indian-ocean-territory: a different country with its own id, never India.",
+  "10_malformed_hierarchy": "A non-string entry in categories_hierarchy. One unreadable entry voids the whole classification rather than being dropped.",
+  "11_lossy_collision_a": "Distinct source category 'fr:Müsli maison' in the non-lossy hierarchy; lossy categories_tags token 'fr:musli-maison'. Pairs with 12.",
+  "12_lossy_collision_b": "Distinct source category 'fr:Musli maison' (no umlaut) in the non-lossy hierarchy; SAME lossy categories_tags token 'fr:musli-maison' as 11. Proof that categories_tags can manufacture a false match while categories_hierarchy does not."
 }

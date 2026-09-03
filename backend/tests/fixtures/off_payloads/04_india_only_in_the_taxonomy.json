@@ -12,9 +12,13 @@
     "fiber_100g": 3
   },
   "categories": "Foods, Breakfasts, Breakfast cereals",
+  "categories_hierarchy": [
+    "en:plant-based-foods-and-beverages",
+    "en:cereals-and-potatoes",
+    "en:breakfast-cereals"
+  ],
   "categories_tags": [
     "en:plant-based-foods-and-beverages",
-    "en:plant-based-foods",
     "en:cereals-and-potatoes",
     "en:breakfast-cereals"
   ],

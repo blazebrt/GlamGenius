@@ -1,6 +1,6 @@
 {
-  "code": "8901000000001",
-  "product_name": "Corn Flakes",
+  "code": "8901000000011",
+  "product_name": "Müsli Maison",
   "brands": "Northstar",
   "ingredients_text": "maize, sugar, salt",
   "nutriments": {
@@ -13,14 +13,12 @@
   },
   "categories": "Foods, Breakfasts, Breakfast cereals",
   "categories_hierarchy": [
-    "en:plant-based-foods-and-beverages",
-    "en:cereals-and-potatoes",
-    "en:breakfast-cereals"
+    "en:snacks",
+    "fr:Müsli maison"
   ],
   "categories_tags": [
-    "en:plant-based-foods-and-beverages",
-    "en:cereals-and-potatoes",
-    "en:breakfast-cereals"
+    "en:snacks",
+    "fr:musli-maison"
   ],
   "countries": "India",
   "countries_tags": [

@@ -35,7 +35,7 @@ OFF_PUBLISHED_FIELDS: frozenset[str] = frozenset({
     "image_url",
     "quantity",
     "countries",
-    "categories_tags",
+    "categories_hierarchy",
     "countries_tags",
     "off_last_modified_t",
     "fetched_at",
