@@ -1,0 +1,2321 @@
+"""Step 6B — what confirmed pack labels said their MRP was, and nothing more.
+
+The claim is small and the ways of overstating it are many, so most of what
+follows defends the boundary rather than the arithmetic: this is a *maximum
+retail price a pack declared on a date*, not a price, not a saving, not a
+verdict on value, and never a reason to prefer one product over another.
+
+The invariant that matters most is order. Step 6A picks the alternative on
+scientific grounds and Step 6B reads that choice afterwards. Money has no path
+back into selection, and several tests here try hard to find one.
+"""
+from __future__ import annotations
+
+import ast
+import inspect
+import json
+import uuid
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+import pytest
+import pytest_asyncio
+from app.domains.ai_gateway.models import (
+    AI_STATUS_SUCCEEDED,
+    VERIFICATION_UNVERIFIED,
+    AIRun,
+    AIRunOutput,
+)
+from app.domains.nutrition.grading.production_rules import (
+    STATUS_PUBLISHED,
+    ProductionRuleset,
+    candidate_ruleset,
+)
+from app.domains.off import client as off_client
+from app.domains.off import taxonomy as off_taxonomy
+from app.domains.off.models import OffBase, OffProduct
+from app.domains.off.store import create_off_schema, get_off_engine, get_off_sessionmaker
+from app.domains.product import extraction, pack_context
+from app.domains.product import service as product_service
+from app.domains.product.models import LabelSnapshot, ProductRecord, ScanEvent
+from app.domains.value import parsing as value_parsing
+from app.domains.value import policy as value_policy
+from app.domains.value import service as value_service
+from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import func, select, update
+
+from tests.conftest import auth
+
+CURRENT = "8902000000001"
+CANDIDATE_B = "8902000000002"
+CANDIDATE_A = "8902000000003"
+
+CEREAL_CATEGORY = "Foods, Breakfasts, Breakfast cereals"
+CEREAL_CATEGORY_OTHER_PATH = "Plant foods, Breakfast cereals"
+
+#: The non-lossy ``categories_hierarchy`` arrays, which are what Step 6A.1 made
+#: the authority for "same kind of product". The two raw cereal strings above
+#: are different English paths to the *same* classification, which is precisely
+#: why the raw text cannot decide comparability and this array must.
+CEREAL_HIERARCHY = ["en:plant-based-foods-and-beverages", "en:cereals-and-potatoes",
+                    "en:breakfast-cereals"]
+INDIA_TAGS = ["en:india"]
+_CATEGORY_HIERARCHIES: dict[str, list[str]] = {
+    CEREAL_CATEGORY: CEREAL_HIERARCHY,
+    CEREAL_CATEGORY_OTHER_PATH: CEREAL_HIERARCHY,
+}
+
+PANEL_C = {"energy_kcal": "380", "sugars_g": "8", "saturated_fat_g": "1",
+           "salt_g": "0.5", "protein_g": "7", "fibre_g": "3"}
+PANEL_B = {"energy_kcal": "370", "sugars_g": "2", "saturated_fat_g": "1.2",
+           "salt_g": "0.3", "protein_g": "12", "fibre_g": "9"}
+PANEL_A = {"energy_kcal": "380", "sugars_g": "1", "saturated_fat_g": "1.2",
+           "salt_g": "0.02", "protein_g": "13", "fibre_g": "10"}
+PANEL_B_DRINK = {"energy_kcal": "70", "sugars_g": "2", "saturated_fat_g": "0.3",
+                 "salt_g": "0.1", "protein_g": "3", "fibre_g": "1.5"}
+
+INGREDIENTS_C = "maize, sugar, salt, flavouring, emulsifier (ins 322)"
+INGREDIENTS_B = "whole grain oats, salt"
+INGREDIENTS_A = "whole grain oats"
+
+
+def label_facts(
+    *,
+    product_name: str,
+    ingredients: str,
+    panel: dict,
+    net_quantity: str = "500 g",
+    basis: str = "per_100g",
+    brand: str | None = "Sunfield",
+    mrp_text: str | None = None,
+    **extra,
+) -> dict:
+    facts = {
+        "product_name": product_name, "brand": brand, "ingredients_text": ingredients,
+        "nutrition_per_100g": panel, "nutrition_basis": basis,
+        "net_quantity": net_quantity, **extra,
+    }
+    if mrp_text is not None:
+        facts["mrp_text"] = mrp_text
+    return facts
+
+
+@pytest_asyncio.fixture
+async def off_clean():
+    from sqlalchemy import text
+
+    await create_off_schema()
+    async with get_off_engine().begin() as conn:
+        names = ", ".join(
+            f'"{t.schema}"."{t.name}"' for t in reversed(OffBase.metadata.sorted_tables)
+        )
+        await conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+    yield
+
+
+@pytest_asyncio.fixture
+async def device(app_client):
+    response = await app_client.post(
+        "/api/v2/scan/device", json={"device_key": uuid.uuid4().hex, "platform": "android"},
+    )
+    assert response.status_code == 201, response.text
+    return {"X-Device-Token": response.json()["token"]}
+
+
+def _published() -> ProductionRuleset:
+    return ProductionRuleset(provenance={
+        rule_id: replace(row, status=STATUS_PUBLISHED)
+        for rule_id, row in candidate_ruleset().provenance.items()
+    })
+
+
+@pytest.fixture
+def published_rules(monkeypatch):
+    from app.api.v2 import product as product_api
+
+    async def resolve(_session):
+        return _published()
+
+    monkeypatch.setattr(product_api, "resolve_production_ruleset", resolve)
+    return resolve
+
+
+@pytest.fixture
+def no_off_network(monkeypatch):
+    calls: list[str] = []
+
+    async def record(barcode: str):
+        calls.append(barcode)
+        return None
+
+    monkeypatch.setattr(off_client, "fetch_product", record)
+    return calls
+
+
+async def seed_off(barcode: str, *, categories: str = CEREAL_CATEGORY, countries: str = "India") -> None:
+    """One Open Food Facts row in Store A, in Step 6A.1's authoritative shape.
+
+    Comparability comes from ``categories_hierarchy`` and availability from
+    ``countries_tags``; the raw strings are carried along as the source text
+    they are, and decide nothing. The discovery key and the India flag are
+    computed by the very functions the live cache-write path uses, so this
+    fixture cannot drift from production by hand-writing them.
+    """
+    hierarchy = _CATEGORY_HIERARCHIES.get(
+        categories, ["en:" + categories.split(",")[-1].strip().casefold().replace(" ", "-")]
+    )
+    countries_array = INDIA_TAGS if countries == "India" else ["en:" + countries.casefold()]
+    factory = get_off_sessionmaker()
+    async with factory() as session:
+        session.add(OffProduct(
+            barcode=barcode, product_name="Catalogue Name", categories=categories,
+            countries=countries, categories_hierarchy=hierarchy,
+            countries_tags=countries_array,
+            off_category_key=off_taxonomy.category_fingerprint(hierarchy),
+            off_listed_for_india=off_taxonomy.listed_for_india(countries_array),
+            fetched_at=datetime.now(UTC),
+        ))
+        await session.commit()
+
+
+async def seed_capture(
+    barcode: str, facts: dict, *, device_id: uuid.UUID | None = None,
+    account_id: uuid.UUID | None = None, age: timedelta | None = None,
+) -> ScanEvent:
+    """One confirmed label capture, written through the real versioning path.
+
+    Carries full confirmation provenance — the canonical label outcome, a
+    non-empty ``label_facts`` object, and a validated ``AIRun`` behind
+    ``ai_run_id`` — because that is what the production confirmation route
+    writes, and what ``pack_context.is_confirmed_label_capture`` requires. A
+    fixture that skipped the run would be quietly asserting a weaker rule than
+    the one the server enforces.
+
+    ``age`` rewrites the server timestamp afterwards, which is the only way to
+    test a freshness window without a client ever supplying a time.
+    """
+    factory = get_sessionmaker()
+    async with factory() as session:
+        run = AIRun(
+            account_id=account_id, feature=extraction.FEATURE, provider="test",
+            model="test-model", prompt_version=extraction.SCHEMA_VERSION,
+            schema_version=extraction.SCHEMA_VERSION,
+            status=AI_STATUS_SUCCEEDED, validation_passed=True,
+        )
+        session.add(run)
+        await session.flush()
+        session.add(AIRunOutput(
+            ai_run_id=run.id, schema_version=extraction.SCHEMA_VERSION, payload=facts,
+        ))
+        event = ScanEvent(
+            device_id=device_id, account_id=account_id, barcode=barcode,
+            outcome=product_service.OUTCOME_LABEL, client_scan_id=uuid.uuid4().hex,
+            label_facts=facts, ai_run_id=run.id,
+        )
+        session.add(event)
+        await session.flush()
+        await product_service.store_label_snapshot(
+            session, barcode=barcode, facts=facts, device_id=device_id, scan_event_id=event.id,
+        )
+        await session.commit()
+        event_id = event.id
+    if age is not None:
+        async with factory() as session:
+            await session.execute(
+                update(ScanEvent).where(ScanEvent.id == event_id)
+                .values(created_at=datetime.now(UTC) - age)
+            )
+            await session.commit()
+    factory = get_sessionmaker()
+    async with factory() as session:
+        return (await session.execute(
+            select(ScanEvent).where(ScanEvent.id == event_id)
+        )).scalar_one()
+
+
+async def verdict(app_client, headers, barcode: str = CURRENT, *, physical_pack: bool | None = None) -> dict:
+    url = f"/api/v2/scan/verdict/{barcode}"
+    if physical_pack is not None:
+        url += f"?physical_pack_context={'true' if physical_pack else 'false'}"
+    response = await app_client.get(url, headers=headers)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+# ---------------------------------------------------------------------------
+# The MRP parser: an explicit declaration, or nothing
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("MRP ₹120", "120"),
+        ("M.R.P. Rs. 120.00", "120.00"),
+        ("Maximum Retail Price INR 75", "75"),
+        ("MRP: ₹1,299/-", "1299"),
+        ("Maximum Retail Price ₹125 incl. of all taxes", "125"),
+        ("M.R.P Rs 99", "99"),
+        ("mrp ₹49.50", "49.50"),
+        # NFKC folds the full-width forms onto the same reading.
+        ("ＭＲＰ ₹120", "120"),
+    ],
+)
+def test_an_explicit_mrp_declaration_is_read_exactly(text, expected):
+    assert value_parsing.parse_mrp_rupees(text) == Decimal(expected)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A rupee sign beside a number is not a declared maximum retail price.
+        "₹120",
+        "Offer ₹99",
+        "Selling price ₹99",
+        "Our price ₹99",
+        "Approx ₹100",
+        # Two amounts, and no way to know which one the pack means.
+        "MRP ₹100 / ₹120",
+        "MRP ₹100-120",
+        "MRP ₹100 / 120",
+        # Nothing that is money at all.
+        "MRP FREE",
+        "MRP 0",
+        "MRP ₹0",
+        "MRP -10",
+        "MRP ₹-10",
+        # Rupees have two decimal places; a third means we misread something.
+        "MRP ₹99.999",
+        "garbage",
+        "",
+        "   ",
+    ],
+)
+def test_anything_doubtful_is_refused_rather_than_guessed(text):
+    assert value_parsing.parse_mrp_rupees(text) is None
+
+
+def test_a_non_string_or_oversized_clause_is_refused():
+    for value in (None, 120, 12.5, ["MRP ₹120"], {"mrp": 120}, True):
+        assert value_parsing.parse_mrp_rupees(value) is None
+    assert value_parsing.parse_mrp_rupees("MRP ₹120" + " x" * 200) is None
+
+
+def test_an_expensive_pack_is_read_rather_than_rejected_for_being_expensive():
+    """There is no market-price ceiling, and the test crosses where one used to be.
+
+    An earlier draft of this parser refused anything above ₹1,00,00,000 as
+    "implausible". Every amount below asserts past that line: a catering sack,
+    a wholesale case, and a figure with more digits than any grocery item has.
+    A number is refused here for being unreadable, never for being large.
+    """
+    assert value_parsing.parse_mrp_rupees("MRP ₹4,250") == Decimal("4250")
+    assert value_parsing.parse_mrp_rupees("MRP ₹18,999.00") == Decimal("18999.00")
+    # Above the ceiling that no longer exists.
+    assert value_parsing.parse_mrp_rupees("MRP ₹1,25,00,000") == Decimal("12500000")
+    assert value_parsing.parse_mrp_rupees("MRP Rs 99999999.99") == Decimal("99999999.99")
+    assert value_parsing.parse_mrp_rupees("MRP ₹9,99,99,99,999") == Decimal("9999999999")
+
+
+def test_decimal_safety_is_bounded_by_the_input_not_by_a_view_of_prices():
+    """The only limit is how much text the clause may carry.
+
+    ``PARSE_PRECISION`` is derived from ``MAX_MRP_TEXT_LENGTH`` and from nothing
+    else, so an amount is read exactly for as long as it fits the clause. That
+    is a statement about strings; it must never become a statement about what a
+    pack is allowed to cost.
+    """
+    assert value_parsing.PARSE_PRECISION >= value_parsing.MAX_MRP_TEXT_LENGTH
+
+    # A hundred digits: absurd on a pack, and still read exactly rather than
+    # rounded into a different number or crashed on.
+    hundred_digits = "9" * 100
+    assert value_parsing.parse_mrp_rupees(f"MRP ₹{hundred_digits}") == Decimal(hundred_digits)
+
+    # And it survives the whole public arithmetic without raising or drifting.
+    # The expected figure is written out rather than computed, because Python's
+    # own default context would round it to 28 digits and quietly agree with a
+    # rounded answer — which is the failure this test exists to catch.
+    per_100 = value_policy.mrp_per_100(Decimal(hundred_digits), Decimal("500"))
+    assert per_100 == Decimal("1" + "9" * 99 + ".8")
+    assert value_policy.money_string(per_100) == "1" + "9" * 99 + ".80"
+
+    # The clause length remains the one bound, and it still bites.
+    assert value_parsing.parse_mrp_rupees("MRP ₹" + "9" * value_parsing.MAX_MRP_TEXT_LENGTH) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # No grouping at all.
+        ("MRP ₹1299", "1299"),
+        # Western grouping, which plenty of Indian packs use.
+        ("MRP ₹1,299", "1299"),
+        ("MRP ₹12,999", "12999"),
+        ("MRP ₹1,234,567", "1234567"),
+        # Indian lakh grouping.
+        ("MRP ₹1,29,999", "129999"),
+        ("MRP ₹12,34,567", "1234567"),
+    ],
+)
+def test_a_digit_grouping_that_exists_is_read(text, expected):
+    assert value_parsing.parse_mrp_rupees(text) == Decimal(expected)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Commas in positions no printed price uses. Stripping them would turn
+        # these into 123 and 1299 — numbers the pack never stated.
+        "MRP ₹1,2,3",
+        "MRP ₹1,,299",
+        "MRP ₹1,2999",
+        "MRP ₹12,34,5",
+        "MRP ₹1,299,",
+        "MRP ₹,299",
+    ],
+)
+def test_a_digit_grouping_that_does_not_exist_is_refused_whole(text):
+    """Refused entirely, and in particular never salvaged as its own prefix.
+
+    The failure worth naming is the quiet one: a parser that reads ``₹1,2,3``
+    as the leading ``1`` publishes "this pack declared one rupee".
+    """
+    assert value_parsing.parse_mrp_rupees(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The amount belongs to the declaration.
+        ("MRP ₹120", "120"),
+        ("MRP: ₹120", "120"),
+        ("MRP - ₹120", "120"),
+        # The parenthetical Indian packs actually print.
+        ("MRP (incl. of all taxes): ₹120", "120"),
+        ("Maximum retail price (inclusive of all taxes) ₹80", "80"),
+    ],
+)
+def test_the_amount_must_belong_to_the_mrp_declaration(text, expected):
+    assert value_parsing.parse_mrp_rupees(text) == Decimal(expected)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The defect this rule exists for: the pack says its MRP is missing and
+        # a shop's asking price sits in the next sentence. Reading ₹99 as the
+        # maximum retail price would print a number the pack does not carry.
+        "MRP not printed. Offer ₹99",
+        "MRP not printed, offer ₹99",
+        "MRP illegible. Selling at ₹99",
+        "MRP smudged - our price ₹99",
+        "MRP torn off. Shelf price ₹250",
+        # A parenthetical may not smuggle the negation back in.
+        "MRP (not printed) ₹99",
+        # Nor a second amount.
+        "MRP (₹5 off) ₹99",
+    ],
+)
+def test_an_amount_in_a_different_sentence_is_not_the_mrp(text):
+    assert value_parsing.parse_mrp_rupees(text) is None
+
+
+# ---------------------------------------------------------------------------
+# The quantity parser: the whole string, or nothing
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("text", "dimension", "amount", "unit"),
+    [
+        ("500 g", "mass", "500", "g"),
+        ("500g", "mass", "500", "g"),
+        ("1 kg", "mass", "1000", "g"),
+        ("1.5 kg", "mass", "1500.0", "g"),
+        ("250 ml", "volume", "250", "ml"),
+        ("1 L", "volume", "1000", "ml"),
+        ("330ml", "volume", "330", "ml"),
+        ("4 x 25 g", "mass", "100", "g"),
+        ("4 × 25 g", "mass", "100", "g"),
+        ("12 x 10 ml", "volume", "120", "ml"),
+        # A decimal *quantity* is ordinary; it is the multiplier that may not be
+        # fractional, and these prove the distinction is real in both directions.
+        ("0.75 L", "volume", "750.00", "ml"),
+        ("25.5 g", "mass", "25.5", "g"),
+    ],
+)
+def test_a_stated_net_quantity_normalises_to_one_base_unit(text, dimension, amount, unit):
+    quantity = value_parsing.parse_quantity(text)
+    assert quantity is not None
+    assert quantity.dimension == dimension
+    assert quantity.base_amount == Decimal(amount)
+    assert quantity.base_unit == unit
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "100 g + 20 g free",
+        "approx 500 g",
+        "10 pieces",
+        "12 sachets",
+        "1 bottle",
+        "serves 4",
+        "family pack",
+        "500 g / 550 g",
+        "500",
+        "g",
+        "0 g",
+        "500 oz",
+        "",
+    ],
+)
+def test_an_ambiguous_pack_size_is_refused(text):
+    assert value_parsing.parse_quantity(text) is None
+
+
+def test_a_non_string_quantity_is_refused():
+    for value in (None, 500, 1.5, ["500 g"], True):
+        assert value_parsing.parse_quantity(value) is None
+
+
+@pytest.mark.parametrize("text", ["1.5 x 25 g", "2.25 × 100 ml", "0.5 x 1 L", "0.5x1l"])
+def test_a_fractional_multipack_count_is_refused_by_the_grammar(text):
+    """Half a packet of anything is not a thing a pack declares.
+
+    The multiplier counts identical packs, so it must be a whole number. The
+    refusal is a rule of the pattern rather than a consequence of some later
+    arithmetic — asserted directly against the compiled grammar below, so a
+    future rewrite of the calculation cannot quietly reintroduce it.
+    """
+    assert value_parsing.parse_quantity(text) is None
+
+
+def test_the_integer_multiplier_is_a_parser_rule():
+    """Read off the pattern itself, not inferred from behaviour."""
+    assert value_parsing._QUANTITY.match("4 x 25 g") is not None
+    assert value_parsing._QUANTITY.match("1.5 x 25 g") is None
+    # The multiplier group admits digits only; the amount group admits a point.
+    count_group, amount_group, _ = value_parsing._QUANTITY.match("4 x 25.5 g").groups()
+    assert (count_group, amount_group) == ("4", "25.5")
+
+
+@pytest.mark.parametrize("text", ["0 g", "0 ml", "0 x 25 g", "0 × 1 kg", "00 x 25 g"])
+def test_a_pack_with_nothing_in_it_is_not_a_denominator(text):
+    assert value_parsing.parse_quantity(text) is None
+
+
+def test_a_pack_size_is_normalised_exactly_or_not_at_all():
+    """A quantity divides into every figure this domain publishes.
+
+    The ambient ``Decimal`` context carries 28 digits, and the normalisation
+    multiplies — by the unit factor, and again by any multipack count. A long
+    quantity run through that context comes back rounded, which would move
+    every per-100 figure derived from it while looking perfectly correct. The
+    parser now works in a context sized from the input bound and traps rather
+    than rounds.
+    """
+    assert value_parsing.QUANTITY_PARSE_PRECISION > value_parsing.MAX_QUANTITY_TEXT_LENGTH
+
+    # Forty significant digits: far past the ambient 28, still well inside the
+    # clause length limit. Expected values are written out rather than computed,
+    # because computing them would round them in exactly the way under test.
+    forty = "1234567890123456789012345678901234567890"
+    grams = value_parsing.parse_quantity(f"{forty} g")
+    assert grams is not None
+    assert grams.base_amount == Decimal(forty)
+
+    kilos = value_parsing.parse_quantity(f"{forty} kg")
+    assert kilos is not None
+    assert kilos.base_amount == Decimal(forty + "000")
+
+    multipack = value_parsing.parse_quantity(f"1000 x {forty} g")
+    assert multipack is not None
+    assert multipack.base_amount == Decimal(forty + "000")
+
+    # Right up against the input bound, which is the only bound there is.
+    longest = "9" * (value_parsing.MAX_QUANTITY_TEXT_LENGTH - 2)
+    at_bound = value_parsing.parse_quantity(f"{longest} g")
+    assert at_bound is not None
+    assert at_bound.base_amount == Decimal(longest)
+    assert value_parsing.parse_quantity("9" * value_parsing.MAX_QUANTITY_TEXT_LENGTH + " g") is None
+
+
+def test_an_exact_long_pack_size_drives_the_public_arithmetic_without_raising():
+    """And the figure it produces is deterministic rather than an exception.
+
+    A denominator of forty digits is absurd on a shelf and must still behave:
+    the per-100 figure is computed, rounded and rendered like any other, and
+    repeating the call gives the same answer.
+    """
+    forty = "1234567890123456789012345678901234567890"
+    quantity = value_parsing.parse_quantity(f"{forty} g")
+    assert quantity is not None
+
+    per_100 = value_policy.mrp_per_100(Decimal("120"), quantity.base_amount)
+    assert per_100 is not None
+    rendered = value_policy.money_string(per_100)
+    assert rendered == "0.00"
+    assert rendered == value_policy.money_string(
+        value_policy.mrp_per_100(Decimal("120"), quantity.base_amount)
+    )
+    # And the pack size itself still renders as a plain readable number.
+    assert value_policy.quantity_string(quantity.base_amount) == forty
+
+
+# ---------------------------------------------------------------------------
+# The arithmetic
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("mrp", "quantity", "expected"),
+    [
+        ("100", "500 g", "20.00"),
+        ("100", "1 kg", "10.00"),
+        ("90", "250 ml", "36.00"),
+        ("80", "1 L", "8.00"),
+        ("100", "4 x 25 g", "100.00"),
+        ("120", "500 g", "24.00"),
+        ("100", "400 g", "25.00"),
+    ],
+)
+def test_mrp_per_100_is_exact_decimal_arithmetic(mrp, quantity, expected):
+    parsed = value_parsing.parse_quantity(quantity)
+    per_100 = value_policy.mrp_per_100(Decimal(mrp), parsed.base_amount)
+    assert value_policy.money_string(per_100) == expected
+
+
+def test_money_never_passes_through_a_float():
+    """A price that drifts by a paise per step is a price we cannot defend."""
+    source = inspect.getsource(value_parsing) + inspect.getsource(value_policy)
+    source += inspect.getsource(value_service)
+    assert "float(" not in source
+    # A third of a rupee rounds once, at the boundary, half up.
+    assert value_policy.money_string(Decimal(100) * 100 / Decimal(3)) == "3333.33"
+    assert value_policy.money_string(Decimal("0.005")) == "0.01"
+    assert value_policy.money_string(Decimal("-4")) == "-4.00"
+
+
+def test_the_difference_sign_is_defined_once_and_points_one_way():
+    lower = value_policy.difference(Decimal("20"), Decimal("24"))
+    higher = value_policy.difference(Decimal("25"), Decimal("24"))
+    assert lower == Decimal("-4")
+    assert higher == Decimal("1")
+    assert value_policy.relationship(Decimal("20"), Decimal("24")) == "candidate_lower_mrp_per_100"
+    assert value_policy.relationship(Decimal("25"), Decimal("24")) == "candidate_higher_mrp_per_100"
+    assert value_policy.relationship(Decimal("24"), Decimal("24")) == "same_mrp_per_100"
+
+
+def test_rounding_happens_once_and_before_anything_is_concluded():
+    """The figures a shopper is shown are the figures the conclusion came from.
+
+    ``quantize_money`` is the single rounding point, and ``relationship`` and
+    ``difference`` take its output. Reasoning from the exact quotients and then
+    printing rounded ones is how a card ends up saying ₹24.00 is higher than
+    ₹24.00 — a discrepancy the reader can see and nobody can defend.
+    """
+    exact_current = value_policy.mrp_per_100(Decimal("120"), Decimal("500"))
+    exact_candidate = value_policy.mrp_per_100(Decimal("168.01"), Decimal("700"))
+    assert exact_candidate > exact_current            # ... below the paise.
+
+    shown_current = value_policy.quantize_money(exact_current)
+    shown_candidate = value_policy.quantize_money(exact_candidate)
+    assert (str(shown_current), str(shown_candidate)) == ("24.00", "24.00")
+    assert value_policy.relationship(shown_candidate, shown_current) == "same_mrp_per_100"
+    assert value_policy.money_string(
+        value_policy.difference(shown_candidate, shown_current)
+    ) == "0.00"
+
+    # Rounding is idempotent, so nothing downstream can round a second time and
+    # move the answer again.
+    assert value_policy.quantize_money(shown_candidate) == shown_candidate
+
+
+def test_the_relationship_vocabulary_states_arithmetic_not_a_verdict():
+    words = {
+        value_policy.RELATIONSHIP_LOWER,
+        value_policy.RELATIONSHIP_SAME,
+        value_policy.RELATIONSHIP_HIGHER,
+    }
+    for banned in ("winner", "best", "worse", "cheap", "expensive", "value", "good", "bad"):
+        assert not any(banned in word for word in words), banned
+
+
+# ---------------------------------------------------------------------------
+# Freshness: our comparison policy, on the server's clock
+# ---------------------------------------------------------------------------
+def test_the_observation_window_has_a_defined_boundary():
+    now = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+    assert value_policy.observation_is_fresh(now - timedelta(days=29, hours=23, minutes=59), now=now)
+    # Exactly the window is already stale. Stated once, so it is not accidental.
+    assert not value_policy.observation_is_fresh(now - timedelta(days=30), now=now)
+    assert not value_policy.observation_is_fresh(now - timedelta(days=31), now=now)
+    # An undated observation is not a recent one.
+    assert not value_policy.observation_is_fresh(None, now=now)
+
+
+def test_pack_freshness_is_its_own_policy_not_the_catalogue_cache():
+    """Same number today, different question. They must be able to move apart."""
+    from app.domains.off import freshness as off_freshness
+
+    assert value_policy.MRP_OBSERVATION_MAX_AGE_DAYS == 30
+    assert value_policy.MRP_OBSERVATION_MAX_AGE is not off_freshness.OFF_CACHE_TTL
+    for module in (value_parsing, value_policy, value_service):
+        for imported in _imported_modules(module):
+            assert "off" not in imported.split("."), f"{module.__name__} imports {imported}"
+
+
+# ---------------------------------------------------------------------------
+# Structural guards
+# ---------------------------------------------------------------------------
+VALUE_MODULES = (value_parsing, value_policy, value_service)
+
+
+def _imported_modules(module) -> list[str]:
+    tree = ast.parse(inspect.getsource(module))
+    modules: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            modules.append(node.module or "")
+    return modules
+
+
+def _code_identifiers(module) -> set[str]:
+    tree = ast.parse(inspect.getsource(module))
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            body = getattr(node, "body", [])
+            first = body[0] if body else None
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                docstrings.add(id(first.value))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            found.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            found.add(node.attr)
+        elif isinstance(node, ast.arg):
+            found.add(node.arg)
+        elif isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            found.add(node.name)
+        elif isinstance(node, ast.alias):
+            found.add(node.asname or node.name)
+        elif isinstance(node, ast.keyword) and node.arg:
+            found.add(node.arg)
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+        ):
+            found.add(node.value)
+    return {value.lower() for value in found}
+
+
+#: Any number that would fold a grade and a price into one figure. The
+#: Constitution rejects a composite score averaging incompatible things, and
+#: quality-per-rupee is the purest example of one.
+FORBIDDEN_VALUE_SCORES = (
+    "value_score", "price_score", "bang_for_buck", "health_per_rupee",
+    "grade_per_rupee", "quality_per_rupee", "weighted_value", "value_index",
+    "best_value_score", "composite", "worth_it",
+)
+
+
+def test_no_number_folds_quality_and_money_together():
+    for module in VALUE_MODULES:
+        identifiers = _code_identifiers(module)
+        for name in FORBIDDEN_VALUE_SCORES:
+            offenders = [value for value in identifiers if name in value]
+            assert not offenders, f"{module.__name__} defines {offenders}"
+
+
+def test_the_value_domain_reaches_no_retailer_and_no_network():
+    """Zero external price requests, enforced structurally rather than promised."""
+    banned = (
+        "httpx", "requests", "aiohttp", "urllib", "socket", "selenium",
+        "amazon", "flipkart", "blinkit", "zepto", "instamart", "affiliate",
+        "retailer", "scrape", "crawler", "commerce",
+    )
+    for module in VALUE_MODULES:
+        for imported in _imported_modules(module):
+            for name in banned:
+                assert name not in imported.lower(), f"{module.__name__} imports {imported}"
+        identifiers = _code_identifiers(module)
+        for name in ("http://", "https://", "www."):
+            assert not any(name in value for value in identifiers), f"{module.__name__}: {name}"
+
+
+def test_the_value_domain_reads_no_ai_person_or_lower_epistemic_layer():
+    banned = (
+        "ai_gateway", "gemini", "community", "official_records", "grading",
+        "identity", "profile", "family", "purchase", "beta_access", "consent",
+        "progress", "planning", "inventory", "recommendation", "alternatives",
+    )
+    for module in VALUE_MODULES:
+        for imported in _imported_modules(module):
+            for name in banned:
+                assert name not in imported.lower(), f"{module.__name__} imports {imported}"
+
+
+def test_the_value_domain_writes_nothing():
+    tree = ast.parse(inspect.getsource(value_service))
+    called = {
+        node.func.attr for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    for writer in ("add", "add_all", "commit", "flush", "merge", "delete", "bulk_save_objects"):
+        assert writer not in called, f"the value service calls session.{writer}()"
+
+
+def test_no_price_table_was_introduced():
+    """V1 carries no new persistence, so there is no migration and no new table."""
+    from app.shared.database.registry import Base
+
+    for name in Base.metadata.tables:
+        lowered = name.lower()
+        for banned in ("price", "mrp", "value_record", "retailer"):
+            assert banned not in lowered, f"a price table appeared: {name}"
+
+
+# ---------------------------------------------------------------------------
+# Transcription: schema v2, and a v1 review that is still somebody's work
+# ---------------------------------------------------------------------------
+def test_the_extraction_schema_gained_an_optional_mrp_clause():
+    assert extraction.SCHEMA_VERSION == "scan-label.v2"
+    assert extraction.PROMPT_VERSION == "scan-label.v2"
+    field = extraction.ExtractedLabel.model_fields["mrp_text"]
+    assert field.default is None, "mrp_text must be optional so a v1 payload still validates"
+    # A payload written before this field existed still validates.
+    legacy = extraction.ExtractedLabel.model_validate({"product_name": "Old Flakes"})
+    assert legacy.mrp_text is None
+    assert "mrp_text" not in legacy.model_dump(exclude_none=True)
+
+
+def test_the_prompt_permits_only_an_explicit_printed_declaration():
+    """The model may copy a declaration. It may not decide one exists."""
+    # Line wrapping is a detail of the source file, not of the instruction.
+    instructions = " ".join(extraction.prompt().lower().split())
+    system = " ".join(extraction.SYSTEM.lower().split())
+
+    # What it may transcribe, and the condition attached to doing so.
+    assert "maximum retail price" in instructions
+    assert "exactly as printed" in instructions
+    # A rupee sign beside a number is explicitly ruled out as sufficient.
+    assert "not enough on its own" in instructions
+    assert "offer price" in instructions and "selling price" in instructions
+    # And an unreadable price is named as missing rather than guessed.
+    assert "omit mrp_text" in instructions
+    assert "uncertain_fields" in instructions
+
+    # The system prompt forbids judging money rather than merely omitting to
+    # mention it — the words appear here as prohibitions, which is the point.
+    assert "never state or estimate a price" in system
+    for judgement in ("cheap", "expensive", "affordable", "good value"):
+        assert judgement in system, f"{judgement} is not explicitly forbidden"
+    assert "do not decide whether anything is" in system
+
+
+def test_both_schema_versions_remain_confirmable():
+    assert {"scan-label.v1", "scan-label.v2"} == extraction.CONFIRMABLE_SCHEMA_VERSIONS
+
+
+async def _seed_ai_run(
+    account_id: uuid.UUID, payload: dict, *, schema_version: str,
+    output_schema_version: str | None = None,
+) -> uuid.UUID:
+    """A succeeded transcription run and its stored output.
+
+    ``output_schema_version`` exists only so a test can build the pair that
+    must never be accepted: a run stamped with one schema whose output claims
+    another. Production has no path that writes such a pair, which is exactly
+    why the endpoint has to refuse one on sight.
+    """
+    factory = get_sessionmaker()
+    async with factory() as session:
+        run = AIRun(
+            account_id=account_id, feature=extraction.FEATURE, provider="test",
+            model="test-model", prompt_version=schema_version, schema_version=schema_version,
+            status=AI_STATUS_SUCCEEDED, validation_passed=True,
+        )
+        session.add(run)
+        await session.flush()
+        session.add(AIRunOutput(
+            ai_run_id=run.id,
+            schema_version=output_schema_version or schema_version,
+            payload=payload,
+        ))
+        await session.commit()
+        return run.id
+
+
+async def confirm_on_device(
+    app_client, device_headers: dict, token: str, account_id: uuid.UUID,
+    barcode: str, facts: dict,
+) -> None:
+    """Confirm a pack through the real route, owned by this viewing device.
+
+    The only way to give a *viewer* proven physical-pack authority under Step
+    6A.1: the event has to be this device's newest scan of this barcode, carry
+    the canonical label outcome, and reference a validated AI run. Going through
+    ``/scan/label/confirm`` gets all three by construction, rather than a
+    fixture asserting them by hand.
+    """
+    run_id = await _seed_ai_run(account_id, facts, schema_version=extraction.SCHEMA_VERSION)
+    response = await app_client.post(
+        "/api/v2/scan/label/confirm",
+        headers={**device_headers, **auth(token)},
+        json={"barcode": barcode, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
+    )
+    assert response.status_code == 201, response.text
+
+
+async def _confirmation_side_effects(barcode: str, run_id: uuid.UUID) -> dict:
+    """Everything a successful confirmation would have written, counted."""
+    factory = get_sessionmaker()
+    async with factory() as session:
+        events = (await session.execute(select(func.count()).select_from(ScanEvent)
+                                        .where(ScanEvent.barcode == barcode))).scalar_one()
+        snapshots = (await session.execute(select(func.count()).select_from(LabelSnapshot)
+                                           .where(LabelSnapshot.barcode == barcode))).scalar_one()
+        record = (await session.execute(select(ProductRecord)
+                                        .where(ProductRecord.barcode == barcode))).scalar_one_or_none()
+        output = (await session.execute(select(AIRunOutput)
+                                        .where(AIRunOutput.ai_run_id == run_id))).scalar_one()
+        return {
+            "scan_events": events,
+            "label_snapshots": snapshots,
+            "product_record": record,
+            "confirmations": None if record is None else record.confirmation_count,
+            "confidence": None if record is None else record.confidence,
+            "verification_status": output.verification_status,
+        }
+
+
+@pytest.mark.parametrize(
+    ("run_version", "output_version"),
+    [
+        # A run stamped v1 whose output claims v2, and the reverse. Both halves
+        # are individually confirmable; the pair is not, because we could not
+        # then state which schema produced the facts we are about to store.
+        ("scan-label.v1", "scan-label.v2"),
+        ("scan-label.v2", "scan-label.v1"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_mismatched_schema_pair_is_refused_and_writes_nothing(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+    run_version, output_version,
+):
+    """Provenance is the run and its output agreeing, not each being allowed.
+
+    Accepting the previous schema is a kindness to a review someone started
+    before a deployment. Accepting a *mismatched* pair would be something else:
+    storing label facts we cannot honestly attribute to any one transcription
+    schema. The refusal must also be total — a rejected confirmation may not
+    leave a scan event, a snapshot, a product record or a moved verification
+    status behind it.
+    """
+    token, account_id = await registered_supabase_user()
+    payload = label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+        mrp_text="MRP ₹120", net_quantity="500 g",
+    )
+    run_id = await _seed_ai_run(
+        account_id, payload, schema_version=run_version, output_schema_version=output_version,
+    )
+
+    response = await app_client.post(
+        "/api/v2/scan/label/confirm", headers={**device, **auth(token)},
+        json={"barcode": CURRENT, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
+    )
+    assert response.status_code == 422, response.text
+
+    after = await _confirmation_side_effects(CURRENT, run_id)
+    assert after["scan_events"] == 0
+    assert after["label_snapshots"] == 0
+    assert after["product_record"] is None
+    assert after["verification_status"] == VERIFICATION_UNVERIFIED
+
+
+@pytest.mark.asyncio
+async def test_a_schema_neither_side_may_confirm_is_refused_even_when_they_agree(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """Equality is necessary and not sufficient: the agreed version must be one we accept."""
+    token, account_id = await registered_supabase_user()
+    payload = label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+    )
+    run_id = await _seed_ai_run(account_id, payload, schema_version="scan-label.v0")
+
+    response = await app_client.post(
+        "/api/v2/scan/label/confirm", headers={**device, **auth(token)},
+        json={"barcode": CURRENT, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
+    )
+    assert response.status_code == 422, response.text
+
+    after = await _confirmation_side_effects(CURRENT, run_id)
+    assert after["scan_events"] == 0
+    assert after["label_snapshots"] == 0
+    assert after["product_record"] is None
+    assert after["verification_status"] == VERIFICATION_UNVERIFIED
+
+
+@pytest.mark.parametrize("version", ["scan-label.v1", "scan-label.v2"])
+@pytest.mark.asyncio
+async def test_a_matched_schema_pair_still_confirms_and_writes_everything(
+    db_clean, off_clean, app_client, device, registered_supabase_user, version,
+):
+    """The tightening refuses mismatched pairs and nothing else.
+
+    Both confirmable versions still work end to end when the run and its output
+    agree, so the rule above costs no one their capture.
+    """
+    token, account_id = await registered_supabase_user()
+    payload = label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+        mrp_text="MRP ₹120", net_quantity="500 g",
+    )
+    run_id = await _seed_ai_run(account_id, payload, schema_version=version)
+
+    response = await app_client.post(
+        "/api/v2/scan/label/confirm", headers={**device, **auth(token)},
+        json={"barcode": CURRENT, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
+    )
+    assert response.status_code == 201, response.text
+
+    after = await _confirmation_side_effects(CURRENT, run_id)
+    assert after["scan_events"] == 1
+    assert after["label_snapshots"] == 1
+    assert after["product_record"] is not None
+    assert after["confidence"] == response.json()["confidence"]["level"]
+    assert after["verification_status"] == "user_confirmed"
+
+
+@pytest.mark.asyncio
+async def test_a_review_started_before_the_deployment_still_confirms(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """A person photographed a label, walked to the till, and we deployed.
+
+    Losing their capture because a schema version moved underneath them would
+    throw away work they already did. ``mrp_text`` is optional precisely so the
+    older payload is still valid.
+    """
+    token, account_id = await registered_supabase_user()
+    legacy_payload = label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+    )
+    run_id = await _seed_ai_run(account_id, legacy_payload, schema_version="scan-label.v1")
+
+    response = await app_client.post(
+        "/api/v2/scan/label/confirm", headers={**device, **auth(token)},
+        json={"barcode": CURRENT, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
+    )
+    assert response.status_code == 201, response.text
+
+    # And a new v2 transcription carrying an MRP confirms just as well.
+    v2_payload = label_facts(
+        product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B, panel=PANEL_B,
+        mrp_text="MRP ₹100", net_quantity="400 g",
+    )
+    v2_run = await _seed_ai_run(account_id, v2_payload, schema_version="scan-label.v2")
+    confirmed = await app_client.post(
+        "/api/v2/scan/label/confirm", headers={**device, **auth(token)},
+        json={"barcode": CANDIDATE_B, "ai_run_id": str(v2_run), "client_scan_id": uuid.uuid4().hex},
+    )
+    assert confirmed.status_code == 201, confirmed.text
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        event = (await session.execute(
+            select(ScanEvent).where(ScanEvent.barcode == CANDIDATE_B)
+        )).scalar_one()
+    assert event.label_facts["mrp_text"] == "MRP ₹100"
+
+
+@pytest.mark.asyncio
+async def test_the_transcription_a_person_reviews_shows_the_mrp_it_read(
+    db_clean, off_clean, app_client, device, registered_supabase_user, monkeypatch,
+):
+    """Nothing is stored until a person has seen what we are about to store."""
+    from app.domains.ai_gateway.gateway import AIResult
+    from app.domains.media import service as media_service
+
+    facts = extraction.ExtractedLabel(
+        product_name="Northstar Corn Flakes", ingredients_text=INGREDIENTS_C,
+        net_quantity="500 g", mrp_text="MRP ₹120",
+    )
+
+    async def fake_transcribe(_session, **_kwargs):
+        return AIResult(
+            data=facts, run_id=uuid.uuid4(), provider="test", model="test-model",
+            prompt_version=extraction.PROMPT_VERSION, schema_version=extraction.SCHEMA_VERSION,
+            confidence=None, latency_ms=5, estimated_cost_usd=None,
+        )
+
+    monkeypatch.setattr(extraction, "transcribe_label", fake_transcribe)
+    monkeypatch.setattr(media_service, "get_owned_asset", fake_transcribe)
+    token, _account_id = await registered_supabase_user()
+
+    response = await app_client.post(
+        "/api/v2/scan/label/transcribe", headers={**device, **auth(token)},
+        json={"barcode": CURRENT, "media_asset_id": str(uuid.uuid4())},
+    )
+    assert response.status_code == 200, response.text
+    # The clause travels to the review screen exactly as it was printed.
+    assert response.json()["facts"]["mrp_text"] == "MRP ₹120"
+    assert response.json()["stored"] is False
+
+
+# ---------------------------------------------------------------------------
+# A price change is not a reformulation
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_a_price_change_creates_no_new_semantic_label_version(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """The formula did not change because the sticker did.
+
+    Semantic versioning tracks what is in the pack. Repricing the same recipe
+    must not look like a reformulation, or every price rise would read as a
+    changed product.
+    """
+    first = label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+        mrp_text="MRP ₹100",
+    )
+    second = {**first, "mrp_text": "MRP ₹110"}
+    await seed_capture(CURRENT, first)
+    await seed_capture(CURRENT, second)
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        snapshots = (await session.execute(
+            select(LabelSnapshot).where(LabelSnapshot.barcode == CURRENT)
+            .order_by(LabelSnapshot.version_number)
+        )).scalars().all()
+        events = (await session.execute(
+            select(ScanEvent).where(ScanEvent.barcode == CURRENT)
+            .order_by(ScanEvent.created_at, ScanEvent.id)
+        )).scalars().all()
+
+    # One semantic version, two captures, and each capture kept its own price.
+    assert [row.version_number for row in snapshots] == [1]
+    assert snapshots[0].changed_fields == []
+    assert len(events) == 2
+    assert [event.label_facts["mrp_text"] for event in events] == ["MRP ₹100", "MRP ₹110"]
+
+    # The fingerprint is blind to price, and so is the changed-field list.
+    assert product_service.label_content_fingerprint(first) == \
+        product_service.label_content_fingerprint(second)
+    assert product_service.label_changed_fields(first, second) == []
+    assert "mrp_text" not in product_service.canonical_label_facts(second)
+    assert "mrp_text" not in product_service.CONTENT_FACT_FIELDS
+
+    # The newest capture is the commercial authority: ₹110, never ₹100.
+    async with factory() as session:
+        observation, _missing = await value_service.observe(session, CURRENT)
+    assert observation.mrp_rupees == Decimal("110")
+
+    # And a real reformulation still earns a new semantic version.
+    reformulated = {**second, "ingredients_text": "maize, sugar, salt, flavouring"}
+    await seed_capture(CURRENT, reformulated)
+    async with factory() as session:
+        versions = (await session.execute(
+            select(LabelSnapshot.version_number).where(LabelSnapshot.barcode == CURRENT)
+            .order_by(LabelSnapshot.version_number)
+        )).scalars().all()
+    assert versions == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_the_newest_capture_is_the_authority_even_when_it_says_less(
+    db_clean, off_clean, app_client, device,
+):
+    """A newer photograph that could not read the price is the current truth.
+
+    Reaching back to an older capture would publish a price we have reason to
+    believe is no longer what the pack says.
+    """
+    factory = get_sessionmaker()
+    priced = label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+        mrp_text="MRP ₹100",
+    )
+    await seed_capture(CURRENT, priced)
+    async with factory() as session:
+        observation, _ = await value_service.observe(session, CURRENT)
+    assert observation.mrp_rupees == Decimal("100")
+
+    # A newer capture whose price could not be read.
+    await seed_capture(CURRENT, {k: v for k, v in priced.items() if k != "mrp_text"})
+    async with factory() as session:
+        observation, missing = await value_service.observe(session, CURRENT)
+    assert observation is None
+    assert missing == "mrp"
+
+
+@pytest.mark.asyncio
+async def test_a_newer_unreadable_pack_size_does_not_borrow_an_older_one(
+    db_clean, off_clean, app_client, device,
+):
+    """The denominator has to come from the same photograph as the price."""
+    await seed_capture(CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+        mrp_text="MRP ₹100", net_quantity="500 g",
+    ))
+    await seed_capture(CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+        mrp_text="MRP ₹100", net_quantity="family pack",
+    ))
+    factory = get_sessionmaker()
+    async with factory() as session:
+        observation, missing = await value_service.observe(session, CURRENT)
+    assert observation is None
+    assert missing == "quantity"
+
+
+async def seed_raw_event(
+    barcode: str, *, outcome: str, label_facts: object, with_run: bool = True,
+    age: timedelta | None = None,
+) -> uuid.UUID:
+    """A ScanEvent with an exact ``label_facts`` shape and chosen provenance.
+
+    ``seed_capture`` always writes well-formed facts, which is right for every
+    ordinary test and useless for probing the eligibility boundary. This writes
+    the row literally, so a JSON ``null``, an array, a string or ``{}`` can be
+    put in front of the query and the answer observed.
+    """
+    factory = get_sessionmaker()
+    async with factory() as session:
+        run_id = None
+        if with_run:
+            run = AIRun(
+                account_id=None, feature=extraction.FEATURE, provider="test",
+                model="test-model", prompt_version=extraction.SCHEMA_VERSION,
+                schema_version=extraction.SCHEMA_VERSION,
+                status=AI_STATUS_SUCCEEDED, validation_passed=True,
+            )
+            session.add(run)
+            await session.flush()
+            run_id = run.id
+        event = ScanEvent(
+            device_id=None, account_id=None, barcode=barcode, outcome=outcome,
+            client_scan_id=uuid.uuid4().hex, label_facts=label_facts, ai_run_id=run_id,
+        )
+        session.add(event)
+        await session.flush()
+        event_id = event.id
+        await session.commit()
+    if age is not None:
+        async with factory() as session:
+            await session.execute(
+                update(ScanEvent).where(ScanEvent.id == event_id)
+                .values(created_at=datetime.now(UTC) - age)
+            )
+            await session.commit()
+    return event_id
+
+
+@pytest.mark.asyncio
+async def test_an_ineligible_newer_row_does_not_hide_an_eligible_older_capture(
+    db_clean, off_clean, app_client, device,
+):
+    """An empty ``{}`` must not consume the single row the query selects.
+
+    The query takes the newest matching row and the row-level test is applied
+    afterwards, so the two have to agree about eligibility exactly. If the SQL
+    accepted any object-shaped value while the Python test additionally
+    required a non-empty one, a newer ``{}`` would win ``LIMIT 1``, fail the
+    check, and silently hide a genuinely eligible older capture — the product
+    would go quiet about a price it actually has.
+
+    This is *not* reaching behind a newer confirmed capture. The newer row was
+    never a confirmed capture: an empty object is not a label anybody read.
+    """
+    await seed_capture(CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+        mrp_text="MRP ₹120", net_quantity="500 g",
+    ), age=timedelta(days=2))
+    # Newer, carries the outcome and the provenance, and says nothing at all.
+    empty_id = await seed_raw_event(
+        CURRENT, outcome=product_service.OUTCOME_LABEL, label_facts={},
+    )
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        event = await value_service.latest_confirmed_capture(session, CURRENT)
+    assert event is not None
+    assert event.id != empty_id                      # the empty row is not it
+    assert event.label_facts["mrp_text"] == "MRP ₹120"
+
+    # ...and the observation the older capture supports is still published.
+    async with factory() as session:
+        observation, missing = await value_service.observe(session, CURRENT)
+    assert missing is None
+    assert observation.mrp_rupees == Decimal("120")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("shape", "outcome", "with_run", "eligible"),
+    [
+        # Nothing that is not a populated object may qualify...
+        (None, "label_captured", True, False),            # JSON null
+        ([], "label_captured", True, False),              # array
+        ("", "label_captured", True, False),              # string
+        ({}, "label_captured", True, False),              # empty object
+        # ...nor a populated object without confirmation provenance...
+        ({"mrp_text": "MRP ₹120"}, "label_captured", False, False),   # no AI run
+        ({"mrp_text": "MRP ₹120"}, "found_local", True, False),       # not a capture
+        ({"mrp_text": "MRP ₹120"}, "found_off", True, False),
+        # ...and a populated object with full provenance does.
+        ({"mrp_text": "MRP ₹120"}, "label_captured", True, True),
+    ],
+)
+async def test_the_capture_query_admits_only_a_populated_object_with_provenance(
+    db_clean, off_clean, app_client, device, shape, outcome, with_run, eligible,
+):
+    """The eligibility boundary, one JSON shape at a time.
+
+    Every one of these goes through the real query rather than the Python
+    predicate alone, because the query is what decides which row is looked at.
+    A shape that raised inside the ``WHERE`` clause would fail here too, which
+    is why the non-emptiness test is a total comparison rather than a function
+    that rejects non-object JSON.
+    """
+    await seed_raw_event(CURRENT, outcome=outcome, label_facts=shape, with_run=with_run)
+    factory = get_sessionmaker()
+    async with factory() as session:
+        event = await value_service.latest_confirmed_capture(session, CURRENT)
+    assert (event is not None) is eligible
+
+
+@pytest.mark.asyncio
+async def test_the_public_observation_and_the_viewer_pack_ask_different_questions(
+    db_clean, off_clean, app_client, device,
+):
+    """The two sequencing rules are deliberately not the same rule.
+
+    * The public product observation takes the newest *eligible* confirmed
+      capture, so an ineligible newer row is skipped rather than allowed to
+      silence the product.
+    * Viewer pack authority takes this device's newest *event* of any kind, and
+      a newer ordinary scan withdraws authority rather than letting the resolver
+      reach back to an older capture — because a plain scan means a different
+      packet is in this person's hand now.
+
+    Both are asserted here so neither can be "simplified" into the other.
+    """
+    factory = get_sessionmaker()
+    reg = await app_client.post(
+        "/api/v2/scan/device", json={"device_key": uuid.uuid4().hex, "platform": "android"},
+    )
+    device_id = uuid.UUID(reg.json()["device_id"])
+
+    # This device confirms the pack, so it holds authority.
+    await seed_capture(CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+        mrp_text="MRP ₹120", net_quantity="500 g",
+    ), device_id=device_id, age=timedelta(days=2))
+    async with factory() as session:
+        pack = await pack_context.current_pack(session, barcode=CURRENT, device_id=device_id)
+    assert pack.is_proven is True
+
+    # A newer ordinary scan by the same device: a different packet is in hand.
+    await seed_raw_event(CURRENT, outcome=product_service.OUTCOME_LOCAL, label_facts=None,
+                         with_run=False)
+    async with factory() as session:
+        session_scan = ScanEvent(
+            device_id=device_id, account_id=None, barcode=CURRENT,
+            outcome=product_service.OUTCOME_LOCAL, client_scan_id=uuid.uuid4().hex,
+            label_facts=None,
+        )
+        session.add(session_scan)
+        await session.commit()
+
+    async with factory() as session:
+        pack_after = await pack_context.current_pack(
+            session, barcode=CURRENT, device_id=device_id,
+        )
+        observation, missing = await value_service.observe(session, CURRENT)
+
+    # Viewer authority is withdrawn, with no reach-back to the older capture.
+    assert pack_after.is_proven is False
+    assert pack_after.label_facts is None
+    # The public product observation is untouched: those plain scans were never
+    # eligible captures, so the newest eligible capture is still the confirmed
+    # one, and the product still states the price it genuinely has.
+    assert missing is None
+    assert observation.mrp_rupees == Decimal("120")
+
+
+@pytest.mark.asyncio
+async def test_only_a_confirmed_label_capture_counts_as_an_observation(
+    db_clean, off_clean, app_client, device,
+):
+    """A plain barcode scan saw no pack. It cannot state a price."""
+    factory = get_sessionmaker()
+    async with factory() as session:
+        session.add(ScanEvent(
+            barcode=CURRENT, outcome=product_service.OUTCOME_OFF,
+            client_scan_id=uuid.uuid4().hex,
+            label_facts={"mrp_text": "MRP ₹999", "net_quantity": "500 g"},
+        ))
+        await session.commit()
+    async with factory() as session:
+        assert await value_service.latest_confirmed_capture(session, CURRENT) is None
+
+
+# ---------------------------------------------------------------------------
+# End to end, through the route a phone actually calls
+# ---------------------------------------------------------------------------
+async def seed_current(*, mrp_text: str | None = "MRP ₹120", net_quantity: str = "500 g",
+                       age: timedelta | None = None) -> None:
+    await seed_capture(CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", brand="Northstar", ingredients=INGREDIENTS_C,
+        panel=PANEL_C, net_quantity=net_quantity, mrp_text=mrp_text,
+    ), age=age)
+    await seed_off(CURRENT)
+
+
+async def seed_candidate(
+    barcode: str, *, product_name: str, ingredients: str, panel: dict,
+    mrp_text: str | None = "MRP ₹100", net_quantity: str = "400 g",
+    basis: str = "per_100g", age: timedelta | None = None,
+) -> None:
+    await seed_off(barcode, categories=CEREAL_CATEGORY_OTHER_PATH)
+    await seed_capture(barcode, label_facts(
+        product_name=product_name, ingredients=ingredients, panel=panel,
+        net_quantity=net_quantity, basis=basis, mrp_text=mrp_text,
+    ), age=age)
+
+
+@pytest.mark.asyncio
+async def test_the_full_pack_comparison_reads_as_arithmetic(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """The case that proves a smaller number on a pack is not a lower MRP.
+
+    ₹100 looks cheaper than ₹120 until the pack sizes are normalised, and then
+    the candidate is the dearer of the two per 100 g. The card reports that
+    rather than hiding it, which is the entire reason absolute pack facts are
+    published beside the normalised ones.
+    """
+    await seed_current(mrp_text="MRP ₹120", net_quantity="500 g")
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹100", net_quantity="400 g",
+    )
+
+    body = await verdict(app_client, device)
+    assert body["alternative"]["candidate"]["barcode"] == CANDIDATE_B
+    assert body["alternative"]["candidate"]["grade"] == "B"
+
+    value = body["value"]
+    assert value["policy_version"] == "pack-mrp-value-v1"
+    assert value["status"] == "available"
+    assert value["reason_key"] == "comparison_available"
+
+    comparison = value["comparison"]
+    assert comparison["basis"] == "per_100g"
+    assert comparison["current"]["mrp_inr"] == "120.00"
+    assert comparison["current"]["quantity"] == {"amount": "500", "unit": "g"}
+    assert comparison["current"]["mrp_per_100_inr"] == "24.00"
+    assert comparison["candidate"]["mrp_inr"] == "100.00"
+    assert comparison["candidate"]["quantity"] == {"amount": "400", "unit": "g"}
+    assert comparison["candidate"]["mrp_per_100_inr"] == "25.00"
+    # Candidate minus current: the candidate's MRP per 100 g is the higher one.
+    assert comparison["difference_inr_per_100"] == "1.00"
+    assert comparison["relationship"] == "candidate_higher_mrp_per_100"
+    assert comparison["current"]["source"] == "confirmed_pack_label"
+
+    # Re-price the candidate. The science does not move; only the money does.
+    await seed_capture(CANDIDATE_B, label_facts(
+        product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B, panel=PANEL_B,
+        net_quantity="400 g", mrp_text="MRP ₹80",
+    ))
+    after = await verdict(app_client, device)
+    assert after["alternative"] == body["alternative"]
+    assert after["value"]["comparison"]["candidate"]["mrp_per_100_inr"] == "20.00"
+    assert after["value"]["comparison"]["difference_inr_per_100"] == "-4.00"
+    assert after["value"]["comparison"]["relationship"] == "candidate_lower_mrp_per_100"
+
+
+@pytest.mark.asyncio
+async def test_two_figures_that_print_the_same_are_reported_as_the_same(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """Case A. ₹24.00 against ₹24.00 cannot be described as a difference.
+
+    The candidate's exact figure here is 24.0014...; the current pack's is 24
+    on the nose. A comparison drawn from those exact quotients would print two
+    identical numbers and call one of them higher, and the shopper would be
+    right to distrust everything else on the card.
+    """
+    await seed_current(mrp_text="MRP ₹120", net_quantity="500 g")
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹168.01", net_quantity="700 g",
+    )
+
+    comparison = (await verdict(app_client, device))["value"]["comparison"]
+    assert comparison["current"]["mrp_per_100_inr"] == "24.00"
+    assert comparison["candidate"]["mrp_per_100_inr"] == "24.00"
+    assert comparison["relationship"] == "same_mrp_per_100"
+    assert comparison["difference_inr_per_100"] == "0.00"
+
+
+@pytest.mark.asyncio
+async def test_the_difference_is_the_subtraction_a_shopper_could_do(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """Case B. ₹33.33 less ₹33.34 is one paise, not "₹-0.00".
+
+    The exact figures are 33.334 and 33.335 and differ by a tenth of a paise.
+    Subtracting before rounding publishes that tenth as ``-0.00`` — a signed
+    zero next to two numbers a paise apart. Subtracting the printed figures
+    gives the only answer that survives being checked by hand.
+    """
+    await seed_current(mrp_text="MRP ₹66.67", net_quantity="200 g")
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹166.67", net_quantity="500 g",
+    )
+
+    comparison = (await verdict(app_client, device))["value"]["comparison"]
+    assert comparison["current"]["mrp_per_100_inr"] == "33.34"
+    assert comparison["candidate"]["mrp_per_100_inr"] == "33.33"
+    assert comparison["difference_inr_per_100"] == "-0.01"
+    assert comparison["relationship"] == "candidate_lower_mrp_per_100"
+
+
+@pytest.mark.asyncio
+async def test_the_published_money_always_adds_up(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """Case C. The invariant, not one example of it.
+
+    For every pack pair: the published difference equals the published
+    candidate figure minus the published current figure, exactly, and the
+    published relationship is the sign of that same subtraction. Nothing the
+    card says about money may come from a number the card does not show.
+    """
+    pairs = [
+        # (current mrp, current size, candidate mrp, candidate size)
+        ("MRP ₹120", "500 g", "MRP ₹100", "400 g"),      # plain, both exact
+        ("MRP ₹120", "500 g", "MRP ₹168.01", "700 g"),   # equal once printed
+        ("MRP ₹66.67", "200 g", "MRP ₹166.67", "500 g"), # a tenth of a paise apart
+        ("MRP ₹48.01", "200 g", "MRP ₹120.02", "500 g"), # both sides round up
+        ("MRP ₹100", "300 g", "MRP ₹50", "150 g"),       # both recurring, equal
+        ("MRP ₹1,25,00,000", "25 kg", "MRP ₹99", "400 g"),  # far above any old ceiling
+    ]
+    # The catalogue rows are seeded once: only the confirmed captures change.
+    await seed_off(CURRENT)
+    await seed_off(CANDIDATE_B, categories=CEREAL_CATEGORY_OTHER_PATH)
+
+    for current_mrp, current_size, candidate_mrp, candidate_size in pairs:
+        await seed_capture(CURRENT, label_facts(
+            product_name="Northstar Corn Flakes", brand="Northstar",
+            ingredients=INGREDIENTS_C, panel=PANEL_C,
+            net_quantity=current_size, mrp_text=current_mrp,
+        ))
+        await seed_capture(CANDIDATE_B, label_facts(
+            product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+            panel=PANEL_B, net_quantity=candidate_size, mrp_text=candidate_mrp,
+        ))
+
+        comparison = (await verdict(app_client, device))["value"]["comparison"]
+        shown_current = Decimal(comparison["current"]["mrp_per_100_inr"])
+        shown_candidate = Decimal(comparison["candidate"]["mrp_per_100_inr"])
+        published = Decimal(comparison["difference_inr_per_100"])
+        assert published == shown_candidate - shown_current, comparison
+        expected = {
+            -1: "candidate_lower_mrp_per_100",
+            0: "same_mrp_per_100",
+            1: "candidate_higher_mrp_per_100",
+        }[(shown_candidate > shown_current) - (shown_candidate < shown_current)]
+        assert comparison["relationship"] == expected, comparison
+        # Two places, always, on both sides and on the difference.
+        for figure in (comparison["current"]["mrp_per_100_inr"],
+                       comparison["candidate"]["mrp_per_100_inr"],
+                       comparison["difference_inr_per_100"]):
+            assert figure.split(".")[1] == figure.split(".")[1][:2]
+            assert len(figure.split(".")[1]) == 2
+            # A signed zero is never published.
+            assert figure != "-0.00"
+
+
+@pytest.mark.asyncio
+async def test_the_public_envelope_exposes_no_internal_identifier(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """A price observation names a product and a date. Never a person."""
+    await seed_current()
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B,
+    )
+    body = await verdict(app_client, device)
+    value = body["value"]
+
+    assert set(value) == {"policy_version", "status", "reason_key", "comparison"}
+    assert set(value["comparison"]) == {
+        "basis", "current", "candidate", "relationship", "difference_inr_per_100",
+    }
+    assert set(value["comparison"]["current"]) == {
+        "barcode", "mrp_inr", "quantity", "mrp_per_100_inr", "observed_at", "source",
+    }
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        events = (await session.execute(select(ScanEvent))).scalars().all()
+    serialised = str(value)
+    for event in events:
+        assert str(event.id) not in serialised
+        assert str(event.device_id) not in serialised or event.device_id is None
+    for leaked in ("account_id", "device_id", "scan_event", "ai_run", "client_scan_id"):
+        assert leaked not in serialised, leaked
+
+
+@pytest.mark.asyncio
+async def test_money_reaches_the_wire_as_decimal_strings(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """Never a JSON float. Binary floating point cannot hold a rupee exactly."""
+    await seed_current(mrp_text="MRP ₹99.99", net_quantity="333 g")
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹49.50", net_quantity="150 g",
+    )
+    comparison = (await verdict(app_client, device))["value"]["comparison"]
+    for side in ("current", "candidate"):
+        assert isinstance(comparison[side]["mrp_inr"], str)
+        assert isinstance(comparison[side]["mrp_per_100_inr"], str)
+        assert isinstance(comparison[side]["quantity"]["amount"], str)
+    assert isinstance(comparison["difference_inr_per_100"], str)
+    # Exact arithmetic all the way to one rounding at the boundary.
+    assert comparison["current"]["mrp_per_100_inr"] == "30.03"
+    assert comparison["candidate"]["mrp_per_100_inr"] == "33.00"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("age", "expected_reason"),
+    [
+        (timedelta(days=29, hours=23, minutes=59), "comparison_available"),
+        (timedelta(days=30), "candidate_mrp_observation_stale"),
+        (timedelta(days=31), "candidate_mrp_observation_stale"),
+    ],
+)
+async def test_the_observation_window_holds_at_its_boundary(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+    age, expected_reason,
+):
+    """Server timestamps only. A phone's clock never decides what is recent."""
+    await seed_current()
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, age=age,
+    )
+    body = await verdict(app_client, device)
+    # The candidate is still chosen on science; only the money went quiet.
+    assert body["alternative"]["candidate"]["barcode"] == CANDIDATE_B
+    assert body["value"]["reason_key"] == expected_reason
+
+
+@pytest.mark.asyncio
+async def test_a_stale_current_observation_says_so_in_its_own_words(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    await seed_current(age=timedelta(days=45))
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B,
+    )
+    body = await verdict(app_client, device)
+    assert body["value"]["reason_key"] == "current_mrp_observation_stale"
+    assert body["value"]["comparison"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_drink_and_a_solid_are_never_compared_by_price(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """A per-100-g comparison needs grams on both sides. No density is assumed."""
+    await seed_current(net_quantity="500 g")
+    # Same category, better grade, but its pack is stated in millilitres while
+    # the scientific basis on both sides is per 100 g.
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, net_quantity="400 ml",
+    )
+    body = await verdict(app_client, device)
+    assert body["alternative"]["candidate"]["barcode"] == CANDIDATE_B
+    assert body["value"]["reason_key"] == "quantity_basis_incompatible"
+
+
+@pytest.mark.asyncio
+async def test_no_alternative_means_no_comparison_to_make(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """Step 6B never goes looking for a product Step 6A did not choose."""
+    await seed_current()
+    body = await verdict(app_client, device)
+    assert body["alternative"]["candidate"] is None
+    assert body["value"]["status"] == "not_enough_information"
+    assert body["value"]["reason_key"] == "no_comparable_alternative"
+    assert body["value"]["comparison"] is None
+
+
+# ---------------------------------------------------------------------------
+# Money may not touch the choice
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_a_cheaper_lesser_product_never_displaces_the_chosen_one(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """The temptation this test exists for is real: B is far cheaper than A.
+
+    A is the scientific winner with an eye-watering MRP; B grades lower and
+    costs almost nothing. A developer optimising for a shopper's wallet would
+    swap them. Selection must not notice money at all.
+    """
+    await seed_current()
+    await seed_candidate(
+        CANDIDATE_A, product_name="Rolled Oats", ingredients=INGREDIENTS_A, panel=PANEL_A,
+        mrp_text="MRP ₹9,999", net_quantity="100 g",
+    )
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹5", net_quantity="500 g",
+    )
+
+    body = await verdict(app_client, device)
+    # A wins on grade, and keeps winning despite costing a thousand times more.
+    assert body["alternative"]["candidate"]["barcode"] == CANDIDATE_A
+    assert body["alternative"]["candidate"]["grade"] == "A"
+    assert body["value"]["comparison"]["candidate"]["mrp_per_100_inr"] == "9999.00"
+    assert body["value"]["comparison"]["relationship"] == "candidate_higher_mrp_per_100"
+
+
+@pytest.mark.asyncio
+async def test_a_candidate_without_a_price_is_still_the_candidate(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """No price-aware fallback. A missing MRP silences money, not the science."""
+    await seed_current()
+    await seed_candidate(
+        CANDIDATE_A, product_name="Rolled Oats", ingredients=INGREDIENTS_A, panel=PANEL_A,
+        mrp_text=None,
+    )
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹40", net_quantity="500 g",
+    )
+
+    body = await verdict(app_client, device)
+    assert body["alternative"]["candidate"]["barcode"] == CANDIDATE_A
+    assert body["value"]["reason_key"] == "candidate_mrp_unavailable"
+    assert body["value"]["comparison"] is None
+
+
+@pytest.mark.asyncio
+async def test_price_moves_nothing_in_the_scientific_verdict(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """Every protected key is byte-identical before and after a price appears."""
+    protected = (
+        "result_contract_version", "grade", "band", "outcome", "decision", "negatives",
+        "positives", "lowers", "helps", "components", "evidence", "trace", "confidence",
+        "facts_provenance", "official_records", "community_observations", "nutrition",
+        "taxonomy", "ingredients", "quantity_guidance", "purity_note", "missing",
+        "product_name", "brand", "barcode", "pack_size_g", "basis", "attribution",
+        "engine_version", "better_next_action", "physical_pack_context", "alternative",
+    )
+    await seed_current(mrp_text=None)
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text=None,
+    )
+    before = await verdict(app_client, device)
+    assert before["value"]["status"] == "not_enough_information"
+
+    # The same packs, now photographed with their prices legible.
+    await seed_capture(CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", brand="Northstar", ingredients=INGREDIENTS_C,
+        panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹120",
+    ))
+    await seed_capture(CANDIDATE_B, label_facts(
+        product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B, panel=PANEL_B,
+        net_quantity="400 g", mrp_text="MRP ₹100",
+    ))
+    after = await verdict(app_client, device)
+    assert after["value"]["status"] == "available"
+
+    for key in protected:
+        assert after.get(key) == before.get(key), key
+    # A price is the only thing that moved anywhere in the payload.
+    assert {key for key in after if after[key] != before.get(key)} == {"value"}
+
+
+@pytest.mark.asyncio
+async def test_a_price_cannot_turn_a_wait_into_a_buy(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """Nothing becomes BUY for being inexpensive, or SKIP for being dear."""
+    await seed_current(mrp_text="MRP ₹5", net_quantity="1 kg")
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹9,999", net_quantity="100 g",
+    )
+    body = await verdict(app_client, device)
+    # A near-free current product is still a C, and still WAIT.
+    assert body["grade"] == "C"
+    assert body["decision"]["action"] == "wait"
+    # A ruinously expensive candidate is still a B, and still BUY.
+    assert body["alternative"]["candidate"]["grade"] == "B"
+    assert body["alternative"]["candidate"]["decision"] == "buy"
+
+
+# ---------------------------------------------------------------------------
+# The layers below, and the ones beside
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_shopper_observations_can_neither_supply_nor_move_a_price(
+    db_clean, off_clean, app_client, published_rules, no_off_network,
+    registered_supabase_user, public_display,
+):
+    from app.domains.community.observations import OBSERVATION_INGREDIENTS_DIFFER
+
+    from tests.test_community_reporting import BARCODE as COMMUNITY_BARCODE
+    from tests.test_community_reporting import label_facts as community_label_facts
+    from tests.test_community_reporting import report, three_reporters
+
+    # The shoppers' own confirmations are the newest captures of this pack, so
+    # the price lives on them — which is exactly how a real observation arrives.
+    priced = community_label_facts(mrp_text="MRP ₹120", net_quantity="500 g")
+    await seed_off(COMMUNITY_BARCODE)
+    await seed_candidate(
+        CANDIDATE_A, product_name="Rolled Oats", ingredients=INGREDIENTS_A, panel=PANEL_A,
+        mrp_text="MRP ₹100", net_quantity="400 g",
+    )
+
+    shoppers = await three_reporters(app_client, registered_supabase_user, facts=priced)
+    headers = shoppers[0][0].headers()
+    before = await verdict(app_client, headers, barcode=COMMUNITY_BARCODE)
+    assert before["value"]["status"] == "available"
+    assert before["value"]["comparison"]["current"]["mrp_inr"] == "120.00"
+    signals_before = len(before["community_observations"]["signals"])
+
+    # The same three shoppers, holding the same packs, report a second thing.
+    # Community state moves on its own; no new capture, so no new observation.
+    for shopper, *_rest in shoppers:
+        response = await report(
+            app_client, shopper, code=OBSERVATION_INGREDIENTS_DIFFER, barcode=COMMUNITY_BARCODE,
+        )
+        assert response.status_code in (200, 201), response.text
+
+    after = await verdict(app_client, headers, barcode=COMMUNITY_BARCODE)
+    assert len(after["community_observations"]["signals"]) > signals_before
+    # A shopper saying something about a pack cannot state, move or silence a price.
+    assert after["value"] == before["value"]
+    assert after["alternative"] == before["alternative"]
+
+
+@pytest.mark.asyncio
+async def test_an_official_record_can_neither_supply_nor_move_a_price(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+    registered_supabase_user, tmp_path,
+):
+    from app.domains.official_records import service as official_records
+
+    from tests.test_official_records import LICENCE, data_row, make_export
+
+    batch = "B-6B-1"
+    await seed_capture(CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", brand="Northstar", ingredients=INGREDIENTS_C,
+        panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹120",
+        fssai_licence=LICENCE, batch_number=batch,
+    ))
+    await seed_off(CURRENT)
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹100", net_quantity="400 g",
+    )
+
+    before = await verdict(app_client, device)
+    assert before["value"]["status"] == "available"
+    assert before["official_records"]["records"] == []
+
+    path = make_export(
+        tmp_path / f"foscos-{uuid.uuid4().hex}.xlsx",
+        rows=[data_row(recall_id=96001, batch=batch, brand="Northstar",
+                       product="Northstar Corn Flakes", status="Initiated", termination="NA")],
+    )
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await official_records.ingest_recall_xlsx(
+            session, path, source_checked_at=datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
+        )
+        await session.commit()
+
+    # The stranger's capture that supplies the MRP gives this caller no claim on
+    # that lot, so the recall is still withheld: Step 6A.1 decides that, and
+    # Step 6B did not loosen it.
+    after = await verdict(app_client, device)
+    assert after["official_records"]["records"] == []
+
+    # Give the viewing device its own proven pack, and the record appears —
+    # which is the state this test actually needs in order to say something
+    # about money surviving it.
+    token, account_id = await registered_supabase_user()
+    await confirm_on_device(app_client, device, token, account_id, CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", brand="Northstar", ingredients=INGREDIENTS_C,
+        panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹120",
+        fssai_licence=LICENCE, batch_number=batch,
+    ))
+    held = await verdict(app_client, device)
+    assert [row["recall_id"] for row in held["official_records"]["records"]] == ["96001"]
+
+    # The recall moved nothing about the money or the science. A government
+    # record is a separate epistemic layer: it cannot supply a price, and it
+    # cannot promote, demote or re-rank the alternative.
+    assert held["value"]["status"] == before["value"]["status"]
+    assert held["value"]["comparison"]["relationship"] == \
+        before["value"]["comparison"]["relationship"]
+    assert held["value"]["comparison"]["difference_inr_per_100"] == \
+        before["value"]["comparison"]["difference_inr_per_100"]
+    assert held["alternative"] == before["alternative"]
+
+
+@pytest.mark.asyncio
+async def test_a_forged_non_label_scan_cannot_manufacture_an_mrp_observation(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+    registered_supabase_user,
+):
+    """Tempting ``label_facts`` on a plain scan are not a confirmed pack label.
+
+    The cheapest possible attack on a public price: write an ordinary
+    ``found_local`` scan and hang an MRP and a pack size off it. It has the
+    shape of a capture and none of the provenance, and the observation must not
+    be built from it — the confirmation route is the authority, not the presence
+    of a convincing-looking dictionary.
+    """
+    factory = get_sessionmaker()
+    forged = {"mrp_text": "MRP ₹120", "net_quantity": "500 g",
+              "product_name": "Northstar Corn Flakes", "ingredients_text": INGREDIENTS_C,
+              "nutrition_basis": "per_100g", "nutrition_panel": PANEL_C}
+    async with factory() as session:
+        session.add(ScanEvent(
+            device_id=None, account_id=None, barcode=CURRENT,
+            outcome=product_service.OUTCOME_LOCAL,      # not a label capture
+            client_scan_id=uuid.uuid4().hex,
+            label_facts=forged,                          # ...however it looks
+        ))
+        await session.commit()
+    await seed_off(CURRENT)
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹100", net_quantity="400 g",
+    )
+
+    # Read directly: the forged row is not an eligible observation at all.
+    async with factory() as session:
+        assert await value_service.latest_confirmed_capture(session, CURRENT) is None
+
+    # And nothing public is built from it. The forged row is not a confirmed
+    # capture, so it supplies neither the science Step 6A needs nor the money
+    # Step 6B needs — the card declines before it ever reaches a price.
+    forged_view = await verdict(app_client, device)
+    assert forged_view["value"]["status"] == "not_enough_information"
+    assert forged_view["value"]["comparison"] is None
+    assert "120" not in json.dumps(forged_view["value"])
+
+    # A genuine confirmation through the real route, and the same product now
+    # has an observation. The rule is about provenance, not about content.
+    token, account_id = await registered_supabase_user()
+    await confirm_on_device(app_client, device, token, account_id, CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", brand="Northstar", ingredients=INGREDIENTS_C,
+        panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹120",
+    ))
+    async with factory() as session:
+        event = await value_service.latest_confirmed_capture(session, CURRENT)
+    assert event is not None and event.ai_run_id is not None
+
+    confirmed_view = await verdict(app_client, device)
+    assert confirmed_view["value"]["status"] == "available"
+    assert confirmed_view["value"]["comparison"]["current"]["mrp_per_100_inr"] == "24.00"
+
+
+@pytest.mark.asyncio
+async def test_a_forged_non_label_scan_cannot_manufacture_a_candidate_observation(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """The same rule on the candidate side of the comparison."""
+    await seed_current()
+    await seed_off(CANDIDATE_B, categories=CEREAL_CATEGORY_OTHER_PATH)
+    # The candidate's science comes from a real confirmed capture...
+    await seed_capture(CANDIDATE_B, label_facts(
+        product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B, panel=PANEL_B,
+        net_quantity="400 g",                    # ...but no MRP on it
+    ))
+    # ...and a later forged plain scan tries to supply the missing price.
+    factory = get_sessionmaker()
+    async with factory() as session:
+        session.add(ScanEvent(
+            device_id=None, account_id=None, barcode=CANDIDATE_B,
+            outcome=product_service.OUTCOME_OFF,
+            client_scan_id=uuid.uuid4().hex,
+            label_facts={"mrp_text": "MRP ₹1", "net_quantity": "400 g"},
+        ))
+        await session.commit()
+
+    body = await verdict(app_client, device)
+    # The candidate is still chosen on its science...
+    assert body["alternative"]["candidate"]["barcode"] == CANDIDATE_B
+    # ...and the forged price neither reaches the card nor overwrites anything.
+    assert body["value"]["status"] == "not_enough_information"
+    assert body["value"]["reason_key"] == "candidate_mrp_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_a_reference_view_keeps_its_restrictions_and_may_still_state_a_dated_price(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network, tmp_path,
+    registered_supabase_user,
+):
+    """The Step 6A.1 / Step 6B boundary, proved in one place.
+
+    Two different authorities are at work and they must not be confused:
+
+    * *Has this viewer proved the packet in their hand?* Gates the physical-pack
+      layers — the exact recall match and the batch signal.
+    * *What did a recent confirmed label for this product state?* A dated public
+      fact about the product, owned by no particular viewer.
+
+    A stranger's legitimate capture may therefore support the public MRP
+    comparison while giving this caller no claim whatsoever on that stranger's
+    lot. Both halves are asserted together, because it is the combination that
+    used to be got wrong.
+    """
+    from app.domains.official_records import service as official_records
+
+    from tests.test_official_records import LICENCE, data_row, make_export
+
+    batch = "B-6B-REF"
+    # A capture of the current pack owned by nobody on this device, carrying a
+    # licence and a lot as well as the money.
+    await seed_capture(CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", brand="Northstar", ingredients=INGREDIENTS_C,
+        panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹120",
+        fssai_licence=LICENCE, batch_number=batch,
+    ))
+    await seed_off(CURRENT)
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹100", net_quantity="400 g",
+    )
+    path = make_export(
+        tmp_path / f"foscos-{uuid.uuid4().hex}.xlsx",
+        rows=[data_row(recall_id=96002, batch=batch, brand="Northstar",
+                       product="Northstar Corn Flakes", status="Initiated", termination="NA")],
+    )
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await official_records.ingest_recall_xlsx(
+            session, path, source_checked_at=datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
+        )
+        await session.commit()
+
+    # ---- Four things at once, with no pack proof on the viewing device ----
+    reference = await verdict(app_client, device, physical_pack=False)
+    assert reference["physical_pack_context"] is False
+    # Step 4 stays suppressed: the recall matches a *stranger's* capture.
+    assert reference["official_records"]["records"] == []
+    # Step 5 carries no batch signal for a lot this caller is not holding.
+    assert [s for s in reference["community_observations"]["signals"]
+            if s["scope"] == "batch"] == []
+    # ...and the dated public MRP observation survives all of it, because it is
+    # a fact about the product rather than a claim about this viewer's packet.
+    assert reference["value"]["status"] == "available"
+    assert reference["value"]["comparison"]["current"]["mrp_per_100_inr"] == "24.00"
+    assert reference["value"]["comparison"]["candidate"]["mrp_per_100_inr"] == "25.00"
+
+    # An *ordinary* read changes none of the restrictions. Under Step 6A.1
+    # authority comes from this device's own newest capture, and this device has
+    # never photographed this pack, so dropping the reference flag cannot
+    # promote a stranger's lot into this caller's record.
+    ordinary = await verdict(app_client, device)
+    assert ordinary["physical_pack_context"] is False
+    assert ordinary["official_records"]["records"] == []
+    assert ordinary["value"]["comparison"] == reference["value"]["comparison"]
+
+    # ---- Now the viewer legitimately confirms the pack on this device ----
+    token, account_id = await registered_supabase_user()
+    await confirm_on_device(app_client, device, token, account_id, CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", brand="Northstar", ingredients=INGREDIENTS_C,
+        panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹120",
+        fssai_licence=LICENCE, batch_number=batch,
+    ))
+
+    held = await verdict(app_client, device)
+    assert held["physical_pack_context"] is True
+    # The viewer's own pack facts now drive Step 4, and the same lot matches.
+    assert [row["recall_id"] for row in held["official_records"]["records"]] == ["96002"]
+    # And the money reads exactly as it did with no pack authority at all, which
+    # is the whole point: MRP never depended on holding the packet. The
+    # observation *date* legitimately moves forward — this device's confirmation
+    # is now the newest confirmed capture of this product — so the figures are
+    # compared rather than the envelope, and the date is asserted to have moved
+    # rather than quietly ignored.
+    for side in ("current", "candidate"):
+        for figure in ("mrp_inr", "mrp_per_100_inr", "quantity"):
+            assert held["value"]["comparison"][side][figure] == \
+                reference["value"]["comparison"][side][figure], (side, figure)
+    assert held["value"]["comparison"]["relationship"] == \
+        reference["value"]["comparison"]["relationship"]
+    assert held["value"]["comparison"]["difference_inr_per_100"] == \
+        reference["value"]["comparison"]["difference_inr_per_100"]
+    assert held["value"]["comparison"]["current"]["observed_at"] > \
+        reference["value"]["comparison"]["current"]["observed_at"]
+
+
+# ---------------------------------------------------------------------------
+# Free, private, and writing nothing
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_an_anonymous_device_sees_the_same_comparison(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+    registered_supabase_user,
+):
+    """Reading an MRP comparison is free. No account, entitlement or profile."""
+    await seed_current()
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B,
+    )
+    anonymous = (await verdict(app_client, device))["value"]
+
+    token, _account_id = await registered_supabase_user()
+    claimed = await app_client.post("/api/v2/scan/device/claim", headers={**device, **auth(token)})
+    assert claimed.status_code == 200, claimed.text
+    signed_in = (await verdict(app_client, {**device, **auth(token)}))["value"]
+
+    assert anonymous["status"] == "available"
+    assert anonymous == signed_in
+
+
+@pytest.mark.asyncio
+async def test_reading_a_price_writes_nothing_anywhere(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """Every request recomputes from live scan events. Nothing is cached."""
+    from app.shared.database.registry import Base
+
+    await seed_current()
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B,
+    )
+
+    async def counts():
+        factory = get_sessionmaker()
+        async with factory() as session:
+            return {
+                name: int(await session.scalar(select(func.count()).select_from(table)) or 0)
+                for name, table in sorted(Base.metadata.tables.items())
+            }
+
+    async def store_a_rows():
+        factory = get_off_sessionmaker()
+        async with factory() as session:
+            rows = (await session.execute(
+                select(OffProduct).order_by(OffProduct.barcode)
+            )).scalars().all()
+            return [(r.barcode, r.categories, r.countries, r.fetched_at) for r in rows]
+
+    before_b, before_a = await counts(), await store_a_rows()
+    assert any(before_b.values())
+
+    body = await verdict(app_client, device)
+    assert body["value"]["status"] == "available"
+    assert await counts() == before_b
+    assert await store_a_rows() == before_a
+
+
+@pytest.mark.asyncio
+async def test_no_price_field_reached_the_open_food_facts_store(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """The ODbL wall does not move for money either."""
+    from app.domains.off.wall import OFF_FIELDS
+
+    for banned in ("price", "mrp", "retailer_price", "unit_price", "cost"):
+        assert not any(banned in field for field in OFF_FIELDS), banned
+    for column in OffProduct.__table__.columns:
+        for banned in ("price", "mrp", "cost"):
+            assert banned not in column.name, column.name
+
+    await seed_current()
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B,
+    )
+    body = await verdict(app_client, device)
+    assert body["value"]["comparison"]["current"]["mrp_inr"] == "120.00"
+
+    # The price lives in the confirmed capture, and nowhere near Store A. Read
+    # the persisted content columns, not ``str(row.__dict__)``: that repr also
+    # carries the instance's memory address and the provenance timestamps
+    # (``fetched_at``, ``off_last_modified_t``), any of which can hold the
+    # substring "120" by coincidence and did once on CI. The only question here
+    # is whether the MRP was copied into a Store A *data* column, so those are
+    # exactly the columns to check, and the answer is deterministic.
+    provenance = {"fetched_at", "off_last_modified_t"}
+    content_columns = [c.name for c in OffProduct.__table__.columns if c.name not in provenance]
+    factory = get_off_sessionmaker()
+    async with factory() as session:
+        rows = (await session.execute(select(OffProduct))).scalars().all()
+    assert rows
+    for row in rows:
+        for name in content_columns:
+            assert "120" not in str(getattr(row, name)), name
+
+
+@pytest.mark.asyncio
+async def test_computing_a_price_comparison_asks_no_ai_anything(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network, monkeypatch,
+):
+    """The model transcribed a clause once. Comparing is deterministic code."""
+    from app.domains.ai_gateway import gateway
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("Step 6B reached the AI gateway")
+
+    monkeypatch.setattr(gateway, "run_structured", forbidden)
+
+    await seed_current()
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B,
+    )
+
+    # The runs behind the confirmed captures are the transcriptions that already
+    # happened; what matters is that *reading* the comparison adds none. Counting
+    # before and after says that directly, where asserting an empty table would
+    # only be asserting that the fixtures happened not to confirm anything.
+    factory = get_sessionmaker()
+    async with factory() as session:
+        before = (await session.execute(select(func.count()).select_from(AIRun))).scalar_one()
+
+    body = await verdict(app_client, device)
+    assert body["value"]["comparison"]["candidate"]["mrp_per_100_inr"] == "25.00"
+
+    async with factory() as session:
+        after = (await session.execute(select(func.count()).select_from(AIRun))).scalar_one()
+    assert after == before
+
+
+@pytest.mark.asyncio
+async def test_an_account_can_export_the_pack_prices_it_captured(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """A person's own price observations are their data, and travel with them."""
+    from app.domains.privacy import export as privacy_export
+
+    token, account_id = await registered_supabase_user()
+    await seed_capture(
+        CURRENT,
+        label_facts(product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C,
+                    panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹120"),
+        account_id=account_id,
+    )
+    # Somebody else's capture of another pack.
+    other_token, other_account = await registered_supabase_user()
+    del other_token
+    await seed_capture(
+        CANDIDATE_B,
+        label_facts(product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+                    panel=PANEL_B, net_quantity="400 g", mrp_text="MRP ₹100"),
+        account_id=other_account,
+    )
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        bundle = await privacy_export.build_export(session, account_id)
+    serialised = str(bundle)
+    assert "MRP ₹120" in serialised, "the account cannot export its own captured MRP"
+    # And never another person's observation.
+    assert "MRP ₹100" not in serialised
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_account_removes_its_price_observation(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+    registered_supabase_user, monkeypatch,
+):
+    """Through the real deletion state machine, not a hand-written DELETE.
+
+    The newest remaining confirmed capture becomes the authority afterwards —
+    which is the ordinary rule, not a reach behind a deletion.
+    """
+    from app.domains.privacy import deletion_service
+
+    async def no_supabase(_account_id):
+        return None
+
+    async def no_storage(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(deletion_service, "_delete_supabase_identity", no_supabase)
+    monkeypatch.setattr(deletion_service, "_remove_external_integrations", no_storage)
+
+    owner_token, owner_account = await registered_supabase_user()
+    other_token, other_account = await registered_supabase_user()
+    del owner_token, other_token
+
+    await seed_off(CURRENT)
+    # The older observation, owned by somebody who is staying.
+    await seed_capture(
+        CURRENT,
+        label_facts(product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C,
+                    panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹110"),
+        account_id=other_account, age=timedelta(days=2),
+    )
+    # The newest observation, owned by the account about to be deleted.
+    await seed_capture(
+        CURRENT,
+        label_facts(product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C,
+                    panel=PANEL_C, net_quantity="500 g", mrp_text="MRP ₹120"),
+        account_id=owner_account,
+    )
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B,
+    )
+
+    before = await verdict(app_client, device)
+    assert before["value"]["comparison"]["current"]["mrp_inr"] == "120.00"
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await deletion_service.request_deletion(session, owner_account)
+        await session.commit()
+        await deletion_service.drain_all(session)
+        await session.commit()
+
+    async with factory() as session:
+        remaining = (await session.execute(
+            select(ScanEvent).where(ScanEvent.barcode == CURRENT)
+        )).scalars().all()
+    assert [event.account_id for event in remaining] == [other_account]
+
+    after = await verdict(app_client, device)
+    # The observation that is now newest — not a resurrection of the deleted one.
+    assert after["value"]["comparison"]["current"]["mrp_inr"] == "110.00"
+    assert "120" not in str(after["value"])

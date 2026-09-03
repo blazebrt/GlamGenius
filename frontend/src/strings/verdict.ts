@@ -122,6 +122,47 @@ export const S = {
     // Says what to do, and does not pretend the shopper saw this packet.
     scanFirstAction: 'Scan this product to report what you see',
   },
+  // -----------------------------------------------------------------------
+  // What confirmed pack labels stated as MRP.
+  //
+  // The narrowest claim in the app: two packs declared these maximum retail
+  // prices on these dates, and this is the arithmetic per 100 g. Four things
+  // this copy must never do:
+  //
+  //   - call it a price. MRP is the maximum a pack may be sold for, printed on
+  //     the pack. We know nothing about discounting, so "price today", "what
+  //     you will pay" and "store price" are all claims we cannot support.
+  //   - characterise the numbers. No cheaper, no expensive, no saving, no
+  //     "worth it", no best value. V1 reports arithmetic and stops.
+  //   - imply we searched anywhere. We read two confirmed pack labels.
+  //   - hide the pack sizes. A smaller number on a smaller pack is not a lower
+  //     MRP per 100 g, and showing only the normalised figure would let a
+  //     shopper conclude the opposite of what the arithmetic says.
+  // -----------------------------------------------------------------------
+  mrpComparison: {
+    heading: 'MRP comparison',
+    current: 'Current',
+    alternative: 'Alternative',
+    // "MRP ₹120 · 500 g" — the absolute pack facts, so the normalised figure
+    // below can be checked rather than taken on trust.
+    packLine: 'MRP {mrp} · {quantity}',
+    perBasisMass: 'MRP per 100 g',
+    perBasisVolume: 'MRP per 100 ml',
+    // Provenance, because an MRP changes and a dated reading is the only
+    // honest form of this claim.
+    observed: 'Observed on a confirmed pack · {date}',
+    disclosure: 'Maximum retail price printed on the pack, not a shop price.',
+    // Rule 5: state the absence. We did not search a market, so we cannot say
+    // a price does not exist — only that we have no recent pack reading.
+    notEnoughInformation: 'Not enough recent pack information to compare MRP.',
+    a11y: {
+      heading: 'MRP comparison',
+      // Role, MRP, pack size, normalised figure and date — everything the
+      // sighted layout conveys, in one spoken sentence.
+      side: '{role}. MRP {mrp} for {quantity}. {basis} {perHundred}. Observed on a confirmed pack on {date}.',
+      missing: 'Not enough recent pack information to compare MRP.',
+    },
+  },
   officialRecords: {
     title: 'Official FSSAI record',
     recallFound: 'This exact pack appears in an official FSSAI food recall record.',
@@ -187,6 +228,10 @@ export const S = {
       `${count} ${count === 1 ? 'shopper' : 'shoppers'} reported ${observation}`,
   },
   labelReview: {
+    // Shown before anything is stored, so a person can check the price we read
+    // against the pack in their hand. "MRP", never "price": the app has no
+    // evidence about what a shop will actually charge.
+    mrp: 'MRP',
     basis: 'Basis',
     basisPer100g: 'Per 100 g',
     basisPer100ml: 'Per 100 ml',

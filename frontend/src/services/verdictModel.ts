@@ -120,6 +120,42 @@ export interface ComparableAlternative {
   candidate: ComparableAlternativeCandidate | null;
 }
 
+/**
+ * One pack's declared MRP, as a confirmed capture recorded it.
+ *
+ * Every money field stays a string all the way to the screen. The app formats
+ * these; it never parses, normalises, divides or compares them, because the
+ * backend already did all of that with exact decimals.
+ */
+export interface PackMrpObservation {
+  barcode: string;
+  mrpInr: string;
+  quantity: { amount: string; unit: 'g' | 'ml' };
+  mrpPer100Inr: string;
+  observedAt: string;
+  source: 'confirmed_pack_label';
+}
+
+export type MrpRelationship =
+  | 'candidate_lower_mrp_per_100'
+  | 'same_mrp_per_100'
+  | 'candidate_higher_mrp_per_100';
+
+export interface MrpComparison {
+  policyVersion: string;
+  status: 'available' | 'not_enough_information';
+  reasonKey: string;
+  comparison: {
+    basis: 'per_100g' | 'per_100ml';
+    current: PackMrpObservation;
+    candidate: PackMrpObservation;
+    /** Arithmetic, not a recommendation. */
+    relationship: MrpRelationship;
+    /** Candidate minus current. Negative means the candidate's is lower. */
+    differenceInrPer100: string;
+  } | null;
+}
+
 export interface VerdictSource {
   resultContractVersion?: 'v1';
   barcode?: string;
@@ -157,6 +193,8 @@ export interface VerdictSource {
   alternative?: Alternative | null;
   /** Step 6A. Additive, and absent on a response that predates it. */
   comparableAlternative?: ComparableAlternative | null;
+  /** Step 6B. Additive, and downstream of the alternative above it. */
+  mrpComparison?: MrpComparison | null;
   /**
    * False when this product was opened as a reference rather than scanned.
    *

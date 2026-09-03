@@ -28,6 +28,7 @@ from app.domains.product import complaints, devices, extraction, pack_context, s
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
 from app.domains.product.models import FssaiComplaintHandoff, ScanDevice
+from app.domains.value import service as value_service
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account
@@ -181,8 +182,16 @@ async def confirm_label(
     if (
         run is None or output is None or run.account_id != current.account_id
         or run.status != AI_STATUS_SUCCEEDED or run.validation_passed is not True
-        or run.feature != extraction.FEATURE or run.schema_version != extraction.SCHEMA_VERSION
-        or output.schema_version != extraction.SCHEMA_VERSION
+        or run.feature != extraction.FEATURE
+        # The run and its stored output must agree on which schema produced
+        # them, and that one agreed schema must be confirmable. Accepting the
+        # previous schema is a kindness to a review a person started before a
+        # deployment; accepting a *mismatched pair* would be something else --
+        # a payload whose provenance we cannot actually state. Equality first,
+        # membership second, so a v1 run carrying a v2 output is refused even
+        # though both versions are individually confirmable.
+        or run.schema_version != output.schema_version
+        or run.schema_version not in extraction.CONFIRMABLE_SCHEMA_VERSIONS
     ):
         raise ValidationFailedError("This label transcription is not available for confirmation.", field="ai_run_id")
     try:
@@ -372,6 +381,15 @@ async def read_product_verdict(
         current_product=product,
         current_result=result,
         ruleset=ruleset,
+    )
+    # A sixth envelope, and deliberately the last thing computed: what two
+    # confirmed pack labels recently stated as their MRP, per 100 g or per
+    # 100 ml. It reads the alternative above rather than participating in it —
+    # the candidate and the basis are already decided, so a price cannot promote
+    # a product, break a tie, or send us looking for a cheaper one the science
+    # did not choose. MRP is what a pack declares, never what a shop charges.
+    payload["value"] = await value_service.pack_mrp_value_envelope(
+        session, barcode=barcode, alternative=payload["alternative"],
     )
     return payload
 
