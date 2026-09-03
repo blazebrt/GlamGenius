@@ -1756,11 +1756,22 @@ async def test_no_price_field_reached_the_open_food_facts_store(
     body = await verdict(app_client, device)
     assert body["value"]["comparison"]["current"]["mrp_inr"] == "120.00"
 
-    # The price lives in the confirmed capture, and nowhere near Store A.
+    # The price lives in the confirmed capture, and nowhere near Store A. Read
+    # the persisted content columns, not ``str(row.__dict__)``: that repr also
+    # carries the instance's memory address and the provenance timestamps
+    # (``fetched_at``, ``off_last_modified_t``), any of which can hold the
+    # substring "120" by coincidence and did once on CI. The only question here
+    # is whether the MRP was copied into a Store A *data* column, so those are
+    # exactly the columns to check, and the answer is deterministic.
+    provenance = {"fetched_at", "off_last_modified_t"}
+    content_columns = [c.name for c in OffProduct.__table__.columns if c.name not in provenance]
     factory = get_off_sessionmaker()
     async with factory() as session:
         rows = (await session.execute(select(OffProduct))).scalars().all()
-    assert all("120" not in str(row.__dict__) for row in rows)
+    assert rows
+    for row in rows:
+        for name in content_columns:
+            assert "120" not in str(getattr(row, name)), name
 
 
 @pytest.mark.asyncio
