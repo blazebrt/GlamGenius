@@ -43,7 +43,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, cast, func, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.product.models import ScanEvent
@@ -75,18 +76,37 @@ def is_confirmed_label_capture(event: ScanEvent | None) -> bool:
 
 
 def confirmed_label_capture_clauses() -> list[ColumnElement[bool]]:
-    """The same three-part test, as SQL, for queries that select captures.
+    """The same test, as SQL. Literally the same — that is the whole point.
 
     ``label_facts`` is JSONB and a plain scan stores JSON ``null`` in it rather
     than SQL ``NULL``, so ``IS NOT NULL`` would read every plain scan as a
-    capture. The type is therefore asserted explicitly. Emptiness is left to
-    :func:`is_confirmed_label_capture` on the selected row, which keeps the two
-    checks in step and fails closed either way.
+    capture. The type is asserted explicitly, and so is non-emptiness.
+
+    **Why non-emptiness has to be here and not only in Python.** A caller that
+    selects the newest matching row and *then* applies
+    :func:`is_confirmed_label_capture` gets the wrong answer if the two
+    disagree: an ineligible newer row consumes the ``LIMIT 1``, fails the
+    row-level check, and hides an older row that was genuinely eligible. The
+    query has to select the newest *eligible* capture, not the newest row that
+    might turn out to be one.
+
+    **Why this expression and not** ``jsonb_object_length``. That function
+    rejects non-object JSON outright, and PostgreSQL does not promise to
+    evaluate ``WHERE`` conjuncts left to right, so pairing it with a
+    ``jsonb_typeof`` guard would be relying on an evaluation order the planner
+    is free to ignore — an error waiting for the row that triggers it.
+    Comparing against an explicitly typed empty object is total: ``<>`` on
+    JSONB is defined for every JSON shape and raises on none of them. SQL
+    ``NULL`` yields ``NULL`` and the row is excluded, which is also correct.
+
+    Verified against ``null``, ``[]``, ``""``, ``{}``, a populated object and
+    SQL ``NULL``: only the populated object qualifies.
     """
     return [
         ScanEvent.outcome == OUTCOME_LABEL,
         ScanEvent.ai_run_id.is_not(None),
         func.jsonb_typeof(ScanEvent.label_facts) == "object",
+        ScanEvent.label_facts != cast({}, JSONB),
     ]
 
 

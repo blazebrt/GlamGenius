@@ -36,7 +36,7 @@ from app.domains.off import client as off_client
 from app.domains.off import taxonomy as off_taxonomy
 from app.domains.off.models import OffBase, OffProduct
 from app.domains.off.store import create_off_schema, get_off_engine, get_off_sessionmaker
-from app.domains.product import extraction
+from app.domains.product import extraction, pack_context
 from app.domains.product import service as product_service
 from app.domains.product.models import LabelSnapshot, ProductRecord, ScanEvent
 from app.domains.value import parsing as value_parsing
@@ -1178,6 +1178,181 @@ async def test_a_newer_unreadable_pack_size_does_not_borrow_an_older_one(
         observation, missing = await value_service.observe(session, CURRENT)
     assert observation is None
     assert missing == "quantity"
+
+
+async def seed_raw_event(
+    barcode: str, *, outcome: str, label_facts: object, with_run: bool = True,
+    age: timedelta | None = None,
+) -> uuid.UUID:
+    """A ScanEvent with an exact ``label_facts`` shape and chosen provenance.
+
+    ``seed_capture`` always writes well-formed facts, which is right for every
+    ordinary test and useless for probing the eligibility boundary. This writes
+    the row literally, so a JSON ``null``, an array, a string or ``{}`` can be
+    put in front of the query and the answer observed.
+    """
+    factory = get_sessionmaker()
+    async with factory() as session:
+        run_id = None
+        if with_run:
+            run = AIRun(
+                account_id=None, feature=extraction.FEATURE, provider="test",
+                model="test-model", prompt_version=extraction.SCHEMA_VERSION,
+                schema_version=extraction.SCHEMA_VERSION,
+                status=AI_STATUS_SUCCEEDED, validation_passed=True,
+            )
+            session.add(run)
+            await session.flush()
+            run_id = run.id
+        event = ScanEvent(
+            device_id=None, account_id=None, barcode=barcode, outcome=outcome,
+            client_scan_id=uuid.uuid4().hex, label_facts=label_facts, ai_run_id=run_id,
+        )
+        session.add(event)
+        await session.flush()
+        event_id = event.id
+        await session.commit()
+    if age is not None:
+        async with factory() as session:
+            await session.execute(
+                update(ScanEvent).where(ScanEvent.id == event_id)
+                .values(created_at=datetime.now(UTC) - age)
+            )
+            await session.commit()
+    return event_id
+
+
+@pytest.mark.asyncio
+async def test_an_ineligible_newer_row_does_not_hide_an_eligible_older_capture(
+    db_clean, off_clean, app_client, device,
+):
+    """An empty ``{}`` must not consume the single row the query selects.
+
+    The query takes the newest matching row and the row-level test is applied
+    afterwards, so the two have to agree about eligibility exactly. If the SQL
+    accepted any object-shaped value while the Python test additionally
+    required a non-empty one, a newer ``{}`` would win ``LIMIT 1``, fail the
+    check, and silently hide a genuinely eligible older capture — the product
+    would go quiet about a price it actually has.
+
+    This is *not* reaching behind a newer confirmed capture. The newer row was
+    never a confirmed capture: an empty object is not a label anybody read.
+    """
+    await seed_capture(CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+        mrp_text="MRP ₹120", net_quantity="500 g",
+    ), age=timedelta(days=2))
+    # Newer, carries the outcome and the provenance, and says nothing at all.
+    empty_id = await seed_raw_event(
+        CURRENT, outcome=product_service.OUTCOME_LABEL, label_facts={},
+    )
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        event = await value_service.latest_confirmed_capture(session, CURRENT)
+    assert event is not None
+    assert event.id != empty_id                      # the empty row is not it
+    assert event.label_facts["mrp_text"] == "MRP ₹120"
+
+    # ...and the observation the older capture supports is still published.
+    async with factory() as session:
+        observation, missing = await value_service.observe(session, CURRENT)
+    assert missing is None
+    assert observation.mrp_rupees == Decimal("120")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("shape", "outcome", "with_run", "eligible"),
+    [
+        # Nothing that is not a populated object may qualify...
+        (None, "label_captured", True, False),            # JSON null
+        ([], "label_captured", True, False),              # array
+        ("", "label_captured", True, False),              # string
+        ({}, "label_captured", True, False),              # empty object
+        # ...nor a populated object without confirmation provenance...
+        ({"mrp_text": "MRP ₹120"}, "label_captured", False, False),   # no AI run
+        ({"mrp_text": "MRP ₹120"}, "found_local", True, False),       # not a capture
+        ({"mrp_text": "MRP ₹120"}, "found_off", True, False),
+        # ...and a populated object with full provenance does.
+        ({"mrp_text": "MRP ₹120"}, "label_captured", True, True),
+    ],
+)
+async def test_the_capture_query_admits_only_a_populated_object_with_provenance(
+    db_clean, off_clean, app_client, device, shape, outcome, with_run, eligible,
+):
+    """The eligibility boundary, one JSON shape at a time.
+
+    Every one of these goes through the real query rather than the Python
+    predicate alone, because the query is what decides which row is looked at.
+    A shape that raised inside the ``WHERE`` clause would fail here too, which
+    is why the non-emptiness test is a total comparison rather than a function
+    that rejects non-object JSON.
+    """
+    await seed_raw_event(CURRENT, outcome=outcome, label_facts=shape, with_run=with_run)
+    factory = get_sessionmaker()
+    async with factory() as session:
+        event = await value_service.latest_confirmed_capture(session, CURRENT)
+    assert (event is not None) is eligible
+
+
+@pytest.mark.asyncio
+async def test_the_public_observation_and_the_viewer_pack_ask_different_questions(
+    db_clean, off_clean, app_client, device,
+):
+    """The two sequencing rules are deliberately not the same rule.
+
+    * The public product observation takes the newest *eligible* confirmed
+      capture, so an ineligible newer row is skipped rather than allowed to
+      silence the product.
+    * Viewer pack authority takes this device's newest *event* of any kind, and
+      a newer ordinary scan withdraws authority rather than letting the resolver
+      reach back to an older capture — because a plain scan means a different
+      packet is in this person's hand now.
+
+    Both are asserted here so neither can be "simplified" into the other.
+    """
+    factory = get_sessionmaker()
+    reg = await app_client.post(
+        "/api/v2/scan/device", json={"device_key": uuid.uuid4().hex, "platform": "android"},
+    )
+    device_id = uuid.UUID(reg.json()["device_id"])
+
+    # This device confirms the pack, so it holds authority.
+    await seed_capture(CURRENT, label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+        mrp_text="MRP ₹120", net_quantity="500 g",
+    ), device_id=device_id, age=timedelta(days=2))
+    async with factory() as session:
+        pack = await pack_context.current_pack(session, barcode=CURRENT, device_id=device_id)
+    assert pack.is_proven is True
+
+    # A newer ordinary scan by the same device: a different packet is in hand.
+    await seed_raw_event(CURRENT, outcome=product_service.OUTCOME_LOCAL, label_facts=None,
+                         with_run=False)
+    async with factory() as session:
+        session_scan = ScanEvent(
+            device_id=device_id, account_id=None, barcode=CURRENT,
+            outcome=product_service.OUTCOME_LOCAL, client_scan_id=uuid.uuid4().hex,
+            label_facts=None,
+        )
+        session.add(session_scan)
+        await session.commit()
+
+    async with factory() as session:
+        pack_after = await pack_context.current_pack(
+            session, barcode=CURRENT, device_id=device_id,
+        )
+        observation, missing = await value_service.observe(session, CURRENT)
+
+    # Viewer authority is withdrawn, with no reach-back to the older capture.
+    assert pack_after.is_proven is False
+    assert pack_after.label_facts is None
+    # The public product observation is untouched: those plain scans were never
+    # eligible captures, so the newest eligible capture is still the confirmed
+    # one, and the product still states the price it genuinely has.
+    assert missing is None
+    assert observation.mrp_rupees == Decimal("120")
 
 
 @pytest.mark.asyncio
