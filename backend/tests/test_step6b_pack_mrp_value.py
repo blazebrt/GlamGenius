@@ -387,6 +387,11 @@ def test_an_amount_in_a_different_sentence_is_not_the_mrp(text):
         ("330ml", "volume", "330", "ml"),
         ("4 x 25 g", "mass", "100", "g"),
         ("4 × 25 g", "mass", "100", "g"),
+        ("12 x 10 ml", "volume", "120", "ml"),
+        # A decimal *quantity* is ordinary; it is the multiplier that may not be
+        # fractional, and these prove the distinction is real in both directions.
+        ("0.75 L", "volume", "750.00", "ml"),
+        ("25.5 g", "mass", "25.5", "g"),
     ],
 )
 def test_a_stated_net_quantity_normalises_to_one_base_unit(text, dimension, amount, unit):
@@ -422,6 +427,90 @@ def test_an_ambiguous_pack_size_is_refused(text):
 def test_a_non_string_quantity_is_refused():
     for value in (None, 500, 1.5, ["500 g"], True):
         assert value_parsing.parse_quantity(value) is None
+
+
+@pytest.mark.parametrize("text", ["1.5 x 25 g", "2.25 × 100 ml", "0.5 x 1 L", "0.5x1l"])
+def test_a_fractional_multipack_count_is_refused_by_the_grammar(text):
+    """Half a packet of anything is not a thing a pack declares.
+
+    The multiplier counts identical packs, so it must be a whole number. The
+    refusal is a rule of the pattern rather than a consequence of some later
+    arithmetic — asserted directly against the compiled grammar below, so a
+    future rewrite of the calculation cannot quietly reintroduce it.
+    """
+    assert value_parsing.parse_quantity(text) is None
+
+
+def test_the_integer_multiplier_is_a_parser_rule():
+    """Read off the pattern itself, not inferred from behaviour."""
+    assert value_parsing._QUANTITY.match("4 x 25 g") is not None
+    assert value_parsing._QUANTITY.match("1.5 x 25 g") is None
+    # The multiplier group admits digits only; the amount group admits a point.
+    count_group, amount_group, _ = value_parsing._QUANTITY.match("4 x 25.5 g").groups()
+    assert (count_group, amount_group) == ("4", "25.5")
+
+
+@pytest.mark.parametrize("text", ["0 g", "0 ml", "0 x 25 g", "0 × 1 kg", "00 x 25 g"])
+def test_a_pack_with_nothing_in_it_is_not_a_denominator(text):
+    assert value_parsing.parse_quantity(text) is None
+
+
+def test_a_pack_size_is_normalised_exactly_or_not_at_all():
+    """A quantity divides into every figure this domain publishes.
+
+    The ambient ``Decimal`` context carries 28 digits, and the normalisation
+    multiplies — by the unit factor, and again by any multipack count. A long
+    quantity run through that context comes back rounded, which would move
+    every per-100 figure derived from it while looking perfectly correct. The
+    parser now works in a context sized from the input bound and traps rather
+    than rounds.
+    """
+    assert value_parsing.QUANTITY_PARSE_PRECISION > value_parsing.MAX_QUANTITY_TEXT_LENGTH
+
+    # Forty significant digits: far past the ambient 28, still well inside the
+    # clause length limit. Expected values are written out rather than computed,
+    # because computing them would round them in exactly the way under test.
+    forty = "1234567890123456789012345678901234567890"
+    grams = value_parsing.parse_quantity(f"{forty} g")
+    assert grams is not None
+    assert grams.base_amount == Decimal(forty)
+
+    kilos = value_parsing.parse_quantity(f"{forty} kg")
+    assert kilos is not None
+    assert kilos.base_amount == Decimal(forty + "000")
+
+    multipack = value_parsing.parse_quantity(f"1000 x {forty} g")
+    assert multipack is not None
+    assert multipack.base_amount == Decimal(forty + "000")
+
+    # Right up against the input bound, which is the only bound there is.
+    longest = "9" * (value_parsing.MAX_QUANTITY_TEXT_LENGTH - 2)
+    at_bound = value_parsing.parse_quantity(f"{longest} g")
+    assert at_bound is not None
+    assert at_bound.base_amount == Decimal(longest)
+    assert value_parsing.parse_quantity("9" * value_parsing.MAX_QUANTITY_TEXT_LENGTH + " g") is None
+
+
+def test_an_exact_long_pack_size_drives_the_public_arithmetic_without_raising():
+    """And the figure it produces is deterministic rather than an exception.
+
+    A denominator of forty digits is absurd on a shelf and must still behave:
+    the per-100 figure is computed, rounded and rendered like any other, and
+    repeating the call gives the same answer.
+    """
+    forty = "1234567890123456789012345678901234567890"
+    quantity = value_parsing.parse_quantity(f"{forty} g")
+    assert quantity is not None
+
+    per_100 = value_policy.mrp_per_100(Decimal("120"), quantity.base_amount)
+    assert per_100 is not None
+    rendered = value_policy.money_string(per_100)
+    assert rendered == "0.00"
+    assert rendered == value_policy.money_string(
+        value_policy.mrp_per_100(Decimal("120"), quantity.base_amount)
+    )
+    # And the pack size itself still renders as a plain readable number.
+    assert value_policy.quantity_string(quantity.base_amount) == forty
 
 
 # ---------------------------------------------------------------------------

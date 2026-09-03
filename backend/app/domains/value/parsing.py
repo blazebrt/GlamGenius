@@ -32,6 +32,15 @@ MAX_QUANTITY_TEXT_LENGTH = 120
 #: truncated one.
 PARSE_PRECISION = MAX_MRP_TEXT_LENGTH + 2
 
+#: The same idea for pack sizes, and it matters more here than it looks.
+#: A quantity is the *denominator* of every per-100 figure, so a size rounded
+#: on its way through the parser would silently change every number a shopper
+#: reads. The bound again comes from the input: a quantity string of at most
+#: ``MAX_QUANTITY_TEXT_LENGTH`` characters cannot hold more digits than that,
+#: and the headroom covers the ×1000 unit factor and the multipack count. Not a
+#: view about how heavy a packet is allowed to be.
+QUANTITY_PARSE_PRECISION = MAX_QUANTITY_TEXT_LENGTH + 8
+
 #: The declaration a pack must actually carry. Without one of these words the
 #: number beside a rupee sign could be an offer price, a shelf price or a
 #: competitor comparison, and we would be publishing it as an MRP.
@@ -164,8 +173,14 @@ _UNITS: dict[str, tuple[str, str, Decimal]] = {
 #: Deliberately anchored at both ends. A pattern that merely *searches* would
 #: happily read "500 g" out of "100 g + 20 g free" and out of "approx 500 g",
 #: and both of those are packs whose size we do not actually know.
+#:
+#: The multiplier is a **count of identical packs**, so the grammar admits only
+#: a positive integer there. ``4 x 25 g`` is four packets; ``1.5 x 25 g`` is not
+#: anything a pack states, and the refusal happens here in the pattern rather
+#: than later in the arithmetic, so there is no interpretation to get wrong.
+#: The quantity itself stays decimal — ``1.5 kg`` and ``0.75 l`` are ordinary.
 _QUANTITY = re.compile(
-    r"^(?:(\d+(?:\.\d+)?)\s*[x×*]\s*)?(\d+(?:\.\d+)?)\s*([a-z]+)$",
+    r"^(?:(\d+)\s*[x×*]\s*)?(\d+(?:\.\d+)?)\s*([a-z]+)$",
 )
 
 
@@ -192,6 +207,11 @@ def parse_quantity(net_quantity: object) -> Quantity | None:
     number the pack actually states.
 
     Never inferred from a product name, a category or a serving size.
+
+    Normalisation is exact or it does not happen. The pack size divides into
+    every figure this domain publishes, so a size that had been rounded on the
+    way in would quietly move every one of them; where exactness cannot be
+    guaranteed the answer is ``None`` and the comparison goes quiet.
     """
     if not isinstance(net_quantity, str):
         return None
@@ -205,13 +225,23 @@ def parse_quantity(net_quantity: object) -> Quantity | None:
     if unit is None:
         return None
     dimension, base_unit, factor = unit
-    try:
-        amount = Decimal(amount_text) * factor
-        if count_text is not None:
-            amount *= Decimal(count_text)
-    except InvalidOperation:
-        return None
+    with localcontext() as ctx:
+        # Room for every digit the bounded input could carry through both
+        # multiplications, and a trap rather than a rounding rule if it is ever
+        # not enough. Without this the ambient 28-digit context would silently
+        # round a long quantity into a different denominator.
+        ctx.prec = QUANTITY_PARSE_PRECISION
+        ctx.traps[InvalidOperation] = True
+        ctx.traps[Rounded] = True
+        try:
+            amount = Decimal(amount_text) * factor
+            if count_text is not None:
+                amount *= Decimal(count_text)
+        except ArithmeticError:
+            return None
     if not amount.is_finite() or amount <= 0:
+        # Covers "0 g" and "0 x 25 g": a pack with nothing in it is not a
+        # denominator, whatever the string said.
         return None
     return Quantity(dimension=dimension, base_amount=amount, base_unit=base_unit)
 
@@ -220,6 +250,7 @@ __all__ = [
     "MAX_MRP_TEXT_LENGTH",
     "MAX_QUANTITY_TEXT_LENGTH",
     "PARSE_PRECISION",
+    "QUANTITY_PARSE_PRECISION",
     "Quantity",
     "parse_mrp_rupees",
     "parse_quantity",

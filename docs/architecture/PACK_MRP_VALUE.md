@@ -190,9 +190,23 @@ which traps rather than rounds. A test asserts past where the old ceiling stood.
 
 **Quantity.** Anchored at both ends, so the whole string must be a quantity —
 a pattern that merely searched would happily read `500 g` out of
-`100 g + 20 g free`. `500 g`, `1 kg`, `250 ml`, `1 L`, `4 x 25 g` all parse;
-`approx 500 g`, `10 pieces`, `12 sachets`, `family pack`, `500 g / 550 g` do
-not. Never inferred from a product name.
+`100 g + 20 g free`. `500 g`, `1 kg`, `1.5 kg`, `0.75 L`, `250 ml`, `4 x 25 g`,
+`12 x 10 ml` all parse; `approx 500 g`, `10 pieces`, `12 sachets`,
+`family pack`, `500 g / 550 g`, `0 g` do not. Never inferred from a product
+name.
+
+**The multipack count is a whole number**, as a rule of the grammar rather than
+a consequence of the arithmetic. It counts identical packs, so `4 x 25 g` is
+four packets and `1.5 x 25 g` is nothing a pack declares. The quantity itself
+stays decimal — `1.5 kg` and `0.75 L` are ordinary.
+
+**And the normalisation is exact or it does not happen.** The pack size is the
+*denominator* of every figure published here, so a size rounded on the way in
+would move all of them while looking perfectly correct — and the ambient
+`Decimal` context, at 28 digits, rounds a long quantity on a plain multiply by
+the unit factor. Parsing runs in a context sized from
+`MAX_QUANTITY_TEXT_LENGTH` and traps rather than rounds; where exactness cannot
+be guaranteed the answer is "not enough information".
 
 A dedicated parser, not the existing `pack_size_g()`: that function treats
 millilitres and grams as one numeric size for a different presentation job, and
