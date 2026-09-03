@@ -19,8 +19,16 @@ PRODUCT_PATH = "/api/v2/product/{barcode}.json"
 
 # The fields Store A holds. Asking for these and no more keeps the response
 # aligned with what may legally be stored.
+#
+# ``categories_tags`` and ``countries_tags`` are the taxonomy arrays. They are
+# requested rather than the ``categories``/``countries`` text alone because
+# only the arrays carry Open Food Facts' own classification: their schema
+# describes the text fields as untaxonomised, written in whichever language the
+# last editor was using, and "mostly used for debugging and testing purposes".
+# See ``app/domains/off/taxonomy.py`` for the quotations and the reasoning.
 REQUESTED_FIELDS = (
     "code,product_name,brands,ingredients_text,nutriments,categories,"
+    "categories_tags,countries_tags,"
     "image_url,quantity,countries,last_modified_t"
 )
 

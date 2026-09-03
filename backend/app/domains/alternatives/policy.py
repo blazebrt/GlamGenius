@@ -50,20 +50,55 @@ REASON_CURRENT_BASIS_NOT_SOURCE_KNOWN = "current_product_basis_not_source_known"
 REASON_CURRENT_CATEGORY_UNAVAILABLE = "no_source_category_for_this_product"
 REASON_CURRENT_CATEGORY_STALE = "source_category_copy_is_out_of_date"
 REASON_NO_COMPARABLE_CANDIDATE = "no_comparable_candidate_in_cached_data"
+#: Distinct from the one above, and the distinction is the honest part: we ran
+#: out of the work one request may do before we ran out of products to consider.
+#: "We did not find one" and "we stopped looking" are different statements, and
+#: collapsing them would let a capacity limit be read as a fact about the
+#: market. Both are still ``not_enough_information`` to a customer — the app
+#: says the same careful sentence — but only one of them means the cached data
+#: has been exhausted, and the difference is what tells us to raise the budget.
+REASON_SEARCH_BUDGET_EXHAUSTED = "search_budget_exhausted_before_a_comparable_candidate"
 
 #: What ``category_match`` in the response means, spelled out rather than
-#: implied: the final token of the source's own category path matched exactly.
-CATEGORY_MATCH_EXACT_SOURCE_LEAF = "exact_source_leaf"
+#: implied: Open Food Facts' own category taxonomy tags, in full, matched
+#: exactly. Not a leaf, not a parent, not a guess at which tag is the most
+#: specific one — the whole published classification, identical on both sides.
+#: See ``app/domains/off/taxonomy.py`` for why that is the narrowest comparison
+#: their documented field semantics support.
+CATEGORY_MATCH_EXACT_SOURCE_TAXONOMY = "exact_source_taxonomy"
 
 #: Where the category came from. Named so no surface can imply GlamGenius
 #: authored or certified a market category. We did not; we read theirs.
 CATEGORY_SOURCE = "open_food_facts"
 
-#: How many cached Store A rows one request may pull back before the Python
-#: gates run. A Product Result must not turn into hundreds of grade
-#: evaluations, and an unbounded scan of Store A is not a query, it is an
-#: outage. Rows come back in barcode order, so the window is deterministic.
-MAX_DISCOVERY_CANDIDATES = 50
+#: How many qualifying Store A rows one page of discovery reads.
+#:
+#: Every question Store A can answer — the canonical category, the canonical
+#: India listing, the exclusion of the shopper's own barcode, and the age of
+#: the copy — is already answered in SQL before this limit applies, so a page
+#: is a page of rows that have *passed* those gates rather than a window that
+#: they will later be filtered out of.
+DISCOVERY_PAGE_SIZE = 50
+
+#: How many such pages one request may read.
+#:
+#: This is the fix for a starvation the single-window design could not avoid.
+#: A Store A row qualifies on category, country and freshness; whether it can
+#: actually be offered depends on a confirmed label snapshot in Store B, which
+#: Store A cannot see and which the licence wall forbids us from joining to. So
+#: a window of fifty source-qualified rows that all happen to lack a usable
+#: snapshot returned nothing, permanently, while a perfectly good candidate sat
+#: at position fifty-one — and no amount of waiting or re-scanning would ever
+#: reach it, because the window started in the same place every time.
+#:
+#: Paging past them costs one more bounded Store B read per page and turns a
+#: permanent blind spot into a stated, raisable limit.
+MAX_DISCOVERY_PAGES = 10
+
+#: The total work ceiling for one request, stated in the unit that matters.
+#: Reaching it is reported as its own reason so a capacity limit is never
+#: mistaken for a fact about what the cached data contains.
+MAX_DISCOVERY_ROWS = DISCOVERY_PAGE_SIZE * MAX_DISCOVERY_PAGES
 
 #: The canonical purchase actions, worst last. Not a new vocabulary — the same
 #: buy/wait/skip the verdict already speaks.
@@ -182,6 +217,22 @@ def ranking_key(candidate: Candidate) -> tuple[int, int, str]:
     return candidate.rank
 
 
+def is_unbeatable(candidate: Candidate) -> bool:
+    """Can any row we have not read yet displace this one? ``True`` means no.
+
+    Discovery walks Store A in ascending barcode order and barcode is the final
+    tie-break, so a later row beats this one only by being *strictly* better on
+    grade or action. A candidate already at the top of both ladders therefore
+    cannot be displaced by anything further down the scan, and reading on would
+    change nothing but the bill.
+
+    Stated here, beside the ranking it depends on, so the two cannot drift: if
+    the ranking key ever gains a term, this has to be reconsidered with it.
+    """
+    grade_rank, action_rank, _barcode = candidate.rank
+    return grade_rank == 0 and action_rank == 0
+
+
 def select(candidates: list[Candidate]) -> Candidate | None:
     """The one candidate the public contract is allowed to carry.
 
@@ -199,7 +250,7 @@ def comparison_block(
 ) -> dict[str, Any]:
     """What the two products were compared on, stated rather than implied."""
     return {
-        "category_match": CATEGORY_MATCH_EXACT_SOURCE_LEAF,
+        "category_match": CATEGORY_MATCH_EXACT_SOURCE_TAXONOMY,
         "category_source": CATEGORY_SOURCE,
         "current_grade": current_grade.value,
         "candidate_grade": candidate_grade.value,
@@ -209,16 +260,19 @@ def comparison_block(
 
 __all__ = [
     "ACTION_ORDER",
-    "CATEGORY_MATCH_EXACT_SOURCE_LEAF",
+    "CATEGORY_MATCH_EXACT_SOURCE_TAXONOMY",
     "CATEGORY_SOURCE",
     "COMPARABLE_ALTERNATIVE_POLICY_VERSION",
-    "MAX_DISCOVERY_CANDIDATES",
+    "DISCOVERY_PAGE_SIZE",
+    "MAX_DISCOVERY_PAGES",
+    "MAX_DISCOVERY_ROWS",
     "REASON_AVAILABLE",
     "REASON_CURRENT_BASIS_NOT_SOURCE_KNOWN",
     "REASON_CURRENT_CATEGORY_STALE",
     "REASON_CURRENT_CATEGORY_UNAVAILABLE",
     "REASON_CURRENT_GRADE_UNAVAILABLE",
     "REASON_NO_COMPARABLE_CANDIDATE",
+    "REASON_SEARCH_BUDGET_EXHAUSTED",
     "SOURCE_KNOWN_BASES",
     "STATUS_AVAILABLE",
     "STATUS_NOT_ENOUGH_INFORMATION",
@@ -227,6 +281,7 @@ __all__ = [
     "basis_key",
     "comparable_basis",
     "comparison_block",
+    "is_unbeatable",
     "published_grade",
     "ranking_key",
     "select",

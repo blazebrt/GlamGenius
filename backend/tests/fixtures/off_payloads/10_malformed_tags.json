@@ -1,0 +1,26 @@
+{
+  "code": "8901000000010",
+  "product_name": "Corn Flakes",
+  "brands": "Northstar",
+  "ingredients_text": "maize, sugar, salt",
+  "nutriments": {
+    "energy-kcal_100g": 380,
+    "sugars_100g": 8,
+    "saturated-fat_100g": 1,
+    "salt_100g": 0.5,
+    "proteins_100g": 7,
+    "fiber_100g": 3
+  },
+  "categories": "Foods, Breakfasts, Breakfast cereals",
+  "categories_tags": [
+    "en:breakfast-cereals",
+    42
+  ],
+  "countries": "India",
+  "countries_tags": [
+    "en:india"
+  ],
+  "image_url": "https://images.openfoodfacts.org/images/products/example.jpg",
+  "quantity": "500 g",
+  "last_modified_t": 1735689600
+}

@@ -57,10 +57,11 @@ simply gets no comparative claim.
 
 ```
 current graded product, from its own confirmed label
-  -> conservative category leaf, from the Open Food Facts row, at runtime
+  -> canonical category key, from the Open Food Facts row's taxonomy tags
   -> that row's copy must be inside the freshness window
-  -> bounded read of cached Store A candidates: same leaf, listed for India, fresh
-  -> ONE batch read of those candidates' latest label snapshots from Store B
+  -> PAGED reads of cached Store A candidates, every gate answered in SQL:
+     same canonical category, canonical India tag, dated, fresh, not itself
+  -> ONE batch read of each page's latest label snapshots from Store B
   -> the same adapter, the same grader, the same resolved ruleset
   -> strictly higher grade, no worse a decision, the same printed panel basis
   -> a name a person can read
@@ -68,31 +69,76 @@ current graded product, from its own confirmed label
   -> at most ONE candidate on the public contract
 ```
 
-`backend/app/domains/alternatives/` owns it: `category.py` reads the source
-taxonomy, `policy.py` holds the eligibility and ranking rules, `service.py`
-runs the chain. The domain consumes the grading, Open Food Facts, product-label
-and presentation layers; it owns none of them.
+`backend/app/domains/alternatives/` owns it: `category.py` states the
+comparison rule and defers to `app/domains/off/taxonomy.py`, which is where the
+source's field semantics are documented, `policy.py` holds the eligibility,
+ranking and work-budget rules, `service.py` runs the chain. The domain consumes
+the grading, Open Food Facts, product-label and presentation layers; it owns
+none of them.
 
 ## Category comparability is not a scientific claim
 
-Two products are comparable when the **final** token of each one's Open Food
-Facts category path, normalised the same way, is the identical string.
+Two products are comparable when Open Food Facts publishes the **same complete
+category classification** for both: their `categories_tags` taxonomy arrays,
+normalised and compared as whole sets.
 
-The normalisation is deliberately dull: NFKC, split on the source's comma,
-trim, collapse repeated whitespace, casefold, drop empties, take the last
-surviving token. `"Foods, Breakfasts, Breakfast cereals"` and `"Plant foods,
-Breakfast cereals"` both resolve to `breakfast cereals`.
+### Why not the `categories` text field
 
-Nothing else is allowed to decide a category. Not the product name, the brand,
-the ingredient list, the nutrition panel, the barcode prefix, an image,
-somebody's report, or an AI. If the source carries no usable category, the
-answer is that we do not have enough information.
+Because Open Food Facts says not to. Their published product schema describes it
+verbatim as:
+
+> Comma separated list of categories (**not taxonomized**), in the last language
+> used to edit it (recorded in categories_lc). This field is mostly used for
+> **debugging and testing purposes**. Do not use it for display purposes.
+
+Two consequences follow, and both are silent failures rather than errors:
+
+* **The same product kind stops matching itself.** A cereal last edited by a
+  French contributor reads `Céréales pour petit-déjeuner`; the same kind of
+  product edited in English reads `Breakfast cereals`. Comparing the text finds
+  nothing and a perfectly good alternative is never offered.
+* **Different products start matching.** A cereal bar whose contributor happened
+  to type `Breakfast cereals` as the final element collides with a box of
+  cereal, and a comparison gets published between two things nobody classified
+  together.
+
+`categories_tags` is the array whose taxonomy-matched entries are exact
+canonical ids of the form `en:breakfast-cereals`, independent of the editor's
+language.
+
+### Why the whole set, and not "the most specific tag"
+
+Nothing in the published schema says `categories_tags` is ordered
+broadest-first. Calling the final entry the leaf is an assumption dressed as a
+reading, so no single element is picked at all: the key is the sorted set of the
+whole array. That is order-independent by construction and is the narrowest
+comparison their documented semantics support — two products match only when
+their entire published classification is identical.
+
+The lossiness their schema warns about applies to entries that matched *no*
+taxonomy entry. Because the whole set must be identical, such an entry has to be
+byte-identical on both sides before it can contribute to a match. It can cost us
+a match; it cannot manufacture one. That is the only direction this may fail in.
+
+`compared_to_category` appears nowhere in the published product schema, so it is
+not part of the documented contract and nothing depends on it.
+
+### What still may not decide a category
+
+Not the product name, the brand, the ingredient list, the nutrition panel, the
+barcode prefix, an image, somebody's report, or an AI. If the source carries no
+usable classification, the answer is that we do not have enough information.
 
 There is no fuzzy matching, no edit distance, no embedding, no parent/child
 equivalence and no hand-written taxonomy of our own. `breakfast cereals` is not
 `cereal bars`; `potato crisps` is not `crackers`; `yogurts` is not `milk
 drinks`. Broadening any of these would buy recall with a comparison we could
-not defend.
+not defend. A row classified broadly and one classified specifically are not
+comparable in either direction, even when one array is a prefix of the other.
+
+The quotations above, their source URLs and the retrieval date live in
+`backend/app/domains/off/taxonomy.py` and
+`backend/tests/fixtures/off_payloads/SOURCES.md`.
 
 And a category match means only what the source says it means: the same kind of
 product. It does not mean the same nutrition, the same ingredients, the same
@@ -124,9 +170,12 @@ rule is absolute — they simply do not qualify during that request.
 
 ## India availability is a statement about a database row
 
-A candidate must carry `India` (or the source's own `en:india` tag form) as an
-exact normalised token in the Open Food Facts `countries` field. A missing
-country list makes a candidate ineligible: absence is not availability.
+A candidate must carry the canonical Open Food Facts country id `en:india` in
+its `countries_tags` array. Not a spelling in the raw `countries` text: their
+own taxonomy already resolves "India", "Bharat", "Hindustan", "IN", "IND" and
+every translation to that single id, so reading it is reading their answer
+rather than re-deriving it badly from prose. A missing or unreadable country
+array makes a candidate ineligible: absence is not availability.
 
 It is never inferred from a barcode prefix, a brand, a language, an
 FSSAI-looking name, or another shopper's scan. No retailer is consulted in this
@@ -158,8 +207,8 @@ place a product's published name and brand are decided. A catalogue row whose
 numbers would grade A does not make a product an A: if the confirmed pack is a
 D, no card offers it.
 
-The snapshot read is **one query for the whole window**, not one per candidate.
-Fifty round trips inside a single Product Result is not a detail to fix later.
+The snapshot read is **one query per page**, never one per candidate. Fifty
+round trips inside a single Product Result is not a detail to fix later.
 
 And "latest" means latest, not latest usable. A newer capture that could not
 read the panel makes a candidate ineligible; reaching back to an older complete
@@ -214,11 +263,47 @@ Opening the alternative navigates to that product's ordinary Product Result with
 `physical_pack_context=false` — a **reference view**.
 
 The distinction it protects: the newest label snapshot for a barcode may be a
-stranger's photograph of a stranger's packet. The ordinary screen is entitled to
-use it, because a shopper who scanned that barcode is probably holding a pack
-like it. A shopper who merely tapped a comparison card is not holding anything.
+stranger's photograph of a stranger's packet. A shopper who merely tapped a
+comparison card is not holding anything.
 
-So a reference view **only ever removes authority**:
+### The flag is a ceiling, not a grant
+
+`physical_pack_context=true` is a **request**, and a request is not evidence. A
+client sets it by default, an old build sets it always, and a hostile one sets
+it deliberately — none of which tells the server anything about what is in
+somebody's hand. Believing it, and then reading the newest snapshot for the
+barcode as though it were the caller's own, attaches a stranger's lot and the
+recall matched to it to a pack this device has never seen.
+
+So authority is established from rows this server wrote, and the request can
+only ever narrow it:
+
+```
+effective pack authority = requested  AND  server-proven
+```
+
+**Server-proven** means: this device's newest `ScanEvent` for this barcode is
+itself a confirmed label capture. Ordered by server time (`created_at`, then
+`id`) and never by the client's `scanned_at`, which an offline queue may
+legitimately backdate and a hostile client may simply choose.
+
+It never searches backwards. A newer plain scan of the same barcode means a
+*different physical packet* is in this person's hand now, and its lot is unknown
+until they photograph it. Reaching past that scan to an older capture would
+attach last month's lot to today's packet, and would keep showing a shopper a
+signal about a pack they put back on the shelf.
+
+One resolver holds this rule — `backend/app/domains/product/pack_context.py` —
+and the official-record layer, the community batch signal and the response flag
+all read it. Two copies would drift, and the way that drift surfaces is a
+stranger's recall on somebody's screen.
+
+The response reports the authority that was actually in force rather than
+echoing the request back, so no surface has to reconstruct the difference.
+
+### What a reference view removes
+
+A reference view **only ever removes authority**:
 
 * **Official records.** No pack facts are passed to the matching layer at all, so
   no exact batch recall from somebody else's capture is shown. The envelope is
@@ -232,8 +317,9 @@ So a reference view **only ever removes authority**:
 
 The product science is unchanged, because that is a fact about the product
 rather than about who is looking. And nothing is added: a device that really did
-scan the pack gets the ordinary Step 4 and Step 5 behaviour back, by its own
-rules.
+photograph the pack gets the ordinary Step 4 and Step 5 behaviour back, by its
+own rules — and a device that did not gets no pack layer even when it asks for
+one.
 
 ## What may not touch the selection
 
@@ -262,21 +348,71 @@ eligibility and selection are deterministic, and the customer copy is keyed.
 Each of those exclusions is enforced structurally — by an import guard, an
 invariance test, or both — rather than by remembering not to call something.
 
-## Discovery is bounded and reads only the cache
+## Discovery is bounded, paged, and reads only the cache
 
 Candidates come from products already in Store A. No Open Food Facts search
 endpoint is called, no category is crawled, and there is never a request per
-candidate. One bounded query, ordered by barcode, capped by
-`MAX_DISCOVERY_CANDIDATES`.
+candidate.
 
-A coarse SQL filter prunes the scan and every row it returns is re-tested with
-the exact parser in Python, so the filter can only ever cost recall — it cannot
-admit a product from another category. Wildcards in a source category are
-escaped, so a category is data and never a pattern.
+### Every gate Store A can answer runs before the row limit
+
+The canonical category, the canonical India tag, the exclusion of the shopper's
+own barcode, and the age of the copy are all SQL predicates. When those gates
+run in Python *after* a `LIMIT`, a stale row, a foreign row or a row from
+another category consumes a place in the window and is then discarded — so a
+window named fifty silently yields far fewer, and the rows it displaced are
+never reached at all.
+
+### Paged, because a single window could starve permanently
+
+Store A knows which products are the same kind and sold here. Only Store B knows
+which of them anybody has ever confirmed a label for, and the licence wall
+forbids joining the two in the database. A single window therefore had a
+permanent blind spot: if the first fifty source-qualified rows all lacked a
+usable snapshot, the fifty-first — a perfectly good candidate — could never be
+reached, on that request or any future one, because the window always started in
+the same place. Nothing about it was random, so no amount of re-scanning,
+waiting or refreshing would have changed it.
+
+Discovery therefore pages: `DISCOVERY_PAGE_SIZE` qualifying rows at a time, up
+to `MAX_DISCOVERY_PAGES`, walking down the barcode order with a keyset cursor
+and costing one batched Store B read per page. It stops early when the running
+winner is at the top of both ladders, because barcode is the final tie-break and
+ascends as the scan proceeds, so nothing further down could displace it.
+
+### Running out of budget is not the same as running out of products
+
+Two distinct reason codes, because they are two different facts:
+
+| Reason | What it means |
+| --- | --- |
+| `no_comparable_candidate_in_cached_data` | We reached the end of the qualifying rows and found nothing. A fact about the cached data. |
+| `search_budget_exhausted_before_a_comparable_candidate` | We stopped looking first. A fact about our own work limit. |
+
+Both render as the same careful sentence to the customer — the distinction is an
+engineering signal, never a claim. Only the first means the data has been
+exhausted; the second is what says the budget needs raising.
 
 Because the cache is not the Indian market, an empty result means we cannot
 establish a comparable alternative. It does not mean none exists, and no
 surface may render it as though it did.
+
+## Coverage is measured; shopping is not
+
+Every failure path returns the same sentence, which is right for the customer
+and blind for us. So each request records **which gate closed**, from a closed
+set, with counts — `backend/app/domains/alternatives/observability.py`.
+
+It records no account id, device id, barcode, product name, brand, batch number,
+FSSAI licence, raw category or country text, label facts, ingredients or
+nutrition values. Not hashed, not truncated. The question being answered is "how
+often does the category gate close", which is an engineering fact about our own
+cached data. A record of which products a person scanned is a different thing
+entirely, and is not built here.
+
+A counter may not change an answer: every function returns `None` and swallows
+its own failures, so the Product Result is byte-identical whether observability
+is working, broken or absent.
 
 ## The ODbL wall holds
 
@@ -325,7 +461,10 @@ recorded and the physical-pack layers keep failing closed on it.
 
 | Piece | File |
 | --- | --- |
-| Category leaf, country tokens, the coarse filter | `backend/app/domains/alternatives/category.py` |
+| What makes two products comparable | `backend/app/domains/alternatives/category.py` |
+| What the source's category and country fields actually mean | `backend/app/domains/off/taxonomy.py` |
+| Server-proven physical-pack authority | `backend/app/domains/product/pack_context.py` |
+| Coverage counters, with no identifier in them | `backend/app/domains/alternatives/observability.py` |
 | Eligibility, ranking, the basis gate, the policy version | `backend/app/domains/alternatives/policy.py` |
 | Discovery, evaluation, the response envelope | `backend/app/domains/alternatives/service.py` |
 | The one freshness window | `backend/app/domains/off/freshness.py` |
@@ -333,5 +472,8 @@ recorded and the physical-pack layers keep failing closed on it.
 | Where it joins the Product Result, and reference mode | `backend/app/api/v2/product.py`, `read_product_verdict` |
 | The card | `frontend/src/components/verdict/BetterOption.tsx` |
 | Every word it says | `frontend/src/strings/verdict.ts`, `S.betterOption`, `S.referenceView` |
+| Store A's schema, its discovery index, and its evolution | `backend/app/domains/off/models.py`, `backend/app/domains/off/store.py` |
 | Backend tests | `backend/tests/test_step6a_comparable_alternative.py` |
+| Taxonomy, provenance, budget and index tests | `backend/tests/test_step6a1_discovery_provenance.py` |
+| Frozen Open Food Facts payloads, and where they came from | `backend/tests/fixtures/off_payloads/` |
 | Licence tests | `backend/tests/test_odbl_data_wall.py` |

@@ -1,135 +1,68 @@
-"""Reading a comparable category, and a country, off the source taxonomy.
+"""What makes two products comparable, and what makes one of them sold here.
 
-Two products are comparable in V1 when the **final** category token Open Food
-Facts published for each, normalised the same conservative way, is the same
-string. Nothing cleverer than that, deliberately:
+This module is deliberately thin. It states the comparison rule in this
+domain's own words and then defers every reading of Open Food Facts data to
+``app/domains/off/taxonomy.py``, which is where the source's field semantics
+are documented and where the canonical values stored in Store A are computed.
+One reader means the value a row was indexed under and the value a request
+compares against cannot drift apart.
 
-* No AI, no embeddings, no fuzzy distance, no "close enough" mapping.
-* No parent/child equivalence. ``breakfast cereals`` is not ``cereal bars``,
-  and a parent category is never quietly treated as the same use case.
-* No hand-written food taxonomy of our own, which would have to be maintained
-  by somebody and would silently lose whatever nobody remembered to add.
+**The rule.** Two products are comparable when Open Food Facts publishes the
+*same complete category classification* for both — their ``categories_tags``
+taxonomy arrays, normalised and compared as whole sets.
 
-What the match means is narrow and worth saying out loud: *the source lists
+What that is not, and each of these was a real option that was rejected:
+
+* Not the ``categories`` text field. Open Food Facts documents it as
+  untaxonomised, written in whichever language the last person to edit the
+  product happened to be using, and "mostly used for debugging and testing
+  purposes". Reading a comparison out of it means two identical products edited
+  by an English and a French contributor never match, while two unrelated
+  products that happen to end on the same word do.
+* Not "the last tag", or any other single element. Nothing in the published
+  schema says the array is ordered broadest-first, so calling the final entry
+  the most specific one is an assumption dressed as a reading.
+* Not a parent, and not a child. ``breakfast cereals`` is not ``cereal bars``,
+  and a shared ancestor is never quietly treated as the same use case.
+* Not AI, embeddings, fuzzy distance or a "close enough" mapping.
+* Not a food taxonomy of our own, which somebody would have to maintain and
+  which would silently lose whatever nobody remembered to add.
+
+What a match means is narrow and worth saying out loud: *the source classifies
 these as the same kind of product.* It does not mean the same nutrition, the
 same ingredients, the same effect on anybody, or the same safety. Those are
-different questions and they are answered elsewhere.
+different questions, and they are answered elsewhere.
 
 Every value read here comes from Store A and stays in memory for the length of
 one response. Nothing is written back — see ``docs/architecture/ODBL_DATA_WALL.md``.
 """
 from __future__ import annotations
 
-import unicodedata
+from app.domains.off.taxonomy import (
+    INDIA_COUNTRY_TAG,
+    canonical_tags,
+    category_key,
+    listed_for_india,
+    same_category,
+)
 
-#: How Open Food Facts separates the category path in the ``categories`` text
-#: field, and how it separates the country list in ``countries``. Both are
-#: comma-separated source text; this is not a guess, it is the shape the cache
-#: in ``app/domains/product/service.py`` writes and the fixtures carry.
-SOURCE_SEPARATOR = ","
+#: The comparison key for one product, or ``None`` when the source publishes no
+#: usable classification for it. ``None`` is ineligible, never "matches
+#: anything": an unclassified product is not comparable with another
+#: unclassified product.
+comparable_category_key = category_key
 
-#: The exact tokens that mean India. A closed set of literal spellings, not a
-#: pattern: ``en:india`` is Open Food Facts' own tag form of the same country,
-#: not a fuzzy match. Anything else — a barcode prefix, a brand, a language, a
-#: name that looks Indian — is not evidence and is never read as one.
-INDIA_COUNTRY_TOKENS: frozenset[str] = frozenset({"india", "en:india"})
+#: Does the source's own country taxonomy list this product for India? A claim
+#: about a database row, never "in stock near you".
+listed_for_india = listed_for_india  # noqa: PLW0127 — re-exported under this domain's name
 
-
-def _normalise_token(raw: str) -> str:
-    """Trim, collapse repeated whitespace, casefold. In that order, always."""
-    return " ".join(raw.split()).casefold()
-
-
-def _tokens(source: str | None) -> tuple[str, ...]:
-    """Split one source field into normalised, non-empty tokens.
-
-    ``None``, a non-string, or a field that normalises to nothing all produce an
-    empty tuple. Missing data stays missing; it is never filled in.
-    """
-    if not isinstance(source, str):
-        return ()
-    text = unicodedata.normalize("NFKC", source)
-    return tuple(
-        token for token in (_normalise_token(part) for part in text.split(SOURCE_SEPARATOR))
-        if token
-    )
-
-
-def category_leaf(categories: str | None) -> str | None:
-    """The final normalised category token, or ``None`` when there is not one.
-
-    Open Food Facts writes the path broadest-first — ``"Foods, Breakfasts,
-    Breakfast cereals"`` — so the last token is the most specific statement the
-    source makes about what the product is. Taking any earlier token would
-    broaden the comparison, which is exactly the mistake this refuses to make.
-    """
-    tokens = _tokens(categories)
-    return tokens[-1] if tokens else None
-
-
-def same_source_category(left: str | None, right: str | None) -> bool:
-    """True only when both leaves exist and are the identical normalised string."""
-    left_leaf = category_leaf(left)
-    right_leaf = category_leaf(right)
-    return left_leaf is not None and left_leaf == right_leaf
-
-
-def country_tokens(countries: str | None) -> tuple[str, ...]:
-    """Every country the source lists, normalised the same way as a category."""
-    return _tokens(countries)
-
-
-def listed_for_india(countries: str | None) -> bool:
-    """Does the source itself say this product is sold in India?
-
-    This is the whole claim, and it is a claim about a database row rather than
-    about a shop. A missing country list means ineligible: absence is not
-    availability, and inferring India from a barcode prefix, a brand, an
-    FSSAI-looking name or somebody else's scan would be inventing the fact.
-
-    It is never "in stock near you". No retailer is consulted in this milestone.
-    """
-    return any(token in INDIA_COUNTRY_TOKENS for token in country_tokens(countries))
-
-
-#: Characters that mean something to SQL ``LIKE`` and must be neutralised
-#: before a category word is interpolated into a pattern.
-_LIKE_ESCAPE = "\\"
-
-
-def _escape_like(value: str) -> str:
-    for character in (_LIKE_ESCAPE, "%", "_"):
-        value = value.replace(character, _LIKE_ESCAPE + character)
-    return value
-
-
-def coarse_category_filter(leaf: str) -> str | None:
-    """A bounded SQL ``ILIKE`` pattern that prunes the candidate scan.
-
-    It matches on the single longest **word** of the leaf rather than the leaf
-    itself, because the leaf has already had its internal whitespace collapsed
-    and the stored source text may not have: a row reading
-    ``"BREAKFAST   Cereals"`` is a genuine match that a pattern built from
-    ``"breakfast cereals"`` would miss.
-
-    This is a prune, never a decision. Every row it returns is re-tested with
-    :func:`category_leaf` in Python before it can be accepted, so the filter can
-    only ever cost recall — a product it fails to surface is simply not offered.
-    That is the safe direction: this system's failure mode is silence.
-    """
-    words = [word for word in leaf.split(" ") if word]
-    if not words:
-        return None
-    longest = max(words, key=len)
-    return f"%{_escape_like(longest)}%"
-
+#: True only when both rows publish a classification and it is identical.
+same_comparable_category = same_category
 
 __all__ = [
-    "INDIA_COUNTRY_TOKENS",
-    "SOURCE_SEPARATOR",
-    "category_leaf",
-    "coarse_category_filter",
-    "country_tokens",
+    "INDIA_COUNTRY_TAG",
+    "canonical_tags",
+    "comparable_category_key",
     "listed_for_india",
-    "same_source_category",
+    "same_comparable_category",
 ]

@@ -60,6 +60,32 @@ column Store A may hold. `assert_no_proprietary_fields()` fails if a table
 grows anything else. Adding a name to that list is a visible, reviewable act,
 which is exactly what it should be.
 
+It is split in two, because one kind of column deserves an argument rather than
+a glance:
+
+* `OFF_PUBLISHED_FIELDS` — fields Open Food Facts publishes, stored verbatim.
+* `OFF_CANONICAL_FIELDS` — deterministic re-encodings of those same fields, so
+  the discovery query can be answered and indexed in SQL. Today:
+  `off_category_key` (the sorted `categories_tags` set) and
+  `off_listed_for_india` (whether `countries_tags` carries `en:india`).
+
+A canonical field is their data in a different shape. Every one is computed by
+`app/domains/off/taxonomy.py` from an Open Food Facts value alone — no
+threshold, score, grade, verdict, ruleset or customer fact is an input, and a
+test holds that module to importing nothing from `app.`. Publishing Store A
+openly, which the export does, therefore still publishes only their data.
+
+What would make one a breach is the opposite direction: a column whose value
+depends on something of *ours*. `off_category_key` restated from our own
+scoring, or an `is_better_than` flag, would make Store A a derived database and
+oblige us to publish the product. That is the line, and it is why the canonical
+list is short and stays short.
+
+The `off_` prefix is not decoration. Store B already has an unrelated
+`inventory_subtype_definitions.category_key` — our own wardrobe taxonomy — and
+two unrelated columns sharing a name is how a licence boundary gets crossed by
+somebody reading quickly.
+
 **4. A write guard.** `guard_off_session()` inspects every object on its way
 to Store A and refuses anything carrying a value outside the allowlist. This is
 the one that catches a value set dynamically — a dictionary unpacked from one

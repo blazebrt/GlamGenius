@@ -1,0 +1,12 @@
+{
+  "01_indian_breakfast_cereal": "The ordinary case: raw text and taxonomy agree, listed for India.",
+  "02_same_kind_edited_in_french": "Same product kind as 01, last edited in French. The raw text differs completely; the taxonomy is identical. Reading the raw text loses this match.",
+  "03_raw_leaf_collision": "A different kind of product whose raw category happens to end on the same words as 01. Reading the raw leaf invents a match that the taxonomy does not support.",
+  "04_india_only_in_the_taxonomy": "Raw countries say 'Inde'. Only the taxonomy tag says en:india. A closed set of English spellings misses it.",
+  "05_raw_says_india_taxonomy_does_not": "Raw countries say 'India' while the taxonomy tags do not. The raw text is the last editor's prose and can disagree with the classification.",
+  "06_no_category_tags": "A category text but no taxonomy array at all. There is no key, so the row cannot support a comparison.",
+  "07_empty_category_tags": "An empty array. Distinct from absent, and equally unusable: two unclassified products are not comparable with each other.",
+  "08_non_taxonomy_category_entry": "A tag that matched no taxonomy entry, so it carries the lossy normalised form. Usable only as an exact match, which can cost recall and can never widen one.",
+  "09_lookalike_country": "en:british-indian-ocean-territory. A different country with its own id, and never India.",
+  "10_malformed_tags": "A non-string entry in the array. One unreadable entry voids the whole classification rather than being dropped, because dropping it would widen what the row matches."
+}

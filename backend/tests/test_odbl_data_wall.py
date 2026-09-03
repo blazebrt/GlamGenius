@@ -391,6 +391,7 @@ async def test_the_alternative_pairing_exists_only_for_one_response(db_clean, of
         candidate_ruleset,
         enforce_published_required_rules,
     )
+    from app.domains.off import taxonomy as off_taxonomy
     from app.domains.product import service as product_service
     from app.domains.product.models import ScanEvent
     from app.shared.database.sql import get_sessionmaker
@@ -417,14 +418,26 @@ async def test_the_alternative_pairing_exists_only_for_one_response(db_clean, of
     # Store A: the discovery universe. Category and country, nothing of ours.
     factory = get_off_sessionmaker()
     async with factory() as session:
+        # Two spellings of the same raw text and one shared taxonomy
+        # classification, which is what actually decides comparability. The
+        # canonical columns are Open Food Facts data in another shape and are
+        # computed from their arrays alone — nothing of ours is an input.
+        cereal_tags = ["en:plant-based-foods-and-beverages", "en:breakfast-cereals"]
+        india_tags = ["en:india"]
         session.add(OffProduct(
             barcode="8901000000001", product_name="Catalogue Name",
             categories="Foods, Breakfasts, Breakfast cereals", countries="India",
+            categories_tags=cereal_tags, countries_tags=india_tags,
+            off_category_key=off_taxonomy.category_key(cereal_tags),
+            off_listed_for_india=off_taxonomy.listed_for_india(india_tags),
             fetched_at=datetime.now(UTC),
         ))
         session.add(OffProduct(
             barcode="8901000000002", product_name="Another Catalogue Name",
             categories="Plant foods, Breakfast cereals", countries="India",
+            categories_tags=cereal_tags, countries_tags=india_tags,
+            off_category_key=off_taxonomy.category_key(cereal_tags),
+            off_listed_for_india=off_taxonomy.listed_for_india(india_tags),
             fetched_at=datetime.now(UTC),
         ))
         await session.commit()
