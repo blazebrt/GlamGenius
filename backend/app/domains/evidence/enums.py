@@ -70,6 +70,12 @@ class EvidenceTier(StrEnum):
     CLINICALLY_STUDIED = "clinically_studied"
     CLASSICAL_TEXT = "classical_text"
     TRADITIONAL_USE = "traditional_use"
+    #: A sourced reference fact rather than a finding about an effect — what a
+    #: register, official reference or technical document *records*. Added for
+    #: canonical substance identity, where "clinically studied" would be a
+    #: category error: nobody runs a trial to establish that a name denotes a
+    #: molecule. Kept distinct from TRADITIONAL_USE, which is a use claim.
+    REFERENCE_DATA = "reference_data"
     NOT_ENOUGH_INFORMATION = "not_enough_information"
     AVOID = "avoid"
 
@@ -104,6 +110,10 @@ class EvidenceDomain(StrEnum):
     NUTRITION = "nutrition"
     SUPPLEMENTS = "supplements"
     PRODUCT_QUALITY = "product_quality"
+    #: Cross-domain canonical substance identity. Deliberately not one of the
+    #: care domains: a substance's identity is the same fact whether it turns up
+    #: in a serum, a shampoo or a capsule.
+    SUBSTANCE = "substance"
 
 
 class RuleKind(StrEnum):
@@ -127,6 +137,9 @@ class ClaimType(StrEnum):
     NUTRITION_REFERENCE = "nutrition_reference"
     PRODUCT_PROVENANCE = "product_provenance"
     TRADITIONAL_USE = "traditional_use"
+    #: "This exact reviewed name denotes this exact entity." Identity only —
+    #: never what the substance does, whether it is safe, or how much is present.
+    SUBSTANCE_IDENTITY = "substance_identity"
 
 
 # Descriptive aliases keep the public vocabulary obvious to callers while the

@@ -224,6 +224,13 @@ REGISTRY: dict[str, Classification] = {
     "evidence_claims": Classification.NOT_USER_OWNED,
     "evidence_claim_sources": Classification.NOT_USER_OWNED,
     "rule_evidence_links": Classification.NOT_USER_OWNED,
+    # Canonical substance identity is a fact about the world, identical for
+    # everybody. Neither table has an account_id or a device_id, so there is
+    # nothing here that could belong to one person: what a name denotes does not
+    # change when an account is deleted, and exporting it would hand somebody a
+    # copy of the reference catalogue rather than their own data.
+    "substances": Classification.NOT_USER_OWNED,
+    "substance_names": Classification.NOT_USER_OWNED,
     # Official FSSAI records are global regulatory data, not account-owned
     # content. Fetch attempts and immutable revisions remain auditable but are
     # never included in a person's privacy export.
