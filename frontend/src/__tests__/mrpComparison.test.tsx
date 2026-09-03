@@ -8,6 +8,7 @@
  * figures — because ₹100 looks cheaper than ₹120 right up until you divide.
  */
 import React from 'react';
+import { TextInput } from 'react-native';
 import { render, screen } from '@testing-library/react-native';
 
 import {
@@ -366,9 +367,7 @@ describe('confirming a transcribed MRP', () => {
     render(<LabelReview facts={facts} onConfirm={jest.fn()} onRetake={jest.fn()} />);
     // A transcription is something a person checks, not something they compose.
     expect(screen.queryByPlaceholderText(/mrp|price|₹/i)).toBeNull();
-    expect(screen.UNSAFE_queryAllByType(
-      require('react-native').TextInput,
-    )).toHaveLength(0);
+    expect(screen.UNSAFE_queryAllByType(TextInput)).toHaveLength(0);
     const text = textOf(screen.toJSON());
     for (const banned of [/enter mrp/i, /what did you pay/i, /sale price/i, /receipt/i]) {
       expect(text).not.toMatch(banned);
