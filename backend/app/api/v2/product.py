@@ -179,11 +179,15 @@ async def confirm_label(
         run is None or output is None or run.account_id != current.account_id
         or run.status != AI_STATUS_SUCCEEDED or run.validation_passed is not True
         or run.feature != extraction.FEATURE
-        # Both the current schema and the one before it. A review a person
-        # started before a deployment is still their work, and ``mrp_text``
-        # being optional is what makes accepting the older payload safe.
+        # The run and its stored output must agree on which schema produced
+        # them, and that one agreed schema must be confirmable. Accepting the
+        # previous schema is a kindness to a review a person started before a
+        # deployment; accepting a *mismatched pair* would be something else --
+        # a payload whose provenance we cannot actually state. Equality first,
+        # membership second, so a v1 run carrying a v2 output is refused even
+        # though both versions are individually confirmable.
+        or run.schema_version != output.schema_version
         or run.schema_version not in extraction.CONFIRMABLE_SCHEMA_VERSIONS
-        or output.schema_version not in extraction.CONFIRMABLE_SCHEMA_VERSIONS
     ):
         raise ValidationFailedError("This label transcription is not available for confirmation.", field="ai_run_id")
     try:

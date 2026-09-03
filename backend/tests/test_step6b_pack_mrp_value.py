@@ -20,7 +20,12 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, AIRun, AIRunOutput
+from app.domains.ai_gateway.models import (
+    AI_STATUS_SUCCEEDED,
+    VERIFICATION_UNVERIFIED,
+    AIRun,
+    AIRunOutput,
+)
 from app.domains.nutrition.grading.production_rules import (
     STATUS_PUBLISHED,
     ProductionRuleset,
@@ -31,7 +36,7 @@ from app.domains.off.models import OffBase, OffProduct
 from app.domains.off.store import create_off_schema, get_off_engine, get_off_sessionmaker
 from app.domains.product import extraction
 from app.domains.product import service as product_service
-from app.domains.product.models import LabelSnapshot, ScanEvent
+from app.domains.product.models import LabelSnapshot, ProductRecord, ScanEvent
 from app.domains.value import parsing as value_parsing
 from app.domains.value import policy as value_policy
 from app.domains.value import service as value_service
@@ -247,10 +252,124 @@ def test_a_non_string_or_oversized_clause_is_refused():
     assert value_parsing.parse_mrp_rupees("MRP ₹120" + " x" * 200) is None
 
 
-def test_no_market_price_ceiling_rejects_a_legitimate_bulk_pack():
-    """A 25 kg sack is not suspicious for costing what a 25 kg sack costs."""
+def test_an_expensive_pack_is_read_rather_than_rejected_for_being_expensive():
+    """There is no market-price ceiling, and the test crosses where one used to be.
+
+    An earlier draft of this parser refused anything above ₹1,00,00,000 as
+    "implausible". Every amount below asserts past that line: a catering sack,
+    a wholesale case, and a figure with more digits than any grocery item has.
+    A number is refused here for being unreadable, never for being large.
+    """
     assert value_parsing.parse_mrp_rupees("MRP ₹4,250") == Decimal("4250")
     assert value_parsing.parse_mrp_rupees("MRP ₹18,999.00") == Decimal("18999.00")
+    # Above the ceiling that no longer exists.
+    assert value_parsing.parse_mrp_rupees("MRP ₹1,25,00,000") == Decimal("12500000")
+    assert value_parsing.parse_mrp_rupees("MRP Rs 99999999.99") == Decimal("99999999.99")
+    assert value_parsing.parse_mrp_rupees("MRP ₹9,99,99,99,999") == Decimal("9999999999")
+
+
+def test_decimal_safety_is_bounded_by_the_input_not_by_a_view_of_prices():
+    """The only limit is how much text the clause may carry.
+
+    ``PARSE_PRECISION`` is derived from ``MAX_MRP_TEXT_LENGTH`` and from nothing
+    else, so an amount is read exactly for as long as it fits the clause. That
+    is a statement about strings; it must never become a statement about what a
+    pack is allowed to cost.
+    """
+    assert value_parsing.PARSE_PRECISION >= value_parsing.MAX_MRP_TEXT_LENGTH
+
+    # A hundred digits: absurd on a pack, and still read exactly rather than
+    # rounded into a different number or crashed on.
+    hundred_digits = "9" * 100
+    assert value_parsing.parse_mrp_rupees(f"MRP ₹{hundred_digits}") == Decimal(hundred_digits)
+
+    # And it survives the whole public arithmetic without raising or drifting.
+    # The expected figure is written out rather than computed, because Python's
+    # own default context would round it to 28 digits and quietly agree with a
+    # rounded answer — which is the failure this test exists to catch.
+    per_100 = value_policy.mrp_per_100(Decimal(hundred_digits), Decimal("500"))
+    assert per_100 == Decimal("1" + "9" * 99 + ".8")
+    assert value_policy.money_string(per_100) == "1" + "9" * 99 + ".80"
+
+    # The clause length remains the one bound, and it still bites.
+    assert value_parsing.parse_mrp_rupees("MRP ₹" + "9" * value_parsing.MAX_MRP_TEXT_LENGTH) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # No grouping at all.
+        ("MRP ₹1299", "1299"),
+        # Western grouping, which plenty of Indian packs use.
+        ("MRP ₹1,299", "1299"),
+        ("MRP ₹12,999", "12999"),
+        ("MRP ₹1,234,567", "1234567"),
+        # Indian lakh grouping.
+        ("MRP ₹1,29,999", "129999"),
+        ("MRP ₹12,34,567", "1234567"),
+    ],
+)
+def test_a_digit_grouping_that_exists_is_read(text, expected):
+    assert value_parsing.parse_mrp_rupees(text) == Decimal(expected)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Commas in positions no printed price uses. Stripping them would turn
+        # these into 123 and 1299 — numbers the pack never stated.
+        "MRP ₹1,2,3",
+        "MRP ₹1,,299",
+        "MRP ₹1,2999",
+        "MRP ₹12,34,5",
+        "MRP ₹1,299,",
+        "MRP ₹,299",
+    ],
+)
+def test_a_digit_grouping_that_does_not_exist_is_refused_whole(text):
+    """Refused entirely, and in particular never salvaged as its own prefix.
+
+    The failure worth naming is the quiet one: a parser that reads ``₹1,2,3``
+    as the leading ``1`` publishes "this pack declared one rupee".
+    """
+    assert value_parsing.parse_mrp_rupees(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The amount belongs to the declaration.
+        ("MRP ₹120", "120"),
+        ("MRP: ₹120", "120"),
+        ("MRP - ₹120", "120"),
+        # The parenthetical Indian packs actually print.
+        ("MRP (incl. of all taxes): ₹120", "120"),
+        ("Maximum retail price (inclusive of all taxes) ₹80", "80"),
+    ],
+)
+def test_the_amount_must_belong_to_the_mrp_declaration(text, expected):
+    assert value_parsing.parse_mrp_rupees(text) == Decimal(expected)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The defect this rule exists for: the pack says its MRP is missing and
+        # a shop's asking price sits in the next sentence. Reading ₹99 as the
+        # maximum retail price would print a number the pack does not carry.
+        "MRP not printed. Offer ₹99",
+        "MRP not printed, offer ₹99",
+        "MRP illegible. Selling at ₹99",
+        "MRP smudged - our price ₹99",
+        "MRP torn off. Shelf price ₹250",
+        # A parenthetical may not smuggle the negation back in.
+        "MRP (not printed) ₹99",
+        # Nor a second amount.
+        "MRP (₹5 off) ₹99",
+    ],
+)
+def test_an_amount_in_a_different_sentence_is_not_the_mrp(text):
+    assert value_parsing.parse_mrp_rupees(text) is None
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +464,31 @@ def test_the_difference_sign_is_defined_once_and_points_one_way():
     assert value_policy.relationship(Decimal("20"), Decimal("24")) == "candidate_lower_mrp_per_100"
     assert value_policy.relationship(Decimal("25"), Decimal("24")) == "candidate_higher_mrp_per_100"
     assert value_policy.relationship(Decimal("24"), Decimal("24")) == "same_mrp_per_100"
+
+
+def test_rounding_happens_once_and_before_anything_is_concluded():
+    """The figures a shopper is shown are the figures the conclusion came from.
+
+    ``quantize_money`` is the single rounding point, and ``relationship`` and
+    ``difference`` take its output. Reasoning from the exact quotients and then
+    printing rounded ones is how a card ends up saying ₹24.00 is higher than
+    ₹24.00 — a discrepancy the reader can see and nobody can defend.
+    """
+    exact_current = value_policy.mrp_per_100(Decimal("120"), Decimal("500"))
+    exact_candidate = value_policy.mrp_per_100(Decimal("168.01"), Decimal("700"))
+    assert exact_candidate > exact_current            # ... below the paise.
+
+    shown_current = value_policy.quantize_money(exact_current)
+    shown_candidate = value_policy.quantize_money(exact_candidate)
+    assert (str(shown_current), str(shown_candidate)) == ("24.00", "24.00")
+    assert value_policy.relationship(shown_candidate, shown_current) == "same_mrp_per_100"
+    assert value_policy.money_string(
+        value_policy.difference(shown_candidate, shown_current)
+    ) == "0.00"
+
+    # Rounding is idempotent, so nothing downstream can round a second time and
+    # move the answer again.
+    assert value_policy.quantize_money(shown_candidate) == shown_candidate
 
 
 def test_the_relationship_vocabulary_states_arithmetic_not_a_verdict():
@@ -542,7 +686,17 @@ def test_both_schema_versions_remain_confirmable():
     assert {"scan-label.v1", "scan-label.v2"} == extraction.CONFIRMABLE_SCHEMA_VERSIONS
 
 
-async def _seed_ai_run(account_id: uuid.UUID, payload: dict, *, schema_version: str) -> uuid.UUID:
+async def _seed_ai_run(
+    account_id: uuid.UUID, payload: dict, *, schema_version: str,
+    output_schema_version: str | None = None,
+) -> uuid.UUID:
+    """A succeeded transcription run and its stored output.
+
+    ``output_schema_version`` exists only so a test can build the pair that
+    must never be accepted: a run stamped with one schema whose output claims
+    another. Production has no path that writes such a pair, which is exactly
+    why the endpoint has to refuse one on sight.
+    """
     factory = get_sessionmaker()
     async with factory() as session:
         run = AIRun(
@@ -552,9 +706,136 @@ async def _seed_ai_run(account_id: uuid.UUID, payload: dict, *, schema_version: 
         )
         session.add(run)
         await session.flush()
-        session.add(AIRunOutput(ai_run_id=run.id, schema_version=schema_version, payload=payload))
+        session.add(AIRunOutput(
+            ai_run_id=run.id,
+            schema_version=output_schema_version or schema_version,
+            payload=payload,
+        ))
         await session.commit()
         return run.id
+
+
+async def _confirmation_side_effects(barcode: str, run_id: uuid.UUID) -> dict:
+    """Everything a successful confirmation would have written, counted."""
+    factory = get_sessionmaker()
+    async with factory() as session:
+        events = (await session.execute(select(func.count()).select_from(ScanEvent)
+                                        .where(ScanEvent.barcode == barcode))).scalar_one()
+        snapshots = (await session.execute(select(func.count()).select_from(LabelSnapshot)
+                                           .where(LabelSnapshot.barcode == barcode))).scalar_one()
+        record = (await session.execute(select(ProductRecord)
+                                        .where(ProductRecord.barcode == barcode))).scalar_one_or_none()
+        output = (await session.execute(select(AIRunOutput)
+                                        .where(AIRunOutput.ai_run_id == run_id))).scalar_one()
+        return {
+            "scan_events": events,
+            "label_snapshots": snapshots,
+            "product_record": record,
+            "confirmations": None if record is None else record.confirmation_count,
+            "confidence": None if record is None else record.confidence,
+            "verification_status": output.verification_status,
+        }
+
+
+@pytest.mark.parametrize(
+    ("run_version", "output_version"),
+    [
+        # A run stamped v1 whose output claims v2, and the reverse. Both halves
+        # are individually confirmable; the pair is not, because we could not
+        # then state which schema produced the facts we are about to store.
+        ("scan-label.v1", "scan-label.v2"),
+        ("scan-label.v2", "scan-label.v1"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_mismatched_schema_pair_is_refused_and_writes_nothing(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+    run_version, output_version,
+):
+    """Provenance is the run and its output agreeing, not each being allowed.
+
+    Accepting the previous schema is a kindness to a review someone started
+    before a deployment. Accepting a *mismatched* pair would be something else:
+    storing label facts we cannot honestly attribute to any one transcription
+    schema. The refusal must also be total — a rejected confirmation may not
+    leave a scan event, a snapshot, a product record or a moved verification
+    status behind it.
+    """
+    token, account_id = await registered_supabase_user()
+    payload = label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+        mrp_text="MRP ₹120", net_quantity="500 g",
+    )
+    run_id = await _seed_ai_run(
+        account_id, payload, schema_version=run_version, output_schema_version=output_version,
+    )
+
+    response = await app_client.post(
+        "/api/v2/scan/label/confirm", headers={**device, **auth(token)},
+        json={"barcode": CURRENT, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
+    )
+    assert response.status_code == 422, response.text
+
+    after = await _confirmation_side_effects(CURRENT, run_id)
+    assert after["scan_events"] == 0
+    assert after["label_snapshots"] == 0
+    assert after["product_record"] is None
+    assert after["verification_status"] == VERIFICATION_UNVERIFIED
+
+
+@pytest.mark.asyncio
+async def test_a_schema_neither_side_may_confirm_is_refused_even_when_they_agree(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """Equality is necessary and not sufficient: the agreed version must be one we accept."""
+    token, account_id = await registered_supabase_user()
+    payload = label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+    )
+    run_id = await _seed_ai_run(account_id, payload, schema_version="scan-label.v0")
+
+    response = await app_client.post(
+        "/api/v2/scan/label/confirm", headers={**device, **auth(token)},
+        json={"barcode": CURRENT, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
+    )
+    assert response.status_code == 422, response.text
+
+    after = await _confirmation_side_effects(CURRENT, run_id)
+    assert after["scan_events"] == 0
+    assert after["label_snapshots"] == 0
+    assert after["product_record"] is None
+    assert after["verification_status"] == VERIFICATION_UNVERIFIED
+
+
+@pytest.mark.parametrize("version", ["scan-label.v1", "scan-label.v2"])
+@pytest.mark.asyncio
+async def test_a_matched_schema_pair_still_confirms_and_writes_everything(
+    db_clean, off_clean, app_client, device, registered_supabase_user, version,
+):
+    """The tightening refuses mismatched pairs and nothing else.
+
+    Both confirmable versions still work end to end when the run and its output
+    agree, so the rule above costs no one their capture.
+    """
+    token, account_id = await registered_supabase_user()
+    payload = label_facts(
+        product_name="Northstar Corn Flakes", ingredients=INGREDIENTS_C, panel=PANEL_C,
+        mrp_text="MRP ₹120", net_quantity="500 g",
+    )
+    run_id = await _seed_ai_run(account_id, payload, schema_version=version)
+
+    response = await app_client.post(
+        "/api/v2/scan/label/confirm", headers={**device, **auth(token)},
+        json={"barcode": CURRENT, "ai_run_id": str(run_id), "client_scan_id": uuid.uuid4().hex},
+    )
+    assert response.status_code == 201, response.text
+
+    after = await _confirmation_side_effects(CURRENT, run_id)
+    assert after["scan_events"] == 1
+    assert after["label_snapshots"] == 1
+    assert after["product_record"] is not None
+    assert after["confidence"] == response.json()["confidence"]["level"]
+    assert after["verification_status"] == "user_confirmed"
 
 
 @pytest.mark.asyncio
@@ -831,6 +1112,110 @@ async def test_the_full_pack_comparison_reads_as_arithmetic(
     assert after["value"]["comparison"]["candidate"]["mrp_per_100_inr"] == "20.00"
     assert after["value"]["comparison"]["difference_inr_per_100"] == "-4.00"
     assert after["value"]["comparison"]["relationship"] == "candidate_lower_mrp_per_100"
+
+
+@pytest.mark.asyncio
+async def test_two_figures_that_print_the_same_are_reported_as_the_same(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """Case A. ₹24.00 against ₹24.00 cannot be described as a difference.
+
+    The candidate's exact figure here is 24.0014...; the current pack's is 24
+    on the nose. A comparison drawn from those exact quotients would print two
+    identical numbers and call one of them higher, and the shopper would be
+    right to distrust everything else on the card.
+    """
+    await seed_current(mrp_text="MRP ₹120", net_quantity="500 g")
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹168.01", net_quantity="700 g",
+    )
+
+    comparison = (await verdict(app_client, device))["value"]["comparison"]
+    assert comparison["current"]["mrp_per_100_inr"] == "24.00"
+    assert comparison["candidate"]["mrp_per_100_inr"] == "24.00"
+    assert comparison["relationship"] == "same_mrp_per_100"
+    assert comparison["difference_inr_per_100"] == "0.00"
+
+
+@pytest.mark.asyncio
+async def test_the_difference_is_the_subtraction_a_shopper_could_do(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """Case B. ₹33.33 less ₹33.34 is one paise, not "₹-0.00".
+
+    The exact figures are 33.334 and 33.335 and differ by a tenth of a paise.
+    Subtracting before rounding publishes that tenth as ``-0.00`` — a signed
+    zero next to two numbers a paise apart. Subtracting the printed figures
+    gives the only answer that survives being checked by hand.
+    """
+    await seed_current(mrp_text="MRP ₹66.67", net_quantity="200 g")
+    await seed_candidate(
+        CANDIDATE_B, product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+        panel=PANEL_B, mrp_text="MRP ₹166.67", net_quantity="500 g",
+    )
+
+    comparison = (await verdict(app_client, device))["value"]["comparison"]
+    assert comparison["current"]["mrp_per_100_inr"] == "33.34"
+    assert comparison["candidate"]["mrp_per_100_inr"] == "33.33"
+    assert comparison["difference_inr_per_100"] == "-0.01"
+    assert comparison["relationship"] == "candidate_lower_mrp_per_100"
+
+
+@pytest.mark.asyncio
+async def test_the_published_money_always_adds_up(
+    db_clean, off_clean, app_client, device, published_rules, no_off_network,
+):
+    """Case C. The invariant, not one example of it.
+
+    For every pack pair: the published difference equals the published
+    candidate figure minus the published current figure, exactly, and the
+    published relationship is the sign of that same subtraction. Nothing the
+    card says about money may come from a number the card does not show.
+    """
+    pairs = [
+        # (current mrp, current size, candidate mrp, candidate size)
+        ("MRP ₹120", "500 g", "MRP ₹100", "400 g"),      # plain, both exact
+        ("MRP ₹120", "500 g", "MRP ₹168.01", "700 g"),   # equal once printed
+        ("MRP ₹66.67", "200 g", "MRP ₹166.67", "500 g"), # a tenth of a paise apart
+        ("MRP ₹48.01", "200 g", "MRP ₹120.02", "500 g"), # both sides round up
+        ("MRP ₹100", "300 g", "MRP ₹50", "150 g"),       # both recurring, equal
+        ("MRP ₹1,25,00,000", "25 kg", "MRP ₹99", "400 g"),  # far above any old ceiling
+    ]
+    # The catalogue rows are seeded once: only the confirmed captures change.
+    await seed_off(CURRENT)
+    await seed_off(CANDIDATE_B, categories=CEREAL_CATEGORY_OTHER_PATH)
+
+    for current_mrp, current_size, candidate_mrp, candidate_size in pairs:
+        await seed_capture(CURRENT, label_facts(
+            product_name="Northstar Corn Flakes", brand="Northstar",
+            ingredients=INGREDIENTS_C, panel=PANEL_C,
+            net_quantity=current_size, mrp_text=current_mrp,
+        ))
+        await seed_capture(CANDIDATE_B, label_facts(
+            product_name="Sunfield Oat Porridge", ingredients=INGREDIENTS_B,
+            panel=PANEL_B, net_quantity=candidate_size, mrp_text=candidate_mrp,
+        ))
+
+        comparison = (await verdict(app_client, device))["value"]["comparison"]
+        shown_current = Decimal(comparison["current"]["mrp_per_100_inr"])
+        shown_candidate = Decimal(comparison["candidate"]["mrp_per_100_inr"])
+        published = Decimal(comparison["difference_inr_per_100"])
+        assert published == shown_candidate - shown_current, comparison
+        expected = {
+            -1: "candidate_lower_mrp_per_100",
+            0: "same_mrp_per_100",
+            1: "candidate_higher_mrp_per_100",
+        }[(shown_candidate > shown_current) - (shown_candidate < shown_current)]
+        assert comparison["relationship"] == expected, comparison
+        # Two places, always, on both sides and on the difference.
+        for figure in (comparison["current"]["mrp_per_100_inr"],
+                       comparison["candidate"]["mrp_per_100_inr"],
+                       comparison["difference_inr_per_100"]):
+            assert figure.split(".")[1] == figure.split(".")[1][:2]
+            assert len(figure.split(".")[1]) == 2
+            # A signed zero is never published.
+            assert figure != "-0.00"
 
 
 @pytest.mark.asyncio

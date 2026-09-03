@@ -18,7 +18,9 @@ incompatible things, and a letter divided by a price is exactly that.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, localcontext
+
+from app.domains.value.parsing import MAX_MRP_TEXT_LENGTH, MAX_QUANTITY_TEXT_LENGTH
 
 #: Bumped when any rule in this module changes meaning, so an answer can be read
 #: back against the policy that produced it.
@@ -69,9 +71,18 @@ RELATIONSHIP_HIGHER = "candidate_higher_mrp_per_100"
 #: nobody prints.
 DIMENSION_FOR_BASIS: dict[str, str] = {"per_100g": "mass", "per_100ml": "volume"}
 
-#: One paise. Every public money string is quantised to this, once, at the
-#: boundary — the arithmetic above it stays exact.
+#: One paise. Every public money figure is quantised to this, once, by
+#: :func:`quantize_money` — and everything a customer is shown, including the
+#: relationship and the difference, is derived from the quantised figures.
 _MONEY = Decimal("0.01")
+
+#: Working precision for the money arithmetic here, derived from the parsers'
+#: input bounds and from nothing else. Both operands come from text those
+#: bounds already limit, so a context with room for both of them, the ×100 and
+#: the two paise places cannot silently shorten a figure on its way to a
+#: shopper. It is a bound on what a *string* can hold; it is emphatically not a
+#: view about what a pack may cost.
+_CALCULATION_PRECISION = MAX_MRP_TEXT_LENGTH + MAX_QUANTITY_TEXT_LENGTH + 8
 
 
 def dimension_for_basis(basis: object) -> str | None:
@@ -101,16 +112,32 @@ def observation_is_fresh(observed_at: datetime | None, *, now: datetime | None =
 
 
 def mrp_per_100(mrp_rupees: Decimal, base_amount: Decimal) -> Decimal | None:
-    """Rupees per 100 g or per 100 ml, exactly.
+    """Rupees per 100 g or per 100 ml, before rounding.
 
-    Kept as an unrounded :class:`~decimal.Decimal`. Rounding happens once, at
-    the presentation boundary, so a difference is computed from the same exact
-    numbers the two sides were computed from rather than from two already-
-    rounded strings.
+    The division happens in a context wide enough for both bounded operands, so
+    the figure that reaches :func:`quantize_money` is the real one. Callers must
+    not compare or subtract these values: two figures that differ below a paise
+    are the same figure as far as a shopper can see, and only the quantised
+    values may be reasoned about publicly.
     """
     if base_amount <= 0:
         return None
-    return mrp_rupees * Decimal(100) / base_amount
+    with localcontext() as ctx:
+        ctx.prec = _CALCULATION_PRECISION
+        return mrp_rupees * Decimal(100) / base_amount
+
+
+def quantize_money(amount: Decimal) -> Decimal:
+    """One paise, half up. The single place rounding happens.
+
+    Everything public goes through here *before* anything is concluded from it.
+    Deriving a relationship or a difference from unrounded figures and then
+    showing rounded ones is how a card ends up saying two identical numbers are
+    different — a discrepancy a shopper can see, and cannot be talked out of.
+    """
+    with localcontext() as ctx:
+        ctx.prec = _CALCULATION_PRECISION
+        return amount.quantize(_MONEY, rounding=ROUND_HALF_UP)
 
 
 def money_string(amount: Decimal) -> str:
@@ -121,20 +148,28 @@ def money_string(amount: Decimal) -> str:
     been lucky rather than correct. The frontend formats this; it never does
     arithmetic on it.
     """
-    return str(amount.quantize(_MONEY, rounding=ROUND_HALF_UP))
+    return str(quantize_money(amount))
 
 
 def quantity_string(amount: Decimal) -> str:
     """A pack size without trailing noise: ``500``, ``1500``, ``1.5``."""
-    normalised = amount.normalize()
-    # Decimal normalises 500 to 5E+2; expand it back to something a person reads.
-    if normalised == normalised.to_integral_value():
-        return str(normalised.quantize(Decimal(1)))
-    return str(normalised)
+    with localcontext() as ctx:
+        ctx.prec = _CALCULATION_PRECISION
+        normalised = amount.normalize()
+        # Decimal normalises 500 to 5E+2; expand it back to something readable.
+        if normalised == normalised.to_integral_value():
+            return str(normalised.quantize(Decimal(1)))
+        return str(normalised)
 
 
 def relationship(candidate_per_100: Decimal, current_per_100: Decimal) -> str:
-    """Which of the two per-100 figures is larger. Arithmetic, not a judgement."""
+    """Which of the two per-100 figures is larger. Arithmetic, not a judgement.
+
+    Both arguments must already have been through :func:`quantize_money`, so
+    the answer is about the two figures the card actually prints. If they print
+    the same, the honest word is "same" — not "lower by a fraction of a paise
+    nobody can spend".
+    """
     if candidate_per_100 < current_per_100:
         return RELATIONSHIP_LOWER
     if candidate_per_100 > current_per_100:
@@ -148,8 +183,14 @@ def difference(candidate_per_100: Decimal, current_per_100: Decimal) -> Decimal:
     Negative means the candidate's MRP per 100 is the lower of the two; positive
     means it is higher. Fixing the direction here is what stops the backend and
     the app disagreeing about which way the sign points.
+
+    Like :func:`relationship`, this takes the already-quantised figures, so the
+    difference is exactly the subtraction a shopper could do on the two numbers
+    in front of them.
     """
-    return candidate_per_100 - current_per_100
+    with localcontext() as ctx:
+        ctx.prec = _CALCULATION_PRECISION
+        return candidate_per_100 - current_per_100
 
 
 __all__ = [
@@ -178,5 +219,6 @@ __all__ = [
     "money_string",
     "observation_is_fresh",
     "quantity_string",
+    "quantize_money",
     "relationship",
 ]

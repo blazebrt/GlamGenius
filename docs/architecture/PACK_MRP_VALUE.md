@@ -79,6 +79,15 @@ version string moved underneath them throws away work they already did.
 `mrp_text` is optional in both directions, so a v1 payload validates without it.
 New transcriptions are only ever produced at v2.
 
+**The run and its output must agree.** Widening the accepted set does not widen
+what may disagree: `run.schema_version == output.schema_version`, *and* that one
+agreed version must be confirmable. A v1 run carrying a v2 output is refused
+even though each half is individually acceptable, because we could not then
+state which schema produced the facts we were about to store. Production writes
+no such pair; the check exists so that if one ever appeared it would stop rather
+than be absorbed. The refusal is total — no scan event, no snapshot, no product
+record, no moved verification status.
+
 ## A price change is not a reformulation
 
 `mrp_text` is deliberately **absent** from `CONTENT_FACT_FIELDS`,
@@ -155,9 +164,29 @@ else returns nothing:
 | `Maximum Retail Price INR 75` | `MRP ₹100 / ₹120`, `MRP ₹100-120` |
 | `MRP: ₹1,299/-` | `MRP 0`, `MRP ₹0`, `MRP -10`, `MRP FREE` |
 | `Maximum Retail Price ₹125 incl. of all taxes` | `MRP ₹99.999`, `Approx ₹100`, garbage |
+| `MRP (incl. of all taxes): ₹120` | `MRP not printed. Offer ₹99` |
+| `MRP ₹1,299`, `MRP ₹1,29,999`, `MRP ₹1,234,567` | `MRP ₹1,2,3`, `MRP ₹1,,299` |
+
+**The amount must belong to the declaration.** Only separators and a
+parenthesised aside may sit between the words "MRP" and the number. That aside
+exists because `MRP (incl. of all taxes): ₹120` is how a great many Indian packs
+are printed, and it may contain neither a digit nor the word "not", so it cannot
+swallow the rule it is an exception to. This is what makes
+`MRP not printed. Offer ₹99` fail closed: the ₹99 is a shop's asking price in
+the next sentence, and publishing it as a maximum retail price would put a
+number on the pack that the pack does not carry.
+
+**The digit grouping must be one that exists.** Ungrouped (`1299`), Western
+(`1,299`, `1,234,567`) and Indian lakh grouping (`1,29,999`) are read; anything
+else is refused *whole*. The failure worth naming is the quiet one — a parser
+that strips commas reads `₹1,2,3` as 123, and one that salvages a prefix reads
+it as ₹1.
 
 There is **no market-price ceiling**. A 25 kg sack is not suspicious for costing
-what a 25 kg sack costs; the only bound is a technical one on the input string.
+what a 25 kg sack costs, and a bound picked from a guess about grocery prices
+would silently drop exactly those packs. The only limits are technical ones on
+the input *string*: its length, and a `Decimal` context derived from that length
+which traps rather than rounds. A test asserts past where the old ceiling stood.
 
 **Quantity.** Anchored at both ends, so the whole string must be a quantity —
 a pattern that merely searched would happily read `500 g` out of
@@ -185,11 +214,22 @@ defend in front of anybody.
 mrp_per_100 = mrp_rupees * 100 / base_amount
 ```
 
-Rounding happens **once**, at the presentation boundary, `ROUND_HALF_UP` to
-₹0.01 — so a difference is computed from the two exact numbers rather than from
-two already-rounded strings. Money crosses the wire as decimal strings
-(`"120.00"`, `"24.00"`, `"-4.00"`), never JSON floats, and the app formats them
-without ever doing arithmetic of its own.
+Rounding happens **once**, in `quantize_money()`, `ROUND_HALF_UP` to ₹0.01 —
+and it happens **before anything is concluded**. Both per-100 figures are
+quantised first, and the relationship and the difference are then derived from
+those quantised figures.
+
+The other order is the tempting one, and it is wrong. Comparing the exact
+quotients and printing the rounded ones produces a card that shows ₹24.00
+against ₹24.00 and calls one of them higher, or shows figures a paise apart and
+reports the difference as `-0.00`. Both are discrepancies a shopper can see in
+the numbers in front of them, and no amount of twelfth-decimal-place accuracy
+answers them. Whatever the card says about money must be the subtraction a
+reader could do by hand.
+
+Money crosses the wire as decimal strings (`"120.00"`, `"24.00"`, `"-4.00"`),
+never JSON floats, and the app formats them without ever doing arithmetic of
+its own.
 
 The difference is defined once: **candidate minus current**. Negative means the
 candidate's MRP per 100 is the lower of the two.

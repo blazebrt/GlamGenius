@@ -14,13 +14,23 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, Rounded, localcontext
 
-#: Longer than any genuine MRP clause on a pack. A bound on the input, not a
-#: bound on what a product may cost — see :data:`_MAX_RUPEES` for why there is
-#: no market-price assumption anywhere in this module.
+#: Longer than any genuine MRP clause on a pack. A bound on the *input*, never
+#: a bound on what a product may cost: there is no market-price assumption
+#: anywhere in this module, and adding one would mean rejecting a real pack for
+#: the crime of being expensive.
 MAX_MRP_TEXT_LENGTH = 200
 MAX_QUANTITY_TEXT_LENGTH = 120
+
+#: Decimal working precision for parsing, derived from the input bound and from
+#: nothing else. A string of at most ``MAX_MRP_TEXT_LENGTH`` characters cannot
+#: hold more than that many digits, so a context with room for all of them —
+#: plus a couple to spare — cannot quietly round a transcription into a
+#: different number. Trapping instead of rounding is the point: if an amount
+#: ever did exceed this, the honest outcome is no observation, not a silently
+#: truncated one.
+PARSE_PRECISION = MAX_MRP_TEXT_LENGTH + 2
 
 #: The declaration a pack must actually carry. Without one of these words the
 #: number beside a rupee sign could be an offer price, a shelf price or a
@@ -29,20 +39,39 @@ _MRP_MARKER = re.compile(
     r"(?<![a-z])(?:mrp|m\.r\.p\.?|maximum\s+retail\s+price)(?![a-z])",
 )
 
-#: An amount that is explicitly rupees. A bare number is never money here.
+#: An amount that is explicitly rupees, written with a digit grouping that
+#: actually exists. A bare number is never money here, and neither is a run of
+#: digits and commas that no one would print: ``1,2,3`` and ``1,,299`` are
+#: transcription damage, and a parser that reads them as 123 and 1299 is
+#: inventing a price.
+#:
+#: Three integer shapes are accepted and no others — ungrouped (``1299``),
+#: Western grouping (``1,299``, ``1,234,567``) and Indian grouping
+#: (``1,29,999``) — because Indian packs are printed in both conventions. The
+#: trailing guard stops a malformed number from being salvaged as its own
+#: prefix: without it ``₹1,2,3`` would match the leading ``1`` and be published
+#: as one rupee.
+_RUPEE_INTEGER = r"(?:\d+|\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})+,\d{3})"
 _RUPEE_AMOUNT = re.compile(
-    r"(?:₹|rs\.?|inr)\s*(\d[\d,]*(?:\.\d+)?)",
+    rf"(?:₹|rs\.?|inr)\s*({_RUPEE_INTEGER}(?:\.\d+)?)(?![\d,])(?!\.\d)",
 )
+
+#: What may sit between the words "MRP" and the amount itself.
+#:
+#: Only separators and a parenthesised aside. This is what binds the number to
+#: the declaration: in "MRP not printed. Offer ₹99" the ₹99 is a shop's asking
+#: price sitting in a different sentence, and reading it as the maximum retail
+#: price would put a number on the pack that the pack does not carry.
+#:
+#: The aside is allowed because "MRP (incl. of all taxes): ₹120" is how a great
+#: many Indian packs are printed. It may not contain a digit (that would be a
+#: second amount we are stepping over) nor the word "not" (that is a negation
+#: we would be reading through), so the exception cannot swallow the rule.
+_MRP_BRIDGE = re.compile(r"^(?:[\s:;=.,\-–—]|\((?![^()]*(?:\d|\bnot\b))[^()]*\))*$")
 
 #: What a range looks like just after the amount we matched: "₹100-120",
 #: "₹100 / 120". Either is two prices, and two prices is not an observation.
 _RANGE_TAIL = re.compile(r"^\s*[-–—/]\s*\d")
-
-#: Technical ceiling only. It exists so a malformed transcription cannot
-#: produce an absurd Decimal, not because we believe food costs less than this:
-#: a bulk pack that genuinely costs a lot must not be rejected for being
-#: expensive, so this is set far above any plausible retail pack.
-_MAX_RUPEES = Decimal("10000000")
 
 
 def _normalise(text: str) -> str:
@@ -81,6 +110,9 @@ def parse_mrp_rupees(mrp_text: object) -> Decimal | None:
         # Nothing to read, or two amounts and no way to know which is the MRP.
         return None
     match = matches[0]
+    if not _MRP_BRIDGE.fullmatch(tail[:match.start()]):
+        # The amount is somewhere after the declaration rather than part of it.
+        return None
     if _RANGE_TAIL.match(tail[match.end():]):
         return None
 
@@ -88,11 +120,23 @@ def parse_mrp_rupees(mrp_text: object) -> Decimal | None:
     if "." in digits and len(digits.split(".", 1)[1]) > 2:
         # Rupees have two decimal places. A third means we misread something.
         return None
-    try:
-        amount = Decimal(digits)
-    except InvalidOperation:
-        return None
-    if not amount.is_finite() or amount <= 0 or amount > _MAX_RUPEES:
+    with localcontext() as ctx:
+        # Room for every digit the bounded input could carry, and a trap rather
+        # than a rounding rule if that is ever not enough. The unary plus is
+        # what forces the value through the context: an amount that would not
+        # survive it raises here instead of reaching the arithmetic downstream
+        # as a quietly shortened number.
+        ctx.prec = PARSE_PRECISION
+        ctx.traps[InvalidOperation] = True
+        ctx.traps[Rounded] = True
+        try:
+            amount = +Decimal(digits)
+        except ArithmeticError:
+            return None
+    if not amount.is_finite() or amount <= 0:
+        # No upper bound. A 25 kg catering sack is not suspicious for costing
+        # what a 25 kg catering sack costs, and a ceiling picked from a guess
+        # about grocery prices would silently drop exactly those packs.
         return None
     return amount
 
@@ -175,6 +219,7 @@ def parse_quantity(net_quantity: object) -> Quantity | None:
 __all__ = [
     "MAX_MRP_TEXT_LENGTH",
     "MAX_QUANTITY_TEXT_LENGTH",
+    "PARSE_PRECISION",
     "Quantity",
     "parse_mrp_rupees",
     "parse_quantity",

@@ -50,6 +50,7 @@ from app.domains.value.policy import (
     mrp_per_100,
     observation_is_fresh,
     quantity_string,
+    quantize_money,
     relationship,
 )
 
@@ -71,6 +72,16 @@ class PackObservation:
     def per_100(self) -> Decimal | None:
         return mrp_per_100(self.mrp_rupees, self.quantity.base_amount)
 
+    def per_100_shown(self) -> Decimal | None:
+        """The per-100 figure as the card prints it: quantised to one paise.
+
+        The only per-100 value anything public may use. The comparison is drawn
+        from these, not from the exact quotients behind them, so the sentence a
+        shopper reads always agrees with the two numbers beside it.
+        """
+        exact = self.per_100()
+        return None if exact is None else quantize_money(exact)
+
     def as_payload(self) -> dict[str, Any]:
         """What a shopper is shown about one side of the comparison.
 
@@ -86,7 +97,7 @@ class PackObservation:
                 "amount": quantity_string(self.quantity.base_amount),
                 "unit": self.quantity.base_unit,
             },
-            "mrp_per_100_inr": money_string(self.per_100()),
+            "mrp_per_100_inr": str(self.per_100_shown()),
             "observed_at": self.observed_at.isoformat(),
             # Never "price", never "current price". This is what a pack said.
             "source": SOURCE_CONFIRMED_PACK_LABEL,
@@ -220,8 +231,13 @@ async def pack_mrp_value_envelope(
     if current.quantity.dimension != dimension or other.quantity.dimension != dimension:
         return not_enough_information(REASON_QUANTITY_BASIS_INCOMPATIBLE)
 
-    current_per_100 = current.per_100()
-    other_per_100 = other.per_100()
+    # Quantise first, conclude second. Both figures are rounded to the paise the
+    # card will print, and the relationship and the difference are then derived
+    # from those printed figures. The other order produces a card that shows
+    # ₹24.00 against ₹24.00 and calls one of them lower, which is indefensible
+    # however true it is of the twelfth decimal place.
+    current_per_100 = current.per_100_shown()
+    other_per_100 = other.per_100_shown()
     if current_per_100 is None or other_per_100 is None:
         return not_enough_information(REASON_QUANTITY_BASIS_INCOMPATIBLE)
 
