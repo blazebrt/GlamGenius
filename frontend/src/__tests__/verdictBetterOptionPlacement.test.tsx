@@ -15,11 +15,13 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import VerdictScreen from '../../app/verdict';
+import { REFERENCE_ALTERNATIVE } from '../components/verdict/BetterOption';
 import { S } from '../strings/verdict';
 
 const mockPush = jest.fn();
+let mockParams: Record<string, string> = { barcode: '8901000000001' };
 jest.mock('expo-router', () => ({
-  useLocalSearchParams: () => ({ barcode: '8901000000001' }),
+  useLocalSearchParams: () => mockParams,
   useRouter: () => ({ push: mockPush, replace: jest.fn(), back: jest.fn() }),
 }));
 jest.mock('expo-image-picker', () => ({
@@ -35,7 +37,8 @@ jest.mock('../services/errorReports', () => ({
 
 const mockGetProductVerdict = jest.fn();
 jest.mock('../services/verdictClient', () => ({
-  getProductVerdict: (barcode: string) => mockGetProductVerdict(barcode),
+  getProductVerdict: (barcode: string, options?: unknown) =>
+    mockGetProductVerdict(barcode, options),
 }));
 
 // Every write the scan flow could make. None of them may fire from opening an
@@ -90,6 +93,7 @@ const source = (overrides: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockParams = { barcode: '8901000000001' };
 });
 
 async function renderScreen(overrides: Record<string, unknown> = {}) {
@@ -170,11 +174,12 @@ describe('where the alternative sits', () => {
 });
 
 describe('opening the alternative', () => {
-  it('navigates to that product\'s ordinary Product Result', async () => {
+  it('navigates to that product\'s Product Result, marked as a reference view', async () => {
     await renderScreen({ comparableAlternative });
     fireEvent.press(screen.getByLabelText('View Sunfield Oat Porridge'));
     expect(mockPush).toHaveBeenCalledWith({
-      pathname: '/verdict', params: { barcode: '8901000000002' },
+      pathname: '/verdict',
+      params: { barcode: '8901000000002', reference: REFERENCE_ALTERNATIVE },
     });
   });
 
@@ -187,5 +192,64 @@ describe('opening the alternative', () => {
     expect(mockRecordScan).not.toHaveBeenCalled();
     expect(mockSubmitObservation).not.toHaveBeenCalled();
     expect(mockPush).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a reference view', () => {
+  it('asks the server to withhold every physical-pack layer', async () => {
+    mockParams = { barcode: '8901000000002', reference: REFERENCE_ALTERNATIVE };
+    await renderScreen();
+    expect(mockGetProductVerdict).toHaveBeenCalledWith(
+      '8901000000002', { physicalPackContext: false },
+    );
+  });
+
+  it('asks for the ordinary physical read when it was reached by scanning', async () => {
+    await renderScreen();
+    expect(mockGetProductVerdict).toHaveBeenCalledWith(
+      '8901000000001', { physicalPackContext: true },
+    );
+  });
+
+  it('does not offer to report what the shopper saw', async () => {
+    mockParams = { barcode: '8901000000002', reference: REFERENCE_ALTERNATIVE };
+    await renderScreen();
+    // The action would be a claim to have held this packet, and it would only
+    // fail later. It is replaced by the thing that would earn it.
+    expect(screen.queryByLabelText(S.communityObservations.reportAction)).toBeNull();
+    expect(screen.getByLabelText(S.referenceView.scanFirstAction)).toBeTruthy();
+  });
+
+  it('sends the shopper to the real scanner rather than inventing a scan', async () => {
+    mockParams = { barcode: '8901000000002', reference: REFERENCE_ALTERNATIVE };
+    await renderScreen();
+    fireEvent.press(screen.getByLabelText(S.referenceView.scanFirstAction));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/scan-product', params: { barcode: '8901000000002' },
+    });
+    expect(mockRecordScan).not.toHaveBeenCalled();
+    expect(mockSubmitObservation).not.toHaveBeenCalled();
+  });
+
+  it('leaves the ordinary scanned screen offering its Community action', async () => {
+    await renderScreen();
+    expect(screen.getByLabelText(S.communityObservations.reportAction)).toBeTruthy();
+    expect(screen.queryByLabelText(S.referenceView.scanFirstAction)).toBeNull();
+  });
+
+  it('says the same thing about the product either way', async () => {
+    // Reference mode removes authority; it never changes the science.
+    await renderScreen({ comparableAlternative });
+    const scanned = orderedText();
+    screen.unmount();
+
+    mockParams = { barcode: '8901000000001', reference: REFERENCE_ALTERNATIVE };
+    await renderScreen({ comparableAlternative });
+    const referenced = orderedText();
+
+    for (const shown of ['WAIT', S.factors.negatives, S.betterOption.heading]) {
+      expect(scanned).toContain(shown);
+      expect(referenced).toContain(shown);
+    }
   });
 });

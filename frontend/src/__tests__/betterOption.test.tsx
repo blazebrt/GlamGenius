@@ -119,10 +119,19 @@ describe('an available comparable alternative', () => {
     expect(screen.queryByText('Sunfield')).toBeNull();
   });
 
-  it('falls back to the barcode when the source carries no name', () => {
-    render(<BetterOption alternative={available({ productName: null })} onView={jest.fn()} />);
-    expect(screen.getByText('8901000000002')).toBeTruthy();
-  });
+  it.each([null, '', '   '])(
+    'fails closed rather than recommending a barcode when the name is %p',
+    (productName) => {
+      render(
+        <BetterOption alternative={available({ productName })} onView={jest.fn()} />,
+      );
+      // The barcode is an identifier, not a customer recommendation title.
+      expect(screen.queryByText('8901000000002')).toBeNull();
+      // And the honest missing line stands in its place.
+      expect(screen.getByText(S.betterOption.notEnoughInformation)).toBeTruthy();
+      expect(screen.queryByLabelText(/^View /)).toBeNull();
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -246,7 +255,7 @@ describe('accessibility', () => {
 // ---------------------------------------------------------------------------
 // The wire mapping
 // ---------------------------------------------------------------------------
-const wire = (alternative: unknown) => ({
+const wire = (alternative: unknown, extra: Record<string, unknown> = {}) => ({
   outcome: 'graded', grade: 'C', band: 'yellow', product_name: 'Northstar Corn Flakes',
   taxonomy: { domain: 'consumed', category: 'packaged_food', subcategory: 'cereal' },
   decision: { action: 'wait', reason_key: 'processing' },
@@ -255,7 +264,7 @@ const wire = (alternative: unknown) => ({
   quantity_guidance: null, purity_note: null, missing: [],
   confidence: { level: 'unverified', text: 'Unverified' },
   attribution: { text: ODBL_ATTRIBUTION_TEXT }, pack_size_g: 200, basis: 'solid',
-  result_contract_version: 'v1', alternative,
+  result_contract_version: 'v1', alternative, ...extra,
 }) as never;
 
 describe('the wire mapping', () => {
@@ -297,5 +306,17 @@ describe('the wire mapping', () => {
 
   it('is absent, not empty, on a response that carries no envelope', () => {
     expect(toVerdictSource(wire(undefined)).comparableAlternative).toBeNull();
+  });
+
+  it('reads the physical-pack context from the server, defaulting to a real read', () => {
+    // Reference mode is opted into. A response that says nothing is an
+    // ordinary physical read, which is what every older response was.
+    expect(toVerdictSource(wire(undefined)).physicalPackContext).toBe(true);
+    expect(
+      toVerdictSource(wire(undefined, { physical_pack_context: true })).physicalPackContext,
+    ).toBe(true);
+    expect(
+      toVerdictSource(wire(undefined, { physical_pack_context: false })).physicalPackContext,
+    ).toBe(false);
   });
 });

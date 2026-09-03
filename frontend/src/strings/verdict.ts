@@ -111,6 +111,17 @@ export const S = {
       missing: 'Not enough information to suggest a comparable alternative yet.',
     },
   },
+  // -----------------------------------------------------------------------
+  // Looking at a product you are not holding.
+  //
+  // Reference mode only ever takes authority away. There is no copy here that
+  // adds a claim — the one line is an invitation to do the thing that would
+  // earn the pack-specific layers back.
+  // -----------------------------------------------------------------------
+  referenceView: {
+    // Says what to do, and does not pretend the shopper saw this packet.
+    scanFirstAction: 'Scan this product to report what you see',
+  },
   officialRecords: {
     title: 'Official FSSAI record',
     recallFound: 'This exact pack appears in an official FSSAI food recall record.',

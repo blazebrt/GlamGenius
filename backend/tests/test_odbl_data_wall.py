@@ -371,14 +371,16 @@ def test_the_alternative_domain_reads_store_a_and_never_writes_it():
 
 
 @pytest.mark.asyncio
-async def test_the_alternative_pairing_exists_only_for_one_response(off_clean):
+async def test_the_alternative_pairing_exists_only_for_one_response(db_clean, off_clean):
     """Their half and ours are assembled together and thrown away together.
 
-    The candidate a shopper sees carries a product name and a brand from Open
-    Food Facts beside a grade of ours. That pairing is a response, not a record:
-    it is built in memory, returned, and never written down. The proof is that
-    Store A is byte-identical afterwards and Store B gained nothing at all.
+    The candidate a shopper sees is *discovered* through an Open Food Facts
+    category and country listing, and *described* by a label somebody confirmed
+    against the pack. That pairing is a response, not a record: it is built in
+    memory, returned, and never written down. The proof is that Store A is
+    byte-identical afterwards and neither store gained a field of the other's.
     """
+    import uuid as uuid_module
     from dataclasses import replace as dataclass_replace
 
     from app.domains.alternatives.service import comparable_alternative_envelope
@@ -389,43 +391,68 @@ async def test_the_alternative_pairing_exists_only_for_one_response(off_clean):
         candidate_ruleset,
         enforce_published_required_rules,
     )
+    from app.domains.product import service as product_service
+    from app.domains.product.models import ScanEvent
+    from app.shared.database.sql import get_sessionmaker
 
-    current_off = {
-        "product_name": "Northstar Corn Flakes", "brands": "Northstar",
+    current_facts = {
+        "product_name": "Northstar Corn Flakes", "brand": "Northstar",
         "ingredients_text": "maize, sugar, salt, flavouring, emulsifier (ins 322)",
-        "nutriments": {
-            "energy-kcal_100g": 380, "sugars_100g": 8, "saturated-fat_100g": 1,
-            "salt_100g": 0.5, "proteins_100g": 7, "fiber_100g": 3,
+        "nutrition_per_100g": {
+            "energy_kcal": "380", "sugars_g": "8", "saturated_fat_g": "1",
+            "salt_g": "0.5", "protein_g": "7", "fibre_g": "3",
         },
-        "categories": "Foods, Breakfasts, Breakfast cereals", "countries": "India",
+        "nutrition_basis": "per_100g", "net_quantity": "200 g",
     }
+    candidate_facts = {
+        "product_name": "Sunfield Oat Porridge", "brand": "Sunfield",
+        "ingredients_text": "whole grain oats, salt",
+        "nutrition_per_100g": {
+            "energy_kcal": "370", "sugars_g": "2", "saturated_fat_g": "1.2",
+            "salt_g": "0.3", "protein_g": "12", "fibre_g": "9",
+        },
+        "nutrition_basis": "per_100g", "net_quantity": "200 g",
+    }
+
+    # Store A: the discovery universe. Category and country, nothing of ours.
     factory = get_off_sessionmaker()
     async with factory() as session:
         session.add(OffProduct(
-            barcode="8901000000001", product_name=current_off["product_name"],
-            brands=current_off["brands"], ingredients_text=current_off["ingredients_text"],
-            nutriments=current_off["nutriments"], categories=current_off["categories"],
-            countries="India", fetched_at=datetime.now(UTC),
+            barcode="8901000000001", product_name="Catalogue Name",
+            categories="Foods, Breakfasts, Breakfast cereals", countries="India",
+            fetched_at=datetime.now(UTC),
         ))
         session.add(OffProduct(
-            barcode="8901000000002", product_name="Sunfield Oat Porridge", brands="Sunfield",
-            ingredients_text="whole grain oats, salt",
-            nutriments={
-                "energy-kcal_100g": 370, "sugars_100g": 2, "saturated-fat_100g": 1.2,
-                "salt_100g": 0.3, "proteins_100g": 12, "fiber_100g": 9,
-            },
+            barcode="8901000000002", product_name="Another Catalogue Name",
             categories="Plant foods, Breakfast cereals", countries="India",
             fetched_at=datetime.now(UTC),
         ))
+        await session.commit()
+
+    # Store B: the confirmed packs. Independently sourced from photographs, and
+    # named for what they are rather than borrowed from the catalogue.
+    store_b = get_sessionmaker()
+    snapshots = {}
+    async with store_b() as session:
+        for barcode, facts in (
+            ("8901000000001", current_facts), ("8901000000002", candidate_facts),
+        ):
+            held = ScanEvent(
+                barcode=barcode, outcome="label_captured",
+                client_scan_id=uuid_module.uuid4().hex, label_facts=facts,
+            )
+            session.add(held)
+            await session.flush()
+            snapshots[barcode] = await product_service.store_label_snapshot(
+                session, barcode=barcode, facts=facts, device_id=None, scan_event_id=held.id,
+            )
         await session.commit()
 
     published = ProductionRuleset(provenance={
         rule_id: dataclass_replace(row, status=STATUS_PUBLISHED)
         for rule_id, row in candidate_ruleset().provenance.items()
     })
-    product = from_scan.build(
-        barcode="8901000000001", name=current_off["product_name"], off_half=current_off,
-    )
+    product = from_scan.build_confirmed_label(barcode="8901000000001", facts=current_facts)
     result = enforce_published_required_rules(grade_product(product), published)
 
     async def store_a_rows():
@@ -441,14 +468,22 @@ async def test_the_alternative_pairing_exists_only_for_one_response(off_clean):
             ]
 
     before = await store_a_rows()
-    envelope = await comparable_alternative_envelope(
-        barcode="8901000000001", current_off_half=current_off,
-        current_product=product, current_result=result, ruleset=published,
-    )
-    # Their half and ours did meet — that is the feature.
+    async with store_b() as session:
+        current_snapshot = await product_service.latest_label_snapshot(session, "8901000000001")
+        envelope = await comparable_alternative_envelope(
+            session,
+            barcode="8901000000001", current_snapshot=current_snapshot,
+            current_product=product, current_result=result, ruleset=published,
+        )
+    # The two halves did meet — that is the feature.
     assert envelope["candidate"]["product_name"] == "Sunfield Oat Porridge"
     assert envelope["candidate"]["grade"] == "B"
     assert envelope["candidate"]["attribution"]["text"] == ATTRIBUTION_TEXT
-    # And Store A is exactly as it was. No grade of ours was written beside
-    # their row, and no row of theirs was copied anywhere.
+    # Store A is exactly as it was. No grade of ours was written beside their
+    # row, and no row of theirs was copied anywhere.
     assert await store_a_rows() == before
+    # And no Open Food Facts field leaked into the confirmed pack beside it.
+    stored = snapshots["8901000000002"].facts
+    assert "Another Catalogue Name" not in str(stored)
+    assert "categories" not in stored
+    assert "countries" not in stored

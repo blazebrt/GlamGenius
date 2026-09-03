@@ -197,6 +197,9 @@ export function toVerdictSource(
           : null,
       }
       : null,
+    // Absent on an older response, and absent means an ordinary physical read:
+    // reference mode is something a caller opts into, never a default.
+    physicalPackContext: wire.physical_pack_context !== false,
     quantityGuidance: wire.quantity_guidance,
     purityNote: wire.purity_note,
     missing,
@@ -205,5 +208,8 @@ export function toVerdictSource(
   };
 }
 
-export const getProductVerdict = async (barcode: string): Promise<VerdictSource> =>
-  toVerdictSource(await readProductVerdict(barcode));
+export const getProductVerdict = async (
+  barcode: string,
+  options: { physicalPackContext?: boolean } = {},
+): Promise<VerdictSource> =>
+  toVerdictSource(await readProductVerdict(barcode, options));

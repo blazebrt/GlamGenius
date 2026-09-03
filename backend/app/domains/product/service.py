@@ -17,7 +17,8 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import UTC, datetime, timedelta
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, text, update
@@ -26,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.nutrition.grading import from_scan, required_grading_data_missing
 from app.domains.off import client as off_client
+from app.domains.off import freshness as off_freshness
 from app.domains.off.join import join_on_barcode, read_off_product, read_off_product_with_age
 from app.domains.off.models import OffProduct
 from app.domains.off.store import get_off_sessionmaker
@@ -55,6 +57,56 @@ async def latest_label_snapshot(session: AsyncSession, barcode: str) -> LabelSna
     return (await session.execute(
         select(LabelSnapshot).where(LabelSnapshot.barcode == barcode).order_by(LabelSnapshot.version_number.desc()).limit(1)
     )).scalar_one_or_none()
+
+
+async def latest_label_snapshots(
+    session: AsyncSession, barcodes: Sequence[str],
+) -> dict[str, LabelSnapshot]:
+    """The same "latest" as :func:`latest_label_snapshot`, for many barcodes at once.
+
+    One statement, whatever the size of the set, because the alternative engine
+    asks about a whole bounded candidate window and a query per candidate would
+    turn one Product Result into fifty round trips.
+
+    ``DISTINCT ON`` picks the highest ``version_number`` per barcode, which is
+    the definition the single-barcode reader above uses. Keeping both orderings
+    on ``version_number`` is what stops the two answers drifting apart, and the
+    unique constraint on ``(barcode, version_number)`` makes the pick
+    unambiguous.
+
+    Deliberately no completeness filter: this returns the *latest* row, not the
+    latest usable one. A caller that needs a gradeable snapshot checks the row
+    it gets — reaching past a newer incomplete capture to an older complete one
+    would answer with facts the pack no longer has.
+    """
+    if not barcodes:
+        return {}
+    rows = (await session.execute(
+        select(LabelSnapshot)
+        .where(LabelSnapshot.barcode.in_(list(barcodes)))
+        .order_by(LabelSnapshot.barcode, LabelSnapshot.version_number.desc())
+        .distinct(LabelSnapshot.barcode)
+    )).scalars().all()
+    return {row.barcode: row for row in rows}
+
+
+def result_identity(barcode: str, source_half: dict[str, Any] | None) -> tuple[str, str | None]:
+    """The name and brand the Product Result publishes for one barcode.
+
+    Shared rather than repeated, because two surfaces now show a product's
+    identity — its own verdict screen, and the "Better option" card on somebody
+    else's — and a card that names a product differently from the screen it
+    opens is a card the shopper cannot trust. One function means they cannot
+    drift.
+
+    An absent brand stays absent. An absent name falls back to the barcode,
+    which is honest as an identifier but is not a name: a caller publishing a
+    recommendation must check for that itself rather than print it.
+    """
+    half = source_half or {}
+    name = half.get("product_name") or half.get("name") or barcode
+    brand = half.get("brands") or half.get("brand") or None
+    return str(name), brand
 
 CONTENT_FACT_FIELDS = (
     "product_name", "brand", "ingredients_text", "nutrition_per_100g",
@@ -165,22 +217,19 @@ async def _cache_off_product(barcode: str, payload: dict[str, Any]) -> dict[str,
         return await read_off_product(session, barcode)
 
 
-#: How long a cached Open Food Facts record is served before we look again.
+#: The freshness window lives in the Open Food Facts domain, because the
+#: comparable alternative reads the same policy and two copies of "30 days"
+#: would eventually disagree. Re-exported here so existing callers and tests
+#: keep their import.
 #:
-#: Their contributors correct records and manufacturers reformulate packs, so a
-#: copy kept forever pins a product's grade to whatever the label said the first
-#: time anybody scanned it. A refresh is best-effort in both directions: the
-#: cached copy is still what we answer with when their API is slow, down, or
-#: the phone is offline, so re-checking costs a stale answer nothing.
-OFF_CACHE_TTL = timedelta(days=30)
+#: A refresh is best-effort in both directions on this path: the cached copy is
+#: still what we answer with when their API is slow, down, or the phone is
+#: offline, so re-checking costs a stale answer nothing.
+OFF_CACHE_TTL = off_freshness.OFF_CACHE_TTL
 
 
 def _is_stale(fetched_at: datetime | None) -> bool:
-    if fetched_at is None:
-        return True
-    if fetched_at.tzinfo is None:
-        fetched_at = fetched_at.replace(tzinfo=UTC)
-    return (datetime.now(UTC) - fetched_at) >= OFF_CACHE_TTL
+    return off_freshness.is_stale(fetched_at)
 
 
 async def _off_half(barcode: str, *, allow_network: bool = True) -> tuple[dict[str, Any] | None, bool]:

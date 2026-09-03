@@ -32,6 +32,15 @@ import { S, t } from '../../strings/verdict';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 import { OpenFoodFactsAttribution } from '../common/OpenFoodFactsAttribution';
 
+/**
+ * The route parameter that marks a verdict screen as a reference view.
+ *
+ * Lives beside the card that produces it, because the card is the only thing
+ * that navigates this way. Reading about a product is not holding it: the
+ * screen this opens asks the server to withhold every physical-pack layer.
+ */
+export const REFERENCE_ALTERNATIVE = 'alternative';
+
 export function BetterOption({
   alternative,
   onView,
@@ -44,7 +53,12 @@ export function BetterOption({
   if (!alternative) return null;
 
   const candidate = alternative.candidate;
-  if (alternative.status !== 'available' || !candidate) {
+  // A recommendation has to name something. The server already refuses a
+  // nameless candidate; this is the second lock, because the failure it guards
+  // against is publishing "Better option: 8901000000002" to a shopper, and a
+  // barcode is an identifier rather than a name.
+  const named = candidate?.productName?.trim() || '';
+  if (alternative.status !== 'available' || !candidate || !named) {
     // Rule 5: state the absence, never fill it. This says what we do not know.
     // It does not say nothing better exists — our cached data is not the market.
     return (
@@ -59,9 +73,7 @@ export function BetterOption({
     );
   }
 
-  // The source may carry no name for a product. Falling back to the barcode
-  // keeps the row honest rather than inventing something to print.
-  const name = candidate.productName?.trim() || candidate.barcode;
+  const name = named;
   const comparison = t(S.betterOption.comparison, {
     candidate: candidate.comparison.candidateGrade,
     current: candidate.comparison.currentGrade,

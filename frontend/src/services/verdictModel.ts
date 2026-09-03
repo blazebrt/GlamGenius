@@ -157,6 +157,14 @@ export interface VerdictSource {
   alternative?: Alternative | null;
   /** Step 6A. Additive, and absent on a response that predates it. */
   comparableAlternative?: ComparableAlternative | null;
+  /**
+   * False when this product was opened as a reference rather than scanned.
+   *
+   * Drives what the screen may offer, not what it may say about the product:
+   * the science is a fact about the product, while "report what you saw" is a
+   * claim about this shopper having held this packet.
+   */
+  physicalPackContext?: boolean;
   quantityGuidance?: string | null;
   purityNote?: string | null;
   missing?: string[];
