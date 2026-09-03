@@ -1,14 +1,31 @@
 # syntax=docker/dockerfile:1.7
 #
-# Reproducible backend image for GlamGenius (Fix 4, WP2).
+# Backend image for GlamGenius (Fix 4, WP2).
 #
-# What "reproducible" means here:
+# What is actually pinned:
 #
-#   * pinned base image (python:3.11.15-slim-trixie, digest updated by
+#   * the base image, by digest (python:3.11.15-slim-trixie, digest updated by
 #     scripts/update_service_digests.sh)
-#   * pinned Python dependencies via requirements.txt exact versions
+#   * Python dependencies, by exact version in requirements.txt
 #   * non-root runtime user
 #   * no shell history, no build tooling in the final image
+#
+# What is deliberately NOT pinned, and why this build is not bit-reproducible:
+#
+#   Both stages run `apt-get update && apt-get upgrade -y` against the live
+#   Debian repositories, so the Debian package set is whatever those
+#   repositories publish at build time. The same Git SHA and the same base
+#   digest can therefore produce images whose OS packages differ. That is the
+#   intended trade: it is what lets a published Debian security fix reach the
+#   image without editing this file, and it is measurable — the pinned base
+#   image alone carries far more HIGH/CRITICAL findings than the built image,
+#   because the upgrade resolves them.
+#
+#   The cost is that OS package provenance is not deterministic and cannot be
+#   reconstructed from Git alone. Do not describe this image as reproducible
+#   without qualifying it. Making package provenance deterministic (a snapshot
+#   Debian mirror, or a recorded package manifest) is a separate change, not
+#   something to fold into a security fix.
 #
 # Build:
 #     docker build -f backend/Dockerfile -t glamgenius-backend backend/
