@@ -32,7 +32,9 @@ from pathlib import Path
 import pytest
 from app.domains.evidence import authoring as evidence_authoring
 from app.domains.evidence.enums import (
+    EVIDENCE_STRENGTHS,
     ClaimSourceRelationship,
+    ClaimStatus,
     ClaimType,
     EvidenceDomain,
     EvidenceStrength,
@@ -42,7 +44,10 @@ from app.domains.evidence.enums import (
     SourceType,
 )
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource
+from app.domains.evidence.service import claim_is_public_knowledge_path
+from app.domains.evidence.urls import openable_url
 from app.domains.substances import authoring as substance_authoring
+from app.domains.substances import service as substance_service
 from app.domains.substances.enums import EntityKind, NameNamespace, SubstanceStatus
 from app.domains.substances.identity_schema import (
     MAX_NAMES_PER_CLAIM,
@@ -53,6 +58,7 @@ from app.domains.substances.identity_schema import (
 from app.domains.substances.models import Substance, SubstanceName
 from app.domains.substances.normalization import MAX_NAME_LENGTH, normalize_name
 from app.domains.substances.service import (
+    IDENTITY_EVIDENCE_STRENGTHS,
     IDENTITY_SOURCE_TYPES,
     MAX_BATCH_NAMES,
     ResolutionStatus,
@@ -61,6 +67,7 @@ from app.domains.substances.service import (
 )
 from app.shared.database import sql
 from app.shared.database.sql import get_sessionmaker
+from app.shared.errors.exceptions import ValidationFailedError
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select, text
 
@@ -879,6 +886,311 @@ class TestInvalidRowCannotHideValidRow:
 # ---------------------------------------------------------------------------
 # G. Legacy alias isolation — the old Care family map was NOT copied
 # ---------------------------------------------------------------------------
+class TestTheSourceMustBeNamed:
+    """A citation with no title and no publisher is not provenance."""
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\t", "\n  "])
+    async def test_authoring_refuses_a_blank_source_title(self, db_clean, blank):
+        factory = get_sessionmaker()
+        async with factory() as session:
+            with pytest.raises(ValidationFailedError) as caught:
+                await substance_authoring.create_identity_draft(
+                    session, substance_key="niacinamide",
+                    entity_kind=EntityKind.DEFINED_SUBSTANCE.value,
+                    names=[_name("Niacinamide", preferred=True)],
+                    summary="Names.", scope="Nomenclature only.",
+                    evidence_strength=EvidenceStrength.STRONG.value,
+                    strength_rationale="A named reference work records this.",
+                    source_title=blank, source_publisher="Example Reference",
+                    source_type=SourceType.INGREDIENT_REFERENCE_DATABASE.value,
+                    source_url="https://example.org/reference/entry",
+                    license_or_use_note="Reproduced under the publisher's terms.",
+                    author="tester",
+                )
+        assert caught.value.extra["field"] == "source_title"
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\t", "\n  "])
+    async def test_authoring_refuses_a_blank_source_publisher(self, db_clean, blank):
+        factory = get_sessionmaker()
+        async with factory() as session:
+            with pytest.raises(ValidationFailedError) as caught:
+                await substance_authoring.create_identity_draft(
+                    session, substance_key="niacinamide",
+                    entity_kind=EntityKind.DEFINED_SUBSTANCE.value,
+                    names=[_name("Niacinamide", preferred=True)],
+                    summary="Names.", scope="Nomenclature only.",
+                    evidence_strength=EvidenceStrength.STRONG.value,
+                    strength_rationale="A named reference work records this.",
+                    source_title="Reference entry", source_publisher=blank,
+                    source_type=SourceType.INGREDIENT_REFERENCE_DATABASE.value,
+                    source_url="https://example.org/reference/entry",
+                    license_or_use_note="Reproduced under the publisher's terms.",
+                    author="tester",
+                )
+        assert caught.value.extra["field"] == "source_publisher"
+
+    async def test_authoring_stores_the_stripped_title_and_publisher(self, db_clean):
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await substance_authoring.create_identity_draft(
+                session, substance_key="niacinamide",
+                entity_kind=EntityKind.DEFINED_SUBSTANCE.value,
+                names=[_name("Niacinamide", preferred=True)],
+                summary="Names.", scope="Nomenclature only.",
+                evidence_strength=EvidenceStrength.STRONG.value,
+                strength_rationale="A named reference work records this.",
+                source_title="  Reference entry  ",
+                source_publisher="  Example Reference  ",
+                source_type=SourceType.INGREDIENT_REFERENCE_DATABASE.value,
+                source_url="  https://example.org/reference/entry  ",
+                license_or_use_note="Reproduced under the publisher's terms.",
+                author="tester",
+            )
+            await session.commit()
+        async with factory() as session:
+            source = (await session.execute(select(EvidenceSource))).scalars().one()
+        assert source.title == "Reference entry"
+        assert source.publisher == "Example Reference"
+        assert source.canonical_url == "https://example.org/reference/entry"
+
+    @pytest.mark.parametrize("field", ["title", "publisher"])
+    @pytest.mark.parametrize("blank", ["", "   "])
+    async def test_blanking_the_source_afterwards_unresolves_the_name(
+        self, db_clean, field, blank,
+    ):
+        """A reader must not depend on the writer having been careful.
+
+        The row was authored correctly and blanked later — by a hand edit, a bad
+        import, or anything else. Read-time eligibility has to notice.
+        """
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _published(
+                session, substance_key="niacinamide",
+                names=[_name("Niacinamide", preferred=True)],
+            )
+        async with factory() as session:
+            assert (await resolve_name(session, "Niacinamide")).status is ResolutionStatus.RESOLVED
+
+        async with factory() as session:
+            source = (await session.execute(select(EvidenceSource))).scalars().one()
+            setattr(source, field, blank)
+            await session.commit()
+        async with factory() as session:
+            assert (await resolve_name(session, "Niacinamide")).status is ResolutionStatus.UNRESOLVED
+
+
+class TestOpenableSourceUrl:
+    """One validator, and it parses rather than sniffs a prefix."""
+
+    @pytest.mark.parametrize("bad", [
+        "", "   ",
+        "example.org",                      # no scheme
+        "ftp://example.org/x",              # wrong scheme
+        "javascript:alert(1)",              # not a citation at all
+        "https://", "http://",              # scheme and nothing else
+        "https://?x=1",                     # query, still no host
+        "https:///path",                    # path, still no host
+        "https://exa mple.org/a",           # embedded space
+        "https://exa\tmple.org/a",          # embedded tab
+        "https://exa\nmple.org/a",          # embedded newline
+        "https://example.org/\x00a",        # embedded NUL
+        "http://[::1/x",                    # malformed IPv6 authority
+        "http://example.org:notaport/x",    # malformed port
+    ])
+    def test_a_string_that_is_not_an_openable_url_is_refused(self, bad):
+        assert openable_url(bad) is None
+
+    @pytest.mark.parametrize("good", [
+        "https://example.org",
+        "http://example.org/a?b=1#c",
+        "https://example.org:8443/entry",
+        "https://sub.example.co.in/reference/entry",
+        "http://[::1]:8080/x",
+    ])
+    def test_a_normal_http_url_still_passes(self, good):
+        assert openable_url(good) == good
+
+    def test_a_non_string_is_refused(self):
+        for value in (None, 123, [], {}, True):
+            assert openable_url(value) is None
+
+    @pytest.mark.parametrize("bad", ["https://", "https://?x=1", "https:///path", "example.org"])
+    async def test_authoring_refuses_an_unopenable_source_url(self, db_clean, bad):
+        factory = get_sessionmaker()
+        async with factory() as session:
+            with pytest.raises(ValidationFailedError) as caught:
+                await _draft(
+                    session, substance_key="niacinamide",
+                    names=[_name("Niacinamide", preferred=True)], source_url=bad,
+                )
+        assert caught.value.extra["field"] == "source_url"
+
+    @pytest.mark.parametrize("bad", ["https://", "https://?x=1", "https:///path"])
+    async def test_breaking_the_url_afterwards_unresolves_the_name(self, db_clean, bad):
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _published(
+                session, substance_key="niacinamide",
+                names=[_name("Niacinamide", preferred=True)],
+            )
+        async with factory() as session:
+            source = (await session.execute(select(EvidenceSource))).scalars().one()
+            source.canonical_url = bad
+            await session.commit()
+        async with factory() as session:
+            assert (await resolve_name(session, "Niacinamide")).status is ResolutionStatus.UNRESOLVED
+
+    def test_there_is_only_one_url_validator(self):
+        """The authoring helper delegates rather than keeping a second opinion."""
+        body = inspect.getsource(evidence_authoring._valid_url)
+        assert "openable_url" in body
+        assert "startswith" not in body
+
+
+class TestEveryMaterialisedFieldMustAgree:
+    """The index is only as trustworthy as its agreement with the evidence."""
+
+    async def test_editing_the_displayed_name_alone_unresolves_it(self, db_clean):
+        """The normalised form is untouched; the spelling a shopper sees is not.
+
+        This is the drift a normalised-only comparison cannot see: the row still
+        answers the same lookup key while displaying a name no reviewer published.
+        """
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _published(
+                session, substance_key="niacinamide",
+                names=[_name("Niacinamide", preferred=True)],
+            )
+        async with factory() as session:
+            row = (await session.execute(select(SubstanceName))).scalars().one()
+            row.name = "Niacinamide (edited)"          # normalized_name left alone
+            await session.commit()
+        async with factory() as session:
+            row = (await session.execute(select(SubstanceName))).scalars().one()
+            assert row.normalized_name == "niacinamide"
+            assert (await resolve_name(session, "Niacinamide")).status is ResolutionStatus.UNRESOLVED
+
+    async def test_editing_the_language_tag_unresolves_it(self, db_clean):
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _published(
+                session, substance_key="niacinamide",
+                names=[_name("Niacinamide", preferred=True)],
+            )
+        async with factory() as session:
+            row = (await session.execute(select(SubstanceName))).scalars().one()
+            row.language_tag = "en"
+            await session.commit()
+        async with factory() as session:
+            assert (await resolve_name(session, "Niacinamide")).status is ResolutionStatus.UNRESOLVED
+
+    async def test_editing_the_namespace_unresolves_it(self, db_clean):
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _published(
+                session, substance_key="niacinamide",
+                names=[_name("Niacinamide", preferred=True)],
+            )
+        async with factory() as session:
+            row = (await session.execute(select(SubstanceName))).scalars().one()
+            row.namespace = NameNamespace.COMMON.value
+            await session.commit()
+        async with factory() as session:
+            assert (await resolve_name(session, "Niacinamide")).status is ResolutionStatus.UNRESOLVED
+
+    async def test_editing_the_preferred_flag_unresolves_it(self, db_clean):
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _published(
+                session, substance_key="niacinamide",
+                names=[_name("Niacinamide", preferred=True)],
+            )
+        async with factory() as session:
+            row = (await session.execute(select(SubstanceName))).scalars().one()
+            row.is_preferred = False
+            await session.commit()
+        async with factory() as session:
+            assert (await resolve_name(session, "Niacinamide")).status is ResolutionStatus.UNRESOLVED
+
+    def test_the_comparison_reads_every_materialised_field(self):
+        """Named explicitly, so adding a column without comparing it is visible."""
+        body = inspect.getsource(substance_service._name_row_agrees_with_claim)
+        for field in ("name.name ==", "normalized_name", "namespace",
+                      "language_tag", "is_preferred"):
+            assert field in body, field
+
+
+class TestInsufficientEvidenceEstablishesNothing:
+    """A grade of "insufficient" is the reviewer saying the evidence is not there."""
+
+    async def test_an_insufficient_claim_does_not_establish_identity(self, db_clean):
+        """Everything else about this path is impeccable, and it still resolves nothing."""
+        factory = get_sessionmaker()
+        async with factory() as session:
+            claim_id = await substance_authoring.create_identity_draft(
+                session, substance_key="niacinamide",
+                entity_kind=EntityKind.DEFINED_SUBSTANCE.value,
+                names=[_name("Niacinamide", preferred=True)],
+                summary="Names.", scope="Nomenclature only.",
+                evidence_strength=EvidenceStrength.INSUFFICIENT.value,
+                strength_rationale="The source does not actually settle the nomenclature.",
+                source_title="Reference entry", source_publisher="Example Reference",
+                source_type=SourceType.INGREDIENT_REFERENCE_DATABASE.value,
+                source_url="https://example.org/reference/entry",
+                license_or_use_note="Reproduced under the publisher's terms.",
+                author="tester",
+            )
+            await _publish(session, uuid.UUID(claim_id["claim_id"]))
+            await session.commit()
+
+        async with factory() as session:
+            claim = (await session.execute(select(EvidenceClaim))).scalars().one()
+            # The path really is otherwise complete — this is not a published
+            # claim failing some other gate.
+            assert claim.review_status == ReviewStatus.PUBLISHED.value
+            assert claim.claim_status == ClaimStatus.SUPPORTED.value
+            assert claim.evidence_strength == EvidenceStrength.INSUFFICIENT.value
+            assert claim_is_public_knowledge_path(claim) is True
+            assert (await resolve_name(session, "Niacinamide")).status is ResolutionStatus.UNRESOLVED
+
+    @pytest.mark.parametrize("strength", [
+        EvidenceStrength.STRONG.value,
+        EvidenceStrength.MODERATE.value,
+        EvidenceStrength.LIMITED.value,
+        EvidenceStrength.TRADITIONAL.value,
+    ])
+    async def test_every_other_graded_strength_still_establishes_identity(
+        self, db_clean, strength,
+    ):
+        factory = get_sessionmaker()
+        async with factory() as session:
+            result = await substance_authoring.create_identity_draft(
+                session, substance_key="niacinamide",
+                entity_kind=EntityKind.DEFINED_SUBSTANCE.value,
+                names=[_name("Niacinamide", preferred=True)],
+                summary="Names.", scope="Nomenclature only.",
+                evidence_strength=strength,
+                strength_rationale="A named reference work records this nomenclature.",
+                source_title="Reference entry", source_publisher="Example Reference",
+                source_type=SourceType.INGREDIENT_REFERENCE_DATABASE.value,
+                source_url="https://example.org/reference/entry",
+                license_or_use_note="Reproduced under the publisher's terms.",
+                author="tester",
+            )
+            await _publish(session, uuid.UUID(result["claim_id"]))
+            await session.commit()
+        async with factory() as session:
+            assert (await resolve_name(session, "Niacinamide")).status is ResolutionStatus.RESOLVED
+
+    def test_the_identity_strength_set_is_narrower_than_the_global_one(self):
+        """Step 7A tightens its own reading; it does not move the shared vocabulary."""
+        assert EvidenceStrength.INSUFFICIENT.value not in IDENTITY_EVIDENCE_STRENGTHS
+        assert EvidenceStrength.INSUFFICIENT.value in set(EVIDENCE_STRENGTHS)
+        assert set(EVIDENCE_STRENGTHS) > IDENTITY_EVIDENCE_STRENGTHS
+
+
 class TestLegacyAliasIsolation:
     async def test_no_substance_row_exists_without_authoring(self, db_clean):
         """No production seed. Zero canonical names ship until a reviewer writes one."""

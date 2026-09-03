@@ -18,6 +18,7 @@ from app.domains.evidence.enums import (
     SourceStatus,
 )
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource, RuleEvidenceLink
+from app.domains.evidence.urls import openable_url
 
 
 class EvidenceApprovalError(ValueError):
@@ -381,9 +382,18 @@ def source_path_is_public_knowledge(
     """Is this one claim→source link fit to carry a public claim?
 
     A supporting (never background) link, reviewed by a named person, pointing
-    at an active source of an allowed type, with a URL somebody can open and an
-    explicit licence/use note. The note is required rather than inferred: what a
-    publisher permits is not deducible from their URL.
+    at an active, *named* source of an allowed type, with a URL somebody can
+    open and an explicit licence/use note. The note is required rather than
+    inferred: what a publisher permits is not deducible from their URL.
+
+    Title and publisher are checked here and not only at authoring, because a
+    reader must not depend on the writer having been careful. A row can be
+    hand-edited, imported badly, or blanked after the fact; a citation with no
+    title and no publisher is not provenance a public claim can rest on,
+    whatever it looked like when it was written.
+
+    The URL goes through :func:`openable_url` — the same check authoring uses —
+    so ``https://`` and ``https://?x=1`` fail here exactly as they fail there.
     """
     if link.relationship != ClaimSourceRelationship.SUPPORTS.value:
         return False
@@ -393,7 +403,10 @@ def source_path_is_public_knowledge(
         return False
     if source.source_type not in allowed_source_types:
         return False
-    url = (source.canonical_url or "").strip().lower()
-    if not url.startswith(("http://", "https://")):
+    if not (source.title or "").strip():
+        return False
+    if not (source.publisher or "").strip():
+        return False
+    if openable_url(source.canonical_url) is None:
         return False
     return bool(source.license_or_use_note and source.license_or_use_note.strip())

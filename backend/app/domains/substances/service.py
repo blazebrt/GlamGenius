@@ -39,7 +39,7 @@ from enum import StrEnum
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.evidence.enums import ClaimType, EvidenceDomain, EvidenceTier, SourceType
+from app.domains.evidence.enums import ClaimType, EvidenceDomain, EvidenceStrength, EvidenceTier, SourceType
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource
 from app.domains.evidence.service import (
     claim_is_public_knowledge_path,
@@ -122,6 +122,29 @@ def _claim_matches_identity_subject(claim: EvidenceClaim, substance: Substance) 
     )
 
 
+#: Which graded strengths may establish a canonical public identity.
+#:
+#: Deliberately narrower than the global evidence vocabulary and deliberately
+#: local to Step 7A. ``claim_is_public_knowledge_path`` accepts any graded
+#: strength, which is right for evidence in general — a limited or traditional
+#: finding is still a finding worth surfacing with its grade attached. Identity
+#: is different: it is not a graded opinion but a statement that this name *is*
+#: this substance, and "insufficient" is precisely the reviewer saying the
+#: evidence does not carry that. Tightening the shared function instead would
+#: change what every other evidence reader may publish.
+IDENTITY_EVIDENCE_STRENGTHS: frozenset[str] = frozenset({
+    EvidenceStrength.STRONG.value,
+    EvidenceStrength.MODERATE.value,
+    EvidenceStrength.LIMITED.value,
+    EvidenceStrength.TRADITIONAL.value,
+})
+
+
+def _identity_strength_is_sufficient(claim: EvidenceClaim) -> bool:
+    """May this claim's graded strength establish an identity at all?"""
+    return claim.evidence_strength in IDENTITY_EVIDENCE_STRENGTHS
+
+
 def _name_row_agrees_with_claim(row: SubstanceName, claim: EvidenceClaim, substance: Substance) -> bool:
     """Does the claim's own payload still record exactly this name row?
 
@@ -136,9 +159,16 @@ def _name_row_agrees_with_claim(row: SubstanceName, claim: EvidenceClaim, substa
     if identity.entity_kind != substance.entity_kind:
         return False
     for name in identity.names:
+        # Every materialised field, not a subset. The index exists to answer
+        # questions about a *name*, so agreeing on the normalised form while the
+        # displayed spelling, its language or its preference has been edited
+        # underneath would be an index that no longer records what the reviewer
+        # published.
         if (
-            name.normalized_name == row.normalized_name
+            name.name == row.name
+            and name.normalized_name == row.normalized_name
             and name.namespace == row.namespace
+            and name.language_tag == row.language_tag
             and name.is_preferred == row.is_preferred
         ):
             return True
@@ -200,6 +230,8 @@ async def resolve_names(
             continue
         if not claim_is_public_knowledge_path(claim):
             continue
+        if not _identity_strength_is_sufficient(claim):
+            continue
         if not _name_row_agrees_with_claim(row, claim, substance):
             continue
         if not any(
@@ -249,6 +281,7 @@ async def resolve_name(session: AsyncSession, name: str) -> SubstanceResolution:
 
 
 __all__ = [
+    "IDENTITY_EVIDENCE_STRENGTHS",
     "IDENTITY_SOURCE_TYPES",
     "IDENTITY_SUBJECT_TYPE",
     "MAX_BATCH_NAMES",

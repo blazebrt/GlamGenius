@@ -43,6 +43,7 @@ from app.domains.evidence.enums import (
     SourceStatus,
 )
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource
+from app.domains.evidence.urls import openable_url
 from app.domains.substances.enums import ENTITY_KINDS, SubstanceStatus
 from app.domains.substances.identity_schema import build_identity_payload, parse_identity
 from app.domains.substances.models import Substance, SubstanceName
@@ -50,6 +51,11 @@ from app.domains.substances.normalization import normalize_name
 from app.domains.substances.service import IDENTITY_SOURCE_TYPES, IDENTITY_SUBJECT_TYPE
 from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import ValidationFailedError
+
+#: Read off the EvidenceSource columns rather than restated, so a schema change
+#: moves the authoring limit with it instead of silently truncating.
+SOURCE_TITLE_MAX = EvidenceSource.__table__.c.title.type.length
+SOURCE_PUBLISHER_MAX = EvidenceSource.__table__.c.publisher.type.length
 
 #: A substance key is a machine identifier a human chooses deliberately. It is
 #: never derived from a display name: deriving it would tie the entity to one
@@ -146,10 +152,33 @@ async def create_identity_draft(
             f"{', '.join(sorted(IDENTITY_SOURCE_TYPES))}.",
             field="source_type",
         )
-    url = (source_url or "").strip()
-    if not url.lower().startswith(("http://", "https://")):
+    url = openable_url(source_url)
+    if url is None:
         raise ValidationFailedError(
             "A source URL somebody can open is required.", field="source_url",
+        )
+    # A canonical identity has to say who published it and under what title.
+    # Blank either one and the citation is decorative: the resolver would be
+    # publishing a name on the authority of a source nobody can name.
+    title = (source_title or "").strip()
+    if not title:
+        raise ValidationFailedError(
+            "A source title is required.", field="source_title",
+        )
+    if len(title) > SOURCE_TITLE_MAX:
+        raise ValidationFailedError(
+            f"A source title may be at most {SOURCE_TITLE_MAX} characters.",
+            field="source_title",
+        )
+    publisher = (source_publisher or "").strip()
+    if not publisher:
+        raise ValidationFailedError(
+            "A source publisher is required.", field="source_publisher",
+        )
+    if len(publisher) > SOURCE_PUBLISHER_MAX:
+        raise ValidationFailedError(
+            f"A source publisher may be at most {SOURCE_PUBLISHER_MAX} characters.",
+            field="source_publisher",
         )
     note = (license_or_use_note or "").strip()
     if not note:
@@ -182,10 +211,10 @@ async def create_identity_draft(
 
     source = EvidenceSource(
         source_key=f"substance-identity:{uuid.uuid4().hex[:24]}",
-        source_series_key=f"substance-identity:{source_publisher.lower()[:100]}",
+        source_series_key=f"substance-identity:{publisher.lower()[:100]}",
         source_type=source_type,
-        title=source_title[:512],
-        publisher=source_publisher[:256],
+        title=title,
+        publisher=publisher,
         canonical_url=url,
         accessed_at=utcnow(),
         status=SourceStatus.ACTIVE.value,

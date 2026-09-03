@@ -42,6 +42,7 @@ from app.domains.evidence.enums import (
 )
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource
 from app.domains.evidence.service import publication_verification_complete
+from app.domains.evidence.urls import openable_url
 from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import ConflictError, NotFoundError, ValidationFailedError
 
@@ -105,13 +106,14 @@ def _require(value: str | None, field: str) -> str:
 
 
 def _valid_url(value: str | None) -> str | None:
-    """A source URL has to be something a reviewer can actually open."""
-    text = (value or "").strip()
-    if not text:
-        return None
-    if not text.lower().startswith(("http://", "https://")):
-        return None
-    return text
+    """A source URL has to be something a reviewer can actually open.
+
+    Delegates to the one shared validator so this and the public-knowledge
+    reader cannot disagree about what "openable" means. The intent is unchanged
+    — an absolute http(s) URL, or nothing — it is simply now checked by parsing
+    rather than by looking at the first eight characters.
+    """
+    return openable_url(value)
 
 
 def _validate_tier(tier: str) -> str:
