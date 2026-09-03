@@ -87,6 +87,39 @@ export interface Alternative {
   grade: GradeLetter;
 }
 
+/**
+ * The Step 6A comparable alternative, exactly as the server decided it.
+ *
+ * Kept as its own type rather than folded into `Alternative` above, which is an
+ * older price-carrying shape the API never populates. This one has no price and
+ * no place to put one: the alternative in this milestone is chosen
+ * independently of what anything costs.
+ */
+export interface ComparableAlternativeCandidate {
+  barcode: string;
+  productName: string | null;
+  brand: string | null;
+  grade: GradeLetter;
+  band: ColourBand;
+  decision: 'buy' | 'wait' | 'skip';
+  comparison: {
+    categoryMatch: 'exact_source_leaf';
+    categorySource: 'open_food_facts';
+    currentGrade: GradeLetter;
+    candidateGrade: GradeLetter;
+    basis: 'per_100g' | 'per_100ml' | null;
+  };
+  attributionText: string | null;
+}
+
+export interface ComparableAlternative {
+  policyVersion: string;
+  status: 'available' | 'not_enough_information';
+  reasonKey: string;
+  /** Zero or one. Never a ranked list — that is a later, paid layer. */
+  candidate: ComparableAlternativeCandidate | null;
+}
+
 export interface VerdictSource {
   resultContractVersion?: 'v1';
   barcode?: string;
@@ -122,6 +155,16 @@ export interface VerdictSource {
   helps?: VerdictFactor[];
   ingredients: VerdictIngredient[];
   alternative?: Alternative | null;
+  /** Step 6A. Additive, and absent on a response that predates it. */
+  comparableAlternative?: ComparableAlternative | null;
+  /**
+   * False when this product was opened as a reference rather than scanned.
+   *
+   * Drives what the screen may offer, not what it may say about the product:
+   * the science is a fact about the product, while "report what you saw" is a
+   * claim about this shopper having held this packet.
+   */
+  physicalPackContext?: boolean;
   quantityGuidance?: string | null;
   purityNote?: string | null;
   missing?: string[];

@@ -803,6 +803,17 @@ export interface ProductVerdictWire {
   attribution: { text: string } | null;
   /** Grams in the pack, when either source states a net quantity. */
   pack_size_g: number | null;
+  /**
+   * False when this was read as a reference, not scanned.
+   *
+   * Server-stated rather than remembered by the client, so every surface reads
+   * it from one place. In a reference view the physical-pack layers fall
+   * silent: the newest label snapshot for a barcode may be a stranger's
+   * photograph of a stranger's packet, and reading it as this viewer's own
+   * would attach somebody else's recall and somebody else's lot to a pack this
+   * device has never seen.
+   */
+  physical_pack_context?: boolean;
   /** "solid" or "drink" — which unit the per-100 panel is stated in. */
   basis: string;
   official_records?: {
@@ -832,11 +843,52 @@ export interface ProductVerdictWire {
       official_finding: false;
     }[];
   } | null;
+  /**
+   * At most one comparable alternative, or an honest reason there is not one.
+   *
+   * Deliberately shaped as zero-or-one and not a list: the free tier carries a
+   * single comparable option, and there is nowhere here for a ranked set to
+   * appear. Nothing about price, stock or the shopper reaches this envelope.
+   */
+  alternative?: {
+    policy_version: string;
+    status: 'available' | 'not_enough_information';
+    reason_key: string;
+    candidate: {
+      barcode: string;
+      product_name: string | null;
+      brand: string | null;
+      grade: 'A' | 'B' | 'C' | 'D' | 'E';
+      band: 'green' | 'yellow' | 'red';
+      decision: 'buy' | 'wait' | 'skip';
+      comparison: {
+        category_match: 'exact_source_leaf';
+        category_source: 'open_food_facts';
+        current_grade: 'A' | 'B' | 'C' | 'D' | 'E';
+        candidate_grade: 'A' | 'B' | 'C' | 'D' | 'E';
+        basis: 'per_100g' | 'per_100ml' | null;
+      };
+      attribution: { text: string } | null;
+    } | null;
+  } | null;
 }
 
-/** The graded verdict for one barcode, shaped for the verdict screen. */
-export const readProductVerdict = async (barcode: string): Promise<ProductVerdictWire> =>
-  (await api.get<ProductVerdictWire>(`${V2}/scan/verdict/${encodeURIComponent(barcode)}`)).data;
+/**
+ * The graded verdict for one barcode, shaped for the verdict screen.
+ *
+ * `physicalPackContext: false` is a reference read — the caller is looking at a
+ * product it is not holding, which is what opening a comparable alternative is.
+ * It only ever removes authority; it never adds any.
+ */
+export const readProductVerdict = async (
+  barcode: string,
+  options: { physicalPackContext?: boolean } = {},
+): Promise<ProductVerdictWire> => {
+  const query = options.physicalPackContext === false ? '?physical_pack_context=false' : '';
+  return (await api.get<ProductVerdictWire>(
+    `${V2}/scan/verdict/${encodeURIComponent(barcode)}${query}`,
+  )).data;
+};
 
 export const readInventoryImport = async (jobId: string): Promise<InventoryImport> =>
   (await api.get<InventoryImport>(`${V2}/inventory/imports/${jobId}`)).data;

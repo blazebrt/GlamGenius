@@ -34,6 +34,7 @@ import { buildVerdictShareText } from '../src/services/verdictShare';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import { OfficialRecords } from '../src/components/verdict/OfficialRecords';
 import { CommunityObservations } from '../src/components/verdict/CommunityObservations';
+import { BetterOption, REFERENCE_ALTERNATIVE } from '../src/components/verdict/BetterOption';
 import { CommunityReportSheet, BATCH_SCOPED_CODES } from '../src/components/verdict/CommunityReportSheet';
 import { useUserStore } from '../src/store/userStore';
 import {
@@ -49,7 +50,11 @@ import {
 export default function VerdictScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { barcode } = useLocalSearchParams<{ barcode?: string }>();
+  const { barcode, reference } = useLocalSearchParams<{ barcode?: string; reference?: string }>();
+  // Opened from another product's "Better option" card rather than scanned. The
+  // screen is reading about a pack nobody here is holding, so it asks the server
+  // for a reference view and offers nothing that would claim otherwise.
+  const referenceView = reference === REFERENCE_ALTERNATIVE;
 
   const [source, setSource] = useState<VerdictSource | null>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'failed'>('loading');
@@ -83,10 +88,10 @@ export default function VerdictScreen() {
   const load = useCallback(() => {
     if (!barcode) return;
     setLoadState('loading');
-    void getProductVerdict(barcode)
+    void getProductVerdict(barcode, { physicalPackContext: !referenceView })
       .then((next) => { setSource(next); setLoadState('ready'); })
       .catch(() => { setSource(null); setLoadState('failed'); });
-  }, [barcode]);
+  }, [barcode, referenceView]);
 
   useEffect(() => {
     load();
@@ -239,6 +244,17 @@ export default function VerdictScreen() {
     }
   }, [refreshOwnReports]);
 
+  // Straight to that product's ordinary Product Result. Deliberately a plain
+  // navigation and nothing else: reading about a pack is not scanning one, so
+  // no scan is recorded, no scan count moves, and the physical-pack layers keep
+  // failing closed on a product this phone has never actually seen.
+  const openAlternative = useCallback((candidateBarcode: string) => {
+    router.push({
+      pathname: '/verdict',
+      params: { barcode: candidateBarcode, reference: REFERENCE_ALTERNATIVE },
+    });
+  }, [router]);
+
   const captureLabelForBatch = useCallback(() => {
     setCommunityOpen(false);
     // Into the label capture that already exists. No second batch scanner, and
@@ -332,14 +348,37 @@ export default function VerdictScreen() {
             {/* Its own row, deliberately outside the signal card: the first
                 reporter necessarily sees no public signal, and reporting must
                 not depend on the display flag, the threshold, or a reply URL. */}
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel={S.communityObservations.reportAction}
-              onPress={openCommunityReport}
-              style={styles.link}
-            >
-              <Text style={styles.linkText}>{S.communityObservations.reportAction}</Text>
-            </TouchableOpacity>
+            {/*
+              Reporting says "I saw this". In a reference view the shopper has
+              not seen this pack, so the action is replaced rather than shown
+              and left to fail later — and never by inventing a scan.
+            */}
+            {referenceView ? (
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel={S.referenceView.scanFirstAction}
+                onPress={() => router.push({
+                  pathname: '/scan-product', params: { barcode: barcode ?? '' },
+                })}
+                style={styles.link}
+              >
+                <Text style={styles.linkText}>{S.referenceView.scanFirstAction}</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel={S.communityObservations.reportAction}
+                onPress={openCommunityReport}
+                style={styles.link}
+              >
+                <Text style={styles.linkText}>{S.communityObservations.reportAction}</Text>
+              </TouchableOpacity>
+            )}
+            {/* Last of the layers, immediately above the closing actions. It
+                sits below the evidence and below the shopper observations
+                because it is the least of them: a comparison with one other
+                product, not a finding about this one. */}
+            <BetterOption alternative={source.comparableAlternative} onView={openAlternative} />
             <VerdictActions
               onWhy={() => setTab('why')}
               onListen={onListen}

@@ -170,6 +170,36 @@ export function toVerdictSource(
         grade: wire.better_next_action.grade,
       }
       : null),
+    // Step 6A. Passed through as the server decided it: the app chooses the
+    // words for these keys and never re-derives the comparison itself.
+    comparableAlternative: wire.alternative
+      ? {
+        policyVersion: wire.alternative.policy_version,
+        status: wire.alternative.status,
+        reasonKey: wire.alternative.reason_key,
+        candidate: wire.alternative.candidate
+          ? {
+            barcode: wire.alternative.candidate.barcode,
+            productName: wire.alternative.candidate.product_name,
+            brand: wire.alternative.candidate.brand,
+            grade: wire.alternative.candidate.grade,
+            band: wire.alternative.candidate.band,
+            decision: wire.alternative.candidate.decision,
+            comparison: {
+              categoryMatch: wire.alternative.candidate.comparison.category_match,
+              categorySource: wire.alternative.candidate.comparison.category_source,
+              currentGrade: wire.alternative.candidate.comparison.current_grade,
+              candidateGrade: wire.alternative.candidate.comparison.candidate_grade,
+              basis: wire.alternative.candidate.comparison.basis,
+            },
+            attributionText: wire.alternative.candidate.attribution?.text ?? null,
+          }
+          : null,
+      }
+      : null,
+    // Absent on an older response, and absent means an ordinary physical read:
+    // reference mode is something a caller opts into, never a default.
+    physicalPackContext: wire.physical_pack_context !== false,
     quantityGuidance: wire.quantity_guidance,
     purityNote: wire.purity_note,
     missing,
@@ -178,5 +208,8 @@ export function toVerdictSource(
   };
 }
 
-export const getProductVerdict = async (barcode: string): Promise<VerdictSource> =>
-  toVerdictSource(await readProductVerdict(barcode));
+export const getProductVerdict = async (
+  barcode: string,
+  options: { physicalPackContext?: boolean } = {},
+): Promise<VerdictSource> =>
+  toVerdictSource(await readProductVerdict(barcode, options));

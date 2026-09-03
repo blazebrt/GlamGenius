@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, VERIFICATION_USER_CONFIRMED, AIRun, AIRunOutput
+from app.domains.alternatives import service as alternatives_service
 from app.domains.community import service as community_service
 from app.domains.media.storage import factory as storage_factory
 from app.domains.nutrition.grading import from_scan, grade_product, presentation
@@ -251,6 +252,7 @@ async def transcribe_label(
 @router.get("/scan/verdict/{barcode}")
 async def read_product_verdict(
     barcode: str,
+    physical_pack_context: bool = True,
     device: ScanDevice = Depends(current_device),
     session: AsyncSession = Depends(get_session),
 ):
@@ -258,6 +260,16 @@ async def read_product_verdict(
 
     The two halves are paired here for the length of this response and are not
     written anywhere together — the ODbL wall, same as every other join.
+
+    ``physical_pack_context=false`` is **reference mode**: the caller is reading
+    about a product it is not holding, which is what happens when somebody opens
+    the comparable alternative from another product's card. Reference mode only
+    ever removes authority. The product science is unchanged — that is a fact
+    about the product, not about who is looking — but the layers that speak
+    about *this packet* fall silent, because the newest label snapshot for a
+    barcode may be a stranger's photograph of a stranger's packet and reading it
+    as the caller's own would attach somebody else's recall and somebody else's
+    lot to a pack this device has never seen.
     """
     found = await service.lookup(session, barcode)
     snapshot = await service.latest_label_snapshot(session, barcode)
@@ -265,7 +277,9 @@ async def read_product_verdict(
     # Its schema is adapted explicitly; it is not disguised as an OFF record
     # and missing physical-pack values are never filled from Store A.
     source_half = snapshot.facts if snapshot is not None else found.get("open_food_facts")
-    name = (source_half or {}).get("product_name") or (source_half or {}).get("name") or barcode
+    # One identity helper, shared with the alternative card, so the name a
+    # shopper is offered and the name on the screen it opens cannot drift.
+    name, brand = service.result_identity(barcode, source_half)
     product = (
         from_scan.build_confirmed_label(barcode=barcode, facts=snapshot.facts)
         if snapshot is not None
@@ -280,7 +294,7 @@ async def read_product_verdict(
     # Identity is factual scan context, not a name inferred by the client.
     # Keep absent catalogue values absent instead of manufacturing a brand.
     payload["barcode"] = barcode
-    payload["brand"] = (source_half or {}).get("brands") or (source_half or {}).get("brand") or None
+    payload["brand"] = brand
     payload["confidence"] = service.confidence_block(snapshot.confidence) if snapshot else found["confidence"]
     payload["facts_provenance"] = "confirmed_label_snapshot" if snapshot else "open_food_facts"
     payload["label_version"] = ({
@@ -303,18 +317,42 @@ async def read_product_verdict(
     # Solid or drink, so the screen can say "100 g" or "100 ml" honestly when
     # there is no pack size to work from.
     payload["basis"] = product.basis
+    # Whether the caller is holding this packet. Stated in the response rather
+    # than left to the client to remember, so every surface reads it from the
+    # same place and a reference view cannot be styled as a scan by accident.
+    payload["physical_pack_context"] = bool(physical_pack_context)
     # Official records are a separate, additive envelope. Matching is allowed
     # only against the confirmed physical-pack snapshot; OFF cannot supply a
-    # licence or batch and therefore cannot manufacture a recall match.
+    # licence or batch and therefore cannot manufacture a recall match. In
+    # reference mode no pack facts are passed at all: an exact batch recall from
+    # somebody else's capture is not this caller's record to be shown.
     payload["official_records"] = await official_records_service.official_records_envelope(
-        session, snapshot.facts if snapshot else None,
+        session, snapshot.facts if (snapshot and physical_pack_context) else None,
     )
     # Shopper observations are a fourth, separate layer: not a label fact, not
     # a graded finding, not a government record. They are additive, they never
     # touch anything above, and a batch signal is assembled only for the lot
-    # this device itself confirmed.
+    # this device itself confirmed. In reference mode the viewer is holding no
+    # pack at all, so no device context is supplied: product-scoped observations
+    # are facts about the product and stay visible, while a batch signal is
+    # about one lot this caller does not have.
     payload["community_observations"] = await community_service.community_observations_envelope(
-        session, barcode=barcode, device_id=device.id,
+        session, barcode=barcode, device_id=device.id if physical_pack_context else None,
+    )
+    # A fifth envelope, additive and last: at most one comparable alternative,
+    # decided by the same ruleset that graded the product above it. Open Food
+    # Facts supplies only which products are the same kind and sold here, read
+    # at runtime on barcode and never written back; the candidate's science
+    # comes from its own confirmed label, so the card cannot disagree with the
+    # screen it opens. No account, no shopper observation, no official record,
+    # no AI: free for an anonymous device and identical for everybody.
+    payload["alternative"] = await alternatives_service.comparable_alternative_envelope(
+        session,
+        barcode=barcode,
+        current_snapshot=snapshot,
+        current_product=product,
+        current_result=result,
+        ruleset=ruleset,
     )
     return payload
 

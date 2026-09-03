@@ -30,6 +30,24 @@ BAND_FOR_GRADE: dict[str, str] = {
     Grade.D.value: "red", Grade.E.value: "red",
 }
 
+#: The canonical purchase action for each letter. Named here, once, because it
+#: is the customer-facing decision and more than one surface now needs it — a
+#: second copy of this ladder somewhere else is how a card ends up disagreeing
+#: with the verdict it sits under.
+ACTION_FOR_GRADE: dict[Grade, str] = {
+    Grade.A: "buy", Grade.B: "buy", Grade.C: "wait", Grade.D: "skip", Grade.E: "skip",
+}
+
+
+def action_for(result: GradeResult) -> str | None:
+    """The canonical buy/wait/skip for a graded result, or ``None``.
+
+    ``None`` is the honest answer for NOT_GRADED and NOT_ENOUGH_INFORMATION:
+    neither has a letter, and neither has an action to take from one.
+    """
+    return ACTION_FOR_GRADE.get(result.grade) if result.grade else None
+
+
 #: The four components, in the order the Why screen lists them.
 COMPONENT_KEYS = ("processing", "nutrients", "additives", "naming")
 
@@ -638,9 +656,7 @@ def present(
     """
     ruleset = ruleset if ruleset is not None else candidate_ruleset()
     negatives, positives = _factor_rows(product, result, ruleset)
-    action = {
-        Grade.A: "buy", Grade.B: "buy", Grade.C: "wait", Grade.D: "skip", Grade.E: "skip",
-    }.get(result.grade)
+    action = action_for(result)
     if negatives:
         reason_key = negatives[0]["key"]
     elif result.outcome.value == "graded":
@@ -700,5 +716,6 @@ def present(
 
 
 __all__ = [
-    "BAND_FOR_GRADE", "COMPONENT_KEYS", "STATUSES", "band_for_status", "present",
+    "ACTION_FOR_GRADE", "BAND_FOR_GRADE", "COMPONENT_KEYS", "STATUSES", "action_for",
+    "band_for_status", "present",
 ]
