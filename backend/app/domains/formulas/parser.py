@@ -247,9 +247,9 @@ def _locant_atom_forwards(text: str, start: int) -> int | None:
     return index
 
 
-#: Every character this parser reads structurally. If Step 7A's NFKC pass could
-#: introduce one of these where the raw text had none — or remove one the raw
-#: text had — the two layers would disagree about where the entries are.
+#: Every character this parser reads structurally. This is only one part of the
+#: boundary vocabulary: locant atoms, whitespace and the trailing-name test are
+#: lexical too, and are accounted for by :func:`_boundary_lexical_properties`.
 _STRUCTURAL_CHARACTERS: frozenset[str] = (
     frozenset(TOP_LEVEL_DELIMITER)
     | _AMBIGUOUS_SEPARATORS
@@ -261,12 +261,27 @@ _STRUCTURAL_CHARACTERS: frozenset[str] = (
 )
 
 
-def _structural_characters(text: str) -> list[str]:
-    return [character for character in text if character in _STRUCTURAL_CHARACTERS]
+def _boundary_lexical_properties(character: str) -> tuple[str | None, bool, bool, bool, bool]:
+    """Return every per-character property consulted while placing boundaries.
+
+    Keeping this inventory in one function makes the Unicode compatibility
+    audit reviewable. The parser distinguishes the *identity* of structural
+    punctuation (an opener is not a closer), ASCII digits, governed
+    heteroatom locants, whitespace, and ``isalnum`` for the character after a
+    locant's terminating hyphen. No other character property participates in
+    :func:`classify_comma`, the locant readers, or :func:`_split_top_level`.
+    """
+    return (
+        character if character in _STRUCTURAL_CHARACTERS else None,
+        character in _ASCII_DIGITS,
+        character in _HETEROATOM_LOCANTS,
+        character.isspace(),
+        character.isalnum(),
+    )
 
 
 def structural_view(text: str) -> str | None:
-    """The text as Step 7A will see its *punctuation*, or ``None`` to fail closed.
+    """A length-preserving view of Step 7A's boundary semantics, or ``None``.
 
     This closes a composition hole between the two layers. Step 7B decides where
     the entries are from the raw printed codepoints; Step 7A then applies NFKC,
@@ -292,38 +307,60 @@ def structural_view(text: str) -> str | None:
     casing are preserved, and nothing normalised is ever reported as though it
     were printed.
 
-    **Where the mapping is not one-to-one, it fails closed.** ``⑴`` (U+2474)
-    expands to ``(1)`` and ``″`` (U+2033) to two primes — 152 codepoints in
-    total introduce structural characters while changing length. Reconstructing
-    raw↔normalised offsets across those is exactly the kind of guessing this
-    parser refuses, so any of them yields ``None`` and the formula is withheld.
+    **Where the mapping is not one-to-one, every boundary-sensitive lexical
+    property is audited.** Step 7A performs NFKC and casefolding. ``⑴`` expands
+    to ``(1)``, ``″`` to two primes, ``⑩`` to two ASCII digits, and ``№`` to
+    ``no``. Each changes punctuation, locant-atom, whitespace, or trailing
+    ``isalnum`` semantics, so offsets cannot be reconstructed defensibly and
+    the formula is withheld. A length-changing fold is retained only when each
+    emitted character has exactly the same boundary properties as the raw
+    codepoint; ordinary identity-only compatibility folds therefore remain
+    available to Step 7A.
 
-    A final check compares the view's structural characters against those of
-    ``NFKC(whole string)``. Per-character normalisation and whole-string
-    normalisation agree on every case tested, but the assertion costs one pass
-    and turns any future disagreement into a withheld formula rather than a
-    silently misplaced boundary.
+    A final check compares the complete boundary-property stream against the
+    whole-string NFKC+casefold result. That turns contextual or future Unicode
+    disagreement into a withheld formula rather than a misplaced boundary.
 
     This is **not** a second identity normalizer. It produces no lookup key, is
     never compared against a canonical name, and never reaches Step 7A —
     ``normalize_name()`` remains the sole identity authority. Its only job is to
-    stop NFKC from creating or destroying a boundary after parsing.
+    stop any Step 7A text transform from changing a boundary after parsing.
     """
     pieces: list[str] = []
     for character in text:
-        folded = unicodedata.normalize("NFKC", character)
+        folded = unicodedata.normalize("NFKC", character).casefold()
         if len(folded) == 1:
             pieces.append(folded)
             continue
-        if set(folded) & _STRUCTURAL_CHARACTERS:
-            # Offsets cannot be reconstructed across this expansion.
+        raw_properties = _boundary_lexical_properties(character)
+        if any(
+            _boundary_lexical_properties(folded_character) != raw_properties
+            for folded_character in folded
+        ):
+            # This expansion changes a predicate used to place boundaries, and
+            # its raw offsets cannot be reconstructed without guessing.
             return None
         pieces.append(character)
 
     view = "".join(pieces)
-    if _structural_characters(view) != _structural_characters(
-        unicodedata.normalize("NFKC", text)
-    ):
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    view_properties = [_boundary_lexical_properties(character) for character in view]
+    normalized_properties = [
+        _boundary_lexical_properties(character) for character in normalized
+    ]
+    # Safe 1→many folds deliberately have repeated equivalent properties. They
+    # may differ in length, so compare their run-collapsed lexical streams.
+    collapsed_view = [
+        properties
+        for index, properties in enumerate(view_properties)
+        if index == 0 or properties != view_properties[index - 1]
+    ]
+    collapsed_normalized = [
+        properties
+        for index, properties in enumerate(normalized_properties)
+        if index == 0 or properties != normalized_properties[index - 1]
+    ]
+    if collapsed_view != collapsed_normalized:
         return None
     return view
 
@@ -440,8 +477,8 @@ def classify_comma(text: str, position: int, *, entry_prefix: str) -> CommaRole:
 def _split_top_level(text: str) -> tuple[ParseStatus, list[str]]:
     """Split on top-level commas, reporting how it went.
 
-    Structure is read from :func:`structural_view`, so a compatibility comma,
-    semicolon or bracket is seen exactly as Step 7A's NFKC pass will see it.
+    Structure is read from :func:`structural_view`, so compatibility forms are
+    seen with the boundary semantics Step 7A's NFKC+casefold pass will produce.
     **Entry text is taken from the raw string**, index for index — the view is
     length-preserving precisely so this is safe — so ``raw_name`` keeps the
     codepoints and casing the pack actually printed.
@@ -453,8 +490,8 @@ def _split_top_level(text: str) -> tuple[ParseStatus, list[str]]:
       the innermost opener — and a closer with nothing open — fails immediately
       rather than at the end.
     * ``AMBIGUOUS_BOUNDARY`` when a comma is undecidable, when a top-level line
-      break or semicolon appears, or when a compatibility character's NFKC
-      expansion would move structure without a reconstructable offset.
+      break or semicolon appears, or when a compatibility fold would change a
+      boundary-sensitive lexical property without a reconstructable offset.
     * one of those, never a partial answer.
     """
     view = structural_view(text)

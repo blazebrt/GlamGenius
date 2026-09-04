@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import unicodedata
 import uuid
 from pathlib import Path
 
@@ -1062,6 +1063,134 @@ class TestFormulaResolution:
                 assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY, text
                 assert result.ingredients == ()
 
+    @pytest.mark.parametrize("printed", ["⑩,3-Butanediol", "⑳,3-Butanediol"])
+    def test_multicharacter_numeric_compatibility_locants_fail_closed(self, printed):
+        """NFKC-created ASCII locant digits cannot move a comma after parsing."""
+        result = parse_formula(printed)
+        assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+        assert result.tokens == ()
+
+    def test_multicharacter_alphanumeric_terminator_fails_closed(self):
+        """``№`` → ``No`` changes both locant and trailing-name semantics."""
+        assert not "№".isalnum()
+        assert unicodedata.normalize("NFKC", "№").casefold() == "no"
+        assert all(character.isalnum() for character in "no")
+        result = parse_formula("1,3-№")
+        assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+        assert result.tokens == ()
+
+    def test_unicode_audit_covers_every_boundary_predicate(self):
+        """Freeze the lexical vocabulary consumed by boundary classification.
+
+        A new character predicate in these functions must be added to the
+        central compatibility audit deliberately; otherwise this test fails.
+        """
+        protected_functions = (
+            formula_parser.classify_comma,
+            formula_parser._locant_atom_backwards,
+            formula_parser._locant_atom_forwards,
+            formula_parser._split_top_level,
+        )
+        function_trees = [ast.parse(inspect.getsource(fn)) for fn in protected_functions]
+        called_character_predicates = {
+            node.func.attr
+            for tree in function_trees
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"isalnum", "isspace", "isdigit", "isnumeric"}
+        }
+        assert called_character_predicates == {"isalnum", "isspace"}
+        sources = "\n".join(_code_only(inspect.getsource(fn)) for fn in protected_functions)
+        for constant in (
+            "_ASCII_DIGITS",
+            "_HETEROATOM_LOCANTS",
+            "_LINE_BOUNDARIES",
+            "_AMBIGUOUS_SEPARATORS",
+            "_GROUPING_PAIRS",
+            "_CLOSERS",
+            "_PRIMES",
+            "_LOCANT_LEAD",
+        ):
+            assert constant in sources
+
+        audit_source = _code_only(inspect.getsource(formula_parser._boundary_lexical_properties))
+        for protected in (
+            "_STRUCTURAL_CHARACTERS",
+            "_ASCII_DIGITS",
+            "_HETEROATOM_LOCANTS",
+            "isspace",
+            "isalnum",
+        ):
+            assert protected in audit_source
+
+        # Exhaust every Unicode codepoint: every length-changing Step 7A fold
+        # that changes a protected property must be refused by the view.
+        for character in map(chr, range(0x110000)):
+            folded = unicodedata.normalize("NFKC", character).casefold()
+            if len(folded) == 1:
+                continue
+            raw = formula_parser._boundary_lexical_properties(character)
+            if any(
+                formula_parser._boundary_lexical_properties(piece) != raw
+                for piece in folded
+            ):
+                assert formula_parser.structural_view(character) is None, (
+                    hex(ord(character)),
+                    folded,
+                )
+
+    async def test_numeric_compatibility_traps_resolve_only_outside_formula_path(
+        self, db_clean, monkeypatch,
+    ):
+        """Step 7A can resolve every trap; Step 7B still emits none of them."""
+        from app.domains.formulas import service as formula_service
+        from app.domains.substances.service import resolve_name
+        from sqlalchemy import event
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "whole.ten.three", "10,3-Butanediol")
+            await _publish_simple(session, "fragment.ten", "10")
+            await _publish_simple(session, "fragment.three", "3-Butanediol")
+
+        async with factory() as session:
+            for printed, expected in (
+                ("⑩,3-Butanediol", "whole.ten.three"),
+                ("10", "fragment.ten"),
+                ("3-Butanediol", "fragment.three"),
+            ):
+                direct = await resolve_name(session, printed)
+                assert direct.status is ResolutionStatus.RESOLVED
+                assert direct.substance_key == expected
+
+        calls: list[list[str]] = []
+        real = formula_service.resolve_names
+
+        async def _spy(session, names):
+            calls.append(list(names))
+            return await real(session, names)
+
+        monkeypatch.setattr(formula_service, "resolve_names", _spy)
+        statements: list[str] = []
+
+        def _record(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        sync_engine = sql.get_engine().sync_engine
+        async with factory() as session:
+            event.listen(sync_engine, "before_cursor_execute", _record)
+            try:
+                result = await resolve_formula(session, "⑩,3-Butanediol")
+            finally:
+                event.remove(sync_engine, "before_cursor_execute", _record)
+
+        assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+        assert result.ingredients == ()
+        assert result.resolved_count == 0
+        assert calls == []
+        assert statements == []
+
     async def test_compatibility_forms_never_reach_the_resolver_when_withheld(
         self, db_clean, monkeypatch,
     ):
@@ -1126,6 +1255,8 @@ class TestFormulaResolution:
             "Acid Red 1,N-Methylpyrrolidone",
             "Water\nGlycerin",
             "Water\u2474Glycerin",
+            "⑩,3-Butanediol",
+            "1,3-№",
         ]
         before = [(parse_formula(t).status, [x.raw_name for x in parse_formula(t).tokens])
                   for t in dangerous]
@@ -1142,6 +1273,9 @@ class TestFormulaResolution:
                 ("t.frag.three.bd", "3-Butanediol"),
                 ("t.merged.acid", "Acid Red 1,N-Methylpyrrolidone"),
                 ("t.merged.waterglycerin", "Water Glycerin"),
+                ("t.whole.ten.three", "10,3-Butanediol"),
+                ("t.fragment.ten", "10"),
+                ("t.fragment.three", "3-Butanediol"),
             ):
                 await _publish_simple(session, key, name)
 

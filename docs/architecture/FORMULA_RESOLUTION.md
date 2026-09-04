@@ -110,30 +110,36 @@ was — the exact failure §6 forbids. The mirror image is a false *split*:
 `Parfum（A,B）, Water` uses fullwidth parentheses, so a raw parser sees no
 grouping and cuts one entry into `Parfum（A` and `B）`.
 
-**So structure is read from a structural view.** Each character is replaced by
-its NFKC form *only when that form is a single character*, which keeps the view
-exactly as long as the input. Index *i* of the view is index *i* of the raw
-string, so boundaries are decided on the view and `raw_name` is sliced from the
-**original** text.
+**So boundaries are read from a structural view.** For a one-character Step 7A
+fold, that folded character can occupy the same position in the view. Index *i*
+still corresponds to index *i* of the raw string, so `raw_name` is sliced from
+the **original** text.
 
-| Group | Codepoints | Treatment |
+Punctuation alone is not a complete audit. Locant recognition also reads ASCII
+digits, case-insensitive `N/O/S/P`, prime marks and whitespace, while the
+terminating-hyphen rule calls `isalnum()`. The compatibility guard therefore
+records every one of those lexical properties. A length-changing NFKC+casefold
+is retained only when every emitted character has exactly the same boundary
+properties as the printed codepoint. Otherwise it fails closed.
+
+| Group | Example | Treatment |
 | --- | --- | --- |
-| NFKC maps 1→1 onto a structural character | 30 — fullwidth/small/presentation comma, semicolon, `()`, `[]`, `{}`, hyphen, apostrophe | read structurally; raw text preserved verbatim |
-| NFKC expands 1→many *including* structure | 152 — e.g. `⑴` → `(1)`, `″` → `′′` | **fail closed** (`AMBIGUOUS_BOUNDARY`) |
-| NFKC introduces no structure | everything else | ordinary text |
+| 1→1 fold | `，` → `,`, fullwidth grouping, upper → lower case | read through the lossless view; raw text preserved verbatim |
+| 1→many, identical boundary properties | ordinary alphabetic ligatures such as `Ĳ` → `ij` | keep one raw-position representative; Step 7A owns the identity fold |
+| 1→many, changed boundary properties | `⑴` → `(1)`, `″` → `′′`, `⑩` → `10`, `№` → `no` | **fail closed** (`AMBIGUOUS_BOUNDARY`) |
 
-Reconstructing raw↔normalised offsets across a length-changing expansion is the
-kind of guessing this parser refuses everywhere else, so the second group is
-withheld rather than reinterpreted. A final check compares the view's structural
-characters against those of `NFKC(whole string)`; any disagreement also fails
-closed.
+The final whole-string check compares the complete boundary-property stream of
+the view with Step 7A's NFKC+casefold stream (collapsing only repeated identical
+properties from a proven-safe expansion). Any contextual disagreement fails
+closed. This protects the actual grammar rather than claiming completeness from
+an enumeration of characters that introduce `_STRUCTURAL_CHARACTERS`.
 
 ### This is not a second identity normalizer
 
 The view produces no lookup key, is never compared against a canonical name, and
 never reaches Step 7A. `normalize_name()` remains the sole identity
-normalization authority. The view's only job is to stop NFKC from creating or
-destroying a boundary *after* parsing.
+normalization authority. The view's only job is to stop NFKC, whitespace
+semantics or casefolding from changing a boundary *after* parsing.
 
 ### Raw observation vs structural safety
 
