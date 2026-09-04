@@ -17,23 +17,30 @@
  *
  * **It never decides pass or fail.** It always exits 0 and always leaves the
  * final output at the requested path, so `validate-node-audit.js` remains the
- * one and only gate. If every attempt fails, the file is unusable and the
+ * one and only gate. If every attempt fails, the output is incomplete and the
  * validator still fails closed — the same red build as before, reached the
  * same way, just not on the first hiccup.
  *
- * Retrying can only ever turn "no data" into "data". It cannot turn a finding
- * into a pass: when Yarn does return advisory records, the first attempt is
- * usable, no retry happens, and the validator sees byte-for-byte what it would
- * have seen before this script existed.
+ * What counts as a finished attempt is a valid `auditSummary`, and nothing
+ * else. Advisory records are not a completion marker: a scan that emitted a
+ * few advisories and then died looks identical, by record count, to one that
+ * finished. Stopping on advisories alone would mean a truncated scan whose
+ * partial findings all happen to be governed could be reported as clean.
+ *
+ * Retrying can only ever turn an unfinished audit into a finished one. It
+ * cannot turn a finding into a pass: a completed audit satisfies the marker on
+ * its first attempt, no retry happens, and the validator sees byte-for-byte
+ * what it would have seen before this script existed.
  */
 
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 
-/** The record types a real audit emits. A clean audit still emits a summary,
- *  which is why "no records at all" means the audit did not run — not that
- *  the tree is clean. */
-const AUDIT_RECORD_TYPES = new Set(["auditAdvisory", "auditSummary"]);
+// Borrowed from the authority rather than restated. The validator decides what
+// a completion marker is; this only asks it. Two copies of that definition
+// could drift, and the direction of drift that matters -- the runner accepting
+// something the validator would reject -- is exactly the bug being closed here.
+const { auditSummaryIsValid } = require("./validate-node-audit");
 
 // Sized to measured behaviour, not to taste. During the 2026-09-04 incident the
 // endpoint recovered into an intermittent state rather than coming straight
@@ -45,13 +52,20 @@ const DEFAULT_ATTEMPTS = 5;
 const DEFAULT_BACKOFF_MS = 5000;
 
 /**
- * Did this run produce anything the gate can actually reason about?
+ * Did this attempt run the audit to completion?
  *
- * Deliberately permissive: one recognisable record is enough. Judging the
- * *content* is the validator's job, and a second opinion here could only
- * disagree with it.
+ * Completion means one thing: a valid `auditSummary`. Advisory records do not
+ * count, however many arrive. An audit that emitted three advisories and then
+ * died is indistinguishable, by record count alone, from one that found three
+ * advisories and finished -- and if those three happen to be already governed
+ * by exceptions, treating the truncated stream as finished would report a
+ * clean bill of health for every dependency the scanner never reached.
+ *
+ * So an advisory-only stream is incomplete and gets retried. This still does
+ * not judge findings: whether the advisories pass is the validator's call, and
+ * the validator independently rejects a summary-less stream too.
  */
-function auditOutputIsUsable(text) {
+function auditOutputIsComplete(text) {
   if (typeof text !== "string" || !text.trim()) return false;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -59,11 +73,11 @@ function auditOutputIsUsable(text) {
     try {
       record = JSON.parse(line);
     } catch {
-      // Yarn prints non-JSON noise on its error paths. Not a usable record,
-      // but not proof the whole run failed either — keep looking.
+      // Yarn prints non-JSON noise on its error paths. Not a completion marker,
+      // but not proof the whole run failed either -- keep looking.
       continue;
     }
-    if (record && AUDIT_RECORD_TYPES.has(record.type)) return true;
+    if (auditSummaryIsValid(record)) return true;
   }
   return false;
 }
@@ -79,7 +93,7 @@ function positiveIntFromEnv(value, fallback) {
 }
 
 /**
- * Run the audit up to `attempts` times, stopping at the first usable output.
+ * Run the audit up to `attempts` times, stopping at the first completed audit.
  * `runAudit` is injected so the retry policy can be tested without a network.
  */
 function runWithRetries({
@@ -92,21 +106,21 @@ function runWithRetries({
   let last = { stdout: "", stderr: "", status: null };
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     last = runAudit(attempt);
-    const usable = auditOutputIsUsable(last.stdout);
+    const complete = auditOutputIsComplete(last.stdout);
     log(
       `yarn audit attempt ${attempt}/${attempts}: exit=${last.status} ` +
-        `usable_records=${usable}`,
+        `completed=${complete}`,
     );
-    if (usable) return { ...last, attempts: attempt, usable: true };
+    if (complete) return { ...last, attempts: attempt, complete: true };
     if (attempt < attempts) {
       const excerpt = (last.stderr || "").trim().split("\n")[0] || "(no stderr)";
-      log(`  advisory service did not return audit records: ${excerpt}`);
+      log(`  audit did not run to completion (no auditSummary): ${excerpt}`);
       // Linear backoff. The failure mode is an overloaded upstream, so the
       // point is to wait, not to be clever about how long.
       sleep(backoffMs * attempt);
     }
   }
-  return { ...last, attempts, usable: false };
+  return { ...last, attempts, complete: false };
 }
 
 function main(argv) {
@@ -126,11 +140,13 @@ function main(argv) {
 
   fs.writeFileSync(outputPath, result.stdout || "");
 
-  if (!result.usable) {
+  if (!result.complete) {
     console.error(
-      `The advisory service returned no audit records after ${result.attempts} ` +
-        "attempt(s). The security gate will now fail closed, which is correct: " +
-        "an audit that did not run cannot clear a dependency tree.",
+      `The audit did not run to completion after ${result.attempts} attempt(s): ` +
+        "no auditSummary was returned. The raw output is kept for diagnostics, " +
+        "but the security gate will now fail closed, which is correct -- an " +
+        "audit that did not finish cannot clear a dependency tree, and a " +
+        "partial advisory stream must never be mistaken for a finished one.",
     );
     if (result.stderr) console.error(result.stderr.trim().slice(0, 2000));
   }
@@ -142,7 +158,6 @@ function main(argv) {
 if (require.main === module) process.exitCode = main(process.argv);
 
 module.exports = {
-  AUDIT_RECORD_TYPES,
-  auditOutputIsUsable,
+  auditOutputIsComplete,
   runWithRetries,
 };

@@ -4,7 +4,7 @@ const test = require("node:test");
 
 const {
   formatPass,
-  validateAuditText,
+  validateAuditText: rawValidateAuditText,
   validateFalsePositiveRegistry,
   validateRegistry,
 } = require("./validate-node-audit");
@@ -46,6 +46,18 @@ function cleanAudit() {
     type: "auditSummary",
     data: { vulnerabilities: { high: 0, critical: 0 } },
   });
+}
+
+// Every test that passes advisory text is about advisory *content*, and a real
+// audit always ends with a summary record. Fixtures therefore get one appended
+// so those tests exercise the content rules rather than tripping over the
+// completeness rule. Completeness has its own tests, at the bottom of this
+// file, which call the validator directly with no summary added.
+function validateAuditText(auditText, ...rest) {
+  const text = auditText.includes('"auditSummary"')
+    ? auditText
+    : `${auditText}\n${cleanAudit()}`;
+  return rawValidateAuditText(text, ...rest);
 }
 
 function nanoidAudit(overrides = {}) {
@@ -331,5 +343,124 @@ test("missing HIGH audit path evidence fails closed", () => {
       } },
     }), registry, falsePositiveRegistry, { today: "2026-08-16" }),
     /without dependency paths/,
+  );
+});
+
+
+// ---- audit completeness: the scan must prove it finished --------------------
+//
+// These call the validator directly, with no summary appended, because the
+// absence of a summary is exactly what is under test.
+
+test("an audit with no auditSummary fails closed", () => {
+  assert.throws(
+    () => rawValidateAuditText(cleanAudit().replace("auditSummary", "auditAdvisory"), registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /missing advisory data/,
+  );
+});
+
+test("C: a governed advisory WITHOUT a summary fails as an incomplete audit", () => {
+  // The defect. These advisories are individually acceptable, so before the
+  // completeness rule this partial stream reported PASS -- clearing every
+  // dependency the crashed scan never reached.
+  const audit = auditAdvisory({
+    advisoryId: approved.advisory_id,
+    cve: approved.cve,
+    packageName: approved.package,
+    version: approved.installed_version,
+    paths: approved.dependency_paths,
+  });
+  assert.throws(
+    () => rawValidateAuditText(audit, registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /did not run to completion/,
+  );
+});
+
+test("D: a false-positive advisory WITHOUT a summary fails as an incomplete audit", () => {
+  assert.throws(
+    () => rawValidateAuditText(nanoidAudit(), registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /did not run to completion/,
+  );
+});
+
+test("E: the full known partial stream WITHOUT a summary must not pass", () => {
+  const audit = [
+    auditAdvisory({
+      advisoryId: approved.advisory_id,
+      cve: approved.cve,
+      packageName: approved.package,
+      version: approved.installed_version,
+      paths: approved.dependency_paths,
+    }),
+    nanoidAudit(),
+  ].join("\n");
+  assert.throws(
+    () => rawValidateAuditText(audit, registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /did not run to completion/,
+  );
+});
+
+test("F: an unknown HIGH WITHOUT a summary fails, and for incompleteness", () => {
+  assert.throws(
+    () => rawValidateAuditText(auditAdvisory({
+      advisoryId: "GHSA-unknown-partial", cve: "CVE-2099-0031",
+      packageName: "other-package", version: "1.0.0",
+    }), registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /did not run to completion/,
+  );
+});
+
+test("A: a summary alone with no findings passes", () => {
+  const result = rawValidateAuditText(cleanAudit(), registry, falsePositiveRegistry, { today: "2026-08-16" });
+  assert.equal(result.findings.length, 0);
+  assert.match(formatPass(result), /Unaccepted HIGH: 0/);
+});
+
+test("B: governed advisories plus a summary are evaluated normally", () => {
+  const audit = [
+    auditAdvisory({
+      advisoryId: approved.advisory_id,
+      cve: approved.cve,
+      packageName: approved.package,
+      version: approved.installed_version,
+      paths: approved.dependency_paths,
+    }),
+    nanoidAudit(),
+    cleanAudit(),
+  ].join("\n");
+  const result = rawValidateAuditText(audit, registry, falsePositiveRegistry, { today: "2026-08-16" });
+  assert.deepEqual(
+    result.acceptedExceptions.map((exception) => exception.advisory_id),
+    [approved.advisory_id],
+  );
+  assert.equal(result.falsePositiveFindings.length, 1);
+});
+
+test("H: a completed unaccepted HIGH still fails on the finding, not on completeness", () => {
+  assert.throws(
+    () => rawValidateAuditText([
+      auditAdvisory({
+        advisoryId: "GHSA-unknown-complete", cve: "CVE-2099-0032",
+        packageName: "other-package", version: "1.0.0",
+      }),
+      cleanAudit(),
+    ].join("\n"), registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /Unaccepted HIGH advisory GHSA-unknown-complete/,
+  );
+});
+
+test("a malformed summary is rejected rather than counted as completion", () => {
+  for (const data of [null, "summary", [], { vulnerabilities: null }, { vulnerabilities: [] }, {}]) {
+    assert.throws(
+      () => rawValidateAuditText(JSON.stringify({ type: "auditSummary", data }), registry, falsePositiveRegistry, { today: "2026-08-16" }),
+      /missing vulnerability data/,
+    );
+  }
+});
+
+test("more than one auditSummary is rejected", () => {
+  assert.throws(
+    () => rawValidateAuditText(`${cleanAudit()}\n${cleanAudit()}`, registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /expected exactly one/,
   );
 });

@@ -252,11 +252,44 @@ function validateFalsePositiveRegistry(registry) {
   return registry.false_positives;
 }
 
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Is this record the marker that the audit ran to completion?
+ *
+ * Yarn emits exactly one `auditSummary` at the end of a successful audit, so
+ * its presence is the only evidence we get that the scanner finished rather
+ * than dying partway through. Advisory records are NOT such evidence: an audit
+ * that emits two advisories and then loses its connection looks, to anyone
+ * counting records, exactly like an audit that found two advisories and
+ * stopped because there were no more.
+ *
+ * That distinction is the whole point. If the advisories received before a
+ * crash happen to be ones already governed by an exception, accepting a
+ * summary-less stream would report PASS on a scan that never completed --
+ * silently clearing every dependency the scanner never got to.
+ *
+ * The shape check is deliberately minimal: enough to tell a real summary from
+ * a truncated or fabricated one, without asserting counts we would then have
+ * to keep in step with Yarn.
+ */
+function auditSummaryIsValid(record) {
+  return Boolean(
+    record
+      && record.type === "auditSummary"
+      && isPlainObject(record.data)
+      && isPlainObject(record.data.vulnerabilities),
+  );
+}
+
 function parseAuditText(auditText) {
   if (typeof auditText !== "string" || !auditText.trim()) {
     fail("Audit output is empty");
   }
   const records = [];
+  let summaries = 0;
   for (const [lineNumber, line] of auditText.split(/\r?\n/).entries()) {
     if (!line.trim()) continue;
     let record;
@@ -271,10 +304,26 @@ function parseAuditText(auditText) {
       }
       records.push(record.data);
     } else if (record && record.type === "auditSummary") {
-      continue;
+      if (!auditSummaryIsValid(record)) {
+        fail(`Audit summary line ${lineNumber + 1} is missing vulnerability data`);
+      }
+      summaries += 1;
     } else {
       fail(`Audit output line ${lineNumber + 1} has unsupported record type`);
     }
+  }
+  // Completeness is checked here, in the authority, and not only in the runner
+  // that feeds it: these scripts can be invoked independently, CI wiring drifts,
+  // and the last retry attempt can still hand over a partial stream. A gate that
+  // trusts its caller to have validated its input is not a gate.
+  if (summaries === 0) {
+    fail(
+      "Audit output contains no auditSummary: the scan did not run to completion, " +
+        "so its advisories cannot clear the dependency tree",
+    );
+  }
+  if (summaries > 1) {
+    fail(`Audit output contains ${summaries} auditSummary records; expected exactly one`);
   }
   return records;
 }
@@ -466,6 +515,7 @@ function main(argv) {
 if (require.main === module) main(process.argv);
 
 module.exports = {
+  auditSummaryIsValid,
   formatPass,
   parseAuditText,
   validateAuditText,

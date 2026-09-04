@@ -1,20 +1,61 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const test = require("node:test");
 
-const { auditOutputIsUsable, runWithRetries } = require("./run-node-audit");
-const runnerSource = require("node:fs").readFileSync(`${__dirname}/run-node-audit.js`, "utf8");
+const { auditOutputIsComplete, runWithRetries } = require("./run-node-audit");
+const runnerSource = fs.readFileSync(`${__dirname}/run-node-audit.js`, "utf8");
 
-const ADVISORY_LINE = JSON.stringify({
-  type: "auditAdvisory",
-  data: {
-    advisory: {
-      github_advisory_id: "GHSA-test-test-test",
-      module_name: "example",
-      severity: "high",
-      cves: ["CVE-2026-00000"],
-      findings: [{ version: "1.0.0", paths: ["example"] }],
+const registry = JSON.parse(
+  fs.readFileSync(`${__dirname}/node-audit-exceptions.json`, "utf8"),
+);
+const approved = registry.exceptions[0];
+const falsePositiveRegistry = JSON.parse(
+  fs.readFileSync(`${__dirname}/node-audit-false-positives.json`, "utf8"),
+);
+const nanoidFalsePositive = falsePositiveRegistry.false_positives[0];
+
+function advisoryLine({ advisoryId, cve, packageName, version, severity = "high", paths }) {
+  return JSON.stringify({
+    type: "auditAdvisory",
+    data: {
+      resolution: { path: paths[0] },
+      advisory: {
+        cves: [cve],
+        findings: [{ paths, version }],
+        github_advisory_id: advisoryId,
+        module_name: packageName,
+        severity,
+      },
     },
-  },
+  });
+}
+
+/** The exact image-size advisory the repository already governs. */
+const GOVERNED_ADVISORY = advisoryLine({
+  advisoryId: approved.advisory_id,
+  cve: approved.cve,
+  packageName: approved.package,
+  version: approved.installed_version,
+  severity: approved.severity,
+  paths: approved.dependency_paths,
+});
+
+/** The exact Nano ID advisory the repository already treats as a false positive. */
+const FALSE_POSITIVE_ADVISORY = advisoryLine({
+  advisoryId: nanoidFalsePositive.advisory_id,
+  cve: nanoidFalsePositive.cve,
+  packageName: nanoidFalsePositive.package,
+  version: nanoidFalsePositive.installed_version,
+  severity: nanoidFalsePositive.severity,
+  paths: nanoidFalsePositive.dependency_paths,
+});
+
+const UNKNOWN_HIGH_ADVISORY = advisoryLine({
+  advisoryId: "GHSA-zzzz-zzzz-zzzz",
+  cve: "CVE-2099-0001",
+  packageName: "totally-new-package",
+  version: "1.0.0",
+  paths: ["app>totally-new-package"],
 });
 
 const SUMMARY_LINE = JSON.stringify({
@@ -34,96 +75,128 @@ function collector() {
   return { lines, log: (line) => lines.push(line) };
 }
 
-test("empty, blank and non-record output is not usable", () => {
+function run(overrides) {
+  return runWithRetries({ backoffMs: 0, sleep: () => {}, log: () => {}, ...overrides });
+}
+
+// ---- what counts as a completed audit -------------------------------------
+
+test("empty, blank and non-record output is not complete", () => {
   for (const text of ["", "   ", "\n\n", undefined, null, 42]) {
-    assert.equal(auditOutputIsUsable(text), false);
+    assert.equal(auditOutputIsComplete(text), false);
   }
 });
 
-test("the observed outage output is not usable", () => {
-  assert.equal(auditOutputIsUsable(OUTAGE_STDOUT), false);
+test("the observed outage output is not complete", () => {
+  assert.equal(auditOutputIsComplete(OUTAGE_STDOUT), false);
 });
 
-test("a clean audit that emits only a summary is usable", () => {
-  // This is the case that must never be confused with an outage: zero
-  // vulnerabilities is a real answer, and it must not be retried or rejected.
-  assert.equal(auditOutputIsUsable(SUMMARY_LINE), true);
+test("a summary alone is complete", () => {
+  // Zero vulnerabilities is a real answer and must never be mistaken for an
+  // outage: it must not be retried, and it must not be rejected.
+  assert.equal(auditOutputIsComplete(SUMMARY_LINE), true);
 });
 
-test("advisory records are usable", () => {
-  assert.equal(auditOutputIsUsable(`${ADVISORY_LINE}\n${SUMMARY_LINE}`), true);
+test("advisories plus a summary are complete", () => {
+  assert.equal(auditOutputIsComplete(`${GOVERNED_ADVISORY}\n${SUMMARY_LINE}`), true);
 });
 
-test("non-JSON noise around a real record stays usable", () => {
-  assert.equal(auditOutputIsUsable(`warning something\n${SUMMARY_LINE}`), true);
+test("advisories WITHOUT a summary are NOT complete", () => {
+  // The defect this closes. Records arrived, but the scan never finished.
+  assert.equal(auditOutputIsComplete(GOVERNED_ADVISORY), false);
+  assert.equal(auditOutputIsComplete(FALSE_POSITIVE_ADVISORY), false);
+  assert.equal(auditOutputIsComplete(UNKNOWN_HIGH_ADVISORY), false);
+  assert.equal(
+    auditOutputIsComplete(`${GOVERNED_ADVISORY}\n${FALSE_POSITIVE_ADVISORY}`),
+    false,
+  );
 });
 
-test("a usable first attempt is never retried", () => {
+test("a malformed summary is not a completion marker", () => {
+  for (const data of [null, "summary", [], { vulnerabilities: null }, { vulnerabilities: [] }, {}]) {
+    assert.equal(auditOutputIsComplete(JSON.stringify({ type: "auditSummary", data })), false);
+  }
+});
+
+test("non-JSON noise around a real summary stays complete", () => {
+  assert.equal(auditOutputIsComplete(`warning something\n${SUMMARY_LINE}`), true);
+});
+
+// ---- retry policy ----------------------------------------------------------
+
+test("a completed first attempt is never retried", () => {
   let calls = 0;
-  const result = runWithRetries({
+  const result = run({
     attempts: 3,
-    backoffMs: 0,
     runAudit: () => {
       calls += 1;
-      return { stdout: `${ADVISORY_LINE}\n${SUMMARY_LINE}`, stderr: "", status: 8 };
+      return { stdout: `${GOVERNED_ADVISORY}\n${SUMMARY_LINE}`, stderr: "", status: 8 };
     },
-    sleep: () => {},
-    log: () => {},
   });
   assert.equal(calls, 1);
   assert.equal(result.attempts, 1);
-  assert.equal(result.usable, true);
+  assert.equal(result.complete, true);
 });
 
-test("a HIGH finding is passed straight through, not retried away", () => {
-  // The whole point: a non-zero exit caused by a real advisory must reach the
-  // validator unchanged. Retrying here could only hide a finding.
-  const result = runWithRetries({
-    attempts: 3,
-    backoffMs: 0,
-    runAudit: () => ({ stdout: ADVISORY_LINE, stderr: "", status: 8 }),
-    sleep: () => {},
-    log: () => {},
+test("H: a completed unaccepted HIGH is passed straight through, not retried away", () => {
+  const result = run({
+    attempts: 5,
+    runAudit: () => ({ stdout: `${UNKNOWN_HIGH_ADVISORY}\n${SUMMARY_LINE}`, stderr: "", status: 8 }),
   });
   assert.equal(result.attempts, 1);
-  assert.equal(result.stdout, ADVISORY_LINE);
+  assert.equal(result.complete, true);
+  assert.match(result.stdout, /GHSA-zzzz-zzzz-zzzz/);
 });
 
-test("an outage is retried up to the attempt limit and then gives up unusable", () => {
+test("C/D/E/F: a summary-less advisory stream is retried, never accepted", () => {
+  for (const stdout of [
+    GOVERNED_ADVISORY,
+    FALSE_POSITIVE_ADVISORY,
+    `${GOVERNED_ADVISORY}\n${FALSE_POSITIVE_ADVISORY}`,
+    UNKNOWN_HIGH_ADVISORY,
+  ]) {
+    let calls = 0;
+    const result = run({
+      attempts: 5,
+      runAudit: () => {
+        calls += 1;
+        return { stdout, stderr: "connection reset", status: 1 };
+      },
+    });
+    assert.equal(calls, 5);
+    assert.equal(result.complete, false);
+    assert.equal(auditOutputIsComplete(result.stdout), false);
+  }
+});
+
+test("G: a partial attempt is retried and a later completed attempt is used", () => {
   let calls = 0;
-  const result = runWithRetries({
+  const result = run({
+    attempts: 5,
+    runAudit: () => {
+      calls += 1;
+      return calls === 1
+        ? { stdout: GOVERNED_ADVISORY, stderr: "connection reset", status: 1 }
+        : { stdout: `${GOVERNED_ADVISORY}\n${FALSE_POSITIVE_ADVISORY}\n${SUMMARY_LINE}`, stderr: "", status: 8 };
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.complete, true);
+  assert.match(result.stdout, /auditSummary/);
+});
+
+test("an outage is retried to the limit and then gives up incomplete", () => {
+  let calls = 0;
+  const result = run({
     attempts: 3,
-    backoffMs: 0,
     runAudit: () => {
       calls += 1;
       return { stdout: OUTAGE_STDOUT, stderr: "ResponseError: 504 Gateway Timeout", status: 1 };
     },
-    sleep: () => {},
-    log: () => {},
   });
   assert.equal(calls, 3);
-  assert.equal(result.usable, false);
-  // Giving up must leave the output unusable so the gate fails closed.
-  assert.equal(auditOutputIsUsable(result.stdout), false);
-});
-
-test("a recovered attempt after an outage is used", () => {
-  let calls = 0;
-  const result = runWithRetries({
-    attempts: 3,
-    backoffMs: 0,
-    runAudit: () => {
-      calls += 1;
-      return calls < 3
-        ? { stdout: "", stderr: "504", status: 1 }
-        : { stdout: SUMMARY_LINE, stderr: "", status: 0 };
-    },
-    sleep: () => {},
-    log: () => {},
-  });
-  assert.equal(calls, 3);
-  assert.equal(result.usable, true);
-  assert.equal(result.stdout, SUMMARY_LINE);
+  assert.equal(result.complete, false);
+  assert.equal(auditOutputIsComplete(result.stdout), false);
 });
 
 test("backoff grows and is skipped after the final attempt", () => {
@@ -138,33 +211,31 @@ test("backoff grows and is skipped after the final attempt", () => {
   assert.deepEqual(waits, [100, 200]);
 });
 
-test("each attempt is reported so an outage is legible in the CI log", () => {
+test("each attempt is reported so an incomplete audit is legible in the CI log", () => {
   const { lines, log } = collector();
   runWithRetries({
     attempts: 2,
     backoffMs: 0,
-    runAudit: () => ({ stdout: "", stderr: "ResponseError: 504 Gateway Timeout", status: 1 }),
+    runAudit: () => ({ stdout: GOVERNED_ADVISORY, stderr: "connection reset", status: 1 }),
     sleep: () => {},
     log,
   });
-  assert.match(lines[0], /attempt 1\/2: exit=1 usable_records=false/);
-  assert.match(lines.join("\n"), /504 Gateway Timeout/);
+  assert.match(lines[0], /attempt 1\/2: exit=1 completed=false/);
+  assert.match(lines.join("\n"), /no auditSummary/);
 });
 
 test("the default attempt budget is the one the incident data justifies", () => {
-  // Pinned deliberately: this number was chosen from a measured ~38% per-attempt
-  // success rate during the outage, not picked to make a build go green. Moving
-  // it should mean new evidence, and should break this test.
+  // Pinned deliberately: chosen from a measured ~38% per-attempt success rate
+  // during the outage, not picked to make a build go green. Moving it should
+  // mean new evidence, and should break this test.
   assert.match(runnerSource, /const DEFAULT_ATTEMPTS = 5;/);
+  assert.match(runnerSource, /const DEFAULT_BACKOFF_MS = 5000;/);
   let calls = 0;
-  runWithRetries({
-    backoffMs: 0,
+  run({
     runAudit: () => {
       calls += 1;
       return { stdout: "", stderr: "down", status: 1 };
     },
-    sleep: () => {},
-    log: () => {},
   });
   assert.equal(calls, 5);
 });
