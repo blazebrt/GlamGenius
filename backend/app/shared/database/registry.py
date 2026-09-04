@@ -59,6 +59,7 @@ from app.domains.reference import (
 )
 from app.domains.routines import models as routines_models
 from app.domains.scan.models import Scan
+from app.domains.substances import models as substances_models
 from app.domains.supplements import models as supplement_models
 from app.domains.supplements.models import SupplementComponentKnowledge
 from app.domains.system.models import WorkerStatus
@@ -107,5 +108,6 @@ __all__ = [
     "community_models",
     "official_records_models",
     "family_models",
+    "substances_models",
     "supplement_models",
 ]

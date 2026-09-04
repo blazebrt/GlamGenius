@@ -18,6 +18,7 @@ from app.domains.evidence.enums import (
     SourceStatus,
 )
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource, RuleEvidenceLink
+from app.domains.evidence.urls import openable_url
 
 
 class EvidenceApprovalError(ValueError):
@@ -307,3 +308,105 @@ async def evidence_state_for_rule(
     if claim_ids:
         return "evidence_linked"
     return "legacy_curated"
+
+
+# ---------------------------------------------------------------------------
+# The public-knowledge boundary
+# ---------------------------------------------------------------------------
+#: The named governance attestations that must all be true before a claim may
+#: be published. Extracted here from ``authoring.publish`` so the publish path
+#: and every reader of published knowledge test the same list — two copies of
+#: this tuple would eventually disagree about what "verified" means.
+PUBLICATION_VERIFICATION_CHECKPOINTS: tuple[str, ...] = (
+    "source_opened",
+    "founder_verified_fact",
+    "claude_review_completed",
+    "codex_review_completed",
+    "independent_reviews_agree",
+    "adversarial_review_passed",
+)
+
+
+def publication_verification_complete(claim: EvidenceClaim) -> bool:
+    """Did a human record every verification checkpoint, with no doubt left?
+
+    Pure, so a batch reader can call it over already-loaded rows without a query.
+    Missing verification is incomplete verification: absence is never consent.
+    """
+    verification = (claim.structured_value or {}).get("publication_verification") or {}
+    if not isinstance(verification, dict):
+        return False
+    if verification.get("unresolved_doubt"):
+        return False
+    return all(verification.get(field) is True for field in PUBLICATION_VERIFICATION_CHECKPOINTS)
+
+
+def claim_is_public_knowledge_path(claim: EvidenceClaim) -> bool:
+    """Is this claim safe to read as *published* public knowledge?
+
+    Strictly stronger than :func:`assert_claim_approvable`, and deliberately a
+    separate function rather than a tightening of it. ``assert_claim_approvable``
+    guards rule provenance and accepts an approved-but-unpublished claim;
+    raising its bar would retroactively invalidate seeded release evidence and
+    change behaviour for every existing call site. This one is for readers that
+    surface knowledge publicly, where "a reviewer approved it" is not yet enough.
+
+    Requires, beyond approval: actually published, by a named person, at a
+    recorded time; a supported claim status; a graded strength with a written
+    rationale; and every publication-verification checkpoint passed with no
+    unresolved doubt.
+
+    Pure and query-free so a batch resolver can apply it to loaded rows.
+    """
+    if claim.review_status != ReviewStatus.PUBLISHED.value:
+        return False
+    if not claim.reviewed_by or not claim.reviewed_at:
+        return False
+    if not claim.published_by or not claim.published_at:
+        return False
+    if claim.claim_status != ClaimStatus.SUPPORTED.value:
+        return False
+    if claim.evidence_strength not in EVIDENCE_STRENGTHS:
+        return False
+    if not claim.strength_rationale or not claim.strength_rationale.strip():
+        return False
+    return publication_verification_complete(claim)
+
+
+def source_path_is_public_knowledge(
+    link: EvidenceClaimSource,
+    source: EvidenceSource,
+    *,
+    allowed_source_types: frozenset[str],
+) -> bool:
+    """Is this one claim→source link fit to carry a public claim?
+
+    A supporting (never background) link, reviewed by a named person, pointing
+    at an active, *named* source of an allowed type, with a URL somebody can
+    open and an explicit licence/use note. The note is required rather than
+    inferred: what a publisher permits is not deducible from their URL.
+
+    Title and publisher are checked here and not only at authoring, because a
+    reader must not depend on the writer having been careful. A row can be
+    hand-edited, imported badly, or blanked after the fact; a citation with no
+    title and no publisher is not provenance a public claim can rest on,
+    whatever it looked like when it was written.
+
+    The URL goes through :func:`openable_url` — the same check authoring uses —
+    so ``https://`` and ``https://?x=1`` fail here exactly as they fail there.
+    """
+    if link.relationship != ClaimSourceRelationship.SUPPORTS.value:
+        return False
+    if not link.reviewed_at or not link.reviewed_by:
+        return False
+    if source.status != SourceStatus.ACTIVE.value:
+        return False
+    if source.source_type not in allowed_source_types:
+        return False
+    if not (source.title or "").strip():
+        return False
+    if not (source.publisher or "").strip():
+        return False
+    if openable_url(source.canonical_url) is None:
+        return False
+    return bool(source.license_or_use_note and source.license_or_use_note.strip())

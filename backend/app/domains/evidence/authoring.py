@@ -41,6 +41,8 @@ from app.domains.evidence.enums import (
     SourceType,
 )
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource
+from app.domains.evidence.service import publication_verification_complete
+from app.domains.evidence.urls import openable_url
 from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import ConflictError, NotFoundError, ValidationFailedError
 
@@ -104,13 +106,14 @@ def _require(value: str | None, field: str) -> str:
 
 
 def _valid_url(value: str | None) -> str | None:
-    """A source URL has to be something a reviewer can actually open."""
-    text = (value or "").strip()
-    if not text:
-        return None
-    if not text.lower().startswith(("http://", "https://")):
-        return None
-    return text
+    """A source URL has to be something a reviewer can actually open.
+
+    Delegates to the one shared validator so this and the public-knowledge
+    reader cannot disagree about what "openable" means. The intent is unchanged
+    — an absolute http(s) URL, or nothing — it is simply now checked by parsing
+    rather than by looking at the first eight characters.
+    """
+    return openable_url(value)
 
 
 def _validate_tier(tier: str) -> str:
@@ -361,12 +364,9 @@ async def publish(
     # Re-checked at publish as well as at approval: the source could have been
     # edited in between, and publishing is the step that makes it public.
     source = await assert_has_openable_source(session, claim)
-    verification = (claim.structured_value or {}).get("publication_verification") or {}
-    required = (
-        "source_opened", "founder_verified_fact", "claude_review_completed",
-        "codex_review_completed", "independent_reviews_agree", "adversarial_review_passed",
-    )
-    if verification.get("unresolved_doubt") or not all(verification.get(field) is True for field in required):
+    # The checkpoint list lives in service.py so publishing and every reader of
+    # published knowledge apply the identical test.
+    if not publication_verification_complete(claim):
         raise ValidationFailedError(
             "This entry cannot publish until every independent verification checkpoint passes "
             "and unresolved doubt is cleared.", field="verification",
