@@ -95,8 +95,23 @@ for path in "${changed_files[@]}"; do
       node_deps=true
       ;;
   esac
+  # Anything that changes what the image contains, or that changes how the
+  # container is qualified, must rebuild and rescan the image.
+  #
+  # The second half of that sentence is the part that was missing. A PR
+  # editing only `.trivy-exceptions.yaml` -- the registry that decides which
+  # CVEs the scan is allowed to ignore -- did not set `container`, so the
+  # build and the Trivy scan were both skipped and the PR reported green.
+  # The scan then ran for the first time after merge, during push-to-main
+  # qualification, which is exactly the wrong moment to discover that an
+  # exception was wrong. The same hole applied to the validator's own inputs
+  # and to this script: a change to the qualification logic could ship
+  # without the qualification ever running against it.
   case "$path" in
-    backend/Dockerfile|Dockerfile|backend/requirements*.txt|docker-compose*.yml|docker-compose*.yaml|.trivyignore|scripts/validate_trivy_exceptions.py)
+    backend/Dockerfile|Dockerfile|backend/requirements*.txt|docker-compose*.yml|docker-compose*.yaml)
+      container=true
+      ;;
+    .trivyignore|.trivy-exceptions.yaml|scripts/validate_trivy_exceptions.py|.github/scripts/detect-ci-scope.sh|.github/workflows/ci.yml)
       container=true
       ;;
   esac
