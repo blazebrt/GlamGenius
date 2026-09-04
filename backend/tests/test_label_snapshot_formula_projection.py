@@ -11,6 +11,7 @@ from app.domains.formulas import service as formula_service
 from app.domains.formulas.parser import ParseStatus
 from app.domains.formulas.service import FormulaResolution
 from app.domains.product import formula_projection
+from app.domains.product.confidence import ProductConfidence
 from app.domains.product.formula_projection import (
     FormulaProjectionProvenance,
     project_formula_from_label_snapshot,
@@ -54,7 +55,7 @@ def _snapshot(
         previous_snapshot_id=previous_snapshot_id,
         changed_fields=[] if version == 1 else ["ingredients_text"],
         completeness="complete_for_grading",
-        confidence="user_confirmed",
+        confidence=ProductConfidence.VERIFIED.value,
     )
     return snapshot
 
@@ -384,7 +385,7 @@ async def test_persisted_snapshot_is_field_equivalent_and_projection_writes_noth
             barcode=scan.barcode,
             scan_event_id=scan.id,
             facts={"ingredients_text": "Water", "brand": "Observed Brand"},
-            confidence="user_confirmed",
+            confidence=ProductConfidence.VERIFIED.value,
             content_fingerprint="f" * 64,
             version_number=1,
             changed_fields=[],
