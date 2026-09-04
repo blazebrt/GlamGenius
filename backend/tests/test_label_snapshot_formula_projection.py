@@ -20,7 +20,7 @@ from app.domains.product.models import LabelSnapshot, ScanEvent
 from app.domains.product.service import canonical_label_facts
 from app.domains.substances import authoring as substance_authoring
 from app.domains.substances.enums import EntityKind, NameNamespace
-from app.domains.substances.service import ResolutionStatus
+from app.domains.substances.service import ResolutionStatus, SubstanceResolution
 from app.shared.database import sql
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import event, select
@@ -314,26 +314,25 @@ async def test_same_snapshot_tracks_live_unresolved_resolved_ambiguous_registry(
     assert unresolved.provenance == resolved.provenance == ambiguous.provenance
 
 
-async def test_projection_keeps_one_full_formula_step_7a_batch(monkeypatch, db_clean):
-    factory = get_sessionmaker()
-    async with factory() as session:
-        await _publish_identity(session, "water", "Water")
-        await _publish_identity(session, "glycerin", "Glycerin")
-        await _publish_identity(session, "niacinamide", "Niacinamide")
-
-    real_resolve_names = formula_service.resolve_names
+async def test_projection_keeps_one_full_formula_step_7a_batch(monkeypatch):
     batches: list[list[str]] = []
 
     async def _spy(session, names):
         batches.append(list(names))
-        return await real_resolve_names(session, names)
+        return tuple(
+            SubstanceResolution(
+                query=name,
+                normalized_name=name.casefold(),
+                status=ResolutionStatus.UNRESOLVED,
+            )
+            for name in names
+        )
 
     monkeypatch.setattr(formula_service, "resolve_names", _spy)
-    async with factory() as session:
-        result = await project_formula_from_label_snapshot(
-            session,
-            _snapshot("Water,Glycerin,Niacinamide"),
-        )
+    result = await project_formula_from_label_snapshot(
+        object(),
+        _snapshot("Water,Glycerin,Niacinamide"),
+    )
 
     assert result.formula.status is ParseStatus.PARSED
     assert batches == [["Water", "Glycerin", "Niacinamide"]]
@@ -371,20 +370,22 @@ async def test_adapter_itself_attempts_no_session_write(monkeypatch):
 async def test_persisted_snapshot_is_field_equivalent_and_projection_writes_nothing(db_clean):
     factory = get_sessionmaker()
     async with factory() as session:
-        await _publish_identity(session, "water", "Water")
         scan = ScanEvent(
             barcode="8900000000009",
             outcome="label_captured",
             client_scan_id=f"projection-{uuid.uuid4()}",
             queued_offline=False,
-            label_facts={"ingredients_text": "Water"},
+            label_facts={"ingredients_text": "Persisted Ingredient"},
         )
         session.add(scan)
         await session.flush()
         snapshot = LabelSnapshot(
             barcode=scan.barcode,
             scan_event_id=scan.id,
-            facts={"ingredients_text": "Water", "brand": "Observed Brand"},
+            facts={
+                "ingredients_text": "Persisted Ingredient",
+                "brand": "Observed Brand",
+            },
             confidence=ProductConfidence.VERIFIED.value,
             content_fingerprint="f" * 64,
             version_number=1,
@@ -414,7 +415,8 @@ async def test_persisted_snapshot_is_field_equivalent_and_projection_writes_noth
             persisted = await session.get(LabelSnapshot, snapshot_id)
             assert persisted is not None
             result = await project_formula_from_label_snapshot(session, persisted)
-            assert result.formula.ingredients[0].substance_key == "water"
+            assert result.formula.ingredients[0].raw_name == "Persisted Ingredient"
+            assert result.formula.ingredients[0].status is ResolutionStatus.UNRESOLVED
             assert not session.is_modified(persisted, include_collections=True)
     finally:
         event.remove(sync_engine, "before_cursor_execute", _record)
