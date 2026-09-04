@@ -61,6 +61,11 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+      # Runs here, before the scope is emitted, because this is the only job
+      # that always runs. A scope script that wrongly reported container=false
+      # would otherwise be able to skip the job holding its own test.
+      - name: Container scope regression test
+        run: bash .github/scripts/detect-ci-scope.test.sh
       - id: scope
         name: Detect changed paths
         env:
