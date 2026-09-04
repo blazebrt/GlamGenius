@@ -349,30 +349,78 @@ class TestParserGuarantees:
         assert result.status is ParseStatus.PARSED
         assert len(result.tokens) >= 2 or "," not in text
 
-    def test_the_residual_lexical_ambiguity_is_recorded(self):
-        """One shape genuinely cannot be resolved lexically, and it fails safe.
+    @pytest.mark.parametrize("text", [
+        "Acid Red 1,N-Methylpyrrolidone",
+        "CI 77491,N-Acetyl Glucosamine",
+        "Some Name 2,O-Methyl Example",
+        "Pigment 4,S-Methyl Example",
+        "Extract 12,P-Example Compound",
+        # Anywhere in the list, not only at the start.
+        "Water, Acid Red 1,N-Methylpyrrolidone, Glycerin",
+        "Water,CI 77491,N-Acetyl Glucosamine",
+    ], ids=lambda t: t[:34])
+    def test_an_undecidable_boundary_emits_nothing(self, text):
+        """Substantive text, a space, then a locant-shaped run: refuse to choose.
 
-        ``Acid Red 1,N-Methylpyrrolidone`` — a name ending in a bare digit,
-        an immediate comma with no space, then a locant-shaped start — is
-        *character-for-character identical* to a locant run. No amount of
-        punctuation analysis can tell the two apart, and resolving it would need
-        exactly the dictionary lookup this parser must not do.
+        ``Acid Red 1,N-Methylpyrrolidone`` reads equally well as a colour index
+        followed by a solvent, or as one name carrying an ``N`` locant. No
+        punctuation analysis separates them; only a dictionary could, and this
+        parser must not have one.
 
-        It is recorded rather than hidden, and it is strictly narrower and safer
-        than the defect it replaces:
-
-        * It fails by **merging**, so the result is one token that resolves to
-          nothing — ``UNRESOLVED``, never a wrong identity. The old failure
-          *split* a name into fragments, which registry growth could turn into
-          confident false positives.
-        * The spaced form, which is how lists are normally printed, parses
-          correctly.
+        Emitting *either* reading would hand the question to the identity
+        registry — whichever reading later matches a published name becomes the
+        "right" one, so growing the registry silently re-interprets labels
+        written years earlier. Both readings are therefore withheld.
         """
-        merged = parse_formula("Acid Red 1,N-Methylpyrrolidone")
-        assert [t.raw_name for t in merged.tokens] == ["Acid Red 1,N-Methylpyrrolidone"]
+        result = parse_formula(text)
+        assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+        assert result.tokens == ()
 
-        spaced = parse_formula("Acid Red 1, N-Methylpyrrolidone")
-        assert [t.raw_name for t in spaced.tokens] == ["Acid Red 1", "N-Methylpyrrolidone"]
+    @pytest.mark.parametrize(("text", "expected"), [
+        ("Acid Red 1, N-Methylpyrrolidone", ["Acid Red 1", "N-Methylpyrrolidone"]),
+        ("CI 77491, N-Acetyl Glucosamine", ["CI 77491", "N-Acetyl Glucosamine"]),
+        ("Some Name 2, O-Methyl Example", ["Some Name 2", "O-Methyl Example"]),
+    ], ids=lambda v: str(v)[:30])
+    def test_the_spaced_counterpart_is_an_ordinary_list(self, text, expected):
+        """A space after the delimiter removes the ambiguity entirely."""
+        result = parse_formula(text)
+        assert result.status is ParseStatus.PARSED
+        assert [t.raw_name for t in result.tokens] == expected
+
+    def test_parse_ambiguity_is_not_identity_ambiguity(self):
+        """Two different questions, two different states, deliberately.
+
+        ``ParseStatus.AMBIGUOUS_BOUNDARY`` answers "where are the printed
+        boundaries"; ``ResolutionStatus.AMBIGUOUS`` answers "which entity does
+        this established token denote". Collapsing them would let a caller
+        treat an unreadable label as a readable one with an undecided
+        ingredient.
+        """
+        assert ParseStatus.AMBIGUOUS_BOUNDARY.value == "ambiguous_boundary"
+        assert ResolutionStatus.AMBIGUOUS.value == "ambiguous"
+        assert ParseStatus.AMBIGUOUS_BOUNDARY.value != ResolutionStatus.AMBIGUOUS.value
+
+    def test_the_comma_classifier_is_tri_state(self):
+        from app.domains.formulas.parser import CommaRole, classify_comma
+
+        # A run beginning the entry: unambiguously a locant.
+        assert classify_comma("1,3-Butanediol", 1, entry_prefix="1") is CommaRole.LOCANT
+        # Bound by a hyphen.
+        assert classify_comma(
+            "Benzene-1,2,4-Acid", 9, entry_prefix="Benzene-1",
+        ) is CommaRole.LOCANT
+        # Glued to a letter: the digit belongs to the word before it.
+        assert classify_comma(
+            "Vitamin B3,2,6-X", 10, entry_prefix="Vitamin B3",
+        ) is CommaRole.DELIMITER
+        # Not locant-shaped at all.
+        assert classify_comma(
+            "Water,Glycerin", 5, entry_prefix="Water",
+        ) is CommaRole.DELIMITER
+        # Substantive text, a space, then a locant-shaped run.
+        assert classify_comma(
+            "Acid Red 1,N-Methyl", 10, entry_prefix="Acid Red 1",
+        ) is CommaRole.AMBIGUOUS
 
     def test_the_locant_rule_consults_nothing(self):
         """Purely lexical: no database, no Step 7A, no dictionary, no network.
@@ -382,14 +430,16 @@ class TestParserGuarantees:
         token boundaries were, or publishing a name would silently change how
         every formula tokenises.
         """
-        from app.domains.formulas.parser import _is_locant_comma
+        from app.domains.formulas.parser import classify_comma
 
-        source = _code_only(inspect.getsource(_is_locant_comma))
+        source = _code_only(inspect.getsource(classify_comma))
         for forbidden in ("await", "session", "resolve", "Substance", "select",
                           "random", "open", "requests", "httpx"):
             assert forbidden not in source, forbidden
         # And it is a pure function of two arguments.
-        assert set(inspect.signature(_is_locant_comma).parameters) == {"text", "position"}
+        assert set(inspect.signature(classify_comma).parameters) == {
+            "text", "position", "entry_prefix",
+        }
 
     async def test_tokenization_does_not_change_when_the_registry_changes(self, db_clean):
         """Publishing or retiring a canonical name must not move a boundary."""
@@ -674,6 +724,109 @@ class TestFormulaResolution:
             direct = await resolve_formula(session, "1")
         assert direct.ingredients[0].status is ResolutionStatus.RESOLVED
         assert direct.ingredients[0].substance_key == "fragment.one"
+
+    async def test_a_merged_name_identity_can_never_win_an_ambiguous_boundary(self, db_clean):
+        """The counterpart to the fragment regression, in the other direction.
+
+        Here the registry contains **all three** readings as fully valid,
+        published canonical identities: the two ingredients the label probably
+        meant, and the concatenation the old parser would have emitted.
+
+        If the parser still merged, it would report one confidently RESOLVED
+        ingredient that is not in the product. If it split, it would report two.
+        Both are false. It must report neither, and it must not ask.
+
+        This is what makes the invariant real rather than a property of an empty
+        registry: publishing more canonical names cannot convert an undecidable
+        boundary into a confident answer in *either* direction.
+        """
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "acid.red.1", "Acid Red 1")
+            await _publish_simple(session, "nmp", "N-Methylpyrrolidone")
+            await _publish_simple(session, "merged.trap", "Acid Red 1,N-Methylpyrrolidone")
+
+        # All three really are published and individually resolvable, so this
+        # test proves the parser withheld them rather than that they were absent.
+        async with factory() as session:
+            for name, key in (
+                ("Acid Red 1", "acid.red.1"),
+                ("N-Methylpyrrolidone", "nmp"),
+            ):
+                probe = await resolve_formula(session, name)
+                assert probe.ingredients[0].status is ResolutionStatus.RESOLVED
+                assert probe.ingredients[0].substance_key == key
+
+        async with factory() as session:
+            result = await resolve_formula(session, "Acid Red 1,N-Methylpyrrolidone")
+
+        assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+        assert result.ingredients == ()
+        assert result.resolved_count == 0
+        # None of the three appears anywhere, as winner or candidate.
+        reported = {r.substance_key for r in result.ingredients}
+        reported |= {k for r in result.ingredients for k in r.candidate_substance_keys}
+        assert reported == set()
+
+    async def test_an_ambiguous_boundary_never_reaches_the_identity_resolver(
+        self, db_clean, monkeypatch,
+    ):
+        """Not merely "no result" — the resolver is never asked the question."""
+        from app.domains.formulas import service as formula_service
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "acid.red.1", "Acid Red 1")
+            await _publish_simple(session, "nmp", "N-Methylpyrrolidone")
+
+        calls: list[list[str]] = []
+        real = formula_service.resolve_names
+
+        async def _spy(session, names):
+            calls.append(list(names))
+            return await real(session, names)
+
+        monkeypatch.setattr(formula_service, "resolve_names", _spy)
+
+        async with factory() as session:
+            ambiguous = await resolve_formula(session, "Acid Red 1,N-Methylpyrrolidone")
+        assert ambiguous.status is ParseStatus.AMBIGUOUS_BOUNDARY
+        assert calls == [], calls
+
+        # The spaced form does reach the resolver, exactly once, so the
+        # assertion above is about ambiguity rather than a broken spy.
+        async with factory() as session:
+            spaced = await resolve_formula(session, "Acid Red 1, N-Methylpyrrolidone")
+        assert spaced.status is ParseStatus.PARSED
+        assert calls == [["Acid Red 1", "N-Methylpyrrolidone"]]
+
+    async def test_an_ambiguous_boundary_issues_no_database_query(self, db_clean):
+        from sqlalchemy import event
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "acid.red.1", "Acid Red 1")
+
+        statements: list[str] = []
+
+        def _record(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        sync_engine = sql.get_engine().sync_engine
+        async with factory() as session:
+            event.listen(sync_engine, "before_cursor_execute", _record)
+            try:
+                statements.clear()
+                for text in (
+                    "Acid Red 1,N-Methylpyrrolidone",
+                    "CI 77491,N-Acetyl Glucosamine",
+                    "Water, Acid Red 1,N-Methylpyrrolidone, Glycerin",
+                ):
+                    result = await resolve_formula(session, text)
+                    assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+            finally:
+                event.remove(sync_engine, "before_cursor_execute", _record)
+        assert statements == [], statements
 
     async def test_a_multi_locant_name_reaches_its_identity(self, db_clean):
         factory = get_sessionmaker()

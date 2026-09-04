@@ -97,6 +97,14 @@ class ParseStatus(StrEnum):
     EMPTY = "empty"
     #: Unbalanced grouping, or an entry with no text in it.
     MALFORMED = "malformed"
+    #: The punctuation admits *both* a locant continuation and an ingredient
+    #: boundary, and V1 refuses to choose. A parsing failure, and deliberately
+    #: not the same thing as ``ResolutionStatus.AMBIGUOUS``: that one answers
+    #: "which entity does this established token denote", this one answers
+    #: "where are the printed boundaries at all". Nothing is sent to the
+    #: identity resolver, so the registry can never decide the question by
+    #: whether one reading happens to resolve.
+    AMBIGUOUS_BOUNDARY = "ambiguous_boundary"
     #: Longer than :data:`MAX_INGREDIENTS_TEXT_LENGTH`.
     TOO_LONG = "too_long"
     #: More than :data:`MAX_FORMULA_TOKENS` entries.
@@ -207,10 +215,25 @@ def _locant_atom_forwards(text: str, start: int) -> int | None:
     return index
 
 
-def _is_locant_comma(text: str, position: int) -> bool:
-    """Is the comma at ``position`` part of a chemical locant, not a delimiter?
+class CommaRole(StrEnum):
+    """What a top-level comma is doing, as far as punctuation can establish.
 
-    The grammar, and it is the whole of it::
+    Three answers, because two were not enough. Forcing an undecidable comma
+    into either ``LOCANT`` or ``DELIMITER`` hands the question to the identity
+    registry: whichever reading happens to match a published name later becomes
+    the "right" one, so growing the registry silently re-interprets old labels.
+    ``AMBIGUOUS`` refuses instead.
+    """
+
+    LOCANT = "locant"
+    DELIMITER = "delimiter"
+    AMBIGUOUS = "ambiguous"
+
+
+def classify_comma(text: str, position: int, *, entry_prefix: str) -> CommaRole:
+    """Decide what the comma at ``position`` is doing, from punctuation alone.
+
+    The locant shape, and it is the whole of it::
 
         locant_run  := atom ( ',' atom )+ '-' name_char
         atom        := ( digit+ | heteroatom ) prime*
@@ -219,66 +242,105 @@ def _is_locant_comma(text: str, position: int) -> bool:
         prime       := ' | ′
         name_char   := any alphanumeric
 
-    and the run must be preceded by the start of the entry, whitespace, an
-    opening bracket, a hyphen, or the previous comma of the same run.
+    A comma that does not sit inside that shape is a ``DELIMITER``. One that
+    does is a ``LOCANT`` **only when the run's own start is accounted for**;
+    otherwise it is ``AMBIGUOUS``.
 
-    Every clause is doing work:
+    What accounts for a run's start, and why each case is safe:
 
-    * **The trailing** ``-`` **plus a name character.** A locant labels
-      something; a run with nothing after it is not a locant. This is what
-      keeps ``CI 77491,CI 77492`` two ingredients — after ``CI`` comes ``I``,
-      not a hyphen.
-    * **The leading boundary.** A locant begins a name. Without this clause
-      ``Vitamin B3,2,6-Di-t-Butyl-4-Methylphenol`` would merge into one entry,
-      because the ``3`` of ``B3`` would read as a locant. With it, the ``3`` is
-      preceded by ``B`` and the comma stays a delimiter.
-    * **No whitespace anywhere inside.** ``Aqua, 1, 2, Glycerin`` is four
-      entries, not a chemical name.
+    * **It begins the current entry**, leading whitespace aside. In
+      ``Water, 1,3-Butanediol, Glycerin`` the entry under construction is just
+      ``" 1"`` when the locant comma arrives, so there is no competing reading:
+      an entry cannot be a delimiter for itself.
+    * **It is attached by a hyphen**, as in ``Benzene-1,2,4-Tricarboxylic
+      Acid``. Explicit chemical punctuation binds it to the name before it.
+    * **It continues a run already accepted**, the second comma of ``1,1,1-``.
 
-    This is lexical analysis, not identification. It answers "does this comma
-    sit inside a locant-shaped run of punctuation", never "is this a real
-    substance" — there is no dictionary here, no database, no Step 7A call and
-    no network. That distinction is the point: **knowledge may decide what a
-    token denotes, but it must never decide retroactively where the printed
-    token boundaries were.** If it could, publishing or retiring a canonical
-    name would silently change how a formula tokenises, and the same printed
-    list would mean different things on different days.
+    What makes a run *unaccounted for* is ordinary internal whitespace with
+    substantive text before it in the same entry::
+
+        Acid Red 1,N-Methylpyrrolidone
+                 ^ locant-shaped, but "Acid Red" is already here
+
+    Read one way this is a colour index followed by a solvent; read the other it
+    is a single name with an ``N`` locant. **Both are entirely plausible, and no
+    amount of punctuation analysis separates them** — the only thing that could
+    is a dictionary, which this parser must not have.
+
+    So it returns ``AMBIGUOUS``, and the caller emits nothing at all.
+
+    That is the invariant, and the earlier attempt got it wrong twice in
+    opposite directions. Splitting such a comma manufactures fragments that a
+    future canonical ``1`` would resolve; merging it manufactures a
+    concatenation that a future canonical ``Acid Red 1,N-Methylpyrrolidone``
+    would resolve. Either way the *registry* ends up deciding where the printed
+    boundaries were, years after the label was written. Neither reading may be
+    emitted: **when punctuation alone cannot defensibly place a boundary, no
+    name is sent to identity resolution.**
+
+    Lexical throughout — ``text``, an index and the entry text so far. No
+    dictionary, no database, no Step 7A call, no network.
     """
     start = _locant_atom_backwards(text, position)
     if start is None:
-        return False
-    if start > 0:
-        preceding = text[start - 1]
-        if not (preceding.isspace() or preceding in _LOCANT_LEAD):
-            return False
+        return CommaRole.DELIMITER
 
+    # The forward shape decides whether this is locant-shaped at all. Checked
+    # first, so a comma that simply separates two names is a plain DELIMITER
+    # and never reported as ambiguous.
     index = position
     while True:
-        # Consume ``, atom`` for as long as the run continues, so ``1,1,1-``
-        # and ``1,2,3-`` are single runs rather than three separate decisions.
         after_atom = _locant_atom_forwards(text, index + 1)
         if after_atom is None:
-            return False
+            return CommaRole.DELIMITER
         index = after_atom
         if index < len(text) and text[index] == ",":
             continue
         break
+    if not (index + 1 < len(text) and text[index] == "-" and text[index + 1].isalnum()):
+        return CommaRole.DELIMITER
 
-    return (
-        index + 1 < len(text)
-        and text[index] == "-"
-        and text[index + 1].isalnum()
-    )
+    # Locant-shaped. Now: is the run's start accounted for?
+    #
+    # ``entry_prefix`` is the entry as accumulated so far, up to but excluding
+    # this comma, so the atom sits at its tail. Everything before that atom is
+    # what has to justify the run.
+    atom_length = position - start
+    before_atom = entry_prefix[: len(entry_prefix) - atom_length] if atom_length else entry_prefix
+
+    if not before_atom.strip():
+        # The run starts the entry (leading whitespace only).
+        return CommaRole.LOCANT
+
+    preceding = before_atom[-1]
+    if preceding in _LOCANT_LEAD:
+        # Bound by a hyphen, or continuing a run already accepted.
+        return CommaRole.LOCANT
+    if preceding.isspace():
+        # Substantive text, then a space, then a locant-shaped run. Undecidable.
+        return CommaRole.AMBIGUOUS
+    # Glued to the previous character — ``Vitamin B3,2,6-…``. The ``3`` is part
+    # of ``B3``, not a free-standing locant, so the comma separates two names.
+    return CommaRole.DELIMITER
 
 
-def _split_top_level(text: str) -> list[str] | None:
-    """Split on top-level commas, or ``None`` when grouping is unbalanced.
+def _split_top_level(text: str) -> tuple[ParseStatus, list[str]]:
+    """Split on top-level commas, reporting how it went.
 
-    One pass, tracking a stack of open groupings. A comma is a separator only at
-    depth zero. A closer that does not match the innermost opener — and a closer
-    with nothing open at all — is malformed immediately rather than at the end,
-    so ``Water (Aqua], Glycerin`` fails on the ``]`` rather than being read as
-    one long entry.
+    One pass, tracking a stack of open groupings. A comma is a candidate
+    separator only at depth zero, and :func:`classify_comma` then decides
+    whether it separates anything.
+
+    Three outcomes:
+
+    * ``PARSED`` with the entries.
+    * ``MALFORMED`` when grouping is unbalanced. A closer that does not match
+      the innermost opener — and a closer with nothing open — fails immediately
+      rather than at the end, so ``Water (Aqua], Glycerin`` fails on the ``]``
+      instead of being read as one long entry.
+    * ``AMBIGUOUS_BOUNDARY`` when any comma is undecidable. One is enough, and
+      it stops the scan: an entry list containing a boundary nobody can place
+      is not a partial answer, it is a wrong one.
     """
     parts: list[str] = []
     current: list[str] = []
@@ -291,11 +353,14 @@ def _split_top_level(text: str) -> list[str] | None:
         elif character in _CLOSERS:
             # A closer with nothing open, or the wrong closer for what is open.
             if not stack or stack[-1] != character:
-                return None
+                return ParseStatus.MALFORMED, []
             stack.pop()
             current.append(character)
         elif character == TOP_LEVEL_DELIMITER and not stack:
-            if _is_locant_comma(text, index):
+            role = classify_comma(text, index, entry_prefix="".join(current))
+            if role is CommaRole.AMBIGUOUS:
+                return ParseStatus.AMBIGUOUS_BOUNDARY, []
+            if role is CommaRole.LOCANT:
                 # Part of the name being read, not a boundary between two.
                 # Kept verbatim: the comma is never stripped or rewritten.
                 current.append(character)
@@ -307,9 +372,9 @@ def _split_top_level(text: str) -> list[str] | None:
 
     if stack:
         # Something was opened and never closed.
-        return None
+        return ParseStatus.MALFORMED, []
     parts.append("".join(current))
-    return parts
+    return ParseStatus.PARSED, parts
 
 
 def parse_formula(ingredients_text: object) -> FormulaParse:
@@ -334,9 +399,11 @@ def parse_formula(ingredients_text: object) -> FormulaParse:
     if not ingredients_text.strip():
         return _failed(ParseStatus.EMPTY)
 
-    parts = _split_top_level(ingredients_text)
-    if parts is None:
-        return _failed(ParseStatus.MALFORMED)
+    status, parts = _split_top_level(ingredients_text)
+    if status is not ParseStatus.PARSED:
+        # MALFORMED or AMBIGUOUS_BOUNDARY. Either way, no entries at all: a
+        # list whose boundaries are not established cannot be partly answered.
+        return _failed(status)
 
     if len(parts) > MAX_FORMULA_TOKENS:
         # Refused whole. Resolving the first 128 would silently answer about a
@@ -361,8 +428,10 @@ __all__ = [
     "MAX_FORMULA_TOKENS",
     "MAX_INGREDIENTS_TEXT_LENGTH",
     "TOP_LEVEL_DELIMITER",
+    "CommaRole",
     "FormulaParse",
     "FormulaToken",
     "ParseStatus",
+    "classify_comma",
     "parse_formula",
 ]

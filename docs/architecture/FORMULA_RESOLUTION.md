@@ -95,6 +95,7 @@ entry would renumber every position after it.
 | `PARSED` | read whole; entries returned in printed order |
 | `EMPTY` | absent, empty, or whitespace only |
 | `MALFORMED` | unbalanced grouping, or an entry with no text |
+| `AMBIGUOUS_BOUNDARY` | a comma that punctuation cannot place; nothing is emitted and nothing is resolved |
 | `TOO_LONG` | longer than 4000 characters |
 | `TOO_MANY_ITEMS` | more than 128 entries |
 
@@ -132,6 +133,7 @@ Each clause earns its place:
 | trailing `-` + name character | `CI 77491,CI 77492` merging — after `CI` comes `I`, not a hyphen |
 | leading boundary | `Vitamin B3,2,6-Di-t-Butyl-4-Methylphenol` merging — the `3` of `B3` follows a letter, so it is not a free-standing locant |
 | no whitespace inside a run | `Aqua, 1, 2, Glycerin` merging — that is an ordinary list |
+| run start must be accounted for | `Acid Red 1,N-Methylpyrrolidone` being silently merged *or* split — it becomes `AMBIGUOUS_BOUNDARY` instead |
 
 The comma is kept **verbatim**: `raw_name` is identical to what was printed,
 never stripped, rewritten or normalised here.
@@ -148,21 +150,61 @@ publishing or retiring one canonical name would silently re-tokenise every
 formula, and the same printed list would mean different things on different
 days. A test publishes identities and asserts tokenisation does not move.
 
-### The one shape that stays ambiguous
+### When punctuation cannot decide, nothing is emitted
 
-`Acid Red 1,N-Methylpyrrolidone` — a name ending in a bare digit, an immediate
-comma with no space, then a locant-shaped start — is character-for-character
-identical to a locant run. No punctuation analysis can separate the two; doing
-so would need exactly the dictionary lookup this parser must not perform.
+`Acid Red 1,N-Methylpyrrolidone` reads equally well two ways: a colour index
+followed by a solvent, or one name carrying an `N` locant. The shape is
+`substantive text`, a space, a bare locant atom, the comma, then a locant-shaped
+run. No punctuation analysis separates the readings; only a dictionary could,
+and this parser must not have one.
 
-It is recorded rather than hidden, and it is strictly narrower and safer than
-the defect it replaced:
+So the parser returns **`AMBIGUOUS_BOUNDARY`**, emits zero tokens, and sends
+nothing to Step 7A.
 
-- It fails by **merging**, so the result is one token that resolves to nothing.
-  `UNRESOLVED`, never a wrong identity. The old failure *split* a name, and
-  registry growth could turn those fragments into confident false positives.
-- The spaced form `Acid Red 1, N-Methylpyrrolidone`, which is how lists are
-  normally printed, parses correctly.
+> **The invariant.** When punctuation alone cannot defensibly determine whether
+> a locant-shaped comma is internal to a name or a delimiter between two, Step
+> 7B returns an explicit parse ambiguity and sends no names to identity
+> resolution. **The registry must never determine token boundaries indirectly,
+> through whether a merged or split reading happens to resolve.**
+
+Two earlier attempts got this wrong in opposite directions, and both were wrong
+the same way — they made correctness depend on what the registry happened to
+contain:
+
+| Attempt | Failure it invited |
+| --- | --- |
+| Split the comma | Fragments `1` and `3-Butanediol`. Publish canonical names for those and the parser starts reporting ingredients that are not in the product. |
+| Merge the comma | The concatenation `Acid Red 1,N-Methylpyrrolidone`. Publish a canonical name matching it and the parser reports one confident ingredient that is not in the product. |
+
+Neither "fails safe". Each is safe *only while nobody has published the name
+that would make it unsafe*, which is not an invariant at all — it is a race
+against the catalogue growing. Withholding both readings is.
+
+An adversarial test publishes all three readings — `Acid Red 1`,
+`N-Methylpyrrolidone`, and the concatenation — as fully valid canonical
+identities, then asserts the formula still returns `AMBIGUOUS_BOUNDARY` with no
+ingredients, that none of the three appears as winner or candidate, and that
+`resolve_names` is never called at all. Its counterpart does the same for the
+fragment direction.
+
+**`AMBIGUOUS_BOUNDARY` is not `ResolutionStatus.AMBIGUOUS`.** They answer
+different questions and are deliberately separate states:
+
+| | Question | Answered by |
+| --- | --- | --- |
+| `ParseStatus.AMBIGUOUS_BOUNDARY` | *Where are the printed boundaries?* | this layer, lexically |
+| `ResolutionStatus.AMBIGUOUS` | *Which entity does this established token denote?* | Step 7A, from evidence |
+
+Collapsing them would let a caller treat an unreadable label as a readable one
+with an undecided ingredient.
+
+### What is unambiguous
+
+A locant run is accepted when its start is accounted for:
+
+- it **begins the current entry**, leading whitespace aside — `Water, 1,3-Butanediol, Glycerin`, where the entry is only `" 1"` when the comma arrives, so there is no competing reading;
+- it is **bound by a hyphen** — `Benzene-1,2,4-Tricarboxylic Acid`;
+- it **continues a run already accepted** — the second comma of `1,1,1-`.
 
 ## 7. No substring, prefix or fuzzy matching
 
