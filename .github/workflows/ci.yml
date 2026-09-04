@@ -585,78 +585,60 @@ jobs:
       # ---------------------------------------------------------------------
       # TEMPORARY (hotfix/util-linux-container-cves-2026-09-04).
       #
-      # Evidence collection for the four util-linux CVEs of 2026-09-04. Reads
-      # the exact image that is about to be scanned; every command runs in a
-      # `--rm` container, so the artifact handed to Trivy is untouched. Remove
-      # this whole step once the exception records are written.
+      # Second evidence pass. The first pass answered everything except two
+      # questions, and both are load-bearing for the exception records:
+      #
+      #   * file capabilities -- getcap is absent (no libcap2-bin), so the
+      #     first pass could not enumerate them. Python is present, so the
+      #     security.capability xattr is read directly instead.
+      #   * the binaries' own upstream version self-report, which is what the
+      #     CVE-2026-78409 version-boundary conclusion rests on. Package
+      #     metadata says 2.41.5; this asks the binary itself.
+      #
+      # Every command runs in a `--rm` container, so the artifact handed to
+      # Trivy is untouched. Removed once the exception records are written.
       # ---------------------------------------------------------------------
-      - name: TEMP util-linux CVE evidence
+      - name: TEMP util-linux CVE evidence (pass 2)
         run: |
           set -x
-          run()      { docker run --rm            glamgenius-backend:ci bash -c "$1"; }
-          run_root() { docker run --rm --user 0   glamgenius-backend:ci bash -c "$1"; }
+          echo "=============== A. FILE CAPABILITIES (getcap is unavailable) ==============="
+          docker run --rm --user 0 glamgenius-backend:ci python3 - <<'PY'
+          import os
+          targets = ["/usr/bin/mount", "/usr/bin/umount", "/usr/bin/nsenter",
+                     "/bin/mount", "/bin/umount", "/bin/nsenter"]
+          for path in targets:
+              if not os.path.exists(path):
+                  print(f"{path}: ABSENT")
+                  continue
+              try:
+                  attrs = os.listxattr(path)
+              except OSError as exc:
+                  print(f"{path}: listxattr failed: {exc}")
+                  continue
+              cap = os.getxattr(path, "security.capability").hex() if "security.capability" in attrs else None
+              print(f"{path}: xattrs={list(attrs)} security.capability={cap or 'NONE'}")
+          print("--- whole-filesystem sweep for security.capability ---")
+          found = 0
+          for root, dirs, files in os.walk("/", onerror=lambda e: None):
+              if root.startswith(("/proc", "/sys", "/dev")):
+                  dirs[:] = []
+                  continue
+              for name in files:
+                  full = os.path.join(root, name)
+                  try:
+                      if "security.capability" in os.listxattr(full):
+                          print("CAPABILITY:", full, os.getxattr(full, "security.capability").hex())
+                          found += 1
+                  except OSError:
+                      pass
+          print(f"total files carrying security.capability: {found}")
+          PY
 
-          echo "=============== 1. DEBIAN RELEASE ==============="
-          run 'cat /etc/os-release; echo "--- debian_version:"; cat /etc/debian_version; echo "--- arch:"; dpkg --print-architecture'
-
-          echo "=============== 2. UTIL-LINUX BINARY PACKAGES ==============="
-          echo "--- every installed binary package built from the util-linux SOURCE package:"
-          run "dpkg-query -W -f='\${source:Package}|\${binary:Package}|\${Version}|\${source:Version}|\${Essential}\n' | awk -F'|' '\$1==\"util-linux\"'" || true
-          echo "--- explicitly named in the Trivy rows:"
-          run "for p in bsdutils libblkid1 liblastlog2-2 libmount1 libsmartcols1 libuuid1 login mount util-linux; do printf '%-16s ' \"\$p\"; dpkg-query -W -f='\${Version} src=\${source:Package}/\${source:Version} essential=\${Essential}\n' \"\$p\" 2>/dev/null || echo 'NOT INSTALLED'; done" || true
-
-          echo "=============== 3. RUNTIME IDENTITY (default user) ==============="
-          run 'id; echo "uid=$(id -u)"; echo "gid=$(id -g)"; echo "--- passwd entry:"; getent passwd "$(id -u)"'
-
-          echo "=============== 4. /etc/fstab ==============="
-          run 'if [ -e /etc/fstab ]; then echo "EXISTS"; ls -l /etc/fstab; echo "--- verbatim contents between markers:"; echo "<<<BEGIN"; cat /etc/fstab; echo "END>>>"; else echo "/etc/fstab DOES NOT EXIST"; fi'
-          echo "--- option-field analysis (real mount options only, not substring matches):"
-          run 'if [ -e /etc/fstab ]; then
-                 awk "!/^[[:space:]]*#/ && NF>=4 {print \$4}" /etc/fstab \
-                 | tr "," "\n" | sed "s/=.*//" | sort -u > /tmp/opts || true
-                 echo \"distinct option keys in field 4: [$(tr "\n" " " < /tmp/opts)]\"
-                 for t in user users bind rbind X-mount.idmap X-mount.owner X-mount.group X-mount.mode X-mount.subdir; do
-                   if grep -qxF "$t" /tmp/opts 2>/dev/null; then echo "PRESENT as option: $t"; else echo "absent as option: $t"; fi
-                 done
-                 echo "--- non-comment entry count:"; awk "!/^[[:space:]]*#/ && NF>0" /etc/fstab | wc -l
-               else echo "no /etc/fstab: no entry can authorise any unprivileged mount"; fi'
-
-          echo "=============== 5. mount / umount / nsenter ==============="
-          run 'for b in mount umount nsenter; do
-                 echo "--- $b"
-                 p="$(command -v "$b" 2>/dev/null || true)"
-                 echo "command -v: ${p:-<not on PATH>}"
-                 for cand in "/bin/$b" "/usr/bin/$b" "/sbin/$b" "/usr/sbin/$b"; do
-                   [ -e "$cand" ] && stat -c "  %n mode=%A octal=%a owner=%U:%G size=%s" "$cand"
-                 done || true
-               done; true'
-          echo "--- SUID/SGID sweep of the whole filesystem:"
-          run_root 'find / -xdev -type f -perm /6000 -exec stat -c "%n mode=%A octal=%a owner=%U:%G" {} \; 2>/dev/null || echo "(none found)"'
-          echo "--- file capabilities:"
-          run_root 'if command -v getcap >/dev/null 2>&1; then getcap -r / 2>/dev/null || echo "(getcap returned nothing)"; else echo "getcap NOT AVAILABLE (libcap2-bin not installed); falling back to per-file check"; fi'
-          run_root 'if command -v getcap >/dev/null 2>&1; then for b in /bin/mount /usr/bin/mount /bin/umount /usr/bin/umount /bin/nsenter /usr/bin/nsenter; do [ -e "$b" ] && { printf "%s: " "$b"; getcap "$b" || echo "(no capabilities)"; }; done; else echo "skipped"; fi; true'
-
-          echo "=============== 6. EXTERNAL mount.<type> HELPERS ==============="
-          run 'ls -la /sbin/mount.* /usr/sbin/mount.* /bin/mount.* /usr/bin/mount.* 2>/dev/null || echo "NO external mount helpers present"'
-          run 'ls -la /sbin/umount.* /usr/sbin/umount.* 2>/dev/null || echo "NO external umount helpers present"'
-
-          echo "=============== 7. INIT / LOGIN / SYSTEMD POSTURE ==============="
-          run 'echo "--- PID 1 in a normal container run:"; ps -p 1 -o pid,user,args 2>/dev/null || cat /proc/1/cmdline | tr "\0" " "; echo'
-          run 'for f in /usr/lib/systemd/systemd /lib/systemd/systemd /usr/bin/systemctl /bin/systemctl /usr/bin/loginctl /usr/lib/systemd/systemd-logind; do if [ -e "$f" ]; then echo "PRESENT: $f"; else echo "absent:  $f"; fi; done'
-          run 'echo "--- running systemd units:"; if [ -d /run/systemd/system ]; then echo "/run/systemd/system EXISTS (systemd booted)"; else echo "/run/systemd/system absent: systemd is not the init system"; fi'
-          run 'echo "--- login shells available to the runtime account:"; getent passwd 10001; echo "--- interactive login binaries:"; for f in /bin/login /usr/bin/login /usr/bin/su /bin/su /usr/bin/newgrp; do [ -e "$f" ] && stat -c "PRESENT %n mode=%A octal=%a" "$f" || echo "absent: $f"; done; true'
-
-          echo "=============== 8. LIVE DEBIAN TRIXIE CANDIDATE (ephemeral root container) ==============="
-          run_root 'apt-get update -qq >/dev/null 2>&1 || apt-get update; echo "--- apt-cache policy util-linux:"; apt-cache policy util-linux; echo "--- candidates for every util-linux binary package:"; for p in bsdutils libblkid1 liblastlog2-2 libmount1 libsmartcols1 libuuid1 login mount util-linux; do echo "### $p"; apt-cache policy "$p" 2>/dev/null | sed -n "1,4p"; done'
-          echo "--- is any newer util-linux visible at all (including non-default suites)?"
-          run_root 'apt-get update -qq >/dev/null 2>&1 || true; apt-cache madison util-linux 2>/dev/null || echo "madison unavailable"'
-
-          echo "=============== 9. SAFE REMOVAL SIMULATION (no actual removal) ==============="
-          run_root 'echo "--- Essential flags:"; dpkg-query -W -f="\${Package} essential=\${Essential} priority=\${Priority}\n" bsdutils libblkid1 liblastlog2-2 libmount1 libsmartcols1 libuuid1 login mount util-linux 2>/dev/null || true'
-          run_root 'for p in util-linux mount login libsmartcols1 liblastlog2-2; do echo "########## simulate remove $p"; apt-get -s remove "$p" 2>&1 | tail -25; done; true'
-          run_root 'echo "--- reverse dependencies of util-linux:"; apt-cache rdepends --installed util-linux 2>/dev/null | head -40; echo "--- what depends on libuuid1:"; apt-cache rdepends --installed libuuid1 2>/dev/null | head -40'
-
-          echo "=============== EVIDENCE COMPLETE ==============="
+          echo "=============== B. BINARY SELF-REPORTED UPSTREAM VERSION ==============="
+          docker run --rm glamgenius-backend:ci bash -c 'for b in mount umount nsenter; do printf "%-8s " "$b"; "$b" --version 2>&1 | head -1; done'
+          echo "--- which package owns each binary, and what else that package ships:"
+          docker run --rm glamgenius-backend:ci bash -c 'for b in /usr/bin/mount /usr/bin/umount /usr/bin/nsenter; do printf "%-20s owned by: " "$b"; dpkg -S "$b" 2>/dev/null || echo "(unowned)"; done'
+          docker run --rm glamgenius-backend:ci bash -c 'echo "--- contents of the mount package:"; dpkg -L mount | grep -E "^/(usr/)?s?bin/" || true'
 
       - name: Save image for downstream jobs
         run: docker save glamgenius-backend:ci | gzip > /tmp/glamgenius-backend-ci.tar.gz
