@@ -252,11 +252,152 @@ function validateFalsePositiveRegistry(registry) {
   return registry.false_positives;
 }
 
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+//: Yarn Classic emits one counter per severity in every auditSummary. All five
+//: are required: a summary missing them is not the record Yarn writes at the
+//: end of a real audit, and since that record is now our only proof the scan
+//: finished, a loose shape check would let a fabricated or truncated object
+//: stand in for that proof.
+const SUMMARY_SEVERITIES = ["info", "low", "moderate", "high", "critical"];
+
+function isCount(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Is this record the marker that the audit ran to completion?
+ *
+ * Yarn emits exactly one `auditSummary` at the end of a successful audit, so
+ * its presence is the only evidence we get that the scanner finished rather
+ * than dying partway through. Advisory records are NOT such evidence: an audit
+ * that emits two advisories and then loses its connection looks, to anyone
+ * counting records, exactly like an audit that found two advisories and
+ * stopped because there were no more.
+ *
+ * That distinction is the whole point. If the advisories received before a
+ * crash happen to be ones already governed by an exception, accepting a
+ * summary-less stream would report PASS on a scan that never completed --
+ * silently clearing every dependency the scanner never got to.
+ *
+ * Because the marker carries that weight, its shape is checked strictly: every
+ * canonical severity counter must be present and be a non-negative integer.
+ * `Number.isInteger` also rejects `NaN` and both infinities, so fractional,
+ * negative, string, boolean, null and missing counters all fail here.
+ * Non-security fields Yarn may add alongside `vulnerabilities` are left alone.
+ */
+function auditSummaryIsValid(record) {
+  if (!record || record.type !== "auditSummary") return false;
+  if (!isPlainObject(record.data)) return false;
+  const counts = record.data.vulnerabilities;
+  if (!isPlainObject(counts)) return false;
+  return SUMMARY_SEVERITIES.every((severity) => isCount(counts[severity]));
+}
+
+/**
+ * What kind of audit record is this? `"advisory"`, `"summary"`, or `null`.
+ *
+ * Exported so the retry runner does not maintain a competing interpretation of
+ * Yarn's output. It classifies; it never judges. Severity, exceptions, false
+ * positives and expiry all stay here, in the authority.
+ */
+function classifyAuditRecord(record) {
+  if (record && record.type === "auditAdvisory") return "advisory";
+  if (auditSummaryIsValid(record)) return "summary";
+  return null;
+}
+
+/**
+ * Does this stream show an audit that ran to completion?
+ *
+ * Three things, all of which the runner and the validator must agree on:
+ * exactly one valid summary, and it is the last thing in the stream. Yarn
+ * writes the summary when it has finished, so anything after it means the
+ * output is not the tidy end-of-audit stream it appears to be -- a second
+ * audit's records bleeding in, a truncated concatenation, or a stream that
+ * carried on past the point we thought it stopped. Rather than guess which,
+ * refuse it.
+ *
+ * Parsing is lenient about unparseable noise, because Yarn writes progress
+ * chatter that is not our business; the validator is stricter and rejects it
+ * outright. Both directions of that disagreement are safe: the runner may
+ * retry something the validator would reject, never the reverse.
+ */
+//: The only severities whose absence of detail we can act on. A count above
+//: zero for either one is a claim the gate must be able to check.
+const SUBSTANTIATED_SEVERITIES = ["high", "critical"];
+
+/**
+ * Which severities does this summary claim without any advisory to back them?
+ *
+ * One definition, used twice: by `auditStreamCompletion` against a single raw
+ * Yarn attempt, and by the validator against the stream it is finally handed.
+ * Never a count comparison -- Yarn counts vulnerable paths and one advisory can
+ * cover several, so equality would fail honest audits. Only presence.
+ */
+function severitiesLackingDetail(summary, observedSeverities) {
+  const counts = summary.data.vulnerabilities;
+  return SUBSTANTIATED_SEVERITIES.filter(
+    (severity) => counts[severity] > 0 && !observedSeverities.has(severity),
+  );
+}
+
+function auditStreamCompletion(auditText) {
+  if (typeof auditText !== "string" || !auditText.trim()) {
+    return { complete: false, reason: "no output" };
+  }
+  let summaries = 0;
+  let summaryAt = -1;
+  let lastContentAt = -1;
+  let summary = null;
+  const observed = new Set();
+  for (const [index, line] of auditText.split(/\r?\n/).entries()) {
+    if (!line.trim()) continue;
+    lastContentAt = index;
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (auditSummaryIsValid(record)) {
+      summaries += 1;
+      summaryAt = index;
+      summary = record;
+    } else if (classifyAuditRecord(record) === "advisory") {
+      const severity = record.data && record.data.advisory && record.data.advisory.severity;
+      if (severity) observed.add(severity);
+    }
+  }
+  if (summaries === 0) return { complete: false, reason: "no valid auditSummary" };
+  if (summaries > 1) return { complete: false, reason: `${summaries} auditSummary records` };
+  if (summaryAt !== lastContentAt) {
+    return { complete: false, reason: "auditSummary is not the final record" };
+  }
+  // Substance, judged strictly within this one raw attempt. An attempt whose
+  // summary counts a HIGH but which never emitted a HIGH advisory did not
+  // finish coherently, whatever some *other* attempt happened to report.
+  const unsubstantiated = severitiesLackingDetail(summary, observed);
+  if (unsubstantiated.length) {
+    return {
+      complete: false,
+      reason: `summary counts ${unsubstantiated.join(" and ")} with no matching advisory in this attempt`,
+    };
+  }
+  return { complete: true, reason: "complete" };
+}
+
 function parseAuditText(auditText) {
   if (typeof auditText !== "string" || !auditText.trim()) {
     fail("Audit output is empty");
   }
   const records = [];
+  let summaries = 0;
+  let summary = null;
+  let summaryOrdinal = -1;
+  let ordinal = 0;
   for (const [lineNumber, line] of auditText.split(/\r?\n/).entries()) {
     if (!line.trim()) continue;
     let record;
@@ -265,18 +406,81 @@ function parseAuditText(auditText) {
     } catch (error) {
       fail(`Audit output line ${lineNumber + 1} is not valid JSON: ${error.message}`);
     }
+    ordinal += 1;
     if (record && record.type === "auditAdvisory") {
       if (!record.data || !record.data.advisory) {
         fail(`Audit advisory line ${lineNumber + 1} is missing advisory data`);
       }
       records.push(record.data);
     } else if (record && record.type === "auditSummary") {
-      continue;
+      if (!auditSummaryIsValid(record)) {
+        fail(`Audit summary line ${lineNumber + 1} is missing vulnerability data`);
+      }
+      summaries += 1;
+      summary = record;
+      summaryOrdinal = ordinal;
     } else {
       fail(`Audit output line ${lineNumber + 1} has unsupported record type`);
     }
   }
-  return records;
+  // Completeness is checked here, in the authority, and not only in the runner
+  // that feeds it: these scripts can be invoked independently, CI wiring drifts,
+  // and the last retry attempt can still hand over a partial stream. A gate that
+  // trusts its caller to have validated its input is not a gate.
+  if (summaries === 0) {
+    fail(
+      "Audit output contains no auditSummary: the scan did not run to completion, " +
+        "so its advisories cannot clear the dependency tree",
+    );
+  }
+  if (summaries > 1) {
+    fail(`Audit output contains ${summaries} auditSummary records; expected exactly one`);
+  }
+  // Yarn writes the summary last. Records after it mean this is not one tidy
+  // end-of-audit stream, and we cannot tell which part is the finished audit.
+  if (summaryOrdinal !== ordinal) {
+    fail(
+      "Audit output continues after its auditSummary: the summary must be the " +
+        "final record, so this stream cannot be read as one completed audit",
+    );
+  }
+  return { records, summary };
+}
+
+/**
+ * If the summary counts a HIGH or CRITICAL, the detail for it must be here.
+ *
+ * The summary is itself scanner evidence. When Yarn says a HIGH exists but no
+ * advisory record for one arrived, the gate has been told a vulnerability is
+ * present and handed nothing to identify it with -- no advisory id, package,
+ * version or path, so no way to match it against an exception or a false
+ * positive. There is no honest verdict available: clearing it would be
+ * clearing something we cannot name. Fail closed.
+ *
+ * Only that one direction is enforced. The reverse -- a summary counting zero
+ * while an advisory is present -- is legitimate and must keep working: a HIGH
+ * carried forward from an earlier incomplete attempt sits alongside a later
+ * clean summary that never saw it, and that carried finding still has to be
+ * evaluated on its merits. Discarding it because the final count says zero
+ * would re-open exactly the hole the sticky evidence closed.
+ *
+ * Counts are never compared numerically against the number of advisory
+ * records. Yarn counts vulnerable paths, one advisory can cover several, and a
+ * naive equality rule would fail honest audits.
+ */
+function assertSummaryDetailIsPresent(summary, records) {
+  const observed = new Set(
+    records.map((record) => record.advisory && record.advisory.severity),
+  );
+  for (const severity of severitiesLackingDetail(summary, observed)) {
+    fail(
+      `Audit summary reports ${summary.data.vulnerabilities[severity]} ` +
+        `${severity.toUpperCase()} vulnerability/ies but the stream carries no ` +
+        `${severity.toUpperCase()} advisory record: without an advisory id, ` +
+        "package, version and paths the gate cannot match it against any " +
+        "exception, so it cannot clear it",
+    );
+  }
 }
 
 function collectHighAndCritical(records) {
@@ -360,8 +564,9 @@ function validateAuditText(auditText, registry, falsePositiveRegistryOrOptions =
   const exceptions = validateRegistry(registry);
   const { falsePositiveRegistry, options } = resolveValidationInputs(falsePositiveRegistryOrOptions, maybeOptions);
   const falsePositives = validateFalsePositiveRegistry(falsePositiveRegistry);
-  const records = parseAuditText(auditText);
+  const { records, summary } = parseAuditText(auditText);
   const findings = collectHighAndCritical(records);
+  assertSummaryDetailIsPresent(summary, records);
   const today = options.today || new Date().toISOString().slice(0, 10);
   parseDate(today, "today");
   const accepted = [];
@@ -466,6 +671,9 @@ function main(argv) {
 if (require.main === module) main(process.argv);
 
 module.exports = {
+  auditStreamCompletion,
+  auditSummaryIsValid,
+  classifyAuditRecord,
   formatPass,
   parseAuditText,
   validateAuditText,

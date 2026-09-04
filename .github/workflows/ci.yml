@@ -366,15 +366,22 @@ jobs:
           EXPO_PUBLIC_SUPABASE_URL: https://ci-project.supabase.co
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ci-anon-key-not-a-real-one
         run: npx expo export --platform web
+      - name: Node audit gate tests (dependency PR)
+        # The gate's own tests belong on the path that can change it. Without
+        # this, a PR could alter the validator or the audit runner and only be
+        # caught after merge, by the push-only job.
+        if: github.event_name == 'pull_request' && needs.scope.outputs.node_deps == 'true'
+        run: node --test security/validate-node-audit.test.js security/run-node-audit.test.js
       - name: Node dependency audit (dependency PR)
         if: github.event_name == 'pull_request' && needs.scope.outputs.node_deps == 'true'
         working-directory: frontend
         run: |
-          set +e
-          yarn audit --level high --json > /tmp/yarn-audit.json
-          code=$?
-          echo "yarn audit exit code = $code (bitmask: 1=info,2=low,4=moderate,8=high,16=critical)"
-          set -e
+          # run-node-audit.js retries an audit that did not run to completion --
+          # only a valid auditSummary establishes completion -- and carries any
+          # advisory seen on an incomplete attempt forward, so retries can
+          # recover completeness but never erase a finding. The validator below
+          # remains the sole pass/fail authority.
+          node ../security/run-node-audit.js /tmp/yarn-audit.json
           node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json ../security/node-audit-false-positives.json
 
   # ---- Mobile: Android bundle validation (blocking) ------------------------
@@ -511,16 +518,18 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Node audit validator tests
-        run: node --test security/validate-node-audit.test.js
+        run: node --test security/validate-node-audit.test.js security/run-node-audit.test.js
       - name: yarn audit and strict exception validation
         working-directory: frontend
         run: |
-          set +e
-          yarn audit --level high --json > /tmp/yarn-audit.json
-          code=$?
-          echo "yarn audit exit code = $code (bitmask: 1=info,2=low,4=moderate,8=high,16=critical)"
-          # The validator below, rather than Yarn's bitmask, decides the gate.
-          set -e
+          # run-node-audit.js retries an audit that did not run to completion and
+          # never decides pass or fail. Completion means a valid auditSummary;
+          # advisory records alone do not prove the scan finished. Advisories
+          # observed on incomplete attempts are carried forward, so retries
+          # recover completeness without erasing evidence. The validator below,
+          # rather than Yarn's exit bitmask, remains the gate: if no attempt
+          # completed, the output has no summary and it fails closed.
+          node ../security/run-node-audit.js /tmp/yarn-audit.json
           node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json ../security/node-audit-false-positives.json
       - name: Upload yarn-audit report
         if: failure()

@@ -4,7 +4,7 @@ const test = require("node:test");
 
 const {
   formatPass,
-  validateAuditText,
+  validateAuditText: rawValidateAuditText,
   validateFalsePositiveRegistry,
   validateRegistry,
 } = require("./validate-node-audit");
@@ -41,11 +41,32 @@ function auditAdvisory({
   });
 }
 
-function cleanAudit() {
+function cleanAudit(overrides = {}) {
   return JSON.stringify({
     type: "auditSummary",
-    data: { vulnerabilities: { high: 0, critical: 0 } },
+    data: {
+      // All five canonical counters, as Yarn Classic actually emits them.
+      vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0, ...overrides },
+      dependencies: 1200,
+    },
   });
+}
+
+/** A summary claiming findings, for the "counts but no detail" contradiction. */
+function summaryClaiming(overrides) {
+  return cleanAudit(overrides);
+}
+
+// Every test that passes advisory text is about advisory *content*, and a real
+// audit always ends with a summary record. Fixtures therefore get one appended
+// so those tests exercise the content rules rather than tripping over the
+// completeness rule. Completeness has its own tests, at the bottom of this
+// file, which call the validator directly with no summary added.
+function validateAuditText(auditText, ...rest) {
+  const text = auditText.includes('"auditSummary"')
+    ? auditText
+    : `${auditText}\n${cleanAudit()}`;
+  return rawValidateAuditText(text, ...rest);
 }
 
 function nanoidAudit(overrides = {}) {
@@ -331,5 +352,250 @@ test("missing HIGH audit path evidence fails closed", () => {
       } },
     }), registry, falsePositiveRegistry, { today: "2026-08-16" }),
     /without dependency paths/,
+  );
+});
+
+
+// ---- audit completeness: the scan must prove it finished --------------------
+//
+// These call the validator directly, with no summary appended, because the
+// absence of a summary is exactly what is under test.
+
+test("an audit with no auditSummary fails closed", () => {
+  assert.throws(
+    () => rawValidateAuditText(cleanAudit().replace("auditSummary", "auditAdvisory"), registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /missing advisory data/,
+  );
+});
+
+test("C: a governed advisory WITHOUT a summary fails as an incomplete audit", () => {
+  // The defect. These advisories are individually acceptable, so before the
+  // completeness rule this partial stream reported PASS -- clearing every
+  // dependency the crashed scan never reached.
+  const audit = auditAdvisory({
+    advisoryId: approved.advisory_id,
+    cve: approved.cve,
+    packageName: approved.package,
+    version: approved.installed_version,
+    paths: approved.dependency_paths,
+  });
+  assert.throws(
+    () => rawValidateAuditText(audit, registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /did not run to completion/,
+  );
+});
+
+test("D: a false-positive advisory WITHOUT a summary fails as an incomplete audit", () => {
+  assert.throws(
+    () => rawValidateAuditText(nanoidAudit(), registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /did not run to completion/,
+  );
+});
+
+test("E: the full known partial stream WITHOUT a summary must not pass", () => {
+  const audit = [
+    auditAdvisory({
+      advisoryId: approved.advisory_id,
+      cve: approved.cve,
+      packageName: approved.package,
+      version: approved.installed_version,
+      paths: approved.dependency_paths,
+    }),
+    nanoidAudit(),
+  ].join("\n");
+  assert.throws(
+    () => rawValidateAuditText(audit, registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /did not run to completion/,
+  );
+});
+
+test("F: an unknown HIGH WITHOUT a summary fails, and for incompleteness", () => {
+  assert.throws(
+    () => rawValidateAuditText(auditAdvisory({
+      advisoryId: "GHSA-unknown-partial", cve: "CVE-2099-0031",
+      packageName: "other-package", version: "1.0.0",
+    }), registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /did not run to completion/,
+  );
+});
+
+test("A: a summary alone with no findings passes", () => {
+  const result = rawValidateAuditText(cleanAudit(), registry, falsePositiveRegistry, { today: "2026-08-16" });
+  assert.equal(result.findings.length, 0);
+  assert.match(formatPass(result), /Unaccepted HIGH: 0/);
+});
+
+test("B: governed advisories plus a summary are evaluated normally", () => {
+  const audit = [
+    auditAdvisory({
+      advisoryId: approved.advisory_id,
+      cve: approved.cve,
+      packageName: approved.package,
+      version: approved.installed_version,
+      paths: approved.dependency_paths,
+    }),
+    nanoidAudit(),
+    cleanAudit(),
+  ].join("\n");
+  const result = rawValidateAuditText(audit, registry, falsePositiveRegistry, { today: "2026-08-16" });
+  assert.deepEqual(
+    result.acceptedExceptions.map((exception) => exception.advisory_id),
+    [approved.advisory_id],
+  );
+  assert.equal(result.falsePositiveFindings.length, 1);
+});
+
+test("H: a completed unaccepted HIGH still fails on the finding, not on completeness", () => {
+  assert.throws(
+    () => rawValidateAuditText([
+      auditAdvisory({
+        advisoryId: "GHSA-unknown-complete", cve: "CVE-2099-0032",
+        packageName: "other-package", version: "1.0.0",
+      }),
+      cleanAudit(),
+    ].join("\n"), registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /Unaccepted HIGH advisory GHSA-unknown-complete/,
+  );
+});
+
+test("a malformed summary is rejected rather than counted as completion", () => {
+  for (const data of [null, "summary", [], { vulnerabilities: null }, { vulnerabilities: [] }, {}]) {
+    assert.throws(
+      () => rawValidateAuditText(JSON.stringify({ type: "auditSummary", data }), registry, falsePositiveRegistry, { today: "2026-08-16" }),
+      /missing vulnerability data/,
+    );
+  }
+});
+
+test("more than one auditSummary is rejected", () => {
+  assert.throws(
+    () => rawValidateAuditText(`${cleanAudit()}\n${cleanAudit()}`, registry, falsePositiveRegistry, { today: "2026-08-16" }),
+    /expected exactly one/,
+  );
+});
+
+
+// ---- summary integrity: the completion marker must be worth trusting -------
+
+const CANONICAL = ["info", "low", "moderate", "high", "critical"];
+
+function summaryWith(vulnerabilities) {
+  return JSON.stringify({ type: "auditSummary", data: { vulnerabilities } });
+}
+
+function gate(text) {
+  return rawValidateAuditText(text, registry, falsePositiveRegistry, { today: "2026-08-16" });
+}
+
+test("A: an empty vulnerabilities object is not a valid summary", () => {
+  assert.throws(() => gate(summaryWith({})), /missing vulnerability data/);
+});
+
+test("B: a summary missing any one canonical severity is rejected", () => {
+  for (const omitted of CANONICAL) {
+    const counts = {};
+    for (const severity of CANONICAL) if (severity !== omitted) counts[severity] = 0;
+    assert.throws(
+      () => gate(summaryWith(counts)),
+      /missing vulnerability data/,
+      `omitting ${omitted} should be rejected`,
+    );
+  }
+});
+
+test("C/D/E/F: non-integer, negative, null and stringly counters are rejected", () => {
+  const bad = ["1", null, -1, 1.5, true, [], {}, NaN, Infinity, undefined];
+  for (const value of bad) {
+    const counts = { info: 0, low: 0, moderate: 0, high: 0, critical: 0, high: value };
+    assert.throws(
+      () => gate(summaryWith({ ...counts, high: value })),
+      /missing vulnerability data/,
+      `high=${String(value)} should be rejected`,
+    );
+    assert.throws(
+      () => gate(summaryWith({ info: 0, low: 0, moderate: 0, high: 0, critical: value })),
+      /missing vulnerability data/,
+      `critical=${String(value)} should be rejected`,
+    );
+  }
+});
+
+test("a well-formed summary with non-zero counts and matching detail is accepted", () => {
+  // Guards against over-tightening: real audits do report non-zero counts.
+  const audit = [
+    auditAdvisory({
+      advisoryId: approved.advisory_id,
+      cve: approved.cve,
+      packageName: approved.package,
+      version: approved.installed_version,
+      paths: approved.dependency_paths,
+    }),
+    cleanAudit({ high: 2 }),
+  ].join("\n");
+  assert.equal(gate(audit).acceptedExceptions.length, 1);
+});
+
+test("G: a summary counting a HIGH with no HIGH advisory detail fails closed", () => {
+  assert.throws(
+    () => gate(summaryClaiming({ high: 1 })),
+    /reports 1 HIGH .* no HIGH advisory record/s,
+  );
+});
+
+test("H: a summary counting a CRITICAL with no CRITICAL advisory detail fails closed", () => {
+  assert.throws(
+    () => gate(summaryClaiming({ critical: 1 })),
+    /reports 1 CRITICAL .* no CRITICAL advisory record/s,
+  );
+});
+
+test("a HIGH count is not satisfied by a CRITICAL advisory, or vice versa", () => {
+  const high = auditAdvisory({
+    advisoryId: approved.advisory_id, cve: approved.cve, packageName: approved.package,
+    version: approved.installed_version, paths: approved.dependency_paths,
+  });
+  assert.throws(() => gate(`${high}\n${cleanAudit({ high: 1, critical: 1 })}`), /no CRITICAL advisory record/s);
+});
+
+test("I: a summary followed by an advisory is not a completed stream", () => {
+  const audit = [
+    cleanAudit(),
+    auditAdvisory({
+      advisoryId: approved.advisory_id, cve: approved.cve, packageName: approved.package,
+      version: approved.installed_version, paths: approved.dependency_paths,
+    }),
+  ].join("\n");
+  assert.throws(() => gate(audit), /continues after its auditSummary/);
+});
+
+test("J: a summary followed by an info record is not a completed clean audit", () => {
+  const info = JSON.stringify({ type: "info", data: "done" });
+  // The unsupported-record rule catches this one first; either way it is refused
+  // and never read as a clean finished audit.
+  assert.throws(() => gate(`${cleanAudit()}\n${info}`), /unsupported record type/);
+});
+
+test("the sticky asymmetry survives: zero counts do not discard a carried finding", () => {
+  // A HIGH carried from an earlier incomplete attempt, alongside a later clean
+  // summary that never saw it. The finding must still be judged, not dropped.
+  const carried = auditAdvisory({
+    advisoryId: "GHSA-carried-high", cve: "CVE-2099-0044",
+    packageName: "other-package", version: "1.0.0",
+  });
+  assert.throws(
+    () => gate(`${carried}\n${cleanAudit()}`),
+    /Unaccepted HIGH advisory GHSA-carried-high/,
+  );
+});
+
+test("a carried governed finding with a zero-count summary is still governed normally", () => {
+  const carried = auditAdvisory({
+    advisoryId: approved.advisory_id, cve: approved.cve, packageName: approved.package,
+    version: approved.installed_version, paths: approved.dependency_paths,
+  });
+  const result = gate(`${carried}\n${cleanAudit()}`);
+  assert.deepEqual(
+    result.acceptedExceptions.map((e) => e.advisory_id),
+    [approved.advisory_id],
   );
 });
