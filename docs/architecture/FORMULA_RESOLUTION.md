@@ -40,10 +40,11 @@ containing niacinamide; whether the product *does* anything is a different
 question, needs its own evidence with its own applicability, and belongs to a
 later milestone.
 
-## 3. Only a top-level comma is a V1 delimiter
+## 3. Only a top-level comma is a V1 delimiter — and not every one of those
 
 Comma is the ordinary ingredient-list separator and the only character explicit
-enough to act on. Every other candidate was considered and rejected, because
+enough to act on. A top-level comma is a delimiter *unless* it sits inside a
+chemical locant, which §6 describes. Every other candidate was considered and rejected, because
 each occurs *inside* real INCI names:
 
 | Rejected | Because it appears inside |
@@ -100,25 +101,68 @@ entry would renumber every position after it.
 Every non-`PARSED` status returns **zero** entries. There is no partial success,
 and nothing is ever truncated to fit.
 
-### Known limitation: a locant comma splits
+### Locant commas are part of the name
 
-`1,3-Butanediol` prints a comma that is not inside any bracket, so the V1 rule
-cannot tell it from the comma between two ingredients. It becomes `1` and
-`3-Butanediol`.
+`1,3-Butanediol` prints a comma that no bracket protects. Treating it as a
+delimiter is not a miscount, it is destruction: the token never reaches the
+identity layer, so **no reviewed identity claim can rescue it** — the name it
+would match no longer exists by the time resolution runs. Worse, the fragments
+left behind (`1`, `3-Butanediol`) are not permanently inert; they would begin
+resolving the moment anybody published a canonical name matching one, turning a
+parsing defect into confident false-positive ingredients.
 
-This is accepted for V1, and three things make it the safe failure:
+So the scanner recognises the *punctuation shape* of a locant run:
 
-- Neither fragment resolves, so **no wrong identity is ever produced** — the
-  outcome is `UNRESOLVED`, which is this layer's honest answer.
-- The alternative is worse. Recognising `digit,digit-` as "inside a name" is
-  exactly the pattern-guessing the parser refuses everywhere else, and it would
-  mis-split the day a list legitimately prints `Titanium Dioxide, 1,3-Butanediol`.
-- The real fix is a reviewed identity claim recording the exact printed form,
-  not a cleverer parser.
+```
+locant_run  := atom ( ',' atom )+ '-' name_char
+atom        := ( digit+ | heteroatom ) prime*
+digit       := 0-9
+heteroatom  := N | O | S | P
+prime       := ' | ′
+name_char   := any alphanumeric
+```
 
-What it costs: the entry count, and every `position` after it, shift. A consumer
-must therefore never treat `position` as authoritative pack order — which it
-already must not, for the separate reason in §10.
+preceded by the start of the entry, whitespace, an opening bracket, a hyphen, or
+the previous comma of the same run.
+
+Each clause earns its place:
+
+| Clause | What it prevents |
+| --- | --- |
+| trailing `-` + name character | `CI 77491,CI 77492` merging — after `CI` comes `I`, not a hyphen |
+| leading boundary | `Vitamin B3,2,6-Di-t-Butyl-4-Methylphenol` merging — the `3` of `B3` follows a letter, so it is not a free-standing locant |
+| no whitespace inside a run | `Aqua, 1, 2, Glycerin` merging — that is an ordinary list |
+
+The comma is kept **verbatim**: `raw_name` is identical to what was printed,
+never stripped, rewritten or normalised here.
+
+**This is lexical analysis, not identification.** It asks whether a comma sits
+inside a locant-shaped run of punctuation — never whether the surrounding text
+names a real substance. There is no dictionary, no database, no Step 7A lookup
+and no network in this decision, and a test asserts as much.
+
+That separation is the invariant, and it is worth stating flatly: **knowledge
+may decide what a token denotes; knowledge must never decide retroactively where
+the printed token boundaries were.** If Step 7A were consulted while parsing,
+publishing or retiring one canonical name would silently re-tokenise every
+formula, and the same printed list would mean different things on different
+days. A test publishes identities and asserts tokenisation does not move.
+
+### The one shape that stays ambiguous
+
+`Acid Red 1,N-Methylpyrrolidone` — a name ending in a bare digit, an immediate
+comma with no space, then a locant-shaped start — is character-for-character
+identical to a locant run. No punctuation analysis can separate the two; doing
+so would need exactly the dictionary lookup this parser must not perform.
+
+It is recorded rather than hidden, and it is strictly narrower and safer than
+the defect it replaced:
+
+- It fails by **merging**, so the result is one token that resolves to nothing.
+  `UNRESOLVED`, never a wrong identity. The old failure *split* a name, and
+  registry growth could turn those fragments into confident false positives.
+- The spaced form `Acid Red 1, N-Methylpyrrolidone`, which is how lists are
+  normally printed, parses correctly.
 
 ## 7. No substring, prefix or fuzzy matching
 
@@ -155,7 +199,8 @@ legitimate answer, and inventing one would defeat the whole layer.
 
 ## 10. Formula order is not concentration
 
-`position` is **printed label order and nothing else**.
+`position` is **parsed printed-entry order, and nothing else**. One printed
+ingredient is one entry, so the numbering matches what the pack shows.
 
 It is never read as concentration, percentage, importance, dominance, efficacy
 or risk. Ordering conventions do exist in some regulatory regimes, but applying

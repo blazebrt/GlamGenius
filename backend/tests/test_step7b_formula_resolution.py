@@ -264,66 +264,146 @@ class TestParserGuarantees:
         "Niacinamide 5%", "Sodium C14-16 Olefin Sulfonate", "Retinyl Palmitate",
         "Vitamin-E", "CI 77491", "Aqua/Water/Eau", "Butyrospermum Parkii (Shea) Butter",
         "Caprylic/Capric Triglyceride", "Tocopheryl Acetate", "sh-Oligopeptide-1",
+        "1,3-Butanediol", "N,N-Dimethylacetamide",
     ])
     def test_internal_punctuation_and_casing_survive_exactly(self, printed):
-        # Every name here is comma-free. A name whose own comma sits at top
-        # level is a separate, documented case — see the locant test below.
-        assert "," not in printed
         result = parse_formula(f"{printed}, Water")
         assert result.status is ParseStatus.PARSED
         assert result.tokens[0].raw_name == printed
 
+    # -- locant commas are part of the name, never a boundary ---------------
+
     @pytest.mark.parametrize("printed", [
-        "1,3-Butanediol", "1,2-Hexanediol", "2,6-Di-t-Butyl-4-Methylphenol",
-    ])
-    def test_a_locant_comma_splits_and_that_is_a_known_limitation(self, printed):
-        """A real INCI name whose own comma is at top level gets split. Fail-safe.
+        "1,2-Hexanediol",
+        "1,3-Butanediol",
+        "2,6-Di-t-Butyl-4-Methylphenol",
+        "1,1,1-Trichloroethane",
+        "1,2,3-Propanetriol",
+        "2,2'-Methylenebis(4-Methyl-6-t-Butylphenol)",
+        "4,4'-Diaminodiphenyl Sulfone",
+        "N,N-Dimethylacetamide",
+        "N,N'-Diphenyl Example",
+        "O,O-Diethyl Example",
+        "S,S-Dioxide Example",
+        "Benzene-1,2,4-Tricarboxylic Acid",
+    ], ids=lambda p: p[:28])
+    def test_a_locant_bearing_name_stays_one_token(self, printed):
+        """One printed ingredient name is one token, comma and all.
 
-        ``1,3-Butanediol`` prints a comma that is not inside any bracket, so the
-        V1 rule — top-level comma is the delimiter — cannot tell it from the
-        comma between two ingredients. It becomes ``1`` and ``3-Butanediol``.
-
-        This is a **known and accepted** V1 limitation, recorded here so it is
-        visible rather than latent. Three things make it the safe failure:
-
-        * Neither fragment resolves, so no wrong identity is ever produced —
-          the outcome is UNRESOLVED, which is this layer's honest answer.
-        * The alternative is worse. Recognising ``digit,digit-`` as "inside a
-          name" is exactly the pattern-guessing the parser refuses everywhere
-          else, and it would mis-split the day a list legitimately prints
-          ``Titanium Dioxide, 1,3-Butanediol`` against a name we guessed wrong.
-        * The real fix is a reviewed identity claim recording the exact printed
-          form, not a cleverer parser.
-
-        What it does cost: the entry count and every position after it shift.
-        A consumer must therefore never treat ``position`` as authoritative
-        pack order — which it already must not, for separate reasons.
+        Treating a locant comma as a delimiter does not merely mis-count: it
+        destroys the ingredient before the identity layer is ever called, so no
+        reviewed claim can reach it, and it manufactures fragments that would
+        start resolving the moment anybody published a name matching one.
         """
         result = parse_formula(f"{printed}, Water")
         assert result.status is ParseStatus.PARSED
-        assert len(result.tokens) == 3
-        assert [t.raw_name for t in result.tokens] == [
-            printed.split(",")[0], printed.split(",", 1)[1], "Water",
-        ]
+        assert len(result.tokens) == 2
+        # Identical to the input: the comma is preserved, never stripped.
+        assert result.tokens[0].raw_name == printed
+        assert result.tokens[1].raw_name == "Water"
+        assert [t.position for t in result.tokens] == [1, 2]
 
-    async def test_a_split_locant_name_resolves_to_nothing(self, db_clean):
-        """The fragments are meaningless, and meaningless is what they return."""
+    @pytest.mark.parametrize(("text", "expected"), [
+        # A locant in the middle keeps the entries either side of it intact.
+        ("Water, 1,3-Butanediol, Glycerin", ["Water", "1,3-Butanediol", "Glycerin"]),
+        # Real lists do omit the space after a delimiter, so "comma with no
+        # space" can never be the rule that decides this.
+        ("Water,1,2-Hexanediol,Glycerin", ["Water", "1,2-Hexanediol", "Glycerin"]),
+        ("Titanium Dioxide, 1,3-Butanediol", ["Titanium Dioxide", "1,3-Butanediol"]),
+        # A name ending in a digit, then a locant name, with no space between.
+        # The digit is preceded by a letter, so it is not a free-standing
+        # locant and the comma stays a boundary.
+        ("Vitamin B3,2,6-Di-t-Butyl-4-Methylphenol",
+         ["Vitamin B3", "2,6-Di-t-Butyl-4-Methylphenol"]),
+        # Colour indices: after the comma comes "CI", and "C" is deliberately
+        # not a heteroatom locant, so these stay two entries.
+        ("CI 77491,CI 77492", ["CI 77491", "CI 77492"]),
+        ("CI 77491, CI 77492", ["CI 77491", "CI 77492"]),
+        ("CI 77491,CI 77492,CI 77499", ["CI 77491", "CI 77492", "CI 77499"]),
+        # Whitespace inside a run means an ordinary list, not a chemical name.
+        ("Aqua, 1, 2, Glycerin", ["Aqua", "1", "2", "Glycerin"]),
+        ("Aqua, 3, Glycerin", ["Aqua", "3", "Glycerin"]),
+        # Two locant names in a row still separate.
+        ("1,3-Butanediol, 1,2-Hexanediol", ["1,3-Butanediol", "1,2-Hexanediol"]),
+        ("1,3-Butanediol,1,2-Hexanediol", ["1,3-Butanediol", "1,2-Hexanediol"]),
+        # Nothing about ordinary lists changed.
+        ("Water, Niacinamide, Glycerin", ["Water", "Niacinamide", "Glycerin"]),
+    ], ids=lambda v: str(v)[:34])
+    def test_real_ingredient_boundaries_still_split(self, text, expected):
+        """The correction must not merge neighbouring ingredients."""
+        result = parse_formula(text)
+        assert result.status is ParseStatus.PARSED
+        assert [t.raw_name for t in result.tokens] == expected
+        assert [t.position for t in result.tokens] == list(range(1, len(expected) + 1))
+
+    @pytest.mark.parametrize("text", [
+        "1,3-",                    # a run with no name after it
+        "1,3",                     # no trailing hyphen at all
+        "Water, 1,3",              # same, after a real delimiter
+        "CI 77491,CI 77492",       # "C" is not a heteroatom locant
+        "Red 5,Blue 1",            # letters either side
+    ])
+    def test_a_locant_shaped_run_without_its_terminator_is_not_a_locant(self, text):
+        """The trailing hyphen-plus-name-character clause is load-bearing."""
+        result = parse_formula(text)
+        assert result.status is ParseStatus.PARSED
+        assert len(result.tokens) >= 2 or "," not in text
+
+    def test_the_residual_lexical_ambiguity_is_recorded(self):
+        """One shape genuinely cannot be resolved lexically, and it fails safe.
+
+        ``Acid Red 1,N-Methylpyrrolidone`` — a name ending in a bare digit,
+        an immediate comma with no space, then a locant-shaped start — is
+        *character-for-character identical* to a locant run. No amount of
+        punctuation analysis can tell the two apart, and resolving it would need
+        exactly the dictionary lookup this parser must not do.
+
+        It is recorded rather than hidden, and it is strictly narrower and safer
+        than the defect it replaces:
+
+        * It fails by **merging**, so the result is one token that resolves to
+          nothing — ``UNRESOLVED``, never a wrong identity. The old failure
+          *split* a name into fragments, which registry growth could turn into
+          confident false positives.
+        * The spaced form, which is how lists are normally printed, parses
+          correctly.
+        """
+        merged = parse_formula("Acid Red 1,N-Methylpyrrolidone")
+        assert [t.raw_name for t in merged.tokens] == ["Acid Red 1,N-Methylpyrrolidone"]
+
+        spaced = parse_formula("Acid Red 1, N-Methylpyrrolidone")
+        assert [t.raw_name for t in spaced.tokens] == ["Acid Red 1", "N-Methylpyrrolidone"]
+
+    def test_the_locant_rule_consults_nothing(self):
+        """Purely lexical: no database, no Step 7A, no dictionary, no network.
+
+        This is the invariant that matters most. Knowledge may decide what a
+        token denotes; it must never decide retroactively where the printed
+        token boundaries were, or publishing a name would silently change how
+        every formula tokenises.
+        """
+        from app.domains.formulas.parser import _is_locant_comma
+
+        source = _code_only(inspect.getsource(_is_locant_comma))
+        for forbidden in ("await", "session", "resolve", "Substance", "select",
+                          "random", "open", "requests", "httpx"):
+            assert forbidden not in source, forbidden
+        # And it is a pure function of two arguments.
+        assert set(inspect.signature(_is_locant_comma).parameters) == {"text", "position"}
+
+    async def test_tokenization_does_not_change_when_the_registry_changes(self, db_clean):
+        """Publishing or retiring a canonical name must not move a boundary."""
+        text = "Water, 1,3-Butanediol, Glycerin"
+        before = [t.raw_name for t in parse_formula(text).tokens]
+
         factory = get_sessionmaker()
         async with factory() as session:
-            await _publish_simple(session, "water", "Water")
-            await _publish_simple(session, "butanediol.1-3", "1,3-Butanediol")
-        async with factory() as session:
-            result = await resolve_formula(session, "1,3-Butanediol, Water")
-        assert [r.status for r in result.ingredients] == [
-            ResolutionStatus.UNRESOLVED,   # "1"
-            ResolutionStatus.UNRESOLVED,   # "3-Butanediol"
-            ResolutionStatus.RESOLVED,     # "Water"
-        ]
-        # The published identity exists and is reachable by its exact name —
-        # it is only the *splitting* that prevents this formula reaching it.
-        async with factory() as session:
-            direct = await resolve_formula(session, "1,3-Butanediol")
-        assert [r.raw_name for r in direct.ingredients] == ["1", "3-Butanediol"]
+            await _publish_simple(session, "butanediol", "1,3-Butanediol")
+            await _publish_simple(session, "one", "1")
+            await _publish_simple(session, "three.butanediol", "3-Butanediol")
+
+        after = [t.raw_name for t in parse_formula(text).tokens]
+        assert before == after == ["Water", "1,3-Butanediol", "Glycerin"]
 
     def test_nested_grouping_is_tracked(self):
         result = parse_formula("Parfum (Fragrance (Aroma, Perfume), Linalool), Water")
@@ -526,6 +606,88 @@ class TestFormulaResolution:
         async with factory() as session:
             result = await resolve_formula(session, "Glycerin")
         assert result.ingredients[0].status is ResolutionStatus.UNRESOLVED
+
+    async def test_a_locant_name_reaches_its_canonical_identity(self, db_clean):
+        """End to end: a published `1,3-Butanediol` identity is actually reachable.
+
+        This is the regression the whole correction exists for. Previously the
+        parser split the name into `1` and `3-Butanediol` before resolution ran,
+        so a perfectly valid reviewed identity was unreachable and no amount of
+        authoring could fix it — the token it needed never existed.
+        """
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "butanediol", "1,3-Butanediol")
+            await _publish_simple(session, "water", "Water")
+        async with factory() as session:
+            result = await resolve_formula(session, "1,3-Butanediol, Water")
+
+        assert result.status is ParseStatus.PARSED
+        assert len(result.ingredients) == 2
+
+        first, second = result.ingredients
+        assert first.position == 1
+        assert first.raw_name == "1,3-Butanediol"
+        assert first.status is ResolutionStatus.RESOLVED
+        assert first.substance_key == "butanediol"
+        assert first.entity_kind == EntityKind.DEFINED_SUBSTANCE.value
+
+        assert second.position == 2
+        assert second.raw_name == "Water"
+        assert second.status is ResolutionStatus.RESOLVED
+        assert second.substance_key == "water"
+
+    async def test_fragment_identities_can_never_enter_a_formula_result(self, db_clean):
+        """Adversarial: registry growth must not resurrect the old defect.
+
+        The previous branch argued the split was harmless because the fragments
+        did not resolve. That was never an invariant — only a fact about an
+        empty registry. Here the fragments `1` and `3-Butanediol` are published
+        as fully valid canonical identities alongside the correct full name.
+
+        If the parser still split, the formula would confidently report two
+        substances that are not in the product. It must send only the two names
+        that were actually printed.
+        """
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "butanediol", "1,3-Butanediol")
+            await _publish_simple(session, "water", "Water")
+            # The traps.
+            await _publish_simple(session, "fragment.one", "1")
+            await _publish_simple(session, "fragment.butanediol", "3-Butanediol")
+
+        async with factory() as session:
+            result = await resolve_formula(session, "1,3-Butanediol, Water")
+
+        assert [r.raw_name for r in result.ingredients] == ["1,3-Butanediol", "Water"]
+        assert [r.substance_key for r in result.ingredients] == ["butanediol", "water"]
+        # Neither trap appears anywhere in the result, as a winner or a candidate.
+        reported = {r.substance_key for r in result.ingredients}
+        reported |= {k for r in result.ingredients for k in r.candidate_substance_keys}
+        assert "fragment.one" not in reported
+        assert "fragment.butanediol" not in reported
+
+        # And the fragment identities really were published and resolvable —
+        # so the test proves the parser withheld them, not that they were absent.
+        async with factory() as session:
+            direct = await resolve_formula(session, "1")
+        assert direct.ingredients[0].status is ResolutionStatus.RESOLVED
+        assert direct.ingredients[0].substance_key == "fragment.one"
+
+    async def test_a_multi_locant_name_reaches_its_identity(self, db_clean):
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "bht", "2,6-Di-t-Butyl-4-Methylphenol")
+            await _publish_simple(session, "dma", "N,N-Dimethylacetamide")
+            await _publish_simple(session, "water", "Water")
+        async with factory() as session:
+            result = await resolve_formula(
+                session, "Water, 2,6-Di-t-Butyl-4-Methylphenol, N,N-Dimethylacetamide",
+            )
+        assert [r.substance_key for r in result.ingredients] == ["water", "bht", "dma"]
+        assert all(r.status is ResolutionStatus.RESOLVED for r in result.ingredients)
+        assert [r.position for r in result.ingredients] == [1, 2, 3]
 
     async def test_a_group_identity_is_preserved_not_expanded(self, db_clean):
         factory = get_sessionmaker()

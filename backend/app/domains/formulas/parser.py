@@ -34,6 +34,16 @@ never expanded, never read. ``Water (Aqua/Eau)`` is one entry, not three: which
 identities a parenthetical names is a question for a reviewed identity claim,
 not for a parser guessing at what an abbreviation meant.
 
+**A comma inside a chemical locant is not a separator either.**
+``1,3-Butanediol`` prints a comma that no bracket protects, and treating it as a
+delimiter destroys the ingredient: the token never reaches the identity layer,
+so no reviewed claim can rescue it, and the meaningless fragments it leaves
+behind (``1``, ``3-Butanediol``) would begin resolving the moment anybody
+published an identity under those names. :func:`_is_locant_comma` therefore
+recognises the *punctuation shape* of a locant sequence, described in full
+there. It reads structure, never chemistry: no dictionary, no database, no
+Step 7A lookup, no guessing at what the name means.
+
 **Malformed grouping fails closed for the whole list.** Not for the entry that
 went wrong, and not for the tail after it: the whole list. A parser that
 returned the well-formed prefix would hand a caller an ingredient analysis that
@@ -126,6 +136,141 @@ def _failed(status: ParseStatus) -> FormulaParse:
     return FormulaParse(status=status, tokens=())
 
 
+#: Characters that may act as a locant in place of a number. Heteroatom
+#: locants — ``N,N-Dimethyl…``, ``O,O-…``, ``S,S-…``, ``P,P-…`` — are the only
+#: letters standard nomenclature uses this way, so the set stops there.
+#:
+#: ``C`` is absent because carbon positions are numbered, not lettered; adding
+#: it would widen the grammar to a form nomenclature does not use, for no gain.
+#: It is *not* what keeps ``CI 77491,CI 77492`` two ingredients — the trailing
+#: hyphen clause does that, and still does with ``C`` added (verified). Keeping
+#: this set minimal is defence in depth, not the defence itself.
+_HETEROATOM_LOCANTS: frozenset[str] = frozenset("NOSP")
+
+#: ASCII digits only, listed rather than using ``str.isdigit()`` so a Unicode
+#: digit from some other script cannot widen the grammar unnoticed.
+_ASCII_DIGITS: frozenset[str] = frozenset("0123456789")
+
+#: Prime marks that may follow a locant: ``2,2'-…``, ``N,N'-…``. The typewriter
+#: apostrophe and the typographic prime, and nothing else.
+_PRIMES: frozenset[str] = frozenset("'\u2032")
+
+#: What may sit immediately before a locant run. A locant starts a name or a
+#: name fragment, so it follows the start of the entry, whitespace, an opening
+#: bracket, a hyphen (``Benzene-1,2,4-…``) or the previous comma of the same
+#: run. Notably **not** a letter or digit: that is what keeps the ``3`` in
+#: ``Vitamin B3,2,6-Di-t-Butyl-4-Methylphenol`` from reading as a locant, so
+#: that list stays two ingredients.
+_LOCANT_LEAD: frozenset[str] = frozenset("([{-,")
+
+
+def _locant_atom_backwards(text: str, end: int) -> int | None:
+    """Read one locant atom leftwards, ending just before ``end``.
+
+    Returns the atom's start index, or ``None`` when what precedes ``end`` is
+    not an atom. An atom is a run of ASCII digits or a single heteroatom
+    letter, either optionally followed by primes.
+    """
+    index = end
+    while index > 0 and text[index - 1] in _PRIMES:
+        index -= 1
+    if index == 0:
+        return None
+    if text[index - 1] in _ASCII_DIGITS:
+        while index > 0 and text[index - 1] in _ASCII_DIGITS:
+            index -= 1
+        return index
+    if text[index - 1] in _HETEROATOM_LOCANTS:
+        return index - 1
+    return None
+
+
+def _locant_atom_forwards(text: str, start: int) -> int | None:
+    """Read one locant atom rightwards from ``start``.
+
+    Returns the index just past it, or ``None``. Deliberately does not skip
+    whitespace: a space inside a locant run means this is an ordinary list
+    (``Aqua, 1, 2, Glycerin``), not a chemical name.
+    """
+    index = start
+    if index >= len(text):
+        return None
+    if text[index] in _ASCII_DIGITS:
+        while index < len(text) and text[index] in _ASCII_DIGITS:
+            index += 1
+    elif text[index] in _HETEROATOM_LOCANTS:
+        index += 1
+    else:
+        return None
+    while index < len(text) and text[index] in _PRIMES:
+        index += 1
+    return index
+
+
+def _is_locant_comma(text: str, position: int) -> bool:
+    """Is the comma at ``position`` part of a chemical locant, not a delimiter?
+
+    The grammar, and it is the whole of it::
+
+        locant_run  := atom ( ',' atom )+ '-' name_char
+        atom        := ( digit+ | heteroatom ) prime*
+        digit       := 0-9
+        heteroatom  := N | O | S | P
+        prime       := ' | ′
+        name_char   := any alphanumeric
+
+    and the run must be preceded by the start of the entry, whitespace, an
+    opening bracket, a hyphen, or the previous comma of the same run.
+
+    Every clause is doing work:
+
+    * **The trailing** ``-`` **plus a name character.** A locant labels
+      something; a run with nothing after it is not a locant. This is what
+      keeps ``CI 77491,CI 77492`` two ingredients — after ``CI`` comes ``I``,
+      not a hyphen.
+    * **The leading boundary.** A locant begins a name. Without this clause
+      ``Vitamin B3,2,6-Di-t-Butyl-4-Methylphenol`` would merge into one entry,
+      because the ``3`` of ``B3`` would read as a locant. With it, the ``3`` is
+      preceded by ``B`` and the comma stays a delimiter.
+    * **No whitespace anywhere inside.** ``Aqua, 1, 2, Glycerin`` is four
+      entries, not a chemical name.
+
+    This is lexical analysis, not identification. It answers "does this comma
+    sit inside a locant-shaped run of punctuation", never "is this a real
+    substance" — there is no dictionary here, no database, no Step 7A call and
+    no network. That distinction is the point: **knowledge may decide what a
+    token denotes, but it must never decide retroactively where the printed
+    token boundaries were.** If it could, publishing or retiring a canonical
+    name would silently change how a formula tokenises, and the same printed
+    list would mean different things on different days.
+    """
+    start = _locant_atom_backwards(text, position)
+    if start is None:
+        return False
+    if start > 0:
+        preceding = text[start - 1]
+        if not (preceding.isspace() or preceding in _LOCANT_LEAD):
+            return False
+
+    index = position
+    while True:
+        # Consume ``, atom`` for as long as the run continues, so ``1,1,1-``
+        # and ``1,2,3-`` are single runs rather than three separate decisions.
+        after_atom = _locant_atom_forwards(text, index + 1)
+        if after_atom is None:
+            return False
+        index = after_atom
+        if index < len(text) and text[index] == ",":
+            continue
+        break
+
+    return (
+        index + 1 < len(text)
+        and text[index] == "-"
+        and text[index + 1].isalnum()
+    )
+
+
 def _split_top_level(text: str) -> list[str] | None:
     """Split on top-level commas, or ``None`` when grouping is unbalanced.
 
@@ -139,7 +284,7 @@ def _split_top_level(text: str) -> list[str] | None:
     current: list[str] = []
     stack: list[str] = []
 
-    for character in text:
+    for index, character in enumerate(text):
         if character in _GROUPING_PAIRS:
             stack.append(_GROUPING_PAIRS[character])
             current.append(character)
@@ -150,8 +295,13 @@ def _split_top_level(text: str) -> list[str] | None:
             stack.pop()
             current.append(character)
         elif character == TOP_LEVEL_DELIMITER and not stack:
-            parts.append("".join(current))
-            current = []
+            if _is_locant_comma(text, index):
+                # Part of the name being read, not a boundary between two.
+                # Kept verbatim: the comma is never stripped or rewritten.
+                current.append(character)
+            else:
+                parts.append("".join(current))
+                current = []
         else:
             current.append(character)
 
