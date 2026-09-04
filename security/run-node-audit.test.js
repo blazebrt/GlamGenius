@@ -222,7 +222,7 @@ test("each attempt is reported so an incomplete audit is legible in the CI log",
     log,
   });
   assert.match(lines[0], /attempt 1\/2: exit=1 completed=false/);
-  assert.match(lines.join("\n"), /no auditSummary/);
+  assert.match(lines.join("\n"), /incomplete \(no valid auditSummary\)/);
 });
 
 test("the default attempt budget is the one the incident data justifies", () => {
@@ -458,4 +458,153 @@ test("carried advisories are prepended, so the summary stays the final record", 
   assert.equal(auditOutputIsComplete(result.stdout), true);
   assert.match(result.stdout.trim().split("\n").pop(), /auditSummary/);
   assert.throws(() => gate(result.stdout), /Unaccepted HIGH advisory GHSA-zzzz-zzzz-zzzz/);
+});
+
+
+// ---- retry provenance: a carried finding cannot explain a later summary ----
+//
+// The masking defect. Attempt 1 reports a governed HIGH and dies; attempt 2
+// returns a well-formed summary claiming high=1 but no HIGH advisory of its
+// own. Concatenate the two and the combined stream looks like one coherent,
+// substantiated, finished audit -- and because the carried HIGH is governed,
+// the gate would pass on a scan that never completed. Sticky evidence is
+// evidence that a finding EXISTS; it is not evidence about a later attempt.
+
+function summaryClaiming(overrides) {
+  return JSON.stringify({
+    type: "auditSummary",
+    data: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0, ...overrides } },
+  });
+}
+
+const CRITICAL_ADVISORY = advisoryLine({
+  advisoryId: "GHSA-crit-crit-crit",
+  cve: "CVE-2099-0002",
+  packageName: "critical-package",
+  version: "2.0.0",
+  severity: "critical",
+  paths: ["app>critical-package"],
+});
+
+test("a summary claiming HIGH with no HIGH of its own is not a complete attempt", () => {
+  assert.equal(auditOutputIsComplete(summaryClaiming({ high: 1 })), false);
+  assert.equal(auditOutputIsComplete(summaryClaiming({ critical: 1 })), false);
+  // Same-attempt detail is what substantiates it.
+  assert.equal(auditOutputIsComplete(`${UNKNOWN_HIGH_ADVISORY}\n${summaryClaiming({ high: 1 })}`), true);
+  // ...and the severities must actually match.
+  assert.equal(auditOutputIsComplete(`${UNKNOWN_HIGH_ADVISORY}\n${summaryClaiming({ critical: 1 })}`), false);
+});
+
+test("A: a carried governed HIGH cannot complete a later detail-less summary", () => {
+  let calls = 0;
+  const result = run({
+    attempts: 5,
+    runAudit: () => {
+      calls += 1;
+      if (calls === 1) return { stdout: GOVERNED_ADVISORY, stderr: "reset", status: 1 };
+      if (calls === 2) return { stdout: summaryClaiming({ high: 1 }), stderr: "", status: 8 };
+      return { stdout: SUMMARY_LINE, stderr: "", status: 0 };
+    },
+  });
+  // Attempt 2 must NOT have been accepted; the runner had to go on to 3.
+  assert.equal(calls, 3);
+  assert.equal(result.complete, true);
+  // The carried governed advisory survived and is judged on its own merits.
+  assert.match(result.stdout, new RegExp(approved.advisory_id));
+  assert.equal(gate(result.stdout).acceptedExceptions.length, 1);
+});
+
+test("B: exhausted masking — a carried governed HIGH must not rescue an incomplete run", () => {
+  // THE load-bearing case. Every attempt after the first claims high=1 with no
+  // detail. Nothing ever completes, so the gate must refuse -- and must not be
+  // talked round by the fact that the only HIGH it can see is an excepted one.
+  let calls = 0;
+  const result = run({
+    attempts: 5,
+    runAudit: () => {
+      calls += 1;
+      return calls === 1
+        ? { stdout: GOVERNED_ADVISORY, stderr: "reset", status: 1 }
+        : { stdout: summaryClaiming({ high: 1 }), stderr: "", status: 8 };
+    },
+  });
+  assert.equal(calls, 5);
+  assert.equal(result.complete, false);
+  // Evidence preserved, not discarded.
+  assert.match(result.stdout, new RegExp(approved.advisory_id));
+  assert.match(result.stdout, /auditSummary/);
+  // And the gate refuses it.
+  assert.throws(() => gate(result.stdout), /continues after its auditSummary/);
+});
+
+test("C: a carried false positive cannot substantiate a later summary either", () => {
+  let calls = 0;
+  const result = run({
+    attempts: 5,
+    runAudit: () => {
+      calls += 1;
+      return calls === 1
+        ? { stdout: FALSE_POSITIVE_ADVISORY, stderr: "reset", status: 1 }
+        : { stdout: summaryClaiming({ high: 1 }), stderr: "", status: 8 };
+    },
+  });
+  assert.equal(calls, 5);
+  assert.equal(result.complete, false);
+  assert.match(result.stdout, new RegExp(nanoidFalsePositive.advisory_id));
+  assert.throws(() => gate(result.stdout), /continues after its auditSummary/);
+});
+
+test("D: carried HIGH does not substantiate critical, and carried CRITICAL does not substantiate a later one", () => {
+  for (const carriedLine of [UNKNOWN_HIGH_ADVISORY, CRITICAL_ADVISORY]) {
+    let calls = 0;
+    const result = run({
+      attempts: 3,
+      runAudit: () => {
+        calls += 1;
+        return calls === 1
+          ? { stdout: carriedLine, stderr: "reset", status: 1 }
+          : { stdout: summaryClaiming({ critical: 1 }), stderr: "", status: 16 };
+      },
+    });
+    assert.equal(calls, 3, "a detail-less critical summary must never complete");
+    assert.equal(result.complete, false);
+    assert.throws(() => gate(result.stdout), /continues after its auditSummary/);
+  }
+});
+
+test("E: a same-attempt non-zero audit completes and is evaluated normally", () => {
+  // Guards against over-tightening: real audits report non-zero counts and are
+  // perfectly complete when they carry their own detail.
+  const stdout = `${GOVERNED_ADVISORY}\n${FALSE_POSITIVE_ADVISORY}\n${summaryClaiming({ high: 3 })}`;
+  const result = run({ attempts: 5, runAudit: () => ({ stdout, stderr: "", status: 8 }) });
+  assert.equal(result.attempts, 1);
+  assert.equal(result.complete, true);
+  assert.equal(result.stdout, stdout, "nothing carried, so byte-for-byte");
+  const verdict = gate(result.stdout);
+  assert.equal(verdict.acceptedExceptions.length, 1);
+  assert.equal(verdict.falsePositiveFindings.length, 1);
+});
+
+test("F: the sticky zero-count asymmetry is unchanged", () => {
+  let calls = 0;
+  const result = run({
+    attempts: 5,
+    runAudit: () => {
+      calls += 1;
+      return calls === 1
+        ? { stdout: UNKNOWN_HIGH_ADVISORY, stderr: "reset", status: 1 }
+        : { stdout: SUMMARY_LINE, stderr: "", status: 0 };
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.complete, true, "a clean zero-count summary is still a real answer");
+  assert.throws(() => gate(result.stdout), /Unaccepted HIGH advisory GHSA-zzzz-zzzz-zzzz/);
+});
+
+test("completion is judged before carrying, never after", () => {
+  // Structural: the raw attempt is what gets tested for completeness.
+  const code = runnerSource.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.match(code, /const completion = auditStreamCompletion\(last\.stdout\);/);
+  assert.doesNotMatch(code, /auditStreamCompletion\([^)]*[Cc]arried/);
+  assert.doesNotMatch(code, /auditOutputIsComplete\([^)]*[Cc]arried/);
 });

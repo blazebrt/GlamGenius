@@ -108,15 +108,39 @@ function advisoryLinesIn(stdout) {
 }
 
 /**
- * Prepend advisories carried over from earlier attempts.
+ * Compose the completed attempt with advisories carried from earlier ones.
  *
- * With nothing carried over this returns the input untouched, so an audit that
+ * Carried records go *before* the completed stream, which keeps that attempt's
+ * summary the final record and so keeps the stream structurally complete.
+ *
+ * With nothing carried this returns the input untouched, so an audit that
  * completed on its first attempt is handed to the validator byte-for-byte as
  * Yarn produced it.
  */
-function withCarriedAdvisories(stdout, carried) {
+function completedWithCarriedAdvisories(stdout, carried) {
   if (carried.length === 0) return stdout;
   return [...carried, stdout].join("\n");
+}
+
+/**
+ * Compose an exhausted, still-incomplete run without letting it look finished.
+ *
+ * Here the order is reversed, and that reversal is the safety property. If
+ * carried records were prepended, a final attempt that reported
+ * `summary(high=1)` with no HIGH advisory of its own would sit behind a HIGH
+ * carried from some earlier attempt -- and the combined stream would then look
+ * like one coherent audit whose summary is substantiated and final. If that
+ * carried HIGH happened to be governed by an exception, the gate would pass on
+ * a run in which no attempt ever completed.
+ *
+ * Appending instead preserves every record while guaranteeing the summary is
+ * not last, so the validator refuses the stream. Nothing is discarded and no
+ * summary is invented: the evidence is all still there for whoever reads the
+ * artifact, it simply cannot be mistaken for a finished audit.
+ */
+function incompleteWithCarriedAdvisories(stdout, carried) {
+  if (carried.length === 0) return stdout;
+  return [stdout, ...carried].join("\n");
 }
 
 /**
@@ -145,12 +169,17 @@ function runWithRetries({
   log = console.error,
 } = {}) {
   let last = { stdout: "", stderr: "", status: null };
+  let lastReason = "no output";
   const carried = [];
   const seen = new Set();
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     last = runAudit(attempt);
-    const complete = auditOutputIsComplete(last.stdout);
+    // Judged on the RAW attempt, before anything is carried into it. Evidence
+    // from an earlier attempt must never help a later one look finished.
+    const completion = auditStreamCompletion(last.stdout);
+    const complete = completion.complete;
+    lastReason = completion.reason;
     log(
       `yarn audit attempt ${attempt}/${attempts}: exit=${last.status} ` +
         `completed=${complete}`,
@@ -161,9 +190,10 @@ function runWithRetries({
       }
       return {
         ...last,
-        stdout: withCarriedAdvisories(last.stdout, carried),
+        stdout: completedWithCarriedAdvisories(last.stdout, carried),
         attempts: attempt,
         complete: true,
+        reason: completion.reason,
         carriedAdvisories: carried.length,
       };
     }
@@ -177,7 +207,7 @@ function runWithRetries({
         carried.push(line);
       }
       const excerpt = (last.stderr || "").trim().split("\n")[0] || "(no stderr)";
-      log(`  audit did not run to completion (no auditSummary): ${excerpt}`);
+      log(`  incomplete (${completion.reason}): ${excerpt}`);
       // Linear backoff. The failure mode is an overloaded upstream, so the
       // point is to wait, not to be clever about how long.
       sleep(backoffMs * attempt);
@@ -188,9 +218,10 @@ function runWithRetries({
   }
   return {
     ...last,
-    stdout: withCarriedAdvisories(last.stdout, carried),
+    stdout: incompleteWithCarriedAdvisories(last.stdout, carried),
     attempts,
     complete: false,
+    reason: lastReason,
     carriedAdvisories: carried.length,
   };
 }
@@ -214,11 +245,12 @@ function main(argv) {
 
   if (!result.complete) {
     console.error(
-      `The audit did not run to completion after ${result.attempts} attempt(s): ` +
-        "no auditSummary was returned. The raw output is kept for diagnostics, " +
-        "but the security gate will now fail closed, which is correct -- an " +
-        "audit that did not finish cannot clear a dependency tree, and a " +
-        "partial advisory stream must never be mistaken for a finished one.",
+      `The audit did not run to completion after ${result.attempts} attempt(s) ` +
+        `(${result.reason}). Every record observed is kept for diagnostics, but ` +
+        "the security gate will now fail closed, which is correct -- an audit " +
+        "that did not finish cannot clear a dependency tree, and neither a " +
+        "partial advisory stream nor evidence carried from an earlier attempt " +
+        "may stand in for one that did.",
     );
     if (result.stderr) console.error(result.stderr.trim().slice(0, 2000));
   }

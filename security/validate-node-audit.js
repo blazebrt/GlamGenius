@@ -325,6 +325,25 @@ function classifyAuditRecord(record) {
  * outright. Both directions of that disagreement are safe: the runner may
  * retry something the validator would reject, never the reverse.
  */
+//: The only severities whose absence of detail we can act on. A count above
+//: zero for either one is a claim the gate must be able to check.
+const SUBSTANTIATED_SEVERITIES = ["high", "critical"];
+
+/**
+ * Which severities does this summary claim without any advisory to back them?
+ *
+ * One definition, used twice: by `auditStreamCompletion` against a single raw
+ * Yarn attempt, and by the validator against the stream it is finally handed.
+ * Never a count comparison -- Yarn counts vulnerable paths and one advisory can
+ * cover several, so equality would fail honest audits. Only presence.
+ */
+function severitiesLackingDetail(summary, observedSeverities) {
+  const counts = summary.data.vulnerabilities;
+  return SUBSTANTIATED_SEVERITIES.filter(
+    (severity) => counts[severity] > 0 && !observedSeverities.has(severity),
+  );
+}
+
 function auditStreamCompletion(auditText) {
   if (typeof auditText !== "string" || !auditText.trim()) {
     return { complete: false, reason: "no output" };
@@ -332,6 +351,8 @@ function auditStreamCompletion(auditText) {
   let summaries = 0;
   let summaryAt = -1;
   let lastContentAt = -1;
+  let summary = null;
+  const observed = new Set();
   for (const [index, line] of auditText.split(/\r?\n/).entries()) {
     if (!line.trim()) continue;
     lastContentAt = index;
@@ -344,12 +365,26 @@ function auditStreamCompletion(auditText) {
     if (auditSummaryIsValid(record)) {
       summaries += 1;
       summaryAt = index;
+      summary = record;
+    } else if (classifyAuditRecord(record) === "advisory") {
+      const severity = record.data && record.data.advisory && record.data.advisory.severity;
+      if (severity) observed.add(severity);
     }
   }
   if (summaries === 0) return { complete: false, reason: "no valid auditSummary" };
   if (summaries > 1) return { complete: false, reason: `${summaries} auditSummary records` };
   if (summaryAt !== lastContentAt) {
     return { complete: false, reason: "auditSummary is not the final record" };
+  }
+  // Substance, judged strictly within this one raw attempt. An attempt whose
+  // summary counts a HIGH but which never emitted a HIGH advisory did not
+  // finish coherently, whatever some *other* attempt happened to report.
+  const unsubstantiated = severitiesLackingDetail(summary, observed);
+  if (unsubstantiated.length) {
+    return {
+      complete: false,
+      reason: `summary counts ${unsubstantiated.join(" and ")} with no matching advisory in this attempt`,
+    };
   }
   return { complete: true, reason: "complete" };
 }
@@ -434,19 +469,17 @@ function parseAuditText(auditText) {
  * naive equality rule would fail honest audits.
  */
 function assertSummaryDetailIsPresent(summary, records) {
-  const counts = summary.data.vulnerabilities;
   const observed = new Set(
     records.map((record) => record.advisory && record.advisory.severity),
   );
-  for (const severity of ["high", "critical"]) {
-    if (counts[severity] > 0 && !observed.has(severity)) {
-      fail(
-        `Audit summary reports ${counts[severity]} ${severity.toUpperCase()} ` +
-          `vulnerability/ies but the stream carries no ${severity.toUpperCase()} ` +
-          "advisory record: without an advisory id, package, version and paths " +
-          "the gate cannot match it against any exception, so it cannot clear it",
-      );
-    }
+  for (const severity of severitiesLackingDetail(summary, observed)) {
+    fail(
+      `Audit summary reports ${summary.data.vulnerabilities[severity]} ` +
+        `${severity.toUpperCase()} vulnerability/ies but the stream carries no ` +
+        `${severity.toUpperCase()} advisory record: without an advisory id, ` +
+        "package, version and paths the gate cannot match it against any " +
+        "exception, so it cannot clear it",
+    );
   }
 }
 
