@@ -366,6 +366,12 @@ jobs:
           EXPO_PUBLIC_SUPABASE_URL: https://ci-project.supabase.co
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ci-anon-key-not-a-real-one
         run: npx expo export --platform web
+      - name: Node audit gate tests (dependency PR)
+        # The gate's own tests belong on the path that can change it. Without
+        # this, a PR could alter the validator or the audit runner and only be
+        # caught after merge, by the push-only job.
+        if: github.event_name == 'pull_request' && needs.scope.outputs.node_deps == 'true'
+        run: node --test security/validate-node-audit.test.js security/run-node-audit.test.js
       - name: Node dependency audit (dependency PR)
         if: github.event_name == 'pull_request' && needs.scope.outputs.node_deps == 'true'
         working-directory: frontend
