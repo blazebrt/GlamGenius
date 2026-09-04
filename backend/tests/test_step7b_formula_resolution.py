@@ -909,6 +909,246 @@ class TestFormulaResolution:
                 assert result.ingredients == ()
                 assert result.resolved_count == 0
 
+    async def test_a_compatibility_comma_cannot_become_one_identity(self, db_clean):
+        """The composition hole between raw parsing and Step 7A's NFKC pass.
+
+        ``Water，Glycerin`` uses FULLWIDTH COMMA. A parser reading raw codepoints
+        sees no delimiter and emits one token — whose Step 7A lookup key is
+        ``water,glycerin``, because NFKC folds the fullwidth comma to an ASCII
+        one. Publish a reviewed identity named ``Water,Glycerin`` and that
+        merged token resolves: the registry has decided, retroactively, where
+        the printed boundary was.
+
+        The trap identity is published here on purpose and proved resolvable
+        first, so this test shows the formula layer reads the boundary
+        correctly rather than that the dangerous name is absent.
+        """
+        from app.domains.substances.service import resolve_name
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "merged.comma.trap", "Water,Glycerin")
+            await _publish_simple(session, "water", "Water")
+            await _publish_simple(session, "glycerin", "Glycerin")
+
+        # The trap really is published and really does resolve when asked.
+        async with factory() as session:
+            probe = await resolve_name(session, "Water,Glycerin")
+        assert probe.status is ResolutionStatus.RESOLVED
+        assert probe.substance_key == "merged.comma.trap"
+
+        # FULLWIDTH COMMA, SMALL COMMA, PRESENTATION FORM COMMA — all NFKC to ",".
+        for text in ("Water\uff0cGlycerin", "Water\ufe50Glycerin", "Water\ufe10Glycerin"):
+            async with factory() as session:
+                result = await resolve_formula(session, text)
+            assert result.status is ParseStatus.PARSED, text
+            # Split correctly into the two real ingredients...
+            assert [r.substance_key for r in result.ingredients] == ["water", "glycerin"], text
+            # ...and the merged trap never appears, as winner or candidate.
+            reported = {r.substance_key for r in result.ingredients}
+            reported |= {k for r in result.ingredients for k in r.candidate_substance_keys}
+            assert "merged.comma.trap" not in reported, text
+
+    async def test_a_compatibility_semicolon_cannot_become_one_identity(self, db_clean):
+        """Compatibility semicolons fail closed, exactly as the ASCII one does."""
+        from app.domains.substances.service import resolve_name
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "merged.semicolon.trap", "Water;Glycerin")
+
+        async with factory() as session:
+            probe = await resolve_name(session, "Water;Glycerin")
+        assert probe.status is ResolutionStatus.RESOLVED
+        assert probe.substance_key == "merged.semicolon.trap"
+
+        # FULLWIDTH, SMALL, PRESENTATION and GREEK QUESTION MARK all NFKC to ";".
+        for text in ("Water\uff1bGlycerin", "Water\ufe54Glycerin",
+                     "Water\ufe14Glycerin", "Water\u037eGlycerin"):
+            async with factory() as session:
+                result = await resolve_formula(session, text)
+            assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY, text
+            assert result.ingredients == ()
+            assert result.resolved_count == 0
+
+    async def test_compatibility_grouping_cannot_manufacture_fragments(self, db_clean):
+        """A fullwidth bracket is grouping, so the comma inside is protected.
+
+        Without the structural view the parser saw no grouping and cut
+        ``Parfum（A,B）, Water`` into ``Parfum（A`` and ``B）`` — a confident
+        false split. Fragment traps are published so the test proves the
+        fragments are never emitted, not merely that they would not resolve.
+        """
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "fragment.parfum.a", "Parfum（A")
+            await _publish_simple(session, "fragment.b", "B）")
+            await _publish_simple(session, "water", "Water")
+
+        pairs = ["\uff08\uff09", "\ufe59\ufe5a", "\uff3b\uff3d", "\uff5b\uff5d"]
+        for pair in pairs:
+            opener, closer = pair[0], pair[1]
+            text = f"Parfum{opener}A,B{closer}, Water"
+            async with factory() as session:
+                result = await resolve_formula(session, text)
+            assert result.status is ParseStatus.PARSED, text
+            assert len(result.ingredients) == 2, (text, [r.raw_name for r in result.ingredients])
+            # Raw provenance: the entry keeps the compatibility characters the
+            # pack printed, not the ASCII shadow the parser reasoned over.
+            assert result.ingredients[0].raw_name == f"Parfum{opener}A,B{closer}"
+            reported = {r.substance_key for r in result.ingredients}
+            assert "fragment.parfum.a" not in reported
+            assert "fragment.b" not in reported
+
+    async def test_lowercase_heteroatom_locants_do_not_fragment(self, db_clean):
+        """Step 7A casefolds, so case must not change where the boundaries are.
+
+        Recognising only uppercase ``N/O/S/P`` split ``n,n-Dimethylacetamide``
+        into ``n`` and ``n-Dimethylacetamide`` while leaving the uppercase form
+        whole — two different boundary readings for one identity.
+        """
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "dma", "N,N-Dimethylacetamide")
+            await _publish_simple(session, "water", "Water")
+            # Fragment traps.
+            await _publish_simple(session, "fragment.n", "n")
+            await _publish_simple(session, "fragment.n.dimethyl", "n-Dimethylacetamide")
+
+        async with factory() as session:
+            result = await resolve_formula(session, "n,n-Dimethylacetamide, Water")
+
+        assert result.status is ParseStatus.PARSED
+        assert len(result.ingredients) == 2
+        # Raw casing preserved exactly — lowercase in, lowercase out.
+        assert result.ingredients[0].raw_name == "n,n-Dimethylacetamide"
+        # Step 7A casefolds, so the lowercase spelling reaches the uppercase identity.
+        assert result.ingredients[0].status is ResolutionStatus.RESOLVED
+        assert result.ingredients[0].substance_key == "dma"
+        reported = {r.substance_key for r in result.ingredients}
+        assert "fragment.n" not in reported
+        assert "fragment.n.dimethyl" not in reported
+
+    @pytest.mark.parametrize(("lower", "upper"), [
+        ("n,n-Dimethylacetamide", "N,N-Dimethylacetamide"),
+        ("o,o-Diethyl Example", "O,O-Diethyl Example"),
+        ("s,s-Dioxide Example", "S,S-Dioxide Example"),
+        ("p,p-Example Compound", "P,P-Example Compound"),
+        ("n,n'-Diphenyl Example", "N,N'-Diphenyl Example"),
+    ], ids=lambda v: v[:22])
+    def test_case_does_not_change_boundaries(self, lower, upper):
+        low = parse_formula(f"{lower}, Water")
+        up = parse_formula(f"{upper}, Water")
+        assert low.status is up.status is ParseStatus.PARSED
+        assert len(low.tokens) == len(up.tokens) == 2
+        # Same boundaries, different printed text — each preserved verbatim.
+        assert low.tokens[0].raw_name == lower
+        assert up.tokens[0].raw_name == upper
+
+    async def test_an_unreconstructable_compatibility_form_fails_closed(self, db_clean):
+        """152 codepoints expand to several characters *including* structure.
+
+        ``⑴`` (U+2474) becomes ``(1)`` and ``″`` (U+2033) becomes two primes.
+        Mapping raw offsets across those expansions would be guesswork, so the
+        formula is withheld rather than reinterpreted.
+        """
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "water", "Water")
+
+        async with factory() as session:
+            for text in ("Water\u2474Glycerin", "Water\u2033Glycerin", "A\u2475B, Water"):
+                result = await resolve_formula(session, text)
+                assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY, text
+                assert result.ingredients == ()
+
+    async def test_compatibility_forms_never_reach_the_resolver_when_withheld(
+        self, db_clean, monkeypatch,
+    ):
+        from app.domains.formulas import service as formula_service
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "water", "Water")
+
+        calls: list[list[str]] = []
+        real = formula_service.resolve_names
+
+        async def _spy(session, names):
+            calls.append(list(names))
+            return await real(session, names)
+
+        monkeypatch.setattr(formula_service, "resolve_names", _spy)
+
+        async with factory() as session:
+            for text in ("Water\uff1bGlycerin", "Water\u2474Glycerin", "Water\u2033Glycerin"):
+                result = await resolve_formula(session, text)
+                assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+        assert calls == [], calls
+
+    async def test_withheld_compatibility_forms_issue_no_database_query(self, db_clean):
+        from sqlalchemy import event
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "water", "Water")
+
+        statements: list[str] = []
+
+        def _record(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        sync_engine = sql.get_engine().sync_engine
+        async with factory() as session:
+            event.listen(sync_engine, "before_cursor_execute", _record)
+            try:
+                statements.clear()
+                for text in ("Water\uff1bGlycerin", "Water\u2474Glycerin"):
+                    result = await resolve_formula(session, text)
+                    assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+            finally:
+                event.remove(sync_engine, "before_cursor_execute", _record)
+        assert statements == [], statements
+
+    async def test_tokenization_is_independent_of_the_registry(self, db_clean):
+        """Adding canonical names cannot move a boundary, for any dangerous class.
+
+        Parsing is a pure function of the printed string and the frozen rules.
+        This asserts it directly: parse the dangerous forms, publish every trap
+        identity that could tempt a different reading, parse again, compare.
+        """
+        dangerous = [
+            "Water\uff0cGlycerin",
+            "Water\uff1bGlycerin",
+            "Parfum\uff08A,B\uff09, Water",
+            "n,n-Dimethylacetamide, Water",
+            "1,3-Butanediol, Water",
+            "Acid Red 1,N-Methylpyrrolidone",
+            "Water\nGlycerin",
+            "Water\u2474Glycerin",
+        ]
+        before = [(parse_formula(t).status, [x.raw_name for x in parse_formula(t).tokens])
+                  for t in dangerous]
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            for key, name in (
+                ("t.merged.comma", "Water,Glycerin"),
+                ("t.merged.semicolon", "Water;Glycerin"),
+                ("t.frag.parfum", "Parfum（A"),
+                ("t.frag.b", "B）"),
+                ("t.frag.n", "n"),
+                ("t.frag.one", "1"),
+                ("t.frag.three.bd", "3-Butanediol"),
+                ("t.merged.acid", "Acid Red 1,N-Methylpyrrolidone"),
+                ("t.merged.waterglycerin", "Water Glycerin"),
+            ):
+                await _publish_simple(session, key, name)
+
+        after = [(parse_formula(t).status, [x.raw_name for x in parse_formula(t).tokens])
+                 for t in dangerous]
+        assert before == after
+
     async def test_line_break_and_semicolon_never_reach_the_resolver(
         self, db_clean, monkeypatch,
     ):
@@ -1275,6 +1515,12 @@ ALLOWED_IMPORT_PREFIXES = (
     "dataclasses",
     "enum",
     "typing",
+    # Standard library, pure, no I/O. The parser must account for the NFKC pass
+    # Step 7A performs before identity lookup, or a compatibility character can
+    # become structural punctuation after parsing. Step 7A's own normalizer
+    # imports the same module; this is the only way to read Unicode
+    # compatibility data without a table of our own.
+    "unicodedata",
     "__future__",
 )
 

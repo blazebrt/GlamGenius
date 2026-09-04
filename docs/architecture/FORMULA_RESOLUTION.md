@@ -92,6 +92,70 @@ asserting the constant still matches it, plus `;`. Bucket A is deliberately
 protected content, not a top-level boundary: `Parfum (A; B), Water` is two
 entries, and `Parfum (A\nB), Water` likewise.
 
+## 3a. Structure is read as Step 7A will see it, not as it was typed
+
+Step 7B decides where the entries are from the printed codepoints. Step 7A then
+applies **NFKC → trim → whitespace-collapse → casefold** before looking an
+identity up. That gap is a composition hole: a character inert to a raw parser
+can *become* punctuation by the time identity resolution runs.
+
+```
+"Water，Glycerin"          FULLWIDTH COMMA — one token to a raw parser
+normalize_name(...)        -> "water,glycerin"
+```
+
+Publish a reviewed identity named `Water,Glycerin` and that merged token
+resolves. The registry has decided, retroactively, where the printed boundary
+was — the exact failure §6 forbids. The mirror image is a false *split*:
+`Parfum（A,B）, Water` uses fullwidth parentheses, so a raw parser sees no
+grouping and cuts one entry into `Parfum（A` and `B）`.
+
+**So structure is read from a structural view.** Each character is replaced by
+its NFKC form *only when that form is a single character*, which keeps the view
+exactly as long as the input. Index *i* of the view is index *i* of the raw
+string, so boundaries are decided on the view and `raw_name` is sliced from the
+**original** text.
+
+| Group | Codepoints | Treatment |
+| --- | --- | --- |
+| NFKC maps 1→1 onto a structural character | 30 — fullwidth/small/presentation comma, semicolon, `()`, `[]`, `{}`, hyphen, apostrophe | read structurally; raw text preserved verbatim |
+| NFKC expands 1→many *including* structure | 152 — e.g. `⑴` → `(1)`, `″` → `′′` | **fail closed** (`AMBIGUOUS_BOUNDARY`) |
+| NFKC introduces no structure | everything else | ordinary text |
+
+Reconstructing raw↔normalised offsets across a length-changing expansion is the
+kind of guessing this parser refuses everywhere else, so the second group is
+withheld rather than reinterpreted. A final check compares the view's structural
+characters against those of `NFKC(whole string)`; any disagreement also fails
+closed.
+
+### This is not a second identity normalizer
+
+The view produces no lookup key, is never compared against a canonical name, and
+never reaches Step 7A. `normalize_name()` remains the sole identity
+normalization authority. The view's only job is to stop NFKC from creating or
+destroying a boundary *after* parsing.
+
+### Raw observation vs structural safety
+
+Two things are kept deliberately apart:
+
+- **Raw observation.** `raw_name` carries the codepoints and casing the pack
+  printed — `Parfum（A,B）`, not `Parfum(A,B)`. Only the already-governed
+  surrounding-whitespace trim applies. Normalised text is never reported as
+  though it were what the pack printed.
+- **Structural safety.** Boundary decisions account for the transformation Step
+  7A will perform, so the two layers cannot disagree about where the entries
+  are.
+
+### Case is structural too
+
+Step 7A casefolds, so `n,n-Dimethylacetamide` and `N,N-Dimethylacetamide` are
+one identity. Heteroatom locants are therefore classified case-insensitively:
+recognising only uppercase split the lowercase transcription into `n` and
+`n-Dimethylacetamide` while leaving the uppercase form whole — two different
+boundary readings for the same identity. The grammar is not otherwise widened,
+and the raw lowercase spelling is preserved.
+
 ## 4. Chemical punctuation is preserved
 
 Slashes, hyphens, digits, percentages, casing and any bracketed text survive

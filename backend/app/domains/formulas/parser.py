@@ -65,6 +65,7 @@ different ingredient than the one printed.
 """
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -173,12 +174,18 @@ def _failed(status: ParseStatus) -> FormulaParse:
 #: locants — ``N,N-Dimethyl…``, ``O,O-…``, ``S,S-…``, ``P,P-…`` — are the only
 #: letters standard nomenclature uses this way, so the set stops there.
 #:
-#: ``C`` is absent because carbon positions are numbered, not lettered; adding
+#: Both cases are listed because Step 7A casefolds identity names before lookup,
+#: so ``n,n-Dimethylacetamide`` and ``N,N-Dimethylacetamide`` are the same
+#: identity. Boundaries must not differ where identity does not: recognising
+#: only uppercase split the lowercase transcription into ``n`` and
+#: ``n-Dimethylacetamide`` while leaving the uppercase one whole.
+#:
+#: ``C``/``c`` is absent because carbon positions are numbered, not lettered; adding
 #: it would widen the grammar to a form nomenclature does not use, for no gain.
 #: It is *not* what keeps ``CI 77491,CI 77492`` two ingredients — the trailing
 #: hyphen clause does that, and still does with ``C`` added (verified). Keeping
 #: this set minimal is defence in depth, not the defence itself.
-_HETEROATOM_LOCANTS: frozenset[str] = frozenset("NOSP")
+_HETEROATOM_LOCANTS: frozenset[str] = frozenset("NOSPnosp")
 
 #: ASCII digits only, listed rather than using ``str.isdigit()`` so a Unicode
 #: digit from some other script cannot widen the grammar unnoticed.
@@ -238,6 +245,87 @@ def _locant_atom_forwards(text: str, start: int) -> int | None:
     while index < len(text) and text[index] in _PRIMES:
         index += 1
     return index
+
+
+#: Every character this parser reads structurally. If Step 7A's NFKC pass could
+#: introduce one of these where the raw text had none — or remove one the raw
+#: text had — the two layers would disagree about where the entries are.
+_STRUCTURAL_CHARACTERS: frozenset[str] = (
+    frozenset(TOP_LEVEL_DELIMITER)
+    | _AMBIGUOUS_SEPARATORS
+    | _LINE_BOUNDARIES
+    | frozenset(_GROUPING_PAIRS)
+    | _CLOSERS
+    | frozenset("-")
+    | _PRIMES
+)
+
+
+def _structural_characters(text: str) -> list[str]:
+    return [character for character in text if character in _STRUCTURAL_CHARACTERS]
+
+
+def structural_view(text: str) -> str | None:
+    """The text as Step 7A will see its *punctuation*, or ``None`` to fail closed.
+
+    This closes a composition hole between the two layers. Step 7B decides where
+    the entries are from the raw printed codepoints; Step 7A then applies NFKC,
+    trim, whitespace-collapse and casefold before looking an identity up. A
+    character that is inert here can therefore *become* punctuation there:
+
+        "Water，Glycerin"            <- FULLWIDTH COMMA, one token to a raw parser
+        normalize_name(...)         -> "water,glycerin"
+
+    Publish a reviewed identity named ``Water,Glycerin`` and that merged token
+    resolves — the registry has decided, retroactively, where the printed
+    boundary was. The mirror image is a false *split*: ``Parfum（A,B）, Water``
+    uses fullwidth parentheses, so a raw parser does not see grouping and cuts
+    the entry into ``Parfum（A`` and ``B）``.
+
+    So structure is read from this view instead of from the raw text.
+
+    **The view is exactly as long as the input, by construction.** A character
+    is replaced by its NFKC form only when that form is a single character, so
+    index *i* of the view always corresponds to index *i* of the raw string.
+    That is what lets the caller decide boundaries here and still slice
+    ``raw_name`` out of the *original* text: the pack's own codepoints and
+    casing are preserved, and nothing normalised is ever reported as though it
+    were printed.
+
+    **Where the mapping is not one-to-one, it fails closed.** ``⑴`` (U+2474)
+    expands to ``(1)`` and ``″`` (U+2033) to two primes — 152 codepoints in
+    total introduce structural characters while changing length. Reconstructing
+    raw↔normalised offsets across those is exactly the kind of guessing this
+    parser refuses, so any of them yields ``None`` and the formula is withheld.
+
+    A final check compares the view's structural characters against those of
+    ``NFKC(whole string)``. Per-character normalisation and whole-string
+    normalisation agree on every case tested, but the assertion costs one pass
+    and turns any future disagreement into a withheld formula rather than a
+    silently misplaced boundary.
+
+    This is **not** a second identity normalizer. It produces no lookup key, is
+    never compared against a canonical name, and never reaches Step 7A —
+    ``normalize_name()`` remains the sole identity authority. Its only job is to
+    stop NFKC from creating or destroying a boundary after parsing.
+    """
+    pieces: list[str] = []
+    for character in text:
+        folded = unicodedata.normalize("NFKC", character)
+        if len(folded) == 1:
+            pieces.append(folded)
+            continue
+        if set(folded) & _STRUCTURAL_CHARACTERS:
+            # Offsets cannot be reconstructed across this expansion.
+            return None
+        pieces.append(character)
+
+    view = "".join(pieces)
+    if _structural_characters(view) != _structural_characters(
+        unicodedata.normalize("NFKC", text)
+    ):
+        return None
+    return view
 
 
 class CommaRole(StrEnum):
@@ -352,35 +440,48 @@ def classify_comma(text: str, position: int, *, entry_prefix: str) -> CommaRole:
 def _split_top_level(text: str) -> tuple[ParseStatus, list[str]]:
     """Split on top-level commas, reporting how it went.
 
-    One pass, tracking a stack of open groupings. A comma is a candidate
-    separator only at depth zero, and :func:`classify_comma` then decides
-    whether it separates anything.
+    Structure is read from :func:`structural_view`, so a compatibility comma,
+    semicolon or bracket is seen exactly as Step 7A's NFKC pass will see it.
+    **Entry text is taken from the raw string**, index for index — the view is
+    length-preserving precisely so this is safe — so ``raw_name`` keeps the
+    codepoints and casing the pack actually printed.
 
-    Three outcomes:
+    Four outcomes:
 
     * ``PARSED`` with the entries.
     * ``MALFORMED`` when grouping is unbalanced. A closer that does not match
       the innermost opener — and a closer with nothing open — fails immediately
-      rather than at the end, so ``Water (Aqua], Glycerin`` fails on the ``]``
-      instead of being read as one long entry.
-    * ``AMBIGUOUS_BOUNDARY`` when any comma is undecidable. One is enough, and
-      it stops the scan: an entry list containing a boundary nobody can place
-      is not a partial answer, it is a wrong one.
+      rather than at the end.
+    * ``AMBIGUOUS_BOUNDARY`` when a comma is undecidable, when a top-level line
+      break or semicolon appears, or when a compatibility character's NFKC
+      expansion would move structure without a reconstructable offset.
+    * one of those, never a partial answer.
     """
+    view = structural_view(text)
+    if view is None:
+        # A compatibility form whose normalisation would relocate structure.
+        return ParseStatus.AMBIGUOUS_BOUNDARY, []
+
     parts: list[str] = []
     current: list[str] = []
     stack: list[str] = []
+    #: Where the entry under construction starts, as an index into ``view``.
+    #: Only a real delimiter moves it — a locant comma stays inside the entry —
+    #: so ``view[entry_start:index]`` is exactly the entry text seen so far,
+    #: which is what :func:`classify_comma` needs to judge a run's start.
+    entry_start = 0
 
-    for index, character in enumerate(text):
+    for index, character in enumerate(view):
+        # ``character`` decides structure; ``text[index]`` is what gets kept.
+        raw_character = text[index]
         if character in _GROUPING_PAIRS:
             stack.append(_GROUPING_PAIRS[character])
-            current.append(character)
+            current.append(raw_character)
         elif character in _CLOSERS:
-            # A closer with nothing open, or the wrong closer for what is open.
             if not stack or stack[-1] != character:
                 return ParseStatus.MALFORMED, []
             stack.pop()
-            current.append(character)
+            current.append(raw_character)
         elif (
             character in _LINE_BOUNDARIES or character in _AMBIGUOUS_SEPARATORS
         ) and not stack:
@@ -397,18 +498,19 @@ def _split_top_level(text: str) -> tuple[ParseStatus, list[str]]:
             # silently resolves to one substance that was never in the product.
             return ParseStatus.AMBIGUOUS_BOUNDARY, []
         elif character == TOP_LEVEL_DELIMITER and not stack:
-            role = classify_comma(text, index, entry_prefix="".join(current))
+            role = classify_comma(view, index, entry_prefix=view[entry_start:index])
             if role is CommaRole.AMBIGUOUS:
                 return ParseStatus.AMBIGUOUS_BOUNDARY, []
             if role is CommaRole.LOCANT:
                 # Part of the name being read, not a boundary between two.
                 # Kept verbatim: the comma is never stripped or rewritten.
-                current.append(character)
+                current.append(raw_character)
             else:
                 parts.append("".join(current))
                 current = []
+                entry_start = index + 1
         else:
-            current.append(character)
+            current.append(raw_character)
 
     if stack:
         # Something was opened and never closed.
