@@ -602,7 +602,7 @@ jobs:
         run: |
           set -x
           echo "=============== A. FILE CAPABILITIES (getcap is unavailable) ==============="
-          docker run --rm --user 0 glamgenius-backend:ci python3 - <<'PY'
+          docker run --rm -i --user 0 glamgenius-backend:ci python3 - <<'PY'
           import os
           targets = ["/usr/bin/mount", "/usr/bin/umount", "/usr/bin/nsenter",
                      "/bin/mount", "/bin/umount", "/bin/nsenter"]
