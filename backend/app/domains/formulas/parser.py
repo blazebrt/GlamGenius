@@ -17,15 +17,23 @@ real INCI names:
   that name nothing.
 * ``-`` — ``PEG-40 Hydrogenated Castor Oil``, ``Sodium C14-16 Olefin Sulfonate``,
   ``Vitamin-E``.
-* ``;`` — rare as a separator, and a list that uses it is unusual enough to be
-  worth a human look rather than a guess.
-* newline — a wrapped line inside one long name is indistinguishable from a
-  line break between two, and choosing wrong merges or splits an ingredient.
 * ``&``, ``+``, the word "and" — all appear inside supplied trade names.
+* space and tab — a name is usually several words.
 
-A list that uses one of those as its real separator therefore parses as a single
-entry, and that entry does not resolve. That is the intended failure: one
-unresolved entry is recoverable, and a name invented by splitting is not.
+Those are *preserved*: each sits visibly inside a line, so no rival reading has
+it separating two entries.
+
+**A top-level line break or semicolon is different, and is withheld rather than
+preserved.** Either may be a boundary between two printed entries or internal to
+one — a visual wrap, or a semicolon in a supplier's own trade name — and
+punctuation alone cannot tell. Emitting the merged token would not be caution;
+it would hand the question to the identity registry, because Step 7A's
+normalizer collapses every line-boundary character to a single space. A merged
+``"Water\nGlycerin"`` looks up ``water glycerin``, so publishing a reviewed
+``Water Glycerin`` would make a two-line label resolve to one substance that was
+never in the product. Both therefore yield
+:attr:`ParseStatus.AMBIGUOUS_BOUNDARY` and no tokens at all. Inside balanced
+grouping they stay protected content, as before.
 
 **A comma inside balanced grouping is not a separator.** ``Parfum (Fragrance,
 Aroma)`` is one printed ingredient. Parentheses, square and curly brackets are
@@ -76,6 +84,23 @@ MAX_FORMULA_TOKENS = 128
 
 #: The only character that separates one printed entry from the next.
 TOP_LEVEL_DELIMITER = ","
+
+#: Characters Python recognises as ending a line, and every one of them a
+#: boundary this parser cannot place. At top level each is treated as
+#: ``AMBIGUOUS_BOUNDARY`` rather than guessed at — see :data:`_LINE_BOUNDARIES`
+#: usage in :func:`_split_top_level`.
+#:
+#: The list is Python's own ``str.splitlines()`` set, spelled out rather than
+#: derived so a reader can see exactly what is covered, with a test asserting it
+#: still matches ``splitlines()`` if Python ever adds one.
+_LINE_BOUNDARIES: frozenset[str] = frozenset(
+    "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+)
+
+#: Separators a printed list may genuinely use, which this parser will not
+#: guess at. A semicolon between two entries and a semicolon inside one
+#: supplied name look identical, so at top level it withholds the formula.
+_AMBIGUOUS_SEPARATORS: frozenset[str] = frozenset(";")
 
 #: Grouping pairs whose contents are protected from the delimiter. Curly braces
 #: are included because a transcription may carry them; they are protected on
@@ -356,6 +381,21 @@ def _split_top_level(text: str) -> tuple[ParseStatus, list[str]]:
                 return ParseStatus.MALFORMED, []
             stack.pop()
             current.append(character)
+        elif (
+            character in _LINE_BOUNDARIES or character in _AMBIGUOUS_SEPARATORS
+        ) and not stack:
+            # A boundary this parser cannot place. A line break may be a visual
+            # wrap inside one long name or a break between two names, and a
+            # semicolon may separate entries or belong to one supplied name;
+            # punctuation alone cannot tell, so nothing is emitted.
+            #
+            # Emitting one merged token instead would not be "conservative": it
+            # would hand the question to the registry. Step 7A's normalizer
+            # collapses every one of these characters to a single space, so
+            # ``"Water\nGlycerin"`` looks up ``water glycerin`` — and the day a
+            # reviewed identity is published under that name, a two-line label
+            # silently resolves to one substance that was never in the product.
+            return ParseStatus.AMBIGUOUS_BOUNDARY, []
         elif character == TOP_LEVEL_DELIMITER and not stack:
             role = classify_comma(text, index, entry_prefix="".join(current))
             if role is CommaRole.AMBIGUOUS:

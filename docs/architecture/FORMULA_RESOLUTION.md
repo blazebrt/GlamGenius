@@ -44,20 +44,53 @@ later milestone.
 
 Comma is the ordinary ingredient-list separator and the only character explicit
 enough to act on. A top-level comma is a delimiter *unless* it sits inside a
-chemical locant, which §6 describes. Every other candidate was considered and rejected, because
-each occurs *inside* real INCI names:
+chemical locant, which §6 describes.
 
-| Rejected | Because it appears inside |
+Every other character falls into one of two buckets, and the distinction
+matters more than it looks.
+
+### Bucket A — preserved inside the entry
+
+These genuinely occur **inside** ingredient and trade names, and sit visibly
+*within* a line, so there is no rival reading in which they separate two printed
+entries:
+
+| Preserved | Because it appears inside |
 | --- | --- |
 | `/` | `Acrylates/C10-30 Alkyl Acrylate Crosspolymer`, `CI 77491/CI 77492`, `Aqua/Water/Eau` |
 | `-` | `PEG-40 Hydrogenated Castor Oil`, `Sodium C14-16 Olefin Sulfonate`, `Vitamin-E` |
-| `;` | rare as a separator; a list using it deserves a human look, not a guess |
-| newline | a wrapped line inside one long name is indistinguishable from a break between two |
 | `&`, `+`, "and" | all appear inside supplied trade names |
+| space, tab | `Butyrospermum Parkii (Shea) Butter` — a name is usually several words |
 
-A list that genuinely uses one of those as its separator parses as a **single
-entry**, which then does not resolve. That is the intended failure: one
-unresolved entry is recoverable, and a name invented by splitting is not.
+Splitting on any of these would shatter one ingredient into fragments that name
+nothing.
+
+### Bucket B — boundary-ambiguous, so the formula is withheld
+
+A **top-level line break** or **semicolon** may be a boundary between two
+printed entries, or may be internal to one — a visual wrap in a long name, or a
+semicolon a supplier put in their own trade name. Punctuation alone cannot tell.
+
+These return `AMBIGUOUS_BOUNDARY`: **zero tokens, and Step 7A is never asked.**
+
+> An earlier version of this document claimed such a list "parses as a single
+> entry, which then does not resolve". That was wrong, in exactly the way §6
+> describes: it is a statement about today's registry, not an invariant.
+> Step 7A's normalizer collapses *every* line-boundary character to a single
+> space, so a merged `"Water\nGlycerin"` token looks up `water glycerin` — and
+> the day a reviewed identity is published under the name `Water Glycerin`, a
+> two-line label would silently resolve to one substance that was never in the
+> product. `"Water; Glycerin"` has the same shape. Merging is a guess, not
+> caution.
+
+Covered: `\n`, `\r`, `\r\n`, `\v`, `\f`, `\x1c`, `\x1d`, `\x1e`, `\x85`,
+`\u2028`, `\u2029` — Python's complete `str.splitlines()` set, with a test
+asserting the constant still matches it, plus `;`. Bucket A is deliberately
+*not* generalised into this rule.
+
+**Grouping still wins.** A semicolon or line break inside balanced brackets is
+protected content, not a top-level boundary: `Parfum (A; B), Water` is two
+entries, and `Parfum (A\nB), Water` likewise.
 
 ## 4. Chemical punctuation is preserved
 
@@ -95,7 +128,7 @@ entry would renumber every position after it.
 | `PARSED` | read whole; entries returned in printed order |
 | `EMPTY` | absent, empty, or whitespace only |
 | `MALFORMED` | unbalanced grouping, or an entry with no text |
-| `AMBIGUOUS_BOUNDARY` | a comma that punctuation cannot place; nothing is emitted and nothing is resolved |
+| `AMBIGUOUS_BOUNDARY` | a comma, line break or semicolon that punctuation cannot place; nothing is emitted and nothing is resolved |
 | `TOO_LONG` | longer than 4000 characters |
 | `TOO_MANY_ITEMS` | more than 128 entries |
 

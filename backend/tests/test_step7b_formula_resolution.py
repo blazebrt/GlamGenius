@@ -7,11 +7,12 @@ add.
 
 Four things shape every group below:
 
-* **Only a top-level comma separates entries.** Semicolons, newlines, slashes,
-  hyphens, ampersands and the word "and" all occur *inside* real INCI names, so
-  splitting on them would shatter one ingredient into fragments that name
-  nothing. A list that really uses one of those parses as a single entry and
-  does not resolve — which is the intended failure.
+* **Only a top-level comma separates entries**, and characters split into two
+  buckets. Slashes, hyphens, ampersands, the word "and", spaces and tabs occur
+  *inside* real INCI names and are preserved. A top-level line break or
+  semicolon is boundary-ambiguous — it may separate two entries or be internal
+  to one — so it withholds the whole formula rather than being guessed either
+  way.
 * **Malformed means the whole list, not the tail.** Returning the well-formed
   prefix would hand a caller an analysis that looks complete and silently omits
   everything after the first unclosed bracket.
@@ -190,16 +191,30 @@ class TestParserMatrix:
         result = parse_formula("CI 77491/CI 77492/CI 77499, Mica")
         assert [t.raw_name for t in result.tokens] == ["CI 77491/CI 77492/CI 77499", "Mica"]
 
-    def test_h_a_semicolon_is_not_guessed_as_a_separator(self):
-        result = parse_formula("Water; Glycerin")
-        assert result.status is ParseStatus.PARSED
-        assert [t.raw_name for t in result.tokens] == ["Water; Glycerin"]
+    def test_h_a_top_level_semicolon_fails_closed(self):
+        """Not split, and not merged either. Withheld.
 
-    def test_i_a_newline_is_not_guessed_as_a_separator(self):
+        A semicolon between two entries and a semicolon inside one supplied
+        name look identical. Emitting the merged token would hand the question
+        to the registry: Step 7A would look up ``water; glycerin``, and a
+        reviewed identity published under that name would make a
+        semicolon-separated list resolve to one substance.
+        """
+        result = parse_formula("Water; Glycerin")
+        assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+        assert result.tokens == ()
+
+    def test_i_a_top_level_line_break_fails_closed(self):
+        """A line break may be a wrap inside one name or a break between two.
+
+        Step 7A's normalizer collapses every line-boundary character to a single
+        space, so ``"Water\nGlycerin"`` looks up ``water glycerin``. Publishing
+        a canonical ``Water Glycerin`` would then make a two-line label resolve
+        to one substance that was never in the product.
+        """
         result = parse_formula("Water\nGlycerin")
-        assert result.status is ParseStatus.PARSED
-        assert len(result.tokens) == 1
-        assert result.tokens[0].raw_name == "Water\nGlycerin"
+        assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+        assert result.tokens == ()
 
     @pytest.mark.parametrize("text", [
         "Water,,Glycerin", ",Water", "Water,", "Water,   ,Glycerin",
@@ -254,11 +269,68 @@ class TestParserGuarantees:
     def test_the_delimiter_is_only_the_comma(self):
         assert formula_parser.TOP_LEVEL_DELIMITER == ","
 
-    @pytest.mark.parametrize("separator", [";", "/", "&", "+", "|", "\n", "\t", " and ", " AND "])
-    def test_no_other_character_splits_a_list(self, separator):
+    @pytest.mark.parametrize("separator", ["/", "&", "+", "|", "\t", " and ", " AND ", " "])
+    def test_a_preserved_character_keeps_the_entry_whole(self, separator):
+        """Bucket A: characters that genuinely occur *inside* ingredient names.
+
+        Slashes (``Aqua/Water/Eau``), hyphens (``PEG-40 …``), ampersands, plus
+        signs, the word "and" and ordinary horizontal whitespace all appear
+        inside supplied trade names. They are part of the token, and splitting
+        on any of them would shatter one ingredient into fragments that name
+        nothing.
+
+        These are **not** the same as the boundary-ambiguous forms in bucket B:
+        a space or a slash sits visibly *within* a line, so there is no rival
+        reading in which it separates two printed entries.
+        """
         result = parse_formula(f"Water{separator}Glycerin")
         assert result.status is ParseStatus.PARSED
         assert len(result.tokens) == 1, f"{separator!r} was treated as a separator"
+
+    @pytest.mark.parametrize("separator", [
+        ";", "\n", "\r", "\r\n", "\v", "\f", "\x1c", "\x1d", "\x1e",
+        "\x85", "\u2028", "\u2029",
+    ], ids=lambda c: repr(c))
+    def test_a_boundary_ambiguous_character_withholds_the_formula(self, separator):
+        """Bucket B: forms that may or may not be a boundary. Neither guessed.
+
+        Every one of these is collapsed to a single space by Step 7A's
+        normalizer, so emitting a merged token would make the identity registry
+        decide the boundary: publish the collapsed name and the merged token
+        starts resolving. Splitting would be a different guess with the same
+        flaw. So no token is emitted at all.
+        """
+        result = parse_formula(f"Water{separator}Glycerin")
+        assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+        assert result.tokens == ()
+
+    def test_the_line_boundary_set_matches_python_splitlines(self):
+        """The constant is spelled out; this keeps it honest.
+
+        If Python ever recognises another line-boundary character, a form that
+        Step 7A would collapse could otherwise slip through as PARSED.
+        """
+        from app.domains.formulas.parser import _LINE_BOUNDARIES
+
+        recognised = {
+            character for character in map(chr, range(0x110000))
+            if len(f"a{character}b".splitlines()) > 1
+        }
+        assert recognised == _LINE_BOUNDARIES
+
+    def test_a_protected_semicolon_or_line_break_is_not_a_top_level_failure(self):
+        """Grouping still protects its contents, exactly as before."""
+        grouped = parse_formula("Parfum (A; B), Water")
+        assert grouped.status is ParseStatus.PARSED
+        assert [t.raw_name for t in grouped.tokens] == ["Parfum (A; B)", "Water"]
+
+        wrapped = parse_formula("Parfum (A\nB), Water")
+        assert wrapped.status is ParseStatus.PARSED
+        assert [t.raw_name for t in wrapped.tokens] == ["Parfum (A\nB)", "Water"]
+
+        nested = parse_formula("Parfum (Blend [X; Y]), Water")
+        assert nested.status is ParseStatus.PARSED
+        assert len(nested.tokens) == 2
 
     @pytest.mark.parametrize("printed", [
         "Niacinamide 5%", "Sodium C14-16 Olefin Sulfonate", "Retinyl Palmitate",
@@ -767,6 +839,133 @@ class TestFormulaResolution:
         reported = {r.substance_key for r in result.ingredients}
         reported |= {k for r in result.ingredients for k in r.candidate_substance_keys}
         assert reported == set()
+
+    async def test_a_line_break_cannot_become_one_identity_however_the_registry_grows(
+        self, db_clean,
+    ):
+        """The newline counterpart of the fragment and merged-comma regressions.
+
+        Step 7A's normalizer collapses every line-boundary character to a single
+        space. So a parser that emitted ``"Water\nGlycerin"`` as one token would
+        be looking up ``water glycerin`` — and the moment a reviewed identity is
+        published under the name ``Water Glycerin``, a two-line label resolves
+        to one substance that was never in the product.
+
+        That name is published here deliberately. The point is not that the
+        dangerous name is absent; it is that its presence changes nothing.
+        """
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "water.glycerin.trap", "Water Glycerin")
+
+        # The trap identity is real and resolvable by its exact printed name,
+        # so this test proves the parser withheld it rather than that it was
+        # never reachable.
+        async with factory() as session:
+            direct = await resolve_formula(session, "Water Glycerin")
+        assert direct.status is ParseStatus.PARSED
+        assert direct.ingredients[0].status is ResolutionStatus.RESOLVED
+        assert direct.ingredients[0].substance_key == "water.glycerin.trap"
+
+        async with factory() as session:
+            for text in ("Water\nGlycerin", "Water\r\nGlycerin", "Water\rGlycerin",
+                         "Water\u2028Glycerin"):
+                result = await resolve_formula(session, text)
+                assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY, text
+                assert result.ingredients == ()
+                assert result.resolved_count == 0
+
+    async def test_a_semicolon_cannot_become_one_identity_however_the_registry_grows(
+        self, db_clean,
+    ):
+        """The same, for a semicolon-separated list.
+
+        ``"Water; Glycerin"`` normalises to ``water; glycerin``, so a reviewed
+        identity published under that exact printed name would make the merged
+        token resolve. Published here on purpose.
+        """
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "semicolon.trap", "Water; Glycerin")
+
+        async with factory() as session:
+            direct = await resolve_formula(session, "Water Glycerin Semicolon Probe")
+        assert direct.status is ParseStatus.PARSED   # the probe itself parses
+
+        # The trap resolves when asked as a bare name through Step 7A directly,
+        # which is the layer that owns identity — the formula layer is what
+        # refuses to ask.
+        from app.domains.substances.service import resolve_name
+
+        async with factory() as session:
+            probe = await resolve_name(session, "Water; Glycerin")
+        assert probe.status is ResolutionStatus.RESOLVED
+        assert probe.substance_key == "semicolon.trap"
+
+        async with factory() as session:
+            for text in ("Water; Glycerin", "Water;Glycerin", "Water, Aqua;Glycerin"):
+                result = await resolve_formula(session, text)
+                assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY, text
+                assert result.ingredients == ()
+                assert result.resolved_count == 0
+
+    async def test_line_break_and_semicolon_never_reach_the_resolver(
+        self, db_clean, monkeypatch,
+    ):
+        """Not merely "no result" — Step 7A is never asked."""
+        from app.domains.formulas import service as formula_service
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "water.glycerin.trap", "Water Glycerin")
+            await _publish_simple(session, "water", "Water")
+
+        calls: list[list[str]] = []
+        real = formula_service.resolve_names
+
+        async def _spy(session, names):
+            calls.append(list(names))
+            return await real(session, names)
+
+        monkeypatch.setattr(formula_service, "resolve_names", _spy)
+
+        async with factory() as session:
+            for text in ("Water\nGlycerin", "Water; Glycerin", "Water\r\nGlycerin"):
+                result = await resolve_formula(session, text)
+                assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+        assert calls == [], calls
+
+        # A comma list still reaches the resolver, so the assertion above is
+        # about the boundary rule rather than a broken spy.
+        async with factory() as session:
+            ok = await resolve_formula(session, "Water, Glycerin")
+        assert ok.status is ParseStatus.PARSED
+        assert calls == [["Water", "Glycerin"]]
+
+    async def test_line_break_and_semicolon_issue_no_database_query(self, db_clean):
+        from sqlalchemy import event
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_simple(session, "water", "Water")
+
+        statements: list[str] = []
+
+        def _record(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        sync_engine = sql.get_engine().sync_engine
+        async with factory() as session:
+            event.listen(sync_engine, "before_cursor_execute", _record)
+            try:
+                statements.clear()
+                for text in ("Water\nGlycerin", "Water; Glycerin",
+                             "Water, Glycerin\nNiacinamide"):
+                    result = await resolve_formula(session, text)
+                    assert result.status is ParseStatus.AMBIGUOUS_BOUNDARY
+            finally:
+                event.remove(sync_engine, "before_cursor_execute", _record)
+        assert statements == [], statements
 
     async def test_an_ambiguous_boundary_never_reaches_the_identity_resolver(
         self, db_clean, monkeypatch,
