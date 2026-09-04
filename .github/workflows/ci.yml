@@ -370,11 +370,9 @@ jobs:
         if: github.event_name == 'pull_request' && needs.scope.outputs.node_deps == 'true'
         working-directory: frontend
         run: |
-          set +e
-          yarn audit --level high --json > /tmp/yarn-audit.json
-          code=$?
-          echo "yarn audit exit code = $code (bitmask: 1=info,2=low,4=moderate,8=high,16=critical)"
-          set -e
+          # The runner only retries an audit that returned no records at all;
+          # the validator below is still the one and only gate.
+          node ../security/run-node-audit.js /tmp/yarn-audit.json
           node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json ../security/node-audit-false-positives.json
 
   # ---- Mobile: Android bundle validation (blocking) ------------------------
@@ -511,16 +509,15 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Node audit validator tests
-        run: node --test security/validate-node-audit.test.js
+        run: node --test security/validate-node-audit.test.js security/run-node-audit.test.js
       - name: yarn audit and strict exception validation
         working-directory: frontend
         run: |
-          set +e
-          yarn audit --level high --json > /tmp/yarn-audit.json
-          code=$?
-          echo "yarn audit exit code = $code (bitmask: 1=info,2=low,4=moderate,8=high,16=critical)"
-          # The validator below, rather than Yarn's bitmask, decides the gate.
-          set -e
+          # run-node-audit.js retries only when the advisory service returned no
+          # audit records at all, and never decides pass or fail. The validator
+          # below, rather than Yarn's exit bitmask, remains the gate: if every
+          # attempt came back empty the output is unusable and it fails closed.
+          node ../security/run-node-audit.js /tmp/yarn-audit.json
           node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json ../security/node-audit-false-positives.json
       - name: Upload yarn-audit report
         if: failure()
