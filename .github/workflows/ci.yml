@@ -376,8 +376,11 @@ jobs:
         if: github.event_name == 'pull_request' && needs.scope.outputs.node_deps == 'true'
         working-directory: frontend
         run: |
-          # The runner retries only an audit that returned no records at all (5 attempts,
-          # linear backoff); the validator below is still the one and only gate.
+          # run-node-audit.js retries an audit that did not run to completion --
+          # only a valid auditSummary establishes completion -- and carries any
+          # advisory seen on an incomplete attempt forward, so retries can
+          # recover completeness but never erase a finding. The validator below
+          # remains the sole pass/fail authority.
           node ../security/run-node-audit.js /tmp/yarn-audit.json
           node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json ../security/node-audit-false-positives.json
 
@@ -519,10 +522,13 @@ jobs:
       - name: yarn audit and strict exception validation
         working-directory: frontend
         run: |
-          # run-node-audit.js retries only when the advisory service returned no
-          # audit records at all, and never decides pass or fail. The validator
-          # below, rather than Yarn's exit bitmask, remains the gate: if every
-          # attempt came back empty the output is unusable and it fails closed.
+          # run-node-audit.js retries an audit that did not run to completion and
+          # never decides pass or fail. Completion means a valid auditSummary;
+          # advisory records alone do not prove the scan finished. Advisories
+          # observed on incomplete attempts are carried forward, so retries
+          # recover completeness without erasing evidence. The validator below,
+          # rather than Yarn's exit bitmask, remains the gate: if no attempt
+          # completed, the output has no summary and it fails closed.
           node ../security/run-node-audit.js /tmp/yarn-audit.json
           node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json ../security/node-audit-false-positives.json
       - name: Upload yarn-audit report

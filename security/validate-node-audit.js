@@ -284,6 +284,19 @@ function auditSummaryIsValid(record) {
   );
 }
 
+/**
+ * What kind of audit record is this? `"advisory"`, `"summary"`, or `null`.
+ *
+ * Exported so the retry runner does not maintain a competing interpretation of
+ * Yarn's output. It classifies; it never judges. Severity, exceptions, false
+ * positives and expiry all stay here, in the authority.
+ */
+function classifyAuditRecord(record) {
+  if (record && record.type === "auditAdvisory") return "advisory";
+  if (auditSummaryIsValid(record)) return "summary";
+  return null;
+}
+
 function parseAuditText(auditText) {
   if (typeof auditText !== "string" || !auditText.trim()) {
     fail("Audit output is empty");
@@ -516,6 +529,7 @@ if (require.main === module) main(process.argv);
 
 module.exports = {
   auditSummaryIsValid,
+  classifyAuditRecord,
   formatPass,
   parseAuditText,
   validateAuditText,

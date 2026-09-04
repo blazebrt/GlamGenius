@@ -2,7 +2,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const test = require("node:test");
 
-const { auditOutputIsComplete, runWithRetries } = require("./run-node-audit");
+const { advisoryLinesIn, auditOutputIsComplete, runWithRetries } = require("./run-node-audit");
+const { validateAuditText } = require("./validate-node-audit");
 const runnerSource = fs.readFileSync(`${__dirname}/run-node-audit.js`, "utf8");
 
 const registry = JSON.parse(
@@ -238,4 +239,177 @@ test("the default attempt budget is the one the incident data justifies", () => 
     },
   });
   assert.equal(calls, 5);
+});
+
+
+// ---- sticky advisory evidence ---------------------------------------------
+//
+// Retries recover completeness. They must never erase evidence. These drive the
+// REAL validator with whatever the runner finally produces, because the only
+// thing that matters is the verdict at the end of the pipe.
+
+const TODAY = { today: "2026-08-16" };
+
+function attemptsOf(...outputs) {
+  let i = 0;
+  return () => {
+    const stdout = outputs[Math.min(i, outputs.length - 1)];
+    i += 1;
+    return { stdout, stderr: stdout ? "connection reset" : "504", status: stdout ? 1 : 1 };
+  };
+}
+
+function gate(stdout) {
+  return validateAuditText(stdout, registry, falsePositiveRegistry, TODAY);
+}
+
+test("advisoryLinesIn extracts advisories verbatim and ignores everything else", () => {
+  const text = `${OUTAGE_STDOUT}\n${GOVERNED_ADVISORY}\nnot json\n${SUMMARY_LINE}`;
+  assert.deepEqual(advisoryLinesIn(text), [GOVERNED_ADVISORY]);
+  assert.deepEqual(advisoryLinesIn(""), []);
+  assert.deepEqual(advisoryLinesIn(SUMMARY_LINE), []);
+});
+
+test("J: an unknown HIGH seen on a partial attempt is NOT erased by a later clean audit", () => {
+  // The load-bearing regression. Attempt 1 reports a real vulnerability and
+  // dies; attempt 2 completes clean. Before sticky evidence the HIGH vanished
+  // with attempt 1 and the gate passed on a finding it had been told about.
+  let calls = 0;
+  const result = run({
+    attempts: 5,
+    runAudit: () => {
+      calls += 1;
+      return calls === 1
+        ? { stdout: UNKNOWN_HIGH_ADVISORY, stderr: "connection reset", status: 1 }
+        : { stdout: SUMMARY_LINE, stderr: "", status: 0 };
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.complete, true);
+  assert.match(result.stdout, /GHSA-zzzz-zzzz-zzzz/);
+  assert.match(result.stdout, /auditSummary/);
+  assert.throws(() => gate(result.stdout), /Unaccepted HIGH advisory GHSA-zzzz-zzzz-zzzz/);
+});
+
+test("K: a governed advisory seen on a partial attempt survives and is judged by the registry", () => {
+  const result = run({
+    attempts: 5,
+    runAudit: attemptsOf(GOVERNED_ADVISORY, SUMMARY_LINE),
+  });
+  assert.equal(result.attempts, 2);
+  assert.equal(result.complete, true);
+  assert.match(result.stdout, new RegExp(approved.advisory_id));
+  // Passes only because the registry explicitly governs it. The runner knows
+  // nothing about that; it simply did not lose the evidence.
+  const verdict = gate(result.stdout);
+  assert.deepEqual(
+    verdict.acceptedExceptions.map((e) => e.advisory_id),
+    [approved.advisory_id],
+  );
+});
+
+test("L: a false-positive advisory seen on a partial attempt survives and is judged by the registry", () => {
+  const result = run({
+    attempts: 5,
+    runAudit: attemptsOf(FALSE_POSITIVE_ADVISORY, SUMMARY_LINE),
+  });
+  assert.equal(result.attempts, 2);
+  assert.match(result.stdout, new RegExp(nanoidFalsePositive.advisory_id));
+  const verdict = gate(result.stdout);
+  assert.equal(verdict.falsePositiveFindings.length, 1);
+  assert.equal(verdict.findings.length, 1);
+});
+
+test("M: advisories from several partial attempts all survive into the validator input", () => {
+  const result = run({
+    attempts: 5,
+    runAudit: attemptsOf(GOVERNED_ADVISORY, FALSE_POSITIVE_ADVISORY, SUMMARY_LINE),
+  });
+  assert.equal(result.attempts, 3);
+  assert.equal(result.carriedAdvisories, 2);
+  assert.match(result.stdout, new RegExp(approved.advisory_id));
+  assert.match(result.stdout, new RegExp(nanoidFalsePositive.advisory_id));
+  const verdict = gate(result.stdout);
+  assert.equal(verdict.acceptedExceptions.length, 1);
+  assert.equal(verdict.falsePositiveFindings.length, 1);
+});
+
+test("evidence survives even when every attempt is incomplete", () => {
+  // attempt 1 sees a real HIGH; attempts 2-5 are pure outage. The gate must
+  // fail for incompleteness AND the finding must still be in the record.
+  let calls = 0;
+  const result = run({
+    attempts: 5,
+    runAudit: () => {
+      calls += 1;
+      return calls === 1
+        ? { stdout: UNKNOWN_HIGH_ADVISORY, stderr: "connection reset", status: 1 }
+        : { stdout: OUTAGE_STDOUT, stderr: "ESOCKETTIMEDOUT", status: 1 };
+    },
+  });
+  assert.equal(result.complete, false);
+  assert.match(result.stdout, /GHSA-zzzz-zzzz-zzzz/);
+  assert.doesNotMatch(result.stdout, /auditSummary/); // nothing manufactured
+  // Fails closed. The trailing info record trips the record-type rule before
+  // the completeness rule is reached -- either way the gate refuses, and the
+  // finding is still in the record for whoever reads it.
+  assert.throws(() => gate(result.stdout), /unsupported record type/);
+});
+
+test("all attempts incomplete with clean outage output fails specifically for incompleteness", () => {
+  let calls = 0;
+  const result = run({
+    attempts: 5,
+    runAudit: () => {
+      calls += 1;
+      return calls === 1
+        ? { stdout: UNKNOWN_HIGH_ADVISORY, stderr: "connection reset", status: 1 }
+        : { stdout: "", stderr: "ESOCKETTIMEDOUT", status: 1 };
+    },
+  });
+  assert.equal(result.complete, false);
+  assert.match(result.stdout, /GHSA-zzzz-zzzz-zzzz/);
+  assert.throws(() => gate(result.stdout), /did not run to completion/);
+});
+
+test("a first-attempt completed audit is handed over byte-for-byte", () => {
+  const stdout = `${GOVERNED_ADVISORY}\n${SUMMARY_LINE}`;
+  const result = run({ attempts: 5, runAudit: () => ({ stdout, stderr: "", status: 8 }) });
+  assert.equal(result.attempts, 1);
+  assert.equal(result.carriedAdvisories, 0);
+  assert.equal(result.stdout, stdout);
+});
+
+test("an info-only outage carries nothing forward and recovers normally", () => {
+  const result = run({ attempts: 5, runAudit: attemptsOf(OUTAGE_STDOUT, SUMMARY_LINE) });
+  assert.equal(result.attempts, 2);
+  assert.equal(result.carriedAdvisories, 0);
+  assert.equal(result.stdout, SUMMARY_LINE);
+  assert.equal(gate(result.stdout).findings.length, 0);
+});
+
+test("duplicate advisories across partial attempts are carried once", () => {
+  const result = run({
+    attempts: 5,
+    runAudit: attemptsOf(GOVERNED_ADVISORY, GOVERNED_ADVISORY, SUMMARY_LINE),
+  });
+  assert.equal(result.carriedAdvisories, 1);
+});
+
+test("the runner reads neither security registry", () => {
+  // Structural: the moment this file learns what an exception is, there are two
+  // security authorities and they will disagree.
+  // Asserted against what the file *does*, not what its comments say: the
+  // prose deliberately names exceptions and expiry to explain what this file
+  // leaves alone, and a test that forbade the words would forbid the
+  // explanation too.
+  const code = runnerSource
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  assert.doesNotMatch(code, /node-audit-exceptions/);
+  assert.doesNotMatch(code, /node-audit-false-positives/);
+  assert.doesNotMatch(code, /require\(["'][^"']*exception/i);
+  assert.doesNotMatch(code, /severity|critical|expiry|false_positive/i);
+  // The single import from the authority is the classification helper only.
+  assert.match(code, /require\("\.\/validate-node-audit"\)/);
 });

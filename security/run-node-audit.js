@@ -28,9 +28,12 @@
  * partial findings all happen to be governed could be reported as clean.
  *
  * Retrying can only ever turn an unfinished audit into a finished one. It
- * cannot turn a finding into a pass: a completed audit satisfies the marker on
- * its first attempt, no retry happens, and the validator sees byte-for-byte
- * what it would have seen before this script existed.
+ * cannot turn a finding into a pass, for two reasons. A completed audit
+ * satisfies the marker on its first attempt, so no retry happens and the
+ * validator sees byte-for-byte what Yarn produced. And every advisory seen on
+ * an incomplete attempt is carried forward into the final validator input, so
+ * a finding reported just before a connection dropped is not erased by a later
+ * attempt that came back clean.
  */
 
 const fs = require("node:fs");
@@ -40,7 +43,7 @@ const { spawnSync } = require("node:child_process");
 // a completion marker is; this only asks it. Two copies of that definition
 // could drift, and the direction of drift that matters -- the runner accepting
 // something the validator would reject -- is exactly the bug being closed here.
-const { auditSummaryIsValid } = require("./validate-node-audit");
+const { auditSummaryIsValid, classifyAuditRecord } = require("./validate-node-audit");
 
 // Sized to measured behaviour, not to taste. During the 2026-09-04 incident the
 // endpoint recovered into an intermittent state rather than coming straight
@@ -93,8 +96,56 @@ function positiveIntFromEnv(value, fallback) {
 }
 
 /**
+ * Every `auditAdvisory` line in this output, verbatim.
+ *
+ * The exact source line is kept rather than a re-serialised object, so what
+ * reaches the validator is what the scanner actually said.
+ */
+function advisoryLinesIn(stdout) {
+  const lines = [];
+  for (const line of String(stdout || "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let record;
+    try {
+      record = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (classifyAuditRecord(record) === "advisory") lines.push(trimmed);
+  }
+  return lines;
+}
+
+/**
+ * Prepend advisories carried over from earlier attempts.
+ *
+ * With nothing carried over this returns the input untouched, so an audit that
+ * completed on its first attempt is handed to the validator byte-for-byte as
+ * Yarn produced it.
+ */
+function withCarriedAdvisories(stdout, carried) {
+  if (carried.length === 0) return stdout;
+  return [...carried, stdout].join("\n");
+}
+
+/**
  * Run the audit up to `attempts` times, stopping at the first completed audit.
  * `runAudit` is injected so the retry policy can be tested without a network.
+ *
+ * **Retries recover completeness. They never erase evidence.**
+ *
+ * An attempt that died before its summary is incomplete, but "incomplete" does
+ * not mean "everything it said was false". The scanner may well have reported a
+ * genuine advisory and *then* lost its connection. Discarding that attempt
+ * wholesale — which is what returning only the last attempt's output does —
+ * means a real finding on attempt 1 disappears the moment attempt 2 comes back
+ * clean, and the gate passes on a vulnerability it had already been told about.
+ *
+ * So every advisory seen on an incomplete attempt is carried forward and
+ * included in what the validator finally reads. Nothing here decides whether
+ * those advisories matter: severity, exceptions, false positives and expiry are
+ * the validator's alone, and this file reads neither registry.
  */
 function runWithRetries({
   attempts = DEFAULT_ATTEMPTS,
@@ -104,6 +155,9 @@ function runWithRetries({
   log = console.error,
 } = {}) {
   let last = { stdout: "", stderr: "", status: null };
+  const carried = [];
+  const seen = new Set();
+
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     last = runAudit(attempt);
     const complete = auditOutputIsComplete(last.stdout);
@@ -111,8 +165,27 @@ function runWithRetries({
       `yarn audit attempt ${attempt}/${attempts}: exit=${last.status} ` +
         `completed=${complete}`,
     );
-    if (complete) return { ...last, attempts: attempt, complete: true };
+    if (complete) {
+      if (carried.length) {
+        log(`  carrying ${carried.length} advisory record(s) forward from incomplete attempts`);
+      }
+      return {
+        ...last,
+        stdout: withCarriedAdvisories(last.stdout, carried),
+        attempts: attempt,
+        complete: true,
+        carriedAdvisories: carried.length,
+      };
+    }
     if (attempt < attempts) {
+      // Preserve this attempt's advisories before moving on. Only attempts we
+      // are about to abandon are harvested; the final attempt's own output is
+      // appended whole below, so nothing is counted twice.
+      for (const line of advisoryLinesIn(last.stdout)) {
+        if (seen.has(line)) continue;
+        seen.add(line);
+        carried.push(line);
+      }
       const excerpt = (last.stderr || "").trim().split("\n")[0] || "(no stderr)";
       log(`  audit did not run to completion (no auditSummary): ${excerpt}`);
       // Linear backoff. The failure mode is an overloaded upstream, so the
@@ -120,7 +193,16 @@ function runWithRetries({
       sleep(backoffMs * attempt);
     }
   }
-  return { ...last, attempts, complete: false };
+  if (carried.length) {
+    log(`  carrying ${carried.length} advisory record(s) forward from incomplete attempts`);
+  }
+  return {
+    ...last,
+    stdout: withCarriedAdvisories(last.stdout, carried),
+    attempts,
+    complete: false,
+    carriedAdvisories: carried.length,
+  };
 }
 
 function main(argv) {
@@ -158,6 +240,7 @@ function main(argv) {
 if (require.main === module) process.exitCode = main(process.argv);
 
 module.exports = {
+  advisoryLinesIn,
   auditOutputIsComplete,
   runWithRetries,
 };
