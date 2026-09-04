@@ -256,6 +256,17 @@ function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+//: Yarn Classic emits one counter per severity in every auditSummary. All five
+//: are required: a summary missing them is not the record Yarn writes at the
+//: end of a real audit, and since that record is now our only proof the scan
+//: finished, a loose shape check would let a fabricated or truncated object
+//: stand in for that proof.
+const SUMMARY_SEVERITIES = ["info", "low", "moderate", "high", "critical"];
+
+function isCount(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 /**
  * Is this record the marker that the audit ran to completion?
  *
@@ -271,17 +282,18 @@ function isPlainObject(value) {
  * summary-less stream would report PASS on a scan that never completed --
  * silently clearing every dependency the scanner never got to.
  *
- * The shape check is deliberately minimal: enough to tell a real summary from
- * a truncated or fabricated one, without asserting counts we would then have
- * to keep in step with Yarn.
+ * Because the marker carries that weight, its shape is checked strictly: every
+ * canonical severity counter must be present and be a non-negative integer.
+ * `Number.isInteger` also rejects `NaN` and both infinities, so fractional,
+ * negative, string, boolean, null and missing counters all fail here.
+ * Non-security fields Yarn may add alongside `vulnerabilities` are left alone.
  */
 function auditSummaryIsValid(record) {
-  return Boolean(
-    record
-      && record.type === "auditSummary"
-      && isPlainObject(record.data)
-      && isPlainObject(record.data.vulnerabilities),
-  );
+  if (!record || record.type !== "auditSummary") return false;
+  if (!isPlainObject(record.data)) return false;
+  const counts = record.data.vulnerabilities;
+  if (!isPlainObject(counts)) return false;
+  return SUMMARY_SEVERITIES.every((severity) => isCount(counts[severity]));
 }
 
 /**
@@ -297,12 +309,60 @@ function classifyAuditRecord(record) {
   return null;
 }
 
+/**
+ * Does this stream show an audit that ran to completion?
+ *
+ * Three things, all of which the runner and the validator must agree on:
+ * exactly one valid summary, and it is the last thing in the stream. Yarn
+ * writes the summary when it has finished, so anything after it means the
+ * output is not the tidy end-of-audit stream it appears to be -- a second
+ * audit's records bleeding in, a truncated concatenation, or a stream that
+ * carried on past the point we thought it stopped. Rather than guess which,
+ * refuse it.
+ *
+ * Parsing is lenient about unparseable noise, because Yarn writes progress
+ * chatter that is not our business; the validator is stricter and rejects it
+ * outright. Both directions of that disagreement are safe: the runner may
+ * retry something the validator would reject, never the reverse.
+ */
+function auditStreamCompletion(auditText) {
+  if (typeof auditText !== "string" || !auditText.trim()) {
+    return { complete: false, reason: "no output" };
+  }
+  let summaries = 0;
+  let summaryAt = -1;
+  let lastContentAt = -1;
+  for (const [index, line] of auditText.split(/\r?\n/).entries()) {
+    if (!line.trim()) continue;
+    lastContentAt = index;
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (auditSummaryIsValid(record)) {
+      summaries += 1;
+      summaryAt = index;
+    }
+  }
+  if (summaries === 0) return { complete: false, reason: "no valid auditSummary" };
+  if (summaries > 1) return { complete: false, reason: `${summaries} auditSummary records` };
+  if (summaryAt !== lastContentAt) {
+    return { complete: false, reason: "auditSummary is not the final record" };
+  }
+  return { complete: true, reason: "complete" };
+}
+
 function parseAuditText(auditText) {
   if (typeof auditText !== "string" || !auditText.trim()) {
     fail("Audit output is empty");
   }
   const records = [];
   let summaries = 0;
+  let summary = null;
+  let summaryOrdinal = -1;
+  let ordinal = 0;
   for (const [lineNumber, line] of auditText.split(/\r?\n/).entries()) {
     if (!line.trim()) continue;
     let record;
@@ -311,6 +371,7 @@ function parseAuditText(auditText) {
     } catch (error) {
       fail(`Audit output line ${lineNumber + 1} is not valid JSON: ${error.message}`);
     }
+    ordinal += 1;
     if (record && record.type === "auditAdvisory") {
       if (!record.data || !record.data.advisory) {
         fail(`Audit advisory line ${lineNumber + 1} is missing advisory data`);
@@ -321,6 +382,8 @@ function parseAuditText(auditText) {
         fail(`Audit summary line ${lineNumber + 1} is missing vulnerability data`);
       }
       summaries += 1;
+      summary = record;
+      summaryOrdinal = ordinal;
     } else {
       fail(`Audit output line ${lineNumber + 1} has unsupported record type`);
     }
@@ -338,7 +401,53 @@ function parseAuditText(auditText) {
   if (summaries > 1) {
     fail(`Audit output contains ${summaries} auditSummary records; expected exactly one`);
   }
-  return records;
+  // Yarn writes the summary last. Records after it mean this is not one tidy
+  // end-of-audit stream, and we cannot tell which part is the finished audit.
+  if (summaryOrdinal !== ordinal) {
+    fail(
+      "Audit output continues after its auditSummary: the summary must be the " +
+        "final record, so this stream cannot be read as one completed audit",
+    );
+  }
+  return { records, summary };
+}
+
+/**
+ * If the summary counts a HIGH or CRITICAL, the detail for it must be here.
+ *
+ * The summary is itself scanner evidence. When Yarn says a HIGH exists but no
+ * advisory record for one arrived, the gate has been told a vulnerability is
+ * present and handed nothing to identify it with -- no advisory id, package,
+ * version or path, so no way to match it against an exception or a false
+ * positive. There is no honest verdict available: clearing it would be
+ * clearing something we cannot name. Fail closed.
+ *
+ * Only that one direction is enforced. The reverse -- a summary counting zero
+ * while an advisory is present -- is legitimate and must keep working: a HIGH
+ * carried forward from an earlier incomplete attempt sits alongside a later
+ * clean summary that never saw it, and that carried finding still has to be
+ * evaluated on its merits. Discarding it because the final count says zero
+ * would re-open exactly the hole the sticky evidence closed.
+ *
+ * Counts are never compared numerically against the number of advisory
+ * records. Yarn counts vulnerable paths, one advisory can cover several, and a
+ * naive equality rule would fail honest audits.
+ */
+function assertSummaryDetailIsPresent(summary, records) {
+  const counts = summary.data.vulnerabilities;
+  const observed = new Set(
+    records.map((record) => record.advisory && record.advisory.severity),
+  );
+  for (const severity of ["high", "critical"]) {
+    if (counts[severity] > 0 && !observed.has(severity)) {
+      fail(
+        `Audit summary reports ${counts[severity]} ${severity.toUpperCase()} ` +
+          `vulnerability/ies but the stream carries no ${severity.toUpperCase()} ` +
+          "advisory record: without an advisory id, package, version and paths " +
+          "the gate cannot match it against any exception, so it cannot clear it",
+      );
+    }
+  }
 }
 
 function collectHighAndCritical(records) {
@@ -422,8 +531,9 @@ function validateAuditText(auditText, registry, falsePositiveRegistryOrOptions =
   const exceptions = validateRegistry(registry);
   const { falsePositiveRegistry, options } = resolveValidationInputs(falsePositiveRegistryOrOptions, maybeOptions);
   const falsePositives = validateFalsePositiveRegistry(falsePositiveRegistry);
-  const records = parseAuditText(auditText);
+  const { records, summary } = parseAuditText(auditText);
   const findings = collectHighAndCritical(records);
+  assertSummaryDetailIsPresent(summary, records);
   const today = options.today || new Date().toISOString().slice(0, 10);
   parseDate(today, "today");
   const accepted = [];
@@ -528,6 +638,7 @@ function main(argv) {
 if (require.main === module) main(process.argv);
 
 module.exports = {
+  auditStreamCompletion,
   auditSummaryIsValid,
   classifyAuditRecord,
   formatPass,

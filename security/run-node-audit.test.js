@@ -413,3 +413,49 @@ test("the runner reads neither security registry", () => {
   // The single import from the authority is the classification helper only.
   assert.match(code, /require\("\.\/validate-node-audit"\)/);
 });
+
+
+// ---- the runner agrees with the authority on what "finished" means ---------
+
+test("a summary that is not the final record is not complete", () => {
+  // Trailing content means this is not one tidy end-of-audit stream. The runner
+  // retries rather than accepting it, and the validator would refuse it too.
+  assert.equal(auditOutputIsComplete(`${SUMMARY_LINE}\n${GOVERNED_ADVISORY}`), false);
+  assert.equal(auditOutputIsComplete(`${SUMMARY_LINE}\n${OUTAGE_STDOUT}`), false);
+  assert.equal(auditOutputIsComplete(`${GOVERNED_ADVISORY}\n${SUMMARY_LINE}`), true);
+});
+
+test("two summaries are not complete", () => {
+  assert.equal(auditOutputIsComplete(`${SUMMARY_LINE}\n${SUMMARY_LINE}`), false);
+});
+
+test("a summary with a malformed severity counter is not a completion marker", () => {
+  for (const high of ["1", null, -1, 1.5, true, undefined]) {
+    const line = JSON.stringify({
+      type: "auditSummary",
+      data: { vulnerabilities: { info: 0, low: 0, moderate: 0, critical: 0, high } },
+    });
+    assert.equal(auditOutputIsComplete(line), false, `high=${String(high)}`);
+  }
+});
+
+test("a summary missing a canonical severity is not a completion marker", () => {
+  const line = JSON.stringify({
+    type: "auditSummary",
+    data: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0 } },
+  });
+  assert.equal(auditOutputIsComplete(line), false);
+});
+
+test("carried advisories are prepended, so the summary stays the final record", () => {
+  // The ordering invariant and the sticky evidence have to coexist: carrying a
+  // finding forward must not itself break completeness.
+  const result = run({
+    attempts: 5,
+    runAudit: attemptsOf(UNKNOWN_HIGH_ADVISORY, SUMMARY_LINE),
+  });
+  assert.equal(result.complete, true);
+  assert.equal(auditOutputIsComplete(result.stdout), true);
+  assert.match(result.stdout.trim().split("\n").pop(), /auditSummary/);
+  assert.throws(() => gate(result.stdout), /Unaccepted HIGH advisory GHSA-zzzz-zzzz-zzzz/);
+});

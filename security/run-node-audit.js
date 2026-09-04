@@ -43,7 +43,7 @@ const { spawnSync } = require("node:child_process");
 // a completion marker is; this only asks it. Two copies of that definition
 // could drift, and the direction of drift that matters -- the runner accepting
 // something the validator would reject -- is exactly the bug being closed here.
-const { auditSummaryIsValid, classifyAuditRecord } = require("./validate-node-audit");
+const { auditStreamCompletion, classifyAuditRecord } = require("./validate-node-audit");
 
 // Sized to measured behaviour, not to taste. During the 2026-09-04 incident the
 // endpoint recovered into an intermittent state rather than coming straight
@@ -57,32 +57,22 @@ const DEFAULT_BACKOFF_MS = 5000;
 /**
  * Did this attempt run the audit to completion?
  *
- * Completion means one thing: a valid `auditSummary`. Advisory records do not
- * count, however many arrive. An audit that emitted three advisories and then
- * died is indistinguishable, by record count alone, from one that found three
- * advisories and finished -- and if those three happen to be already governed
- * by exceptions, treating the truncated stream as finished would report a
- * clean bill of health for every dependency the scanner never reached.
+ * Delegated wholesale to the validator's `auditStreamCompletion`, so the two
+ * cannot disagree about what "finished" means. It requires exactly one valid
+ * `auditSummary` and requires it to be the last thing in the stream.
  *
- * So an advisory-only stream is incomplete and gets retried. This still does
- * not judge findings: whether the advisories pass is the validator's call, and
- * the validator independently rejects a summary-less stream too.
+ * Advisory records do not count, however many arrive. An audit that emitted
+ * three advisories and then died is indistinguishable, by record count alone,
+ * from one that found three and finished -- and if those three happen to be
+ * already governed by exceptions, treating the truncated stream as finished
+ * would report a clean bill of health for every dependency the scanner never
+ * reached. So an advisory-only stream is incomplete and gets retried.
+ *
+ * This still judges no findings: whether the advisories pass is the
+ * validator's call, and the validator independently re-checks completeness.
  */
 function auditOutputIsComplete(text) {
-  if (typeof text !== "string" || !text.trim()) return false;
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    let record;
-    try {
-      record = JSON.parse(line);
-    } catch {
-      // Yarn prints non-JSON noise on its error paths. Not a completion marker,
-      // but not proof the whole run failed either -- keep looking.
-      continue;
-    }
-    if (auditSummaryIsValid(record)) return true;
-  }
-  return false;
+  return auditStreamCompletion(text).complete;
 }
 
 function sleepSync(milliseconds) {
