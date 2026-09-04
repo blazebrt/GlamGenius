@@ -1371,17 +1371,40 @@ class TestAntiSprawl:
                 for module in imported
             ), f"{path.name} imports {forbidden}"
 
-    def test_nothing_outside_the_domain_depends_on_it_yet(self):
-        """Step 7A ships the layer, wired to nothing. Nothing else may change."""
+    def test_only_named_callers_depend_on_the_identity_layer(self):
+        """Who may reach canonical identity, enumerated one caller at a time.
+
+        Step 7A shipped wired to nothing. Step 7B adds the first real consumer:
+        the formulas domain resolves printed ingredient names, and Step 7B's
+        brief names this layer as the identity authority it must reuse rather
+        than duplicate. So the guard now records that one dependency by name
+        instead of forbidding all of them.
+
+        It keeps its full force everywhere else, which is the point: a domain
+        that starts resolving identities on its own — care, nutrition, product,
+        supplements — still fails here, and adding a name to this list is a
+        deliberate act somebody has to argue for in review.
+        """
+        registry = BACKEND_ROOT / "app" / "shared" / "database" / "registry.py"
+        #: Files outside the domain that may reference it, and why.
+        permitted = {
+            # Alembic cannot see a model that is not imported here, and its
+            # table would silently never be created.
+            registry,
+            # Step 7B: the formula engine's identity authority. It may import
+            # the resolver and nothing else — its own anti-sprawl test in
+            # tests/test_step7b_formula_resolution.py pins that down.
+            BACKEND_ROOT / "app" / "domains" / "formulas" / "service.py",
+        }
         app_root = BACKEND_ROOT / "app"
         for path in sorted(app_root.rglob("*.py")):
             if SUBSTANCES_DIR in path.parents:
                 continue
             imported = _imported_modules(path)
-            if path == BACKEND_ROOT / "app" / "shared" / "database" / "registry.py":
-                # The one permitted reference: Alembic cannot see a model that
-                # is not imported here, and its table would silently never exist.
+            if path == registry:
                 assert any(m.startswith("app.domains.substances") for m in imported)
+                continue
+            if path in permitted:
                 continue
             assert not any(
                 m.startswith("app.domains.substances") for m in imported
