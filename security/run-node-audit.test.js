@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const { auditOutputIsUsable, runWithRetries } = require("./run-node-audit");
+const runnerSource = require("node:fs").readFileSync(`${__dirname}/run-node-audit.js`, "utf8");
 
 const ADVISORY_LINE = JSON.stringify({
   type: "auditAdvisory",
@@ -148,4 +149,22 @@ test("each attempt is reported so an outage is legible in the CI log", () => {
   });
   assert.match(lines[0], /attempt 1\/2: exit=1 usable_records=false/);
   assert.match(lines.join("\n"), /504 Gateway Timeout/);
+});
+
+test("the default attempt budget is the one the incident data justifies", () => {
+  // Pinned deliberately: this number was chosen from a measured ~38% per-attempt
+  // success rate during the outage, not picked to make a build go green. Moving
+  // it should mean new evidence, and should break this test.
+  assert.match(runnerSource, /const DEFAULT_ATTEMPTS = 5;/);
+  let calls = 0;
+  runWithRetries({
+    backoffMs: 0,
+    runAudit: () => {
+      calls += 1;
+      return { stdout: "", stderr: "down", status: 1 };
+    },
+    sleep: () => {},
+    log: () => {},
+  });
+  assert.equal(calls, 5);
 });

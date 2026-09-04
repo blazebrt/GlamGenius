@@ -35,7 +35,13 @@ const { spawnSync } = require("node:child_process");
  *  the tree is clean. */
 const AUDIT_RECORD_TYPES = new Set(["auditAdvisory", "auditSummary"]);
 
-const DEFAULT_ATTEMPTS = 3;
+// Sized to measured behaviour, not to taste. During the 2026-09-04 incident the
+// endpoint recovered into an intermittent state rather than coming straight
+// back: 3 of 8 probes succeeded. At that rate 3 attempts clear it ~76% of the
+// time and 5 attempts ~90%, which is the difference between a gate that
+// annoys people into ignoring it and one they trust. Raising this never
+// weakens the gate -- an audit that never returns still fails closed.
+const DEFAULT_ATTEMPTS = 5;
 const DEFAULT_BACKOFF_MS = 5000;
 
 /**

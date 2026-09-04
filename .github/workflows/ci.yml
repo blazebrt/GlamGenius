@@ -376,8 +376,8 @@ jobs:
         if: github.event_name == 'pull_request' && needs.scope.outputs.node_deps == 'true'
         working-directory: frontend
         run: |
-          # The runner only retries an audit that returned no records at all;
-          # the validator below is still the one and only gate.
+          # The runner retries only an audit that returned no records at all (5 attempts,
+          # linear backoff); the validator below is still the one and only gate.
           node ../security/run-node-audit.js /tmp/yarn-audit.json
           node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json ../security/node-audit-false-positives.json
 
