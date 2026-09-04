@@ -385,9 +385,44 @@ string plus canonical Store-B knowledge and discarded with the response. There
 is no `formulas` table, nothing is written to `LabelSnapshot`, and nothing goes
 anywhere near Open Food Facts' Store A.
 
-The engine is also wired to nothing: no API route exposes it, and a structural
-test asserts no module outside the domain imports it. Integration comes only
-after the semantics are proven.
+Step 7B originally shipped wired to nothing: no API route exposed it and no
+module outside the domain imported it. Step 7B.1 is the first deliberately
+approved integration, described below; the engine remains absent from APIs.
+
+## 14a. Projection from an explicit label snapshot
+
+Step 7B.1 adds one narrow product-domain adapter. A caller supplies a particular
+versioned `LabelSnapshot`; the adapter passes that snapshot's exact stored
+`facts["ingredients_text"]` value to Step 7B and returns the formula together
+with immutable provenance: snapshot ID, barcode, version number, content
+fingerprint, and scan-event ID.
+
+Step 7B originally shipped unwired. Step 7B.1 introduces its first and currently
+only external consumer: the LabelSnapshot formula projection adapter at
+`app.domains.product.formula_projection`. An architectural test asserts that
+exact importer set. A future formula consumer must deliberately evolve that
+boundary test; it must not silently import the formula domain elsewhere.
+
+The adapter does not choose a snapshot. It performs no latest-version query and
+does not fall back to a scan event, ProductRecord, Open Food Facts, or the
+network. Consequently an older snapshot remains independently projectable even
+after a newer one exists.
+
+The raw observation and the label fingerprint have different jobs. Label
+fingerprinting canonicalises fact strings to identify label versions, whereas
+formula parsing must see the exact stored codepoints: a top-level line boundary
+is `AMBIGUOUS_BOUNDARY`, even when canonical fingerprint input would collapse
+that boundary to a space. The fingerprint identifies the source version; it is
+never reconstructed into formula text.
+
+Formula identity remains live Step 7A knowledge. Re-projecting the same snapshot
+may move a printed name from unresolved to resolved or ambiguous as reviewed
+identity evidence changes, while every snapshot and provenance field remains
+unchanged. No formula result is persisted and no snapshot is mutated.
+
+This bridge adds no interpretation, score, verdict, recommendation, API route,
+frontend surface, model, migration, lineage, fingerprint, or formula-version
+table. Those remain outside Step 7B.1.
 
 ## 15. What is deliberately still ahead
 
