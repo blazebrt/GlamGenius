@@ -482,6 +482,28 @@ jobs:
           pip-audit -r requirements.txt \
             --vulnerability-service osv \
             --strict
+      - name: TEMP resolve the eight historical PYSEC IDs against OSV
+        if: always()
+        run: |
+          python - <<'EOF'
+          import json, urllib.request
+          ids = ["PYSEC-2026-1845","PYSEC-2026-161","PYSEC-2026-1941","PYSEC-2026-1943",
+                 "PYSEC-2026-2280","PYSEC-2026-2281","PYSEC-2026-248","PYSEC-2026-249"]
+          for vid in ids:
+              try:
+                  with urllib.request.urlopen(f"https://api.osv.dev/v1/vulns/{vid}", timeout=30) as r:
+                      d = json.load(r)
+              except Exception as exc:
+                  print(f"{vid}: LOOKUP FAILED {exc}"); continue
+              aliases = d.get("aliases", [])
+              for a in d.get("affected", []):
+                  pkg = a.get("package", {}).get("name")
+                  fixed = []
+                  for rng in a.get("ranges", []):
+                      for ev in rng.get("events", []):
+                          if "fixed" in ev: fixed.append(ev["fixed"])
+                  print(f"{vid} | package={pkg} | fixed={fixed} | aliases={aliases}")
+          EOF
       - name: Full audit report (failure diagnostics)
         if: failure()
         working-directory: backend
