@@ -154,15 +154,7 @@ jobs:
         run: |
           pip-audit -r requirements.txt \
             --vulnerability-service osv \
-            --strict \
-            --ignore-vuln PYSEC-2026-1845 \
-            --ignore-vuln PYSEC-2026-161 \
-            --ignore-vuln PYSEC-2026-1941 \
-            --ignore-vuln PYSEC-2026-1943 \
-            --ignore-vuln PYSEC-2026-2280 \
-            --ignore-vuln PYSEC-2026-2281 \
-            --ignore-vuln PYSEC-2026-248 \
-            --ignore-vuln PYSEC-2026-249
+            --strict
       - name: Run Ruff on pull requests
         if: github.event_name == 'pull_request'
         working-directory: backend
@@ -489,19 +481,15 @@ jobs:
         run: |
           pip-audit -r requirements.txt \
             --vulnerability-service osv \
-            --strict \
-            --ignore-vuln PYSEC-2026-1845 \
-            --ignore-vuln PYSEC-2026-161 \
-            --ignore-vuln PYSEC-2026-1941 \
-            --ignore-vuln PYSEC-2026-1943 \
-            --ignore-vuln PYSEC-2026-2280 \
-            --ignore-vuln PYSEC-2026-2281 \
-            --ignore-vuln PYSEC-2026-248 \
-            --ignore-vuln PYSEC-2026-249
+            --strict
       - name: Full audit report (failure diagnostics)
         if: failure()
         working-directory: backend
-        run: pip-audit -r requirements.txt --vulnerability-service osv --format=json > /tmp/pip-audit.json || true
+        run: |
+          pip-audit -r requirements.txt --vulnerability-service osv --format=json > /tmp/pip-audit.json || true
+          echo '===== FULL JSON ADVISORY REPORT ====='
+          python -c "import json;d=json.load(open('/tmp/pip-audit.json'));[print(dep['name'], dep['version'], '->', [ (v['id'], v.get('aliases'), v.get('fix_versions')) for v in dep['vulns']]) for dep in d.get('dependencies',[]) if dep.get('vulns')]"
+          echo '===== PIP FREEZE =====' ; pip freeze | grep -iE 'pytest|starlette|fastapi|anyio' || true
       - name: Upload full pip-audit report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
