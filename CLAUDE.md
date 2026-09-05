@@ -69,7 +69,7 @@ backend/
     release.py               # `python -m app.release` — lock, migrate, seed, verify
     release_readiness.py     # `python -m app.release_readiness` — honest readiness report
     api/v2/                  # 24 route modules mounted by api/v2/__init__.py (health.py is an empty orphan)
-    domains/                 # 34 domain packages — see §3
+    domains/                 # 35 domain packages — see §3
     workers/                 # notifications.py, account_deletion.py — see §6
     bootstrap/               # reference_data.py — versioned seed catalogue
     shared/
@@ -95,7 +95,7 @@ startup checks. Real work lives under `backend/app/`.
 
 ## 3. The domains
 
-All 34 packages under `backend/app/domains/`:
+All 35 packages under `backend/app/domains/`:
 
 | Domain | Owns |
 | --- | --- |
@@ -127,6 +127,7 @@ All 34 packages under `backend/app/domains/`:
 | `substance_interpretation` | Step 7C category-specific projection of published evidence onto already-resolved canonical substance identities; no identity resolution, scoring or verdicts |
 | `personal_lens` | Step 8A read-only FOR YOU context projection from trusted user-declared non-medical Profile facts; hard-handoff first; no score, verdict or evidence matching |
 | `personal_applicability` | Step 8B read-only join of exact Step 7C substance identities, Step 8A body facts and reviewed published personal-applicability evidence; no inference, score, verdict or persistence |
+| `personal_decision_semantics` | Step 8C pure deterministic mapping from an exact Step 8B applicable claim version to an explicit reviewed supporting or cautionary direction; production registry deliberately empty; no prose parsing, strength arithmetic, counting, aggregation, score or verdict |
 
 Every ORM model module must be imported in `backend/app/shared/database/registry.py`.
 A model that is not imported there is invisible to Alembic and its table is silently
