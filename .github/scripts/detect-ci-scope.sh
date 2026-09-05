@@ -60,6 +60,9 @@ for path in "${changed_files[@]}"; do
     backend/*|tests/*|backend/pyproject.toml|pyproject.toml)
       backend=true
       ;;
+    .github/scripts/detect-ci-scope.sh|.github/workflows/ci.yml)
+      backend=true
+      ;;
   esac
   case "$path" in
     backend/migrations/*|backend/alembic.ini|backend/app/*/models.py|backend/app/shared/database/*)
