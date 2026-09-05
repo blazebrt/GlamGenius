@@ -1,0 +1,168 @@
+# TEMPORARY — September 2026 security exception expiry review.
+#
+# This workflow exists only to produce evidence for the expiry review of
+# .trivy-exceptions.yaml. It builds the production image and reports, from
+# inside that freshly built image:
+#
+#   * the installed version of every package an exception names
+#   * what the live Debian repositories currently offer for it
+#   * every HIGH/CRITICAL Trivy finding with NO ignore file applied
+#
+# The last one is discovery, not a gate: the point is to see what the scanner
+# reports before any suppression, so each exception can be reconciled against
+# reality instead of against itself. The real gate is `container-scan` in
+# ci.yml, which is untouched, still runs with exit-code 1, and still applies
+# the generated .trivyignore.
+#
+# DELETE THIS FILE once the review PR's evidence is captured.
+
+name: Security exception evidence (temporary)
+
+on:
+  push:
+    branches:
+      - maintenance/security-exception-expiry-review-2026-09
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    name: Fresh image + unfiltered scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Build production image
+        run: |
+          docker build \
+            --build-arg COMMIT_SHA=${{ github.sha }} \
+            -t glamgenius-backend:evidence \
+            backend/
+
+      - name: Image identity
+        run: |
+          echo "=== base image digest pinned in backend/Dockerfile ==="
+          grep -n 'FROM python@sha256' backend/Dockerfile
+          echo
+          echo "=== /etc/os-release ==="
+          docker run --rm glamgenius-backend:evidence cat /etc/os-release
+          echo
+          echo "=== /etc/debian_version ==="
+          docker run --rm glamgenius-backend:evidence cat /etc/debian_version
+          echo
+          echo "=== build timestamp ==="
+          date -u +'%Y-%m-%dT%H:%M:%SZ'
+
+      - name: Installed versions of every excepted package
+        run: |
+          docker run --rm --user 0 glamgenius-backend:evidence bash -c '
+            set -e
+            for pkg in \
+              libncursesw6 libtinfo6 ncurses-base ncurses-bin \
+              gzip libacl1 perl-base \
+              libssl3t64 openssl \
+              libsqlite3-0 \
+              libsystemd0 libudev1 systemd \
+              bsdutils libblkid1 liblastlog2-2 libmount1 libsmartcols1 \
+              libuuid1 login mount util-linux ; do
+              printf "%-18s " "$pkg"
+              dpkg-query -W -f="installed=\${Version} source=\${source:Package} srcver=\${source:Version} status=\${db:Status-Status}\n" "$pkg" 2>/dev/null \
+                || echo "NOT INSTALLED"
+            done
+          '
+
+      - name: What the live Debian repositories currently offer
+        run: |
+          docker run --rm --user 0 glamgenius-backend:evidence bash -c '
+            set -e
+            apt-get update -qq
+            echo
+            for pkg in \
+              libncursesw6 libtinfo6 ncurses-base ncurses-bin \
+              gzip libacl1 perl-base \
+              libssl3t64 openssl \
+              libsqlite3-0 \
+              libsystemd0 libudev1 systemd \
+              bsdutils libblkid1 liblastlog2-2 libmount1 libsmartcols1 \
+              libuuid1 login mount util-linux ; do
+              echo "----- $pkg -----"
+              apt-cache policy "$pkg" || true
+            done
+          '
+
+      - name: Trivy scan WITHOUT any ignore file (discovery)
+        uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # v0.30.0
+        env:
+          # Shows the vulnerability DB being downloaded during this run, so the
+          # findings below cannot be a stale-database artifact.
+          TRIVY_DEBUG: "true"
+        with:
+          image-ref: glamgenius-backend:evidence
+          format: json
+          output: /tmp/trivy-unfiltered.json
+          severity: HIGH,CRITICAL
+          # Discovery, not a gate. This step must report everything it finds
+          # rather than stopping at the first finding; `container-scan` in
+          # ci.yml is the gate and still fails on any unignored finding.
+          exit-code: 0
+
+      - name: Unfiltered HIGH/CRITICAL findings
+        run: |
+          echo "=== every HIGH/CRITICAL row, no ignore file ==="
+          python3 - <<'PY'
+          import json
+          report = json.load(open("/tmp/trivy-unfiltered.json"))
+          rows = []
+          for result in report.get("Results") or []:
+              for v in result.get("Vulnerabilities") or []:
+                  rows.append((
+                      v.get("VulnerabilityID"),
+                      v.get("Severity"),
+                      v.get("PkgName"),
+                      v.get("InstalledVersion"),
+                      v.get("FixedVersion") or "-",
+                      v.get("Status") or "-",
+                      (v.get("PkgIdentifier") or {}).get("PURL") or "-",
+                  ))
+          rows.sort()
+          print(f"total rows: {len(rows)}")
+          print(f"{'CVE':<20} {'SEV':<9} {'PACKAGE':<20} {'INSTALLED':<40} {'FIXED':<30} STATUS")
+          for r in rows:
+              print(f"{r[0]:<20} {r[1]:<9} {r[2]:<20} {r[3]:<40} {r[4]:<30} {r[5]}")
+          print()
+          print("=== distinct CVE ids ===")
+          for cve in sorted({r[0] for r in rows}):
+              print(cve)
+          PY
+
+      - name: Reconcile against the exception registry
+        run: |
+          python3 - <<'PY'
+          import json, yaml
+          report = json.load(open("/tmp/trivy-unfiltered.json"))
+          reported = set()
+          for result in report.get("Results") or []:
+              for v in result.get("Vulnerabilities") or []:
+                  reported.add(v.get("VulnerabilityID"))
+          registry = yaml.safe_load(open(".trivy-exceptions.yaml"))
+          excepted = [e["cve_or_advisory_id"] for e in registry["exceptions"]]
+          print("=== exceptions the fresh scan NO LONGER reports (candidates to DELETE) ===")
+          for cve in sorted(set(excepted) - reported):
+              print(" ", cve)
+          print()
+          print("=== exceptions the fresh scan still reports ===")
+          for cve in sorted(set(excepted) & reported):
+              print(" ", cve)
+          print()
+          print("=== reported but NOT excepted (would fail the gate today) ===")
+          for cve in sorted(reported - set(excepted)):
+              print(" ", cve)
+          PY
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: trivy-unfiltered
+          path: /tmp/trivy-unfiltered.json
+          retention-days: 7
