@@ -174,7 +174,7 @@ jobs:
         run: pytest -q tests/test_invite_reservation.py tests/test_invite_bypass_regression.py
       - name: Upload pytest report on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pytest-report
           path: /tmp/pytest-report.xml
@@ -491,7 +491,7 @@ jobs:
         run: pip-audit -r requirements.txt --vulnerability-service osv --format=json > /tmp/pip-audit.json || true
       - name: Upload full pip-audit report
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pip-audit-report
           path: /tmp/pip-audit.json
@@ -525,7 +525,7 @@ jobs:
           node ../security/validate-node-audit.js /tmp/yarn-audit.json ../security/node-audit-exceptions.json ../security/node-audit-false-positives.json
       - name: Upload yarn-audit report
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: yarn-audit-report
           path: /tmp/yarn-audit.json
@@ -571,7 +571,7 @@ jobs:
           fi
       - name: Save image for downstream jobs
         run: docker save glamgenius-backend:ci | gzip > /tmp/glamgenius-backend-ci.tar.gz
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: docker-image
           path: /tmp/glamgenius-backend-ci.tar.gz
@@ -610,7 +610,7 @@ jobs:
           format: json
           output: /tmp/trivy-report.json
           severity: HIGH,CRITICAL
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: trivy-report
@@ -638,7 +638,7 @@ jobs:
           image: glamgenius-backend:ci
           format: spdx-json
           output-file: /tmp/backend-sbom.spdx.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: backend-sbom
           path: /tmp/backend-sbom.spdx.json
@@ -649,7 +649,7 @@ jobs:
           path: frontend
           format: cyclonedx-json
           output-file: /tmp/frontend-sbom.cdx.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: frontend-sbom
           path: /tmp/frontend-sbom.cdx.json
