@@ -1,3 +1,40 @@
+# Container vulnerability exceptions.
+#
+# Every entry here suppresses a HIGH or CRITICAL Trivy finding on the
+# production image, so every entry is a decision to ship a known finding.
+# scripts/validate_trivy_exceptions.py is the only thing that may write
+# .trivyignore: it validates each entry, refuses wildcards, refuses an expired
+# expiry_date, and regenerates the ignore file from what survives. Do not
+# hand-author .trivyignore.
+#
+# Reviewed 2026-09-05, at the 2026-09-08 expiry. The evidence was a Trivy scan
+# of a freshly built production image with the ignore file genuinely bypassed
+# (see the note below) and a same-day vulnerability database. It reported 54
+# rows across 18 distinct CVEs -- 51 HIGH and 3 CRITICAL -- and every one of
+# them carries an empty Fixed Version with status `affected` or `fix_deferred`.
+# There is no fixed Debian package to install for any of them, so there is
+# nothing to upgrade to; and these are base OS packages, so there is nothing to
+# remove either. Renewed to 2026-10-03 on that basis. created_date is left
+# untouched so the record still shows how long each has been carried.
+#
+# One entry was retired rather than renewed: CVE-2026-14456 (libssl3t64).
+# Debian published the fix. The exception recorded 3.5.6-1~deb13u2; the freshly
+# built image installs 3.5.7-1~deb13u2, which is also the current trixie
+# candidate, and the CVE is absent from the unfiltered scan.
+#
+# How to bypass the ignore file, because getting this wrong invalidates the
+# whole review: Trivy reads `.trivyignore` from the working directory by
+# DEFAULT. Not passing the trivy-action's `trivyignores` input does not disable
+# it. An earlier run in this review reported zero findings for exactly that
+# reason, and came close to retiring all 19 entries on the strength of a scan
+# the ignore file had silently filtered. Scan from a directory with no
+# `.trivyignore` in it, or point `--ignorefile` at an empty file, and check the
+# result against a target you already expect findings on.
+#
+# Adding an entry requires all of: cve_or_advisory_id, affected_package,
+# installed_version, reason, exploitability_assessment, compensating_control,
+# owner, created_date, review_date, expiry_date, upgrade_plan.
+
 exceptions:
   - cve_or_advisory_id: "CVE-2025-69720"
     affected_package: "ncurses family"
@@ -7,8 +44,8 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access"
     owner: "@blazebrt"
     created_date: "2026-08-08"
-    review_date: "2026-08-24"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove exception immediately when patched package lands"
 
   - cve_or_advisory_id: "CVE-2026-41992"
@@ -19,8 +56,8 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access"
     owner: "@blazebrt"
     created_date: "2026-08-08"
-    review_date: "2026-08-24"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove exception immediately when patched package lands"
 
   - cve_or_advisory_id: "CVE-2026-54369"
@@ -31,8 +68,8 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access"
     owner: "@blazebrt"
     created_date: "2026-08-08"
-    review_date: "2026-08-24"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove exception immediately when patched package lands"
 
   - cve_or_advisory_id: "CVE-2026-42496"
@@ -43,8 +80,8 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access"
     owner: "@blazebrt"
     created_date: "2026-08-08"
-    review_date: "2026-08-24"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove exception immediately when patched package lands"
 
   - cve_or_advisory_id: "CVE-2026-42497"
@@ -55,8 +92,8 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access"
     owner: "@blazebrt"
     created_date: "2026-08-08"
-    review_date: "2026-08-24"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove exception immediately when patched package lands"
 
   - cve_or_advisory_id: "CVE-2026-9538"
@@ -67,8 +104,8 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access"
     owner: "@blazebrt"
     created_date: "2026-08-08"
-    review_date: "2026-08-24"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove exception immediately when patched package lands"
 
   - cve_or_advisory_id: "CVE-2026-57433"
@@ -79,8 +116,8 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access"
     owner: "@blazebrt"
     created_date: "2026-08-08"
-    review_date: "2026-08-24"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove exception immediately when patched package lands"
 
   - cve_or_advisory_id: "CVE-2026-48962"
@@ -91,8 +128,8 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access"
     owner: "@blazebrt"
     created_date: "2026-08-08"
-    review_date: "2026-08-24"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove exception immediately when patched package lands"
 
   - cve_or_advisory_id: "CVE-2026-57432"
@@ -103,8 +140,8 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access"
     owner: "@blazebrt"
     created_date: "2026-08-08"
-    review_date: "2026-08-24"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove exception immediately when patched package lands"
 
   - cve_or_advisory_id: "CVE-2026-8376"
@@ -115,8 +152,8 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access"
     owner: "@blazebrt"
     created_date: "2026-08-08"
-    review_date: "2026-08-24"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove exception immediately when patched package lands"
 
   - cve_or_advisory_id: "CVE-2026-13221"
@@ -127,21 +164,9 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access"
     owner: "@blazebrt"
     created_date: "2026-08-08"
-    review_date: "2026-08-24"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove exception immediately when patched package lands"
-
-  - cve_or_advisory_id: "CVE-2026-14456"
-    affected_package: "libssl3t64"
-    installed_version: "3.5.6-1~deb13u2"
-    reason: "No Debian trixie fixed package is available"
-    exploitability_assessment: "The vulnerable incoming-channel queue is used only by an OpenSSL QUIC server. GlamGenius runs Uvicorn as an HTTP-over-TCP server and has no QUIC or HTTP/3 dependency or runtime code path."
-    compensating_control: "The container exposes only the TCP Uvicorn service, runs as non-root UID 10001, and has no shell access."
-    owner: "@blazebrt"
-    created_date: "2026-08-19"
-    review_date: "2026-08-28"
-    expiry_date: "2026-09-08"
-    upgrade_plan: "Remove this exception and update the immutable Python base-image digest as soon as Debian publishes a fixed OpenSSL package."
 
   - cve_or_advisory_id: "CVE-2026-11822"
     affected_package: "libsqlite3-0"
@@ -151,8 +176,8 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access; database access is confined to the PostgreSQL service."
     owner: "@blazebrt"
     created_date: "2026-08-26"
-    review_date: "2026-09-02"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove this exception immediately when Debian publishes the trixie sqlite3 fix and refresh the immutable Python base-image digest."
 
   - cve_or_advisory_id: "CVE-2026-11824"
@@ -163,20 +188,20 @@ exceptions:
     compensating_control: "Minimal container surface with non-root user and no shell access; database access is confined to the PostgreSQL service."
     owner: "@blazebrt"
     created_date: "2026-08-26"
-    review_date: "2026-09-02"
-    expiry_date: "2026-09-08"
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove this exception immediately when Debian publishes the trixie sqlite3 fix and refresh the immutable Python base-image digest."
 
   - cve_or_advisory_id: "CVE-2026-16742"
     affected_package: "libsystemd0 and libudev1 (binary packages of the systemd source package)"
     installed_version: "257.13-1~deb13u1"
     reason: "No Debian trixie fixed package is available and the vulnerable binary package is not installed"
-    exploitability_assessment: "The vulnerable code is home_authenticating_finish() in src/home/homed-home.c, which upstream (GHSA-jm29-p7hh-vjhv) compiles into the systemd-homed daemon and its systemd-homework worker. Those binaries ship in the separate Debian binary package systemd-homed, which is not installed in this image: dpkg reports no systemd-homed package and /usr/lib/systemd/systemd-homed, /usr/lib/systemd/systemd-homework and /usr/bin/homectl are all absent. libsystemd0 ships exactly one shared object, libsystemd.so.0.40.0, which is the client library and carries none of the homed record-authentication code; libudev1 ships only the device-enumeration library. Trivy flags both packages solely because Debian tracks this CVE against the systemd source package and Trivy maps source-package advisories onto every binary package built from that source. The upstream preconditions cannot be met here either: they require systemd-homed running and enabled, a logged-in user with an active homed-managed home directory, and the attacker editing their own ~/.identity file. This container runs no init and no systemd services, has no homed-managed users and no interactive login, and executes a single Uvicorn process as non-root UID 10001 whose account shell is /sbin/nologin. The advisory vector is CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H, which requires a local authenticated user; the image provides no such login path."
+    exploitability_assessment: "The vulnerable code is home_authenticating_finish() in src/home/homed-home.c, which upstream (GHSA-jm29-p7hh-vjhv) compiles into the systemd-homed daemon and its systemd-homework worker. Those binaries ship in the separate Debian binary package systemd-homed, which is not installed in this image: dpkg reports no systemd-homed package and /usr/lib/systemd/systemd-homed, /usr/lib/systemd/systemd-homework and /usr/bin/homectl are all absent. libsystemd0 ships exactly one shared object, libsystemd.so.0.40.0, which is the client library and carries none of the homed record-authentication code; libudev1 ships only the device-enumeration library. Trivy flags both packages solely because Debian tracks this CVE against the systemd source package and Trivy maps source-package advisories onto every binary package built from that source. The upstream preconditions depend on components this image does not contain: they require systemd-homed running and enabled, a user with an active homed-managed home directory, and that user editing their own ~/.identity file. Because the systemd-homed package is not installed and none of its binaries are present, no homed daemon can run and no homed-managed home directory can exist. The container also runs no init system and no systemd service, and executes a single Uvicorn process as non-root UID 10001 whose account shell is /sbin/nologin. The advisory vector is CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H and requires a local authenticated user. That precondition is deliberately not relied on here: this entry rests on the absence of the vulnerable homed code from the two installed binary packages Trivy flags, not on any claim about what access to the container is possible."
     compensating_control: "The container runs as non-root UID 10001 with /sbin/nologin, contains no init system, no systemd services and no compiler, and exposes only the TCP Uvicorn HTTP port. No user-controlled input reaches libsystemd0 or libudev1: they are linked only as transitive dependencies of coreutils, util-linux and apt, none of which process request data."
     owner: "@blazebrt"
     created_date: "2026-09-03"
     review_date: "2026-09-05"
-    expiry_date: "2026-09-08"
+    expiry_date: "2026-10-03"
     upgrade_plan: "Remove this exception as soon as Debian publishes a fixed systemd package for trixie. Upstream fixed the flaw in v262, v261.2, v260.4, v259.8 and v258.10; trixie ships the 257.x line, so a Debian backport to 257.x is required. The build already runs apt-get upgrade -y against the live Debian repositories, so the fix is picked up by the next image build with no Dockerfile change; refresh the pinned base-image digest at that point and delete this entry."
 
   - cve_or_advisory_id: "CVE-2026-76642"
@@ -187,9 +212,9 @@ exceptions:
     compensating_control: "The container runs a single Uvicorn application process as non-root UID 10001 whose account shell is /sbin/nologin, has no init system or systemd services, contains no compiler, and exposes only the TCP HTTP service. PID 1 is /usr/bin/tini. Most importantly for this CVE, /etc/fstab contains zero non-comment entries and authorises no user or users mount with any X-mount hook option, and no external mount helper is installed. /usr/bin/mount remains present and setuid root as recorded in the exploitability assessment."
     owner: "@blazebrt"
     created_date: "2026-09-04"
-    review_date: "2026-09-04"
-    expiry_date: "2026-09-08"
-    upgrade_plan: "Both stages of backend/Dockerfile already run apt-get update && apt-get upgrade -y against the live Debian repositories, so a fixed trixie package reaches the image on the next build with no Dockerfile change. Upstream fixed this in util-linux 2.41.6 and 2.42.3; trixie ships the 2.41.5 line, so a Debian backport to 2.41.x is required. Verified live from inside the built image on 2026-09-04: apt-cache policy util-linux reports Installed 2.41.5-0+deb13u1 and Candidate 2.41.5-0+deb13u1, and apt-cache madison offers only 2.41.5-0+deb13u1 from trixie-security and 2.41-5 from trixie, so no fixed candidate exists today. Removal was checked rather than assumed and is not an alternative: util-linux and bsdutils are Essential=yes, and apt refuses to remove libsmartcols1 or liblastlog2-2 because util-linux Pre-Depends on them at an exact version. The only cleanly removable package is mount, and removing it would still leave the other eight rows reporting this same CVE because Trivy maps it onto the shared source package. Re-run the candidate check at each review; when the candidate advances past 2.41.5-0+deb13u1, rebuild, refresh the pinned base-image digest in backend/Dockerfile and delete this entry."
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
+    upgrade_plan: "Both stages of backend/Dockerfile already run apt-get update && apt-get upgrade -y against the live Debian repositories, so a fixed trixie package reaches the image on the next build with no Dockerfile change. Upstream fixed this in util-linux 2.41.6 and 2.42.3; trixie ships the 2.41.5 line, so a Debian backport to 2.41.x is required. Verified live from inside the built image on 2026-09-05: apt-cache policy util-linux reports Installed 2.41.5-0+deb13u1 and Candidate 2.41.5-0+deb13u1, and apt-cache madison offers only 2.41.5-0+deb13u1 from trixie-security and 2.41-5 from trixie, so no fixed candidate exists today. Removal was checked rather than assumed and is not an alternative: util-linux and bsdutils are Essential=yes, and apt refuses to remove libsmartcols1 or liblastlog2-2 because util-linux Pre-Depends on them at an exact version. The only cleanly removable package is mount, and removing it would still leave the other eight rows reporting this same CVE because Trivy maps it onto the shared source package. Re-run the candidate check at each review; when the candidate advances past 2.41.5-0+deb13u1, rebuild, refresh the pinned base-image digest in backend/Dockerfile and delete this entry."
 
   - cve_or_advisory_id: "CVE-2026-78408"
     affected_package: "util-linux source package (Trivy rows: bsdutils, libblkid1, liblastlog2-2, libmount1, libsmartcols1, libuuid1, login, mount, util-linux)"
@@ -199,9 +224,9 @@ exceptions:
     compensating_control: "The container runs a single Uvicorn process as non-root UID 10001 whose account shell is /sbin/nologin, has no init system and no systemd services, contains no compiler, and exposes only the TCP HTTP port. nsenter carries neither a setuid bit nor any file capability -- no file in the image carries a security.capability attribute -- so it confers no authority the calling process does not already hold, and the calling process is unprivileged."
     owner: "@blazebrt"
     created_date: "2026-09-04"
-    review_date: "2026-09-04"
-    expiry_date: "2026-09-08"
-    upgrade_plan: "Both stages of backend/Dockerfile already run apt-get update && apt-get upgrade -y against the live Debian repositories, so a fixed trixie package reaches the image on the next build with no Dockerfile change. Upstream fixed this in util-linux 2.41.6 and 2.42.3; trixie ships the 2.41.5 line, so a Debian backport to 2.41.x is required. Verified live from inside the built image on 2026-09-04: apt-cache policy util-linux reports Installed 2.41.5-0+deb13u1 and Candidate 2.41.5-0+deb13u1, and apt-cache madison offers only 2.41.5-0+deb13u1 from trixie-security and 2.41-5 from trixie. Removal is not an alternative for the reasons recorded against CVE-2026-76642; nsenter ships in the Essential util-linux package itself, which apt will not remove. Re-run the candidate check at each review; when the candidate advances past 2.41.5-0+deb13u1, rebuild, refresh the pinned base-image digest in backend/Dockerfile and delete this entry."
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
+    upgrade_plan: "Both stages of backend/Dockerfile already run apt-get update && apt-get upgrade -y against the live Debian repositories, so a fixed trixie package reaches the image on the next build with no Dockerfile change. Upstream fixed this in util-linux 2.41.6 and 2.42.3; trixie ships the 2.41.5 line, so a Debian backport to 2.41.x is required. Verified live from inside the built image on 2026-09-05: apt-cache policy util-linux reports Installed 2.41.5-0+deb13u1 and Candidate 2.41.5-0+deb13u1, and apt-cache madison offers only 2.41.5-0+deb13u1 from trixie-security and 2.41-5 from trixie. Removal is not an alternative for the reasons recorded against CVE-2026-76642; nsenter ships in the Essential util-linux package itself, which apt will not remove. Re-run the candidate check at each review; when the candidate advances past 2.41.5-0+deb13u1, rebuild, refresh the pinned base-image digest in backend/Dockerfile and delete this entry."
 
   - cve_or_advisory_id: "CVE-2026-78409"
     affected_package: "util-linux source package (Trivy rows: bsdutils, libblkid1, liblastlog2-2, libmount1, libsmartcols1, libuuid1, login, mount, util-linux)"
@@ -211,9 +236,9 @@ exceptions:
     compensating_control: "The container runs a single Uvicorn process as non-root UID 10001 whose account shell is /sbin/nologin, has no init system and no systemd services, contains no compiler, and exposes only the TCP HTTP port. /etc/fstab authorises no mount by any user, and no external mount helper is installed."
     owner: "@blazebrt"
     created_date: "2026-09-04"
-    review_date: "2026-09-04"
-    expiry_date: "2026-09-08"
-    upgrade_plan: "Two independent external events would each clear this row. Debian may correct the affected-version mapping for its trixie util-linux source package, since the CNA states the vulnerable implementation arrived in v2.42 and that v2.41 is not affected; or Debian may ship a package version that Trivy no longer matches. The build already runs apt-get update && apt-get upgrade -y against the live Debian repositories, so the second reaches the image with no Dockerfile change. Verified live from inside the built image on 2026-09-04: Candidate is 2.41.5-0+deb13u1, with nothing newer offered by trixie or trixie-security. Removal is not an alternative for the reasons recorded against CVE-2026-76642. At each review, re-check whether Debian still lists this CVE against trixie util-linux and whether Trivy still reports it; delete this entry as soon as either stops, and prefer reporting the mapping upstream to renewing this entry."
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
+    upgrade_plan: "Two independent external events would each clear this row. Debian may correct the affected-version mapping for its trixie util-linux source package, since the CNA states the vulnerable implementation arrived in v2.42 and that v2.41 is not affected; or Debian may ship a package version that Trivy no longer matches. The build already runs apt-get update && apt-get upgrade -y against the live Debian repositories, so the second reaches the image with no Dockerfile change. Verified live from inside the built image on 2026-09-05: Candidate is 2.41.5-0+deb13u1, with nothing newer offered by trixie or trixie-security. Removal is not an alternative for the reasons recorded against CVE-2026-76642. At each review, re-check whether Debian still lists this CVE against trixie util-linux and whether Trivy still reports it; delete this entry as soon as either stops, and prefer reporting the mapping upstream to renewing this entry."
 
   - cve_or_advisory_id: "CVE-2026-78410"
     affected_package: "util-linux source package (Trivy rows: bsdutils, libblkid1, liblastlog2-2, libmount1, libsmartcols1, libuuid1, login, mount, util-linux)"
@@ -223,6 +248,6 @@ exceptions:
     compensating_control: "The container runs a single Uvicorn application process as non-root UID 10001 whose account shell is /sbin/nologin, has no init system or systemd services, contains no compiler, and exposes only the TCP HTTP service. For this CVE, /etc/fstab contains zero non-comment entries, so it authorises no restricted bind or rbind mount and contains none of X-mount.owner, X-mount.group or X-mount.mode. /usr/bin/mount remains present and setuid root as recorded in the exploitability assessment."
     owner: "@blazebrt"
     created_date: "2026-09-04"
-    review_date: "2026-09-04"
-    expiry_date: "2026-09-08"
-    upgrade_plan: "Both stages of backend/Dockerfile already run apt-get update && apt-get upgrade -y against the live Debian repositories, so a fixed trixie package reaches the image on the next build with no Dockerfile change. Upstream fixed this in util-linux 2.41.6 and 2.42.3; trixie ships the 2.41.5 line, so a Debian backport to 2.41.x is required. Verified live from inside the built image on 2026-09-04: apt-cache policy util-linux reports Installed 2.41.5-0+deb13u1 and Candidate 2.41.5-0+deb13u1, and apt-cache madison offers only 2.41.5-0+deb13u1 from trixie-security and 2.41-5 from trixie. Removal was checked and is not an alternative, for the reasons recorded against CVE-2026-76642. Re-run the candidate check at each review; when the candidate advances past 2.41.5-0+deb13u1, rebuild, refresh the pinned base-image digest in backend/Dockerfile and delete this entry."
+    review_date: "2026-09-05"
+    expiry_date: "2026-10-03"
+    upgrade_plan: "Both stages of backend/Dockerfile already run apt-get update && apt-get upgrade -y against the live Debian repositories, so a fixed trixie package reaches the image on the next build with no Dockerfile change. Upstream fixed this in util-linux 2.41.6 and 2.42.3; trixie ships the 2.41.5 line, so a Debian backport to 2.41.x is required. Verified live from inside the built image on 2026-09-05: apt-cache policy util-linux reports Installed 2.41.5-0+deb13u1 and Candidate 2.41.5-0+deb13u1, and apt-cache madison offers only 2.41.5-0+deb13u1 from trixie-security and 2.41-5 from trixie. Removal was checked and is not an alternative, for the reasons recorded against CVE-2026-76642. Re-run the candidate check at each review; when the candidate advances past 2.41.5-0+deb13u1, rebuild, refresh the pinned base-image digest in backend/Dockerfile and delete this entry."

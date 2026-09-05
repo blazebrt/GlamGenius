@@ -9,14 +9,30 @@ const {
   validateRegistry,
 } = require("./validate-node-audit");
 
-const registry = JSON.parse(
+// Frozen fixtures rather than the live registries. Both governed advisories
+// are remediated and the shipped registries are now empty, but the validator's
+// rules about accepted exceptions and scanner false positives still need a
+// well-formed record to be exercised against, and reading that record out of
+// the live registry meant fixing the vulnerability deleted the tests' inputs.
+// See node-audit-fixtures.js.
+const {
+  exceptionRegistry,
+  falsePositiveRegistry: buildFalsePositiveRegistry,
+} = require("./node-audit-fixtures");
+
+const registry = exceptionRegistry();
+const approved = registry.exceptions[0];
+const falsePositiveRegistry = buildFalsePositiveRegistry();
+const nanoidFalsePositive = falsePositiveRegistry.false_positives[0];
+
+// The registries the gate actually reads, for the tests that assert on their
+// shipped contents rather than on validator behaviour.
+const shippedExceptionRegistry = JSON.parse(
   fs.readFileSync(`${__dirname}/node-audit-exceptions.json`, "utf8"),
 );
-const approved = registry.exceptions[0];
-const falsePositiveRegistry = JSON.parse(
+const shippedFalsePositiveRegistry = JSON.parse(
   fs.readFileSync(`${__dirname}/node-audit-false-positives.json`, "utf8"),
 );
-const nanoidFalsePositive = falsePositiveRegistry.false_positives[0];
 
 function auditAdvisory({
   advisoryId,
@@ -339,6 +355,100 @@ test("existing image-size dependency-path contract remains strict", () => {
     }), registry, { today: "2026-08-16" }),
     /does not allow dependency path/,
   );
+});
+
+// ---- The remediated state -------------------------------------------------
+// September 2026: metro 0.83.8 dropped its `image-size` dependency and the
+// nanoid resolution moved to the patched 3.3.18, so nothing in the tree needs
+// governing and both shipped registries are empty. The registry rules have to
+// admit that state without admitting anything else.
+
+test("the shipped registries are empty and still validate", () => {
+  assert.deepEqual(validateRegistry(shippedExceptionRegistry), []);
+  assert.deepEqual(validateFalsePositiveRegistry(shippedFalsePositiveRegistry), []);
+});
+
+test("a clean audit passes against the shipped registries with nothing governed", () => {
+  const result = validateAuditText(
+    cleanAudit(),
+    shippedExceptionRegistry,
+    shippedFalsePositiveRegistry,
+    { today: "2026-09-05" },
+  );
+  assert.equal(result.findings.length, 0);
+  assert.equal(result.acceptedExceptions.length, 0);
+  assert.equal(result.falsePositiveFindings.length, 0);
+  assert.equal(result.reviewWarnings.length, 0);
+});
+
+test("removing image-size exceptions does not open the gate to image-size findings", () => {
+  // The whole point of removing them is that the package is gone. If it ever
+  // comes back, an ungoverned HIGH against it must fail, not pass quietly.
+  assert.throws(
+    () => validateAuditText(
+      auditAdvisory({
+        advisoryId: approved.advisory_id,
+        cve: approved.cve,
+        packageName: approved.package,
+        version: approved.installed_version,
+        paths: approved.dependency_paths,
+      }),
+      shippedExceptionRegistry,
+      shippedFalsePositiveRegistry,
+      { today: "2026-09-05" },
+    ),
+    /Unaccepted HIGH advisory GHSA-w3rx-r6r6-pgpr/,
+  );
+});
+
+test("removing the Nano ID record does not open the gate to Nano ID findings", () => {
+  assert.throws(
+    () => validateAuditText(
+      nanoidAudit(),
+      shippedExceptionRegistry,
+      shippedFalsePositiveRegistry,
+      { today: "2026-09-05" },
+    ),
+    /Unaccepted HIGH advisory GHSA-2v37-7h3g-55p8/,
+  );
+});
+
+test("image-size exceptions come as the approved pair or not at all", () => {
+  // Both advisories are against the same package, so no remediation can clear
+  // one and leave the other. Half a pair means the registry was edited by
+  // hand, which is exactly what the allowlist exists to catch.
+  for (const kept of [0, 1]) {
+    assert.throws(
+      () => validateRegistry({
+        schema_version: 1,
+        exceptions: [registry.exceptions[kept]],
+      }),
+      /either no image-size advisories or exactly the two approved ones/,
+    );
+  }
+});
+
+test("an unapproved image-size advisory is still refused, empty registry or not", () => {
+  const smuggled = {
+    ...JSON.parse(JSON.stringify(approved)),
+    advisory_id: "GHSA-0000-0000-0000",
+    cve: "CVE-2026-00000",
+  };
+  assert.throws(
+    () => validateRegistry({ schema_version: 1, exceptions: [smuggled] }),
+    /unapproved image-size advisory/,
+  );
+  assert.throws(
+    () => validateRegistry({
+      schema_version: 1,
+      exceptions: [...JSON.parse(JSON.stringify(registry.exceptions)), smuggled],
+    }),
+    /unapproved image-size advisory/,
+  );
+});
+
+test("the approved image-size pair still validates, so the fixture is a real contract", () => {
+  assert.equal(validateRegistry(exceptionRegistry()).length, 2);
 });
 
 test("missing HIGH audit path evidence fails closed", () => {

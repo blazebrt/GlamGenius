@@ -188,12 +188,27 @@ function validateRegistry(registry) {
       }
     }
   }
+  // The two image-size advisories are against the same package, so they arrive
+  // and leave together: no remediation can clear one and leave the other. The
+  // registry may therefore hold both, or neither, and nothing in between.
+  //
+  // Neither is the remediated state. metro 0.83.8 dropped its `image-size`
+  // dependency, and pinning the metro package set to 0.83.8 removes the
+  // package from the tree entirely -- there is then no image-size for an
+  // exception to cover, and a registry still claiming one would be asserting
+  // an exposure that no longer exists. Requiring the pair to be present, as
+  // this check once did, would have made the fix unmergeable.
+  //
+  // Everything else still fails: one of the pair, a third advisory, a
+  // substituted identifier. The allowlist is what stops a new image-size
+  // suppression being slipped in beside the approved ones.
   const imageSizeIds = registry.exceptions
     .filter((exception) => exception.package === "image-size")
     .map((exception) => exception.advisory_id)
     .sort();
-  if (imageSizeIds.length !== 2 || imageSizeIds.join(",") !== Object.keys(EXPECTED_IMAGE_SIZE_ADVISORIES).sort().join(",")) {
-    fail("Exception registry must contain exactly the two approved image-size advisories");
+  const approvedImageSizeIds = Object.keys(EXPECTED_IMAGE_SIZE_ADVISORIES).sort().join(",");
+  if (imageSizeIds.length !== 0 && imageSizeIds.join(",") !== approvedImageSizeIds) {
+    fail("Exception registry must contain either no image-size advisories or exactly the two approved ones");
   }
   return registry.exceptions;
 }

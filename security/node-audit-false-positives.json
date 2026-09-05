@@ -1,27 +1,4 @@
 {
   "schema_version": 1,
-  "false_positives": [
-    {
-      "advisory_id": "GHSA-2v37-7h3g-55p8",
-      "cve": "CVE-2026-67213",
-      "package": "nanoid",
-      "installed_version": "3.3.17",
-      "severity": "high",
-      "dependency_paths": [
-        "@react-navigation/native>nanoid",
-        "@react-navigation/native>@react-navigation/core>nanoid",
-        "@react-navigation/native>@react-navigation/core>@react-navigation/routers>nanoid",
-        "expo-router>@react-navigation/native>@react-navigation/core>@react-navigation/routers>nanoid"
-      ],
-      "authoritative_affected_range": "< 3.3.17",
-      "authoritative_patched_version": "3.3.17",
-      "reason": "Yarn Classic reports the patched Nano ID 3.3.17 release for an advisory whose authoritative affected range ends before 3.3.17. Re-verified 2026-08-29 at the scheduled expiry: yarn.lock still resolves nanoid to 3.3.17, the advisory's patched version is still 3.3.17, and the scanner still reports it, so the assessment is unchanged. Re-issued for one further review cycle by the owner; not auto-extended.",
-      "authoritative_source": "https://github.com/ai/nanoid/releases/tag/3.3.17",
-      "owner": "@blazebrt",
-      "created_date": "2026-08-15",
-      "review_date": "2026-09-19",
-      "expiry_date": "2026-09-26",
-      "removal_condition": "Remove immediately when the Yarn audit feed stops incorrectly reporting patched Nano ID 3.3.17; remove and re-review if the installed version, advisory, severity, or dependency path changes; never auto-extend this expiry."
-    }
-  ]
+  "false_positives": []
 }
