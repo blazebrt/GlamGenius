@@ -427,7 +427,6 @@ async def _state():
         return records, revisions, freshness
 
 
-@pytest.mark.anyio
 async def test_unchanged_reobservation_advances_observation_without_inventing_a_revision(tmp_path, db_clean):
     """Seeing the same record again is not the register changing its mind."""
     first, second = tmp_path / "t1.xlsx", tmp_path / "t2.xlsx"
@@ -446,7 +445,6 @@ async def test_unchanged_reobservation_advances_observation_without_inventing_a_
     assert freshness == T2.isoformat()
 
 
-@pytest.mark.anyio
 async def test_source_order_governs_revisions_freshness_and_regression(tmp_path, db_clean):
     initial = make_export(tmp_path / "t1.xlsx")
     changed = make_export(tmp_path / "t2.xlsx", status="Completed")
@@ -478,7 +476,6 @@ async def test_source_order_governs_revisions_freshness_and_regression(tmp_path,
     assert after_freshness == T3.isoformat()
 
 
-@pytest.mark.anyio
 async def test_a_later_status_is_never_overwritten_by_an_earlier_source_check(tmp_path, db_clean):
     """T2 says Completed. A T1 file saying Initiated may not undo that."""
     completed = make_export(tmp_path / "t2.xlsx", status="Completed")
@@ -496,7 +493,6 @@ async def test_a_later_status_is_never_overwritten_by_an_earlier_source_check(tm
     assert freshness == T2.isoformat()
 
 
-@pytest.mark.anyio
 async def test_equal_source_check_times_are_refused_deterministically(tmp_path, db_clean):
     """V1 picks no winner between two artifacts claiming the same instant.
 
@@ -522,7 +518,6 @@ async def test_equal_source_check_times_are_refused_deterministically(tmp_path, 
     assert freshness == T1.isoformat()
 
 
-@pytest.mark.anyio
 async def test_failed_source_is_recorded_without_advancing_successful_freshness(tmp_path, db_clean):
     good = make_export(tmp_path / "t1.xlsx")
     await _ingest(good, T1)
@@ -555,7 +550,6 @@ async def test_failed_source_is_recorded_without_advancing_successful_freshness(
     assert freshness == T1.isoformat()
 
 
-@pytest.mark.anyio
 async def test_error_codes_written_to_the_ledger_stay_inside_the_closed_vocabulary(tmp_path, db_clean):
     factory = get_sessionmaker()
     for name, kwargs in (("bad-date.xlsx", {"start": "x"}), ("bad-licence.xlsx", {"licence": 123}),
@@ -615,7 +609,6 @@ async def _fetches():
         )).scalars().all()
 
 
-@pytest.mark.anyio
 async def test_a_second_import_waits_on_the_database_lock_instead_of_reading_stale_state(tmp_path, db_clean):
     """The serialization is PostgreSQL's, so it holds across sessions and processes.
 
@@ -645,7 +638,6 @@ async def test_a_second_import_waits_on_the_database_lock_instead_of_reading_sta
     assert len(revisions) == 1
 
 
-@pytest.mark.anyio
 @pytest.mark.parametrize("newest_first", [False, True])
 async def test_concurrent_imports_cannot_leave_older_content_under_newer_freshness(
     tmp_path, db_clean, newest_first,
@@ -677,7 +669,6 @@ async def test_concurrent_imports_cannot_leave_older_content_under_newer_freshne
     assert max(row.source_checked_at for row in successful) == T3
 
 
-@pytest.mark.anyio
 async def test_a_first_import_race_on_identical_bytes_admits_exactly_one(tmp_path, db_clean):
     """Two operators importing the same download at the same stated instant."""
     original = make_export(tmp_path / "foscos.xlsx")
@@ -692,7 +683,6 @@ async def test_a_first_import_race_on_identical_bytes_admits_exactly_one(tmp_pat
     assert [row.status for row in fetches].count("succeeded") == 1
 
 
-@pytest.mark.anyio
 async def test_a_first_import_race_on_differing_bytes_picks_no_winner(tmp_path, db_clean):
     """Two artifacts claiming the same instant disagree; only one can be accepted."""
     first = make_export(tmp_path / "a.xlsx", status="Initiated")
@@ -713,7 +703,6 @@ async def test_a_first_import_race_on_differing_bytes_picks_no_winner(tmp_path, 
 # A record we keep after it leaves the export
 # ---------------------------------------------------------------------------
 
-@pytest.mark.anyio
 async def test_a_record_absent_from_the_latest_export_keeps_its_own_observation_date(tmp_path, db_clean):
     """Absence from one download proves nothing, so the record stays — dated honestly.
 
@@ -765,7 +754,6 @@ def run_command(*args) -> subprocess.CompletedProcess:
     )
 
 
-@pytest.mark.anyio
 async def test_operator_command_reports_source_provenance_on_success(tmp_path, db_clean):
     path = make_export(tmp_path / "foscos.xlsx")
     completed = run_command(str(path), "--source-checked-at", "2026-08-01T10:00:00+05:30")
@@ -781,7 +769,6 @@ async def test_operator_command_reports_source_provenance_on_success(tmp_path, d
     assert report["source_file_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-@pytest.mark.anyio
 async def test_operator_command_fails_loudly_and_leaves_prior_good_data_alone(tmp_path, db_clean):
     good = make_export(tmp_path / "good.xlsx")
     assert run_command(str(good), "--source-checked-at", "2026-08-01T00:00:00+00:00").returncode == 0
