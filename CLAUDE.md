@@ -69,7 +69,7 @@ backend/
     release.py               # `python -m app.release` — lock, migrate, seed, verify
     release_readiness.py     # `python -m app.release_readiness` — honest readiness report
     api/v2/                  # 24 route modules mounted by api/v2/__init__.py (health.py is an empty orphan)
-    domains/                 # 32 domain packages — see §3
+    domains/                 # 33 domain packages — see §3
     workers/                 # notifications.py, account_deletion.py — see §6
     bootstrap/               # reference_data.py — versioned seed catalogue
     shared/
@@ -95,7 +95,7 @@ startup checks. Real work lives under `backend/app/`.
 
 ## 3. The domains
 
-All 32 packages under `backend/app/domains/`:
+All 33 packages under `backend/app/domains/`:
 
 | Domain | Owns |
 | --- | --- |
@@ -125,6 +125,7 @@ All 32 packages under `backend/app/domains/`:
 | `off` | Store A: the Open Food Facts copy, behind the ODbL wall — see §5a |
 | `product` | Barcode scanning: anonymous device identity, our product record, scan events, label transcription |
 | `substance_interpretation` | Step 7C category-specific projection of published evidence onto already-resolved canonical substance identities; no identity resolution, scoring or verdicts |
+| `personal_lens` | Step 8A read-only FOR YOU context projection from trusted user-declared non-medical Profile facts; hard-handoff first; no score, verdict or evidence matching |
 
 Every ORM model module must be imported in `backend/app/shared/database/registry.py`.
 A model that is not imported there is invisible to Alembic and its table is silently
