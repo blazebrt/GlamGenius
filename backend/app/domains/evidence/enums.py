@@ -114,6 +114,7 @@ class EvidenceDomain(StrEnum):
     #: care domains: a substance's identity is the same fact whether it turns up
     #: in a serum, a shampoo or a capsule.
     SUBSTANCE = "substance"
+    COSMETICS = "cosmetics"
 
 
 class RuleKind(StrEnum):
@@ -140,6 +141,7 @@ class ClaimType(StrEnum):
     #: "This exact reviewed name denotes this exact entity." Identity only —
     #: never what the substance does, whether it is safe, or how much is present.
     SUBSTANCE_IDENTITY = "substance_identity"
+    SUBSTANCE_CATEGORY_INTERPRETATION = "substance_category_interpretation"
 
 
 # Descriptive aliases keep the public vocabulary obvious to callers while the
