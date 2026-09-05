@@ -154,15 +154,7 @@ jobs:
         run: |
           pip-audit -r requirements.txt \
             --vulnerability-service osv \
-            --strict \
-            --ignore-vuln PYSEC-2026-1845 \
-            --ignore-vuln PYSEC-2026-161 \
-            --ignore-vuln PYSEC-2026-1941 \
-            --ignore-vuln PYSEC-2026-1943 \
-            --ignore-vuln PYSEC-2026-2280 \
-            --ignore-vuln PYSEC-2026-2281 \
-            --ignore-vuln PYSEC-2026-248 \
-            --ignore-vuln PYSEC-2026-249
+            --strict
       - name: Run Ruff on pull requests
         if: github.event_name == 'pull_request'
         working-directory: backend
@@ -483,21 +475,16 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install pip-audit
         run: pip install pip-audit==2.7.3
-      - name: Audit requirements (strict — fail on any advisory not on the documented ignore list)
+      - name: Audit requirements (strict — fail on any advisory)
         working-directory: backend
-        # See the Stabilisation Report backlog for the rationale on each ignored ID.
+        # No suppression flags. Python audit exceptions are zero, and
+        # security/test_no_python_audit_ignores.py fails the build if an
+        # inline suppression reappears. Reintroducing one is a deliberate
+        # governance change, not something to slip into an unrelated PR.
         run: |
           pip-audit -r requirements.txt \
             --vulnerability-service osv \
-            --strict \
-            --ignore-vuln PYSEC-2026-1845 \
-            --ignore-vuln PYSEC-2026-161 \
-            --ignore-vuln PYSEC-2026-1941 \
-            --ignore-vuln PYSEC-2026-1943 \
-            --ignore-vuln PYSEC-2026-2280 \
-            --ignore-vuln PYSEC-2026-2281 \
-            --ignore-vuln PYSEC-2026-248 \
-            --ignore-vuln PYSEC-2026-249
+            --strict
       - name: Full audit report (failure diagnostics)
         if: failure()
         working-directory: backend
