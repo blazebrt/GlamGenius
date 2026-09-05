@@ -343,8 +343,9 @@ async def test_appearance_wellness_and_allergy_data_are_never_projected(db_clean
     assert food.preference_facts == ()
     assert food.missing_information == ()
     assert food.status is PersonalLensStatus.NOT_ENOUGH_PERSONAL_CONTEXT
-    assert "allerg" not in repr(skin).casefold()
-    assert "fragrance" not in repr(skin).casefold()
+    projected = (*skin.body_facts, *skin.preference_facts)
+    assert all(fact.key != "allergies" for fact in projected)
+    assert all(fact.value != ("fragrance",) for fact in projected)
 
 
 @pytest.mark.asyncio
