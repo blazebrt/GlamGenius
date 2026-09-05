@@ -424,11 +424,16 @@ This bridge adds no interpretation, score, verdict, recommendation, API route,
 frontend surface, model, migration, lineage, fingerprint, or formula-version
 table. Those remain outside Step 7B.1.
 
-## 15. What is deliberately still ahead
+## 15. Step 7C consumes the projection without reopening this layer
 
-- **Step 7C** — evidence-backed category interpretation. It will read these
-  identities; it will not modify identity semantics, and it will not loosen
-  anything above.
+Step 7C now lives in the sibling `substance_interpretation` domain. It consumes
+the already-resolved, snapshot-bound Product projection and attaches eligible
+category-specific public evidence by exact canonical key. It deliberately does
+not import this formula domain or the identity domain, and it never changes a
+token boundary or identity answer. See `SUBSTANCE_INTERPRETATION.md`.
+
+## 16. What is deliberately still ahead
+
 - **Observed formula facts** — printed percentages and other on-pack claims,
   each with its own provenance.
 - **Product Result integration** — only once this layer's semantics are settled.
