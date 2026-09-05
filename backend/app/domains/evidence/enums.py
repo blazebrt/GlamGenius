@@ -142,6 +142,10 @@ class ClaimType(StrEnum):
     #: never what the substance does, whether it is safe, or how much is present.
     SUBSTANCE_IDENTITY = "substance_identity"
     SUBSTANCE_CATEGORY_INTERPRETATION = "substance_category_interpretation"
+    #: A reviewed, published, non-medical claim whose structured scope names
+    #: exact user-declared body facts. It is applicability evidence only, never
+    #: a product verdict, recommendation, safety answer, or efficacy inference.
+    SUBSTANCE_PERSONAL_APPLICABILITY = "substance_personal_applicability"
 
 
 # Descriptive aliases keep the public vocabulary obvious to callers while the
