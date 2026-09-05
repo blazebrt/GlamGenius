@@ -478,7 +478,7 @@ jobs:
       - name: Audit requirements (strict — fail on any advisory)
         working-directory: backend
         # No suppression flags. Python audit exceptions are zero, and
-        # security/test_no_python_audit_ignores.py fails the build if an
+        # backend/tests/test_no_python_audit_ignores.py fails the build if an
         # inline suppression reappears. Reintroducing one is a deliberate
         # governance change, not something to slip into an unrelated PR.
         run: |
