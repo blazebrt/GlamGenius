@@ -1868,16 +1868,19 @@ class TestExistingBehaviourUnchanged:
         assert "ceramide np" in INGREDIENT_BY_KEY["ceramides"].aliases
         assert {row.key for row in parse_label("Aqua, Niacinamide, Glycerin")} >= {"niacinamide"}
 
-    def test_nothing_outside_the_domain_imports_it_yet(self):
-        """Step 7B ships the engine, wired to nothing."""
+    def test_only_the_label_snapshot_projection_adapter_imports_the_formulas_domain(self):
+        """Step 7B.1 has exactly one approved external formula consumer."""
         app_root = BACKEND_ROOT / "app"
-        for path in sorted(app_root.rglob("*.py")):
-            if FORMULAS_DIR in path.parents:
-                continue
-            assert not any(
+        importers = {
+            path.relative_to(BACKEND_ROOT).as_posix()
+            for path in sorted(app_root.rglob("*.py"))
+            if FORMULAS_DIR not in path.parents
+            and any(
                 module.startswith("app.domains.formulas")
                 for module in _imported_modules(path)
-            ), f"{path.relative_to(BACKEND_ROOT)} imports the formulas domain"
+            )
+        }
+        assert importers == {"app/domains/product/formula_projection.py"}
 
     def test_no_api_route_exposes_the_formula_engine(self):
         api_root = BACKEND_ROOT / "app" / "api"
