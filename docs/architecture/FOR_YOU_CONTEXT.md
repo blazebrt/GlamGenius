@@ -105,3 +105,102 @@ Step 8A has no product, barcode, LabelSnapshot, formula, ingredient, substance,
 brand, Open Food Facts, network, AI, family, subscription, payment, entitlement,
 or frontend input. Step 8B will be the first reviewed layer allowed to join
 this personal context with governed product evidence.
+
+## Step 8B governed evidence applicability
+
+Step 8B answers one additional, still deliberately bounded question:
+
+> Given an exact Step 7C formula interpretation and an exact Step 8A context
+> for the same explicit category, which reviewed, published, non-medical
+> substance-personal-applicability claims exactly match the trusted body facts?
+
+It consumes both earlier projections. It does not read Profile storage,
+re-tokenise a formula, reopen canonical identity, derive meaning from a Step 7C
+reference-role summary, or infer a claim from ingredient presence. A valid
+`substance_category_interpretation` claim such as a reference role is never a
+personal rule. Only the separate controlled claim type
+`substance_personal_applicability` can enter this layer.
+
+### Strict structured applicability
+
+Machine applicability lives in the claim's `structured_value` under this exact
+V1 block:
+
+```json
+{
+  "substance_personal_applicability": {
+    "schema_version": "1",
+    "category": "skin_care",
+    "all_of": [
+      {
+        "fact_key": "care_skin_sensitivity",
+        "operator": "equals_any",
+        "values": ["sometimes_reactive", "often_reactive"]
+      }
+    ]
+  }
+}
+```
+
+`all_of` contains one to four conditions and every condition must match. Scalar
+Profile facts use exact `equals_any`; list-valued facts use exact
+`contains_any`. There is no `any_of`, negation, nesting, numeric comparison,
+regex, substring, alias, case-fold, fuzzy match, or prose inference. Fact keys
+must be in Step 8A's body allowlist for the same category, operators must match
+the canonical Profile fact shape, and values must be exact canonical registry
+choices. Preferences and `not_sure` are invalid claim conditions. Duplicate
+values, duplicate fact conditions, unknown keys, unknown operators, malformed
+values and unsupported schema versions fail closed.
+
+Packaged food remains intentionally empty in V1 because Step 8A has no governed
+packaged-food body facts. Lifestyle, wellness, appearance, allergy and medical
+Profile fields cannot fill that gap.
+
+### Public evidence gate
+
+An applicable claim must use the exact resolved substance key, requested
+evidence domain, new claim type, category and V1 payload. It must pass the
+shared published public-knowledge gate, be human-reviewed and published with no
+unresolved verification doubt, be non-AI, supported, clinically studied, and
+have strong, moderate or limited evidence strength. At least one fully reviewed
+supporting path must point to an active, named, openable source with a recorded
+use note. V1 admits only official guidelines, government references, systematic
+reviews, peer-reviewed research and professional consensus. Manufacturer
+materials, ingredient databases, traditional references, background links and
+generic other sources cannot carry personal body-effect applicability.
+
+The category-to-domain mapping is exact: packaged food to nutrition, Skin Care
+to skin care, Hair Care to hair care, and Cosmetics to cosmetics. Cosmetics is
+never silently treated as Skin Care.
+
+### Handoff, identity and absence
+
+The top-level snapshot helper invokes Step 8A first. A medical handoff stops
+before Step 7C or Step 8B evidence reads and returns only the existing safe
+handoff projection; the input text is never stored or returned. No usable body
+context also stops before product-evidence work.
+
+Only a Step 7C `resolved` identity may be queried by exact canonical key.
+Unresolved names stay unresolved. Ambiguous identities retain every candidate,
+but no candidate is queried or selected and personal context cannot break the
+tie. Duplicate printed positions remain duplicate output rows while sharing one
+batched evidence load.
+
+A non-matching claim is simply inapplicable, not contradictory. No match and no
+claim both mean `not_enough_information`; neither implies good, bad, safe,
+unsafe, suitable or unsuitable.
+
+### Live, bounded and non-decisional
+
+For K distinct resolved keys, Step 8B performs at most one candidate-claim
+query and, only when candidates exist, one source-path query. It does not query
+per ingredient, ambiguous candidate or raw printed name. Results retain exact
+LabelSnapshot provenance, explicit category, formula status, Profile ID and
+version, identity state, matched Profile-attribute IDs, exact reviewed claim
+text and complete source provenance.
+
+The projection is immutable and live. It adds no result model, table, cache,
+event, API, frontend, production knowledge seed or write. Its sole schema
+change extends the existing evidence claim-type CHECK vocabulary. It produces
+no score, grade, confidence number, ranking, concentration estimate,
+alternative, recommendation or `BUY` / `WAIT` / `SKIP` verdict.
