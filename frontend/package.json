@@ -87,9 +87,23 @@
     "typescript": "~5.9.2"
   },
   "resolutions": {
-    "//": "Work Package 1 — pin the transitive postcss dependency of expo's metro-config to a patched version. Advisory GHSA/npm 1124252 and 1124288 (arbitrary file read + path traversal via sourceMappingURL) are HIGH and pull expo > @expo/metro-config > postcss into a vulnerable range on the expo 54 line. When Expo publishes a metro-config that pins ≥8.5.18 upstream, this override is removed.",
+    "//": "Security overrides for transitive build-tooling dependencies. postcss: Work Package 1 - pin the transitive postcss dependency of expo's metro-config to a patched version; advisories npm 1124252 and 1124288 (arbitrary file read + path traversal via sourceMappingURL) are HIGH and pull expo > @expo/metro-config > postcss into a vulnerable range on the expo 54 line; removed when Expo publishes a metro-config that pins >=8.5.18 upstream. nanoid: GHSA-2v37-7h3g-55p8 / CVE-2026-67213 (HIGH, infinite loop in custom generators) affects <3.3.18; 3.3.18 is the patched release. metro: metro 0.83.8 removed the image-size dependency, which is the only source of GHSA-w3rx-r6r6-pgpr / CVE-2025-71330 and GHSA-5p2g-fcmc-qvqq / CVE-2025-71329 (both HIGH, no patched image-size release exists at any version); @expo/metro 54.2.0 pins metro 0.83.3 exactly, so the whole metro package set is pinned together to 0.83.8 - mixing metro versions is not supported. Expo ships metro 0.83.8 itself in @expo/metro 55.1.2. Removed when the Expo SDK the app targets pins metro >=0.83.8 upstream.",
     "postcss": "^8.5.18",
-    "nanoid": "3.3.17"
+    "nanoid": "3.3.18",
+    "metro": "0.83.8",
+    "metro-babel-transformer": "0.83.8",
+    "metro-cache": "0.83.8",
+    "metro-cache-key": "0.83.8",
+    "metro-config": "0.83.8",
+    "metro-core": "0.83.8",
+    "metro-file-map": "0.83.8",
+    "metro-minify-terser": "0.83.8",
+    "metro-resolver": "0.83.8",
+    "metro-runtime": "0.83.8",
+    "metro-source-map": "0.83.8",
+    "metro-symbolicate": "0.83.8",
+    "metro-transform-plugins": "0.83.8",
+    "metro-transform-worker": "0.83.8"
   },
   "private": true,
   "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"

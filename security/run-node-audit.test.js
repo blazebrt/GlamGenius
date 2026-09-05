@@ -6,13 +6,18 @@ const { advisoryLinesIn, auditOutputIsComplete, runWithRetries } = require("./ru
 const { validateAuditText } = require("./validate-node-audit");
 const runnerSource = fs.readFileSync(`${__dirname}/run-node-audit.js`, "utf8");
 
-const registry = JSON.parse(
-  fs.readFileSync(`${__dirname}/node-audit-exceptions.json`, "utf8"),
-);
+// Frozen fixtures rather than the live registries, which are empty now that
+// both governed advisories are remediated. The retry policy still has to be
+// shown carrying a governed advisory forward, so it needs a governed advisory
+// to carry. See node-audit-fixtures.js.
+const {
+  exceptionRegistry,
+  falsePositiveRegistry: buildFalsePositiveRegistry,
+} = require("./node-audit-fixtures");
+
+const registry = exceptionRegistry();
 const approved = registry.exceptions[0];
-const falsePositiveRegistry = JSON.parse(
-  fs.readFileSync(`${__dirname}/node-audit-false-positives.json`, "utf8"),
-);
+const falsePositiveRegistry = buildFalsePositiveRegistry();
 const nanoidFalsePositive = falsePositiveRegistry.false_positives[0];
 
 function advisoryLine({ advisoryId, cve, packageName, version, severity = "high", paths }) {
