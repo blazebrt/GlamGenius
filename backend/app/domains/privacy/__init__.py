@@ -231,6 +231,16 @@ REGISTRY: dict[str, Classification] = {
     # copy of the reference catalogue rather than their own data.
     "substances": Classification.NOT_USER_OWNED,
     "substance_names": Classification.NOT_USER_OWNED,
+    # A governed decision release is reviewed global knowledge: which published
+    # claim carries which reviewed direction, which governed state warrants
+    # which action, and which source is cited for it. The same bundle applies
+    # to everybody, and the manifest schema forbids an account, profile or scan
+    # identifier anywhere inside it -- whether a rule applies to one person is
+    # decided at runtime by Step 8B against that person's own facts and is
+    # never written here. Exporting it would hand somebody the rule book rather
+    # than their own data, and deleting an account must not retire knowledge
+    # that governs every other account.
+    "personal_decision_releases": Classification.NOT_USER_OWNED,
     # Official FSSAI records are global regulatory data, not account-owned
     # content. Fetch attempts and immutable revisions remain auditable but are
     # never included in a person's privacy export.
