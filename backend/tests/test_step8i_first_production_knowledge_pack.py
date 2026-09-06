@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import json
 import subprocess
 import uuid
 from datetime import date
@@ -255,6 +256,15 @@ class TestCompiler:
             lambda e: e["sources"][0].update(status="unavailable"),
             lambda e: e["sources"][0].update(source_key=" "),
             lambda e: e.update(sources=[copy.deepcopy(e["sources"][0])] * 2),
+            # Absent provenance must stay absent. Each of these is a plausible
+            # inference someone could re-introduce, so each is rejected by name.
+            lambda e: e["sources"][0].update(publication_date="2026-01-02"),
+            lambda e: e["sources"][0].update(jurisdiction="global"),
+            lambda e: e["sources"][1].update(jurisdiction="global"),
+            lambda e: e["sources"][1].update(publisher="PubMed"),
+            lambda e: e["sources"][0].update(version_or_revision="2026-01-02"),
+            lambda e: e["sources"][0].update(jurisdiction="US"),
+            lambda e: e["sources"][1].update(jurisdiction="international"),
         ],
     )
     def test_every_reviewed_boundary_fails_closed(self, mutation) -> None:
@@ -424,7 +434,7 @@ def _applicability_input(*, existing_sources: list[dict] | None = None, syntheti
                 canonical_url=pack.AAD_SOURCE_URL,
                 license_or_use_note=pack.AAD_SOURCE_USE_NOTE,
                 locator=pack.AAD_SOURCE_LOCATOR,
-                publication_date=date.fromisoformat(pack.AAD_SOURCE_PUBLICATION_DATE),
+                publication_date=None,
                 version_or_revision=pack.AAD_SOURCE_VERSION,
                 jurisdiction=pack.AAD_SOURCE_JURISDICTION,
             ),
@@ -778,3 +788,162 @@ class TestSeedBoundary:
         assert PERSONAL_DECISION_SEMANTIC_RULES == ()
         assert PERSONAL_DECISION_POLICY_RULES == ()
         assert PERSONAL_DECISION_EXPLANATION_RULES == ()
+
+
+# ---------------------------------------------------------------------------
+# The customer reason must be supported by its own selected citation
+# ---------------------------------------------------------------------------
+
+
+class TestSourceToReasonCorrespondence:
+    """Step 8F shows one reason beside one citation, so the two must agree.
+
+    The Step 8G evidence body is reviewed from two sources: the AAD guidance page
+    and the randomized PubMed study. Only the AAD page is the *selected* Step 8F
+    citation. A customer reading the reason would take it as what that citation
+    says, so the reason is scoped to what the AAD locator actually supports --
+    that dermatologist guidance lists petrolatum among cream/ointment ingredients
+    for dry skin.
+
+    The moisture-loss / TEWL mechanism is real and reviewed, but it comes from the
+    PubMed study. Attaching it to the AAD citation would cite a source for a claim
+    it does not make at that locator. That is the boundary these tests hold.
+    """
+
+    def test_the_reason_key_is_scoped_to_dermatologist_guidance(self) -> None:
+        assert pack.REASON_KEY == (
+            "for_you.skin_care.petrolatum.dry_skin.dermatologist_guidance"
+        )
+
+    def test_the_retired_moisture_loss_reason_key_is_gone(self) -> None:
+        """No alias: there is no released version, so nothing depends on it."""
+        retired = "for_you.skin_care.petrolatum.dry_skin.moisture_loss"
+        assert retired != pack.REASON_KEY
+        source = (
+            Path(pack.__file__).read_text(encoding="utf-8")
+            if hasattr(pack, "__file__")
+            else ""
+        )
+        assert retired not in source
+
+    def test_the_retired_reason_key_is_absent_from_the_manifest(self) -> None:
+        manifest = pack.build_release_manifest_from_published_entry(_valid_entry())
+        rendered = json.dumps(manifest, sort_keys=True)
+        assert "moisture_loss" not in rendered
+        assert pack.REASON_KEY in rendered
+
+    def test_the_future_reason_intent_stays_within_the_aad_scope(self) -> None:
+        intent = pack.FUTURE_REASON_INTENT.lower()
+        assert "dry skin" in intent
+        assert "petrolatum" in intent
+        assert "dermatologist" in intent
+        # It must describe ingredient selection guidance, not a mechanism.
+        assert "cream" in intent or "ointment" in intent
+
+    @pytest.mark.parametrize("claim", pack.REASON_CLAIMS_OUT_OF_SCOPE)
+    def test_the_future_reason_intent_makes_no_unsupported_claim(self, claim: str) -> None:
+        """Each of these belongs to the other source, or to no source at all."""
+        assert claim not in pack.FUTURE_REASON_INTENT.lower()
+
+    def test_the_pubmed_mechanism_is_absent_from_the_customer_reason(self) -> None:
+        for forbidden in ("tewl", "transepidermal", "moisture loss", "water loss"):
+            assert forbidden not in pack.REASON_KEY.lower()
+            assert forbidden not in pack.FUTURE_REASON_INTENT.lower()
+
+    def test_the_intent_is_not_verbatim_source_wording(self) -> None:
+        """An original paraphrase, not reproduced AAD text."""
+        assert pack.FUTURE_REASON_INTENT not in pack.AAD_SOURCE_TITLE
+        assert pack.FUTURE_REASON_INTENT != pack.AAD_SOURCE_LOCATOR
+
+    def test_the_evidence_body_may_still_cite_both_reviewed_sources(self) -> None:
+        """The Step 8G review is the two-source synthesis; only the reason narrows.
+
+        This is the other half of the boundary. Narrowing the customer reason must
+        not quietly narrow the evidence review that justified the strength.
+        """
+        combined = (pack.EVIDENCE_SUMMARY + pack.EVIDENCE_STRENGTH_RATIONALE).lower()
+        assert "moisture loss" in combined or "water loss" in combined
+        assert "dermatolog" in combined
+        assert pack.EVIDENCE_STRENGTH == "moderate"
+
+    def test_the_selected_citation_is_still_the_aad_page(self) -> None:
+        manifest = pack.build_release_manifest_from_published_entry(_valid_entry())
+        (explanation,) = manifest["explanation_rules"]
+        entry = _valid_entry()
+        aad = next(s for s in entry["sources"] if s["publisher"] == pack.AAD_SOURCE_PUBLISHER)
+        assert explanation["source_key"] == aad["source_key"]
+        assert explanation["source_locator"] == pack.AAD_SOURCE_LOCATOR
+
+
+class TestProvenanceIsAbsentNotInferred:
+    """Optional provenance stays null unless the source establishes it.
+
+    A null here is a deliberate statement that the source does not say, not an
+    accidental omission -- so each value is asserted by name.
+    """
+
+    def test_aad_reports_an_update_not_a_publication_date(self) -> None:
+        assert pack.AAD_SOURCE_PUBLICATION_DATE is None
+        assert pack.AAD_SOURCE_VERSION == "Last updated 2026-01-02"
+
+    def test_neither_source_asserts_a_jurisdiction(self) -> None:
+        assert pack.AAD_SOURCE_JURISDICTION is None
+        assert pack.PUBMED_SOURCE_JURISDICTION is None
+
+    def test_the_article_publisher_is_not_the_database(self) -> None:
+        assert pack.PUBMED_SOURCE_PUBLISHER == "Wiley Periodicals, Inc."
+        assert pack.PUBMED_SOURCE_URL == "https://pubmed.ncbi.nlm.nih.gov/31532576/"
+        assert pack.PUBMED_SOURCE_VERSION == "PMID 31532576; DOI 10.1111/jocd.13163"
+
+    def test_the_identity_publisher_is_the_depositor_not_the_host(self) -> None:
+        assert pack.IDENTITY_SOURCE_PUBLISHER == "ChemIDplus"
+        assert pack.IDENTITY_SOURCE_URL == (
+            "https://pubchem.ncbi.nlm.nih.gov/substance/135345390"
+        )
+
+    def test_the_compiled_manifest_still_requires_exactly_two_sources(self) -> None:
+        entry = _valid_entry()
+        assert len(entry["sources"]) == 2
+        assert pack.build_release_manifest_from_published_entry(entry)
+
+    def test_source_order_does_not_change_the_compiled_manifest(self) -> None:
+        forward = _valid_entry()
+        reversed_entry = _valid_entry()
+        reversed_entry["sources"].reverse()
+        assert pack.build_release_manifest_from_published_entry(
+            forward
+        ) == pack.build_release_manifest_from_published_entry(reversed_entry)
+
+
+class TestReasonChangeMovesTheHash:
+    """A reviewed knowledge change must be visible in the release hash.
+
+    The full manifest embeds generated claim and source keys, so its hash is
+    environment-dependent and no fixed value can be asserted. Holding those
+    constant and varying only the reason key isolates the thing under review.
+    """
+
+    def test_the_reason_key_participates_in_the_content_hash(self, monkeypatch) -> None:
+        entry = _valid_entry()
+        current = manifest_content_hash(
+            parse_release_manifest(pack.build_release_manifest_from_published_entry(entry))
+        )
+
+        monkeypatch.setattr(
+            pack, "REASON_KEY", "for_you.skin_care.petrolatum.dry_skin.moisture_loss"
+        )
+        retired = manifest_content_hash(
+            parse_release_manifest(pack.build_release_manifest_from_published_entry(entry))
+        )
+        assert current != retired
+
+    def test_the_hash_is_stable_for_one_reviewed_pack(self) -> None:
+        """Same reviewed knowledge, same entry, same hash."""
+        entry = _valid_entry()
+        first = manifest_content_hash(
+            parse_release_manifest(pack.build_release_manifest_from_published_entry(entry))
+        )
+        second = manifest_content_hash(
+            parse_release_manifest(pack.build_release_manifest_from_published_entry(entry))
+        )
+        assert first == second

@@ -27,7 +27,8 @@ IDENTITY_NAME_NAMESPACE = "official_reference"
 IDENTITY_NAME_PREFERRED = True
 IDENTITY_SOURCE_TYPE = "government_reference"
 IDENTITY_SOURCE_TITLE = "Petrolatum [USP]"
-IDENTITY_SOURCE_PUBLISHER = "PubChem / ChemIDplus"
+#: PubChem hosts the substance record; ChemIDplus is the depositor it names.
+IDENTITY_SOURCE_PUBLISHER = "ChemIDplus"
 IDENTITY_SOURCE_URL = "https://pubchem.ncbi.nlm.nih.gov/substance/135345390"
 IDENTITY_SOURCE_EXTERNAL_ID = "0008009038"
 IDENTITY_SOURCE_USE_NOTE = (
@@ -68,9 +69,15 @@ AAD_SOURCE_URL = (
     "dermatologists-tips-relieve-dry-skin"
 )
 AAD_SOURCE_LOCATOR = "What skin care products are best for dry skin? / Ointment or cream"
-AAD_SOURCE_PUBLICATION_DATE = "2026-01-02"
+#: The page reports "Last updated: 1/2/26" and states no publication date. An update
+#: date is not a publication date, so this stays null and the update is recorded as a
+#: version instead. Optional provenance is left absent when the source does not
+#: establish it, rather than inferred into something that looks authoritative.
+AAD_SOURCE_PUBLICATION_DATE = None
 AAD_SOURCE_VERSION = "Last updated 2026-01-02"
-AAD_SOURCE_JURISDICTION = "global"
+#: Neither reviewed source states the territory its guidance applies to. "global" was
+#: an inference, so it is null.
+AAD_SOURCE_JURISDICTION = None
 AAD_SOURCE_USE_NOTE = (
     "Public source reviewed through its canonical page for citation and verification; "
     "GlamGenius stores metadata and a locator, not reproduced AAD article text."
@@ -81,12 +88,15 @@ PUBMED_SOURCE_TITLE = (
     "Combined effects of glycerol and petrolatum in an emollient cream: A randomized, "
     "double-blind, crossover study in healthy volunteers with dry skin"
 )
-PUBMED_SOURCE_PUBLISHER = "PubMed"
+#: The PubMed record is the open citation location; the article itself carries
+#: "© 2019 Wiley Periodicals, Inc." Naming the database as the publisher would
+#: misattribute the work.
+PUBMED_SOURCE_PUBLISHER = "Wiley Periodicals, Inc."
 PUBMED_SOURCE_URL = "https://pubmed.ncbi.nlm.nih.gov/31532576/"
 PUBMED_SOURCE_LOCATOR = "Abstract / Conclusions"
 PUBMED_SOURCE_PUBLICATION_DATE = "2019-09-18"
 PUBMED_SOURCE_VERSION = "PMID 31532576; DOI 10.1111/jocd.13163"
-PUBMED_SOURCE_JURISDICTION = "global"
+PUBMED_SOURCE_JURISDICTION = None
 PUBMED_SOURCE_USE_NOTE = (
     "Bibliographic and abstract page used for citation and reviewer verification; no article "
     "full text is stored or reproduced."
@@ -103,7 +113,42 @@ POLICY_ACTION = "buy"
 
 EXPLANATION_ID = "for_you.explanation.skin_care.petrolatum.dry_skin.buy"
 EXPLANATION_VERSION = "1"
-REASON_KEY = "for_you.skin_care.petrolatum.dry_skin.moisture_loss"
+
+#: Step 8F attaches one reason to one selected citation, and the two must say the same
+#: thing. The selected AAD locator supports only that dermatologist guidance lists
+#: petrolatum among cream/ointment ingredients for dry skin. It does not, at that
+#: locator, establish the moisture-loss mechanism -- that comes from the PubMed study,
+#: which is part of the Step 8G evidence body but is not the citation the customer is
+#: shown. So the reason is scoped to what its own source carries.
+REASON_KEY = "for_you.skin_care.petrolatum.dry_skin.dermatologist_guidance"
+
+#: The reviewed intent for the future customer sentence behind REASON_KEY. Recorded
+#: here so the scope is reviewable and testable before any copy exists; the wording is
+#: an original GlamGenius paraphrase, never AAD text reproduced.
+FUTURE_REASON_INTENT = (
+    "For dry skin, dermatologist guidance includes petrolatum among ingredients to "
+    "look for in a cream or ointment."
+)
+
+#: Claims the selected AAD citation does not support, and which therefore must never
+#: appear in the customer reason attached to it. They are not false -- some are
+#: supported by the other reviewed source -- they are simply not this citation's.
+REASON_CLAIMS_OUT_OF_SCOPE = (
+    "reduces moisture loss",
+    "reduce moisture loss",
+    "prevents water loss",
+    "prevent water loss",
+    "repairs the barrier",
+    "repair the barrier",
+    "heals skin",
+    "heal skin",
+    "treats dry skin",
+    "treat dry skin",
+    "transepidermal water loss",
+    "tewl",
+    "safe",
+    "recommended for everyone",
+)
 
 
 class FirstProductionKnowledgePackError(ValueError):
@@ -281,7 +326,10 @@ def build_release_manifest_from_published_entry(
 
 
 __all__ = [
-    "FirstProductionKnowledgePackError",
+    "FUTURE_REASON_INTENT",
     "PACK_ID",
+    "REASON_CLAIMS_OUT_OF_SCOPE",
+    "REASON_KEY",
+    "FirstProductionKnowledgePackError",
     "build_release_manifest_from_published_entry",
 ]

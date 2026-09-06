@@ -51,8 +51,68 @@ version cannot be inherited by the old release; it needs a new reviewed pack/rel
 Production activation is therefore an explicit post-merge operation, never a
 migration, startup hook, or reference-data seed.
 
+## Evidence basis vs. customer-selected reason
+
+These are two different scopes, and conflating them is the mistake this section
+exists to prevent.
+
+**Overall evidence basis (Step 8G review).** The reviewed claim rests on two
+independently checked sources: the AAD dry-skin guidance page, which includes
+petrolatum among cream/ointment ingredients to look for, and the randomized
+PubMed study (PMID 31532576), in which the petrolatum component improved barrier
+function with reduced transepidermal water loss. Evidence strength is `moderate`
+because the evidence is ingredient/component-level rather than an exact-product
+therapeutic trial, and because the study was not designed to evaluate therapeutic
+benefit. The summary and strength rationale may — and do — describe both paths.
+
+**Customer-selected reason and citation (Step 8F).** Step 8F shows one reason
+beside one citation, so the reason may only assert what that one citation
+supports. The selected citation is the AAD page at the exact locator
+*"What skin care products are best for dry skin? / Ointment or cream"*. At that
+locator the page supports a narrow proposition: dermatologist guidance lists
+petrolatum among ingredients to look for in a cream or ointment for dry skin. It
+does **not** establish the moisture-loss mechanism. That mechanism comes from the
+PubMed study, which is part of the evidence body but is *not* the citation the
+customer sees.
+
+Attaching the mechanism to the AAD citation would cite a source for a claim it
+does not make. So the reason is scoped to its own source:
+
+```text
+reason key: for_you.skin_care.petrolatum.dry_skin.dermatologist_guidance
+```
+
+Narrowing the customer reason does not narrow the evidence review behind it, and
+the strength stays `moderate`. Tests hold both halves of that boundary.
+
 ## Future reason intent
 
-Reviewed intent, not yet wired to any customer API or copy catalogue:
+Reviewed intent, not yet wired to any customer API or copy catalogue. An original
+GlamGenius paraphrase, never reproduced source wording:
 
-> Petrolatum can help reduce moisture loss when your skin feels dry or tight.
+> For dry skin, dermatologist guidance includes petrolatum among ingredients to
+> look for in a cream or ointment.
+
+The reason attached to the AAD citation must not say *reduces moisture loss*,
+*prevents water loss*, *repairs the barrier*, *heals* or *treats* dry skin, or
+that the ingredient is *safe* or *recommended for everyone*. Some of those are
+different claims; some belong to the other source; none is carried by this
+citation.
+
+## Provenance is absent, not inferred
+
+Optional source metadata is left null where the source does not establish it. A
+null is a statement that the source is silent, not an oversight:
+
+| Field | Value | Why |
+| --- | --- | --- |
+| AAD `publication_date` | `null` | The page reports "Last updated: 1/2/26" — an update is not a publication date |
+| AAD `version_or_revision` | `Last updated 2026-01-02` | Where the update date is recorded honestly |
+| AAD `jurisdiction` | `null` | The page states no territory |
+| PubMed `publisher` | `Wiley Periodicals, Inc.` | The article carries "© 2019 Wiley Periodicals, Inc."; PubMed is the citation location, not the publisher |
+| PubMed `jurisdiction` | `null` | The record states none |
+| Identity `publisher` | `ChemIDplus` | PubChem hosts the record; ChemIDplus is the depositor it names |
+
+The compiler rejects each of these fields being filled with an inferred value —
+including `2026-01-02` as a publication date, `global`/`US`/`international` as a
+jurisdiction, and `PubMed` as the article publisher.
