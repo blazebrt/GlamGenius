@@ -54,8 +54,9 @@ source or create a new opaque source identity. Eligible types are exactly:
 Every source must be active, named, published by a named publisher, have an
 openable HTTP(S) URL, and carry an explicit licence/use note. A duplicate
 canonical URL is rejected with the existing source key. Locators belong to
-the claim-to-source link. Every link is `supports`, and duplicate source paths
-are rejected.
+the claim-to-source link. A locator is either null or a nonblank string; a
+valid locator is preserved exactly, including deliberate surrounding spaces.
+Every link is `supports`, and duplicate source paths are rejected.
 
 ## Review, verification, and publication
 
@@ -72,10 +73,15 @@ the transaction.
 
 Draft and rejected rows edit in place and return to draft. Approved or
 published rows produce a new version with the same claim key and a
-`supersedes_claim_id`; the prior row is retained and marked superseded. New or
-changed drafts clear verification, reviewer, publisher, claim status, and
-rejection metadata, and their source links begin unreviewed. No automatic
-“latest wins” runtime policy is introduced.
+`supersedes_claim_id`. An approved predecessor may be superseded immediately.
+A published predecessor remains published public knowledge while its
+replacement is draft or approved. Only after the replacement passes every
+publication assertion does the same transaction mark the old published row
+superseded and the replacement published. More than one other published row
+for the claim key fails closed rather than selecting one. New or changed
+drafts clear verification, reviewer, publisher, claim status, and rejection
+metadata, and their source links begin unreviewed. No automatic “latest wins”
+runtime policy is introduced.
 
 ## Runtime boundary
 

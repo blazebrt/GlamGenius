@@ -9,6 +9,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from app.api.v2.personal_applicability_admin import ExistingSourceBody, NewSourceBody
 from app.domains.evidence import authoring as evidence_authoring
 from app.domains.evidence.enums import (
     ClaimSourceRelationship,
@@ -48,6 +49,7 @@ from app.domains.substance_interpretation.service import (
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_sessionmaker
 from app.shared.errors.exceptions import ConflictError, ValidationFailedError
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from tests.conftest import auth
@@ -185,6 +187,73 @@ async def _existing_source(session, **overrides) -> EvidenceSource:
     return source
 
 
+def _step8b_inputs() -> tuple[LabelSnapshotFormulaInterpretation, PersonalLensContext]:
+    context = PersonalLensContext(
+        category=PersonalLensCategory.SKIN_CARE,
+        status=PersonalLensStatus.PARTIAL_CONTEXT,
+        profile_id=uuid.uuid4(),
+        profile_version=1,
+        body_facts=(PersonalLensFact(
+            key="care_skin_sensitivity",
+            value="sometimes_reactive",
+            source="user_declared",
+            verification_state="confirmed",
+            profile_attribute_id=uuid.uuid4(),
+            explicit_unknown=False,
+            last_reviewed_at=None,
+        ),),
+        preference_facts=(),
+        missing_information=(),
+        handoff=None,
+    )
+    interpretation = LabelSnapshotFormulaInterpretation(
+        provenance=FormulaProjectionProvenance(
+            label_snapshot_id=uuid.uuid4(),
+            barcode="synthetic-step8g",
+            version_number=1,
+            content_fingerprint="a" * 64,
+            scan_event_id=uuid.uuid4(),
+        ),
+        category=InterpretationCategory.SKIN_CARE,
+        formula_status="parsed",
+        ingredients=(FormulaIngredientInterpretation(
+            position=1,
+            raw_name="Synthetic A",
+            normalized_name="synthetic a",
+            identity_status=ProjectedIdentityStatus.RESOLVED,
+            substance_key="substance.synthetic.a",
+            entity_kind="defined_substance",
+            candidate_substance_keys=("substance.synthetic.a",),
+            interpretation_status=InterpretationStatus.NOT_ENOUGH_INFORMATION,
+            claims=(),
+        ),),
+    )
+    return interpretation, context
+
+
+async def _step8b_claims(session):
+    interpretation, context = _step8b_inputs()
+    result = await apply_personal_evidence(
+        session,
+        interpretation,
+        context,
+        category=PersonalApplicabilityCategory.SKIN_CARE,
+    )
+    return result[0].claims
+
+
+def _replacement_entry(
+    source_key: str,
+    *,
+    locator: str | None = "section synthetic-a",
+    summary: str = "A replacement synthetic version.",
+) -> authoring.PersonalApplicabilityDraftInput:
+    return _entry(
+        summary=summary,
+        sources=(authoring.ExistingSourceInput(source_key=source_key, locator=locator),),
+    )
+
+
 @pytest.mark.parametrize(
     ("category", "expected_domain", "fact_key", "value", "operator"),
     [
@@ -306,6 +375,56 @@ async def test_eligible_existing_source_and_locator_are_preserved(db_clean):
         ),)))
     assert created["sources"][0]["source_key"] == source.source_key
     assert created["sources"][0]["locator"] == "table synthetic-7"
+
+
+@pytest.mark.parametrize("source_mode", ["existing", "new"])
+@pytest.mark.parametrize("locator", [None, "  synthetic section 3  "])
+async def test_null_or_padded_nonblank_locator_is_accepted_without_normalization(
+    db_clean, source_mode, locator,
+):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        if source_mode == "existing":
+            source = await _existing_source(session)
+            source_input = authoring.ExistingSourceInput(source.source_key, locator)
+        else:
+            source_input = _new_source(locator=locator)
+        created = await _create(session, _entry(sources=(source_input,)))
+    assert created["sources"][0]["locator"] == locator
+
+
+@pytest.mark.parametrize("source_mode", ["existing", "new"])
+@pytest.mark.parametrize("locator", ["", "   "])
+async def test_blank_locator_is_rejected_by_the_service(db_clean, source_mode, locator):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        if source_mode == "existing":
+            source = await _existing_source(session)
+            source_input = authoring.ExistingSourceInput(source.source_key, locator)
+        else:
+            source_input = _new_source(locator=locator)
+        with pytest.raises(ValidationFailedError) as exc_info:
+            await _create(session, _entry(sources=(source_input,)))
+    assert exc_info.value.field == "locator"
+
+
+@pytest.mark.parametrize("model", [ExistingSourceBody, NewSourceBody])
+@pytest.mark.parametrize("locator", ["", "   "])
+def test_blank_locator_is_rejected_by_the_api_schema(model, locator):
+    values = (
+        {"mode": "existing", "source_key": "source.synthetic"}
+        if model is ExistingSourceBody
+        else {
+            "mode": "new",
+            "source_type": SourceType.PEER_REVIEWED_RESEARCH.value,
+            "title": "Synthetic source",
+            "publisher": "Synthetic publisher",
+            "canonical_url": "https://example.invalid/step8g/schema-locator",
+            "license_or_use_note": "Synthetic test use only.",
+        }
+    )
+    with pytest.raises(ValidationError):
+        model(**values, locator=locator)
 
 
 @pytest.mark.parametrize(
@@ -545,7 +664,150 @@ async def test_reviewed_edit_creates_clean_version_two_without_overwriting_old(d
     assert replacement["reviewed_by"] is None and replacement["published_by"] is None
     assert replacement["sources"][0]["reviewed_at"] is None
     assert old.summary == old_summary
-    assert old.review_status == ReviewStatus.SUPERSEDED.value
+    assert old.review_status == (
+        ReviewStatus.PUBLISHED.value if publish_first else ReviewStatus.SUPERSEDED.value
+    )
+
+
+async def test_published_replacement_handoff_preserves_runtime_until_atomic_publish(db_clean):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        v1 = await _create(session)
+        await _approve(session, v1["id"])
+        await _verify(session, v1["id"])
+        await _publish(session, v1["id"])
+        await session.commit()
+
+        before_edit = await _step8b_claims(session)
+        v2 = await authoring.edit_personal_applicability_entry(
+            session,
+            uuid.UUID(v1["id"]),
+            _replacement_entry(v1["sources"][0]["source_key"]),
+            author="admin.synthetic",
+        )
+        await session.commit()
+        during_draft = await _step8b_claims(session)
+        persisted_v1 = await session.get(EvidenceClaim, uuid.UUID(v1["id"]))
+        persisted_v2 = await session.get(EvidenceClaim, uuid.UUID(v2["id"]))
+
+        assert [(claim.claim_id, claim.claim_version) for claim in before_edit] == [
+            (uuid.UUID(v1["id"]), 1),
+        ]
+        assert persisted_v1.review_status == ReviewStatus.PUBLISHED.value
+        assert persisted_v2.review_status == ReviewStatus.DRAFT.value
+        assert [(claim.claim_id, claim.claim_version) for claim in during_draft] == [
+            (uuid.UUID(v1["id"]), 1),
+        ]
+
+        await _approve(session, v2["id"])
+        await _verify(session, v2["id"])
+        await _publish(session, v2["id"])
+        await session.commit()
+        after_publish = await _step8b_claims(session)
+        await session.refresh(persisted_v1)
+        await session.refresh(persisted_v2)
+
+    assert persisted_v1.review_status == ReviewStatus.SUPERSEDED.value
+    assert persisted_v2.review_status == ReviewStatus.PUBLISHED.value
+    assert [(claim.claim_id, claim.claim_version) for claim in after_publish] == [
+        (uuid.UUID(v2["id"]), 2),
+    ]
+
+
+async def test_failed_replacement_publication_rolls_back_and_preserves_live_v1(db_clean):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        v1 = await _create(session)
+        await _approve(session, v1["id"])
+        await _verify(session, v1["id"])
+        await _publish(session, v1["id"])
+        await session.commit()
+
+        v2 = await authoring.edit_personal_applicability_entry(
+            session,
+            uuid.UUID(v1["id"]),
+            _entry(
+                summary="A replacement with its own synthetic source.",
+                sources=(_new_source(
+                    canonical_url="https://example.invalid/step8g/replacement-source",
+                    locator="replacement locator",
+                ),),
+            ),
+            author="admin.synthetic",
+        )
+        await _approve(session, v2["id"])
+        await _verify(session, v2["id"])
+        await session.commit()
+
+        v2_source = (await session.execute(
+            select(EvidenceSource)
+            .join(EvidenceClaimSource, EvidenceClaimSource.source_id == EvidenceSource.id)
+            .where(EvidenceClaimSource.claim_id == uuid.UUID(v2["id"]))
+        )).scalar_one()
+        v2_source.status = SourceStatus.RETIRED.value
+        with pytest.raises(ValidationFailedError):
+            await _publish(session, v2["id"])
+        await session.rollback()
+
+        persisted_v1 = await session.get(EvidenceClaim, uuid.UUID(v1["id"]))
+        persisted_v2 = await session.get(EvidenceClaim, uuid.UUID(v2["id"]))
+        projected = await _step8b_claims(session)
+
+    assert persisted_v1.review_status == ReviewStatus.PUBLISHED.value
+    assert persisted_v2.review_status == ReviewStatus.APPROVED.value
+    assert [(claim.claim_id, claim.claim_version) for claim in projected] == [
+        (uuid.UUID(v1["id"]), 1),
+    ]
+
+
+async def test_multiple_other_published_versions_fail_closed_without_selecting_one(db_clean):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        v1 = await _create(session)
+        await _approve(session, v1["id"])
+        await _verify(session, v1["id"])
+        await _publish(session, v1["id"])
+        await session.commit()
+
+        v2 = await authoring.edit_personal_applicability_entry(
+            session,
+            uuid.UUID(v1["id"]),
+            _replacement_entry(v1["sources"][0]["source_key"], summary="Synthetic v2."),
+            author="admin.synthetic",
+        )
+        await _approve(session, v2["id"])
+        await _verify(session, v2["id"])
+        corrupted_v2 = await session.get(EvidenceClaim, uuid.UUID(v2["id"]))
+        corrupted_v2.review_status = ReviewStatus.PUBLISHED.value
+        corrupted_v2.published_by = "corruptor.synthetic"
+        corrupted_v2.published_at = utcnow()
+        await session.commit()
+
+        v3 = await authoring.edit_personal_applicability_entry(
+            session,
+            uuid.UUID(v2["id"]),
+            _replacement_entry(v1["sources"][0]["source_key"], summary="Synthetic v3."),
+            author="admin.synthetic",
+        )
+        await _approve(session, v3["id"])
+        await _verify(session, v3["id"])
+        await session.commit()
+
+        with pytest.raises(ConflictError, match="MULTIPLE_ACTIVE_PUBLISHED_VERSIONS"):
+            await _publish(session, v3["id"])
+        await session.rollback()
+        statuses = {
+            claim.claim_version: claim.review_status
+            for claim in (await session.execute(
+                select(EvidenceClaim).where(EvidenceClaim.claim_key == v1["claim_key"])
+            )).scalars().all()
+        }
+
+    assert statuses == {
+        1: ReviewStatus.PUBLISHED.value,
+        2: ReviewStatus.PUBLISHED.value,
+        3: ReviewStatus.APPROVED.value,
+    }
 
 
 @pytest.fixture
@@ -619,66 +881,19 @@ async def test_generic_reads_work_but_generic_mutations_cannot_bypass_specialize
 async def test_real_step8b_projects_exact_specialized_authoring_provenance(db_clean):
     factory = get_sessionmaker()
     async with factory() as session:
-        created = await _create(session)
+        locator = "  synthetic section 3  "
+        created = await _create(session, _entry(sources=(_new_source(locator=locator),)))
         await _approve(session, created["id"])
         await _verify(session, created["id"])
         published = await _publish(session, created["id"])
         await session.commit()
+        projected = (await _step8b_claims(session))[0]
 
-        profile_attribute_id = uuid.uuid4()
-        context = PersonalLensContext(
-            category=PersonalLensCategory.SKIN_CARE,
-            status=PersonalLensStatus.PARTIAL_CONTEXT,
-            profile_id=uuid.uuid4(),
-            profile_version=1,
-            body_facts=(PersonalLensFact(
-                key="care_skin_sensitivity",
-                value="sometimes_reactive",
-                source="user_declared",
-                verification_state="confirmed",
-                profile_attribute_id=profile_attribute_id,
-                explicit_unknown=False,
-                last_reviewed_at=None,
-            ),),
-            preference_facts=(),
-            missing_information=(),
-            handoff=None,
-        )
-        interpretation = LabelSnapshotFormulaInterpretation(
-            provenance=FormulaProjectionProvenance(
-                label_snapshot_id=uuid.uuid4(),
-                barcode="synthetic-step8g",
-                version_number=1,
-                content_fingerprint="a" * 64,
-                scan_event_id=uuid.uuid4(),
-            ),
-            category=InterpretationCategory.SKIN_CARE,
-            formula_status="parsed",
-            ingredients=(FormulaIngredientInterpretation(
-                position=1,
-                raw_name="Synthetic A",
-                normalized_name="synthetic a",
-                identity_status=ProjectedIdentityStatus.RESOLVED,
-                substance_key="substance.synthetic.a",
-                entity_kind="defined_substance",
-                candidate_substance_keys=("substance.synthetic.a",),
-                interpretation_status=InterpretationStatus.NOT_ENOUGH_INFORMATION,
-                claims=(),
-            ),),
-        )
-        result = await apply_personal_evidence(
-            session,
-            interpretation,
-            context,
-            category=PersonalApplicabilityCategory.SKIN_CARE,
-        )
-
-    projected = result[0].claims[0]
     assert projected.claim_id == uuid.UUID(published["id"])
     assert projected.claim_key == published["claim_key"]
     assert projected.claim_version == published["claim_version"]
     assert projected.sources[0].source_key == published["sources"][0]["source_key"]
-    assert projected.sources[0].locator == published["sources"][0]["locator"]
+    assert projected.sources[0].locator == published["sources"][0]["locator"] == locator
 
 
 def test_vocabulary_is_derived_from_controlled_authorities():

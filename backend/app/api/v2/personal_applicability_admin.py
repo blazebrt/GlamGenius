@@ -7,7 +7,7 @@ from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v2.admin import require_admin
@@ -34,6 +34,13 @@ class ExistingSourceBody(BaseModel):
     source_key: str = Field(min_length=1, max_length=160)
     locator: str | None = Field(default=None, max_length=512)
 
+    @field_validator("locator")
+    @classmethod
+    def locator_is_null_or_nonblank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("locator must be null or nonblank")
+        return value
+
 
 class NewSourceBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -48,6 +55,13 @@ class NewSourceBody(BaseModel):
     publication_date: date | None = None
     version_or_revision: str | None = Field(default=None, max_length=160)
     jurisdiction: str | None = Field(default=None, max_length=128)
+
+    @field_validator("locator")
+    @classmethod
+    def locator_is_null_or_nonblank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("locator must be null or nonblank")
+        return value
 
 
 SourceBody = Annotated[ExistingSourceBody | NewSourceBody, Field(discriminator="mode")]

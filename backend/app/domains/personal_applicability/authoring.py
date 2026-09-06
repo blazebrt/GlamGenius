@@ -207,10 +207,21 @@ def _assert_source_metadata(source: EvidenceSource) -> None:
     _required(source.license_or_use_note, "license_or_use_note")
 
 
+def _validated_locator(locator: str | None) -> str | None:
+    if locator is None:
+        return None
+    if not isinstance(locator, str) or not locator.strip():
+        raise ValidationFailedError("locator must be null or nonblank.", field="locator")
+    return locator
+
+
 async def _resolve_source(
     session: AsyncSession,
     source_input: AuthoringSourceInput,
 ) -> tuple[EvidenceSource, str | None]:
+    if not isinstance(source_input, (ExistingSourceInput, NewSourceInput)):
+        raise ValidationFailedError("Each source must be existing or new.", field="sources")
+    locator = _validated_locator(source_input.locator)
     if isinstance(source_input, ExistingSourceInput):
         source_key = _required(source_input.source_key, "source_key")
         source = (await session.execute(
@@ -219,10 +230,8 @@ async def _resolve_source(
         if source is None:
             raise NotFoundError("That evidence source does not exist.")
         _assert_source_metadata(source)
-        return source, source_input.locator
+        return source, locator
 
-    if not isinstance(source_input, NewSourceInput):
-        raise ValidationFailedError("Each source must be existing or new.", field="sources")
     if source_input.source_type not in PERSONAL_APPLICABILITY_SOURCE_TYPES:
         raise ValidationFailedError("The source type is not eligible for Step 8B.", field="source_type")
     canonical_url = openable_url(source_input.canonical_url)
@@ -254,7 +263,7 @@ async def _resolve_source(
     )
     session.add(source)
     await session.flush()
-    return source, source_input.locator
+    return source, locator
 
 
 async def _resolve_sources(
@@ -544,7 +553,8 @@ async def edit_personal_applicability_entry(
     session.add(replacement)
     await session.flush()
     await _add_links(session, replacement, paths)
-    claim.review_status = ReviewStatus.SUPERSEDED.value
+    if claim.review_status == ReviewStatus.APPROVED.value:
+        claim.review_status = ReviewStatus.SUPERSEDED.value
     await session.flush()
     return await _view(session, replacement)
 
@@ -646,6 +656,21 @@ async def publish_personal_applicability_entry(
         for link, source in paths
     ):
         raise ValidationFailedError("No source path is eligible for Step 8B.", field="sources")
+    published_predecessors = list((await session.execute(
+        select(EvidenceClaim).where(
+            EvidenceClaim.claim_key == claim.claim_key,
+            EvidenceClaim.review_status == ReviewStatus.PUBLISHED.value,
+            EvidenceClaim.id != claim.id,
+        )
+    )).scalars().all())
+    if len(published_predecessors) > 1:
+        raise ConflictError(
+            "MULTIPLE_ACTIVE_PUBLISHED_VERSIONS",
+            current_version=claim.claim_version,
+        )
+    if published_predecessors:
+        published_predecessors[0].review_status = ReviewStatus.SUPERSEDED.value
+        await session.flush()
     return await _view(session, claim)
 
 
