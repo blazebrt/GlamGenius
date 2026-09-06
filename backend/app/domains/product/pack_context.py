@@ -63,6 +63,16 @@ def is_confirmed_label_capture(event: ScanEvent | None) -> bool:
     treats a row as "a confirmed pack label" has to mean the same thing by it.
     A second, looser copy elsewhere is exactly how a forged ``found_local`` row
     carrying a hand-written ``mrp_text`` ends up being read as a capture.
+
+    There are two legitimate confirmation surfaces, not one:
+    ``/scan/label/confirm`` for a packaged food pack and
+    ``/scan/skin-care/label/confirm`` for a skin-care pack. Both write the same
+    three things, and this test is deliberately unchanged by the second's
+    arrival. In particular a skin-care capture's ``product_category`` fact is
+    *not* part of confirmation provenance: it says what the confirmed facts are
+    to be interpreted as, never that they were confirmed, and a row carrying it
+    without the three counts below is no more a capture than any other
+    hand-written row.
     """
     if event is None:
         return False
@@ -165,19 +175,21 @@ async def current_pack(
     scan of this barcode is a genuine confirmed label capture, which the server
     can attest to on three counts that must all hold:
 
-    * ``outcome == OUTCOME_LABEL``. Only the ``/scan/label/confirm`` route writes
-      that outcome, so a plain barcode read — or an event of any other kind —
-      does not qualify however its ``label_facts`` happen to look. A row whose
+    * ``outcome == OUTCOME_LABEL``. Only the two confirmation routes —
+      ``/scan/label/confirm`` for a food pack and
+      ``/scan/skin-care/label/confirm`` for a skin-care pack — write that
+      outcome, so a plain barcode read, or an event of any other kind, does not
+      qualify however its ``label_facts`` happen to look. A row whose
       ``label_facts`` were set on a non-label event is not a capture; it is at
       best a mislabelled row and at worst a forged one, and either way it cannot
       speak for this packet.
     * ``label_facts`` is a non-empty object. A plain scan stores JSON ``null``
       here rather than SQL ``NULL``, so a bare "is not null" check would read
       every plain scan as a capture — the type is checked, not just presence.
-    * ``ai_run_id`` is present. Every legitimate capture is written by the
-      confirmation route from a validated ``AIRun`` (the only production writer
-      of ``OUTCOME_LABEL``), so its absence means the row did not come through
-      the server-authorised path. Requiring it proves provenance rather than
+    * ``ai_run_id`` is present. Every legitimate capture is written by one of
+      the confirmation routes from a validated ``AIRun`` (together the only
+      production writers of ``OUTCOME_LABEL``), so its absence means the row did
+      not come through a server-authorised path. Requiring it proves provenance rather than
       mere resemblance.
 
     Any of the three missing yields a scan context with no proven pack, so the

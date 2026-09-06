@@ -123,7 +123,7 @@ All 40 packages under `backend/app/domains/`:
 | `progress` | Explainable metrics, milestones, comparison and controlled long-term memory |
 | `system` | `system_worker_status` — worker heartbeats and last-error state |
 | `off` | Store A: the Open Food Facts copy, behind the ODbL wall — see §5a |
-| `product` | Barcode scanning: anonymous device identity, our product record, scan events, label transcription |
+| `product` | Barcode scanning: anonymous device identity, our product record, scan events, label transcription. **Step 8J: confirmed skin-care label capture, and the decision category bound to it** |
 | `substance_interpretation` | Step 7C category-specific projection of published evidence onto already-resolved canonical substance identities; no identity resolution, scoring or verdicts |
 | `personal_lens` | Step 8A read-only FOR YOU context projection from trusted user-declared non-medical Profile facts; hard-handoff first; no score, verdict or evidence matching |
 | `personal_applicability` | Step 8B read-only projection of exact substance identities, controlled body facts and reviewed published personal-applicability evidence, plus governed admin evidence authoring; no inference, score or verdict |
@@ -139,6 +139,16 @@ registries. They must never populate the Step 8C/8E/8F static registries or ente
 reference-data auto-seeding. Production authority comes only from an active Step 8H
 release. Any change to an evidence identity/version, semantic direction, policy
 action, gap target, explanation anchor, or reason key requires fresh review.
+
+**The skin-care decision category is bound at confirmed-label capture time.** A
+confirmed skin-care capture writes `product_category: "skin_care"` into its
+`LabelSnapshot` facts, where it participates in the content fingerprint, and the
+only writer is the dedicated skin-care confirmation route — never the AI, never a
+request field, never a query parameter. Read-time callers read that value; they
+must not invent one, override it, accept one from a client, or infer it from a
+product name or an ingredient list. A snapshot without it (every food capture
+predating Step 8J) has no established category, which is not the same as
+`packaged_food`. See `docs/architecture/SKIN_CARE_LABEL_CAPTURE.md`.
 
 Every ORM model module must be imported in `backend/app/shared/database/registry.py`.
 A model that is not imported there is invisible to Alembic and its table is silently
@@ -349,6 +359,9 @@ decision needs their input, ask one clear question with the options spelled out.
   AI safety, evidence, external integration, mobile UX)
 - `docs/architecture/ODBL_DATA_WALL.md` — why Open Food Facts data lives in its own
   database, and what would happen if it did not
+- `docs/architecture/SKIN_CARE_LABEL_CAPTURE.md` — how a photographed skin-care label
+  becomes a confirmed, category-bound `LabelSnapshot`, and why the category may only
+  ever enter once
 - `docs/engineering/adrs/` — why the non-obvious choices were made
 - `docs/reports/` — the phase and stabilisation reports (historical records)
 - Feature-area specs: `docs/VC-05_GOOGLE_CALENDAR.md`, `docs/VC-06_MAINTENANCE.md`,

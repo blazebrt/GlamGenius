@@ -109,9 +109,24 @@ def result_identity(barcode: str, source_half: dict[str, Any] | None) -> tuple[s
     brand = half.get("brands") or half.get("brand") or None
     return str(name), brand
 
+#: What a label version *is*, as opposed to what was going on when it was
+#: photographed. Batch numbers and extraction metadata are observations about
+#: one capture; these are the pack's content, and two captures that agree on
+#: all of them are the same observed label.
+#:
+#: ``product_category`` is here because a formula cannot have one semantic
+#: label identity while being freely reinterpreted under another category.
+#: "Petrolatum, as a skin-care product" and "Petrolatum, as a hair-care
+#: product" are two different things to decide about, and a fingerprint that
+#: could not tell them apart would let the second silently inherit the first's
+#: version, its reviewed history and its decision context. Legacy captures
+#: carry no category at all; canonicalisation drops absent values, so their
+#: fingerprints are unchanged by this field's existence and no category is
+#: inserted into them.
 CONTENT_FACT_FIELDS = (
     "product_name", "brand", "ingredients_text", "nutrition_per_100g",
     "nutrition_basis", "serving_size", "net_quantity", "fssai_licence", "veg_mark", "allergen_text",
+    "product_category",
 )
 def _normalise(value: Any) -> Any:
     if isinstance(value, dict):
@@ -145,7 +160,7 @@ def label_completeness(facts: dict[str, Any]) -> str:
 
 def label_changed_fields(previous: dict[str, Any], current: dict[str, Any]) -> list[str]:
     old, new = canonical_label_facts(previous), canonical_label_facts(current)
-    mapping = {"product_name": "product_name", "brand": "brand", "ingredients_text": "ingredients", "nutrition_per_100g": "nutrition", "nutrition_basis": "nutrition_basis", "serving_size": "serving_size", "net_quantity": "net_quantity", "fssai_licence": "fssai_licence", "veg_mark": "veg_mark", "allergen_text": "allergen_text"}
+    mapping = {"product_name": "product_name", "brand": "brand", "ingredients_text": "ingredients", "nutrition_per_100g": "nutrition", "nutrition_basis": "nutrition_basis", "serving_size": "serving_size", "net_quantity": "net_quantity", "fssai_licence": "fssai_licence", "veg_mark": "veg_mark", "allergen_text": "allergen_text", "product_category": "product_category"}
     return [mapping[key] for key in CONTENT_FACT_FIELDS if old.get(key) != new.get(key)]
 
 

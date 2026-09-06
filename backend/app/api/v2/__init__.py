@@ -32,6 +32,7 @@ from app.api.v2 import (
     scan,
     shelf,
     shopping,
+    skin_care_scan,
     style,
     supplements,
     today,
@@ -53,6 +54,7 @@ router.include_router(inventory.router, tags=["v2-inventory"])
 router.include_router(supplements.router, tags=["v2-supplements"])
 router.include_router(scan.router, tags=["v2-scan"])
 router.include_router(product.router, tags=["v2-product-scan"])
+router.include_router(skin_care_scan.router, tags=["v2-skin-care-scan"])
 router.include_router(community.router, tags=["v2-community"])
 router.include_router(quiz.router, tags=["v2-quiz"])
 router.include_router(style.router, tags=["v2-style"])
