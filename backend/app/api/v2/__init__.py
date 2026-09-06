@@ -21,6 +21,7 @@ from app.api.v2 import (
     media,
     onboarding,
     personal_applicability_admin,
+    personal_decision_release_admin,
     planner,
     privacy,
     product,
@@ -65,5 +66,8 @@ router.include_router(routines.router, tags=["v2-routines"])
 router.include_router(progress.router, tags=["v2-progress"])
 router.include_router(admin.router, tags=["v2-admin"])
 router.include_router(personal_applicability_admin.router, tags=["v2-admin-personal-applicability"])
+router.include_router(
+    personal_decision_release_admin.router, tags=["v2-admin-personal-decision-releases"]
+)
 
 __all__ = ["router"]
