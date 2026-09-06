@@ -16,6 +16,7 @@ test author can build one.
 from __future__ import annotations
 
 import ast
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -141,6 +142,41 @@ async def _capture(app_client, registered_supabase_user, payload, *, barcode=BAR
     return {
         "token": token, "account_id": account_id, "headers": headers,
         "device_id": device_id, "run_id": run_id, "body": response.json(),
+    }
+
+
+async def _camera_seam_capture(app_client, registered_supabase_user, fake_provider, media_root):
+    """The whole seam, with only the model boundary mocked.
+
+    ``fake_provider`` replaces ``gemini.generate`` and nothing else, so the real
+    gateway runs: it records the ``AIRun``, parses the reply, validates it
+    against the production schema, and writes the ``AIRunOutput``. The
+    transcription route, the confirmation route, the scan event, the label
+    snapshot and the pack context are all real. Nothing in this path is
+    hand-built, which is the point — the bridge is what the milestone has to
+    prove.
+    """
+    fake_provider.text = json.dumps({
+        **PACK, "product_type": "Ointment", "confidence": 0.93, "uncertain_fields": [],
+    })
+    token, account_id = await registered_supabase_user()
+    headers, device_id = await _register_device(app_client)
+    await _claim(app_client, headers, token)
+    asset_id = await _upload(app_client, token)
+
+    draft = await app_client.post(
+        TRANSCRIBE_URL, headers=auth(token),
+        json={"barcode": BARCODE, "media_asset_id": asset_id},
+    )
+    assert draft.status_code == 200, draft.text
+    assert draft.json()["stored"] is False
+    run_id = uuid.UUID(draft.json()["provenance"]["ai_run_id"])
+
+    confirmed = await _confirm(app_client, headers, token, run_id)
+    assert confirmed.status_code == 201, confirmed.text
+    return {
+        "token": token, "account_id": account_id, "headers": headers,
+        "device_id": device_id, "run_id": run_id, "body": confirmed.json(),
     }
 
 
@@ -289,6 +325,22 @@ class TestTranscription:
             ExtractedSkinCareLabel.model_validate({
                 "ingredients_text": "Petrolatum", "verdict": "buy",
             })
+
+    async def test_the_boundary_instructions_actually_reach_the_model(
+        self, db_clean, app_client, registered_supabase_user, fake_provider, media_root,
+    ):
+        """A constant nobody sends is not a boundary. Only the provider is mocked."""
+        fake_provider.text = json.dumps({**PACK, "confidence": 0.8})
+        token, _ = await registered_supabase_user()
+        asset_id = await _upload(app_client, token)
+        response = await app_client.post(
+            TRANSCRIBE_URL, headers=auth(token),
+            json={"barcode": BARCODE, "media_asset_id": asset_id},
+        )
+        assert response.status_code == 200, response.text
+        assert fake_provider.calls == 1
+        assert fake_provider.last_system == care_extraction.SYSTEM
+        assert response.json()["provenance"]["schema_version"] == care_extraction.SCHEMA_VERSION
 
     async def test_transcription_needs_an_account(self, db_clean, app_client):
         headers, _ = await _register_device(app_client)
@@ -937,15 +989,19 @@ class TestFoodRegression:
 # ---------------------------------------------------------------------------
 class TestStep8BReadiness:
     async def test_the_captured_snapshot_enters_step8b_with_its_own_provenance(
-        self, db_clean, app_client, registered_supabase_user, payload,
+        self, db_clean, app_client, registered_supabase_user, fake_provider, media_root,
     ):
-        """Real capture, real snapshot, real projection. Only the model was mocked.
+        """The decisive proof: camera seam to governed engine, nothing hand-built.
 
-        The category handed to Step 8B is read from the snapshot itself, never
-        supplied by this test: a hard-coded category here would prove the
-        opposite of what the milestone claims.
+        Only ``gemini.generate`` is replaced. The gateway, both routes, the scan
+        event, the label snapshot and the Step 8B projection are all real, and
+        the category handed to Step 8B is read from the snapshot itself — a
+        hard-coded category here would prove the opposite of what the milestone
+        claims.
         """
-        captured = await _capture(app_client, registered_supabase_user, payload)
+        captured = await _camera_seam_capture(
+            app_client, registered_supabase_user, fake_provider, media_root,
+        )
         account_id = captured["account_id"]
 
         factory = get_sessionmaker()
@@ -960,7 +1016,21 @@ class TestStep8BReadiness:
             ))
             await session.commit()
 
+            run = await session.get(AIRun, captured["run_id"])
+            assert run.feature == care_extraction.FEATURE
+            assert run.schema_version == care_extraction.SCHEMA_VERSION
+            assert run.status == AI_STATUS_SUCCEEDED
+            assert run.validation_passed is True
+            assert run.account_id == account_id
+            output = (await session.execute(
+                select(AIRunOutput).where(AIRunOutput.ai_run_id == captured["run_id"])
+            )).scalar_one()
+            assert output.verification_status == VERIFICATION_USER_CONFIRMED
+
             snapshot = await service.latest_label_snapshot(session, BARCODE)
+            assert snapshot.facts["ingredients_text"] == "Petrolatum"
+            assert snapshot.facts["product_category"] == "skin_care"
+            assert snapshot.scan_event_id is not None
             category = care_capture.personal_applicability_category_from_label(snapshot)
             assert category is PersonalApplicabilityCategory.SKIN_CARE
 
