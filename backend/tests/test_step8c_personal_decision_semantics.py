@@ -749,3 +749,69 @@ def test_public_surface_is_stable() -> None:
     assert IngredientDecisionSemantics.__dataclass_params__.frozen
     assert ClaimDecisionSemanticProjection.__dataclass_params__.frozen
     assert LabelSnapshotPersonalDecisionSemantics.__dataclass_params__.frozen
+
+
+# ---------------------------------------------------------------------------
+# Source continuity (added for Step 8F)
+# ---------------------------------------------------------------------------
+
+
+class TestSourceContinuity:
+    """The exact Step 8B result must survive the projection, by identity.
+
+    Step 8C reduces a claim to its identity and reviewed direction, which is
+    right for deciding but leaves a later presentation layer with no way back
+    to the named openable sources the claim carried. Carrying the whole
+    Step 8B object forward closes that gap without copying a single URL into
+    this domain -- a copy would be a second evidence record, free to drift
+    from the one that was reviewed.
+    """
+
+    def test_ordinary_context_preserves_the_exact_input(self) -> None:
+        upstream = _result(ingredients=(_ingredient(claims=(_claim(),)),))
+        result = project_personal_decision_semantics(upstream)
+        assert result.source_personal_applicability is upstream
+
+    def test_handoff_preserves_the_exact_input(self) -> None:
+        upstream = _result(handoff=object())
+        result = project_personal_decision_semantics(upstream)
+        assert result.ingredients == ()
+        assert result.source_personal_applicability is upstream
+
+    def test_handoff_by_status_preserves_the_exact_input(self) -> None:
+        upstream = _result(context_status="handoff_required")
+        result = project_personal_decision_semantics(upstream)
+        assert result.source_personal_applicability is upstream
+
+    def test_missing_personal_context_preserves_the_exact_input(self) -> None:
+        upstream = _result(context_status="not_enough_personal_context")
+        result = project_personal_decision_semantics(upstream)
+        assert result.source_personal_applicability is upstream
+
+    def test_no_claim_or_source_object_is_rebuilt(self) -> None:
+        claim = _claim()
+        ingredient = _ingredient(claims=(claim,))
+        upstream = _result(ingredients=(ingredient,))
+        result = project_personal_decision_semantics(upstream)
+
+        carried = result.source_personal_applicability
+        assert carried is not None
+        assert carried.ingredients is upstream.ingredients
+        assert carried.ingredients[0] is ingredient
+        assert carried.ingredients[0].claims is ingredient.claims
+        assert carried.ingredients[0].claims[0] is claim
+        assert carried.ingredients[0].claims[0].sources is claim.sources
+
+    def test_the_field_defaults_to_none_for_synthetic_construction(self) -> None:
+        """Downstream synthetic fixtures may still omit it."""
+        built = LabelSnapshotPersonalDecisionSemantics(
+            provenance=None,
+            category=PersonalApplicabilityCategory.SKIN_CARE,
+            formula_status="parsed",
+            profile_id=None,
+            profile_version=None,
+            context_status="context_available",
+            ingredients=(),
+            handoff=None,
+        )
+        assert built.source_personal_applicability is None

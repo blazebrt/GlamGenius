@@ -109,6 +109,13 @@ class LabelSnapshotPersonalDecisionSemantics:
     ingredients: tuple[IngredientDecisionSemantics, ...]
     handoff: object | None
 
+    #: The exact Step 8B result this projection was built from, carried by
+    #: identity so a later layer can reach the reviewed claims and their named
+    #: openable sources. Copying those into this projection would create a
+    #: second, drifting evidence record; carrying the object cannot. Defaulted
+    #: so existing synthetic constructors stay valid.
+    source_personal_applicability: LabelSnapshotPersonalApplicability | None = None
+
 
 def _project_claims(
     ingredient: IngredientPersonalApplicability,
@@ -182,6 +189,7 @@ def project_personal_decision_semantics(
             context_status=personal_applicability.context_status,
             ingredients=(),
             handoff=personal_applicability.handoff,
+            source_personal_applicability=personal_applicability,
         )
 
     ingredients = tuple(
@@ -208,4 +216,5 @@ def project_personal_decision_semantics(
         context_status=personal_applicability.context_status,
         ingredients=ingredients,
         handoff=personal_applicability.handoff,
+        source_personal_applicability=personal_applicability,
     )

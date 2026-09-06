@@ -69,7 +69,7 @@ backend/
     release.py               # `python -m app.release` — lock, migrate, seed, verify
     release_readiness.py     # `python -m app.release_readiness` — honest readiness report
     api/v2/                  # 24 route modules mounted by api/v2/__init__.py (health.py is an empty orphan)
-    domains/                 # 37 domain packages — see §3
+    domains/                 # 38 domain packages — see §3
     workers/                 # notifications.py, account_deletion.py — see §6
     bootstrap/               # reference_data.py — versioned seed catalogue
     shared/
@@ -95,7 +95,7 @@ startup checks. Real work lives under `backend/app/`.
 
 ## 3. The domains
 
-All 37 packages under `backend/app/domains/`:
+All 38 packages under `backend/app/domains/`:
 
 | Domain | Owns |
 | --- | --- |
@@ -130,6 +130,7 @@ All 37 packages under `backend/app/domains/`:
 | `personal_decision_semantics` | Step 8C pure deterministic mapping from an exact Step 8B applicable claim version to an explicit reviewed supporting or cautionary direction; production registry deliberately empty; no prose parsing, strength arithmetic, counting, aggregation, score or verdict |
 | `personal_decision_aggregation` | Step 8D pure deterministic aggregation of exact Step 8C semantic mappings into distinct rule provenance, structural mapping coverage and an unweighted signal set; duplicates do not create weight; no score, conflict resolution or verdict |
 | `personal_decision_policy` | Step 8E pure deterministic exact versioned policy over eligible Step 8D state; policy matches the exact semantic-rule identity/version set and structural upstream gap flags; no generic signal→action mapping; production registry empty; no explanation, API or persistence |
+| `personal_decision_explanation` | Step 8F pure deterministic presentation contract: one reviewed reason key and one exactly-selected openable Step 8B source per reviewed Step 8E decision; withholds an action that has no reviewed explanation; no prose generation, source ranking, API or persistence; production registry empty |
 
 Every ORM model module must be imported in `backend/app/shared/database/registry.py`.
 A model that is not imported there is invisible to Alembic and its table is silently
