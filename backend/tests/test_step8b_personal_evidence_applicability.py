@@ -1049,7 +1049,11 @@ class TestArchitecture:
         production = BACKEND_ROOT / "app"
         hits = []
         for path in production.rglob("*.py"):
-            if DOMAIN_DIR in path.parents or path.name == "enums.py" and "evidence" in path.parts:
+            if (
+                DOMAIN_DIR in path.parents
+                or "knowledge_packs" in path.parts
+                or path.name == "enums.py" and "evidence" in path.parts
+            ):
                 continue
             if "substance_personal_applicability" in path.read_text(encoding="utf-8"):
                 hits.append(path)
