@@ -645,6 +645,20 @@ class TestRealGovernedChain:
         assert presentation.citation.source_key == aad["source_key"]
         assert presentation.citation.canonical_url == pack.AAD_SOURCE_URL
         assert presentation.citation.locator == pack.AAD_SOURCE_LOCATOR
+        # The absent provenance survives the whole chain to the customer
+        # citation: an update date never becomes a publication date, and no
+        # jurisdiction is invented along the way.
+        assert presentation.citation.publication_date is None
+        assert presentation.citation.jurisdiction is None
+        assert presentation.citation.version_or_revision == pack.AAD_SOURCE_VERSION
+        assert presentation.citation.publisher == pack.AAD_SOURCE_PUBLISHER
+        # The narrowed reason did not narrow the evidence: both reviewed paths
+        # remain on the published claim.
+        assert len(published["sources"]) == 2
+        assert {source["publisher"] for source in published["sources"]} == {
+            pack.AAD_SOURCE_PUBLISHER,
+            pack.PUBMED_SOURCE_PUBLISHER,
+        }
         assert str(result.release_id) == activated["id"]
         assert result.release_version == activated["release_version"]
         assert result.release_content_hash == activated["content_hash"]
