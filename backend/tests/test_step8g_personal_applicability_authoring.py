@@ -405,7 +405,7 @@ async def test_blank_locator_is_rejected_by_the_service(db_clean, source_mode, l
             source_input = _new_source(locator=locator)
         with pytest.raises(ValidationFailedError) as exc_info:
             await _create(session, _entry(sources=(source_input,)))
-    assert exc_info.value.field == "locator"
+    assert exc_info.value.extra == {"field": "locator"}
 
 
 @pytest.mark.parametrize("model", [ExistingSourceBody, NewSourceBody])
