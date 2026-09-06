@@ -133,14 +133,42 @@ exactly one `EvidenceClaim` that is:
 - `review_status = published`, and clears `claim_is_public_knowledge_path`
 - not AI-generated
 - `evidence_tier = clinically_studied`
+- graded within `PERSONAL_APPLICABILITY_STRENGTHS`
 - `claim_type = substance_personal_applicability`, `subject_type = substance`
 - about the rule's exact `substance_key`
 - in the evidence domain the Step 8B category mapping requires
 - carrying a payload that parses and whose category matches the rule's
+- carrying **at least one source path Step 8B would accept**
 
 A rule pointing at missing, draft, approved-but-unpublished, rejected,
 superseded, malformed, AI-generated, wrong-category or wrong-substance
 evidence blocks both approval and activation.
+
+The strength check imports `PERSONAL_APPLICABILITY_STRENGTHS` from Step 8B
+rather than restating `strong` / `moderate` / `limited`. Two copies would
+eventually disagree, and the direction of disagreement that matters is Step 8H
+approving a release Step 8B will never project. It is a **membership test and
+nothing else** — the only permitted shape is `in
+PERSONAL_APPLICABILITY_STRENGTHS`, and a static guard rejects any other use:
+comparing grades, ordering them, indexing a table by one, or passing one to a
+function are all steps towards deriving a direction, an action, a weight or a
+confidence from how strong the evidence looks. That is a judgement Step 8H has
+no authority to make.
+
+### Two source gates, and why they are not one
+
+A semantic rule whose claim has **no** eligible source path is invisible to
+Step 8B: it returns no claims for that substance at all, so the rule can never
+match, and a policy keyed on its identity can never fire. The reviewed action
+behind it is unreachable, and none of that is visible from the manifest.
+
+That is a different question from the one the explanation asks. The
+projectability gate asks *can Step 8B project this claim at all*; the citation
+gate asks *which exact source did the reviewer choose to show*. A release whose
+displayed citation is still perfectly valid can still rest on a second semantic
+rule that no longer projects — and approving it on the strength of the citation
+would approve a release that cannot work. Both gates read the same batch-loaded
+path map, so neither costs a query.
 
 **What this never does is read the science.** `summary`, `scope` and
 `strength_rationale` are never read, and no direction is ever inferred from
@@ -249,8 +277,21 @@ decision taken later.
 
 ## Atomic activation
 
-Activation runs the **full** cross-validation again against current evidence,
-and that repetition is the point. Evidence moves between review and
+Activation re-reads the persisted row before it touches anything: the schema
+column, the manifest, the content hash, the recorded attestations, and then the
+full evidence cross-validation. `status = approved` records that those checks
+passed once; it does not prove the row still satisfies them, and every field
+they read is editable in the database. The schema column matters separately
+from the manifest's own internal `schema_version`, because the runtime loader
+reads the column first — installing a release whose column disagrees would
+create an outage the moment production asked for it, from an activation step
+that only looked inside the JSON. Nothing is ever repaired: a column that
+disagrees means the row was written outside the reviewed path, and quietly
+correcting it would hide that. Approval applies the same schema-column check,
+for the same reason.
+
+The evidence cross-validation runs again here, and that repetition is the
+point. Evidence moves between review and
 activation: a published claim can be superseded by a new version, a source
 retired, a URL removed, a licence note blanked, a claim's category changed. A
 release that was coherent at approval may name evidence that no longer exists,
@@ -374,9 +415,10 @@ They serialise in the existing `detail` shape as `reason`.
 | `RELEASE_VERIFICATION_INCOMPLETE` | an attestation is missing or false |
 | `RELEASE_UNRESOLVED_DOUBT` | doubt was recorded and left open |
 | `RELEASE_CONTENT_HASH_MISMATCH` | the stored manifest was edited outside the reviewed path |
+| `RELEASE_SCHEMA_VERSION_UNSUPPORTED` | the persisted schema column is not the supported version |
 | `RELEASE_PERSONAL_DATA_PRESENT` | the document names a person, profile or scan |
 | `EVIDENCE_CLAIM_NOT_PUBLISHED` | the exact claim version is missing or not published |
-| `EVIDENCE_CLAIM_NOT_ELIGIBLE` | published, but fails the Step 8B eligibility boundary |
+| `EVIDENCE_CLAIM_NOT_ELIGIBLE` | published, but fails the Step 8B eligibility boundary — wrong tier, wrong grade, unparseable payload, or no source path Step 8B would accept |
 | `SEMANTIC_EVIDENCE_MISMATCH` | the claim is about a different substance, category or subject |
 | `POLICY_SEMANTIC_NOT_IN_RELEASE` | a policy references semantics outside this bundle |
 | `POLICY_CATEGORY_MISMATCH` | a policy references semantics from another category |

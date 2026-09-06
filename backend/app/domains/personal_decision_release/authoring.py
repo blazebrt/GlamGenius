@@ -82,6 +82,27 @@ def _assert_transition(
         )
 
 
+def assert_supported_schema_column(release: PersonalDecisionRelease) -> None:
+    """The persisted schema column must be the supported one.
+
+    Separate from the manifest's own internal ``schema_version``, and not
+    covered by it. The runtime loader reads this column first and refuses a row
+    whose column disagrees, so a release installed as active with a wrong
+    column would be unloadable the moment production asked for it -- an outage
+    created by an approval step that only looked inside the JSON.
+
+    The column is never repaired here. It disagreeing with the manifest means
+    the row was written by something other than the reviewed path, and quietly
+    correcting it would hide that.
+    """
+    if release.manifest_schema_version != PERSONAL_DECISION_RELEASE_MANIFEST_SCHEMA_VERSION:
+        raise PersonalDecisionReleaseValidationError(
+            PersonalDecisionReleaseValidationCode.RELEASE_SCHEMA_VERSION_UNSUPPORTED,
+            f"The release records manifest schema {release.manifest_schema_version}, which is "
+            f"not the supported version {PERSONAL_DECISION_RELEASE_MANIFEST_SCHEMA_VERSION}.",
+        )
+
+
 def persisted_manifest(release: PersonalDecisionRelease) -> PersonalDecisionReleaseManifest:
     """Parse the stored manifest and prove it is still the reviewed one.
 
@@ -316,6 +337,7 @@ async def approve_personal_decision_release(
     release = await _release(session, release_id)
     _assert_transition(release, PersonalDecisionReleaseStatus.APPROVED)
 
+    assert_supported_schema_column(release)
     manifest = persisted_manifest(release)
     assert_verification_permits_approval(release.review_verification)
     await validate_release_manifest(session, manifest, require_complete=True)
@@ -377,7 +399,15 @@ async def activate_personal_decision_release(
 
     _assert_transition(release, PersonalDecisionReleaseStatus.ACTIVE)
 
+    # Persisted-state revalidation, not a repeat of what approval already did.
+    # `status == approved` records that these checks passed once; it does not
+    # prove the row still satisfies them. The manifest, the hash, the schema
+    # column and the attestations are all editable in the database, and a
+    # release installed as active on a row that no longer holds together is
+    # exactly the state the runtime loader will refuse to load.
+    assert_supported_schema_column(release)
     manifest = persisted_manifest(release)
+    assert_verification_permits_approval(release.review_verification)
     await validate_release_manifest(session, manifest, require_complete=True)
 
     currently_active = [
@@ -477,6 +507,7 @@ async def list_personal_decision_releases(
 __all__ = [
     "ReleaseEvidenceReport",
     "activate_personal_decision_release",
+    "assert_supported_schema_column",
     "approve_personal_decision_release",
     "clone_personal_decision_release",
     "create_personal_decision_release_draft",

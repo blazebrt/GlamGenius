@@ -60,6 +60,11 @@ class PersonalDecisionReleaseValidationCode(StrEnum):
     RELEASE_VERIFICATION_INCOMPLETE = "RELEASE_VERIFICATION_INCOMPLETE"
     RELEASE_UNRESOLVED_DOUBT = "RELEASE_UNRESOLVED_DOUBT"
     RELEASE_CONTENT_HASH_MISMATCH = "RELEASE_CONTENT_HASH_MISMATCH"
+    #: The persisted `manifest_schema_version` column is not the supported one.
+    #: Separate from the manifest's own internal `schema_version`: the column is
+    #: what the runtime loader reads first, so a row whose column disagrees can
+    #: never be loaded and must never be installed as active.
+    RELEASE_SCHEMA_VERSION_UNSUPPORTED = "RELEASE_SCHEMA_VERSION_UNSUPPORTED"
     #: A release holds global governed knowledge. Anything naming one person,
     #: one profile or one scan has escaped from runtime into the bundle.
     RELEASE_PERSONAL_DATA_PRESENT = "RELEASE_PERSONAL_DATA_PRESENT"

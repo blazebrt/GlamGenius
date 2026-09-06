@@ -49,7 +49,10 @@ from app.domains.personal_applicability import (
     evidence_domain_for_category,
     parse_personal_applicability_payload,
 )
-from app.domains.personal_applicability.service import PERSONAL_APPLICABILITY_SOURCE_TYPES
+from app.domains.personal_applicability.service import (
+    PERSONAL_APPLICABILITY_SOURCE_TYPES,
+    PERSONAL_APPLICABILITY_STRENGTHS,
+)
 from app.domains.personal_decision_aggregation import PersonalSignalSet
 from app.domains.personal_decision_policy import PersonalDecisionPolicyRule
 from app.domains.personal_decision_release.enums import PersonalDecisionReleaseValidationCode
@@ -489,6 +492,19 @@ def _assert_claim_supports_semantic(
             f"{where} names a {claim.evidence_tier} claim; Step 8B accepts only "
             f"{EvidenceTier.CLINICALLY_STUDIED.value}.",
         )
+    # Membership in Step 8B's own controlled set, reusing that set rather than
+    # restating it: two copies would eventually disagree, and the direction of
+    # disagreement that matters is Step 8H approving a release Step 8B will
+    # never project. This is the only reason strength is read anywhere in this
+    # domain. It answers "would Step 8B accept this exact row" and nothing
+    # else -- it is never compared, ordered, counted, or turned into a signal,
+    # an action, a weight or a confidence.
+    if claim.evidence_strength not in PERSONAL_APPLICABILITY_STRENGTHS:
+        _fail(
+            PersonalDecisionReleaseValidationCode.EVIDENCE_CLAIM_NOT_ELIGIBLE,
+            f"{where} names a claim graded {claim.evidence_strength!r}, which Step 8B does "
+            "not accept.",
+        )
     if claim.claim_type != ClaimType.SUBSTANCE_PERSONAL_APPLICABILITY.value:
         _fail(
             PersonalDecisionReleaseValidationCode.SEMANTIC_EVIDENCE_MISMATCH,
@@ -524,6 +540,51 @@ def _assert_claim_supports_semantic(
             f"{where} is {rule.category.value} but the claim's payload is "
             f"{payload.category.value}.",
         )
+
+
+def _assert_semantic_claims_are_projectable(
+    manifest: PersonalDecisionReleaseManifest,
+    claims: Mapping[tuple[str, int], EvidenceClaim],
+    paths: Mapping[uuid.UUID, list[tuple[EvidenceClaimSource, EvidenceSource]]],
+) -> None:
+    """Every semantic claim must have at least one source Step 8B would accept.
+
+    A claim with no eligible source path is invisible to Step 8B: it returns
+    no claims for it at all, so a semantic rule naming it can never match and
+    the release is quietly carrying a rule that does nothing. Worse, a policy
+    keyed on that rule's identity can never be reached, so the reviewed action
+    behind it is unreachable too -- and none of that is visible from the
+    manifest.
+
+    This is a different gate from the explanation source check below, and they
+    must not be collapsed. This one asks *whether Step 8B can project this
+    claim at all*; that one asks *which exact source the reviewer chose to
+    show*. A release whose displayed citation is still perfectly valid can
+    still be built on a semantic rule that no longer projects, and approving it
+    on the strength of the citation would be approving something that cannot
+    work.
+
+    Reuses the already batch-loaded path map, so this costs no query however
+    many semantic rules the release holds.
+    """
+    for rule in manifest.semantic_rules:
+        claim = claims.get((rule.claim_key, rule.claim_version))
+        if claim is None:
+            continue  # already reported by the claim readiness gate
+        if not any(
+            source_path_is_public_knowledge(
+                link,
+                source,
+                allowed_source_types=PERSONAL_APPLICABILITY_SOURCE_TYPES,
+            )
+            for link, source in paths.get(claim.id, ())
+        ):
+            _fail(
+                PersonalDecisionReleaseValidationCode.EVIDENCE_CLAIM_NOT_ELIGIBLE,
+                f"Semantic rule {rule.rule_id}@{rule.rule_version} names claim "
+                f"{rule.claim_key} v{rule.claim_version}, which has no source path Step 8B "
+                "would accept; Step 8B cannot project it, so the rule can never match.",
+            )
 
 
 def _assert_explanation_source(
@@ -591,6 +652,7 @@ async def validate_release_evidence(
         _assert_claim_supports_semantic(rule, claims.get((rule.claim_key, rule.claim_version)))
 
     paths = await _load_source_paths(session, {claim.id for claim in claims.values()})
+    _assert_semantic_claims_are_projectable(manifest, claims, paths)
     _assert_explanation_source(manifest, claims, paths)
 
     return ReleaseEvidenceReport(

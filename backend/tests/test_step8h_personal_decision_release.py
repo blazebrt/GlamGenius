@@ -334,6 +334,8 @@ async def _publish_claim(
     reviewed_link: bool = True,
     source_url: str | None = "https://example.org/research/glycerin",
     license_note: str | None = "Use recorded for evidence review.",
+    evidence_strength: str = EvidenceStrength.STRONG.value,
+    extra_eligible_source: bool = False,
 ) -> EvidenceClaim:
     """A published, Step 8B-eligible claim written directly.
 
@@ -365,7 +367,7 @@ async def _publish_claim(
         claim_type=claim_type,
         summary="The reviewed source reports this scoped body-context relationship.",
         scope="Exact declared fact values and the named substance only.",
-        evidence_strength=EvidenceStrength.STRONG.value,
+        evidence_strength=evidence_strength,
         strength_rationale="The named independent source directly supports the scoped claim.",
         claim_status=ClaimStatus.SUPPORTED.value,
         review_status=review_status,
@@ -390,6 +392,36 @@ async def _publish_claim(
             reviewed_by="reviewer" if reviewed_link else None,
         )
     )
+    if extra_eligible_source:
+        # A second, unimpeachable path. With it the claim stays projectable by
+        # Step 8B however the first source is corrupted, which is what lets a
+        # test aim at the explanation gate rather than the projectability gate.
+        spare = EvidenceSource(
+            source_key=f"{source_key}.spare",
+            source_series_key=f"{source_key}.spare.series",
+            source_type=SourceType.PEER_REVIEWED_RESEARCH.value,
+            title="A second reviewed source",
+            publisher="Example Journal",
+            publication_date=date(2025, 2, 3),
+            version_or_revision="2025",
+            jurisdiction="global",
+            canonical_url="https://example.org/research/spare",
+            accessed_at=now,
+            status=SourceStatus.ACTIVE.value,
+            license_or_use_note="Use recorded for evidence review.",
+        )
+        session.add(spare)
+        await session.flush()
+        session.add(
+            EvidenceClaimSource(
+                claim_id=claim.id,
+                source_id=spare.id,
+                relationship=ClaimSourceRelationship.SUPPORTS.value,
+                locator="appendix",
+                reviewed_at=now,
+                reviewed_by="reviewer",
+            )
+        )
     await session.flush()
     return claim
 
@@ -530,7 +562,8 @@ def _handoff() -> PersonalLensHandoff:
     )
 
 
-def _interpretation(substance_key: str = SUBSTANCE) -> LabelSnapshotFormulaInterpretation:
+def _interpretation(*substance_keys: str) -> LabelSnapshotFormulaInterpretation:
+    keys = substance_keys or (SUBSTANCE,)
     return LabelSnapshotFormulaInterpretation(
         provenance=FormulaProjectionProvenance(
             label_snapshot_id=uuid.uuid4(),
@@ -541,27 +574,28 @@ def _interpretation(substance_key: str = SUBSTANCE) -> LabelSnapshotFormulaInter
         ),
         category=InterpretationCategory(CATEGORY.value),
         formula_status=ParseStatus.PARSED.value,
-        ingredients=(
+        ingredients=tuple(
             FormulaIngredientInterpretation(
-                position=1,
-                raw_name="Glycerin",
-                normalized_name="glycerin",
+                position=position,
+                raw_name=key.title(),
+                normalized_name=key,
                 identity_status=ProjectedIdentityStatus.RESOLVED,
-                substance_key=substance_key,
+                substance_key=key,
                 entity_kind="defined_substance",
-                candidate_substance_keys=(substance_key,),
+                candidate_substance_keys=(key,),
                 interpretation_status=InterpretationStatus.NOT_ENOUGH_INFORMATION,
                 claims=(),
-            ),
+            )
+            for position, key in enumerate(keys, start=1)
         ),
     )
 
 
-async def _real_step_8b(session, *, handoff: object | None = None):
+async def _real_step_8b(session, *, handoff: object | None = None, substances=(SUBSTANCE,)):
     """The real Step 8B over synthetic Step 7C and Step 8A inputs."""
     from app.domains.personal_applicability.service import LabelSnapshotPersonalApplicability
 
-    interpretation = _interpretation()
+    interpretation = _interpretation(*substances)
     context = _context()
     ingredients = await apply_personal_evidence(
         session, interpretation, context, category=CATEGORY
@@ -1342,21 +1376,49 @@ class TestEvidenceValidation:
                     _manifest([_semantic()], [_policy()], [_explanation(source_locator="p1")]),
                 )
 
-    @pytest.mark.parametrize(
-        "override",
-        [
-            {"source_status": SourceStatus.RETIRED.value},
-            {"relationship": ClaimSourceRelationship.BACKGROUND.value},
-            {"reviewed_link": False},
-            {"license_note": None},
-            {"source_url": "https://"},
-            {"source_type": SourceType.MANUFACTURER_CLAIM.value},
-        ],
-    )
-    async def test_an_ineligible_source_path_blocks_the_release(self, db_clean, override) -> None:
+    #: Every way a source path can stop being something Step 8B would accept.
+    INELIGIBLE_SOURCE_PATHS = [
+        {"source_status": SourceStatus.RETIRED.value},
+        {"relationship": ClaimSourceRelationship.BACKGROUND.value},
+        {"reviewed_link": False},
+        {"license_note": None},
+        {"source_url": "https://"},
+        {"source_type": SourceType.MANUFACTURER_CLAIM.value},
+    ]
+
+    @pytest.mark.parametrize("override", INELIGIBLE_SOURCE_PATHS)
+    async def test_a_claim_with_no_eligible_source_path_is_not_projectable(
+        self, db_clean, override
+    ) -> None:
+        """No eligible path means Step 8B returns nothing, so the rule is dead.
+
+        This is the projectability gate, not the citation gate: the claim
+        itself can no longer reach a customer, whatever the explanation says.
+        """
         factory = get_sessionmaker()
         async with factory() as session:
             await _publish_claim(session, **override)
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await _validate(session, _manifest())
+        assert _reason(caught.value) is (
+            PersonalDecisionReleaseValidationCode.EVIDENCE_CLAIM_NOT_ELIGIBLE
+        )
+        assert "Step 8B would accept" in caught.value.message
+
+    @pytest.mark.parametrize("override", INELIGIBLE_SOURCE_PATHS)
+    async def test_the_citation_gate_still_fires_on_a_projectable_claim(
+        self, db_clean, override
+    ) -> None:
+        """The two source gates are separate and neither substitutes for the other.
+
+        Here a second, valid path keeps the claim projectable, so Step 8B is
+        satisfied -- and the reviewed citation the customer would actually see
+        still points at a path that is not eligible. That must still fail, and
+        with the citation code rather than the projectability one.
+        """
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_claim(session, extra_eligible_source=True, **override)
             with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
                 await _validate(session, _manifest())
         assert _reason(caught.value) is (
@@ -2551,10 +2613,7 @@ class TestProductionInertness:
 
 
 def _production_sources() -> list[tuple[str, ast.Module]]:
-    return [
-        (path.name, ast.parse(path.read_text(encoding="utf-8")))
-        for path in sorted(DOMAIN_DIR.glob("*.py"))
-    ]
+    return sorted(_PRODUCTION_TREES.items())
 
 
 def _imported_modules(tree: ast.Module) -> set[str]:
@@ -2565,6 +2624,26 @@ def _imported_modules(tree: ast.Module) -> set[str]:
         elif isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
     return modules
+
+
+def _parent_map(tree: ast.Module) -> dict[int, ast.AST]:
+    """Every node's parent, so a guard can ask how a value is *used*."""
+    parents: dict[int, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[id(child)] = node
+    return parents
+
+
+#: Built once per module and keyed by file name, so the trees the parents were
+#: taken from are the same objects the guards walk.
+_PRODUCTION_TREES: dict[str, ast.Module] = {
+    path.name: ast.parse(path.read_text(encoding="utf-8"))
+    for path in sorted(DOMAIN_DIR.glob("*.py"))
+}
+_PARENTS: dict[str, dict[int, ast.AST]] = {
+    name: _parent_map(tree) for name, tree in _PRODUCTION_TREES.items()
+}
 
 
 def _docstring_node_ids(tree: ast.Module) -> set[int]:
@@ -2693,15 +2772,70 @@ class TestStaticGuards:
                     offenders.append(f"{name}: {module}")
         assert offenders == [], offenders
 
-    def test_evidence_prose_and_strength_are_never_read(self) -> None:
-        """Direction is a reviewed rule, never something inferred from a paragraph."""
-        forbidden = {"summary", "scope", "strength_rationale", "evidence_strength", "notes"}
+    def test_evidence_prose_is_never_read(self) -> None:
+        """Direction is a reviewed rule, never something inferred from a paragraph.
+
+        ``evidence_strength`` is deliberately not in this set -- see
+        ``test_strength_is_read_only_for_step_8b_membership``. The prose fields
+        are absolute: there is no legitimate reason for Step 8H to read a
+        sentence a reviewer wrote about the evidence.
+        """
+        forbidden = {"summary", "scope", "strength_rationale", "notes"}
         offenders: list[str] = []
         for name, tree in _production_sources():
             for node in ast.walk(tree):
                 if isinstance(node, ast.Attribute) and node.attr in forbidden:
                     offenders.append(f"{name}:{node.lineno} reads .{node.attr}")
         assert offenders == [], offenders
+
+    def test_strength_is_read_only_for_step_8b_membership(self) -> None:
+        """Strength may be tested for membership in Step 8B's set. Nothing else.
+
+        The one legitimate question is "would Step 8B accept this exact row",
+        and the only shape that answers it is ``in
+        PERSONAL_APPLICABILITY_STRENGTHS``. Every other use -- an equality
+        against a grade, an ordering, a subscript into a table, an argument to
+        a function -- is a step towards deriving a direction, an action, a
+        weight or a rank from how strong the evidence looks, which is a
+        judgement Step 8H has no authority to make.
+        """
+        offenders: list[str] = []
+        for name, tree in _production_sources():
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Attribute) or node.attr != "evidence_strength":
+                    continue
+                parent = _PARENTS[name].get(id(node))
+                permitted = (
+                    isinstance(parent, ast.Compare)
+                    and parent.left is node
+                    and len(parent.ops) == 1
+                    and isinstance(parent.ops[0], ast.NotIn | ast.In)
+                    and isinstance(parent.comparators[0], ast.Name)
+                    and parent.comparators[0].id == "PERSONAL_APPLICABILITY_STRENGTHS"
+                )
+                # A membership test is the whole permitted use. The value may
+                # also be quoted back in the refusal message, which is a
+                # formatted read and decides nothing.
+                in_message = isinstance(parent, ast.FormattedValue)
+                if not (permitted or in_message):
+                    offenders.append(
+                        f"{name}:{node.lineno}: .evidence_strength used as "
+                        f"{type(parent).__name__}"
+                    )
+        assert offenders == [], offenders
+
+    def test_the_strength_allowlist_is_step_8bs_own_set_not_a_copy(self) -> None:
+        """Two copies would drift, and the drift that matters approves a dead release."""
+        from app.domains.personal_applicability.service import (
+            PERSONAL_APPLICABILITY_STRENGTHS as authority,
+        )
+        from app.domains.personal_decision_release import validation as release_validation
+
+        assert release_validation.PERSONAL_APPLICABILITY_STRENGTHS is authority
+        # And no Step 8H module restates the grades as literals of its own.
+        for name, tree in _production_sources():
+            for line, token in _executable_tokens(tree):
+                assert token not in {"strong", "moderate", "limited"}, f"{name}:{line}"
 
     def test_no_action_member_is_ever_named_in_production(self) -> None:
         """An action may be parsed and copied, never chosen.
@@ -2951,3 +3085,495 @@ async def test_the_migration_round_trips_and_keeps_the_single_active_invariant(d
             await sql.dispose_engine()
             await _alembic("upgrade", "head")
         await sql.dispose_engine()
+
+
+# ---------------------------------------------------------------------------
+# Evidence strength: exactly Step 8B's boundary, and nothing more
+# ---------------------------------------------------------------------------
+
+
+class TestEvidenceStrengthEligibility:
+    """Step 8H must accept exactly what Step 8B accepts.
+
+    Strength is read here for one reason: to answer "would Step 8B project this
+    exact row". It never becomes a direction, an action, a rank or a weight --
+    see ``TestStaticGuards.test_strength_is_read_only_for_step_8b_membership``.
+    """
+
+    @pytest.mark.parametrize(
+        "strength",
+        [
+            EvidenceStrength.STRONG.value,
+            EvidenceStrength.MODERATE.value,
+            EvidenceStrength.LIMITED.value,
+        ],
+    )
+    async def test_every_accepted_strength_stays_eligible(self, db_clean, strength) -> None:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_claim(session, evidence_strength=strength)
+            report = await _validate(session, _manifest())
+        assert report.semantic_evidence_checked == 1
+
+    @pytest.mark.parametrize(
+        "strength",
+        [EvidenceStrength.TRADITIONAL.value, EvidenceStrength.INSUFFICIENT.value],
+    )
+    async def test_a_strength_step_8b_rejects_blocks_the_release(
+        self, db_clean, strength
+    ) -> None:
+        """Otherwise perfectly valid published evidence, graded outside the set."""
+        factory = get_sessionmaker()
+        async with factory() as session:
+            claim = await _publish_claim(session)
+            await session.commit()
+            claim_id = claim.id
+
+        # Corrupt only the grade, directly, leaving everything else intact.
+        async with factory() as session:
+            row = await session.get(EvidenceClaim, claim_id)
+            row.evidence_strength = strength
+            await session.commit()
+
+        async with factory() as session:
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await _validate(session, _manifest())
+        assert _reason(caught.value) is (
+            PersonalDecisionReleaseValidationCode.EVIDENCE_CLAIM_NOT_ELIGIBLE
+        )
+        assert strength in caught.value.message
+
+    @pytest.mark.parametrize(
+        "strength",
+        [EvidenceStrength.TRADITIONAL.value, EvidenceStrength.INSUFFICIENT.value],
+    )
+    async def test_the_real_step_8b_does_not_project_that_evidence_either(
+        self, db_clean, strength
+    ) -> None:
+        """The point of the allowlist: Step 8H's answer must match Step 8B's."""
+        factory = get_sessionmaker()
+        async with factory() as session:
+            claim = await _publish_claim(session)
+            await session.commit()
+            claim_id = claim.id
+
+        async with factory() as session:
+            applicability = await _real_step_8b(session)
+        assert applicability.ingredients[0].personal_applicability_status is (
+            PersonalApplicabilityStatus.PERSONAL_EVIDENCE_AVAILABLE
+        )
+
+        async with factory() as session:
+            row = await session.get(EvidenceClaim, claim_id)
+            row.evidence_strength = strength
+            await session.commit()
+
+        async with factory() as session:
+            applicability = await _real_step_8b(session)
+        ingredient = applicability.ingredients[0]
+        assert ingredient.claims == ()
+        assert ingredient.personal_applicability_status is (
+            PersonalApplicabilityStatus.NOT_ENOUGH_INFORMATION
+        )
+
+    async def test_approval_is_blocked_by_a_disallowed_strength(self, db_clean) -> None:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            claim = await _publish_claim(session)
+            view = await _verified_draft(session, _manifest())
+            await session.commit()
+            claim_id, release_id = claim.id, uuid.UUID(view["id"])
+
+        async with factory() as session:
+            row = await session.get(EvidenceClaim, claim_id)
+            row.evidence_strength = EvidenceStrength.INSUFFICIENT.value
+            await session.commit()
+
+        async with factory() as session:
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await release_authoring.approve_personal_decision_release(
+                    session, release_id, actor="admin.synthetic"
+                )
+        assert _reason(caught.value) is (
+            PersonalDecisionReleaseValidationCode.EVIDENCE_CLAIM_NOT_ELIGIBLE
+        )
+
+
+# ---------------------------------------------------------------------------
+# A semantic rule Step 8B cannot project, even when the citation is fine
+# ---------------------------------------------------------------------------
+
+
+SUBSTANCE_B = "niacinamide"
+
+
+def _two_rule_bundle(*, source_key_a: str, locator_a: str | None) -> dict:
+    """sem.a and sem.b, one policy needing both, one explanation anchored to sem.a."""
+    return _manifest(
+        [
+            _semantic(rule_id="sem.a", claim_key="claim.a", substance_key=SUBSTANCE),
+            _semantic(rule_id="sem.b", claim_key="claim.b", substance_key=SUBSTANCE_B),
+        ],
+        [_policy(identities=[("sem.a", "1"), ("sem.b", "1")])],
+        [
+            _explanation(
+                semantic_rule_id="sem.a",
+                claim_key="claim.a",
+                substance_key=SUBSTANCE,
+                source_key=source_key_a,
+                source_locator=locator_a,
+            )
+        ],
+    )
+
+
+class TestNonAnchorSemanticSource:
+    """A valid citation must not vouch for a rule the citation says nothing about.
+
+    The explanation names sem.a's source. sem.b is never displayed -- but the
+    policy cannot fire without it, so a sem.b that Step 8B can no longer
+    project makes the whole reviewed decision unreachable. Approving on the
+    strength of sem.a's still-valid citation would approve a release that
+    cannot work.
+    """
+
+    async def _setup(self, session) -> None:
+        await _publish_claim(
+            session, claim_key="claim.a", source_key="src.a", subject_key=SUBSTANCE
+        )
+        await _publish_claim(
+            session, claim_key="claim.b", source_key="src.b", subject_key=SUBSTANCE_B
+        )
+
+    async def test_both_rules_eligible_validates(self, db_clean) -> None:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await self._setup(session)
+            report = await _validate(
+                session, _two_rule_bundle(source_key_a="src.a", locator_a="section 2")
+            )
+        assert report.semantic_evidence_checked == 2
+
+    @pytest.mark.parametrize(
+        ("label", "override"),
+        [
+            ("retired source", {"status": SourceStatus.RETIRED.value}),
+            ("bad source type", {"source_type": SourceType.MANUFACTURER_CLAIM.value}),
+            ("licence note removed", {"license_or_use_note": None}),
+            ("url not openable", {"canonical_url": "https://"}),
+        ],
+    )
+    async def test_a_non_anchor_rule_losing_its_only_source_blocks_the_release(
+        self, db_clean, label, override
+    ) -> None:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await self._setup(session)
+            await session.commit()
+
+        # Corrupt only sem.b's source. sem.a and the displayed citation are
+        # untouched and remain perfectly valid.
+        async with factory() as session:
+            source = (
+                await session.execute(
+                    select(EvidenceSource).where(EvidenceSource.source_key == "src.b")
+                )
+            ).scalar_one()
+            for field, value in override.items():
+                assert field in EvidenceSource.__table__.columns, field
+                setattr(source, field, value)
+            await session.commit()
+
+        async with factory() as session:
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await _validate(
+                    session, _two_rule_bundle(source_key_a="src.a", locator_a="section 2")
+                )
+        assert _reason(caught.value) is (
+            PersonalDecisionReleaseValidationCode.EVIDENCE_CLAIM_NOT_ELIGIBLE
+        ), label
+        assert "sem.b" in caught.value.message
+
+        # And Step 8B agrees: the claim behind sem.b is simply gone.
+        async with factory() as session:
+            applicability = await _real_step_8b(
+                session, substances=(SUBSTANCE, SUBSTANCE_B)
+            )
+        by_key = {
+            ingredient.substance_key: ingredient for ingredient in applicability.ingredients
+        }
+        assert by_key[SUBSTANCE].claims != ()
+        assert by_key[SUBSTANCE_B].claims == ()
+        assert by_key[SUBSTANCE_B].personal_applicability_status is (
+            PersonalApplicabilityStatus.NOT_ENOUGH_INFORMATION
+        )
+
+    async def test_approval_is_blocked_and_the_citation_gate_is_not_what_fired(
+        self, db_clean
+    ) -> None:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await self._setup(session)
+            view = await _verified_draft(
+                session, _two_rule_bundle(source_key_a="src.a", locator_a="section 2")
+            )
+            await session.commit()
+            release_id = uuid.UUID(view["id"])
+
+        async with factory() as session:
+            source = (
+                await session.execute(
+                    select(EvidenceSource).where(EvidenceSource.source_key == "src.b")
+                )
+            ).scalar_one()
+            source.status = SourceStatus.RETIRED.value
+            await session.commit()
+
+        async with factory() as session:
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await release_authoring.approve_personal_decision_release(
+                    session, release_id, actor="admin.synthetic"
+                )
+            row = await session.get(PersonalDecisionRelease, release_id)
+            assert row.status == PersonalDecisionReleaseStatus.DRAFT.value
+        assert _reason(caught.value) is not (
+            PersonalDecisionReleaseValidationCode.EXPLANATION_SOURCE_PATH_NOT_ELIGIBLE
+        )
+        assert _reason(caught.value) is (
+            PersonalDecisionReleaseValidationCode.EVIDENCE_CLAIM_NOT_ELIGIBLE
+        )
+
+    async def test_the_two_source_gates_cost_no_extra_queries(self, db_clean) -> None:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await self._setup(session)
+            await session.commit()
+
+        statements: list[str] = []
+
+        def record(conn, cursor, statement, parameters, context, executemany):
+            if statement.lstrip().upper().startswith("SELECT"):
+                statements.append(statement)
+
+        engine = sql.get_engine().sync_engine
+        async with factory() as session:
+            event.listen(engine, "before_cursor_execute", record)
+            try:
+                await validate_release_evidence(
+                    session,
+                    parse_release_manifest(
+                        _two_rule_bundle(source_key_a="src.a", locator_a="section 2")
+                    ),
+                )
+            finally:
+                event.remove(engine, "before_cursor_execute", record)
+        assert len(statements) == 2
+
+
+# ---------------------------------------------------------------------------
+# Persisted-state revalidation at approval and activation
+# ---------------------------------------------------------------------------
+
+
+class TestPersistedStateRevalidation:
+    """`status == approved` records that checks passed once, not that they still do.
+
+    Every field those checks read -- the manifest, the hash, the schema column,
+    the attestations -- is editable in the database. Activation installs a row
+    into production, so it must re-ask, not remember.
+    """
+
+    async def _approved_pair(self, factory) -> tuple[uuid.UUID, uuid.UUID]:
+        """An active release, and an approved candidate to activate over it."""
+        async with factory() as session:
+            await _publish_claim(session)
+            active = await _activated(session, _manifest())
+            candidate = await _approved(session, _manifest())
+            await session.commit()
+        return uuid.UUID(active["id"]), uuid.UUID(candidate["id"])
+
+    async def _assert_no_switch(self, factory, active_id, candidate_id) -> None:
+        async with factory() as session:
+            rows = {
+                row.id: row.status
+                for row in (
+                    await session.execute(select(PersonalDecisionRelease))
+                ).scalars().all()
+            }
+        assert rows[active_id] == PersonalDecisionReleaseStatus.ACTIVE.value
+        assert rows[candidate_id] == PersonalDecisionReleaseStatus.APPROVED.value
+        async with factory() as session:
+            loaded = await load_active_personal_decision_release(session)
+        assert loaded is not None
+        assert loaded.release_id == active_id
+
+    @pytest.mark.parametrize(
+        ("label", "mutate"),
+        [
+            (
+                "one checkpoint false",
+                lambda block: {**block, "founder_review_completed": False},
+            ),
+            ("unresolved doubt", lambda block: {**block, "unresolved_doubt": True}),
+            ("verification removed", lambda block: None),
+            ("verification truncated", lambda block: {"founder_review_completed": True}),
+        ],
+    )
+    async def test_corrupted_verification_blocks_activation(
+        self, db_clean, label, mutate
+    ) -> None:
+        factory = get_sessionmaker()
+        active_id, candidate_id = await self._approved_pair(factory)
+
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, candidate_id)
+            row.review_verification = mutate(dict(row.review_verification or {}))
+            await session.commit()
+
+        async with factory() as session:
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await release_authoring.activate_personal_decision_release(
+                    session, candidate_id, actor="admin.synthetic"
+                )
+            await session.rollback()
+        assert _reason(caught.value) in {
+            PersonalDecisionReleaseValidationCode.RELEASE_VERIFICATION_INCOMPLETE,
+            PersonalDecisionReleaseValidationCode.RELEASE_UNRESOLVED_DOUBT,
+        }, label
+        await self._assert_no_switch(factory, active_id, candidate_id)
+
+    async def test_unresolved_doubt_specifically_blocks_activation(self, db_clean) -> None:
+        factory = get_sessionmaker()
+        active_id, candidate_id = await self._approved_pair(factory)
+
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, candidate_id)
+            row.review_verification = {**row.review_verification, "unresolved_doubt": True}
+            await session.commit()
+
+        async with factory() as session:
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await release_authoring.activate_personal_decision_release(
+                    session, candidate_id, actor="admin.synthetic"
+                )
+            await session.rollback()
+        assert _reason(caught.value) is (
+            PersonalDecisionReleaseValidationCode.RELEASE_UNRESOLVED_DOUBT
+        )
+        await self._assert_no_switch(factory, active_id, candidate_id)
+
+    async def test_a_corrupted_schema_column_blocks_activation(self, db_clean) -> None:
+        """The manifest and hash are fine; only the column the loader reads is not.
+
+        Runtime already refuses such a row, so activating it would install a
+        release production cannot load -- an outage created by an activation
+        step that only looked inside the JSON.
+        """
+        factory = get_sessionmaker()
+        active_id, candidate_id = await self._approved_pair(factory)
+
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, candidate_id)
+            row.manifest_schema_version = 999
+            await session.commit()
+
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, candidate_id)
+            # The manifest itself is untouched and still hashes correctly.
+            assert release_authoring.persisted_manifest(row) is not None
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await release_authoring.activate_personal_decision_release(
+                    session, candidate_id, actor="admin.synthetic"
+                )
+            await session.rollback()
+        assert _reason(caught.value) is (
+            PersonalDecisionReleaseValidationCode.RELEASE_SCHEMA_VERSION_UNSUPPORTED
+        )
+        await self._assert_no_switch(factory, active_id, candidate_id)
+
+    async def test_the_schema_column_is_not_repaired(self, db_clean) -> None:
+        factory = get_sessionmaker()
+        _active_id, candidate_id = await self._approved_pair(factory)
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, candidate_id)
+            row.manifest_schema_version = 999
+            await session.commit()
+        async with factory() as session:
+            with pytest.raises(PersonalDecisionReleaseValidationError):
+                await release_authoring.activate_personal_decision_release(
+                    session, candidate_id, actor="admin.synthetic"
+                )
+            await session.rollback()
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, candidate_id)
+            assert row.manifest_schema_version == 999
+
+    async def test_a_corrupted_schema_column_blocks_approval(self, db_clean) -> None:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_claim(session)
+            view = await _verified_draft(session, _manifest())
+            await session.commit()
+            release_id = uuid.UUID(view["id"])
+
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, release_id)
+            row.manifest_schema_version = 999
+            await session.commit()
+
+        async with factory() as session:
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await release_authoring.approve_personal_decision_release(
+                    session, release_id, actor="admin.synthetic"
+                )
+            await session.rollback()
+        assert _reason(caught.value) is (
+            PersonalDecisionReleaseValidationCode.RELEASE_SCHEMA_VERSION_UNSUPPORTED
+        )
+
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, release_id)
+            assert row.status == PersonalDecisionReleaseStatus.DRAFT.value
+            assert row.manifest_schema_version == 999
+
+    async def test_a_corrupted_manifest_hash_blocks_activation(self, db_clean) -> None:
+        factory = get_sessionmaker()
+        active_id, candidate_id = await self._approved_pair(factory)
+
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, candidate_id)
+            row.content_hash = "0" * 64
+            await session.commit()
+
+        async with factory() as session:
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await release_authoring.activate_personal_decision_release(
+                    session, candidate_id, actor="admin.synthetic"
+                )
+            await session.rollback()
+        assert _reason(caught.value) is (
+            PersonalDecisionReleaseValidationCode.RELEASE_CONTENT_HASH_MISMATCH
+        )
+        await self._assert_no_switch(factory, active_id, candidate_id)
+
+    async def test_a_healthy_candidate_still_activates(self, db_clean) -> None:
+        """The guards above must not have made a correct replacement impossible."""
+        factory = get_sessionmaker()
+        active_id, candidate_id = await self._approved_pair(factory)
+
+        async with factory() as session:
+            activated = await release_authoring.activate_personal_decision_release(
+                session, candidate_id, actor="admin.synthetic"
+            )
+            await session.commit()
+        assert activated["status"] == PersonalDecisionReleaseStatus.ACTIVE.value
+
+        async with factory() as session:
+            rows = {
+                row.id: row.status
+                for row in (
+                    await session.execute(select(PersonalDecisionRelease))
+                ).scalars().all()
+            }
+        assert rows[active_id] == PersonalDecisionReleaseStatus.RETIRED.value
+        assert rows[candidate_id] == PersonalDecisionReleaseStatus.ACTIVE.value
