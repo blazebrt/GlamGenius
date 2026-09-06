@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.evidence import authoring
-from app.domains.evidence.enums import EvidenceDomain, EvidenceTier, ReviewStatus
+from app.domains.evidence.enums import ClaimType, EvidenceDomain, EvidenceTier, ReviewStatus
+from app.domains.evidence.models import EvidenceClaim
 from app.domains.system.models import WorkerStatus
 from app.shared.database.sql import get_session
 from app.shared.security.deps import CurrentAccount, get_current_account
@@ -231,6 +232,21 @@ def _author(current: CurrentAccount) -> str:
     return current.account_id_str
 
 
+async def _require_generic_mutation(session: AsyncSession, entry_id: uuid.UUID) -> None:
+    claim = await session.get(EvidenceClaim, entry_id)
+    if claim is not None and (
+        claim.claim_type == ClaimType.SUBSTANCE_PERSONAL_APPLICABILITY.value
+        or claim.claim_key.startswith("personal-applicability:")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "SPECIALIZED_AUTHORING_REQUIRED",
+                "message": "Use the personal-applicability authoring route for this entry.",
+            },
+        )
+
+
 @router.get("/knowledge/vocabulary")
 async def knowledge_vocabulary(
     _: CurrentAccount = Depends(require_admin),
@@ -301,6 +317,7 @@ async def edit_knowledge_entry(
     session: AsyncSession = Depends(get_session),
 ):
     """Edit. A published or approved entry gains a new version; nothing is overwritten."""
+    await _require_generic_mutation(session, entry_id)
     entry = await authoring.edit(session, entry_id, body.to_input(), author=_author(current))
     await session.commit()
     return entry
@@ -312,6 +329,7 @@ async def approve_knowledge_entry(
     current: CurrentAccount = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
+    await _require_generic_mutation(session, entry_id)
     entry = await authoring.approve(session, entry_id, reviewer=_author(current))
     await session.commit()
     return entry
@@ -323,6 +341,7 @@ async def publish_knowledge_entry(
     current: CurrentAccount = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
+    await _require_generic_mutation(session, entry_id)
     entry = await authoring.publish(session, entry_id, publisher=_author(current))
     await session.commit()
     return entry
@@ -335,6 +354,7 @@ async def record_knowledge_publication_verification(
     current: CurrentAccount = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
+    await _require_generic_mutation(session, entry_id)
     entry = await authoring.record_publication_verification(
         session, entry_id, verification=body.to_input(), actor=_author(current),
     )
@@ -349,6 +369,7 @@ async def reject_knowledge_entry(
     current: CurrentAccount = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
+    await _require_generic_mutation(session, entry_id)
     entry = await authoring.reject(
         session, entry_id, reviewer=_author(current), reason=body.reason,
     )

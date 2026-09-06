@@ -20,6 +20,7 @@ from app.domains.personal_applicability.service import (
     MatchedPersonalFact,
     PersonalApplicabilitySource,
     apply_personal_evidence,
+    evidence_domain_for_category,
     interpret_label_snapshot_for_account,
 )
 
@@ -38,6 +39,7 @@ __all__ = [
     "PersonalApplicabilitySource",
     "PersonalApplicabilityStatus",
     "apply_personal_evidence",
+    "evidence_domain_for_category",
     "interpret_label_snapshot_for_account",
     "parse_personal_applicability_payload",
 ]
