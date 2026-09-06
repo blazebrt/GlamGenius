@@ -38,6 +38,7 @@ Step 8E and treats everything below it structurally.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
@@ -97,6 +98,56 @@ _BLOCKED_BY_POLICY: dict[
     PersonalDecisionPolicyReason.SEMANTIC_MAPPING_NOT_COMPLETE: (
         PersonalDecisionPresentationReason.SEMANTIC_MAPPING_NOT_COMPLETE,
         REASON_KEY_SEMANTIC_MAPPING,
+    ),
+}
+
+#: Which presentation statuses each upstream state may legitimately produce.
+#: A presentation must not relabel one governed state as another: a manually
+#: built "presentable" result over a policy that never decided would be a
+#: verdict with no decision behind it.
+_ALLOWED_STATUSES: dict[
+    PersonalDecisionPolicyStatus, frozenset[PersonalDecisionPresentationStatus]
+] = {
+    PersonalDecisionPolicyStatus.HANDOFF_REQUIRED: frozenset(
+        {PersonalDecisionPresentationStatus.HANDOFF_REQUIRED}
+    ),
+    PersonalDecisionPolicyStatus.NOT_ENOUGH_INFORMATION: frozenset(
+        {PersonalDecisionPresentationStatus.NOT_ENOUGH_INFORMATION}
+    ),
+    PersonalDecisionPolicyStatus.NOT_ENOUGH_DECISION_POLICY: frozenset(
+        {PersonalDecisionPresentationStatus.NOT_ENOUGH_DECISION_POLICY}
+    ),
+    PersonalDecisionPolicyStatus.DECISION_AVAILABLE: frozenset(
+        {
+            PersonalDecisionPresentationStatus.DECISION_PRESENTABLE,
+            PersonalDecisionPresentationStatus.NOT_ENOUGH_EXPLANATION,
+        }
+    ),
+}
+
+#: The exact reason and copy key each non-presentable status must carry.
+#: ``DECISION_PRESENTABLE`` is absent because its key is the reviewed
+#: explanation's own, not a fixed structural one.
+_REQUIRED_REASONS: dict[
+    PersonalDecisionPresentationStatus,
+    tuple[frozenset[PersonalDecisionPresentationReason], str],
+] = {
+    PersonalDecisionPresentationStatus.HANDOFF_REQUIRED: (
+        frozenset({PersonalDecisionPresentationReason.PROFESSIONAL_HANDOFF_REQUIRED}),
+        REASON_KEY_HANDOFF,
+    ),
+    PersonalDecisionPresentationStatus.NOT_ENOUGH_DECISION_POLICY: (
+        frozenset({PersonalDecisionPresentationReason.NO_EXACT_DECISION_POLICY}),
+        REASON_KEY_DECISION_POLICY,
+    ),
+    PersonalDecisionPresentationStatus.NOT_ENOUGH_EXPLANATION: (
+        frozenset(
+            {
+                PersonalDecisionPresentationReason.NO_EXACT_EXPLANATION_RULE,
+                PersonalDecisionPresentationReason.EXPLANATION_SOURCE_NOT_AVAILABLE,
+            }
+        ),
+        REASON_KEY_EXPLANATION,
     ),
 }
 
@@ -162,6 +213,17 @@ class PersonalDecisionPresentation:
             self.citation,
         )
 
+        # The presentation must describe the governed state it came from, not
+        # a different one. Without this a hand-built result could show a
+        # verdict over a policy that never decided.
+        allowed = _ALLOWED_STATUSES.get(self.source_policy.status)
+        if allowed is None:
+            raise ValueError(f"upstream policy status {self.source_policy.status} is unrecognised")
+        if self.status not in allowed:
+            raise ValueError(
+                f"{self.status} cannot represent an upstream {self.source_policy.status}"
+            )
+
         if presentable:
             if any(part is None for part in decided):
                 raise ValueError(
@@ -170,11 +232,35 @@ class PersonalDecisionPresentation:
                 )
             if self.action is not self.source_policy.action:
                 raise ValueError("the presented action must be the action Step 8E decided")
+            if self.reason is not PersonalDecisionPresentationReason.REVIEWED_EXPLANATION_AVAILABLE:
+                raise ValueError("DECISION_PRESENTABLE requires REVIEWED_EXPLANATION_AVAILABLE")
         elif any(part is not None for part in decided):
             raise ValueError(f"{self.status} must carry no action, explanation or citation")
 
         if not self.reason_key or not self.reason_key.strip():
             raise ValueError("every presentation carries a reason key")
+
+        # Each blocked status carries exactly one reason vocabulary and one
+        # copy key, so a result cannot say one thing in its status and another
+        # in the sentence a customer would read.
+        required = _REQUIRED_REASONS.get(self.status)
+        if required is not None:
+            reasons, reason_key = required
+            if self.reason not in reasons:
+                raise ValueError(f"{self.status} requires one of {sorted(reasons)}")
+            if self.reason_key != reason_key:
+                raise ValueError(f"{self.status} requires reason key {reason_key}")
+        elif self.status is PersonalDecisionPresentationStatus.NOT_ENOUGH_INFORMATION:
+            expected = _BLOCKED_BY_POLICY.get(self.source_policy.reason)
+            if expected is None:
+                raise ValueError(
+                    f"upstream reason {self.source_policy.reason} is not a structural block"
+                )
+            reason, reason_key = expected
+            if self.reason is not reason:
+                raise ValueError(f"an upstream {self.source_policy.reason} requires {reason}")
+            if self.reason_key != reason_key:
+                raise ValueError(f"an upstream {self.source_policy.reason} requires {reason_key}")
 
         handoff = self.status is PersonalDecisionPresentationStatus.HANDOFF_REQUIRED
         handoff_fields = (self.handoff_reason, self.handoff_message)
@@ -220,14 +306,38 @@ def _no_explanation(
     )
 
 
+def _handoff_text(handoff: object, field_name: str) -> str:
+    """One canonical handoff string, returned byte-for-byte as written.
+
+    ``strip`` appears here only to decide whether the value is blank. The
+    string that leaves this function is the original, untrimmed: it was
+    written by the hard-handoff authority for this boundary, and the product
+    has no business reformatting the sentence that sends someone to a
+    professional.
+    """
+    value = getattr(handoff, field_name, None)
+    if not isinstance(value, str) or not value.strip():
+        raise PersonalDecisionPresentationInvariantError(
+            f"the upstream handoff carries no {field_name}"
+        )
+    return value
+
+
 def _handoff(policy: PersonalDecisionPolicyResult) -> PersonalDecisionPresentation:
     """Pass the canonical handoff text through untouched.
 
-    The message came from the hard-handoff authority and was written for this
-    boundary. Rewriting or embellishing it here would put a second, unreviewed
-    voice on the most sensitive sentence the product says.
+    A handoff with no text is not a handoff we can present. Emitting empty
+    strings would hand the screen a blank where the most important sentence
+    in the product belongs, and it would look like a successful result. So a
+    missing or blank reason or message fails closed here rather than
+    degrading -- and it is not downgraded to NOT_ENOUGH_INFORMATION either,
+    which would quietly reclassify a safety state as an ordinary gap.
     """
     handoff = getattr(policy.source_aggregation.source_semantics, "handoff", None)
+    if handoff is None:
+        raise PersonalDecisionPresentationInvariantError(
+            "the upstream result requires handoff but carries no handoff object"
+        )
     return PersonalDecisionPresentation(
         source_policy=policy,
         status=PersonalDecisionPresentationStatus.HANDOFF_REQUIRED,
@@ -238,8 +348,8 @@ def _handoff(policy: PersonalDecisionPolicyResult) -> PersonalDecisionPresentati
         explanation_id=None,
         explanation_version=None,
         citation=None,
-        handoff_reason=str(getattr(handoff, "reason", "")),
-        handoff_message=str(getattr(handoff, "message", "")),
+        handoff_reason=_handoff_text(handoff, "reason"),
+        handoff_message=_handoff_text(handoff, "message"),
     )
 
 
@@ -270,17 +380,55 @@ def _matching_aggregated_rule(
     return matches[0]
 
 
+def _anchored_claim_id(aggregated_rule: object) -> uuid.UUID:
+    """The exact claim UUID the governed chain already recorded.
+
+    Step 8B minted this id, Step 8C carried it, and Step 8D preserved it on
+    every occurrence. Re-deriving the claim downstream from key and version
+    alone would throw that away and re-identify the evidence by description --
+    which is how a reason ends up cited against a different row that merely
+    shares a key. So the id travels, and the claim must match it.
+
+    One ingredient repeated across printed positions produces several
+    occurrences of one aggregated rule. They are the same evidence, so they
+    must carry one identical id; several distinct ids under one reviewed rule
+    is a corrupted chain, and picking one of them would be inventing the
+    provenance this layer exists to prove.
+    """
+    claim_ids = {occurrence.claim_id for occurrence in aggregated_rule.occurrences}
+    if not claim_ids:
+        raise PersonalDecisionPresentationInvariantError(
+            "the matched governed rule records no claim occurrence"
+        )
+    if len(claim_ids) != 1:
+        raise PersonalDecisionPresentationInvariantError(
+            "one governed rule records occurrences of several distinct reviewed claims"
+        )
+    claim_id = claim_ids.pop()
+    if not isinstance(claim_id, uuid.UUID):
+        raise PersonalDecisionPresentationInvariantError(
+            "the recorded claim occurrence carries no reviewed claim identity"
+        )
+    return claim_id
+
+
 def _matching_claim(
-    applicability: object, explanation: PersonalDecisionExplanationRule
+    applicability: object,
+    explanation: PersonalDecisionExplanationRule,
+    claim_id: uuid.UUID,
 ) -> object | None:
     """The exact reviewed Step 8B claim the anchor names.
 
-    One ingredient repeated across printed positions yields the same claim
-    identity more than once. That is one evidence chain, not several, so
-    repeats of the identical object collapse. Genuinely different claim
-    objects wearing one identity are a corrupted chain and fail closed.
+    Matched on the governed claim UUID *and* the full descriptive anchor. The
+    id alone would be enough to find the row; requiring both means a chain
+    whose id and description have drifted apart is rejected rather than
+    quietly trusted.
+
+    Repeats of the identical object collapse -- one ingredient at several
+    printed positions is one evidence chain. Genuinely different claim objects
+    wearing one identity are a corrupted chain and fail closed.
     """
-    found: list[object] = []
+    described: list[object] = []
     for ingredient in getattr(applicability, "ingredients", ()):
         if ingredient.substance_key != explanation.substance_key:
             continue
@@ -288,17 +436,28 @@ def _matching_claim(
             if (
                 claim.claim_key == explanation.claim_key
                 and claim.claim_version == explanation.claim_version
-                and not any(existing is claim for existing in found)
+                and not any(existing is claim for existing in described)
             ):
-                found.append(claim)
+                described.append(claim)
 
-    if not found:
+    exact = [claim for claim in described if claim.claim_id == claim_id]
+    if not exact:
+        if described:
+            # The description still matches, but the identity Step 8D recorded
+            # does not. The chain disagrees with itself, which is corruption
+            # rather than a missing explanation -- and it is exactly the case
+            # where citing the look-alike row would be most convincing and
+            # most wrong.
+            raise PersonalDecisionPresentationInvariantError(
+                "the reviewed claim no longer carries the claim identity the governed chain "
+                "recorded"
+            )
         return None
-    if len(found) != 1:
+    if len(exact) != 1:
         raise PersonalDecisionPresentationInvariantError(
             "one exact claim identity resolved to several distinct reviewed claims"
         )
-    return found[0]
+    return exact[0]
 
 
 def _selected_source(claim: object, explanation: PersonalDecisionExplanationRule) -> object | None:
@@ -412,7 +571,8 @@ def present_personal_decision(
             policy, PersonalDecisionPresentationReason.NO_EXACT_EXPLANATION_RULE
         )
 
-    if _matching_aggregated_rule(policy, explanation) is None:
+    aggregated_rule = _matching_aggregated_rule(policy, explanation)
+    if aggregated_rule is None:
         return _no_explanation(
             policy, PersonalDecisionPresentationReason.EXPLANATION_SOURCE_NOT_AVAILABLE
         )
@@ -425,7 +585,7 @@ def present_personal_decision(
             policy, PersonalDecisionPresentationReason.EXPLANATION_SOURCE_NOT_AVAILABLE
         )
 
-    claim = _matching_claim(applicability, explanation)
+    claim = _matching_claim(applicability, explanation, _anchored_claim_id(aggregated_rule))
     if claim is None:
         return _no_explanation(
             policy, PersonalDecisionPresentationReason.EXPLANATION_SOURCE_NOT_AVAILABLE

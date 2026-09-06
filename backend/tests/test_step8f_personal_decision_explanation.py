@@ -36,7 +36,10 @@ from app.domains.personal_applicability import (
     PersonalApplicabilityStatus,
 )
 from app.domains.personal_applicability.service import PersonalApplicabilitySource
-from app.domains.personal_decision_aggregation import aggregate_personal_decision_signals
+from app.domains.personal_decision_aggregation import (
+    PersonalDecisionSignalOccurrence,
+    aggregate_personal_decision_signals,
+)
 from app.domains.personal_decision_explanation import (
     PERSONAL_DECISION_EXPLANATION_RULES,
     PersonalDecisionExplanationRegistryError,
@@ -291,6 +294,40 @@ def _decided() -> PersonalDecisionPolicyResult:
     assert policy.status is PersonalDecisionPolicyStatus.DECISION_AVAILABLE
     assert policy.action is PersonalDecisionAction.BUY
     return policy
+
+
+def _handoff_policy(
+    *, reason: str = "pregnancy", message: str = "Please speak to a professional."
+) -> PersonalDecisionPolicyResult:
+    policy = _policy_result(
+        applicability=_applicability(handoff=PersonalLensHandoff(reason=reason, message=message))
+    )
+    assert policy.status is PersonalDecisionPolicyStatus.HANDOFF_REQUIRED
+    return policy
+
+
+def _no_information_policy(**kwargs: object) -> PersonalDecisionPolicyResult:
+    policy = _policy_result(applicability=_applicability(**kwargs))  # type: ignore[arg-type]
+    assert policy.status is PersonalDecisionPolicyStatus.NOT_ENOUGH_INFORMATION
+    return policy
+
+
+def _undecided_policy() -> PersonalDecisionPolicyResult:
+    policy = _policy_result(policy_rules=())
+    assert policy.status is PersonalDecisionPolicyStatus.NOT_ENOUGH_DECISION_POLICY
+    return policy
+
+
+def _corrupt(obj: object, **fields: object) -> object:
+    """Force fields past a frozen dataclass, to build impossible input.
+
+    The governed dataclasses refuse to construct these shapes, which is the
+    point: the only way to reach Step 8F's invariant errors is to assemble an
+    object no valid upstream chain ever produced.
+    """
+    for name, value in fields.items():
+        object.__setattr__(obj, name, value)
+    return obj
 
 
 #: An explanation registry that cannot be built.
@@ -861,8 +898,10 @@ class TestRegistry:
 # ---------------------------------------------------------------------------
 
 
-def _presentation(**overrides: object) -> PersonalDecisionPresentation:
-    policy = _decided()
+def _presentation(
+    policy: PersonalDecisionPolicyResult | None = None, **overrides: object
+) -> PersonalDecisionPresentation:
+    policy = policy if policy is not None else _decided()
     fields: dict = {
         "source_policy": policy,
         "status": PRESENTABLE,
@@ -901,18 +940,60 @@ class TestResultInvariants:
         with pytest.raises(ValueError, match="must be the action Step 8E decided"):
             _presentation(action=PersonalDecisionAction.SKIP)
 
-    @pytest.mark.parametrize("status", [NO_INFO, NO_POLICY, NO_EXPLANATION, HANDOFF])
+    @pytest.mark.parametrize(
+        ("status", "policy_factory", "reason", "reason_key"),
+        [
+            (
+                NO_EXPLANATION,
+                _decided,
+                PersonalDecisionPresentationReason.NO_EXACT_EXPLANATION_RULE,
+                "for_you.not_enough.explanation",
+            ),
+            (
+                NO_INFO,
+                lambda: _no_information_policy(context_status="partial_context"),
+                PersonalDecisionPresentationReason.PERSONAL_CONTEXT_NOT_COMPLETE,
+                "for_you.not_enough.personal_context",
+            ),
+            (
+                NO_POLICY,
+                _undecided_policy,
+                PersonalDecisionPresentationReason.NO_EXACT_DECISION_POLICY,
+                "for_you.not_enough.decision_policy",
+            ),
+            (
+                HANDOFF,
+                _handoff_policy,
+                PersonalDecisionPresentationReason.PROFESSIONAL_HANDOFF_REQUIRED,
+                "for_you.handoff.required",
+            ),
+        ],
+    )
     def test_a_blocked_status_cannot_carry_a_decision(
-        self, status: PersonalDecisionPresentationStatus
+        self,
+        status: PersonalDecisionPresentationStatus,
+        policy_factory: object,
+        reason: PersonalDecisionPresentationReason,
+        reason_key: str,
     ) -> None:
+        """Each blocked state, built over the upstream state that produces it."""
         with pytest.raises(ValueError, match="no action, explanation or citation"):
-            _presentation(status=status)
+            _presentation(
+                policy_factory(),  # type: ignore[operator]
+                status=status,
+                reason=reason,
+                reason_key=reason_key,
+                handoff_reason="pregnancy" if status is HANDOFF else None,
+                handoff_message="see a professional" if status is HANDOFF else None,
+            )
 
     def test_handoff_requires_its_upstream_text(self) -> None:
         with pytest.raises(ValueError, match="HANDOFF_REQUIRED requires"):
             _presentation(
+                _handoff_policy(),
                 status=HANDOFF,
                 reason=PersonalDecisionPresentationReason.PROFESSIONAL_HANDOFF_REQUIRED,
+                reason_key="for_you.handoff.required",
                 action=None,
                 verdict_key=None,
                 explanation_id=None,
@@ -1264,3 +1345,349 @@ def test_public_surface_is_stable() -> None:
         HANDOFF,
     }
     assert isinstance(present_personal_decision(_decided()), PersonalDecisionPresentation)
+
+
+# ---------------------------------------------------------------------------
+# Exact governed claim identity (hardening correction 1)
+# ---------------------------------------------------------------------------
+
+
+class TestClaimIdentityContinuity:
+    """The claim UUID minted by Step 8B must survive to the citation.
+
+    Matching a claim by substance, key and version alone re-identifies the
+    evidence by description. Two rows can share a description; only the id
+    says it is the same reviewed row. These tests pin that the id travels and
+    is checked, so a reason cannot be cited against a look-alike.
+    """
+
+    def test_the_governed_claim_id_is_carried_and_verified(self) -> None:
+        claim = _claim()
+        policy = _policy_result(
+            applicability=_applicability(ingredients=(_ingredient(claims=(claim,)),))
+        )
+        # Step 8D really did record this exact id.
+        assert policy.source_aggregation.rules[0].occurrences[0].claim_id == claim.claim_id
+
+        result = present_personal_decision(policy, rules=(_explanation(),))
+        assert result.status is PRESENTABLE
+
+    def test_a_mutated_claim_id_fails_closed(self) -> None:
+        """The chain disagreeing with itself must be loud, not quietly absent.
+
+        Everything descriptive still matches -- substance, claim key, version,
+        semantic rule, policy and source are untouched. Only the identity
+        Step 8D recorded has drifted. Before the hardening this still
+        presented, citing a row the governed chain never approved.
+        """
+        claim = _claim()
+        policy = _policy_result(
+            applicability=_applicability(ingredients=(_ingredient(claims=(claim,)),))
+        )
+        recorded = policy.source_aggregation.rules[0].occurrences[0].claim_id
+        assert recorded == claim.claim_id
+
+        _corrupt(claim, claim_id=uuid.uuid4())
+        assert claim.claim_id != recorded
+
+        with pytest.raises(
+            PersonalDecisionPresentationInvariantError, match="no longer carries the claim identity"
+        ):
+            present_personal_decision(policy, rules=(_explanation(),))
+
+    def test_the_descriptive_anchor_is_still_required(self) -> None:
+        """Identity does not replace the description; both must agree."""
+        claim = _claim()
+        policy = _policy_result(
+            applicability=_applicability(ingredients=(_ingredient(claims=(claim,)),))
+        )
+        _corrupt(claim, claim_key="claim.synthetic.renamed")
+        result = present_personal_decision(policy, rules=(_explanation(),))
+        assert result.status is NO_EXPLANATION
+        assert result.action is None
+
+    def test_one_claim_repeated_across_positions_is_one_chain(self) -> None:
+        claim = _claim()
+        applicability = _applicability(
+            ingredients=tuple(
+                _ingredient(position=position, claims=(claim,)) for position in (0, 3, 8)
+            )
+        )
+        policy = _policy_result(applicability=applicability)
+        occurrences = policy.source_aggregation.rules[0].occurrences
+        assert [o.ingredient_position for o in occurrences] == [0, 3, 8]
+        assert {o.claim_id for o in occurrences} == {claim.claim_id}
+
+        result = present_personal_decision(policy, rules=(_explanation(),))
+        assert result.status is PRESENTABLE
+        assert result.citation is not None
+        assert result.citation.source_key == SOURCE_A
+
+    def test_occurrences_naming_two_claim_ids_fail_closed(self) -> None:
+        """Never pick one of them -- not the first, newest or most common."""
+        policy = _decided()
+        rule = policy.source_aggregation.rules[0]
+        original = rule.occurrences[0]
+        second = PersonalDecisionSignalOccurrence(
+            ingredient_position=3,
+            substance_key=original.substance_key,
+            claim_id=uuid.uuid4(),
+            claim_key=original.claim_key,
+            claim_version=original.claim_version,
+        )
+        _corrupt(rule, occurrences=(original, second))
+
+        with pytest.raises(
+            PersonalDecisionPresentationInvariantError,
+            match="occurrences of several distinct reviewed claims",
+        ):
+            present_personal_decision(policy, rules=(_explanation(),))
+
+    def test_a_rule_with_no_occurrence_fails_closed(self) -> None:
+        policy = _decided()
+        _corrupt(policy.source_aggregation.rules[0], occurrences=())
+        with pytest.raises(
+            PersonalDecisionPresentationInvariantError, match="records no claim occurrence"
+        ):
+            present_personal_decision(policy, rules=(_explanation(),))
+
+
+# ---------------------------------------------------------------------------
+# Handoff provenance (hardening correction 3)
+# ---------------------------------------------------------------------------
+
+
+class TestHandoffProvenance:
+    """A handoff with no text is not a handoff we can present.
+
+    Emitting empty strings would hand the screen a blank where the product's
+    most important sentence belongs -- and it would look like success.
+    """
+
+    def test_a_handoff_status_with_no_handoff_object_fails_closed(self) -> None:
+        policy = _policy_result(applicability=_applicability(context_status="handoff_required"))
+        assert policy.status is PersonalDecisionPolicyStatus.HANDOFF_REQUIRED
+        assert policy.source_aggregation.source_semantics.handoff is None
+
+        with pytest.raises(
+            PersonalDecisionPresentationInvariantError, match="carries no handoff object"
+        ):
+            present_personal_decision(policy)
+
+    @pytest.mark.parametrize("reason", ["", "   "])
+    def test_a_blank_handoff_reason_fails_closed(self, reason: str) -> None:
+        policy = _handoff_policy(reason=reason, message="Please speak to a professional.")
+        with pytest.raises(PersonalDecisionPresentationInvariantError, match="no reason"):
+            present_personal_decision(policy)
+
+    @pytest.mark.parametrize("message", ["", "   "])
+    def test_a_blank_handoff_message_fails_closed(self, message: str) -> None:
+        policy = _handoff_policy(reason="pregnancy", message=message)
+        with pytest.raises(PersonalDecisionPresentationInvariantError, match="no message"):
+            present_personal_decision(policy)
+
+    def test_a_non_string_handoff_field_fails_closed(self) -> None:
+        policy = _handoff_policy()
+        _corrupt(policy.source_aggregation.source_semantics.handoff, reason=42)
+        with pytest.raises(PersonalDecisionPresentationInvariantError, match="no reason"):
+            present_personal_decision(policy)
+
+    def test_a_malformed_handoff_is_not_downgraded(self) -> None:
+        """It must not quietly become an ordinary information gap."""
+        policy = _handoff_policy(reason="pregnancy", message="  ")
+        with pytest.raises(PersonalDecisionPresentationInvariantError):
+            present_personal_decision(policy)
+
+    def test_valid_handoff_text_passes_through_byte_for_byte(self) -> None:
+        """Validation may strip to test for blankness; output must not be trimmed."""
+        reason = " pregnancy_or_breastfeeding "
+        message = "  Please speak to a qualified professional about this product.  "
+        policy = _handoff_policy(reason=reason, message=message)
+
+        result = present_personal_decision(policy)
+        assert result.status is HANDOFF
+        assert result.handoff_reason == reason
+        assert result.handoff_message == message
+        assert result.action is None
+
+    def test_valid_handoff_still_survives_a_broken_registry(self) -> None:
+        result = present_personal_decision(_handoff_policy(), rules=BROKEN_REGISTRY)
+        assert result.status is HANDOFF
+        assert result.handoff_reason == "pregnancy"
+
+
+# ---------------------------------------------------------------------------
+# Status / reason / key coherence (hardening correction 2)
+# ---------------------------------------------------------------------------
+
+
+class TestPresentationCoherence:
+    """A presentation must describe the governed state it actually came from.
+
+    Without this, a hand-built result could relabel one upstream state as
+    another -- most dangerously, show a verdict over a policy that never
+    decided anything.
+    """
+
+    def test_presentable_cannot_carry_a_blocking_reason(self) -> None:
+        with pytest.raises(ValueError, match="REVIEWED_EXPLANATION_AVAILABLE"):
+            _presentation(reason=PersonalDecisionPresentationReason.NO_EXACT_DECISION_POLICY)
+
+    def test_presentable_cannot_be_built_over_an_undecided_policy(self) -> None:
+        with pytest.raises(ValueError, match="cannot represent an upstream"):
+            _presentation(_undecided_policy())
+
+    def test_presentable_cannot_be_built_over_a_handoff(self) -> None:
+        with pytest.raises(ValueError, match="cannot represent an upstream"):
+            _presentation(_handoff_policy())
+
+    def test_no_policy_cannot_carry_a_formula_reason(self) -> None:
+        with pytest.raises(ValueError, match="requires one of"):
+            _presentation(
+                _undecided_policy(),
+                status=NO_POLICY,
+                reason=PersonalDecisionPresentationReason.FORMULA_NOT_PROJECTABLE,
+                reason_key="for_you.not_enough.decision_policy",
+                action=None,
+                verdict_key=None,
+                explanation_id=None,
+                explanation_version=None,
+                citation=None,
+            )
+
+    def test_not_enough_information_cannot_carry_a_policy_reason(self) -> None:
+        with pytest.raises(ValueError, match="requires"):
+            _presentation(
+                _no_information_policy(context_status="partial_context"),
+                status=NO_INFO,
+                reason=PersonalDecisionPresentationReason.NO_EXACT_DECISION_POLICY,
+                reason_key="for_you.not_enough.personal_context",
+                action=None,
+                verdict_key=None,
+                explanation_id=None,
+                explanation_version=None,
+                citation=None,
+            )
+
+    def test_not_enough_information_reason_must_match_the_upstream_block(self) -> None:
+        """A formula failure may not be relabelled as a context failure."""
+        with pytest.raises(ValueError, match="requires"):
+            _presentation(
+                _no_information_policy(formula_status="malformed"),
+                status=NO_INFO,
+                reason=PersonalDecisionPresentationReason.PERSONAL_CONTEXT_NOT_COMPLETE,
+                reason_key="for_you.not_enough.personal_context",
+                action=None,
+                verdict_key=None,
+                explanation_id=None,
+                explanation_version=None,
+                citation=None,
+            )
+
+    def test_no_explanation_cannot_be_built_over_an_information_gap(self) -> None:
+        with pytest.raises(ValueError, match="cannot represent an upstream"):
+            _presentation(
+                _no_information_policy(context_status="partial_context"),
+                status=NO_EXPLANATION,
+                reason=PersonalDecisionPresentationReason.NO_EXACT_EXPLANATION_RULE,
+                reason_key="for_you.not_enough.explanation",
+                action=None,
+                verdict_key=None,
+                explanation_id=None,
+                explanation_version=None,
+                citation=None,
+            )
+
+    def test_no_explanation_cannot_carry_a_context_reason(self) -> None:
+        with pytest.raises(ValueError, match="requires one of"):
+            _presentation(
+                status=NO_EXPLANATION,
+                reason=PersonalDecisionPresentationReason.PERSONAL_CONTEXT_NOT_COMPLETE,
+                reason_key="for_you.not_enough.explanation",
+                action=None,
+                verdict_key=None,
+                explanation_id=None,
+                explanation_version=None,
+                citation=None,
+            )
+
+    def test_handoff_cannot_carry_the_wrong_reason(self) -> None:
+        with pytest.raises(ValueError, match="requires one of"):
+            _presentation(
+                _handoff_policy(),
+                status=HANDOFF,
+                reason=PersonalDecisionPresentationReason.PERSONAL_CONTEXT_NOT_COMPLETE,
+                reason_key="for_you.handoff.required",
+                action=None,
+                verdict_key=None,
+                explanation_id=None,
+                explanation_version=None,
+                citation=None,
+                handoff_reason="pregnancy",
+                handoff_message="see a professional",
+            )
+
+    def test_handoff_cannot_carry_the_wrong_reason_key(self) -> None:
+        with pytest.raises(ValueError, match="requires reason key"):
+            _presentation(
+                _handoff_policy(),
+                status=HANDOFF,
+                reason=PersonalDecisionPresentationReason.PROFESSIONAL_HANDOFF_REQUIRED,
+                reason_key="for_you.not_enough.explanation",
+                action=None,
+                verdict_key=None,
+                explanation_id=None,
+                explanation_version=None,
+                citation=None,
+                handoff_reason="pregnancy",
+                handoff_message="see a professional",
+            )
+
+    @pytest.mark.parametrize(
+        ("status", "policy_factory"),
+        [
+            (NO_INFO, _undecided_policy),
+            (NO_POLICY, lambda: _no_information_policy(context_status="partial_context")),
+            (HANDOFF, _undecided_policy),
+        ],
+    )
+    def test_one_upstream_state_cannot_be_relabelled_as_another(
+        self, status: PersonalDecisionPresentationStatus, policy_factory: object
+    ) -> None:
+        with pytest.raises(ValueError, match="cannot represent an upstream"):
+            _presentation(
+                policy_factory(),  # type: ignore[operator]
+                status=status,
+                reason=PersonalDecisionPresentationReason.NO_EXACT_DECISION_POLICY,
+                reason_key="for_you.not_enough.decision_policy",
+                action=None,
+                verdict_key=None,
+                explanation_id=None,
+                explanation_version=None,
+                citation=None,
+            )
+
+    def test_every_real_path_satisfies_its_own_invariants(self) -> None:
+        """The service's own outputs must pass the tightened contract."""
+        for policy, rules in (
+            (_handoff_policy(), ()),
+            (_no_information_policy(context_status="partial_context"), ()),
+            (_no_information_policy(formula_status="malformed"), ()),
+            (_undecided_policy(), ()),
+            (_decided(), ()),
+            (_decided(), (_explanation(),)),
+        ):
+            assert isinstance(
+                present_personal_decision(policy, rules=rules), PersonalDecisionPresentation
+            )
+
+
+def test_the_verdict_map_is_unchanged_and_names_no_action_member() -> None:
+    """The reviewed presentation-only mapping stays keyed by value."""
+    from app.domains.personal_decision_explanation import service as step8f
+
+    assert {
+        "buy": "for_you.verdict.buy",
+        "wait": "for_you.verdict.wait",
+        "skip": "for_you.verdict.skip",
+    } == step8f._VERDICT_KEYS

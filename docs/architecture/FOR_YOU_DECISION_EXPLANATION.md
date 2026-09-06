@@ -89,6 +89,22 @@ rule. Matching on the semantic rule id alone, or the claim key without its
 version, would let a reason written against one finding travel to a revised
 one.
 
+**The governed claim UUID is carried, not re-derived.** Step 8B minted the
+claim's id, Step 8C carried it, and Step 8D records it on every occurrence.
+Step 8F takes that exact id from the matched aggregated rule and requires the
+Step 8B claim to carry it *as well as* the descriptive anchor. Re-finding the
+claim by substance, key and version alone would re-identify the evidence by
+description, and two rows can share a description — only the id says it is the
+same reviewed row. The id is deliberately **not** stored on the explanation
+rule: duplicating a database identity into reviewed policy would create a
+second thing to keep in sync, and the runtime provenance chain already carries
+it. All occurrences of one aggregated rule must name one identical id;
+several distinct ids under one reviewed rule is corruption, and picking one
+would invent the provenance this layer exists to prove. A claim whose
+description still matches but whose id has drifted is rejected outright —
+that is precisely the case where citing the look-alike would be most
+convincing and most wrong.
+
 Two explanations for a single reviewed decision make the registry invalid —
 even when they name the same source and the same reason. Choosing between them
 by version recency, declaration order, shortest reason or apparent source
@@ -133,6 +149,15 @@ turn a structural non-decision into an exception. The handoff `reason` and
 rewriting or embellishing them would put a second, unreviewed voice on the
 most sensitive sentence the product says.
 
+A handoff with no text is not a handoff that can be presented. A missing
+handoff object, or a reason or message that is absent, non-string or blank,
+fails closed rather than degrading: emitting empty strings would hand the
+screen a blank where the product's most important sentence belongs, and it
+would look like a successful result. It is not downgraded to
+`NOT_ENOUGH_INFORMATION` either, which would quietly reclassify a safety state
+as an ordinary gap. Blankness is tested with `strip`, but the strings that
+leave the layer are the originals, untrimmed.
+
 ## Copy keys, not sentences
 
 Step 8F emits keys — `for_you.verdict.buy`, `for_you.not_enough.explanation`,
@@ -160,6 +185,15 @@ source available to the presentation layer. `DECISION_PRESENTABLE` is the only
 status carrying an action, and it cannot be constructed without a citation:
 the invariant is enforced in `__post_init__`, so a decision without its source
 is not merely unreached but unrepresentable.
+
+The same constructor also pins the presentation to the governed state it came
+from. Each upstream Step 8E status permits only its own presentation statuses
+(`DECISION_AVAILABLE` alone may become either `DECISION_PRESENTABLE` or
+`NOT_ENOUGH_EXPLANATION`), and each blocked status requires its exact reason
+vocabulary and copy key — with `NOT_ENOUGH_INFORMATION` required to carry the
+reason matching Step 8E's own structural block. So a result cannot relabel one
+governed state as another, and cannot say one thing in its status and another
+in the sentence a customer would read.
 
 ## Pure, and adds nothing to the database
 
