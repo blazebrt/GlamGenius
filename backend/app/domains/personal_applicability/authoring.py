@@ -593,7 +593,8 @@ async def assert_personal_applicability_authoring_ready(
     for link, source in paths:
         if link.relationship != ClaimSourceRelationship.SUPPORTS.value:
             raise ValidationFailedError("Every source path must support the claim.", field="relationship")
-        identity = (source.id, link.locator or "")
+        locator = _validated_locator(link.locator)
+        identity = (source.id, locator or "")
         if identity in identities:
             raise ValidationFailedError("Duplicate source path.", field="sources")
         identities.add(identity)

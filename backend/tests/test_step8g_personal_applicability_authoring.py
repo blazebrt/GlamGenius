@@ -531,6 +531,22 @@ async def test_approval_revalidates_corrupted_claim_shape(db_clean, attribute, v
             await _approve(session, created["id"])
 
 
+@pytest.mark.parametrize("locator", ["", "   "])
+async def test_approval_revalidates_corrupted_persisted_locator(db_clean, locator):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        created = await _create(session)
+        claim = await session.get(EvidenceClaim, uuid.UUID(created["id"]))
+        link = (await session.execute(
+            select(EvidenceClaimSource).where(EvidenceClaimSource.claim_id == claim.id)
+        )).scalar_one()
+        link.locator = locator
+        with pytest.raises(ValidationFailedError) as exc_info:
+            await _approve(session, created["id"])
+
+    assert exc_info.value.extra == {"field": "locator"}
+
+
 async def test_publication_requires_complete_explicit_verification(db_clean):
     factory = get_sessionmaker()
     async with factory() as session:
@@ -592,6 +608,25 @@ async def test_source_corruption_after_approval_blocks_publication(db_clean, att
         setattr(source, attribute, value)
         with pytest.raises(ValidationFailedError):
             await _publish(session, created["id"])
+
+
+@pytest.mark.parametrize("locator", ["", "   "])
+async def test_publication_revalidates_corrupted_persisted_locator(db_clean, locator):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        created = await _create(session)
+        await _approve(session, created["id"])
+        await _verify(session, created["id"])
+        claim = await session.get(EvidenceClaim, uuid.UUID(created["id"]))
+        link = (await session.execute(
+            select(EvidenceClaimSource).where(EvidenceClaimSource.claim_id == claim.id)
+        )).scalar_one()
+        link.locator = locator
+        with pytest.raises(ValidationFailedError) as exc_info:
+            await _publish(session, created["id"])
+
+    assert exc_info.value.extra == {"field": "locator"}
+    assert claim.review_status == ReviewStatus.APPROVED.value
 
 
 async def test_non_supporting_link_corruption_blocks_publication(db_clean):
@@ -760,6 +795,47 @@ async def test_failed_replacement_publication_rolls_back_and_preserves_live_v1(d
     ]
 
 
+async def test_corrupt_replacement_locator_rolls_back_and_preserves_live_v1(db_clean):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        v1 = await _create(session)
+        await _approve(session, v1["id"])
+        await _verify(session, v1["id"])
+        await _publish(session, v1["id"])
+        await session.commit()
+
+        v2 = await authoring.edit_personal_applicability_entry(
+            session,
+            uuid.UUID(v1["id"]),
+            _replacement_entry(v1["sources"][0]["source_key"]),
+            author="admin.synthetic",
+        )
+        await _approve(session, v2["id"])
+        await _verify(session, v2["id"])
+        await session.commit()
+
+        v2_link = (await session.execute(
+            select(EvidenceClaimSource).where(
+                EvidenceClaimSource.claim_id == uuid.UUID(v2["id"]),
+            )
+        )).scalar_one()
+        v2_link.locator = ""
+        with pytest.raises(ValidationFailedError) as exc_info:
+            await _publish(session, v2["id"])
+        await session.rollback()
+
+        persisted_v1 = await session.get(EvidenceClaim, uuid.UUID(v1["id"]))
+        persisted_v2 = await session.get(EvidenceClaim, uuid.UUID(v2["id"]))
+        projected = await _step8b_claims(session)
+
+    assert exc_info.value.extra == {"field": "locator"}
+    assert persisted_v1.review_status == ReviewStatus.PUBLISHED.value
+    assert persisted_v2.review_status == ReviewStatus.APPROVED.value
+    assert [(claim.claim_id, claim.claim_version) for claim in projected] == [
+        (uuid.UUID(v1["id"]), 1),
+    ]
+
+
 async def test_multiple_other_published_versions_fail_closed_without_selecting_one(db_clean):
     factory = get_sessionmaker()
     async with factory() as session:
@@ -883,7 +959,8 @@ async def test_real_step8b_projects_exact_specialized_authoring_provenance(db_cl
     async with factory() as session:
         locator = "  synthetic section 3  "
         created = await _create(session, _entry(sources=(_new_source(locator=locator),)))
-        await _approve(session, created["id"])
+        approved = await _approve(session, created["id"])
+        assert approved["sources"][0]["locator"] == locator
         await _verify(session, created["id"])
         published = await _publish(session, created["id"])
         await session.commit()
