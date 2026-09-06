@@ -133,6 +133,13 @@ All 40 packages under `backend/app/domains/`:
 | `personal_decision_explanation` | Step 8F pure deterministic presentation contract: one reviewed reason key and one exactly-selected openable Step 8B source per reviewed Step 8E decision; withholds an action that has no reviewed explanation; no prose generation, source ranking, API or persistence; production registry empty |
 | `personal_decision_release` | Step 8H immutable cross-validated release + activation of governed personal decision knowledge: one reviewed bundle of Step 8C/8E/8F rules, hashed, validated against published evidence, activated atomically with at most one active release; no evidence authoring, no inference, no customer API; no real release seeded |
 
+Step 8I production knowledge packs under `backend/app/knowledge_packs/` are
+version-controlled reviewed specifications, not a new domain and not runtime
+registries. They must never populate the Step 8C/8E/8F static registries or enter
+reference-data auto-seeding. Production authority comes only from an active Step 8H
+release. Any change to an evidence identity/version, semantic direction, policy
+action, gap target, explanation anchor, or reason key requires fresh review.
+
 Every ORM model module must be imported in `backend/app/shared/database/registry.py`.
 A model that is not imported there is invisible to Alembic and its table is silently
 never created.
