@@ -983,7 +983,7 @@ def _imported_modules(path: Path) -> set[str]:
 class TestArchitecture:
     def test_domain_owns_only_the_deliberate_modules(self):
         assert {path.name for path in DOMAIN_DIR.glob("*.py")} == {
-            "__init__.py", "enums.py", "schema.py", "service.py",
+            "__init__.py", "authoring.py", "enums.py", "schema.py", "service.py",
         }
 
     @pytest.mark.parametrize("path", sorted(DOMAIN_DIR.glob("*.py")), ids=lambda path: path.name)

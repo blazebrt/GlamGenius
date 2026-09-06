@@ -76,6 +76,15 @@ _EVIDENCE_DOMAIN_BY_CATEGORY: dict[PersonalApplicabilityCategory, EvidenceDomain
 }
 
 
+def evidence_domain_for_category(
+    category: PersonalApplicabilityCategory,
+) -> EvidenceDomain:
+    """Return the one explicit Step 8B evidence domain for a category."""
+    if not isinstance(category, PersonalApplicabilityCategory):
+        raise ValueError("category must be a PersonalApplicabilityCategory")
+    return _EVIDENCE_DOMAIN_BY_CATEGORY[category]
+
+
 @dataclass(frozen=True, slots=True)
 class PersonalApplicabilitySource:
     source_id: uuid.UUID
@@ -280,7 +289,7 @@ async def apply_personal_evidence(
 
     claims_by_key: dict[str, tuple[ApplicableSubstancePersonalClaim, ...]] = {}
     if resolved_keys:
-        evidence_domain = _EVIDENCE_DOMAIN_BY_CATEGORY[category]
+        evidence_domain = evidence_domain_for_category(category)
         candidates = list((await session.execute(
             select(EvidenceClaim).where(
                 EvidenceClaim.domain == evidence_domain.value,
@@ -417,5 +426,6 @@ __all__ = [
     "MatchedPersonalFact",
     "PersonalApplicabilitySource",
     "apply_personal_evidence",
+    "evidence_domain_for_category",
     "interpret_label_snapshot_for_account",
 ]
