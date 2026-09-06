@@ -18,7 +18,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, StrictBool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v2.admin import require_admin
@@ -61,12 +61,12 @@ class ReviewVerificationBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    founder_review_completed: bool
-    claude_review_completed: bool
-    codex_review_completed: bool
-    independent_reviews_agree: bool
-    adversarial_review_passed: bool
-    unresolved_doubt: bool = Field(default=False)
+    founder_review_completed: StrictBool
+    claude_review_completed: StrictBool
+    codex_review_completed: StrictBool
+    independent_reviews_agree: StrictBool
+    adversarial_review_passed: StrictBool
+    unresolved_doubt: StrictBool
 
     def to_verification(self) -> ReleaseVerification:
         return ReleaseVerification(

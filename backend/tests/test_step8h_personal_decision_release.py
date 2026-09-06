@@ -1718,6 +1718,56 @@ class TestLifecycle:
         assert report["policies_checked"] == 1
         assert report["explanations_checked"] == 1
 
+    @pytest.mark.parametrize(
+        "verification",
+        [None, _release_verification(founder_review_completed=False).as_dict()],
+        ids=["missing", "incomplete"],
+    )
+    async def test_validate_refuses_missing_or_incomplete_verification(
+        self, db_clean, verification
+    ) -> None:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_claim(session)
+            view = await _draft(session, _manifest())
+            row = await session.get(PersonalDecisionRelease, uuid.UUID(view["id"]))
+            row.review_verification = verification
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await release_authoring.validate_personal_decision_release(
+                    session, row.id
+                )
+        assert _reason(caught.value) is (
+            PersonalDecisionReleaseValidationCode.RELEASE_VERIFICATION_INCOMPLETE
+        )
+
+    async def test_validate_refuses_unresolved_doubt(self, db_clean) -> None:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_claim(session)
+            view = await _verified_draft(session, _manifest(), unresolved_doubt=True)
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await release_authoring.validate_personal_decision_release(
+                    session, uuid.UUID(view["id"])
+                )
+        assert _reason(caught.value) is (
+            PersonalDecisionReleaseValidationCode.RELEASE_UNRESOLVED_DOUBT
+        )
+
+    async def test_validate_refuses_corrupted_schema_column(self, db_clean) -> None:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_claim(session)
+            view = await _verified_draft(session, _manifest())
+            row = await session.get(PersonalDecisionRelease, uuid.UUID(view["id"]))
+            row.manifest_schema_version = 999
+            with pytest.raises(PersonalDecisionReleaseValidationError) as caught:
+                await release_authoring.validate_personal_decision_release(
+                    session, row.id
+                )
+        assert _reason(caught.value) is (
+            PersonalDecisionReleaseValidationCode.RELEASE_SCHEMA_VERSION_UNSUPPORTED
+        )
+
     async def test_an_unknown_release_is_not_found(self, db_clean) -> None:
         factory = get_sessionmaker()
         async with factory() as session:
@@ -1952,6 +2002,42 @@ class TestRuntimeLoader:
                 event.remove(engine, "before_cursor_execute", record)
         assert len(statements) == 1
         assert "personal_decision_releases" in statements[0]
+
+    @pytest.mark.parametrize(
+        "corrupt",
+        [
+            lambda block: {**block, "founder_review_completed": False},
+            lambda block: {**block, "unresolved_doubt": True},
+            lambda block: None,
+            lambda block: {
+                key: value
+                for key, value in block.items()
+                if key != "codex_review_completed"
+            },
+        ],
+        ids=["false-checkpoint", "unresolved-doubt", "null", "missing-key"],
+    )
+    async def test_corrupted_active_review_verification_fails_closed(
+        self, db_clean, corrupt
+    ) -> None:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_claim(session)
+            view = await _activated(session, _manifest())
+            await session.commit()
+            release_id = uuid.UUID(view["id"])
+
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, release_id)
+            row.review_verification = corrupt(row.review_verification)
+            await session.commit()
+
+        async with factory() as session:
+            with pytest.raises(
+                PersonalDecisionReleaseInvariantError,
+                match="review verification",
+            ):
+                await load_active_personal_decision_release(session)
 
     def test_more_than_one_active_release_is_never_resolved_by_a_tie_break(self) -> None:
         """The index should make this unconstructible; the rule is still tested."""
@@ -2440,6 +2526,66 @@ class TestAdminApi:
         empty = await app_client.get(f"{ADMIN}/active", headers=auth(admin_token))
         assert empty.json() is None
 
+    async def test_validate_route_is_true_approval_readiness(
+        self, db_clean, app_client, admin_token
+    ) -> None:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await _publish_claim(session)
+            await session.commit()
+
+        created = await app_client.post(
+            ADMIN, headers=auth(admin_token), json={"manifest": _manifest()}
+        )
+        release_id = created.json()["id"]
+
+        missing = await app_client.post(
+            f"{ADMIN}/{release_id}/validate", headers=auth(admin_token)
+        )
+        assert missing.status_code == 422
+        assert missing.json()["detail"]["reason"] == (
+            PersonalDecisionReleaseValidationCode.RELEASE_VERIFICATION_INCOMPLETE.value
+        )
+
+        recorded = await app_client.post(
+            f"{ADMIN}/{release_id}/review-verification",
+            headers=auth(admin_token),
+            json=_release_verification(unresolved_doubt=True).as_dict(),
+        )
+        assert recorded.status_code == 200
+        doubtful = await app_client.post(
+            f"{ADMIN}/{release_id}/validate", headers=auth(admin_token)
+        )
+        assert doubtful.status_code == 422
+        assert doubtful.json()["detail"]["reason"] == (
+            PersonalDecisionReleaseValidationCode.RELEASE_UNRESOLVED_DOUBT.value
+        )
+
+        recorded = await app_client.post(
+            f"{ADMIN}/{release_id}/review-verification",
+            headers=auth(admin_token),
+            json=_release_verification().as_dict(),
+        )
+        assert recorded.status_code == 200
+        ready = await app_client.post(
+            f"{ADMIN}/{release_id}/validate", headers=auth(admin_token)
+        )
+        assert ready.status_code == 200
+        assert ready.json()["ready"] is True
+        assert ready.json()["verification_recorded"] is True
+
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, uuid.UUID(release_id))
+            row.manifest_schema_version = 999
+            await session.commit()
+        corrupted = await app_client.post(
+            f"{ADMIN}/{release_id}/validate", headers=auth(admin_token)
+        )
+        assert corrupted.status_code == 422
+        assert corrupted.json()["detail"]["reason"] == (
+            PersonalDecisionReleaseValidationCode.RELEASE_SCHEMA_VERSION_UNSUPPORTED.value
+        )
+
     async def test_an_approved_release_cannot_be_edited_over_http(
         self, db_clean, app_client, admin_token
     ) -> None:
@@ -2473,18 +2619,70 @@ class TestAdminApi:
             response = await app_client.post(path, headers=auth(admin_token), json=body)
             assert response.status_code == 422, response.text
 
-    async def test_verification_checkpoints_have_no_defaults(
+    async def test_all_verification_checkpoints_are_required_and_write_nothing_when_omitted(
         self, db_clean, app_client, admin_token
     ) -> None:
         """An omitted attestation is not an attestation."""
-        incomplete = _release_verification().as_dict()
-        del incomplete["founder_review_completed"]
-        response = await app_client.post(
-            f"{ADMIN}/{uuid.uuid4()}/review-verification",
-            headers=auth(admin_token),
-            json=incomplete,
+        created = await app_client.post(
+            ADMIN, headers=auth(admin_token), json={"manifest": _manifest()}
         )
-        assert response.status_code == 422
+        release_id = created.json()["id"]
+        complete = _release_verification().as_dict()
+        for omitted in complete:
+            incomplete = {key: value for key, value in complete.items() if key != omitted}
+            response = await app_client.post(
+                f"{ADMIN}/{release_id}/review-verification",
+                headers=auth(admin_token),
+                json=incomplete,
+            )
+            assert response.status_code == 422, omitted
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, uuid.UUID(release_id))
+            assert row.review_verification is None
+
+    async def test_verification_checkpoints_reject_boolean_coercion_and_write_nothing(
+        self, db_clean, app_client, admin_token
+    ) -> None:
+        created = await app_client.post(
+            ADMIN, headers=auth(admin_token), json={"manifest": _manifest()}
+        )
+        release_id = created.json()["id"]
+        complete = _release_verification().as_dict()
+        for field in complete:
+            for coercible in ("true", "false", 1, 0, "yes", "no"):
+                response = await app_client.post(
+                    f"{ADMIN}/{release_id}/review-verification",
+                    headers=auth(admin_token),
+                    json={**complete, field: coercible},
+                )
+                assert response.status_code == 422, (field, coercible)
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, uuid.UUID(release_id))
+            assert row.review_verification is None
+
+    async def test_six_explicit_boolean_checkpoints_are_recorded_exactly(
+        self, db_clean, app_client, admin_token
+    ) -> None:
+        created = await app_client.post(
+            ADMIN, headers=auth(admin_token), json={"manifest": _manifest()}
+        )
+        release_id = created.json()["id"]
+        verification = _release_verification().as_dict()
+        response = await app_client.post(
+            f"{ADMIN}/{release_id}/review-verification",
+            headers=auth(admin_token),
+            json=verification,
+        )
+        assert response.status_code == 200, response.text
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            row = await session.get(PersonalDecisionRelease, uuid.UUID(release_id))
+            assert row.review_verification == verification
 
     async def test_a_validation_failure_carries_its_deterministic_reason(
         self, db_clean, app_client, admin_token

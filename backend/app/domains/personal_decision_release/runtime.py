@@ -60,6 +60,8 @@ from app.domains.personal_decision_release.manifest import (
 from app.domains.personal_decision_release.models import PersonalDecisionRelease
 from app.domains.personal_decision_release.validation import (
     PersonalDecisionReleaseInvariantError,
+    PersonalDecisionReleaseValidationError,
+    assert_verification_permits_approval,
 )
 from app.domains.personal_decision_semantics import (
     PersonalDecisionSemanticRule,
@@ -142,6 +144,13 @@ def materialise_active_release(
             f"release {release.id} declares manifest schema "
             f"{release.manifest_schema_version}, which is not supported"
         )
+
+    try:
+        assert_verification_permits_approval(release.review_verification)
+    except PersonalDecisionReleaseValidationError as error:
+        raise PersonalDecisionReleaseInvariantError(
+            f"release {release.id} does not carry valid review verification: {error}"
+        ) from error
 
     try:
         manifest = parse_release_manifest(release.manifest)

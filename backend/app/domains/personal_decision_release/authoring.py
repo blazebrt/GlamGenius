@@ -48,7 +48,6 @@ from app.domains.personal_decision_release.validation import (
     ReleaseVerification,
     assert_manifest_carries_no_personal_data,
     assert_verification_permits_approval,
-    parse_release_verification,
     validate_release_manifest,
     validate_release_structure,
 )
@@ -306,16 +305,17 @@ async def validate_personal_decision_release(
     later against evidence that has moved.
     """
     release = await _release(session, release_id)
+    assert_supported_schema_column(release)
     manifest = persisted_manifest(release)
+    assert_verification_permits_approval(release.review_verification)
     report = await validate_release_manifest(session, manifest, require_complete=True)
-    verification = parse_release_verification(release.review_verification)
     return {
         "id": str(release.id),
         "release_version": release.release_version,
         "status": release.status,
         "content_hash": release.content_hash,
         "ready": True,
-        "verification_recorded": verification is not None,
+        "verification_recorded": True,
         "semantic_evidence_checked": report.semantic_evidence_checked,
         "policies_checked": report.policies_checked,
         "explanations_checked": report.explanations_checked,
