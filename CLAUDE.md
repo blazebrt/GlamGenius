@@ -140,6 +140,16 @@ reference-data auto-seeding. Production authority comes only from an active Step
 release. Any change to an evidence identity/version, semantic direction, policy
 action, gap target, explanation anchor, or reason key requires fresh review.
 
+**Customer FOR YOU decisions begin at `pack_context.current_pack`.** Never at
+`latest_label_snapshot`, which answers what anybody published about a barcode
+rather than what this device is holding. A customer caller never selects the
+category, the label snapshot or the release: the category comes from the
+confirmed snapshot, the snapshot from this device's current pack, and the
+release from the one active Step 8H row. Step 8K copy resolution may only render
+a result the governed chain already decided — and missing reviewed wording hides
+the action, the verdict and the citation together. See
+`docs/architecture/CURRENT_PACK_PERSONAL_DECISION_API.md`.
+
 **The skin-care decision category is bound at confirmed-label capture time.** A
 confirmed skin-care capture writes `product_category: "skin_care"` into its
 `LabelSnapshot` facts, where it participates in the content fingerprint, and the
@@ -362,6 +372,9 @@ decision needs their input, ask one clear question with the options spelled out.
 - `docs/architecture/SKIN_CARE_LABEL_CAPTURE.md` — how a photographed skin-care label
   becomes a confirmed, category-bound `LabelSnapshot`, and why the category may only
   ever enter once
+- `docs/architecture/CURRENT_PACK_PERSONAL_DECISION_API.md` — the customer FOR YOU
+  endpoint: why the current pack is the only physical authority, and why reviewed
+  copy is a second gate
 - `docs/engineering/adrs/` — why the non-obvious choices were made
 - `docs/reports/` — the phase and stabilisation reports (historical records)
 - Feature-area specs: `docs/VC-05_GOOGLE_CALENDAR.md`, `docs/VC-06_MAINTENANCE.md`,
