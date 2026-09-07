@@ -2714,12 +2714,21 @@ class TestAdminApi:
         assert len(release_paths) == 9
         assert all(path.startswith("/api/v2/admin/") for path in release_paths)
 
-    def test_only_the_admin_module_reaches_the_release_runtime(self) -> None:
-        """Step 8H ships no customer surface. The evaluator has no caller yet.
+    def test_only_reviewed_modules_reach_the_release_runtime(self) -> None:
+        """Exactly two API modules may touch the release domain, and only for
+        the names each was reviewed for.
 
-        The orchestration seam exists so a later milestone can wire a customer
-        route to it deliberately; until that milestone is reviewed, nothing in
-        the API may call it.
+        Step 8H shipped with no customer surface at all: the orchestration seam
+        existed so a later, separately reviewed milestone could wire a customer
+        route to it deliberately. Step 8K is that milestone, so the customer
+        route joins the allowlist — and the guard gets *narrower* rather than
+        merely wider, because the allowlist now pins which names each module may
+        import as well as which modules may import anything.
+
+        The admin module still may not evaluate: authoring a release and running
+        one against a person are different jobs. The customer module still may
+        not author: it reads the one active release through the runtime and
+        cannot create, approve, activate or edit anything.
         """
         api_root = BACKEND_ROOT / "app" / "api"
         importers: dict[str, set[str]] = {}
@@ -2733,10 +2742,22 @@ class TestAdminApi:
                     names.update(alias.name for alias in node.names)
             if names:
                 importers[path.name] = names
-        assert set(importers) == {"personal_decision_release_admin.py"}
+        assert set(importers) == {
+            "personal_decision_release_admin.py",
+            "skin_care_personal_decision.py",
+        }
         assert "evaluate_personal_decision_with_release" not in (
             importers["personal_decision_release_admin.py"]
         )
+        # The customer route's whole permitted surface: load the active
+        # release, run the pure chain against it, name the result type, and
+        # recognise a corrupt bundle. Nothing that writes.
+        assert importers["skin_care_personal_decision.py"] == {
+            "ReleasedPersonalDecisionResult",
+            "evaluate_personal_decision_with_release",
+            "load_active_personal_decision_release",
+            "PersonalDecisionReleaseInvariantError",
+        }
 
 
 # ---------------------------------------------------------------------------
