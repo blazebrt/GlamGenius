@@ -266,6 +266,43 @@ export async function readQueue(): Promise<QueuedScan[]> {
   return readJson<QueuedScan[]>(QUEUE_KEY, []);
 }
 
+/**
+ * Read the queue for proof rather than for convenience.
+ *
+ * `readQueue` above is deliberately forgiving, and should stay that way: a
+ * scanner that cannot read its own backlog must still let the customer scan,
+ * so a storage or parse failure becomes an empty list there. Settlement cannot
+ * borrow that forgiveness. "The store would not answer" is not "there is
+ * nothing queued", and reading it that way is exactly how a stale plain event
+ * survives to overtake a confirmation.
+ *
+ * So this reader throws instead. It returns an empty list only when storage
+ * successfully reports the key absent, and only hands back entries whose
+ * barcode is actually readable — an entry without one cannot prove anything
+ * about the barcode being settled. Its one caller turns a throw into `false`.
+ */
+async function readQueueForProof(): Promise<QueuedScan[]> {
+  // An I/O failure here propagates; it is never rewritten as an empty queue.
+  const raw: unknown = await AsyncStorage.getItem(QUEUE_KEY);
+  // `null` is storage saying "no such key" — the one trustworthy empty answer.
+  if (raw === null) return [];
+  // Anything else that is not a string is not an answer this check can read,
+  // and an unreadable answer must not pass for an empty queue.
+  if (typeof raw !== 'string') throw new Error('the scan queue could not be read');
+  // A parse failure propagates for the same reason an I/O failure does.
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) throw new Error('the scan queue is not a list');
+  for (const entry of parsed) {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new Error('the scan queue holds something that is not an entry');
+    }
+    if (typeof (entry as { barcode?: unknown }).barcode !== 'string') {
+      throw new Error('a scan queue entry has no readable barcode');
+    }
+  }
+  return parsed as QueuedScan[];
+}
+
 export async function enqueueScan(entry: QueuedScan): Promise<void> {
   const queue = await readQueue();
   if (queue.some((q) => q.client_scan_id === entry.client_scan_id)) return;
@@ -340,9 +377,17 @@ export async function scanBarcode(barcode: string): Promise<ScanResult> {
     if (response.status === 401) throw new Error('device unknown');
     const result = withConfidence({ ...response.data, barcode: clean });
     await cacheResult(result);
-    void enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: false })
-      .then(() => syncQueue())
-      .catch(() => undefined);
+    // Deliberately not awaited: a lookup must answer at shop speed, and the
+    // event ledger is not what the customer is waiting for. But it is
+    // *tracked*, because a later skin-care capture has to be able to prove
+    // this write landed before it confirms a pack — see settleScanEvents.
+    trackPendingScanEvent(
+      clean,
+      enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: false })
+        .then(() => syncQueue())
+        .then(() => undefined)
+        .catch(() => undefined),
+    );
     return result;
   } catch (err) {
     const status = (err as { response?: { status?: number } })?.response?.status;
@@ -400,4 +445,246 @@ export async function confirmLabel(
     const retry = await api.post('/api/v2/scan/label/confirm', body, { headers: refreshedHeaders });
     return retry.data;
   }
+}
+
+// --- Settling the generic scan ledger ---------------------------------------
+//
+// ``scanBarcode`` records its event in the background so a lookup can answer
+// at shop speed. That is fine on its own and wrong the moment a skin-care
+// capture follows, because Step 8K resolves the current physical pack from the
+// device's *newest* ScanEvent by server ordering.
+//
+// The race, in order: the lookup answers, its plain event is still in flight,
+// the person chooses Skin care, photographs the label and confirms it — and
+// only then does the delayed plain event reach the server, take a later
+// ``created_at``, and become the newest event. Step 8K then correctly reports
+// that no pack has been confirmed, seconds after somebody confirmed one.
+//
+// The fix is a barrier, not a delay: before spending a model call the client
+// proves this barcode's plain event has actually landed. Nothing is guessed
+// from client clocks, no backend rule changes, and an unrelated barcode stuck
+// in the queue never blocks a different one.
+
+/** Background persistence still running, keyed by barcode. */
+const pendingScanEvents = new Map<string, Promise<void>>();
+
+function trackPendingScanEvent(barcode: string, work: Promise<void>): void {
+  const previous = pendingScanEvents.get(barcode);
+  const chained = (previous ? previous.then(() => work) : work).catch(() => undefined);
+  pendingScanEvents.set(barcode, chained);
+  void chained.finally(() => {
+    if (pendingScanEvents.get(barcode) === chained) pendingScanEvents.delete(barcode);
+  });
+}
+
+/** Test seam: forget any tracked work. Never called by the app. */
+export function resetPendingScanEvents(): void {
+  pendingScanEvents.clear();
+}
+
+/**
+ * Prove this barcode's plain scan event can no longer overtake a confirmation.
+ *
+ * Returns false when it cannot be proven — offline, the queue will not flush,
+ * or the queue cannot be read back and trusted at all. The caller must then
+ * refuse to spend the model call rather than capture a pack whose confirmation
+ * may be silently superseded.
+ */
+export async function settleScanEvents(barcode: string): Promise<boolean> {
+  const clean = (barcode || '').trim();
+  // 1. Whatever this barcode already started.
+  const inFlight = pendingScanEvents.get(clean);
+  if (inFlight) await inFlight;
+  // 2. Push anything the phone is still holding.
+  await syncQueue().catch(() => undefined);
+  // 3. Read the queue back for proof and check *this* barcode specifically.
+  //    Somebody else's stuck entry is their problem, not a reason to block
+  //    this pack. But a queue that cannot be read is not an empty queue: if
+  //    the final inspection cannot be completed and trusted, nothing is
+  //    proven, and an unproven barcode does not get to spend a model call.
+  let queue: QueuedScan[];
+  try {
+    queue = await readQueueForProof();
+  } catch {
+    return false;
+  }
+  return !queue.some((entry) => entry.barcode === clean);
+}
+
+// --- Skin care: the governed FOR YOU loop -----------------------------------
+//
+// These live here rather than in apiV2 because every one of them needs the
+// X-Device-Token this module owns. The token stays in this module's storage:
+// it is never put in Zustand, never in route params, and never logged.
+
+/** The four skin-care draft facts the review screen may show. */
+export interface SkinCareLabelFactsView {
+  product_name?: string | null;
+  brand?: string | null;
+  product_type?: string | null;
+  ingredients_text?: string | null;
+}
+
+/** The exact controlled safety flags Step 8K accepts. Nothing else exists. */
+export interface ForYouSafetyContext {
+  pregnancy?: true;
+  breastfeeding?: true;
+  medication_involved?: true;
+  diagnosed_condition_involved?: true;
+  subject_is_child?: true;
+}
+
+export interface ForYouCitation {
+  source_key: string;
+  title: string;
+  publisher: string;
+  canonical_url: string;
+  locator: string | null;
+  publication_date: string | null;
+  version_or_revision: string | null;
+  jurisdiction: string | null;
+}
+
+export interface ForYouResult {
+  status: string;
+  reason: string | null;
+  action: string | null;
+  verdict_key: string | null;
+  verdict_text: string | null;
+  reason_key: string;
+  reason_text: string;
+  citation: ForYouCitation | null;
+  handoff: { reason: string; message: string } | null;
+}
+
+export interface ForYouResponse {
+  barcode: string;
+  product_category: string | null;
+  copy_version: string;
+  pack: {
+    is_proven: boolean;
+    current_pack_scan_id: string | null;
+    label_snapshot_id: string | null;
+    label_snapshot_source_scan_id: string | null;
+    label_snapshot_version: number | null;
+    content_fingerprint: string | null;
+  };
+  result: ForYouResult;
+  /** Auditability only. Never rendered, never logged, never persisted. */
+  release: { id: string | null; version: number | null; content_hash: string | null } | null;
+}
+
+/** The reason key whose only client meaning is "offer the profile editor". */
+export const REASON_KEY_PERSONAL_CONTEXT = 'for_you.not_enough.personal_context';
+
+/**
+ * Make sure this phone is registered and claimed by this account.
+ *
+ * Step 8J refuses a confirmation on a device the account does not own, and a
+ * model call is spent before that refusal would otherwise be discovered. So
+ * ownership is settled first: registering costs nothing, and a wasted
+ * transcription costs the person a photograph and us a model call.
+ */
+export async function ensureDeviceClaimed(accountId: string): Promise<boolean> {
+  const device = await ensureDevice();
+  if (!device?.token) return false;
+  const token = await tokenToClaimFor(accountId);
+  if (!token) return true;
+  try {
+    await api.post('/api/v2/scan/device/claim', {}, { headers: { 'X-Device-Token': token } });
+    await markDeviceClaimed(accountId);
+    return true;
+  } catch (error) {
+    const code = (error as { response?: { data?: { detail?: { code?: string } } } })
+      ?.response?.data?.detail?.code;
+    if (code !== 'DEVICE_UNKNOWN') return false;
+    // The stored credential is stale, not the account. Re-register once and
+    // claim the fresh one. Exactly once: a loop here would spin forever.
+    await forgetDevice();
+    const fresh = await ensureDevice();
+    if (!fresh?.token) return false;
+    try {
+      await api.post('/api/v2/scan/device/claim', {}, { headers: { 'X-Device-Token': fresh.token } });
+      await markDeviceClaimed(accountId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+export interface ConfirmedSkinCareLabel {
+  barcode: string;
+  scan_id: string;
+  created: boolean;
+  product_category: string;
+  label_snapshot: {
+    id: string;
+    version_number: number;
+    content_fingerprint: string;
+    completeness: string;
+  };
+  confidence: Confidence;
+  confirmations: number;
+}
+
+/**
+ * Confirm a skin-care label the person has checked against the pack.
+ *
+ * The body carries three identifiers and nothing else. The displayed facts are
+ * never replayed as authority: the server re-reads its own AI audit record, so
+ * anything this client thinks it saw is irrelevant by design.
+ *
+ * ``clientScanId`` is supplied by the caller and must be stable across
+ * retries — a fresh id per HTTP attempt would turn one confirmation into two.
+ */
+export async function confirmSkinCareLabel(
+  barcode: string,
+  aiRunId: string,
+  clientScanId: string,
+): Promise<ConfirmedSkinCareLabel | null> {
+  if (typeof aiRunId !== 'string' || !aiRunId.trim()) {
+    throw new Error('The label read is missing its confirmation reference. Please try again.');
+  }
+  const headers = await deviceHeaders();
+  if (!headers['X-Device-Token']) return null;
+  const body = { barcode, ai_run_id: aiRunId, client_scan_id: clientScanId };
+  try {
+    const response = await api.post('/api/v2/scan/skin-care/label/confirm', body, { headers });
+    return response.data;
+  } catch (error) {
+    const code = (error as { response?: { data?: { detail?: { code?: string } } } })
+      ?.response?.data?.detail?.code;
+    if (code !== 'DEVICE_UNKNOWN') throw error;
+    await forgetDevice();
+    const refreshed = await deviceHeaders();
+    if (!refreshed['X-Device-Token']) throw error;
+    // Same idempotency key, same run reference: a retry, not a second capture.
+    const retry = await api.post('/api/v2/scan/skin-care/label/confirm', body, { headers: refreshed });
+    return retry.data;
+  }
+}
+
+/**
+ * Ask Step 8K what the reviewed knowledge says about the confirmed pack.
+ *
+ * The body has exactly two possible top-level keys. No category, no snapshot,
+ * no release, no ingredients, no account id: every one of those is an
+ * authority the server establishes, and a client able to send one could
+ * assemble a decision nobody approved.
+ *
+ * The result is never cached. It depends on the current pack, live profile
+ * facts, live evidence and the active release, all of which can change between
+ * two identical requests.
+ */
+export async function fetchSkinCareForYou(
+  barcode: string,
+  safety?: ForYouSafetyContext,
+): Promise<ForYouResponse | null> {
+  const headers = await deviceHeaders();
+  if (!headers['X-Device-Token']) return null;
+  const body: { barcode: string; safety?: ForYouSafetyContext } = { barcode };
+  if (safety && Object.keys(safety).length > 0) body.safety = safety;
+  const response = await api.post('/api/v2/scan/skin-care/for-you', body, { headers });
+  return response.data;
 }

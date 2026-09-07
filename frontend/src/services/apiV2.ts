@@ -342,6 +342,54 @@ export const transcribeProductLabel = async (
   return response.data;
 };
 
+/**
+ * A skin-care label transcription, exactly as Step 8J returns it.
+ *
+ * Deliberately its own contract rather than a widened food one. The route a
+ * capture travels down *is* the category assertion: reaching this endpoint is
+ * the structured form of a person choosing "Skin care", so no category is sent
+ * and none comes back as an AI-supplied fact.
+ */
+export interface SkinCareLabelFacts {
+  product_name?: string | null;
+  brand?: string | null;
+  product_type?: string | null;
+  ingredients_text?: string | null;
+}
+
+export interface TranscribedSkinCareLabelResponse {
+  barcode: string;
+  facts: SkinCareLabelFacts;
+  /** Always false: nothing is written until the person confirms. */
+  stored: boolean;
+  /** False when the photograph yielded no usable ingredient list. */
+  ingredients_readable: boolean;
+  /** The server's own sentence when the ingredients could not be read. */
+  message: string | null;
+  capture_quality: {
+    confidence: number | null;
+    uncertain_fields: string[];
+    photo_quality_notes: string | null;
+  };
+  confidence: { level: string; text: string };
+  provenance: {
+    ai_run_id: string;
+    [key: string]: unknown;
+  };
+}
+
+/** Read one skin-care label photo. Signed in; the category is the route. */
+export const transcribeSkinCareLabel = async (
+  barcode: string,
+  mediaAssetId: string
+): Promise<TranscribedSkinCareLabelResponse> => {
+  const response = await api.post<TranscribedSkinCareLabelResponse>(
+    `${V2}/scan/skin-care/label/transcribe`,
+    { barcode, media_asset_id: mediaAssetId }
+  );
+  return response.data;
+};
+
 export const getMedia = async (id: string): Promise<MediaAsset> => {
   const response = await api.get<MediaAsset>(`${V2}/media/${id}`);
   return response.data;
