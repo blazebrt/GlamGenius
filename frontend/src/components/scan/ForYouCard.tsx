@@ -24,6 +24,13 @@
  * citation would be exactly the unsourced claim the chain exists to prevent.
  * So the two are handled separately: the first shows the server's sentence,
  * the second shows nothing but neutral structural copy.
+ *
+ * Every branch below carries a distinct `testID` so a tester on a physical
+ * phone can name the state the card is in without reading this file, and so
+ * that "malformed presentable", "governed non-decision", "hard handoff" and
+ * "technical failure" can never be mistaken for one another during
+ * qualification. The hooks name what is already on screen; none of them
+ * exposes a release, an evidence id, a safety flag or a payload.
  */
 import React from 'react';
 import { Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -78,14 +85,19 @@ function Citation({ citation }: { citation: NonNullable<ForYouResponse['result']
   }, [citation.canonical_url]);
 
   return (
-    <View style={styles.source} accessibilityLabel="Source for this result">
+    <View style={styles.source} testID="for-you-source" accessibilityLabel="Source for this result">
       <Text style={styles.sourceTitle}>{citation.title}</Text>
       <Text style={styles.sourceMeta}>{citation.publisher}</Text>
       {!!citation.locator && <Text style={styles.sourceMeta}>{citation.locator}</Text>}
-      {failed && <Text style={styles.error}>{FOR_YOU_COPY.linkFailed}</Text>}
+      {failed && (
+        <Text style={styles.error} testID="for-you-source-link-failed" accessibilityRole="alert">
+          {FOR_YOU_COPY.linkFailed}
+        </Text>
+      )}
       <TouchableOpacity
         accessibilityRole="link"
         accessibilityLabel={FOR_YOU_COPY.openSource}
+        testID="for-you-open-source"
         onPress={open}
         style={styles.sourceButton}
       >
@@ -97,8 +109,8 @@ function Citation({ citation }: { citation: NonNullable<ForYouResponse['result']
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <View style={styles.card} accessibilityLabel="FOR YOU">
-      <Text style={styles.eyebrow}>{FOR_YOU_COPY.heading}</Text>
+    <View style={styles.card} testID="for-you-card" accessibilityLabel="FOR YOU">
+      <Text style={styles.eyebrow} accessibilityRole="header">{FOR_YOU_COPY.heading}</Text>
       {children}
     </View>
   );
@@ -121,7 +133,9 @@ export function ForYouCard({
   if (loading) {
     return (
       <Shell>
-        <Text style={styles.body}>{FOR_YOU_COPY.checking}</Text>
+        <Text style={styles.body} testID="for-you-loading" accessibilityRole="alert">
+          {FOR_YOU_COPY.checking}
+        </Text>
       </Shell>
     );
   }
@@ -131,10 +145,13 @@ export function ForYouCard({
     // nothing about the exception, the rules or the release.
     return (
       <Shell>
-        <Text style={styles.body}>{FOR_YOU_COPY.unavailable}</Text>
+        <Text style={styles.body} testID="for-you-technical-unavailable" accessibilityRole="alert">
+          {FOR_YOU_COPY.unavailable}
+        </Text>
         <TouchableOpacity
           accessibilityRole="button"
           accessibilityLabel={FOR_YOU_COPY.retry}
+          testID="for-you-retry"
           onPress={onRetry}
           style={styles.secondaryButton}
         >
@@ -151,7 +168,9 @@ export function ForYouCard({
     // alongside a hand-over, and this client writes nothing medical around it.
     return (
       <Shell>
-        <Text style={styles.body}>{result.handoff?.message ?? result.reason_text}</Text>
+        <Text style={styles.body} testID="for-you-handoff" accessibilityRole="alert">
+          {result.handoff?.message ?? result.reason_text}
+        </Text>
       </Shell>
     );
   }
@@ -168,7 +187,9 @@ export function ForYouCard({
     // would otherwise leak that a real evaluation happened.
     return (
       <Shell>
-        <Text style={styles.body}>{FOR_YOU_COPY.notAvailable}</Text>
+        <Text style={styles.body} testID="for-you-malformed-presentable" accessibilityRole="alert">
+          {FOR_YOU_COPY.notAvailable}
+        </Text>
       </Shell>
     );
   }
@@ -179,11 +200,14 @@ export function ForYouCard({
     const sentence = result.reason_text?.trim() || FOR_YOU_COPY.notAvailable;
     return (
       <Shell>
-        <Text style={styles.body}>{sentence}</Text>
+        <Text style={styles.body} testID="for-you-nondecision" accessibilityRole="alert">
+          {sentence}
+        </Text>
         {result.reason_key === REASON_KEY_PERSONAL_CONTEXT && (
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityLabel={FOR_YOU_COPY.addSkinDetails}
+            testID="for-you-add-skin-details"
             onPress={onAddSkinDetails}
             style={styles.secondaryButton}
           >
@@ -198,10 +222,15 @@ export function ForYouCard({
     <Shell>
       <Text style={styles.subheading}>{FOR_YOU_COPY.subheading}</Text>
       {/* The server's word, printed as given. */}
-      <Text style={styles.verdict} accessibilityLabel={`Verdict: ${result.verdict_text}`}>
+      <Text
+        style={styles.verdict}
+        testID="for-you-verdict"
+        accessibilityRole="header"
+        accessibilityLabel={`Verdict: ${result.verdict_text}`}
+      >
         {result.verdict_text}
       </Text>
-      <Text style={styles.reason}>{result.reason_text}</Text>
+      <Text style={styles.reason} testID="for-you-reason">{result.reason_text}</Text>
       {result.citation && <Citation citation={result.citation} />}
     </Shell>
   );

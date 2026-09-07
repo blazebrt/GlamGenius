@@ -4,6 +4,12 @@
  * Each exists because something must be *stated* rather than inferred: which
  * kind of label this is, what the camera read, and whether anything about the
  * person's situation should send them to a clinician instead.
+ *
+ * The `testID`s and accessibility props are qualification hooks: a tester on a
+ * physical phone, and a screen reader, must both be able to tell which state
+ * the loop is in without reading this file. They name states that are already
+ * visible on screen. None of them carries hidden state, a safety flag, a
+ * payload, a release or an evidence id, and none of them is a bypass.
  */
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -42,8 +48,8 @@ export function LabelTypeChoice({
   onCancel: () => void;
 }) {
   return (
-    <View style={styles.card}>
-      <Text style={styles.title}>{LABEL_TYPE_COPY.heading}</Text>
+    <View style={styles.card} testID="label-kind-choice">
+      <Text style={styles.title} accessibilityRole="header">{LABEL_TYPE_COPY.heading}</Text>
       <Text style={styles.body}>{LABEL_TYPE_COPY.body}</Text>
       <TouchableOpacity
         accessibilityRole="button"
@@ -118,19 +124,29 @@ export function SkinCareLabelReview({
     .map(([key, label]) => ({ key, label, value: facts[key] as string }));
 
   return (
-    <View style={styles.card}>
-      <Text style={styles.title}>{SKIN_CARE_REVIEW_COPY.heading}</Text>
+    <View style={styles.card} testID="skin-care-label-review">
+      <Text style={styles.title} accessibilityRole="header">{SKIN_CARE_REVIEW_COPY.heading}</Text>
       <Text style={styles.body}>{SKIN_CARE_REVIEW_COPY.body}</Text>
 
       {rows.map((row) => (
-        <View key={String(row.key)} style={styles.factRow}>
+        <View
+          key={String(row.key)}
+          style={styles.factRow}
+          testID={row.key === 'ingredients_text' ? 'skin-care-ingredients' : `skin-care-fact-${row.key}`}
+          accessibilityLabel={`${row.label}: ${row.value}`}
+        >
           <Text style={styles.factLabel}>{row.label}</Text>
           <Text style={styles.factValue}>{row.value}</Text>
         </View>
       ))}
 
       {!ingredientsReadable && !!message && (
-        <Text style={styles.warning} accessibilityLabel="Ingredients could not be read">
+        <Text
+          style={styles.warning}
+          testID="skin-care-ingredients-unreadable"
+          accessibilityRole="alert"
+          accessibilityLabel="Ingredients could not be read"
+        >
           {message}
         </Text>
       )}
@@ -140,6 +156,7 @@ export function SkinCareLabelReview({
           accessibilityRole="button"
           accessibilityLabel={SKIN_CARE_REVIEW_COPY.confirm}
           testID="skin-care-confirm"
+          accessibilityState={{ disabled: !!busy, busy: !!busy }}
           onPress={onConfirm}
           disabled={busy}
           style={styles.primaryButton}
@@ -239,8 +256,8 @@ export function SafetyPreflight({
   const ready = none || selected.size > 0;
 
   return (
-    <View style={styles.card}>
-      <Text style={styles.title}>{SAFETY_COPY.heading}</Text>
+    <View style={styles.card} testID="safety-preflight">
+      <Text style={styles.title} accessibilityRole="header">{SAFETY_COPY.heading}</Text>
       <Text style={styles.body}>{SAFETY_COPY.body}</Text>
 
       {SAFETY_OPTIONS.map(([key, label]) => {
@@ -310,9 +327,9 @@ export function ConfirmedSkinCareLabelCard({
   onScanAgain: () => void;
 }) {
   return (
-    <View style={styles.card}>
+    <View style={styles.card} testID="skin-care-confirmed-card">
       <Text style={styles.barcode}>{barcode}</Text>
-      <Text style={styles.title}>{CONFIRMED_COPY.heading}</Text>
+      <Text style={styles.title} accessibilityRole="header">{CONFIRMED_COPY.heading}</Text>
       {!!facts.product_name && <Text style={styles.name}>{facts.product_name}</Text>}
       {!!facts.brand && <Text style={styles.body}>{facts.brand}</Text>}
       {!!facts.product_type && <Text style={styles.body}>{facts.product_type}</Text>}
@@ -326,6 +343,7 @@ export function ConfirmedSkinCareLabelCard({
       <TouchableOpacity
         accessibilityRole="button"
         accessibilityLabel={CONFIRMED_COPY.scanAnother}
+        testID="skin-care-scan-again"
         onPress={onScanAgain}
         style={styles.linkButton}
       >
