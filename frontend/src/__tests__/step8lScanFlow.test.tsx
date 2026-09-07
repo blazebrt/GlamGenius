@@ -50,6 +50,7 @@ const mockConfirmSkinCare = jest.fn();
 const mockFetchForYou = jest.fn();
 const mockEnsureClaimed = jest.fn();
 const mockReadQueue = jest.fn();
+const mockSettleScanEvents = jest.fn();
 
 jest.mock('../services/productScan', () => {
   const actual = jest.requireActual('../services/productScan');
@@ -63,6 +64,7 @@ jest.mock('../services/productScan', () => {
     ensureDevice: jest.fn(async () => ({ device_key: 'd', token: 't' })),
     syncQueue: jest.fn(async () => ({ sent: 0, remaining: 0 })),
     readQueue: (...args: unknown[]) => mockReadQueue(...args),
+    settleScanEvents: (...args: unknown[]) => mockSettleScanEvents(...args),
   };
 });
 
@@ -134,6 +136,7 @@ beforeEach(() => {
   mockFocusCallback = null;
   mockReadQueue.mockResolvedValue([]);
   mockEnsureClaimed.mockResolvedValue(true);
+  mockSettleScanEvents.mockResolvedValue(true);
   mockUploadMedia.mockResolvedValue({ id: 'asset-1' });
   mockTranscribeSkin.mockResolvedValue(skinDraft);
   mockConfirmSkinCare.mockResolvedValue(confirmedPack);
@@ -223,6 +226,69 @@ describe('the current pack must survive confirmation', () => {
   });
 });
 
+describe('the plain scan must settle before a capture', () => {
+  it('settles this barcode before spending the model call', async () => {
+    await reachConfirmedPack();
+    expect(mockSettleScanEvents).toHaveBeenCalledWith(BARCODE);
+    const settleOrder = mockSettleScanEvents.mock.invocationCallOrder[0];
+    const transcribeOrder = mockTranscribeSkin.mock.invocationCallOrder[0];
+    expect(settleOrder).toBeLessThan(transcribeOrder);
+  });
+
+  it('never starts the model call when the scan cannot be settled', async () => {
+    mockSettleScanEvents.mockResolvedValue(false);
+    render(<ScanProductScreen />);
+    const camera = screen.getByTestId('scan-camera');
+    await act(async () => { camera.props.onBarcodeScanned({ data: BARCODE }); });
+    await screen.findByLabelText('Photograph the label');
+    fireEvent.press(screen.getByLabelText('Photograph the label'));
+    await screen.findByTestId('label-kind-skin-care');
+    await act(async () => { fireEvent.press(screen.getByTestId('label-kind-skin-care')); });
+
+    // No photograph, no model call, no confirmation — and a retryable state.
+    expect(mockTranscribeSkin).not.toHaveBeenCalled();
+    expect(mockConfirmSkinCare).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Take the label photo')).toBeNull();
+    expect(await screen.findByText(
+      'We could not finish saving this scan. Check your connection and try again.',
+    )).toBeTruthy();
+    // Never a verdict.
+    for (const word of ['BUY', 'WAIT', 'SKIP']) {
+      expect(screen.queryByText(word)).toBeNull();
+    }
+    // Still retryable: the choice is still on screen.
+    expect(screen.getByTestId('label-kind-skin-care')).toBeTruthy();
+  });
+
+  it('does not gate the packaged-food path', async () => {
+    mockTranscribeFood.mockResolvedValue({
+      barcode: BARCODE, facts: { product_name: 'Noodles' }, fssai_licence: null,
+      stored: false, confidence: { level: 'unverified', text: 'x' },
+      provenance: { ai_run_id: 'food-run' },
+    });
+    render(<ScanProductScreen />);
+    const camera = screen.getByTestId('scan-camera');
+    await act(async () => { camera.props.onBarcodeScanned({ data: BARCODE }); });
+    await screen.findByLabelText('Photograph the label');
+    fireEvent.press(screen.getByLabelText('Photograph the label'));
+    await screen.findByTestId('label-kind-packaged-food');
+    await act(async () => { fireEvent.press(screen.getByTestId('label-kind-packaged-food')); });
+    await screen.findByLabelText('Take the label photo');
+    await act(async () => { fireEvent.press(screen.getByLabelText('Take the label photo')); });
+
+    expect(mockSettleScanEvents).not.toHaveBeenCalled();
+    expect(mockTranscribeFood).toHaveBeenCalled();
+  });
+
+  it('leaves the confirmation as the last event-producing operation', async () => {
+    await reachConfirmedPack();
+    const settleOrder = mockSettleScanEvents.mock.invocationCallOrder[0];
+    const confirmOrder = mockConfirmSkinCare.mock.invocationCallOrder[0];
+    expect(settleOrder).toBeLessThan(confirmOrder);
+    expect(mockScanBarcode).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('the safety preflight gates the decision', () => {
   it('does not call FOR YOU until the person has answered', async () => {
     await reachConfirmedPack();
@@ -230,13 +296,34 @@ describe('the safety preflight gates the decision', () => {
     expect(screen.getByText('Before FOR YOU')).toBeTruthy();
   });
 
-  it('calls FOR YOU with the selected flags once answered', async () => {
+  it('makes exactly one request for one deliberate answer', async () => {
     await reachConfirmedPack();
+    expect(mockFetchForYou).toHaveBeenCalledTimes(0);
+
     await act(async () => { fireEvent.press(screen.getByTestId('safety-pregnancy')); });
     await act(async () => { fireEvent.press(screen.getByTestId('safety-submit')); });
     await waitFor(() => expect(mockFetchForYou).toHaveBeenCalled());
+
+    // One answer, one governed evaluation. Two would race, and the loser's
+    // response could overwrite the winner's.
+    expect(mockFetchForYou).toHaveBeenCalledTimes(1);
     expect(mockFetchForYou).toHaveBeenCalledWith(BARCODE, { pregnancy: true });
     expect(await screen.findByText('SERVER VERDICT')).toBeTruthy();
+  });
+
+  it('spends no scan, transcription or confirmation on the evaluation', async () => {
+    await reachConfirmedPack();
+    const before = {
+      scan: mockScanBarcode.mock.calls.length,
+      transcribe: mockTranscribeSkin.mock.calls.length,
+      confirm: mockConfirmSkinCare.mock.calls.length,
+    };
+    await act(async () => { fireEvent.press(screen.getByTestId('safety-none')); });
+    await act(async () => { fireEvent.press(screen.getByTestId('safety-submit')); });
+    await waitFor(() => expect(mockFetchForYou).toHaveBeenCalledTimes(1));
+    expect(mockScanBarcode).toHaveBeenCalledTimes(before.scan);
+    expect(mockTranscribeSkin).toHaveBeenCalledTimes(before.transcribe);
+    expect(mockConfirmSkinCare).toHaveBeenCalledTimes(before.confirm);
   });
 });
 
@@ -267,6 +354,9 @@ describe('a profile change changes the answer without rescanning', () => {
     expect(await screen.findByText('SERVER SENTENCE AFTER CHANGE')).toBeTruthy();
     await waitFor(() => expect(screen.queryByText('SERVER VERDICT')).toBeNull());
 
+    // Exactly two evaluations in total: one for the answer, one for the
+    // return. Not three, which is what a direct call plus a focus effect gave.
+    expect(mockFetchForYou).toHaveBeenCalledTimes(2);
     // Nothing about the physical pack was redone.
     expect(mockScanBarcode).toHaveBeenCalledTimes(scansBefore);
     expect(mockTranscribeSkin).toHaveBeenCalledTimes(transcribesBefore);

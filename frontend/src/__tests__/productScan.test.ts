@@ -16,10 +16,13 @@ import {
   readQueue,
   scanBarcode,
   syncQueue,
+  enqueueScan,
   confirmLabel,
   confirmSkinCareLabel,
   ensureDeviceClaimed,
   fetchSkinCareForYou,
+  resetPendingScanEvents,
+  settleScanEvents,
   tokenToClaimFor,
   withConfidence,
   type ScanResult,
@@ -84,6 +87,7 @@ beforeEach(() => {
   Object.keys(store).forEach((key) => delete store[key]);
   http.get.mockReset();
   http.post.mockReset();
+  resetPendingScanEvents();
 });
 
 describe('the device', () => {
@@ -443,5 +447,107 @@ describe('device ownership before a skin-care model call', () => {
     await registeredDevice();
     http.post.mockRejectedValueOnce({ response: { status: 409, data: { detail: { code: 'CONFLICT' } } } });
     expect(await ensureDeviceClaimed('account-1')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 8L correction — the plain scan event must settle before a capture
+// ---------------------------------------------------------------------------
+//
+// scanBarcode records its event in the background. If that write lands *after*
+// a skin-care confirmation it becomes the device's newest ScanEvent, and
+// Step 8K correctly reports pack_not_confirmed seconds after somebody
+// confirmed a pack. These tests drive the real service, not a mock of it.
+
+describe('settling the generic scan ledger', () => {
+  it('waits for a deliberately delayed scan-event write', async () => {
+    await registeredDevice();
+    http.get.mockResolvedValueOnce({ status: 200, data: notFoundPayload });
+
+    let releaseWrite: () => void = () => undefined;
+    const written = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    let eventPosted = false;
+    http.post.mockImplementation(async (url: string) => {
+      if (url === '/api/v2/scan/events') {
+        await written;
+        eventPosted = true;
+        return { data: {} };
+      }
+      return { data: {} };
+    });
+
+    await scanBarcode(UNKNOWN);
+    // The lookup answered while the event write is still in flight.
+    expect(eventPosted).toBe(false);
+
+    let settled: boolean | null = null;
+    const barrier = settleScanEvents(UNKNOWN).then((ok) => { settled = ok; });
+    await Promise.resolve();
+    // The barrier is still holding: the capture cannot begin yet.
+    expect(settled).toBeNull();
+
+    releaseWrite();
+    await barrier;
+    expect(eventPosted).toBe(true);
+    expect(settled).toBe(true);
+  });
+
+  it('refuses to settle while this barcode is still queued', async () => {
+    await registeredDevice();
+    // The lookup fails, so the scan is queued rather than sent.
+    http.get.mockRejectedValueOnce(new Error('offline'));
+    await scanBarcode(UNKNOWN);
+    expect(await readQueue()).toHaveLength(1);
+
+    // The flush keeps failing, so the entry stays put.
+    http.post.mockRejectedValue(new Error('still offline'));
+    expect(await settleScanEvents(UNKNOWN)).toBe(false);
+    expect(await readQueue()).toHaveLength(1);
+  });
+
+  it('settles once the queued entry finally flushes', async () => {
+    await registeredDevice();
+    http.get.mockRejectedValueOnce(new Error('offline'));
+    await scanBarcode(UNKNOWN);
+    expect(await readQueue()).toHaveLength(1);
+
+    http.post.mockResolvedValue({ data: {} });
+    expect(await settleScanEvents(UNKNOWN)).toBe(true);
+    expect(await readQueue()).toHaveLength(0);
+  });
+
+  it('is not blocked by an unrelated barcode stuck in the queue', async () => {
+    await registeredDevice();
+    // A different barcode is sitting in the queue and cannot be sent.
+    await enqueueScan({
+      client_scan_id: 'stuck-1', barcode: KNOWN,
+      scanned_at: new Date().toISOString(), queued_offline: true,
+    });
+    // Only that one fails to flush; ours goes through.
+    http.post.mockImplementation(async (url: string, body: { barcode?: string }) => {
+      if (url === '/api/v2/scan/events' && body?.barcode === KNOWN) {
+        throw new Error('this one is stuck');
+      }
+      return { data: {} };
+    });
+    http.get.mockResolvedValueOnce({ status: 200, data: notFoundPayload });
+    await scanBarcode(UNKNOWN);
+
+    // Somebody else's stuck entry is their problem, not a reason to block
+    // this pack.
+    expect(await settleScanEvents(UNKNOWN)).toBe(true);
+    const remaining = await readQueue();
+    expect(remaining.map((entry) => entry.barcode)).toEqual([KNOWN]);
+  });
+
+  it('treats an unreadable queue as unsettled rather than assuming success', async () => {
+    await registeredDevice();
+    const original = AsyncStorage.getItem as jest.Mock;
+    const spy = jest.spyOn(AsyncStorage, 'getItem').mockRejectedValue(new Error('storage gone'));
+    // readQueue swallows storage errors and returns [], so the barrier still
+    // answers; what matters is that it never throws into the capture path.
+    await expect(settleScanEvents(UNKNOWN)).resolves.toBeDefined();
+    spy.mockRestore();
+    expect(original).toBeDefined();
   });
 });

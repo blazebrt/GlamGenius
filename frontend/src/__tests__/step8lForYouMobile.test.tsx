@@ -133,16 +133,70 @@ describe('the cited source', () => {
 // Fail closed
 // ---------------------------------------------------------------------------
 describe('a malformed presentable response', () => {
+  /**
+   * A presentable decision missing part of its evidence chain is not a
+   * governed non-decision. Its reason_text is a product claim, so showing it
+   * without its citation would be the unsourced claim the chain exists to
+   * prevent. Everything is withheld — verdict, reason, source, and the
+   * profile-gap affordance, which would otherwise leak that a real evaluation
+   * happened.
+   */
   it.each([
     ['citation', { citation: null }],
     ['verdict_text', { verdict_text: null }],
     ['reason_text', { reason_text: '' }],
     ['an openable url', { citation: { ...CITATION, canonical_url: '' } }],
-  ])('shows no verdict when %s is missing', (_label, overrides) => {
-    renderCard(response(overrides as Partial<ForYouResponse['result']>));
+    ['an openable url (whitespace)', { citation: { ...CITATION, canonical_url: '   ' } }],
+  ])('shows no product claim at all when %s is missing', (_label, overrides) => {
+    const malformed = response(overrides as Partial<ForYouResponse['result']>);
+    renderCard(malformed);
+
+    expect(isPresentable(malformed)).toBe(false);
+    // No verdict.
     expect(screen.queryByText(SERVER_VERDICT)).toBeNull();
+    // No product/personal reason. This is the assertion the earlier version
+    // of this suite was missing.
+    expect(screen.queryByText(SERVER_REASON)).toBeNull();
+    // No source, in any form.
     expect(screen.queryByLabelText(FOR_YOU_COPY.openSource)).toBeNull();
-    expect(isPresentable(response(overrides as Partial<ForYouResponse['result']>))).toBe(false);
+    expect(screen.queryByText('SENTINEL SOURCE TITLE')).toBeNull();
+    expect(screen.queryByText('SENTINEL PUBLISHER')).toBeNull();
+    expect(screen.queryByText('SENTINEL LOCATOR')).toBeNull();
+    // Only neutral structural copy.
+    expect(screen.getByText(FOR_YOU_COPY.notAvailable)).toBeTruthy();
+  });
+
+  it('withholds the profile CTA even when the malformed result names that gap', () => {
+    const add = jest.fn();
+    renderCard(
+      response({
+        citation: null,
+        reason_key: 'for_you.not_enough.personal_context',
+        reason_text: 'A CLAIM WITH NO SOURCE',
+      }),
+      { onAddSkinDetails: add },
+    );
+    expect(screen.queryByText('A CLAIM WITH NO SOURCE')).toBeNull();
+    expect(screen.queryByLabelText(FOR_YOU_COPY.addSkinDetails)).toBeNull();
+    expect(screen.getByText(FOR_YOU_COPY.notAvailable)).toBeTruthy();
+  });
+
+  it('is not reinterpreted as a governed non-decision', () => {
+    // The same sentence, under two different statuses. A genuine absence
+    // explains itself; a malformed presentable must not borrow that behaviour
+    // to smuggle its claim onto the screen.
+    const sentence = 'THE SAME SENTENCE UNDER BOTH STATUSES';
+
+    const genuine = renderCard(response({
+      status: 'not_enough_information', action: null, verdict_key: null,
+      verdict_text: null, citation: null, reason_text: sentence,
+    }));
+    expect(genuine.queryByText(sentence)).toBeTruthy();
+    genuine.unmount();
+
+    const malformed = renderCard(response({ citation: null, reason_text: sentence }));
+    expect(malformed.queryByText(sentence)).toBeNull();
+    expect(malformed.queryByText(FOR_YOU_COPY.notAvailable)).toBeTruthy();
   });
 });
 

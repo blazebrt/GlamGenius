@@ -17,9 +17,13 @@
  * - One neutral treatment for every action. BUY-green and SKIP-red would make
  *   the client an interpretation layer through styling.
  *
- * It also fails closed on a malformed response. The server already guarantees
- * the contract, but a presentable status arriving without its verdict, reason
- * or openable source shows nothing rather than half a decision.
+ * It also fails closed on a malformed response, and the distinction matters.
+ * A *governed non-decision* carries a sentence explaining an absence, which is
+ * safe to show. A *malformed presentable* carries a product claim whose
+ * evidence chain is incomplete — and printing that sentence without its
+ * citation would be exactly the unsourced claim the chain exists to prevent.
+ * So the two are handled separately: the first shows the server's sentence,
+ * the second shows nothing but neutral structural copy.
  */
 import React from 'react';
 import { Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -152,9 +156,26 @@ export function ForYouCard({
     );
   }
 
+  if (result.status === STATUS_PRESENTABLE && !isPresentable(response)) {
+    // A decision that claims to be presentable but is missing its verdict, its
+    // reason or its openable source.
+    //
+    // This is NOT a governed non-decision, and must not be shown as one. Its
+    // reason_text is a *product or personal claim* — the very thing the
+    // evidence chain exists to license — so printing it while the citation is
+    // absent would put an unsourced claim on screen. No source, no claim: the
+    // whole thing is withheld, including the profile-gap affordance, which
+    // would otherwise leak that a real evaluation happened.
+    return (
+      <Shell>
+        <Text style={styles.body}>{FOR_YOU_COPY.notAvailable}</Text>
+      </Shell>
+    );
+  }
+
   if (!isPresentable(response)) {
-    // Either a governed non-decision, or a presentable response missing a part
-    // it needs. Both show the server's sentence and no verdict.
+    // A legitimate governed non-decision. The server's sentence explains an
+    // absence rather than asserting anything about the product, so it is shown.
     const sentence = result.reason_text?.trim() || FOR_YOU_COPY.notAvailable;
     return (
       <Shell>

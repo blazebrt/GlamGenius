@@ -340,9 +340,17 @@ export async function scanBarcode(barcode: string): Promise<ScanResult> {
     if (response.status === 401) throw new Error('device unknown');
     const result = withConfidence({ ...response.data, barcode: clean });
     await cacheResult(result);
-    void enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: false })
-      .then(() => syncQueue())
-      .catch(() => undefined);
+    // Deliberately not awaited: a lookup must answer at shop speed, and the
+    // event ledger is not what the customer is waiting for. But it is
+    // *tracked*, because a later skin-care capture has to be able to prove
+    // this write landed before it confirms a pack — see settleScanEvents.
+    trackPendingScanEvent(
+      clean,
+      enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: false })
+        .then(() => syncQueue())
+        .then(() => undefined)
+        .catch(() => undefined),
+    );
     return result;
   } catch (err) {
     const status = (err as { response?: { status?: number } })?.response?.status;
@@ -400,6 +408,62 @@ export async function confirmLabel(
     const retry = await api.post('/api/v2/scan/label/confirm', body, { headers: refreshedHeaders });
     return retry.data;
   }
+}
+
+// --- Settling the generic scan ledger ---------------------------------------
+//
+// ``scanBarcode`` records its event in the background so a lookup can answer
+// at shop speed. That is fine on its own and wrong the moment a skin-care
+// capture follows, because Step 8K resolves the current physical pack from the
+// device's *newest* ScanEvent by server ordering.
+//
+// The race, in order: the lookup answers, its plain event is still in flight,
+// the person chooses Skin care, photographs the label and confirms it — and
+// only then does the delayed plain event reach the server, take a later
+// ``created_at``, and become the newest event. Step 8K then correctly reports
+// that no pack has been confirmed, seconds after somebody confirmed one.
+//
+// The fix is a barrier, not a delay: before spending a model call the client
+// proves this barcode's plain event has actually landed. Nothing is guessed
+// from client clocks, no backend rule changes, and an unrelated barcode stuck
+// in the queue never blocks a different one.
+
+/** Background persistence still running, keyed by barcode. */
+const pendingScanEvents = new Map<string, Promise<void>>();
+
+function trackPendingScanEvent(barcode: string, work: Promise<void>): void {
+  const previous = pendingScanEvents.get(barcode);
+  const chained = (previous ? previous.then(() => work) : work).catch(() => undefined);
+  pendingScanEvents.set(barcode, chained);
+  void chained.finally(() => {
+    if (pendingScanEvents.get(barcode) === chained) pendingScanEvents.delete(barcode);
+  });
+}
+
+/** Test seam: forget any tracked work. Never called by the app. */
+export function resetPendingScanEvents(): void {
+  pendingScanEvents.clear();
+}
+
+/**
+ * Prove this barcode's plain scan event can no longer overtake a confirmation.
+ *
+ * Returns false when it cannot be proven — offline, or the queue will not
+ * flush. The caller must then refuse to spend the model call rather than
+ * capture a pack whose confirmation may be silently superseded.
+ */
+export async function settleScanEvents(barcode: string): Promise<boolean> {
+  const clean = (barcode || '').trim();
+  // 1. Whatever this barcode already started.
+  const inFlight = pendingScanEvents.get(clean);
+  if (inFlight) await inFlight;
+  // 2. Push anything the phone is still holding.
+  await syncQueue().catch(() => undefined);
+  // 3. Read the queue back and check *this* barcode specifically. Somebody
+  //    else's stuck entry is their problem, not a reason to block this pack.
+  const queue = await readQueue().catch(() => null);
+  if (queue === null) return false;
+  return !queue.some((entry) => entry.barcode === clean);
 }
 
 // --- Skin care: the governed FOR YOU loop -----------------------------------

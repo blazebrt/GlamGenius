@@ -86,6 +86,28 @@ That confirmed state is deliberately **not** disguised as an Open Food Facts
 result. Nothing in it came from them, so rendering their attribution beside it
 would be a false statement about where the data originated.
 
+### The plain scan must settle first
+
+Not scanning again is necessary but not sufficient. `scanBarcode` records its
+own `/scan/events` write **in the background**, so a lookup can answer at shop
+speed — and that write can still be in flight when the person chooses Skin
+care. The race runs: lookup answers → plain event still pending → label
+photographed → label confirmed → the delayed plain event finally lands, takes a
+later server `created_at`, and becomes the newest event. Step 8K then correctly
+reports `pack_not_confirmed`, seconds after somebody confirmed a pack.
+
+So before any skin-care model call, `settleScanEvents(barcode)` proves the write
+cannot arrive late: it awaits the tracked in-flight persistence for that
+barcode, flushes the offline queue, re-reads it, and requires no unresolved
+entry **for that barcode**. A different barcode stuck in the queue never blocks
+this one.
+
+If it cannot be settled — offline, or the queue will not flush — the capture
+does not begin. No photograph, no model call, no confirmation: only a neutral
+retryable message. Spending a model call on a pack whose confirmation might be
+silently superseded is the worse outcome, and technical failure is never turned
+into a verdict.
+
 ## Why the client renders and does not decide
 
 The FOR YOU card inspects a presentation status and prints server fields. It
@@ -97,11 +119,43 @@ has no signal-to-action logic, because it never receives a signal. Concretely:
 | Reason comes from `reason_text`, never `reason_key` | A key-to-prose table on the phone is an unreviewed second copy of the science |
 | One neutral card treatment for every action | BUY-green / SKIP-red would make styling an interpretation layer |
 | No fallback verdict for an unknown status | "We do not know what this means" is not a reason to guess |
-| A presentable response missing its verdict, reason or openable source shows nothing | Half a decision is worse than none |
+| A presentable response missing its verdict, reason, citation or openable URL shows **nothing at all** | Half a decision is worse than none — see below |
 
 One reason key is read — `for_you.not_enough.personal_context` — and only to
 decide whether to show a button. The sentence beside it still comes from the
 server.
+
+### A malformed presentable decision is not a non-decision
+
+These two look similar and must be treated differently.
+
+A **governed non-decision** (`not_enough_information`, `not_enough_explanation`
+and the rest) carries a sentence that explains an *absence*. It asserts nothing
+about the product, so it is shown, and `for_you.not_enough.personal_context` may
+still offer the profile editor.
+
+A **malformed presentable** — `decision_presentable` arriving without its
+`verdict_text`, `reason_text`, citation, or an openable `canonical_url` — is a
+different thing entirely. Its `reason_text` is a *product or personal claim*,
+and that is precisely what the evidence chain exists to license. Printing it
+while the citation is missing would put an unsourced claim on screen.
+
+No source, no claim. Everything is withheld — verdict, reason, citation, and the
+profile-gap affordance, which would otherwise leak that a real evaluation
+occurred — and only neutral structural copy is shown:
+
+> This result is not available right now.
+
+### Exactly one evaluation per answer
+
+The focused effect is the **single owner** of every FOR YOU request. Submitting
+the safety answer records it and nothing more.
+
+An earlier version fetched directly in the submit handler *and* re-fetched from
+the focus effect when `safety` changed, producing two initial evaluations for
+one deliberate answer — two governed evaluations, and a last-response-wins race
+between them. One answer now produces exactly one request, and a genuine
+navigation away and back produces exactly one more.
 
 The cited source is opened at exactly `citation.canonical_url`. No publisher
 homepage, no search, no reconstruction, no ranking.

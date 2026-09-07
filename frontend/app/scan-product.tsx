@@ -34,6 +34,7 @@ import {
   fetchSkinCareForYou,
   newScanId,
   readQueue,
+  settleScanEvents,
   scanBarcode,
   syncQueue,
   type ConfirmedSkinCareLabel,
@@ -55,6 +56,10 @@ import { S } from '../src/strings/verdict';
 import { transcribeProductLabel, transcribeSkinCareLabel, uploadMedia } from '../src/services/apiV2';
 import { errorMessage } from '../src/services/api';
 import { useUserStore } from '../src/store/userStore';
+
+/** Shown when this barcode's plain scan event cannot be proven to have landed. */
+const SCAN_NOT_SETTLED_MESSAGE =
+  'We could not finish saving this scan. Check your connection and try again.';
 
 /** The symbologies on Indian retail packaging. QR is not one of them. */
 const BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'itf14'] as const;
@@ -178,15 +183,27 @@ export default function ScanProductScreen() {
     setLabelError(null);
     if (kind === 'skin_care') {
       if (!userId) { router.push('/(auth)/welcome'); return; }
+      if (!result) return;
       const owned = await ensureDeviceClaimed(userId);
       if (!owned) {
         setLabelError('This phone is not linked to your account yet. Try again in a moment.');
         return;
       }
+      // The plain scan event for this barcode must be on the server before a
+      // model call is spent. If it arrived afterwards it would become the
+      // newest event and silently supersede the confirmation the person is
+      // about to make. Refusing to start is the honest answer; capturing a
+      // pack whose confirmation may not hold is not.
+      setLabelBusy(true);
+      const settled = await settleScanEvents(result.barcode).finally(() => setLabelBusy(false));
+      if (!settled) {
+        setLabelError(SCAN_NOT_SETTLED_MESSAGE);
+        return;
+      }
     }
     setLabelKind(kind);
     setStage('label');
-  }, [router, userId]);
+  }, [result, router, userId]);
 
   /** Take the photo, read it, and show what came back. Nothing is saved yet. */
   const captureAndRead = useCallback(async () => {
@@ -282,11 +299,17 @@ export default function ScanProductScreen() {
     }
   }, []);
 
+  /**
+   * Record the answer. It does not fetch.
+   *
+   * The focused effect below is the single owner of every FOR YOU request.
+   * Fetching here *as well* produced two initial evaluations whenever the
+   * screen was already focused — two governed evaluations for one deliberate
+   * answer, and a last-response-wins race between them.
+   */
   const submitSafety = useCallback((context: ForYouSafetyContext) => {
-    if (!result) return;
     setSafety(context);
-    void loadForYou(result.barcode, context);
-  }, [loadForYou, result]);
+  }, []);
 
   /**
    * Confirm the skin-care label.
@@ -334,6 +357,9 @@ export default function ScanProductScreen() {
       void loadForYou(result.barcode, safety);
     }, [loadForYou, result, safety, stage]),
   );
+
+  // Nothing else may call loadForYou: one owner, one request per answer, and
+  // one more per genuine return to this screen.
 
   if (permission && !permission.granted && !permission.canAskAgain) {
     return (
