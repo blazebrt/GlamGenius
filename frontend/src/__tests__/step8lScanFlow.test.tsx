@@ -291,6 +291,41 @@ describe('the plain scan must settle before a capture', () => {
     expect(mockTranscribeFood).toHaveBeenCalled();
   });
 
+  it('never turns a settlement failure into a confirmed pack, even on retry', async () => {
+    // The barrier refuses, the person tries the same choice again, and it
+    // refuses again. A retry must reach the same refusal, not manufacture a
+    // confirmation out of a second attempt.
+    mockSettleScanEvents.mockResolvedValue(false);
+    render(<ScanProductScreen />);
+    const camera = screen.getByTestId('scan-camera');
+    await act(async () => { camera.props.onBarcodeScanned({ data: BARCODE }); });
+    await screen.findByLabelText('Photograph the label');
+    fireEvent.press(screen.getByLabelText('Photograph the label'));
+    await screen.findByTestId('label-kind-skin-care');
+
+    await act(async () => { fireEvent.press(screen.getByTestId('label-kind-skin-care')); });
+    expect(await screen.findByTestId('scan-settlement-failed')).toBeTruthy();
+
+    await act(async () => { fireEvent.press(screen.getByTestId('label-kind-skin-care')); });
+    expect(await screen.findByTestId('scan-settlement-failed')).toBeTruthy();
+
+    expect(mockSettleScanEvents).toHaveBeenCalledTimes(2);
+    expect(mockTranscribeSkin).not.toHaveBeenCalled();
+    expect(mockConfirmSkinCare).not.toHaveBeenCalled();
+    expect(mockFetchForYou).not.toHaveBeenCalled();
+    expect(screen.queryByText('Skin care label confirmed')).toBeNull();
+    expect(screen.queryByTestId('skin-care-confirmed-card')).toBeNull();
+    expect(screen.queryByTestId('for-you-card')).toBeNull();
+
+    // And once the ledger does settle, the same choice proceeds normally.
+    mockSettleScanEvents.mockResolvedValue(true);
+    await act(async () => { fireEvent.press(screen.getByTestId('label-kind-skin-care')); });
+    await screen.findByTestId('label-capture-take-photo');
+    await act(async () => { fireEvent.press(screen.getByTestId('label-capture-take-photo')); });
+    await screen.findByTestId('skin-care-confirm');
+    expect(mockTranscribeSkin).toHaveBeenCalledTimes(1);
+  });
+
   it('leaves the confirmation as the last event-producing operation', async () => {
     await reachConfirmedPack();
     const settleOrder = mockSettleScanEvents.mock.invocationCallOrder[0];

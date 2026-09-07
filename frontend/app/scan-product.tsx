@@ -465,7 +465,18 @@ export default function ScanProductScreen() {
       {stage === 'label-kind' && (
         <>
           <LabelTypeChoice onChoose={(kind) => void chooseLabelKind(kind)} onCancel={scanAgain} />
-          {!!labelError && <Text style={styles.error}>{labelError}</Text>}
+          {!!labelError && (
+            // The settlement refusal is named apart from every other error on
+            // this stage: during qualification a tester has to be able to say
+            // "the barrier held" rather than "something went wrong".
+            <Text
+              style={styles.error}
+              testID={labelError === SCAN_NOT_SETTLED_MESSAGE ? 'scan-settlement-failed' : 'label-kind-error'}
+              accessibilityRole="alert"
+            >
+              {labelError}
+            </Text>
+          )}
         </>
       )}
 
@@ -512,17 +523,23 @@ export default function ScanProductScreen() {
       )}
 
       {stage === 'label' && !labelDraft && !skinDraft && (
-        <View style={styles.card}>
+        <View style={styles.card} testID="label-capture">
           <Ionicons name="camera-outline" size={24} color={COLORS.primary} />
-          <Text style={styles.title}>Photograph the label</Text>
+          <Text style={styles.title} accessibilityRole="header">Photograph the label</Text>
           <Text style={styles.body}>
             Hold the pack steady so the ingredient list and the nutrition table are both in frame. We read
             what is printed, show it back to you, and save nothing until you say it is right.
           </Text>
-          {!!labelError && <Text style={styles.error}>{labelError}</Text>}
+          {!!labelError && (
+            <Text style={styles.error} testID="label-capture-error" accessibilityRole="alert">
+              {labelError}
+            </Text>
+          )}
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityLabel="Take the label photo"
+            testID="label-capture-take-photo"
+            accessibilityState={{ disabled: labelBusy, busy: labelBusy }}
             onPress={captureAndRead}
             disabled={labelBusy}
             style={styles.primaryButton}
