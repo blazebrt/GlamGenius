@@ -26,9 +26,13 @@ photograph a skin-care ingredient label
   → facts carry product_category = skin_care
 ```
 
-Transcription writes nothing at all — no scan event, no product record, no
-snapshot, no category. Confirmation writes all of it, from the *stored*
-transcription rather than from the request.
+Transcription writes no *product* state — no `ScanEvent`, no `ProductRecord`,
+no `LabelSnapshot`, no `product_category`. It is not silent, though: the AI
+gateway's audit ledger still writes the `AIRun` and, on a validated result, the
+`AIRunOutput`, exactly as it does for every model call in this product. That
+ledger is what confirmation later re-reads and re-validates, and what makes a
+capture auditable after the fact. Confirmation writes the product state, from
+that stored transcription rather than from the request.
 
 ---
 
@@ -195,6 +199,36 @@ disagrees on the barcode, the AI run, or the confirmed facts, the request fails
 with `409` and names the field that differs. Returning the older row would
 quietly discard a new claim about a physical pack, which is the one thing a
 capture system must never do.
+
+### The race the barcode lock does not cover
+
+`record_scan` looks the identity up and then inserts it, and the confirmation
+routes hold a **barcode-scoped** advisory lock around the whole transaction.
+That lock does not serialise this: the same `client_scan_id` sent for two
+*different* barcodes takes two different locks, so both transactions can read an
+empty table and both can reach the insert. One wins;
+`uq_scan_event_device_client_id` stops the other at flush.
+
+Left alone, the loser's `IntegrityError` escapes before any mismatch policy
+runs, and the caller sees a `500` where the contract promises a `409` naming the
+barcode. So the insert runs inside a **savepoint**. When the constraint fires,
+only the savepoint is rolled back — the outer transaction stays usable, which
+matters because the confirmation route has already done work in it and still has
+its own comparison to make. `record_scan` then re-reads the winner by its exact
+`(device_id, client_scan_id)` identity and returns it as an ordinary "already
+recorded" answer, and `_material_mismatch` reaches its normal `409`.
+
+Two boundaries keep that recovery honest:
+
+- It applies **only** when a row with that exact identity now exists. Any other
+  integrity failure — a foreign key that does not resolve, say — re-raises
+  unchanged rather than being reinterpreted as somebody else's win.
+- The winner is found **by identity**, never by "the newest row". A recency
+  shortcut would hand back another device's scan of another barcode, and the
+  caller would compare its facts and answer confidently about the wrong pack.
+
+`record_scan` still decides one thing only — created, or already recorded. What
+a replayed key is *carrying* stays with the caller that owns those facts.
 
 ---
 

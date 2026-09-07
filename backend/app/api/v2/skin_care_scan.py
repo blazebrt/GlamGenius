@@ -9,8 +9,10 @@ decision below is made in :mod:`app.domains.product.care_capture`.
 Two routes, in the order a person meets them:
 
 * **transcribe** — a draft. Signed in, because reading a label costs a model
-  call. Nothing is written: no scan event, no product record, no label
-  snapshot, no category. The person is shown what was read and decides.
+  call. No product state is written: no scan event, no product record, no label
+  snapshot, no category. The AI gateway's audit ledger still records the run and
+  its validated output, as it does for every model call; that ledger is what
+  confirmation re-reads. The person is shown what was read and decides.
 * **confirm** — the write. Signed in *and* on a device they own, because a
   confirmed capture is an assertion about what the holder of that phone was
   looking at. It carries three identifiers and no facts: the facts are re-read
@@ -82,6 +84,10 @@ async def transcribe_skin_care_label(
     hand. A photograph whose ingredient list could not be read is still
     returned — they tried, and saying so is more useful than an error — but it
     is marked unreadable, and confirmation will refuse it.
+
+    "Nothing is stored" means no product state. The gateway's own audit ledger
+    still records this model call and its validated output, which is what
+    ``/scan/skin-care/label/confirm`` later re-reads and re-validates.
     """
     result = await care_extraction.transcribe_label(
         session,

@@ -322,6 +322,23 @@ async def lookup(
     return body
 
 
+async def _existing_scan_event(
+    session: AsyncSession, *, device_id: uuid.UUID | None, client_scan_id: str,
+) -> ScanEvent | None:
+    """The event already recorded under this exact idempotency identity, if any.
+
+    One definition, used both for the lookup before the insert and for the
+    re-read after a unique-constraint race, so the two can never disagree about
+    what "already recorded" means.
+    """
+    return (await session.execute(
+        select(ScanEvent).where(
+            ScanEvent.device_id == device_id,
+            ScanEvent.client_scan_id == client_scan_id,
+        )
+    )).scalar_one_or_none()
+
+
 async def record_scan(
     session: AsyncSession,
     *,
@@ -339,13 +356,37 @@ async def record_scan(
 
     Returns ``(event, created)``. A replayed offline queue hits the same
     ``client_scan_id`` and gets the original event back rather than a duplicate.
+
+    **The lookup is not enough on its own.** Two concurrent requests carrying
+    the same ``(device_id, client_scan_id)`` can both find nothing and both
+    reach the insert. The barcode-scoped advisory lock the confirmation routes
+    hold does not help here: it is keyed by barcode, so the same idempotency key
+    sent for two *different* barcodes takes two different locks and the two
+    transactions never see each other. One insert then wins and the other meets
+    ``uq_scan_event_device_client_id`` at flush.
+
+    So the insert runs inside a savepoint. When the unique constraint fires, the
+    savepoint alone is rolled back — the caller's outer transaction stays usable,
+    which matters because the confirmation routes have already done work in it
+    and still have their own mismatch policy to apply. The winner is then re-read
+    and returned as an ordinary "already recorded" answer, which is exactly what
+    it is.
+
+    **Recovery is narrow on purpose.** It applies only when an exact
+    ``(device_id, client_scan_id)`` row now exists; any other integrity failure —
+    a bad foreign key, say — re-raises unchanged rather than being quietly
+    reinterpreted as a replay. The winner is found by that exact identity, never
+    by "the newest row" or any other tie-break.
+
+    **This function decides one thing only:** whether this call created the
+    event or found an existing idempotency identity. Whether a replayed key is
+    carrying *different* evidence — another barcode, another AI run, other label
+    facts — is a policy question, and it stays with the callers that own the
+    facts in question.
     """
-    existing = (await session.execute(
-        select(ScanEvent).where(
-            ScanEvent.device_id == device_id,
-            ScanEvent.client_scan_id == client_scan_id,
-        )
-    )).scalar_one_or_none()
+    existing = await _existing_scan_event(
+        session, device_id=device_id, client_scan_id=client_scan_id,
+    )
     if existing is not None:
         return existing, False
 
@@ -354,8 +395,20 @@ async def record_scan(
         client_scan_id=client_scan_id, queued_offline=queued_offline,
         scanned_at=scanned_at or utcnow(), label_facts=label_facts, ai_run_id=ai_run_id,
     )
-    session.add(event)
-    await session.flush()
+    try:
+        async with session.begin_nested():
+            session.add(event)
+            await session.flush()
+    except IntegrityError:
+        # The insert waited on the unique index until the other transaction
+        # finished, so by the time this raises the winner is committed and a
+        # fresh statement in this READ COMMITTED transaction can see it.
+        winner = await _existing_scan_event(
+            session, device_id=device_id, client_scan_id=client_scan_id,
+        )
+        if winner is None:
+            raise
+        return winner, False
     return event, True
 
 

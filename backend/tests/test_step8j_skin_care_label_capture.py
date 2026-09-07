@@ -16,8 +16,10 @@ test author can build one.
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +45,8 @@ from app.domains.product.care_extraction import ExtractedSkinCareLabel
 from app.domains.product.models import LabelSnapshot, ProductRecord, ScanDevice, ScanEvent
 from app.domains.profile.models import AppearanceProfile, ProfileAttribute
 from app.shared.database.sql import get_sessionmaker
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 
 from tests.conftest import auth, png_bytes
 
@@ -1271,3 +1274,332 @@ class TestProductionHold:
         assert PERSONAL_DECISION_SEMANTIC_RULES == ()
         assert PERSONAL_DECISION_POLICY_RULES == ()
         assert PERSONAL_DECISION_EXPLANATION_RULES == ()
+
+
+# ---------------------------------------------------------------------------
+# 12. Concurrency — the shared idempotency identity under a real race
+# ---------------------------------------------------------------------------
+class TestConcurrentConfirmation:
+    """Real PostgreSQL, real concurrent transactions, one event loop.
+
+    ``record_scan`` looks a scan up and then inserts it, and two requests
+    carrying the same ``(device_id, client_scan_id)`` can both find nothing and
+    both reach the insert. The barcode-scoped advisory lock does not prevent
+    that: keyed by barcode, the same key sent for two *different* barcodes takes
+    two different locks, so the two transactions never see each other and one
+    meets ``uq_scan_event_device_client_id`` at flush.
+
+    Timing alone would make this test flaky in the direction that hides the bug,
+    so the contenders are made to rendezvous at the seam that matters — the
+    lookup inside ``record_scan``. Nothing is faked: both parties really do read
+    an empty table, really do insert, and the loser really does receive
+    PostgreSQL's unique violation. The barrier only guarantees the interleaving
+    that concurrency permits but does not schedule reliably.
+    """
+
+    @staticmethod
+    def _rendezvous(monkeypatch, parties: int = 2):
+        """Hold the first ``parties`` idempotency lookups until all have read.
+
+        Later calls pass straight through, which matters because the loser's
+        recovery performs a second lookup and must not wait for a partner that
+        will never arrive.
+        """
+        barrier = asyncio.Barrier(parties)
+        real = service._existing_scan_event
+        state = {"seen": 0}
+
+        async def rendezvous(session, **kwargs):
+            row = await real(session, **kwargs)
+            state["seen"] += 1
+            if state["seen"] <= parties:
+                await barrier.wait()
+            return row
+
+        monkeypatch.setattr(service, "_existing_scan_event", rendezvous)
+        return state
+
+    async def test_two_barcodes_one_key_yield_one_capture_and_one_conflict(
+        self, db_clean, app_client, registered_supabase_user, payload, monkeypatch,
+    ):
+        """The reviewed contract: 409 naming the barcode, never a leaked 500."""
+        token, account_id = await registered_supabase_user()
+        headers, device_id = await _register_device(app_client)
+        await _claim(app_client, headers, token)
+        run_a = await _seed_run(payload, account_id)
+        run_b = await _seed_run(payload, account_id)
+        key = uuid.uuid4().hex
+
+        self._rendezvous(monkeypatch)
+        first, second = await asyncio.gather(
+            _confirm(app_client, headers, token, run_a, barcode=BARCODE, client_scan_id=key),
+            _confirm(app_client, headers, token, run_b, barcode=OTHER_BARCODE, client_scan_id=key),
+            return_exceptions=True,
+        )
+        for response in (first, second):
+            assert not isinstance(response, BaseException), response
+
+        codes = sorted(response.status_code for response in (first, second))
+        assert codes == [201, 409], (first.text, second.text)
+        winner = first if first.status_code == 201 else second
+        loser = second if first.status_code == 201 else first
+        assert winner.json()["created"] is True
+        assert winner.json()["product_category"] == "skin_care"
+        assert loser.json()["detail"]["conflicting_field"] == "barcode"
+        # No unhandled database error reached the client, in either direction.
+        assert 500 not in codes
+        assert "IntegrityError" not in loser.text
+        assert "uq_scan_event" not in loser.text
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            events = (await session.execute(
+                select(ScanEvent).where(
+                    ScanEvent.device_id == device_id, ScanEvent.client_scan_id == key,
+                )
+            )).scalars().all()
+            assert len(events) == 1
+            assert str(events[0].id) == winner.json()["scan_id"]
+            # The loser left nothing behind: no record, no snapshot, for its barcode.
+            snapshots = (await session.execute(select(LabelSnapshot))).scalars().all()
+            assert len(snapshots) == 1
+            assert snapshots[0].barcode == events[0].barcode
+            records = (await session.execute(select(ProductRecord))).scalars().all()
+            assert [record.barcode for record in records] == [events[0].barcode]
+
+    async def test_a_concurrent_exact_replay_creates_once(
+        self, db_clean, app_client, registered_supabase_user, payload,
+    ):
+        """Same barcode, so the advisory lock serialises: one creation, one replay.
+
+        No rendezvous here, and deliberately so. Both contenders take the *same*
+        barcode lock, so holding them at a barrier inside that lock would
+        deadlock — the second can never reach a barrier it is blocked before.
+        The lock is the synchronisation, and the outcome is deterministic
+        because of it.
+        """
+        token, account_id = await registered_supabase_user()
+        headers, device_id = await _register_device(app_client)
+        await _claim(app_client, headers, token)
+        run_id = await _seed_run(payload, account_id)
+        key = uuid.uuid4().hex
+
+        first, second = await asyncio.gather(
+            _confirm(app_client, headers, token, run_id, client_scan_id=key),
+            _confirm(app_client, headers, token, run_id, client_scan_id=key),
+            return_exceptions=True,
+        )
+        for response in (first, second):
+            assert not isinstance(response, BaseException), response
+        assert first.status_code == 201, first.text
+        assert second.status_code == 201, second.text
+
+        bodies = [first.json(), second.json()]
+        assert sorted(body["created"] for body in bodies) == [False, True]
+        assert bodies[0]["scan_id"] == bodies[1]["scan_id"]
+        assert bodies[0]["label_snapshot"] == bodies[1]["label_snapshot"]
+        assert bodies[0]["confirmations"] == bodies[1]["confirmations"]
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            events = (await session.execute(
+                select(ScanEvent).where(
+                    ScanEvent.device_id == device_id, ScanEvent.client_scan_id == key,
+                )
+            )).scalars().all()
+            assert len(events) == 1
+            assert (await session.execute(
+                select(func.count()).select_from(LabelSnapshot)
+            )).scalar_one() == 1
+            record = (await session.execute(select(ProductRecord))).scalar_one()
+            assert record.confirmation_count == bodies[0]["confirmations"]
+
+    async def test_one_key_two_ai_runs_on_one_barcode_conflicts_on_the_run(
+        self, db_clean, app_client, registered_supabase_user, payload,
+    ):
+        token, account_id = await registered_supabase_user()
+        headers, device_id = await _register_device(app_client)
+        await _claim(app_client, headers, token)
+        run_a = await _seed_run(payload, account_id)
+        run_b = await _seed_run(payload, account_id)
+        key = uuid.uuid4().hex
+
+        first, second = await asyncio.gather(
+            _confirm(app_client, headers, token, run_a, client_scan_id=key),
+            _confirm(app_client, headers, token, run_b, client_scan_id=key),
+            return_exceptions=True,
+        )
+        for response in (first, second):
+            assert not isinstance(response, BaseException), response
+        codes = sorted(response.status_code for response in (first, second))
+        assert codes == [201, 409], (first.text, second.text)
+        loser = second if first.status_code == 201 else first
+        assert loser.json()["detail"]["conflicting_field"] == "ai_run_id"
+        assert 500 not in codes
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            events = (await session.execute(
+                select(ScanEvent).where(
+                    ScanEvent.device_id == device_id, ScanEvent.client_scan_id == key,
+                )
+            )).scalars().all()
+        assert len(events) == 1
+
+    async def test_the_losing_session_survives_its_savepoint_rollback(
+        self, db_clean, app_client, registered_supabase_user, monkeypatch,
+    ):
+        """The whole point of the savepoint: the outer transaction stays usable.
+
+        Two independent sessions race at ``record_scan`` directly. The loser
+        takes a real PostgreSQL unique violation, recovers, returns the winner —
+        and must then still be able to run ordinary SQL and commit. Without the
+        savepoint the transaction would be aborted and every later statement in
+        it would fail with ``current transaction is aborted``.
+        """
+        headers, device_id = await _register_device(app_client)
+        key = uuid.uuid4().hex
+        factory = get_sessionmaker()
+        self._rendezvous(monkeypatch)
+
+        async def contend(barcode: str) -> tuple[bool, uuid.UUID, int]:
+            async with factory() as session:
+                event, created = await service.record_scan(
+                    session, barcode=barcode, outcome=service.OUTCOME_NOT_FOUND,
+                    client_scan_id=key, device_id=device_id,
+                )
+                # Benign query on the *same* outer session, after recovery.
+                alive = (await session.execute(select(text("1")))).scalar_one()
+                await session.commit()
+                return created, event.id, alive
+
+        results = await asyncio.gather(
+            contend(BARCODE), contend(OTHER_BARCODE), return_exceptions=True,
+        )
+        for result in results:
+            assert not isinstance(result, BaseException), result
+        created_flags = sorted(result[0] for result in results)
+        assert created_flags == [False, True]
+        # Both parties agree on which row won, by identity and not by recency.
+        assert results[0][1] == results[1][1]
+        # The recovered session answered ordinary SQL and committed cleanly.
+        assert [result[2] for result in results] == [1, 1]
+
+        async with factory() as session:
+            events = (await session.execute(
+                select(ScanEvent).where(
+                    ScanEvent.device_id == device_id, ScanEvent.client_scan_id == key,
+                )
+            )).scalars().all()
+        assert len(events) == 1
+
+    async def test_recovery_picks_the_exact_identity_and_never_the_newest_row(
+        self, db_clean, app_client, monkeypatch,
+    ):
+        """Which row the loser gets back is decided by identity, not by recency.
+
+        A newer, unrelated scan sits in the table when the loser recovers. Any
+        "latest row wins" shortcut would hand back that one — a different
+        device's scan of a different barcode — and the caller would compare its
+        facts and reach a confidently wrong answer.
+
+        Only the first lookup is forced to miss, which is what a real race does
+        to one of its parties; the insert, the unique violation, the savepoint
+        rollback and the recovering read are all real.
+        """
+        headers, device_id = await _register_device(app_client)
+        other_headers, other_device_id = await _register_device(app_client)
+        key = uuid.uuid4().hex
+        factory = get_sessionmaker()
+
+        async with factory() as session:
+            winner = ScanEvent(
+                device_id=device_id, barcode=BARCODE, outcome=service.OUTCOME_NOT_FOUND,
+                client_scan_id=key,
+            )
+            session.add(winner)
+            await session.flush()
+            winner_id = winner.id
+            decoy = ScanEvent(
+                device_id=other_device_id, barcode=OTHER_BARCODE,
+                outcome=service.OUTCOME_NOT_FOUND, client_scan_id=uuid.uuid4().hex,
+                created_at=winner.created_at + timedelta(hours=1),
+            )
+            session.add(decoy)
+            await session.commit()
+            decoy_id = decoy.id
+        assert winner_id != decoy_id
+
+        real = service._existing_scan_event
+        state = {"seen": 0}
+
+        async def miss_once(session, **kwargs):
+            state["seen"] += 1
+            if state["seen"] == 1:
+                return None
+            return await real(session, **kwargs)
+
+        monkeypatch.setattr(service, "_existing_scan_event", miss_once)
+        async with factory() as session:
+            event, created = await service.record_scan(
+                session, barcode=OTHER_BARCODE, outcome=service.OUTCOME_LABEL,
+                client_scan_id=key, device_id=device_id,
+            )
+            alive = (await session.execute(select(text("1")))).scalar_one()
+            await session.commit()
+        assert created is False
+        assert event.id == winner_id
+        assert event.id != decoy_id
+        assert alive == 1
+        assert state["seen"] == 2
+
+    async def test_an_unrelated_integrity_failure_is_never_read_as_a_replay(
+        self, db_clean, app_client,
+    ):
+        """A foreign key that does not exist is a bug, not somebody else's win."""
+        headers, device_id = await _register_device(app_client)
+        factory = get_sessionmaker()
+        async with factory() as session:
+            with pytest.raises(IntegrityError):
+                await service.record_scan(
+                    session, barcode=BARCODE, outcome=service.OUTCOME_LABEL,
+                    client_scan_id=uuid.uuid4().hex, device_id=device_id,
+                    label_facts={"ingredients_text": "Petrolatum"},
+                    ai_run_id=uuid.uuid4(),   # no such AIRun
+                )
+            await session.rollback()
+            assert (await session.execute(
+                select(func.count()).select_from(ScanEvent)
+            )).scalar_one() == 0
+
+
+# ---------------------------------------------------------------------------
+# 13. The shared authority stays generic
+# ---------------------------------------------------------------------------
+class TestGenericScanRegression:
+    async def test_an_ordinary_scan_event_replays_idempotently_and_gains_no_category(
+        self, db_clean, off_clean, app_client,
+    ):
+        """``record_scan`` is shared. Step 8J must not have leaked into it."""
+        headers, device_id = await _register_device(app_client)
+        key = uuid.uuid4().hex
+        body = {"barcode": BARCODE, "client_scan_id": key}
+
+        first = await app_client.post("/api/v2/scan/events", headers=headers, json=body)
+        assert first.status_code == 201, first.text
+        assert first.json()["created"] is True
+
+        replay = await app_client.post("/api/v2/scan/events", headers=headers, json=body)
+        assert replay.status_code == 201, replay.text
+        assert replay.json()["created"] is False
+        assert replay.json()["scan_id"] == first.json()["scan_id"]
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            events = (await session.execute(
+                select(ScanEvent).where(ScanEvent.device_id == device_id)
+            )).scalars().all()
+        assert len(events) == 1
+        assert events[0].outcome != service.OUTCOME_LABEL
+        assert events[0].label_facts is None
+        assert events[0].ai_run_id is None
