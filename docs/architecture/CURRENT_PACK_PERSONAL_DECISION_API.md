@@ -162,17 +162,67 @@ they confirmed it** — future observations rewriting past provenance.
 
 1. **Exact event first.** A snapshot whose `scan_event_id` is the current pack's
    event, verified on barcode, canonical facts and fingerprint together.
-2. **Dedup fallback.** Otherwise the latest semantic version whose *source
-   capture* happened at or before the current pack's own capture, ordered
-   exactly as `pack_context` orders scans — server `created_at`, then `id`.
+   `current_pack` has already established that event as the genuine physical
+   capture, so this path needs no global rows.
+2. **Dedup fallback.** Otherwise the newest *eligible* candidate — see the chain
+   below.
 3. **Otherwise it raises.** A proven pack with no resolvable version is a broken
    invariant, not a customer state. It answers `503 FEATURE_UNAVAILABLE` and
-   never downgrades to `pack_not_confirmed`, which would tell the person
-   something false and hide a real defect.
+   never downgrades to `pack_not_confirmed`: the physical pack **is** confirmed;
+   what the server has lost is trustworthy semantic provenance, and saying
+   otherwise would tell the person something false and hide a real defect.
 
-The adversarial case is a required test: Device A confirms formula A twice (the
-second deduplicates), then Device B publishes formula B (v2) and formula A again
-(v3). Device A's answer must use **v1**, not v3.
+### The eligibility chain
+
+A snapshot row is free to name any event at all, so a fallback candidate has to
+earn every link rather than resemble one:
+
+```
+current physical capture
+    ↓ exact same canonical content
+eligible historical LabelSnapshot   barcode, fingerprint, canonical facts
+    ↓ existed already                snapshot created_at <= this capture
+its source ScanEvent                 same barcode, same canonical facts
+    ↓ genuine confirmed capture      pack_context.is_confirmed_label_capture
+    ↓ happened already               (created_at, id) <= this capture's
+```
+
+Two of those links are easy to miss, and the first implementation missed both.
+
+**The source must be a real confirmed capture.** Checking only the snapshot's
+own fields lets a forged high-version row point at a plain scan, at a
+`label_captured` row with no `ai_run_id`, or at a capture of another product.
+The test borrows `pack_context.is_confirmed_label_capture` rather than restating
+it: a second, looser definition is exactly how a forged row ends up being read
+as a capture.
+
+**The row itself must have existed.** Using only the *source event's* timestamp
+as a proxy lets a snapshot inserted later point at an older capture and pass as
+historical — a backfill that rewrites an earlier user's provenance while
+satisfying every other check. So `LabelSnapshot.created_at <= event.created_at`
+is required in its own right.
+
+**Canonical facts, not raw JSON.** Two captures of the same label can differ in
+whitespace and carry identical semantic content. Comparison uses the same
+normalisation the fingerprint is built from, so it agrees with the fingerprint
+rather than contradicting it.
+
+**The newest *eligible* candidate, not the newest candidate.** Ordering by
+version and validating the winner afterwards is a different rule: a forged
+high-version row would take the `ORDER BY`, fail validation, and hide the
+legitimate older version behind it. Eligibility is part of the choice. One query
+returns the bounded candidate set; filtering is deterministic and in memory,
+never a query per candidate.
+
+Ordering is the repository's server ordering — `created_at` then `id` — never
+`scanned_at`, which a client chooses, and never version number alone.
+
+Required adversarial tests: the ordinary future case (Device A confirms formula
+A twice, Device B then publishes formula B as v2 and formula A as v3 — Device A
+must still resolve **v1**), plus a forged high-version snapshot over a plain
+scan, a source with no `ai_run_id`, a source for another barcode, a source
+carrying different content, and a snapshot backfilled after the capture. Each
+must resolve v1, and losing every legitimate candidate must fail closed.
 
 ---
 

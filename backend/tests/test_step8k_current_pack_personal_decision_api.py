@@ -15,7 +15,7 @@ from __future__ import annotations
 import ast
 import json
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +49,7 @@ from app.domains.substances import authoring as substance_authoring
 from app.domains.substances.enums import EntityKind, NameNamespace
 from app.knowledge_packs import petrolatum_dry_skin_v1 as pack
 from app.shared.database.sql import get_sessionmaker
-from sqlalchemy import func, select, update
+from sqlalchemy import event, func, select, update
 
 from tests.conftest import auth, png_bytes
 
@@ -578,6 +578,208 @@ class TestSnapshotResolution:
         assert body["pack"]["label_snapshot_id"] == v1_id
         assert body["pack"]["label_snapshot_version"] == 1
         assert body["pack"]["label_snapshot_id"] != v3["label_snapshot"]["id"]
+
+    async def _forge_candidate(
+        self, *, owner, source_outcome=None, source_ai_run=True,
+        source_barcode=None, source_facts=None, snapshot_after_pack=False,
+        version=99,
+    ):
+        """Insert a higher-version snapshot with a deliberately weak source.
+
+        Everything about the snapshot row itself is correct — barcode,
+        fingerprint, canonical facts, version — so only the chain behind it can
+        reject it. Returns the legitimate v1 id for comparison.
+        """
+        from app.domains.product import pack_context
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            legitimate = (await session.execute(
+                select(LabelSnapshot).order_by(LabelSnapshot.version_number)
+            )).scalars().first()
+            current = await pack_context.current_pack_event(
+                session, barcode=BARCODE, device_id=owner["device_id"],
+            )
+            facts = dict(legitimate.facts)
+            source = ScanEvent(
+                device_id=owner["device_id"], account_id=owner["account_id"],
+                barcode=source_barcode or BARCODE,
+                outcome=source_outcome or service.OUTCOME_LABEL,
+                client_scan_id=uuid.uuid4().hex,
+                label_facts=(facts if source_facts is None else source_facts),
+                ai_run_id=None,
+                created_at=current.created_at - timedelta(hours=2),
+            )
+            if source_outcome == service.OUTCOME_NOT_FOUND:
+                source.label_facts = None
+            if source_ai_run:
+                run = AIRun(
+                    account_id=owner["account_id"], feature=care_extraction.FEATURE,
+                    provider="test", model="test-model",
+                    prompt_version=care_extraction.PROMPT_VERSION,
+                    schema_version=care_extraction.SCHEMA_VERSION,
+                    status=AI_STATUS_SUCCEEDED, validation_passed=True,
+                )
+                session.add(run)
+                await session.flush()
+                source.ai_run_id = run.id
+            session.add(source)
+            await session.flush()
+            forged = LabelSnapshot(
+                barcode=BARCODE, device_id=owner["device_id"], scan_event_id=source.id,
+                facts=facts, content_fingerprint=legitimate.content_fingerprint,
+                version_number=version, completeness=legitimate.completeness,
+                confidence=legitimate.confidence,
+                created_at=(
+                    current.created_at + timedelta(hours=1)
+                    if snapshot_after_pack
+                    else current.created_at - timedelta(hours=1)
+                ),
+            )
+            session.add(forged)
+            await session.commit()
+            return {"legitimate_id": str(legitimate.id), "forged_id": str(forged.id)}
+
+    async def _deduplicated_owner(self, app_client, registered_supabase_user):
+        """A device whose current pack deduplicated onto an earlier v1."""
+        owner = await _confirmed_device(app_client, registered_supabase_user)
+        again = await _confirm(
+            app_client, owner["headers"], owner["token"], account_id=owner["account_id"],
+        )
+        owner["current"] = again
+        return owner
+
+    async def test_a_forged_high_version_over_a_plain_scan_is_ignored(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """A snapshot is only as trustworthy as the capture it names."""
+        owner = await self._deduplicated_owner(app_client, registered_supabase_user)
+        ids = await self._forge_candidate(
+            owner=owner, source_outcome=service.OUTCOME_NOT_FOUND, source_ai_run=True,
+        )
+        body = (await _for_you(app_client, owner["headers"], owner["token"])).json()
+        assert body["pack"]["label_snapshot_id"] == ids["legitimate_id"]
+        assert body["pack"]["label_snapshot_id"] != ids["forged_id"]
+        assert body["pack"]["label_snapshot_version"] == 1
+
+    async def test_a_source_without_ai_provenance_is_not_eligible(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """`label_captured` with matching facts and no AI run is not a capture."""
+        owner = await self._deduplicated_owner(app_client, registered_supabase_user)
+        ids = await self._forge_candidate(owner=owner, source_ai_run=False)
+        body = (await _for_you(app_client, owner["headers"], owner["token"])).json()
+        assert body["pack"]["label_snapshot_id"] == ids["legitimate_id"]
+        assert body["pack"]["label_snapshot_version"] == 1
+
+    async def test_a_source_for_another_barcode_is_not_eligible(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        owner = await self._deduplicated_owner(app_client, registered_supabase_user)
+        ids = await self._forge_candidate(owner=owner, source_barcode=OTHER_BARCODE)
+        body = (await _for_you(app_client, owner["headers"], owner["token"])).json()
+        assert body["pack"]["label_snapshot_id"] == ids["legitimate_id"]
+        assert body["pack"]["label_snapshot_version"] == 1
+
+    async def test_a_source_carrying_different_content_is_not_eligible(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        owner = await self._deduplicated_owner(app_client, registered_supabase_user)
+        ids = await self._forge_candidate(
+            owner=owner,
+            source_facts={"ingredients_text": "Glycerin", "product_category": "skin_care"},
+        )
+        body = (await _for_you(app_client, owner["headers"], owner["token"])).json()
+        assert body["pack"]["label_snapshot_id"] == ids["legitimate_id"]
+        assert body["pack"]["label_snapshot_version"] == 1
+
+    async def test_a_snapshot_backfilled_after_the_capture_is_not_eligible(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """The row itself must have existed, not merely the event it names.
+
+        The source capture is genuine and older than this pack. Only the
+        snapshot row is younger — which is exactly the backfill that would
+        otherwise pass every other check.
+        """
+        owner = await self._deduplicated_owner(app_client, registered_supabase_user)
+        ids = await self._forge_candidate(owner=owner, snapshot_after_pack=True)
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            from app.domains.product import pack_context
+
+            current = await pack_context.current_pack_event(
+                session, barcode=BARCODE, device_id=owner["device_id"],
+            )
+            forged = await session.get(LabelSnapshot, uuid.UUID(ids["forged_id"]))
+            source = await session.get(ScanEvent, forged.scan_event_id)
+            # The trap, stated: an old genuine source, a young snapshot row.
+            assert source.created_at < current.created_at
+            assert forged.created_at > current.created_at
+            assert pack_context.is_confirmed_label_capture(source) is True
+
+        body = (await _for_you(app_client, owner["headers"], owner["token"])).json()
+        assert body["pack"]["label_snapshot_id"] == ids["legitimate_id"]
+        assert body["pack"]["label_snapshot_version"] == 1
+
+    async def test_losing_every_legitimate_candidate_fails_closed(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """The pack is still confirmed; the server has lost its provenance."""
+        owner = await self._deduplicated_owner(app_client, registered_supabase_user)
+        factory = get_sessionmaker()
+        async with factory() as session:
+            # Break the only legitimate candidate's own source chain.
+            legitimate = (await session.execute(
+                select(LabelSnapshot).order_by(LabelSnapshot.version_number)
+            )).scalars().first()
+            await session.execute(
+                update(ScanEvent)
+                .where(ScanEvent.id == legitimate.scan_event_id)
+                .values(ai_run_id=None)
+            )
+            await session.commit()
+
+        response = await _for_you(app_client, owner["headers"], owner["token"])
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"]["code"] == "FEATURE_UNAVAILABLE"
+        # Not downgraded: the physical pack is confirmed, the provenance is not.
+        assert "pack_not_confirmed" not in response.text
+
+    async def test_the_resolver_issues_one_query_for_the_candidate_set(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """Bounded candidates in one statement, then filtering in memory."""
+        owner = await self._deduplicated_owner(app_client, registered_supabase_user)
+        await self._forge_candidate(owner=owner, source_ai_run=False, version=97)
+        await self._forge_candidate(owner=owner, source_barcode=OTHER_BARCODE, version=98)
+
+        from app.domains.product import pack_context
+        from app.shared.database import sql
+
+        statements: list[str] = []
+
+        def record(conn, cursor, statement, parameters, context, executemany):
+            if "label_snapshots" in statement.lower():
+                statements.append(statement)
+
+        factory = get_sessionmaker()
+        engine = sql.get_engine().sync_engine
+        async with factory() as session:
+            resolved = await pack_context.current_pack(
+                session, barcode=BARCODE, device_id=owner["device_id"],
+            )
+            event.listen(engine, "before_cursor_execute", record)
+            try:
+                snapshot = await resolve_current_pack_label_snapshot(
+                    session, pack=resolved,
+                )
+            finally:
+                event.remove(engine, "before_cursor_execute", record)
+        assert snapshot.version_number == 1
+        # One exact-event lookup, one candidate query. Never one per candidate.
+        assert len(statements) == 2, statements
 
     async def test_a_proven_pack_with_no_resolvable_version_fails_closed(
         self, db_clean, app_client, registered_supabase_user,

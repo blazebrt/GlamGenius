@@ -15,11 +15,34 @@ with no snapshot pointing back at it.
 are global to a barcode, and anybody can add one. If a stranger photographs the
 same formula next week, a "latest matching" lookup would silently re-attribute
 this person's capture to a row that did not exist when they confirmed it —
-future observations rewriting past provenance. So a candidate is eligible only
-if the capture that created it happened *at or before* the current pack's own
-capture, ordered exactly as ``pack_context`` orders scans: server
-``created_at``, then ``id`` to break a tie. Among those, the latest semantic
-version wins.
+future observations rewriting past provenance.
+
+So a fallback candidate has to earn the whole chain, not resemble part of it:
+
+```
+current physical capture
+    ↓ exact same canonical content
+eligible historical LabelSnapshot   (barcode, fingerprint, canonical facts)
+    ↓ existed already                (snapshot created_at <= this capture)
+its source ScanEvent                 (same barcode, same canonical facts)
+    ↓ genuine confirmed capture      (pack_context.is_confirmed_label_capture)
+    ↓ happened already               ((created_at, id) <= this capture's)
+```
+
+Two of those links are easy to miss and were. **The row itself must have
+existed**: checking only the *source event's* time lets a snapshot inserted
+later point at an older capture and pass as historical. And **the source must
+be a real confirmed capture**: the snapshot names an event id and nothing
+stopped that event being a plain scan, a forged ``label_captured`` row with no
+``ai_run_id``, or a capture of a different product entirely.
+
+Ordering is the repository's server ordering — ``created_at`` then ``id`` —
+never ``scanned_at``, which a client chooses, and never version number alone.
+
+**The newest *eligible* candidate, not the newest candidate.** Ordering by
+version and validating the winner afterwards is a different rule: a forged
+high-version row would take the ORDER BY, fail validation, and hide the
+legitimate older version behind it. Eligibility is part of the choice.
 
 **And why the global newest is never consulted at all.** ``latest_label_snapshot``
 answers "what is the newest thing anybody published about this barcode", which
@@ -38,6 +61,7 @@ from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.domains.product import pack_context
 from app.domains.product.models import LabelSnapshot, ScanEvent
 from app.domains.product.pack_context import CurrentPack
 from app.domains.product.service import canonical_label_facts, label_content_fingerprint
@@ -64,6 +88,31 @@ def _matches(snapshot: LabelSnapshot, *, barcode: str, facts: dict, fingerprint:
         and snapshot.content_fingerprint == fingerprint
         and canonical_label_facts(snapshot.facts) == canonical_label_facts(facts)
     )
+
+
+def _eligible_source(source: ScanEvent, *, barcode: str, facts: dict) -> bool:
+    """Is the capture this candidate names a genuine source for these facts?
+
+    A snapshot is only as trustworthy as the capture behind it, and the row is
+    free to name any event at all. Three things must hold, and the first is
+    borrowed rather than restated:
+
+    * :func:`pack_context.is_confirmed_label_capture` — the one definition of
+      confirmation provenance in this codebase. A plain scan, an event with
+      empty or malformed ``label_facts``, and a ``label_captured`` row with no
+      ``ai_run_id`` all fail it. Writing a looser copy here is precisely how a
+      forged row ends up being read as a capture.
+    * The same barcode. Provenance never crosses products.
+    * The same *canonical* content. Raw JSON equality would reject a capture
+      whose whitespace differs while carrying identical semantic content — the
+      same normalisation the fingerprint is built from, so the comparison
+      agrees with the fingerprint instead of contradicting it.
+    """
+    if not pack_context.is_confirmed_label_capture(source):
+        return False
+    if source.barcode != barcode:
+        return False
+    return canonical_label_facts(source.label_facts) == canonical_label_facts(facts)
 
 
 async def resolve_current_pack_label_snapshot(
@@ -94,29 +143,42 @@ async def resolve_current_pack_label_snapshot(
         return own
 
     # No row of its own: the content was already stored, so the version that
-    # already held it is this pack's version — provided it existed by the time
-    # this pack was confirmed.
+    # already held it is this pack's version — provided the whole chain behind
+    # it is genuine and it existed by the time this pack was confirmed.
+    #
+    # One query for the bounded candidate set, then deterministic filtering in
+    # memory. Selecting the newest row and *then* validating it would be a
+    # different rule: a forged high-version snapshot would win the ORDER BY,
+    # fail validation, and hide the legitimate older version behind it. The
+    # newest *eligible* candidate is the answer, so eligibility has to be part
+    # of the choice rather than a check applied after it.
     source = aliased(ScanEvent)
-    candidate = (await session.execute(
-        select(LabelSnapshot)
+    rows = (await session.execute(
+        select(LabelSnapshot, source)
         .join(source, LabelSnapshot.scan_event_id == source.id)
         .where(
             LabelSnapshot.barcode == event.barcode,
             LabelSnapshot.content_fingerprint == fingerprint,
+            # The row itself must have existed. A snapshot inserted later that
+            # merely *points* at an older capture is a backfill, and letting it
+            # answer would be exactly the rewriting of history this guards.
+            LabelSnapshot.created_at <= event.created_at,
+            source.barcode == event.barcode,
             tuple_(source.created_at, source.id) <= tuple_(event.created_at, event.id),
         )
         .order_by(LabelSnapshot.version_number.desc())
-        .limit(1)
-    )).scalars().first()
-    if candidate is None:
-        raise CurrentPackSnapshotUnresolved(
-            "no label version existed for this pack's confirmed content at the time it was confirmed"
-        )
-    if not _matches(candidate, barcode=event.barcode, facts=facts, fingerprint=fingerprint):
-        raise CurrentPackSnapshotUnresolved(
-            f"label snapshot {candidate.id} does not hold this pack's confirmed content"
-        )
-    return candidate
+    )).all()
+
+    for candidate, source_event in rows:
+        if not _eligible_source(source_event, barcode=event.barcode, facts=facts):
+            continue
+        if not _matches(candidate, barcode=event.barcode, facts=facts, fingerprint=fingerprint):
+            continue
+        return candidate
+    raise CurrentPackSnapshotUnresolved(
+        "no legitimate label version existed for this pack's confirmed content "
+        "at the time it was confirmed"
+    )
 
 
 __all__ = ["CurrentPackSnapshotUnresolved", "resolve_current_pack_label_snapshot"]
