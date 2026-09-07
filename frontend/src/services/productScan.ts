@@ -266,6 +266,43 @@ export async function readQueue(): Promise<QueuedScan[]> {
   return readJson<QueuedScan[]>(QUEUE_KEY, []);
 }
 
+/**
+ * Read the queue for proof rather than for convenience.
+ *
+ * `readQueue` above is deliberately forgiving, and should stay that way: a
+ * scanner that cannot read its own backlog must still let the customer scan,
+ * so a storage or parse failure becomes an empty list there. Settlement cannot
+ * borrow that forgiveness. "The store would not answer" is not "there is
+ * nothing queued", and reading it that way is exactly how a stale plain event
+ * survives to overtake a confirmation.
+ *
+ * So this reader throws instead. It returns an empty list only when storage
+ * successfully reports the key absent, and only hands back entries whose
+ * barcode is actually readable — an entry without one cannot prove anything
+ * about the barcode being settled. Its one caller turns a throw into `false`.
+ */
+async function readQueueForProof(): Promise<QueuedScan[]> {
+  // An I/O failure here propagates; it is never rewritten as an empty queue.
+  const raw: unknown = await AsyncStorage.getItem(QUEUE_KEY);
+  // `null` is storage saying "no such key" — the one trustworthy empty answer.
+  if (raw === null) return [];
+  // Anything else that is not a string is not an answer this check can read,
+  // and an unreadable answer must not pass for an empty queue.
+  if (typeof raw !== 'string') throw new Error('the scan queue could not be read');
+  // A parse failure propagates for the same reason an I/O failure does.
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) throw new Error('the scan queue is not a list');
+  for (const entry of parsed) {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new Error('the scan queue holds something that is not an entry');
+    }
+    if (typeof (entry as { barcode?: unknown }).barcode !== 'string') {
+      throw new Error('a scan queue entry has no readable barcode');
+    }
+  }
+  return parsed as QueuedScan[];
+}
+
 export async function enqueueScan(entry: QueuedScan): Promise<void> {
   const queue = await readQueue();
   if (queue.some((q) => q.client_scan_id === entry.client_scan_id)) return;
@@ -448,9 +485,10 @@ export function resetPendingScanEvents(): void {
 /**
  * Prove this barcode's plain scan event can no longer overtake a confirmation.
  *
- * Returns false when it cannot be proven — offline, or the queue will not
- * flush. The caller must then refuse to spend the model call rather than
- * capture a pack whose confirmation may be silently superseded.
+ * Returns false when it cannot be proven — offline, the queue will not flush,
+ * or the queue cannot be read back and trusted at all. The caller must then
+ * refuse to spend the model call rather than capture a pack whose confirmation
+ * may be silently superseded.
  */
 export async function settleScanEvents(barcode: string): Promise<boolean> {
   const clean = (barcode || '').trim();
@@ -459,10 +497,17 @@ export async function settleScanEvents(barcode: string): Promise<boolean> {
   if (inFlight) await inFlight;
   // 2. Push anything the phone is still holding.
   await syncQueue().catch(() => undefined);
-  // 3. Read the queue back and check *this* barcode specifically. Somebody
-  //    else's stuck entry is their problem, not a reason to block this pack.
-  const queue = await readQueue().catch(() => null);
-  if (queue === null) return false;
+  // 3. Read the queue back for proof and check *this* barcode specifically.
+  //    Somebody else's stuck entry is their problem, not a reason to block
+  //    this pack. But a queue that cannot be read is not an empty queue: if
+  //    the final inspection cannot be completed and trusted, nothing is
+  //    proven, and an unproven barcode does not get to spend a model call.
+  let queue: QueuedScan[];
+  try {
+    queue = await readQueueForProof();
+  } catch {
+    return false;
+  }
   return !queue.some((entry) => entry.barcode === clean);
 }
 

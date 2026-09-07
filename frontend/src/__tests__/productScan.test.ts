@@ -54,6 +54,10 @@ jest.mock('@react-native-async-storage/async-storage', () => {
 
 const http = (axios as unknown as { create: () => { get: jest.Mock; post: jest.Mock } }).create() as { get: jest.Mock; post: jest.Mock };
 const store = (AsyncStorage as unknown as { __store: Record<string, string> }).__store as Record<string, string>;
+// jest.spyOn hands back the mock that is already there rather than wrapping
+// it, so mockRestore would leave getItem blank for every later test. Keep the
+// real implementation and reinstate it before each one.
+const realGetItem = (AsyncStorage.getItem as jest.Mock).getMockImplementation() as (k: string) => Promise<string | null>;
 
 const KNOWN = '8901058000191';
 const UNKNOWN = '8909999999999';
@@ -87,6 +91,7 @@ beforeEach(() => {
   Object.keys(store).forEach((key) => delete store[key]);
   http.get.mockReset();
   http.post.mockReset();
+  (AsyncStorage.getItem as jest.Mock).mockImplementation(realGetItem);
   resetPendingScanEvents();
 });
 
@@ -540,14 +545,52 @@ describe('settling the generic scan ledger', () => {
     expect(remaining.map((entry) => entry.barcode)).toEqual([KNOWN]);
   });
 
-  it('treats an unreadable queue as unsettled rather than assuming success', async () => {
+  // "Could not inspect the queue" is not "the queue is empty". Each of the
+  // next three tests breaks the final read in a different way and demands the
+  // same answer: false. A barrier that answers true on a broken read is not a
+  // barrier, and the generic readQueue — which turns every one of these into
+  // [] on purpose, for the scanner's sake — must not be what settlement asks.
+
+  it('refuses to settle when the queue storage cannot be read at all', async () => {
     await registeredDevice();
-    const original = AsyncStorage.getItem as jest.Mock;
-    const spy = jest.spyOn(AsyncStorage, 'getItem').mockRejectedValue(new Error('storage gone'));
-    // readQueue swallows storage errors and returns [], so the barrier still
-    // answers; what matters is that it never throws into the capture path.
-    await expect(settleScanEvents(UNKNOWN)).resolves.toBeDefined();
-    spy.mockRestore();
-    expect(original).toBeDefined();
+    (AsyncStorage.getItem as jest.Mock).mockRejectedValue(new Error('storage gone'));
+    await expect(settleScanEvents(UNKNOWN)).resolves.toBe(false);
+  });
+
+  it('refuses to settle when the stored queue is not parseable', async () => {
+    await registeredDevice();
+    store['glamgenius_scan_queue_v1'] = '{not json at all';
+    await expect(settleScanEvents(UNKNOWN)).resolves.toBe(false);
+  });
+
+  it('refuses to settle when the stored queue is not a list of scans', async () => {
+    await registeredDevice();
+    // Valid JSON, wrong shape: nothing here can prove this barcode is absent.
+    store['glamgenius_scan_queue_v1'] = '{"barcode":"' + UNKNOWN + '"}';
+    await expect(settleScanEvents(UNKNOWN)).resolves.toBe(false);
+  });
+
+  it('refuses to settle when a queued entry has no readable barcode', async () => {
+    await registeredDevice();
+    store['glamgenius_scan_queue_v1'] = JSON.stringify([{ client_scan_id: 'x1', queued_offline: true }]);
+    // The flush leaves it in place, and an entry with no barcode cannot be
+    // ruled out as this one.
+    http.post.mockRejectedValue(new Error('still offline'));
+    await expect(settleScanEvents(UNKNOWN)).resolves.toBe(false);
+  });
+
+  it('refuses to settle when storage answers with something that is not a value', async () => {
+    await registeredDevice();
+    // Only `null` means "no such key". A store that answers anything else has
+    // not told us the queue is empty, whatever it looks like.
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValue(undefined);
+    await expect(settleScanEvents(UNKNOWN)).resolves.toBe(false);
+  });
+
+  it('settles on an empty store, which is a real answer rather than a failure', async () => {
+    await registeredDevice();
+    // The key has never been written. Storage answered; there is nothing held.
+    expect('glamgenius_scan_queue_v1' in store).toBe(false);
+    await expect(settleScanEvents(UNKNOWN)).resolves.toBe(true);
   });
 });

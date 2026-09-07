@@ -102,7 +102,19 @@ barcode, flushes the offline queue, re-reads it, and requires no unresolved
 entry **for that barcode**. A different barcode stuck in the queue never blocks
 this one.
 
-If it cannot be settled — offline, or the queue will not flush — the capture
+That final re-read is a strict one, and deliberately not the `readQueue` the
+scanner uses. `readQueue` is forgiving on purpose: a phone that cannot read its
+own backlog must still let somebody scan, so it turns a storage or parse
+failure into an empty list. Settlement cannot accept that trade. "Could not
+inspect the queue" is not "the queue is empty", and reading it that way would
+hand back a confident `true` in exactly the case where nothing has been proven.
+So the settlement read fails instead: it accepts an empty queue only when
+storage reports the key genuinely absent, and rejects an unreadable store,
+unparseable JSON, a stored value that is not a list, or an entry whose barcode
+cannot be read.
+
+If it cannot be settled — offline, the queue will not flush, or the queue
+cannot be read back and trusted at all — the capture
 does not begin. No photograph, no model call, no confirmation: only a neutral
 retryable message. Spending a model call on a pack whose confirmation might be
 silently superseded is the worse outcome, and technical failure is never turned
