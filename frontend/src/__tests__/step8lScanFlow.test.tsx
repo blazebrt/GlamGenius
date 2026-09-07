@@ -79,6 +79,17 @@ jest.mock('../services/apiV2', () => ({
 }));
 
 
+/**
+ * These are multi-step journeys through a real screen — barcode read, category
+ * choice, ledger settlement, photograph, transcription, confirmation — and the
+ * first one in the file also pays the module-transform cost. Jest's 5s default
+ * is comfortable locally and marginal on a shared CI runner, where the first
+ * test timed out at 5.0s while doing nothing wrong. The limit is raised for
+ * this file only; nothing here waits on a real timer, so a genuine hang still
+ * fails rather than hiding.
+ */
+jest.setTimeout(30000);
+
 const BARCODE = '8901030000011';
 
 const notFound = {
