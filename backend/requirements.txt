@@ -2,13 +2,13 @@ fastapi==0.141.1
 uvicorn==0.25.0
 msgpack>=1.2.1
 setuptools>=78.1.1
-python-dotenv==1.2.2
+python-dotenv==1.2.3
 aiofiles==25.1.0
 # The [email] extra pulls in email-validator, which pydantic's EmailStr needs.
 # `app/api/v2/access.py` types the invite-reservation email as EmailStr, so
 # without it the application cannot even import.
 pydantic[email]==2.12.5
-python-multipart==0.0.31
+python-multipart==0.0.32
 httpx==0.28.1
 google-genai>=1.0.0
 
@@ -24,13 +24,13 @@ supabase==2.31.0
 sentry-sdk[fastapi]==2.66.1
 
 # --- V2: PostgreSQL ---
-sqlalchemy[asyncio]==2.0.36
+sqlalchemy[asyncio]==2.0.52
 asyncpg==0.30.0
 alembic==1.14.0
 openpyxl==3.1.5
 # psycopg2-binary is used by Alembic's sync engine for migrations only.
 # Runtime queries all go through asyncpg.
-psycopg2-binary==2.9.10
+psycopg2-binary==2.9.12
 
 # --- Tests ---
 pytest==9.0.3
