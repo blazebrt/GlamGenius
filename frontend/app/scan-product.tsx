@@ -21,33 +21,64 @@ import {
   View,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 import {
   confirmLabel,
+  confirmSkinCareLabel,
   ensureDevice,
+  ensureDeviceClaimed,
+  fetchSkinCareForYou,
+  newScanId,
   readQueue,
   scanBarcode,
   syncQueue,
+  type ConfirmedSkinCareLabel,
+  type ForYouResponse,
+  type ForYouSafetyContext,
   type ScanResult,
+  type SkinCareLabelFactsView,
 } from '../src/services/productScan';
 import { LabelReview, NotFoundResult, OfflineNote, ProductResult } from '../src/components/scan/ScanPieces';
+import {
+  ConfirmedSkinCareLabelCard,
+  LabelTypeChoice,
+  SafetyPreflight,
+  SkinCareLabelReview,
+  type LabelKind,
+} from '../src/components/scan/SkinCarePieces';
+import { ForYouCard } from '../src/components/scan/ForYouCard';
 import { S } from '../src/strings/verdict';
-import { transcribeProductLabel, uploadMedia } from '../src/services/apiV2';
+import { transcribeProductLabel, transcribeSkinCareLabel, uploadMedia } from '../src/services/apiV2';
 import { errorMessage } from '../src/services/api';
 import { useUserStore } from '../src/store/userStore';
 
 /** The symbologies on Indian retail packaging. QR is not one of them. */
 const BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'itf14'] as const;
 
-type Stage = 'camera' | 'looking' | 'result' | 'label';
+type Stage = 'camera' | 'looking' | 'result' | 'label-kind' | 'label' | 'skin-care-confirmed';
 
 type LabelDraft = {
   facts: Record<string, unknown>;
   aiRunId: string;
+};
+
+/**
+ * One skin-care draft, with the idempotency key it will be confirmed under.
+ *
+ * The key is minted once per transcription and reused for every retry of that
+ * confirmation. A fresh key per HTTP attempt would turn one physical capture
+ * into two logical ones; retaking the photograph is what deserves a new key.
+ */
+type SkinCareDraft = {
+  facts: SkinCareLabelFactsView;
+  aiRunId: string;
+  clientScanId: string;
+  ingredientsReadable: boolean;
+  message: string | null;
 };
 
 export default function ScanProductScreen() {
@@ -63,6 +94,15 @@ export default function ScanProductScreen() {
   const [labelBusy, setLabelBusy] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<string | null>(null);
+  const [labelKind, setLabelKind] = useState<LabelKind | null>(null);
+  const [skinDraft, setSkinDraft] = useState<SkinCareDraft | null>(null);
+  const [skinConfirmed, setSkinConfirmed] = useState<ConfirmedSkinCareLabel | null>(null);
+  const [skinFacts, setSkinFacts] = useState<SkinCareLabelFactsView | null>(null);
+  // Session-only. Never stored, never logged, never sent to analytics.
+  const [safety, setSafety] = useState<ForYouSafetyContext | null>(null);
+  const [forYou, setForYou] = useState<ForYouResponse | null>(null);
+  const [forYouLoading, setForYouLoading] = useState(false);
+  const [forYouFailed, setForYouFailed] = useState(false);
   const cameraRef = useRef<CameraView | null>(null);
   // One barcode at a time: the camera fires this many times a second.
   const busy = useRef(false);
@@ -102,6 +142,13 @@ export default function ScanProductScreen() {
     setLabelDraft(null);
     setLabelError(null);
     setConfirmed(null);
+    setLabelKind(null);
+    setSkinDraft(null);
+    setSkinConfirmed(null);
+    setSkinFacts(null);
+    setSafety(null);
+    setForYou(null);
+    setForYouFailed(false);
     setStage('camera');
   }, []);
 
@@ -112,8 +159,33 @@ export default function ScanProductScreen() {
       router.push('/(auth)/welcome');
       return;
     }
-    setStage('label');
+    // The category is asked, never inferred. Which route the capture travels
+    // down is the assertion, so the person has to make it.
+    setStage('label-kind');
     setLabelDraft(null);
+    setSkinDraft(null);
+  }, [router, userId]);
+
+  /**
+   * Settle the category, and for skin care settle device ownership too.
+   *
+   * Step 8J refuses a confirmation on a device this account does not own, and
+   * that refusal would otherwise arrive *after* a model call had been spent on
+   * the photograph. Claiming first costs a cheap request; getting it wrong
+   * costs the person a wasted capture.
+   */
+  const chooseLabelKind = useCallback(async (kind: LabelKind) => {
+    setLabelError(null);
+    if (kind === 'skin_care') {
+      if (!userId) { router.push('/(auth)/welcome'); return; }
+      const owned = await ensureDeviceClaimed(userId);
+      if (!owned) {
+        setLabelError('This phone is not linked to your account yet. Try again in a moment.');
+        return;
+      }
+    }
+    setLabelKind(kind);
+    setStage('label');
   }, [router, userId]);
 
   /** Take the photo, read it, and show what came back. Nothing is saved yet. */
@@ -128,6 +200,24 @@ export default function ScanProductScreen() {
         { uri: photo.uri, name: 'label.jpg', type: 'image/jpeg' },
         'inventory_item',
       );
+      if (labelKind === 'skin_care') {
+        const read = await transcribeSkinCareLabel(result.barcode, asset.id);
+        const aiRunId = read.provenance?.ai_run_id;
+        if (typeof aiRunId !== 'string' || !aiRunId.trim()) {
+          setLabelError(S.labelReview.missingConfirmationReference);
+          return;
+        }
+        // One key per transcription, minted here and reused for every retry
+        // of this confirmation.
+        setSkinDraft({
+          facts: read.facts,
+          aiRunId,
+          clientScanId: newScanId(),
+          ingredientsReadable: read.ingredients_readable !== false,
+          message: read.message ?? null,
+        });
+        return;
+      }
       const read = await transcribeProductLabel(result.barcode, asset.id);
       const aiRunId = read.provenance?.ai_run_id;
       if (typeof aiRunId !== 'string' || !aiRunId.trim()) {
@@ -140,7 +230,7 @@ export default function ScanProductScreen() {
     } finally {
       setLabelBusy(false);
     }
-  }, [labelBusy, result]);
+  }, [labelBusy, labelKind, result]);
 
   /**
    * The VC-07 confirm: the person says it is right, and only then it counts.
@@ -168,6 +258,82 @@ export default function ScanProductScreen() {
       setLabelBusy(false);
     }
   }, [labelDraft, result]);
+
+  /**
+   * Ask Step 8K about the confirmed pack.
+   *
+   * Never cached: the answer depends on the current pack, live profile facts,
+   * live evidence and the active release, any of which can change between two
+   * identical requests.
+   */
+  const loadForYou = useCallback(async (barcode: string, context: ForYouSafetyContext) => {
+    setForYouLoading(true);
+    setForYouFailed(false);
+    try {
+      const answer = await fetchSkinCareForYou(barcode, context);
+      setForYou(answer);
+      setForYouFailed(answer === null);
+    } catch {
+      // A technical failure is never a decision.
+      setForYou(null);
+      setForYouFailed(true);
+    } finally {
+      setForYouLoading(false);
+    }
+  }, []);
+
+  const submitSafety = useCallback((context: ForYouSafetyContext) => {
+    if (!result) return;
+    setSafety(context);
+    void loadForYou(result.barcode, context);
+  }, [loadForYou, result]);
+
+  /**
+   * Confirm the skin-care label.
+   *
+   * The one thing this must never do afterwards is scan the barcode again.
+   * Step 8K reads the device's *newest* scan event as the current physical
+   * pack, so a plain lookup here would replace the confirmation and Step 8K
+   * would correctly answer that no pack has been confirmed. The generic food
+   * path re-scans; this one must not.
+   */
+  const acceptSkinCareLabel = useCallback(async () => {
+    if (!result || !skinDraft || labelBusy) return;
+    if (!skinDraft.ingredientsReadable) return;
+    setLabelBusy(true);
+    setLabelError(null);
+    try {
+      const saved = await confirmSkinCareLabel(
+        result.barcode, skinDraft.aiRunId, skinDraft.clientScanId,
+      );
+      if (!saved) {
+        setLabelError(S.labelReview.saveFailed);
+        return;
+      }
+      setSkinConfirmed(saved);
+      setSkinFacts(skinDraft.facts);
+      setSkinDraft(null);
+      setStage('skin-care-confirmed');
+    } catch (err) {
+      setLabelError(errorMessage(err, 'We could not save that just now. Try again in a moment.'));
+    } finally {
+      setLabelBusy(false);
+    }
+  }, [labelBusy, result, skinDraft]);
+
+  /**
+   * Re-ask Step 8K when this screen regains focus.
+   *
+   * Editing a skin fact must be able to change or withdraw a decision without
+   * rescanning anything: the product evidence is bound to the snapshot, but the
+   * personal context is live.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      if (stage !== 'skin-care-confirmed' || !result || !safety) return;
+      void loadForYou(result.barcode, safety);
+    }, [loadForYou, result, safety, stage]),
+  );
 
   if (permission && !permission.granted && !permission.canAskAgain) {
     return (
@@ -240,7 +406,7 @@ export default function ScanProductScreen() {
       style={styles.container}
       contentContainerStyle={{ paddingTop: insets.top + SPACING.md, paddingBottom: insets.bottom + SPACING.xl, gap: SPACING.md }}
     >
-      {stage === 'label' && !labelDraft && Platform.OS !== 'web' && permission?.granted && (
+      {stage === 'label' && !labelDraft && !skinDraft && Platform.OS !== 'web' && permission?.granted && (
         <View style={styles.labelPreview}>
           <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" testID="label-camera" />
         </View>
@@ -270,6 +436,46 @@ export default function ScanProductScreen() {
         </TouchableOpacity>
       )}
 
+      {stage === 'label-kind' && (
+        <>
+          <LabelTypeChoice onChoose={(kind) => void chooseLabelKind(kind)} onCancel={scanAgain} />
+          {!!labelError && <Text style={styles.error}>{labelError}</Text>}
+        </>
+      )}
+
+      {stage === 'label' && skinDraft && (
+        <SkinCareLabelReview
+          facts={skinDraft.facts}
+          ingredientsReadable={skinDraft.ingredientsReadable}
+          message={skinDraft.message}
+          busy={labelBusy}
+          onConfirm={acceptSkinCareLabel}
+          onRetake={() => { setSkinDraft(null); setLabelError(null); }}
+        />
+      )}
+
+      {stage === 'skin-care-confirmed' && skinConfirmed && skinFacts && result && (
+        <>
+          <ConfirmedSkinCareLabelCard
+            barcode={result.barcode}
+            facts={skinFacts}
+            confirmed={skinConfirmed}
+            onScanAgain={scanAgain}
+          />
+          {!safety ? (
+            <SafetyPreflight onSubmit={submitSafety} busy={forYouLoading} />
+          ) : (
+            <ForYouCard
+              response={forYou}
+              loading={forYouLoading}
+              failed={forYouFailed}
+              onRetry={() => void loadForYou(result.barcode, safety)}
+              onAddSkinDetails={() => router.push('/for-you-profile')}
+            />
+          )}
+        </>
+      )}
+
       {stage === 'label' && labelDraft && (
         <LabelReview
           facts={labelDraft.facts}
@@ -279,7 +485,7 @@ export default function ScanProductScreen() {
         />
       )}
 
-      {stage === 'label' && !labelDraft && (
+      {stage === 'label' && !labelDraft && !skinDraft && (
         <View style={styles.card}>
           <Ionicons name="camera-outline" size={24} color={COLORS.primary} />
           <Text style={styles.title}>Photograph the label</Text>

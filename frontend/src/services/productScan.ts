@@ -401,3 +401,181 @@ export async function confirmLabel(
     return retry.data;
   }
 }
+
+// --- Skin care: the governed FOR YOU loop -----------------------------------
+//
+// These live here rather than in apiV2 because every one of them needs the
+// X-Device-Token this module owns. The token stays in this module's storage:
+// it is never put in Zustand, never in route params, and never logged.
+
+/** The four skin-care draft facts the review screen may show. */
+export interface SkinCareLabelFactsView {
+  product_name?: string | null;
+  brand?: string | null;
+  product_type?: string | null;
+  ingredients_text?: string | null;
+}
+
+/** The exact controlled safety flags Step 8K accepts. Nothing else exists. */
+export interface ForYouSafetyContext {
+  pregnancy?: true;
+  breastfeeding?: true;
+  medication_involved?: true;
+  diagnosed_condition_involved?: true;
+  subject_is_child?: true;
+}
+
+export interface ForYouCitation {
+  source_key: string;
+  title: string;
+  publisher: string;
+  canonical_url: string;
+  locator: string | null;
+  publication_date: string | null;
+  version_or_revision: string | null;
+  jurisdiction: string | null;
+}
+
+export interface ForYouResult {
+  status: string;
+  reason: string | null;
+  action: string | null;
+  verdict_key: string | null;
+  verdict_text: string | null;
+  reason_key: string;
+  reason_text: string;
+  citation: ForYouCitation | null;
+  handoff: { reason: string; message: string } | null;
+}
+
+export interface ForYouResponse {
+  barcode: string;
+  product_category: string | null;
+  copy_version: string;
+  pack: {
+    is_proven: boolean;
+    current_pack_scan_id: string | null;
+    label_snapshot_id: string | null;
+    label_snapshot_source_scan_id: string | null;
+    label_snapshot_version: number | null;
+    content_fingerprint: string | null;
+  };
+  result: ForYouResult;
+  /** Auditability only. Never rendered, never logged, never persisted. */
+  release: { id: string | null; version: number | null; content_hash: string | null } | null;
+}
+
+/** The reason key whose only client meaning is "offer the profile editor". */
+export const REASON_KEY_PERSONAL_CONTEXT = 'for_you.not_enough.personal_context';
+
+/**
+ * Make sure this phone is registered and claimed by this account.
+ *
+ * Step 8J refuses a confirmation on a device the account does not own, and a
+ * model call is spent before that refusal would otherwise be discovered. So
+ * ownership is settled first: registering costs nothing, and a wasted
+ * transcription costs the person a photograph and us a model call.
+ */
+export async function ensureDeviceClaimed(accountId: string): Promise<boolean> {
+  const device = await ensureDevice();
+  if (!device?.token) return false;
+  const token = await tokenToClaimFor(accountId);
+  if (!token) return true;
+  try {
+    await api.post('/api/v2/scan/device/claim', {}, { headers: { 'X-Device-Token': token } });
+    await markDeviceClaimed(accountId);
+    return true;
+  } catch (error) {
+    const code = (error as { response?: { data?: { detail?: { code?: string } } } })
+      ?.response?.data?.detail?.code;
+    if (code !== 'DEVICE_UNKNOWN') return false;
+    // The stored credential is stale, not the account. Re-register once and
+    // claim the fresh one. Exactly once: a loop here would spin forever.
+    await forgetDevice();
+    const fresh = await ensureDevice();
+    if (!fresh?.token) return false;
+    try {
+      await api.post('/api/v2/scan/device/claim', {}, { headers: { 'X-Device-Token': fresh.token } });
+      await markDeviceClaimed(accountId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+export interface ConfirmedSkinCareLabel {
+  barcode: string;
+  scan_id: string;
+  created: boolean;
+  product_category: string;
+  label_snapshot: {
+    id: string;
+    version_number: number;
+    content_fingerprint: string;
+    completeness: string;
+  };
+  confidence: Confidence;
+  confirmations: number;
+}
+
+/**
+ * Confirm a skin-care label the person has checked against the pack.
+ *
+ * The body carries three identifiers and nothing else. The displayed facts are
+ * never replayed as authority: the server re-reads its own AI audit record, so
+ * anything this client thinks it saw is irrelevant by design.
+ *
+ * ``clientScanId`` is supplied by the caller and must be stable across
+ * retries — a fresh id per HTTP attempt would turn one confirmation into two.
+ */
+export async function confirmSkinCareLabel(
+  barcode: string,
+  aiRunId: string,
+  clientScanId: string,
+): Promise<ConfirmedSkinCareLabel | null> {
+  if (typeof aiRunId !== 'string' || !aiRunId.trim()) {
+    throw new Error('The label read is missing its confirmation reference. Please try again.');
+  }
+  const headers = await deviceHeaders();
+  if (!headers['X-Device-Token']) return null;
+  const body = { barcode, ai_run_id: aiRunId, client_scan_id: clientScanId };
+  try {
+    const response = await api.post('/api/v2/scan/skin-care/label/confirm', body, { headers });
+    return response.data;
+  } catch (error) {
+    const code = (error as { response?: { data?: { detail?: { code?: string } } } })
+      ?.response?.data?.detail?.code;
+    if (code !== 'DEVICE_UNKNOWN') throw error;
+    await forgetDevice();
+    const refreshed = await deviceHeaders();
+    if (!refreshed['X-Device-Token']) throw error;
+    // Same idempotency key, same run reference: a retry, not a second capture.
+    const retry = await api.post('/api/v2/scan/skin-care/label/confirm', body, { headers: refreshed });
+    return retry.data;
+  }
+}
+
+/**
+ * Ask Step 8K what the reviewed knowledge says about the confirmed pack.
+ *
+ * The body has exactly two possible top-level keys. No category, no snapshot,
+ * no release, no ingredients, no account id: every one of those is an
+ * authority the server establishes, and a client able to send one could
+ * assemble a decision nobody approved.
+ *
+ * The result is never cached. It depends on the current pack, live profile
+ * facts, live evidence and the active release, all of which can change between
+ * two identical requests.
+ */
+export async function fetchSkinCareForYou(
+  barcode: string,
+  safety?: ForYouSafetyContext,
+): Promise<ForYouResponse | null> {
+  const headers = await deviceHeaders();
+  if (!headers['X-Device-Token']) return null;
+  const body: { barcode: string; safety?: ForYouSafetyContext } = { barcode };
+  if (safety && Object.keys(safety).length > 0) body.safety = safety;
+  const response = await api.post('/api/v2/scan/skin-care/for-you', body, { headers });
+  return response.data;
+}

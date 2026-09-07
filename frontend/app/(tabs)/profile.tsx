@@ -36,6 +36,7 @@ export default function ProfileScreen() {
         {deletionStatus.state === 'requested' && <TouchableOpacity accessibilityRole="button" accessibilityLabel="Cancel account deletion" onPress={() => void cancelPrivacyAccountDeletion().then(() => setDeletionStatus(null))} style={styles.cancelButton}><Text style={styles.cancelText}>Cancel deletion</Text></TouchableOpacity>}
       </View>}
 
+      {!!user && <AccountRow icon="sparkles-outline" title="FOR YOU skin details" description="The two skin answers your personal result is matched against." onPress={() => router.push('/for-you-profile')} />}
       <AccountRow icon="bookmark-outline" title="Memory" description="What GlamGenius remembers and how to remove it." onPress={() => router.push('/memory')} />
       <AccountRow icon="notifications-outline" title="Notifications" description="Optional reminders and device settings." onPress={() => router.push('/notifications')} />
       <AccountRow icon="log-in-outline" title="Sign in or create account" description="Keep product decisions available on this account." onPress={() => router.push('/(auth)/welcome')} />

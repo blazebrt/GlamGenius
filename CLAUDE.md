@@ -140,6 +140,16 @@ reference-data auto-seeding. Production authority comes only from an active Step
 release. Any change to an evidence identity/version, semantic direction, policy
 action, gap target, explanation anchor, or reason key requires fresh review.
 
+**The mobile client renders governed decisions; it never makes them.** A
+confirmed skin-care pack may call the FOR YOU customer API from the phone, but
+the app may not decide an action, select evidence, choose a release or a label
+snapshot, reconstruct reviewed copy from a key, cache a personal decision, or
+perform a plain barcode scan between confirmation and evaluation — that last
+one would become the newest scan event and correctly invalidate the pack the
+person just confirmed. Safety context is session-only; the two skin profile
+facts are persistent because the customer saves them deliberately. See
+`docs/architecture/FOR_YOU_MOBILE_LOOP.md`.
+
 **Customer FOR YOU decisions begin at `pack_context.current_pack`.** Never at
 `latest_label_snapshot`, which answers what anybody published about a barcode
 rather than what this device is holding. A customer caller never selects the
@@ -375,6 +385,8 @@ decision needs their input, ask one clear question with the options spelled out.
 - `docs/architecture/CURRENT_PACK_PERSONAL_DECISION_API.md` — the customer FOR YOU
   endpoint: why the current pack is the only physical authority, and why reviewed
   copy is a second gate
+- `docs/architecture/FOR_YOU_MOBILE_LOOP.md` — the first complete mobile loop, and
+  why the phone chooses the category but decides nothing else
 - `docs/engineering/adrs/` — why the non-obvious choices were made
 - `docs/reports/` — the phase and stabilisation reports (historical records)
 - Feature-area specs: `docs/VC-05_GOOGLE_CALENDAR.md`, `docs/VC-06_MAINTENANCE.md`,

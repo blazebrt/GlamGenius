@@ -17,6 +17,9 @@ import {
   scanBarcode,
   syncQueue,
   confirmLabel,
+  confirmSkinCareLabel,
+  ensureDeviceClaimed,
+  fetchSkinCareForYou,
   tokenToClaimFor,
   withConfidence,
   type ScanResult,
@@ -287,5 +290,158 @@ describe('handing the phone to an account', () => {
 
   it('has nothing to offer before the phone has registered', async () => {
     expect(await tokenToClaimFor('account-1')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 8L — the skin-care FOR YOU loop from the service layer
+// ---------------------------------------------------------------------------
+describe('skin-care confirmation', () => {
+  it('sends exactly three identifiers and never replays the displayed facts', async () => {
+    await registeredDevice();
+    http.post.mockResolvedValueOnce({ data: { scan_id: 's1', created: true } });
+
+    await confirmSkinCareLabel('890111', 'run-1', 'stable-key');
+
+    const [url, body] = http.post.mock.calls[1];
+    expect(url).toBe('/api/v2/scan/skin-care/label/confirm');
+    expect(Object.keys(body).sort()).toEqual(['ai_run_id', 'barcode', 'client_scan_id']);
+    for (const forbidden of [
+      'category', 'product_category', 'ingredients', 'ingredients_text', 'facts',
+      'label_snapshot_id', 'action', 'verdict', 'reason', 'release', 'account_id',
+    ]) {
+      expect(body).not.toHaveProperty(forbidden);
+    }
+  });
+
+  it('never uses the generic food confirmation route', async () => {
+    await registeredDevice();
+    http.post.mockResolvedValueOnce({ data: { scan_id: 's1', created: true } });
+    await confirmSkinCareLabel('890111', 'run-1', 'stable-key');
+    const urls = http.post.mock.calls.map((call) => call[0]);
+    expect(urls).not.toContain('/api/v2/scan/label/confirm');
+  });
+
+  it('reuses the same client_scan_id when a stale device forces a retry', async () => {
+    await registeredDevice();
+    http.post
+      .mockRejectedValueOnce({ response: { data: { detail: { code: 'DEVICE_UNKNOWN' } } } })
+      .mockResolvedValueOnce({ data: { device_id: 'd2', token: 'fresh-token' } })
+      .mockResolvedValueOnce({ data: { scan_id: 's1', created: true } });
+
+    await confirmSkinCareLabel('890111', 'run-1', 'stable-key');
+
+    const confirmBodies = http.post.mock.calls
+      .filter((call) => call[0] === '/api/v2/scan/skin-care/label/confirm')
+      .map((call) => call[1]);
+    expect(confirmBodies).toHaveLength(2);
+    // The same logical confirmation, not a second capture.
+    expect(confirmBodies[0].client_scan_id).toBe('stable-key');
+    expect(confirmBodies[1].client_scan_id).toBe('stable-key');
+    expect(confirmBodies[0].ai_run_id).toBe(confirmBodies[1].ai_run_id);
+  });
+
+  it('does not retry forever when the fresh credential also fails', async () => {
+    await registeredDevice();
+    http.post
+      .mockRejectedValueOnce({ response: { data: { detail: { code: 'DEVICE_UNKNOWN' } } } })
+      .mockResolvedValueOnce({ data: { device_id: 'd2', token: 'fresh-token' } })
+      .mockRejectedValueOnce({ response: { data: { detail: { code: 'DEVICE_UNKNOWN' } } } });
+    await expect(confirmSkinCareLabel('890111', 'run-1', 'k')).rejects.toBeDefined();
+    const attempts = http.post.mock.calls.filter(
+      (call) => call[0] === '/api/v2/scan/skin-care/label/confirm',
+    );
+    expect(attempts).toHaveLength(2);
+  });
+
+  it('refuses a draft with no confirmation reference', async () => {
+    await registeredDevice();
+    await expect(confirmSkinCareLabel('890111', '  ', 'k')).rejects.toBeDefined();
+  });
+});
+
+describe('the FOR YOU request', () => {
+  it('carries only a barcode when nothing was selected', async () => {
+    await registeredDevice();
+    http.post.mockResolvedValueOnce({ data: { barcode: '890111' } });
+    await fetchSkinCareForYou('890111', {});
+    const [url, body] = http.post.mock.calls[1];
+    expect(url).toBe('/api/v2/scan/skin-care/for-you');
+    expect(Object.keys(body)).toEqual(['barcode']);
+  });
+
+  it('carries only barcode and safety when flags were selected', async () => {
+    await registeredDevice();
+    http.post.mockResolvedValueOnce({ data: { barcode: '890111' } });
+    await fetchSkinCareForYou('890111', { pregnancy: true });
+    const [, body] = http.post.mock.calls[1];
+    expect(Object.keys(body).sort()).toEqual(['barcode', 'safety']);
+    expect(body.safety).toEqual({ pregnancy: true });
+  });
+
+  it('cannot carry a category, snapshot, release or decision', async () => {
+    await registeredDevice();
+    http.post.mockResolvedValueOnce({ data: { barcode: '890111' } });
+    await fetchSkinCareForYou('890111', { medication_involved: true });
+    const [, body] = http.post.mock.calls[1];
+    for (const forbidden of [
+      'category', 'product_category', 'decision_category', 'label_snapshot_id',
+      'scan_event_id', 'release_id', 'release_version', 'content_hash', 'action',
+      'verdict', 'reason', 'reason_key', 'policy', 'signal', 'ingredients',
+      'ingredients_text', 'substance', 'evidence', 'account_id',
+    ]) {
+      expect(body).not.toHaveProperty(forbidden);
+    }
+  });
+
+  it('never writes the personal decision to the phone', async () => {
+    await registeredDevice();
+    http.post.mockResolvedValueOnce({
+      data: { barcode: '890111', result: { status: 'decision_presentable', verdict_text: 'X' } },
+    });
+    const before = JSON.stringify(store);
+    await fetchSkinCareForYou('890111', {});
+    expect(JSON.stringify(store)).toBe(before);
+    expect(JSON.stringify(store)).not.toContain('decision_presentable');
+  });
+
+  it('never queues a personal decision into the offline scan outbox', async () => {
+    await registeredDevice();
+    http.post.mockResolvedValueOnce({ data: { barcode: '890111' } });
+    await fetchSkinCareForYou('890111', {});
+    expect(await readQueue()).toHaveLength(0);
+  });
+});
+
+describe('device ownership before a skin-care model call', () => {
+  it('claims the phone for the account when it has not been claimed', async () => {
+    await registeredDevice();
+    http.post.mockResolvedValueOnce({ data: { claimed: true } });
+    expect(await ensureDeviceClaimed('account-1')).toBe(true);
+    expect(http.post.mock.calls[1][0]).toBe('/api/v2/scan/device/claim');
+  });
+
+  it('does not claim twice for the same account', async () => {
+    await registeredDevice();
+    await markDeviceClaimed('account-1');
+    expect(await ensureDeviceClaimed('account-1')).toBe(true);
+    expect(http.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers once from a stale device credential', async () => {
+    await registeredDevice();
+    http.post
+      .mockRejectedValueOnce({ response: { data: { detail: { code: 'DEVICE_UNKNOWN' } } } })
+      .mockResolvedValueOnce({ data: { device_id: 'd2', token: 'fresh' } })
+      .mockResolvedValueOnce({ data: { claimed: true } });
+    expect(await ensureDeviceClaimed('account-1')).toBe(true);
+    const claims = http.post.mock.calls.filter((c) => c[0] === '/api/v2/scan/device/claim');
+    expect(claims).toHaveLength(2);
+  });
+
+  it('reports a genuine ownership failure rather than bypassing it', async () => {
+    await registeredDevice();
+    http.post.mockRejectedValueOnce({ response: { status: 409, data: { detail: { code: 'CONFLICT' } } } });
+    expect(await ensureDeviceClaimed('account-1')).toBe(false);
   });
 });
