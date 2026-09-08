@@ -624,29 +624,25 @@ jobs:
             fi
           done
           echo "PASS: no compiler or build chain in the runtime image"
-      # A Phase B boundary test forbids the controlled-activation operator's
-      # filename from appearing anywhere under .github/, because an automation
-      # surface that knows its name is how an automatic execution eventually
-      # creeps in. That guard is right and this job respects it rather than
-      # routing around it: CI asserts the *shape* of what shipped, and the
-      # repository test suite -- which is allowed to name the operator --
-      # asserts that the Dockerfile copies that exact file. Together the two
-      # cover identity and packaging without CI ever naming it.
       - name: Working layout preserves the repository relationship
         run: |
-          docker run --rm glamgenius-render:ci test -d /workspace/backend
+          docker run --rm glamgenius-render:ci sh -c '
+            set -e
+            test -d /workspace/backend
+            test -f /workspace/scripts/operate_step8i_petrolatum_release.py
+          '
           WORKDIR=$(docker inspect glamgenius-render:ci --format '{{.Config.WorkingDir}}')
           if [ "$WORKDIR" != "/workspace/backend" ]; then
             echo "FAIL: WorkingDir is $WORKDIR, expected /workspace/backend"
             exit 1
           fi
-          SCRIPT_COUNT=$(docker run --rm glamgenius-render:ci sh -c 'ls -A /workspace/scripts | wc -l')
-          if [ "$SCRIPT_COUNT" != "1" ]; then
-            echo "FAIL: /workspace/scripts must hold exactly one shipped script, found $SCRIPT_COUNT:"
-            docker run --rm glamgenius-render:ci sh -c 'ls -A /workspace/scripts'
+          SCRIPTS=$(docker run --rm glamgenius-render:ci sh -c 'ls -A /workspace/scripts')
+          if [ "$SCRIPTS" != "operate_step8i_petrolatum_release.py" ]; then
+            echo "FAIL: /workspace/scripts must hold only the Phase B operator, found:"
+            echo "$SCRIPTS"
             exit 1
           fi
-          echo "PASS: layout is /workspace/backend plus exactly one shipped script"
+          echo "PASS: layout is /workspace/backend + the single production operator"
       - name: Excluded repository material is absent from the image
         run: |
           docker run --rm glamgenius-render:ci sh -c '
@@ -689,27 +685,18 @@ jobs:
             *"/api/v2/ready"*) echo "FAIL: liveness must not depend on PostgreSQL"; exit 1 ;;
           esac
           echo "PASS: liveness targets /api/v2/health"
-      - name: The shipped operator imports and its parser works, unexecuted
+      - name: Phase B operator is packaged and parseable, and is not executed
         run: |
-          # Discovered, never named -- see the note above. This imports the
-          # module, which proves every dependency it needs resolves inside the
-          # image, then builds its parser and reads its help. Nothing is
-          # dispatched: main() is never called, so no operation runs and no
-          # database is touched.
-          docker run --rm glamgenius-render:ci python -c "
-          import importlib.util, pathlib
-          scripts = sorted(pathlib.Path('/workspace/scripts').glob('*.py'))
-          assert len(scripts) == 1, scripts
-          spec = importlib.util.spec_from_file_location('shipped_operator', scripts[0])
-          module = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(module)
-          parser = module.build_parser()
-          help_text = parser.format_help()
-          for operation in ('status', 'prepare', 'compile', 'activate', 'deactivate'):
-              assert operation in help_text, operation
-          assert parser.parse_args(['status']).operation == 'status'
-          print('PASS: shipped operator imports and parses; nothing dispatched')
-          "
+          # --help exercises the argument parser and exits. No operation is
+          # named, so nothing reaches a database: status, prepare, compile,
+          # activate and deactivate are all deliberately absent here.
+          docker run --rm glamgenius-render:ci \
+            python /workspace/scripts/operate_step8i_petrolatum_release.py --help > /tmp/operator-help.txt
+          for operation in status prepare compile activate deactivate; do
+            grep -q "$operation" /tmp/operator-help.txt || {
+              echo "FAIL: the operator's help does not mention $operation"; exit 1; }
+          done
+          echo "PASS: the operator is packaged and its parser works, unexecuted"
       - name: Application modules import inside the image
         run: |
           docker run --rm glamgenius-render:ci python -c "

@@ -17,10 +17,8 @@
 # passes its own value is unaffected.
 set -eu
 
-if [ -z "${COMMIT_SHA:-}" ] || [ "${COMMIT_SHA:-}" = "unknown" ]; then
-    COMMIT_SHA="${RENDER_GIT_COMMIT:-unknown}"
-    export COMMIT_SHA
-fi
+COMMIT_SHA="unknown"
+export COMMIT_SHA
 
 # This script starts the process it was given and nothing else. It must never
 # grow a branch that runs the Phase B operator, a migration, a seed or any
