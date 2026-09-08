@@ -13,6 +13,7 @@ a field carefully still cannot leak its content by accident.
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -34,6 +35,27 @@ _AUTH_HEADER = re.compile(r"((?:authorization\s*[:=]\s*)?Bearer\s+)[A-Za-z0-9._~
 # it names is infrastructure detail that nothing in a crash report needs, and
 # leaving it invites somebody to reconstruct the rest.
 _URL_WITH_CREDENTIALS = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@\S*", re.I)
+
+# An IP address anywhere inside free text -- an upstream error, a connection
+# message, a proxy header echoed into an exception. Two stages on purpose:
+# a loose candidate match, then `ipaddress` decides. A regex tight enough to
+# recognise every IPv6 form and loose enough to miss none is not a regex worth
+# trusting, and a looser one would redact software versions. `2.12.5` is not an
+# address and the standard library says so; `203.0.113.42` and `2001:db8::42`
+# are, and it says that too.
+_IP_CANDIDATE = re.compile(r"(?<![\w.:-])((?:\d{1,3}\.){3}\d{1,3}|[0-9A-Fa-f:]{2,45})(?![\w.-])")
+
+
+def _redact_ip_addresses(value: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        candidate = match.group(1)
+        try:
+            ipaddress.ip_address(candidate)
+        except ValueError:
+            return candidate
+        return REDACTED
+
+    return _IP_CANDIDATE.sub(_replace, value)
 
 # Key-name filter — anything matching is redacted whole regardless of type.
 _SENSITIVE_KEY = re.compile(
@@ -74,7 +96,26 @@ _SENSITIVE_KEY = re.compile(
     # The keys stay readable: `verdict_key` and `reason_key` are global
     # governance identifiers and are useful in a report. The rendered text is
     # what was shown to one person about their own body.
-    r"verdict_text|reason_text|source_url|canonical_url)",
+    r"verdict_text|reason_text|source_url|canonical_url|"
+
+    # --- Profile facts, by container ---------------------------------------
+    # What somebody said about their own skin is personal context, and the
+    # milestone's contract keeps all of it out of observability. The container
+    # is redacted whole rather than walked into, so a fact nobody has invented
+    # yet is covered on the day it is added -- enumerating individual fact
+    # names would protect only the ones that already exist. `care_skin_` covers
+    # the currently relevant facts when one appears on its own rather than
+    # inside its container.
+    r"profile|personal_context|personal_lens|personal_fact|care_skin_|"
+
+    # --- Network identity ---------------------------------------------------
+    # `send_default_pii=False` already asks the SDK not to attach these. That
+    # is one layer and not a proof: a custom context, a proxy header echoed
+    # into an exception, or a future integration can each carry an address the
+    # SDK never chose to send. Anchored so that `description`, `recipe`,
+    # `equipment` and `zip` are untouched.
+    r"\bip[_-]?address\b|client[_-]?ip\b|remote[_-]?(?:ip|addr)\b|"
+    r"forwarded[_-]?for\b|real[_-]?ip\b|\bip[_-]?v[46]\b)",
     re.I,
 )
 
@@ -93,6 +134,10 @@ def _clean(value: Any, key: str = "") -> Any:
         if _BASE64_LIKE.fullmatch(stripped):
             return REDACTED
         value = _URL_WITH_CREDENTIALS.sub(REDACTED, value)
+        # Before the phone pattern: a dotted quad also looks like a long run of
+        # digits and separators, and "redacted as an address" is the truthful
+        # label for it.
+        value = _redact_ip_addresses(value)
         value = _JWT.sub(REDACTED, value)
         value = _EMAIL.sub(REDACTED, value)
         value = _PHONE.sub(REDACTED, value)

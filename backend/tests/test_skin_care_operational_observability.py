@@ -22,13 +22,19 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Any
 
 import pytest
+from app.api.v2 import skin_care_personal_decision as for_you_api
 from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, AIRun, AIRunOutput
+from app.domains.personal_decision_release.validation import (
+    PersonalDecisionReleaseInvariantError,
+)
 from app.domains.product import care_extraction
+from app.domains.product.personal_decision import CurrentPackSnapshotUnresolved
 from app.shared.database.sql import get_sessionmaker
 from app.shared.errors.exceptions import AppError, ValidationFailedError
 from app.shared.observability import operational_events
@@ -37,6 +43,7 @@ from app.shared.observability.operational_events import (
     EVENT_FOR_YOU,
     EVENT_LABEL_CONFIRMATION,
     EVENT_LABEL_TRANSCRIPTION,
+    MAX_DURATION_MS,
     OperationalEventContractError,
     OperationalFailureClass,
     OperationalOutcome,
@@ -71,6 +78,17 @@ DIAGNOSIS_SENTINEL = "DIAGNOSIS_SECRET_SENTINEL"
 INGREDIENT_SENTINEL = "INGREDIENT_SECRET_SENTINEL"
 CUSTOMER_SENTINEL = "CUSTOMER_SECRET_SENTINEL"
 DATABASE_URL_SENTINEL = "postgresql://secret-user:secret-password@secret-host/db"
+SNAPSHOT_SENTINEL = "SNAPSHOT_SECRET_SENTINEL"
+PRODUCT_SENTINEL = "PRODUCT_SECRET_SENTINEL"
+RELEASE_SENTINEL = "RELEASE_SECRET_SENTINEL"
+
+#: Personal context and network identity, which the contract also prohibits.
+PROFILE_FACT_KEY = "care_skin_usual_feel"
+PROFILE_FACT_VALUE = "often_dry_or_tight"
+IPV4_SENTINEL = "203.0.113.42"
+IPV6_SENTINEL = "2001:db8::42"
+#: A software version, not an address. Redacting this would be a bug.
+HARMLESS_VERSION = "2.12.5"
 
 ALL_SENTINELS = (
     EMAIL_SENTINEL,
@@ -86,6 +104,9 @@ ALL_SENTINELS = (
     "secret-password",
     "secret-user",
     "secret-host",
+    SNAPSHOT_SENTINEL,
+    PRODUCT_SENTINEL,
+    RELEASE_SENTINEL,
 )
 
 #: The synthetic pack. Every one of these strings is customer/product content
@@ -126,6 +147,16 @@ FORBIDDEN_TELEMETRY_FIELDS = (
     "source_url",
     "verdict_text",
     "reason_text",
+    # Personal context, by container and by fact.
+    "profile",
+    "profile_facts",
+    "personal_context",
+    "personal_lens",
+    "care_skin_usual_feel",
+    # Network identity.
+    "ip_address",
+    "client_ip",
+    "remote_ip",
 )
 
 
@@ -147,11 +178,19 @@ def operational_log():
             lines.append(record.getMessage())
 
     handler = _Capture()
+    handler.setLevel(logging.DEBUG)
+    # Set the level explicitly rather than inheriting it. Without this the
+    # logger's effective level comes from the root, which is only INFO because
+    # some earlier test happened to start the app and configure logging — so
+    # this class passed in a full run and captured nothing when run alone.
+    previous_level = operational_events.logger.level
+    operational_events.logger.setLevel(logging.INFO)
     operational_events.logger.addHandler(handler)
     try:
         yield lines
     finally:
         operational_events.logger.removeHandler(handler)
+        operational_events.logger.setLevel(previous_level)
 
 
 def _events(lines: list[str], name: str) -> list[str]:
@@ -184,29 +223,41 @@ def _assert_only_known_events(lines: list[str]) -> None:
         ), f"unrecognised line in the operational stream: {line!r}"
 
 
+#: Fragments that may never appear anywhere, in any form.
+_FORBIDDEN_FRAGMENTS = (
+    *ALL_SENTINELS,
+    *PACK.values(),
+    PROFILE_FACT_VALUE,
+    IPV4_SENTINEL,
+    IPV6_SENTINEL,
+    "petrolatum",
+    "pregnan",
+    "breastfeed",
+    "medication",
+    "diagnos",
+    "handoff",
+    "barcode",
+)
+
+#: Short words that must be matched whole. `age` as a bare substring also
+#: appears in `message`, `usage` and `storage`, and `wait` in `waiting` -- the
+#: same class of accident this milestone is meant to avoid, so it is not
+#: repeated in the assertion that checks for it.
+_FORBIDDEN_WORDS = (
+    "age", "child", "account", "device", "verdict", "buy", "wait", "skip",
+    "profile", "ip", "address",
+)
+
+
 def _assert_nothing_sensitive(text: str) -> None:
-    """No customer, product or health content anywhere in this text."""
+    """No customer, product, personal-context or health content in this text."""
     lowered = text.lower()
-    for forbidden in (
-        *ALL_SENTINELS,
-        *PACK.values(),
-        "petrolatum",
-        "pregnan",
-        "breastfeed",
-        "medication",
-        "diagnos",
-        "child",
-        "age",
-        "handoff",
-        "barcode",
-        "account",
-        "device",
-        "verdict",
-        "buy",
-        "wait",
-        "skip",
-    ):
+    for forbidden in _FORBIDDEN_FRAGMENTS:
         assert forbidden.lower() not in lowered, f"{forbidden!r} leaked into: {text!r}"
+    for word in _FORBIDDEN_WORDS:
+        assert not re.search(rf"\b{re.escape(word)}\b", lowered), (
+            f"{word!r} leaked into: {text!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -742,9 +793,18 @@ class TestForYouTelemetry:
         stream = "\n".join(operational_log)
         _assert_only_known_events(operational_log)
         _assert_nothing_sensitive(stream)
+        # Structural, not numeric. `duration_ms=15` is legitimate telemetry and
+        # `duration_ms=150` contains "15" too, so banning the digits that happen
+        # to spell an age would fail on a fast request and prove nothing about
+        # privacy. What matters is that no health-derived *key* exists at all.
         for flag in ALL_SAFETY_FLAGS:
             assert flag not in stream
-        assert "15" not in stream.replace("duration_ms=", "duration=")
+        for key in (
+            "stated_age", "age", "subject_is_child", "pregnancy", "breastfeeding",
+            "medication_involved", "diagnosed_condition_involved", "handoff",
+        ):
+            assert key not in fields
+            assert f"{key}=" not in stream
         # And nothing survives the Sentry boundary either.
         scrubbed = json.dumps(
             scrub_event({"request": {"data": {"barcode": BARCODE, "safety": ALL_SAFETY_FLAGS}}})
@@ -797,6 +857,308 @@ class TestForYouTelemetry:
         fields = _fields(events[0])
         assert fields["outcome"] == "failed"
         assert set(fields) == {"outcome", "failure_class", "duration_ms"}
+        _assert_only_known_events(operational_log)
+        _assert_nothing_sensitive("\n".join(operational_log))
+
+
+# ---------------------------------------------------------------------------
+# The application log — what a caught exception must not carry into it
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def application_log():
+    """Every line the real application log path would produce.
+
+    Attached to the root logger with the production redaction filter, because
+    that is where a route's `logger.error(...)` actually ends up. The filter
+    materialises `exc_info` into text exactly as it does in production, so if
+    anybody restores `logger.exception(...)` the traceback lands here in full
+    and the assertions below see it.
+    """
+    lines: list[str] = []
+    formatter = logging.Formatter("%(name)s %(levelname)s %(message)s")
+    redactor = OAuthRedactionFilter()
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            redactor.filter(record)
+            lines.append(formatter.format(record))
+
+    handler = _Capture()
+    handler.setLevel(logging.DEBUG)
+    root = logging.getLogger()
+    previous_level = root.level
+    root.setLevel(logging.DEBUG)
+    root.addHandler(handler)
+    try:
+        yield lines
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(previous_level)
+
+
+class TestCaughtExceptionsNeverReachTheLog:
+    async def test_an_unresolved_snapshot_logs_a_name_and_nothing_else(
+        self, db_clean, app_client, registered_supabase_user,
+        operational_log, application_log, monkeypatch,
+    ) -> None:
+        """The exact leak independent review found.
+
+        `CurrentPackSnapshotUnresolved` really does say "label snapshot <uuid>
+        does not match the capture that created it". Dropping the identifiers
+        from the format string left `logger.exception` attaching `exc_info`, so
+        the uuid reached the log through the traceback instead. The customer
+        gets a governed fixed 503 either way, so the exception text buys
+        nothing the request id does not.
+        """
+        pack = await _confirmed_pack(app_client, registered_supabase_user)
+
+        async def _explode(session: Any, *, pack: Any):
+            raise CurrentPackSnapshotUnresolved(
+                f"label snapshot {SNAPSHOT_SENTINEL} does not match {PRODUCT_SENTINEL}"
+            )
+
+        monkeypatch.setattr(
+            for_you_api, "resolve_current_pack_label_snapshot", _explode
+        )
+        operational_log.clear()
+        application_log.clear()
+
+        response = await app_client.post(
+            FOR_YOU_URL, headers={**pack["headers"], **auth(pack["token"])},
+            json={"barcode": BARCODE},
+        )
+
+        # The governed response is unchanged: still fail-closed, still 503.
+        assert response.status_code == 503, response.text
+        assert SNAPSHOT_SENTINEL not in response.text
+        assert PRODUCT_SENTINEL not in response.text
+
+        logged = "\n".join(application_log)
+        assert "for_you_snapshot_unresolved" in logged
+        assert SNAPSHOT_SENTINEL not in logged
+        assert PRODUCT_SENTINEL not in logged
+        assert "does not match" not in logged
+        assert "Traceback" not in logged
+        assert "CurrentPackSnapshotUnresolved" not in logged
+
+        # And the operational stream carries only its safe failed event.
+        events = _events(operational_log, EVENT_FOR_YOU)
+        assert len(events) == 1
+        fields = _fields(events[0])
+        assert fields["outcome"] == "failed"
+        assert set(fields) == {"outcome", "failure_class", "duration_ms"}
+        _assert_only_known_events(operational_log)
+        _assert_nothing_sensitive("\n".join(operational_log))
+
+    async def test_an_invalid_active_release_logs_a_name_and_nothing_else(
+        self, db_clean, app_client, registered_supabase_user,
+        operational_log, application_log, monkeypatch,
+    ) -> None:
+        """The same treatment for the other caught invariant.
+
+        `PersonalDecisionReleaseInvariantError` carries manifest and rule detail
+        in its message, which is exactly what must not describe a governed 503.
+        """
+        pack = await _confirmed_pack(app_client, registered_supabase_user)
+
+        async def _explode(session: Any):
+            raise PersonalDecisionReleaseInvariantError(
+                f"release manifest {RELEASE_SENTINEL} does not hash to its recorded value"
+            )
+
+        monkeypatch.setattr(
+            for_you_api, "load_active_personal_decision_release", _explode
+        )
+        operational_log.clear()
+        application_log.clear()
+
+        response = await app_client.post(
+            FOR_YOU_URL, headers={**pack["headers"], **auth(pack["token"])},
+            json={"barcode": BARCODE},
+        )
+        assert response.status_code == 503, response.text
+        assert RELEASE_SENTINEL not in response.text
+
+        logged = "\n".join(application_log)
+        assert "for_you_active_release_invalid" in logged
+        assert RELEASE_SENTINEL not in logged
+        assert "does not hash" not in logged
+        assert "Traceback" not in logged
+        assert "PersonalDecisionReleaseInvariantError" not in logged
+
+        events = _events(operational_log, EVENT_FOR_YOU)
+        assert len(events) == 1
+        assert _fields(events[0])["outcome"] == "failed"
+        _assert_only_known_events(operational_log)
+
+    def test_the_for_you_route_never_calls_logger_exception(self) -> None:
+        """A static backstop for the two tests above.
+
+        `logger.exception` is the leak: it attaches `exc_info` whatever the
+        format string says. There is no caught invariant in this route whose
+        traceback the customer's governed 503 needs.
+        """
+        tree = ast.parse(
+            (BACKEND_ROOT / "app" / "api" / "v2" / "skin_care_personal_decision.py")
+            .read_text(encoding="utf-8")
+        )
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                target = ast.unparse(node.func)
+                assert target != "logger.exception", ast.unparse(node)
+                if target.startswith("logger."):
+                    # And every log call takes a fixed string, never a value.
+                    assert node.args and isinstance(node.args[0], ast.Constant), (
+                        ast.unparse(node)
+                    )
+                    assert len(node.args) == 1, ast.unparse(node)
+                    assert not node.keywords, ast.unparse(node)
+
+
+# ---------------------------------------------------------------------------
+# Personal context and network identity at the Sentry boundary
+# ---------------------------------------------------------------------------
+class TestProfileFactsAndAddresses:
+    def test_the_reviewed_adversarial_payload_survives_nothing(self) -> None:
+        """Exactly the payload independent review asked for."""
+        event = {
+            "user": {"ip_address": IPV4_SENTINEL},
+            "request": {
+                "headers": {
+                    "X-Forwarded-For": IPV4_SENTINEL,
+                    "X-Real-IP": IPV6_SENTINEL,
+                },
+                "data": {"profile_facts": {PROFILE_FACT_KEY: PROFILE_FACT_VALUE}},
+            },
+            "contexts": {"personal_context": {PROFILE_FACT_KEY: PROFILE_FACT_VALUE}},
+            "message": f"upstream peer {IPV4_SENTINEL} failed",
+        }
+
+        rendered = json.dumps(scrub_event(event))
+
+        for forbidden in (IPV4_SENTINEL, IPV6_SENTINEL, PROFILE_FACT_VALUE, PROFILE_FACT_KEY):
+            assert forbidden not in rendered, f"{forbidden!r} survived scrubbing"
+        assert REDACTED in rendered
+
+    @pytest.mark.parametrize(
+        "key", ["profile", "profile_facts", "personal_context", "personal_lens"]
+    )
+    def test_a_profile_container_is_redacted_whole(self, key: str) -> None:
+        """The container, not an enumeration of the facts inside it.
+
+        A fact nobody has invented yet is covered on the day it is added.
+        """
+        scrubbed = scrub_event(
+            {"contexts": {key: {PROFILE_FACT_KEY: PROFILE_FACT_VALUE, "future_fact": "x"}}}
+        )
+        assert scrubbed["contexts"][key] == REDACTED
+        rendered = json.dumps(scrubbed)
+        assert PROFILE_FACT_KEY not in rendered
+        assert "future_fact" not in rendered
+
+    def test_a_bare_profile_fact_is_redacted_too(self) -> None:
+        scrubbed = scrub_event({"extra": {PROFILE_FACT_KEY: PROFILE_FACT_VALUE}})
+        assert scrubbed["extra"][PROFILE_FACT_KEY] == REDACTED
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "ip_address", "client_ip", "remote_ip", "remote_addr",
+            "x_forwarded_for", "X-Forwarded-For", "x_real_ip", "X-Real-IP",
+        ],
+    )
+    def test_every_address_key_is_redacted(self, key: str) -> None:
+        scrubbed = scrub_event({"request": {"headers": {key: IPV4_SENTINEL}}})
+        assert scrubbed["request"]["headers"][key] == REDACTED
+
+    @pytest.mark.parametrize(
+        "address",
+        [
+            "203.0.113.42", "8.8.8.8", "10.0.0.1", "255.255.255.255",
+            "2001:db8::42", "2001:0db8:0000:0000:0000:0000:0000:0042",
+            "::1", "fe80::1", "2001:db8:85a3::8a2e:370:7334",
+        ],
+    )
+    def test_an_address_inside_free_text_is_redacted(self, address: str) -> None:
+        """A proxy header echoed into an exception is still an address."""
+        scrubbed = scrub_event({"message": f"upstream peer {address} refused the connection"})
+        assert address not in scrubbed["message"]
+        assert REDACTED in scrubbed["message"]
+
+    @pytest.mark.parametrize(
+        "harmless",
+        [
+            "2.12.5", "1.0.0", "0.3.5", "16.4", "v2.12.5",
+            "sentry-sdk 2.12.5 initialised", "python 3.11.9", "postgres 16.4",
+            "took 12.5 ms", "99.9% availability",
+        ],
+    )
+    def test_a_version_number_is_not_mistaken_for_an_address(self, harmless: str) -> None:
+        """Redacting these would destroy exactly the diagnostics we kept."""
+        scrubbed = scrub_event({"extra": {"note": harmless}})
+        assert scrubbed["extra"]["note"] == harmless
+
+    @pytest.mark.parametrize(
+        "not_an_address", ["12:34", "00:57:11", "de:ad:be:ef:ca:fe", "abc", "1.2.3"]
+    )
+    def test_a_colon_separated_value_that_is_not_an_address_survives(
+        self, not_an_address: str
+    ) -> None:
+        scrubbed = scrub_event({"extra": {"note": f"saw {not_an_address} here"}})
+        assert not_an_address in scrubbed["extra"]["note"]
+
+
+# ---------------------------------------------------------------------------
+# Safe latency that happens to look like an age
+# ---------------------------------------------------------------------------
+class TestDurationIsNotAnAge:
+    @pytest.mark.parametrize("duration", [15, 150, 151, 0, 1, MAX_DURATION_MS])
+    def test_a_duration_equal_to_an_age_is_still_valid_telemetry(
+        self, duration: int, operational_log,
+    ) -> None:
+        """`duration_ms=15` is latency. It is not somebody's age.
+
+        A privacy assertion that banned the digits would fail here, on a fast
+        request, having proved nothing. The event is judged by its keys.
+        """
+        operational_events._emit(
+            EVENT_FOR_YOU,
+            {"outcome": OperationalOutcome.COMPLETED, "duration_ms": duration},
+        )
+        assert len(operational_log) == 1
+        fields = _fields(operational_log[0])
+        assert set(fields) == {"outcome", "duration_ms"}
+        assert fields["duration_ms"] == str(duration)
+        _assert_only_known_events(operational_log)
+        _assert_nothing_sensitive("\n".join(operational_log))
+
+    async def test_a_forced_fifteen_millisecond_request_is_indistinguishable(
+        self, db_clean, app_client, registered_supabase_user,
+        operational_log, monkeypatch,
+    ) -> None:
+        """The stopwatch forced to exactly 15, on a request carrying age 15.
+
+        The two numbers coincide and nothing about the request can be recovered
+        from the event either way.
+        """
+        monkeypatch.setattr(
+            operational_events._Stopwatch, "duration_ms", lambda self: 15
+        )
+        pack = await _confirmed_pack(app_client, registered_supabase_user)
+        operational_log.clear()
+
+        response = await app_client.post(
+            FOR_YOU_URL, headers={**pack["headers"], **auth(pack["token"])},
+            json={"barcode": BARCODE, "safety": ALL_SAFETY_FLAGS},
+        )
+        assert response.status_code == 200, response.text
+
+        events = _events(operational_log, EVENT_FOR_YOU)
+        assert len(events) == 1
+        fields = _fields(events[0])
+        assert fields == {"outcome": "completed", "duration_ms": "15"}
+        # The 15 that is present is a latency; the 15 that is absent is an age.
+        assert "stated_age" not in operational_log[0]
         _assert_only_known_events(operational_log)
         _assert_nothing_sensitive("\n".join(operational_log))
 

@@ -481,10 +481,16 @@ async def read_skin_care_for_you(
             # label version behind it. That is a broken invariant, not a customer
             # state, so it fails closed rather than pretending nothing was
             # confirmed.
-            # Identifiers deliberately absent: the barcode is product data and the
-            # scan event identifies one person's capture. The root logger stamps
-            # the request id on every line, which is how an operator finds this.
-            logger.exception("for_you_snapshot_unresolved")
+            # A fixed event name and nothing else. Removing the identifiers from
+            # the format string was not enough: `logger.exception` attaches
+            # `exc_info`, and `CurrentPackSnapshotUnresolved` says things like
+            # "label snapshot <uuid> does not match the capture that created
+            # it" -- so the snapshot id reached the log anyway, through the
+            # traceback rather than through the message. The customer already
+            # gets a governed fixed 503 here, so the exception text buys nothing
+            # that the request id does not. The root logger stamps that id on
+            # every line, which is how an operator finds this one.
+            logger.error("for_you_snapshot_unresolved")
             raise AppError(
                 "This result is not available right now.",
                 status_code=503,
@@ -520,7 +526,10 @@ async def read_skin_care_for_you(
                 # customers "no reviewed knowledge" while a broken bundle sits
                 # activated. The detail stays in the log; the customer gets none of
                 # the manifest, the hash or the rule identities.
-                logger.exception("for_you_active_release_invalid")
+                # Same reasoning. `PersonalDecisionReleaseInvariantError`
+                # carries manifest and rule detail in its message, which is
+                # exactly what must not reach a log line for a governed 503.
+                logger.error("for_you_active_release_invalid")
                 raise AppError(
                     "This result is not available right now.",
                     status_code=503,
