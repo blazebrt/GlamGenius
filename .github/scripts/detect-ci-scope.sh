@@ -63,6 +63,16 @@ for path in "${changed_files[@]}"; do
     .github/scripts/detect-ci-scope.sh|.github/workflows/ci.yml)
       backend=true
       ;;
+    # The production deployment artefacts. `render.yaml` matched nothing at
+    # all before this milestone: a pull request could rewrite the entire
+    # production topology -- turn automatic deploys on, drop the notification
+    # cron, point readiness at the wrong path -- and every job would skip and
+    # the pull request would report green. The assertions that hold those
+    # rules live in backend/tests/test_production_runtime_foundation.py, so
+    # the backend suite is what qualifies them.
+    render.yaml|deploy/*)
+      backend=true
+      ;;
   esac
   case "$path" in
     backend/migrations/*|backend/alembic.ini|backend/app/*/models.py|backend/app/shared/database/*)
@@ -117,6 +127,12 @@ for path in "${changed_files[@]}"; do
     .trivyignore|.trivy-exceptions.yaml|scripts/validate_trivy_exceptions.py|.github/scripts/detect-ci-scope.sh|.github/workflows/ci.yml)
       container=true
       ;;
+    # The production image itself, and the Blueprint that decides which
+    # Dockerfile and build context produce it. `.dockerignore` decides what
+    # ends up inside the image, which is squarely a container concern.
+    deploy/*|render.yaml|.dockerignore)
+      container=true
+      ;;
   esac
   case "$path" in
     security/node-audit*|security/*audit*|security/pip-audit*|security/requirements*)
@@ -124,9 +140,30 @@ for path in "${changed_files[@]}"; do
     backend/app/config.py|backend/app/auth/*|backend/app/shared/auth*|backend/tests/test_supabase*|backend/tests/test_jwks*|security/*|.github/*)
       security=true
       ;;
+    # The public readiness endpoint is the service's most exposed surface and
+    # is now an explicit redaction boundary, so a change to it must run the
+    # health-and-readiness job -- which the `security` scope is what gates.
+    # `backend/*` alone only ran the backend suite.
+    backend/app/api/v2/config.py)
+      security=true
+      ;;
+    # Production runtime configuration is where a credential would most
+    # plausibly be committed by accident, so it is qualified as a security
+    # change as well as a container one.
+    render.yaml|deploy/*|.dockerignore)
+      security=true
+      ;;
   esac
   case "$path" in
     backend/app/release.py|scripts/deploy*|.github/workflows/*)
+      release=true
+      ;;
+    # The Blueprint names `python -m app.release` as the pre-deploy gate and
+    # the image is what that gate runs inside, so both belong to release
+    # qualification. The production runtime suite is deliberately not listed
+    # here: it is a backend test, and the release job is a live migration
+    # rehearsal against PostgreSQL, which is a different question.
+    render.yaml|deploy/*)
       release=true
       ;;
   esac

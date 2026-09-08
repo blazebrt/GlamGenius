@@ -1,0 +1,165 @@
+# GlamGenius production runtime — Render Blueprint.
+#
+# Three process classes, one image, one database authority, and no automatic
+# anything. Documented at https://render.com/docs/blueprint-spec.
+#
+# ---------------------------------------------------------------------------
+# What this file is not
+# ---------------------------------------------------------------------------
+# It is not a knowledge activation. Deploying the software and governing what
+# the product is allowed to say are two different events, and this file only
+# performs the first. Nothing here runs the Phase B controlled activation
+# operator: not a start command, not a pre-deploy command, not the cron job.
+# Production activation is a deliberate human one-off job, described in
+# docs/OPERATIONS.md under "Render Production Runtime".
+#
+# ---------------------------------------------------------------------------
+# Why there is no database here
+# ---------------------------------------------------------------------------
+# There is deliberately no `databases:` block. The application authority is the
+# existing Supabase PostgreSQL project, and Store A — the Open Food Facts copy
+# — is a physically separate database authority. Letting Render create a
+# managed Postgres alongside them would introduce a third, ownerless authority
+# and would invite exactly the mistake the ODbL wall exists to prevent: two
+# stores that quietly become one. Both URLs arrive through the environment and
+# `validate_production_configuration()` refuses to start if they are equal.
+#
+# ---------------------------------------------------------------------------
+# Why nothing deploys itself
+# ---------------------------------------------------------------------------
+# `autoDeploy: false` and `autoDeployTrigger: off` are both set on every
+# service. autoDeployTrigger supersedes autoDeploy in Render's current schema
+# and takes precedence when both are present; both are written because the
+# cost of one of them being ignored by a future schema change is a production
+# deploy nobody chose. `"off"` is quoted on purpose: YAML 1.1 reads a bare off
+# as the boolean false, which is not the string the schema expects. A deployment is an operator deploying one exact
+# reviewed Git SHA — never "latest".
+#
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+# Two environment groups, referenced by every workload so all four run against
+# the same configuration:
+#
+#   glamgenius-production-invariants  declared below. Non-secret governance
+#                                     values that must not drift, so they are
+#                                     version-controlled rather than typed
+#                                     into a dashboard.
+#
+#   glamgenius-production-secrets     NOT declared here and never in Git. The
+#                                     operator creates it in the Render
+#                                     dashboard and fills it in BEFORE the
+#                                     first Blueprint sync. A sync that runs
+#                                     first fails because the group does not
+#                                     exist — which is the correct failure:
+#                                     it stops before creating services that
+#                                     would start unconfigured.
+#
+# The key names that group must contain are listed in docs/OPERATIONS.md.
+# No value for any of them belongs in this file, in any test, or in any commit.
+
+services:
+  # --- 1. The API ----------------------------------------------------------
+  - type: web
+    name: glamgenius-api
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerfilePath: ./deploy/render/Dockerfile
+    dockerContext: .
+    autoDeploy: false
+    autoDeployTrigger: "off"
+    # Readiness, not liveness. /api/v2/ready checks PostgreSQL, the production
+    # configuration invariants, storage, the seed version, the Alembic head,
+    # worker heartbeat freshness and the AI provider, and answers 503 until all
+    # of them hold. Render must not send customer traffic before that.
+    # /api/v2/health is liveness and is the container's own healthcheck.
+    healthCheckPath: /api/v2/ready
+    # The governed release entrypoint, and only it. It already owns production
+    # config validation, the PostgreSQL advisory lock, `alembic upgrade head`,
+    # `alembic check`, Store A provisioning, reference-data seeding and the
+    # consistency checks — so none of that is restated in YAML or in bash,
+    # where it would drift. A non-zero exit here stops the deploy.
+    preDeployCommand: python -m app.release
+    # Bind 0.0.0.0 on Render's runtime $PORT. The image's WORKDIR is
+    # /workspace/backend, so this is the same command the runbook documents.
+    dockerCommand: sh -c "exec uvicorn server:app --host 0.0.0.0 --port $PORT"
+    # No disk: media lives in Supabase Storage in production, and
+    # /api/v2/ready refuses to be ready if the local adapter is selected.
+    envVars:
+      - fromGroup: glamgenius-production-invariants
+      - fromGroup: glamgenius-production-secrets
+
+  # --- 2. The account-deletion worker --------------------------------------
+  # Long-running, not scheduled: it polls deletion jobs with
+  # SELECT ... FOR UPDATE SKIP LOCKED and must be continuously available,
+  # because a person who asked to be deleted is waiting on it.
+  - type: worker
+    name: glamgenius-account-deletion
+    runtime: docker
+    region: singapore
+    plan: starter
+    # The same image, from the same build source, as the API. Not a second
+    # Dockerfile: a worker running different code from the API it shares a
+    # database with is a class of incident this avoids outright.
+    dockerfilePath: ./deploy/render/Dockerfile
+    dockerContext: .
+    autoDeploy: false
+    autoDeployTrigger: "off"
+    # On a first deployment the worker can otherwise start against a database
+    # the API has not migrated yet. The advisory lock in app/release.py
+    # (LOCK_ID 4829103) is the single concurrency authority: whichever of the
+    # two reaches it first migrates, the other blocks and then finds nothing
+    # to do. No second lock is introduced anywhere.
+    preDeployCommand: python -m app.release
+    dockerCommand: python -m app.workers.account_deletion
+    envVars:
+      - fromGroup: glamgenius-production-invariants
+      - fromGroup: glamgenius-production-secrets
+
+  # --- 3. The hourly notification batch ------------------------------------
+  # A scheduled batch, not a daemon — that is what the worker has always been,
+  # and this is the scheduler the repository never had. It replaces host cron
+  # or a systemd timer for this deployment model. The systemd guidance in
+  # docs/OPERATIONS.md stays valid for anyone deploying differently, and no
+  # cron or systemd is installed inside the container.
+  - type: cron
+    name: glamgenius-notifications
+    runtime: docker
+    region: singapore
+    plan: starter
+    # Once per hour, on the hour, evaluated in UTC. The compiler behind this
+    # never sends late catch-ups, so a missed hour is a missed hour rather
+    # than a burst — which is why the interval matters and is asserted.
+    schedule: "0 * * * *"
+    dockerfilePath: ./deploy/render/Dockerfile
+    dockerContext: .
+    autoDeploy: false
+    autoDeployTrigger: "off"
+    dockerCommand: python -m app.workers.notifications
+    envVars:
+      - fromGroup: glamgenius-production-invariants
+      - fromGroup: glamgenius-production-secrets
+
+envVarGroups:
+  # Non-secret production invariants. These are here rather than in the
+  # dashboard precisely because they are governance decisions: an invite-only
+  # beta that requires analysis consent and never writes media to a local
+  # disk. Changing one of them should be a reviewed commit, not a text field
+  # somebody edited on a Tuesday.
+  #
+  # Every secret — database URLs, Supabase keys, the Gemini key, the Sentry
+  # DSN — belongs to glamgenius-production-secrets, which is created in the
+  # dashboard and is deliberately absent from this file.
+  - name: glamgenius-production-invariants
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: INVITE_REQUIRED
+        value: "true"
+      - key: REQUIRE_ANALYSIS_CONSENT
+        value: "true"
+      - key: MEDIA_STORAGE_BACKEND
+        value: supabase
+      - key: MEDIA_ALLOW_LOCAL_IN_PRODUCTION
+        value: "false"

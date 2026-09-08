@@ -101,7 +101,15 @@ EXPOSE 8000
 # tini reaps zombies and forwards signals so `docker stop` is graceful.
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
+# Liveness, on the route that actually exists. This probed /health, which no
+# router serves — every V2 route is mounted under /api/v2 — so the container
+# reported unhealthy from the moment it started and the signal was worthless.
+#
+# It stays liveness and must not become readiness: /api/v2/health makes no
+# network calls, so a database outage cannot make Docker kill a process that
+# is running perfectly well. Readiness, which does check PostgreSQL, is
+# /api/v2/ready, and it is the orchestrator's probe rather than this one.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
-  CMD python -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').getcode() == 200 else 1)" || exit 1
+  CMD python -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v2/health', timeout=3).getcode() == 200 else 1)" || exit 1
 
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]

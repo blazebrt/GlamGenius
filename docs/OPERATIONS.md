@@ -518,3 +518,207 @@ curl -X POST "https://<your-api-host>/api/v2/admin/personal-decision-releases/<r
 
 Never paste a real token, password, production hostname or connection string
 into a ticket, a log, or this document.
+
+---
+
+## Render Production Runtime
+
+The deployment model for production: three Render services in Singapore, one
+image, and the existing Supabase authorities. The Blueprint is `render.yaml`
+at the repository root; the image is `deploy/render/Dockerfile`, built from the
+repository root as its context.
+
+The systemd guidance in §6 is **not** replaced. It remains the correct approach
+for anyone deploying to a host they own. Render's Cron Job takes its place in
+*this* model, and no cron or systemd is installed inside the container.
+
+### Two different events, and why the order matters
+
+| | Deployment | Phase B activation |
+| --- | --- | --- |
+| What it changes | which software is running | what the product is allowed to say |
+| Who decides | operator, after CI is green on a reviewed SHA | reviewer, after inspecting production status |
+| How often | whenever a reviewed change ships | rarely, deliberately |
+| Automatable | the mechanics, yes | **never** |
+
+**A deployment must never activate knowledge.** Nothing in `render.yaml`, in
+the image, in the pre-deploy command or in the cron job reaches the Phase B
+operator. Deploying the code that *contains* the operator changes nothing about
+what customers are told; only step 13 below does, and only after step 14.
+
+### The services
+
+| Service | Type | Command | Notes |
+| --- | --- | --- | --- |
+| `glamgenius-api` | web | `uvicorn server:app --host 0.0.0.0 --port $PORT` | readiness `/api/v2/ready` |
+| `glamgenius-account-deletion` | worker | `python -m app.workers.account_deletion` | continuous; people are waiting on it |
+| `glamgenius-notifications` | cron | `python -m app.workers.notifications` | `0 * * * *`, UTC |
+
+All three run from `/workspace/backend` inside the image, use the same
+Dockerfile and build context, declare no disk, and have automatic Git deploy
+switched off.
+
+### Environment configuration
+
+Two Render environment groups, both referenced by all three services so they
+cannot drift apart:
+
+**`glamgenius-production-invariants`** — declared in `render.yaml` and
+version-controlled, because these are governance decisions rather than
+settings: `APP_ENV`, `INVITE_REQUIRED`, `REQUIRE_ANALYSIS_CONSENT`,
+`MEDIA_STORAGE_BACKEND`, `MEDIA_ALLOW_LOCAL_IN_PRODUCTION`.
+
+**`glamgenius-production-secrets`** — created by hand in the Render dashboard,
+never in Git. Key names only, below. **No value for any of these belongs in
+this repository, in a ticket, in a log, or in a screenshot.**
+
+| Key | What it is |
+| --- | --- |
+| `POSTGRES_URL` | the production application database |
+| `OFF_DATABASE_URL` | Store A, a **physically distinct** database |
+| `SUPABASE_URL` | the production Supabase project |
+| `SUPABASE_ANON_KEY` | public client key |
+| `SUPABASE_SERVICE_ROLE_KEY` | server-side only — never reaches the app |
+| `SUPABASE_JWT_ISSUER` | token issuer the API verifies against |
+| `SUPABASE_JWKS_URL` | where the API fetches signing keys |
+| `SUPABASE_STORAGE_BUCKET` | media bucket name |
+| `GEMINI_API_KEY` | the AI gateway's only credential |
+| `SENTRY_BACKEND_DSN` | backend error reporting |
+| `ALLOWED_ORIGINS` | CORS allowlist; must not be the development default |
+| `PRIVACY_POLICY_URL` | shown to customers |
+| `SUPPORT_URL` | shown to customers |
+| `CONSENT_VERSION` | the consent text version being enforced |
+
+`python -m app.release_readiness --json` reports which of these are missing,
+placeholder or invalid, **by key name and status only**. It never prints a
+value. It is the right tool when something is misconfigured; reading the
+environment directly is not.
+
+### The procedure
+
+**1. Production application database authority.** Identify or create the
+production Supabase PostgreSQL project. This is the primary authority for every
+application table. Prefer a region close to the Singapore runtime where
+Supabase offers one.
+
+**2. Store A authority, physically separate.** Identify or create a second,
+distinct database for the Open Food Facts copy. This is a licence obligation,
+not a preference: ODbL is share-alike, and a single database holding both would
+oblige us to publish ours. `validate_production_configuration()` refuses to
+start if `OFF_DATABASE_URL` equals `POSTGRES_URL`. See
+`docs/architecture/ODBL_DATA_WALL.md`.
+
+**3. Create the secrets group — before any sync.** In the Render dashboard,
+create an environment group named exactly `glamgenius-production-secrets` and
+enter every key from the table above. Do this first: a Blueprint sync attempted
+before the group exists fails, which is the correct failure — it stops before
+creating services that would start unconfigured.
+
+**4. Initial Blueprint sync.** Point Render at the repository and sync
+`render.yaml`. Render creates the three services and the invariants group. No
+deploy happens automatically, because automatic deploy is off on all three.
+
+**5. Deploy one exact reviewed commit.** Choose the SHA a human reviewed and CI
+passed. Deploy that SHA — never a branch tip, never "latest". Record it. Each
+process receives it at runtime as `RENDER_GIT_COMMIT`, and the image's
+entrypoint copies it into `COMMIT_SHA`, which both workers write to
+`system_worker_status.service_version`. That is how the deployed commit stays
+checkable after the fact rather than only at deploy time.
+
+**6. The pre-deploy gate.** The web service and the deletion worker both run
+`python -m app.release` before starting. It validates production configuration,
+takes the PostgreSQL advisory lock (`LOCK_ID = 4829103`), runs
+`alembic upgrade head`, runs `alembic check` for drift, provisions Store A,
+seeds reference data and verifies the seed version, the seven inventory
+categories, the feature flags and the ingredient catalogue.
+
+*Ordering on a first deployment:* whichever of the two reaches the advisory
+lock first performs the migration; the other blocks until it finishes and then
+finds nothing to do. That lock is the only concurrency authority — do not add a
+second one anywhere. The cron job has no pre-deploy command; if it fires before
+the first migration completes, that hour is skipped and the next hour succeeds.
+
+*Failure behaviour:* a non-zero exit stops the deploy. The previous version
+keeps serving traffic and no customer sees a partially migrated database. The
+log line names the stage and a fixed classification — for example
+`stage=alembic_upgrade classification=migration_failed returncode=1` — and
+deliberately does **not** include Alembic's stderr, because a failing
+migration's stderr is usually the driver's connection string with credentials
+in it. Reproduce against a non-production database with the same migration
+chain to see the underlying message.
+
+**7. Verify liveness.** `GET /api/v2/health` → `200`, `{"status": "alive"}`.
+This makes no network calls, so it stays `alive` through a database blip. It is
+also the container's own Docker healthcheck.
+
+**8. Verify readiness.** `GET /api/v2/ready` → `200` and `"status": "ready"`.
+Until every component is satisfied it answers `503` with `"not_ready"`, and
+Render withholds traffic. Components: `postgres`, `production_config`,
+`storage`, `seed_version_status`, `alembic_status`, `worker_heartbeat`,
+`feature_flags`, `ai_provider`. Each reports a fixed status word — the endpoint
+is public and unauthenticated, so it will never quote a driver message, a URL
+or a hostname. `unavailable` means that component raised; use
+`app.release_readiness` and the service logs to find out why.
+
+**9. Verify the deletion worker.** Confirm the service is running and its
+heartbeat is fresh:
+
+```sql
+SELECT worker_name, last_heartbeat_at, service_version
+FROM system_worker_status
+WHERE worker_name LIKE 'account_deletion_worker_%'
+ORDER BY last_heartbeat_at DESC
+LIMIT 1;
+```
+
+`service_version` should equal the commit you deployed in step 5. Readiness
+also treats a heartbeat older than 300 seconds as stale while deletion jobs are
+pending.
+
+**10. Verify the hourly notification job.** Confirm the cron schedule reads
+`0 * * * *` in the dashboard and that it is UTC. After the first hour, check
+the run succeeded and that its heartbeat row carries the same `service_version`.
+The batch never sends late catch-ups, so a skipped hour is skipped, not queued.
+
+**11. Point the app at the backend.** Once the production API URL genuinely
+exists, set `EXPO_PUBLIC_BACKEND_URL` in the **EAS production environment**
+(and the preview URL in the EAS preview environment). `eas.json` selects those
+environments with its `environment` field; the URL is deliberately not in Git,
+because a URL committed before the endpoint exists is a build pointing at
+nothing. `EXPO_PUBLIC_*` values are public build-time configuration embedded in
+the app bundle — never put the service-role key, the Gemini key or the Sentry
+backend DSN in one.
+
+**12. Rollback is also exact-commit.** Redeploy the previous known-good SHA
+through the same path. Do not roll back by reverting on a branch and letting
+something deploy itself; nothing deploys itself. If the bad deploy included a
+migration, check whether the previous code can run against the new schema
+before rolling back — the migration is not undone by redeploying older code.
+
+**13. Read-only Phase B status, through an exact-commit-checked one-off job.**
+When the reviewer asks for production knowledge status, start a Render one-off
+job **based on the production API service**, so it inherits the same image and
+the same environment groups. Refuse to run unless the deployed commit is the
+one a human expects:
+
+```bash
+test "$RENDER_GIT_COMMIT" = "<the-exact-sha-the-reviewer-named>" \
+  || { echo "REFUSED: deployed commit is not the reviewed commit"; exit 2; }
+python /workspace/scripts/operate_step8i_petrolatum_release.py status
+```
+
+Substitute the reviewed SHA at the moment you run it. Do not commit it: a SHA
+written into this file or into source is a provenance claim that goes stale the
+next time `main` moves.
+
+`status` is read-only by contract. Its JSON reports governed release and
+evidence metadata and never a credential. If it returns `UNEXPECTED_ERROR`,
+report the sanitised JSON and stop — do not investigate by printing environment
+variables or connection strings.
+
+**14. STOP after status.** Do not run `prepare`, `compile`, `activate` or
+`deactivate`, and do not perform evidence review, approval or publication —
+however clearly the status output seems to point at a next step, and even if it
+reports that everything is absent. The reviewer decides what happens next after
+independently inspecting that exact status output. `status` is where this
+runbook ends.
