@@ -86,6 +86,13 @@ done
 # run when it changes.
 expect_scope "backend/tests/test_production_runtime_foundation.py" backend true
 
+# The workflow governs its own gates -- including, since the production runtime
+# milestone, whether the image Render actually deploys gets built and scanned at
+# all. A change to it must run every gate it governs.
+for scope in backend container security release; do
+  expect_scope ".github/workflows/ci.yml" "$scope" true
+done
+
 # What the production image contains. Not a release question: `.dockerignore`
 # cannot change what `python -m app.release` does to a database.
 expect_scope ".dockerignore" container true

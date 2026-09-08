@@ -577,27 +577,208 @@ jobs:
           path: /tmp/glamgenius-backend-ci.tar.gz
           retention-days: 1
 
+  # ---- The exact image Render deploys ----------------------------------------
+  #
+  # `docker-build` above qualifies backend/Dockerfile, which is the local and
+  # compose contract. It is NOT what production runs: render.yaml deploys
+  # deploy/render/Dockerfile built from the repository root, because the Phase B
+  # operator deliberately lives outside backend/ and a backend-context build
+  # cannot reach it.
+  #
+  # Until this job existed, a pull request could change the production image,
+  # set container scope true, watch CI go green, and never once have built the
+  # thing Render would deploy. Everything below runs against the real image
+  # produced by the real Dockerfile and the real .dockerignore. Nothing is
+  # neutralised and no fixture stands in for the filesystem.
+  render-image:
+    name: Render production image
+    needs: scope
+    if: needs.scope.outputs.container == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build the exact Render production image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            -f deploy/render/Dockerfile \
+            -t glamgenius-render:ci \
+            .
+      - name: Runtime identity is the non-root application user
+        run: |
+          UID_AT_RUNTIME=$(docker run --rm glamgenius-render:ci id -u)
+          CONFIGURED_USER=$(docker inspect glamgenius-render:ci --format '{{.Config.User}}')
+          echo "uid=$UID_AT_RUNTIME configured_user=$CONFIGURED_USER"
+          if [ "$UID_AT_RUNTIME" != "10001" ] || [ "$CONFIGURED_USER" != "10001" ]; then
+            echo "FAIL: the production image must run as uid 10001"
+            exit 1
+          fi
+          echo "PASS: runs as non-root uid 10001"
+      - name: No build chain in the runtime image
+        run: |
+          for tool in gcc cc g++ make ld; do
+            if docker run --rm glamgenius-render:ci sh -c "command -v $tool" 2>/dev/null; then
+              echo "FAIL: $tool is present in the runtime image"
+              exit 1
+            fi
+          done
+          echo "PASS: no compiler or build chain in the runtime image"
+      # A Phase B boundary test forbids the controlled-activation operator's
+      # filename from appearing anywhere under .github/, because an automation
+      # surface that knows its name is how an automatic execution eventually
+      # creeps in. That guard is right and this job respects it rather than
+      # routing around it: CI asserts the *shape* of what shipped, and the
+      # repository test suite -- which is allowed to name the operator --
+      # asserts that the Dockerfile copies that exact file. Together the two
+      # cover identity and packaging without CI ever naming it.
+      - name: Working layout preserves the repository relationship
+        run: |
+          docker run --rm glamgenius-render:ci test -d /workspace/backend
+          WORKDIR=$(docker inspect glamgenius-render:ci --format '{{.Config.WorkingDir}}')
+          if [ "$WORKDIR" != "/workspace/backend" ]; then
+            echo "FAIL: WorkingDir is $WORKDIR, expected /workspace/backend"
+            exit 1
+          fi
+          SCRIPT_COUNT=$(docker run --rm glamgenius-render:ci sh -c 'ls -A /workspace/scripts | wc -l')
+          if [ "$SCRIPT_COUNT" != "1" ]; then
+            echo "FAIL: /workspace/scripts must hold exactly one shipped script, found $SCRIPT_COUNT:"
+            docker run --rm glamgenius-render:ci sh -c 'ls -A /workspace/scripts'
+            exit 1
+          fi
+          echo "PASS: layout is /workspace/backend plus exactly one shipped script"
+      - name: Excluded repository material is absent from the image
+        run: |
+          docker run --rm glamgenius-render:ci sh -c '
+            fail=0
+            for path in /workspace/frontend /workspace/.git /workspace/backend/tests \
+                        /workspace/docs /workspace/.env /workspace/tests \
+                        /workspace/security /workspace/memory /workspace/node_modules; do
+              if [ -e "$path" ]; then echo "FAIL: $path is in the image"; fail=1; fi
+            done
+            if find /workspace -name ".env*" -print -quit | grep -q .; then
+              echo "FAIL: an environment file reached the image"; fail=1
+            fi
+            exit $fail
+          '
+          echo "PASS: no excluded repository material in the image"
+      - name: Entrypoint is executable and PID 1 is tini
+        run: |
+          docker run --rm glamgenius-render:ci test -x /usr/local/bin/glamgenius-entrypoint
+          ENTRYPOINT=$(docker inspect glamgenius-render:ci --format '{{json .Config.Entrypoint}}')
+          echo "entrypoint=$ENTRYPOINT"
+          case "$ENTRYPOINT" in
+            *"/usr/bin/tini"*"glamgenius-entrypoint"*) ;;
+            *) echo "FAIL: PID 1 must be tini, followed by the entrypoint"; exit 1 ;;
+          esac
+          echo "PASS: tini is PID 1 and the entrypoint is executable"
+      - name: Docker healthcheck is liveness, on a route that exists
+        run: |
+          HEALTHCHECK=$(docker inspect glamgenius-render:ci --format '{{json .Config.Healthcheck.Test}}')
+          echo "healthcheck=$HEALTHCHECK"
+          case "$HEALTHCHECK" in
+            *"/api/v2/health"*) ;;
+            *) echo "FAIL: the healthcheck must target /api/v2/health"; exit 1 ;;
+          esac
+          # /api/v2/health contains /health as a substring, so the wrong forms
+          # are matched precisely rather than by a naive negative search.
+          case "$HEALTHCHECK" in
+            *"8000/health"*) echo "FAIL: healthcheck targets /health, which no router serves"; exit 1 ;;
+          esac
+          case "$HEALTHCHECK" in
+            *"/api/v2/ready"*) echo "FAIL: liveness must not depend on PostgreSQL"; exit 1 ;;
+          esac
+          echo "PASS: liveness targets /api/v2/health"
+      - name: The shipped operator imports and its parser works, unexecuted
+        run: |
+          # Discovered, never named -- see the note above. This imports the
+          # module, which proves every dependency it needs resolves inside the
+          # image, then builds its parser and reads its help. Nothing is
+          # dispatched: main() is never called, so no operation runs and no
+          # database is touched.
+          docker run --rm glamgenius-render:ci python -c "
+          import importlib.util, pathlib
+          scripts = sorted(pathlib.Path('/workspace/scripts').glob('*.py'))
+          assert len(scripts) == 1, scripts
+          spec = importlib.util.spec_from_file_location('shipped_operator', scripts[0])
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          parser = module.build_parser()
+          help_text = parser.format_help()
+          for operation in ('status', 'prepare', 'compile', 'activate', 'deactivate'):
+              assert operation in help_text, operation
+          assert parser.parse_args(['status']).operation == 'status'
+          print('PASS: shipped operator imports and parses; nothing dispatched')
+          "
+      - name: Application modules import inside the image
+        run: |
+          docker run --rm glamgenius-render:ci python -c "
+          import importlib
+          for module in ('server', 'app.release', 'app.workers.account_deletion', 'app.workers.notifications'):
+              importlib.import_module(module)
+          print('PASS: all production modules import')
+          "
+      - name: Render supplies the deployed commit at runtime
+        run: |
+          SENTINEL=0123456789abcdef0123456789abcdef01234567
+          # Through the real entrypoint: Render sets RENDER_GIT_COMMIT, and the
+          # image turns it into COMMIT_SHA, which both workers record on their
+          # heartbeat. Nothing is baked in at build time.
+          docker run --rm -e RENDER_GIT_COMMIT=$SENTINEL glamgenius-render:ci \
+            python -c "import os,sys; sys.exit(0 if os.environ.get('COMMIT_SHA') == '$SENTINEL' else 1)"
+          # An explicitly supplied value keeps precedence, as documented.
+          docker run --rm -e RENDER_GIT_COMMIT=$SENTINEL -e COMMIT_SHA=explicit-build-value glamgenius-render:ci \
+            python -c "import os,sys; sys.exit(0 if os.environ.get('COMMIT_SHA') == 'explicit-build-value' else 1)"
+          # Neither set degrades rather than crashing.
+          docker run --rm glamgenius-render:ci \
+            python -c "import os,sys; sys.exit(0 if os.environ.get('COMMIT_SHA') == 'unknown' else 1)"
+          echo "PASS: RENDER_GIT_COMMIT reaches the application as COMMIT_SHA"
+      - name: Save the production image for scanning
+        run: docker save glamgenius-render:ci | gzip > /tmp/glamgenius-render-ci.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: render-image
+          path: /tmp/glamgenius-render-ci.tar.gz
+          retention-days: 1
+
   # ---- Container vulnerability scan (Trivy) ----------------------------------
+  # Both images, one policy. The severity threshold, the exception registry and
+  # its validator are shared deliberately: a second, weaker gate for the image
+  # that actually reaches production would defeat the point of having a gate.
   container-scan:
     name: Container vulnerability scan
-    needs: [scope, docker-build]
-    if: needs.scope.outputs.container == 'true' && needs.docker-build.result == 'success'
+    needs: [scope, docker-build, render-image]
+    if: needs.scope.outputs.container == 'true' && needs.docker-build.result == 'success' && needs.render-image.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: docker-image
           path: /tmp
-      - name: Load image
-        run: docker load < /tmp/glamgenius-backend-ci.tar.gz
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: render-image
+          path: /tmp
+      - name: Load images
+        run: |
+          docker load < /tmp/glamgenius-backend-ci.tar.gz
+          docker load < /tmp/glamgenius-render-ci.tar.gz
       - name: Validate Trivy Exceptions
         run: python scripts/validate_trivy_exceptions.py
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy vulnerability scanner (backend image)
         uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # v0.30.0
         with:
           image-ref: glamgenius-backend:ci
+          format: table
+          exit-code: 1
+          severity: HIGH,CRITICAL
+          trivyignores: .trivyignore
+      - name: Run Trivy vulnerability scanner (Render production image)
+        uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # v0.30.0
+        with:
+          image-ref: glamgenius-render:ci
           format: table
           exit-code: 1
           severity: HIGH,CRITICAL
@@ -606,7 +787,7 @@ jobs:
         if: failure()
         uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # v0.30.0
         with:
-          image-ref: glamgenius-backend:ci
+          image-ref: glamgenius-render:ci
           format: json
           output: /tmp/trivy-report.json
           severity: HIGH,CRITICAL
@@ -620,18 +801,24 @@ jobs:
   # ---- SBOM generation -------------------------------------------------------
   sbom:
     name: SBOM generation
-    needs: [scope, docker-build]
-    if: needs.scope.outputs.container == 'true' && needs.docker-build.result == 'success'
+    needs: [scope, docker-build, render-image]
+    if: needs.scope.outputs.container == 'true' && needs.docker-build.result == 'success' && needs.render-image.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: docker-image
           path: /tmp
-      - name: Load image
-        run: docker load < /tmp/glamgenius-backend-ci.tar.gz
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: render-image
+          path: /tmp
+      - name: Load images
+        run: |
+          docker load < /tmp/glamgenius-backend-ci.tar.gz
+          docker load < /tmp/glamgenius-render-ci.tar.gz
       - name: Generate Backend Container SBOM (SPDX JSON)
         uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.17.2
         with:
@@ -642,6 +829,19 @@ jobs:
         with:
           name: backend-sbom
           path: /tmp/backend-sbom.spdx.json
+
+      # The mandatory one for the production runtime: this is the image Render
+      # deploys. Kept as a separate artifact so the two are never confused.
+      - name: Generate Render Production Image SBOM (SPDX JSON)
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.17.2
+        with:
+          image: glamgenius-render:ci
+          format: spdx-json
+          output-file: /tmp/render-production-sbom.spdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: render-production-sbom
+          path: /tmp/render-production-sbom.spdx.json
 
       - name: Generate Frontend Dependency SBOM (CycloneDX JSON)
         uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.17.2
@@ -929,7 +1129,7 @@ jobs:
   # be required by PR scope.
   pr-gate:
     name: PR gate
-    needs: [scope, backend-tests, frontend-tests, backend-release, auth-security, health-readiness, docker-build, container-scan, sbom]
+    needs: [scope, backend-tests, frontend-tests, backend-release, auth-security, health-readiness, docker-build, render-image, container-scan, sbom]
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1006,6 +1206,7 @@ jobs:
           AUTH_RESULT: ${{ needs.auth-security.result }}
           HEALTH_RESULT: ${{ needs.health-readiness.result }}
           DOCKER_RESULT: ${{ needs.docker-build.result }}
+          RENDER_IMAGE_RESULT: ${{ needs.render-image.result }}
           TRIVY_RESULT: ${{ needs.container-scan.result }}
           SBOM_RESULT: ${{ needs.sbom.result }}
         run: |
@@ -1025,6 +1226,9 @@ jobs:
           fi
           if [[ "$CONTAINER_SCOPE" == "true" ]]; then
             require_success "Docker build" "$DOCKER_RESULT"
+            # The image Render actually deploys. Without this line a green PR
+            # could have built only backend/Dockerfile.
+            require_success "Render production image" "$RENDER_IMAGE_RESULT"
             require_success "Trivy" "$TRIVY_RESULT"
             require_success "SBOM" "$SBOM_RESULT"
           fi

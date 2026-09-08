@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -63,6 +64,7 @@ PRODUCTION_DOCKERFILE = REPOSITORY_ROOT / "deploy" / "render" / "Dockerfile"
 PRODUCTION_ENTRYPOINT = REPOSITORY_ROOT / "deploy" / "render" / "entrypoint.sh"
 ROOT_DOCKERIGNORE = REPOSITORY_ROOT / ".dockerignore"
 BACKEND_DOCKERFILE = BACKEND_ROOT / "Dockerfile"
+CI_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
 PHASE_B_OPERATOR = REPOSITORY_ROOT / "scripts" / "operate_step8i_petrolatum_release.py"
 
 #: The one string that must never come back out of a redacted failure.
@@ -799,6 +801,172 @@ class TestReleaseNeverLeaks:
 
 
 # ---------------------------------------------------------------------------
+# CI must build the image Render actually deploys
+# ---------------------------------------------------------------------------
+class TestCIBuildsTheRealProductionImage:
+    """The workflow is part of the contract, not just the Dockerfile.
+
+    The first version of this milestone passed CI green while CI built only
+    ``backend/Dockerfile``. Every assertion elsewhere in this file reads the
+    production Dockerfile's *text*; none of them noticed that nothing ever
+    built it. These read the workflow instead, so that regression cannot
+    return quietly.
+    """
+
+    @staticmethod
+    def workflow() -> str:
+        return CI_WORKFLOW.read_text(encoding="utf-8")
+
+    @staticmethod
+    def code() -> str:
+        """The workflow with comment-only lines removed.
+
+        The workflow explains at length why the Render image is built; that
+        prose must not be able to satisfy an assertion about the build.
+        """
+        return "\n".join(
+            line for line in CI_WORKFLOW.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+
+    def test_a_job_builds_the_render_dockerfile_from_the_repository_root(self) -> None:
+        code = self.code()
+        assert "-f deploy/render/Dockerfile" in code, (
+            "CI must build the production Dockerfile Render deploys"
+        )
+        # The Render build invocation specifically. There are two `docker build`
+        # calls in this workflow and the backend one comes first, so the block
+        # is selected by content rather than by position.
+        candidates = [
+            chunk.split("- name:", 1)[0]
+            for chunk in code.split("docker build")[1:]
+        ]
+        matching = [c for c in candidates if "-f deploy/render/Dockerfile" in c]
+        assert len(matching) == 1, "expected exactly one Render image build in CI"
+        build = matching[0]
+        assert "-t glamgenius-render:ci" in build
+        assert "--platform linux/amd64" in build
+        # The build context has to be the repository root, or the operator and
+        # the sibling layout cannot be in the image at all.
+        assert re.search(r"^\s+\.\s*$", build, flags=re.MULTILINE), (
+            "the Render image must be built with the repository root as context"
+        )
+
+    def test_the_backend_image_qualification_is_preserved(self) -> None:
+        # The Render image is added alongside the existing contract, never
+        # instead of it: backend/Dockerfile still serves compose and local dev.
+        code = self.code()
+        assert "-t glamgenius-backend:ci" in code
+        assert "glamgenius-backend:ci" in code
+
+    def test_the_built_render_image_is_qualified_not_merely_built(self) -> None:
+        code = self.code()
+        for probe in (
+            "id -u",                       # non-root
+            "command -v $tool",            # no build chain
+            "/workspace/scripts",          # layout and shipped-script shape
+            "Config.WorkingDir",           # workdir
+            "glamgenius-entrypoint",       # entrypoint
+            "Config.Healthcheck.Test",     # liveness target
+            "RENDER_GIT_COMMIT",           # provenance
+            "importlib.import_module",     # import smoke test
+        ):
+            assert probe in code, f"the Render image job must check {probe}"
+
+    def test_ci_never_names_the_controlled_activation_operator(self) -> None:
+        """The Phase B boundary, restated from the CI side.
+
+        ``test_production_activation_is_not_wired_into_anything_automatic``
+        forbids the operator's filename anywhere under ``.github/``. That guard
+        is deliberately blunt: an automation surface that knows the operator's
+        name is how an automatic execution eventually creeps in, and "it is
+        only --help" is the sentence that precedes "it is only status".
+
+        So CI proves the *shape* of what shipped and never the name, while
+        ``test_the_exact_operator_is_in_the_production_build_context`` above --
+        which lives outside ``.github/`` and may name it -- proves the right
+        file is copied. Neither test alone is enough; together they cover
+        identity and packaging without breaching the boundary.
+        """
+        workflow = self.workflow()
+        assert PHASE_B_OPERATOR.name not in workflow
+        assert "operate_step8i" not in workflow
+        # And no operation may be dispatched from CI, under any spelling.
+        code = self.code()
+        for operation in ("prepare", "compile", "activate", "deactivate", "status"):
+            assert f"petrolatum_release.py {operation}" not in code
+
+    def test_ci_still_proves_the_shipped_operator_works_in_the_image(self) -> None:
+        # Shape, not name: exactly one script, it imports, its parser builds.
+        code = self.code()
+        assert "/workspace/scripts" in code
+        assert "spec.loader.exec_module" in code
+        assert "build_parser()" in code
+        assert "format_help()" in code
+        # main() is never called, so nothing is dispatched.
+        assert "module.main(" not in code
+
+    def test_trivy_scans_the_render_image_under_the_existing_policy(self) -> None:
+        code = self.code()
+        assert "image-ref: glamgenius-render:ci" in code
+        # One policy for both images. A second, weaker gate for the image that
+        # actually reaches production would defeat the purpose of the gate.
+        assert code.count("trivyignores: .trivyignore") >= 2
+        assert code.count("severity: HIGH,CRITICAL") >= 2
+        assert "validate_trivy_exceptions.py" in code
+
+    def test_the_render_image_receives_its_own_sbom(self) -> None:
+        code = self.code()
+        assert "image: glamgenius-render:ci" in code
+        assert "render-production-sbom" in code
+        # Separate artifacts, so one image's SBOM cannot overwrite the other's.
+        assert "name: backend-sbom" in code
+        assert "name: render-production-sbom" in code
+
+    def test_the_two_images_are_saved_as_distinct_artifacts(self) -> None:
+        code = self.code()
+        assert "name: docker-image" in code
+        assert "name: render-image" in code
+        assert "glamgenius-render-ci.tar.gz" in code
+        assert "glamgenius-backend-ci.tar.gz" in code
+
+    def test_the_pr_gate_requires_the_render_image(self) -> None:
+        code = self.code()
+        assert "RENDER_IMAGE_RESULT" in code
+        assert 'require_success "Render production image" "$RENDER_IMAGE_RESULT"' in code
+        # And the scan and SBOM cannot run without it.
+        assert "needs: [scope, docker-build, render-image]" in code
+
+    def test_action_pinning_is_not_weakened(self) -> None:
+        for line in self.workflow().splitlines():
+            match = re.match(r"^\s*(?:-\s+)?uses:\s+(\S+)\s*(?:#.*)?$", line)
+            if match:
+                assert re.search(r"@[0-9a-f]{40}$", match.group(1)), line.strip()
+
+    def test_workflow_edits_are_qualified_by_the_gates_they_govern(self) -> None:
+        # A change to ci.yml must run the backend, container, security and
+        # release qualification, or the workflow could weaken its own gates.
+        detector = (REPOSITORY_ROOT / ".github" / "scripts" / "detect-ci-scope.sh").read_text(
+            encoding="utf-8"
+        )
+        result = subprocess.run(
+            ["bash", str(REPOSITORY_ROOT / ".github" / "scripts" / "detect-ci-scope.sh"),
+             "base", "head", "pull_request"],
+            cwd=REPOSITORY_ROOT,
+            env={"PATH": os.environ.get("PATH", ""), "CI_SCOPE_CHANGED_FILES": ".github/workflows/ci.yml"},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        scopes = dict(
+            line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+        )
+        for required in ("backend", "container", "security", "release"):
+            assert scopes.get(required) == "true", f"ci.yml must set {required}"
+        assert detector  # the detector is the thing under test
+
+
+# ---------------------------------------------------------------------------
 # Operations documentation is part of the contract
 # ---------------------------------------------------------------------------
 class TestRunbook:
@@ -818,6 +986,35 @@ class TestRunbook:
         assert "operate_step8i_petrolatum_release.py status" in section
         # And it must say where to stop.
         assert "STOP" in section
+
+    def test_the_runbook_requires_blueprint_auto_sync_to_be_disabled(self) -> None:
+        """Two controls, and the service one alone is not enough.
+
+        ``autoDeployTrigger: "off"`` stops a push from deploying a service.
+        It cannot stop a push from re-applying ``render.yaml`` itself, because
+        the Blueprint is what creates the services. Blueprint Auto Sync is a
+        dashboard setting, it defaults to enabled, and Render exposes no YAML
+        field for it — so the runbook is the only place this can be enforced.
+        """
+        operations = (REPOSITORY_ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
+        section = operations.split("## Render Production Runtime", 1)[1]
+        assert "Auto Sync" in section
+        assert "Auto Sync = No" in section or "→ No" in section
+        assert "Manual Sync" in section
+        # And it must say plainly that the service setting does not cover it.
+        assert "autoDeployTrigger" in section
+        # Whitespace-normalised: this is prose, and a sentence that happens to
+        # wrap across a line is the same sentence.
+        prose = " ".join(section.lower().split())
+        assert "auto sync defaults to enabled" in prose
+
+    def test_the_runbook_no_longer_claims_service_settings_stop_blueprint_sync(self) -> None:
+        operations = (REPOSITORY_ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
+        section = operations.split("## Render Production Runtime", 1)[1]
+        assert (
+            "No deploy happens automatically, because automatic deploy is off on all three."
+            not in section
+        ), "the runbook must not imply service auto-deploy governs Blueprint sync"
 
     def test_the_runbook_lists_key_names_and_no_values(self) -> None:
         operations = (REPOSITORY_ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")

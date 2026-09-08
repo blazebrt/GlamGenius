@@ -596,6 +596,10 @@ environment directly is not.
 
 ### The procedure
 
+Steps 1-4 must all be complete before this runtime counts as governed. Step 4
+in particular is easy to skip and is the one that keeps `render.yaml` itself
+from being applied automatically.
+
 **1. Production application database authority.** Identify or create the
 production Supabase PostgreSQL project. This is the primary authority for every
 application table. Prefer a region close to the Singapore runtime where
@@ -614,9 +618,46 @@ enter every key from the table above. Do this first: a Blueprint sync attempted
 before the group exists fails, which is the correct failure — it stops before
 creating services that would start unconfigured.
 
-**4. Initial Blueprint sync.** Point Render at the repository and sync
-`render.yaml`. Render creates the three services and the invariants group. No
-deploy happens automatically, because automatic deploy is off on all three.
+**4. Initial Blueprint sync, then immediately disable Auto Sync.** Point Render
+at the repository and sync `render.yaml`. Render creates the three services and
+the invariants group.
+
+**Two different controls, and the service one is not enough.** This step used to
+say that nothing happens automatically because auto-deploy is off on all three
+services. That was only half true, and the half it missed is the dangerous one:
+
+| Control | Where it lives | What it governs |
+| --- | --- | --- |
+| `autoDeployTrigger: "off"` | per service, in `render.yaml` | whether a push to the repository triggers a **service deploy** |
+| **Blueprint Auto Sync** | Render dashboard, per Blueprint | whether a push **re-applies `render.yaml` itself** |
+
+Service settings cannot govern Blueprint synchronisation — a Blueprint is what
+creates and configures the services in the first place. **Auto Sync defaults to
+enabled.** So until it is switched off, a push that edits `render.yaml` can have
+Render apply the change to the affected resources on its own: new services,
+changed regions, changed commands, changed schedules. Both controls must be off
+for the exact-commit model to actually hold.
+
+Render does not expose Auto Sync as a Blueprint field, so it cannot be set from
+this repository. It is a dashboard setting, and it is the operator's job:
+
+```text
+Render Dashboard
+  → Blueprints
+    → the GlamGenius Blueprint
+      → Settings
+        → Auto Sync
+          → No
+```
+
+Do this immediately after the first sync, before treating the production
+runtime as governed. Then **verify it reads `Auto Sync = No`** — do not assume
+the change saved. From that point, every future change to `render.yaml`
+requires a deliberate **Manual Sync**, which is the intended behaviour: the
+Blueprint describes production, and applying a new description is a decision,
+not a consequence of pushing a commit.
+
+No deploy happens automatically once **both** are off.
 
 **5. Deploy one exact reviewed commit.** Choose the SHA a human reviewed and CI
 passed. Deploy that SHA — never a branch tip, never "latest". Record it. Each
