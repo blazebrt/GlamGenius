@@ -41,6 +41,7 @@ from app.domains.product import care_capture, care_extraction, service
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.models import ScanDevice
 from app.shared.database.sql import get_session
+from app.shared.observability import operational_events
 from app.shared.security.deps import CurrentAccount, get_current_account
 
 router = APIRouter()
@@ -89,20 +90,25 @@ async def transcribe_skin_care_label(
     still records this model call and its validated output, which is what
     ``/scan/skin-care/label/confirm`` later re-reads and re-validates.
     """
-    result = await care_extraction.transcribe_label(
-        session,
-        account_id=current.account_id,
-        account_id_str=current.account_id_str,
-        media_asset_id=body.media_asset_id,
-    )
-    await session.commit()
-    extracted = result.data
-    facts = {
-        field: getattr(extracted, field)
-        for field in ("product_name", "brand", "product_type", "ingredients_text")
-        if getattr(extracted, field) is not None
-    }
-    readable = care_capture.has_readable_ingredients(extracted)
+    # Operational telemetry only: whether this finished, how long it took, and
+    # whether an ingredient list was legible. Never the barcode, the media
+    # asset, the account, the AI run, or one character of what was read.
+    async with operational_events.observe_label_transcription() as observed:
+        result = await care_extraction.transcribe_label(
+            session,
+            account_id=current.account_id,
+            account_id_str=current.account_id_str,
+            media_asset_id=body.media_asset_id,
+        )
+        await session.commit()
+        extracted = result.data
+        facts = {
+            field: getattr(extracted, field)
+            for field in ("product_name", "brand", "product_type", "ingredients_text")
+            if getattr(extracted, field) is not None
+        }
+        readable = care_capture.has_readable_ingredients(extracted)
+        observed.readable(readable)
     return {
         "barcode": body.barcode,
         "facts": facts,
@@ -138,15 +144,23 @@ async def confirm_skin_care_label(
     a capture route that hinted at it would be the first place the two got
     tangled.
     """
-    capture = await care_capture.confirm_skin_care_label(
-        session,
-        barcode=body.barcode,
-        ai_run_id=body.ai_run_id,
-        client_scan_id=body.client_scan_id,
-        account_id=current.account_id,
-        device=device,
-    )
-    await session.commit()
+    # As above: the fact that a confirmation happened, and whether it created a
+    # new record or matched an existing one. No barcode, no scan id, no
+    # snapshot id, no fingerprint, no device, no account, no confirmation
+    # count -- a count of how often one person confirms things is behavioural
+    # analytics, which this milestone does not collect. The event is recorded
+    # after the commit, so telemetry can never roll back a governed write.
+    async with operational_events.observe_label_confirmation() as observed:
+        capture = await care_capture.confirm_skin_care_label(
+            session,
+            barcode=body.barcode,
+            ai_run_id=body.ai_run_id,
+            client_scan_id=body.client_scan_id,
+            account_id=current.account_id,
+            device=device,
+        )
+        await session.commit()
+        observed.was_created(capture.created)
     snapshot = capture.label_snapshot
     return {
         "barcode": capture.product_record.barcode,

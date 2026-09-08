@@ -29,6 +29,11 @@ _APIKEY_QUERY = re.compile(r"([?&]apikey=)[^&#\s]+", re.I)
 _OAUTH_QUERY = re.compile(r"([?&](?:code|state|access_token|refresh_token|client_secret)=)[^&#\s]+", re.I)
 _OAUTH_KV = re.compile(r"((?:[\"']?\b(?:code|state|access_token|refresh_token|client_secret)\b[\"']?)\s*[:=]\s*[\"']?)[^\s,}&\"']+", re.I)
 _AUTH_HEADER = re.compile(r"((?:authorization\s*[:=]\s*)?Bearer\s+)[A-Za-z0-9._~+/=-]+", re.I)
+# A URL carrying credentials -- a database URL, a broker URL, anything with
+# `user:password@`. Redacted whole rather than just the credentials: the host
+# it names is infrastructure detail that nothing in a crash report needs, and
+# leaving it invites somebody to reconstruct the rest.
+_URL_WITH_CREDENTIALS = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@\S*", re.I)
 
 # Key-name filter — anything matching is redacted whole regardless of type.
 _SENSITIVE_KEY = re.compile(
@@ -39,7 +44,37 @@ _SENSITIVE_KEY = re.compile(
     # service-role key is the most dangerous value in this system and its name
     # matches none of the words above.
     r"service_role|credential|private_key|access_key|anon_key|dsn|"
-    r"storage_key|storage_path|object_key)",
+    r"storage_key|storage_path|object_key|"
+
+    # --- Health and safety state -----------------------------------------
+    # Step 8K's contract is that ephemeral safety state is never stored,
+    # logged, echoed or counted. A serialized request reaching Sentry inside a
+    # future exception would break that contract without anybody writing a
+    # line of logging code, so the whole `safety` subtree and every field it
+    # holds is redacted by name, wherever it appears and however deeply nested.
+    #
+    # Matched narrowly on purpose. Generic operational words -- `status`,
+    # `reason`, `message`, `code` -- are deliberately absent: redacting those
+    # would blind every crash report in the product to protect nothing.
+    r"safety|pregnan|breastfeed|breast_feed|lactat|"
+    r"medication|medicine|medical|diagnos|symptom|"
+    r"\bcondition|handoff|hand_off|"
+    # `stated_age` and a bare `age`; anchored so `page`, `usage`, `language`,
+    # `storage` and `message` are untouched.
+    r"stated_age|\bage\b|subject_is_child|subject_child|is_child|"
+
+    # --- Who and what this request was about ------------------------------
+    # None of these is a secret in the credential sense, and each one links a
+    # crash to one person or one product they were holding.
+    r"account_id|user_id|device_id|device_key|client_scan|scan_id|scan_event|"
+    r"ai_run|media_asset|snapshot_id|label_snapshot|content_fingerprint|"
+    r"fingerprint|barcode|product_name|brand|product_type|"
+
+    # --- The sentence a customer would have read --------------------------
+    # The keys stay readable: `verdict_key` and `reason_key` are global
+    # governance identifiers and are useful in a report. The rendered text is
+    # what was shown to one person about their own body.
+    r"verdict_text|reason_text|source_url|canonical_url)",
     re.I,
 )
 
@@ -57,6 +92,7 @@ def _clean(value: Any, key: str = "") -> Any:
         stripped = value.strip()
         if _BASE64_LIKE.fullmatch(stripped):
             return REDACTED
+        value = _URL_WITH_CREDENTIALS.sub(REDACTED, value)
         value = _JWT.sub(REDACTED, value)
         value = _EMAIL.sub(REDACTED, value)
         value = _PHONE.sub(REDACTED, value)
