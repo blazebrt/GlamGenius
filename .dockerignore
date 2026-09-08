@@ -1,0 +1,70 @@
+# Build context exclusions for the repository-root production build
+# (deploy/render/Dockerfile). No other image in this repository uses the root
+# as its context — backend/Dockerfile uses backend/ and keeps its own
+# backend/.dockerignore — so this file governs the production image alone.
+#
+# Two reasons a path is here: it would put something in the production image
+# that has no business in production, or it would put something in a build
+# context that must never leave a developer's machine.
+
+# Never in a build context, at all.
+.env
+.env.*
+*.env
+!env.example
+**/.env
+**/.env.*
+secrets/
+*.pem
+*.key
+*.p12
+*.keystore
+
+# Not needed at runtime: the production image serves the API and the two
+# workers. The mobile client is built by EAS, not by this image.
+frontend/
+
+# History and CI machinery. .git in particular would carry every secret ever
+# committed and every branch, into an image that only needs one commit's files.
+.git/
+.github/
+.gitignore
+.gitconfig
+.gitleaksignore
+
+# Documentation, governance and reports: read by people, not by processes.
+docs/
+memory/
+test_reports/
+security/
+*.md
+!backend/**/*.md
+
+# Development and qualification artefacts.
+tests/
+backend/tests/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.pytest_cache/
+**/.pytest_cache/
+.ruff_cache/
+**/.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
+**/node_modules/
+.emergent/
+ci_status.json
+
+# Compose and local tooling. Production topology is render.yaml.
+docker-compose*.yml
+docker-compose*.yaml
+
+# Everything under scripts/ except the one operator the production runtime
+# genuinely needs. Root scripts are developer and CI tooling; shipping them
+# would widen what an authorized operator can reach inside the container for
+# no operational benefit.
+scripts/*
+!scripts/operate_step8i_petrolatum_release.py

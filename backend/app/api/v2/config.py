@@ -1,4 +1,31 @@
-"""GET /api/v2/config + /api/v2/health + /api/v2/ready — client-side capability + ops health."""
+"""GET /api/v2/config + /api/v2/health + /api/v2/ready — client-side capability + ops health.
+
+``/api/v2/ready`` is public and unauthenticated, and it is the probe Render
+uses to decide whether to send customer traffic. That makes it the most exposed
+place in the service, so every component below reports a **fixed status word
+chosen here**, never text derived from an exception.
+
+The rule exists because the exceptions this endpoint can catch are database
+exceptions, and asyncpg puts the connection string — user, password, host,
+database — into its message. ``f"error: {e}"`` on a public endpoint is
+therefore a credential disclosure waiting for a bad afternoon. The same applies
+to ``validate_production_configuration()``: its messages name the hostname or
+scheme it rejected.
+
+What a component may report: up/down, valid/invalid, configured/missing,
+ok/mismatch/missing, fresh/stale, and governed non-secret identifiers that come
+from this repository rather than from a failure — the expected seed version,
+the expected Alembic head. What it may never report: a driver message, SQL, a
+URL, a hostname, a credential, a token or a traceback.
+
+An operator who needs the underlying message reproduces it against a
+non-production database. Losing it here is the price of the endpoint being
+public, and it is worth paying.
+
+``/api/v2/health`` stays liveness: no network calls, no database, no readiness
+semantics. Keeping them apart is what stops a database blip from being reported
+as a dead process.
+"""
 from __future__ import annotations
 
 import logging
@@ -105,8 +132,11 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
     try:
         validate_production_configuration()
         components["production_config"] = "valid"
-    except RuntimeError as e:
-        components["production_config"] = f"invalid: {e}"
+    except RuntimeError:
+        # The validator names the key and sometimes the hostname it rejected.
+        # `python -m app.release_readiness --json` is the safe way to see which
+        # key is wrong; it reports key names and statuses and never a value.
+        components["production_config"] = "invalid"
         if APP_ENV in ("production", "staging"):
             is_ready = False
 
@@ -125,12 +155,14 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
         current_seed = seed_result.scalar()
         components["seed_version"] = current_seed
         if current_seed != SEED_VERSION:
+            # SEED_VERSION is a constant from this repository, not from the
+            # failure, so naming it tells an operator what to deploy.
             components["seed_version_status"] = f"mismatch: expected {SEED_VERSION}"
             is_ready = False
         else:
             components["seed_version_status"] = "ok"
-    except Exception as e:
-        components["seed_version_status"] = f"missing or error: {e}"
+    except Exception:
+        components["seed_version_status"] = "unavailable"
         is_ready = False
 
     # 5. Alembic head check
@@ -153,11 +185,12 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
             components["alembic_status"] = "missing"
         elif db_alembic_head != repo_head:
             is_ready = False
+            # repo_head comes from the migration chain in this repository.
             components["alembic_status"] = f"mismatch: expected {repo_head}"
         else:
             components["alembic_status"] = "ok"
-    except Exception as e:
-        components["alembic_status"] = f"error: {e}"
+    except Exception:
+        components["alembic_status"] = "unavailable"
         is_ready = False
 
     # 6. Worker heartbeat freshness (if deletion jobs exist)
@@ -186,8 +219,8 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
                     components["worker_heartbeat"] = "fresh"
         else:
             components["worker_heartbeat"] = "idle_no_pending_jobs"
-    except Exception as e:
-        components["worker_heartbeat"] = f"error: {e}"
+    except Exception:
+        components["worker_heartbeat"] = "unavailable"
         is_ready = False
 
     # 7. Stable feature flags
@@ -198,8 +231,8 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
             # is_ready = False  # Or maybe just record it? "Required stable feature flags"
         else:
             components["feature_flags"] = "ok"
-    except Exception as e:
-        components["feature_flags"] = f"error: {e}"
+    except Exception:
+        components["feature_flags"] = "unavailable"
         is_ready = False
 
     # 8. AI configuration presence

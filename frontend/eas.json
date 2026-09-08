@@ -7,6 +7,7 @@
   "build": {
     "development": {
       "//": "For developers running the app on a physical device with a debugger attached.",
+      "environment": "development",
       "developmentClient": true,
       "distribution": "internal",
       "android": {
@@ -20,6 +21,8 @@
       "android": {
         "buildType": "apk"
       },
+      "//environment": "Resolve EXPO_PUBLIC_* from the EAS preview environment. Previously this profile relied on the inline APP_ENV alone, which set a variable but told EAS nothing about which environment to read, so EXPO_PUBLIC_BACKEND_URL was resolved by CLI inference rather than by a stated choice.",
+      "environment": "preview",
       "env": {
         "APP_ENV": "staging"
       },
@@ -28,6 +31,8 @@
     "production": {
       "//": "For the Play Store. Produces an AAB (Android App Bundle) — the format Google requires for new listings.",
       "autoIncrement": true,
+      "//environment": "Resolve EXPO_PUBLIC_* from the EAS production environment. EXPO_PUBLIC_BACKEND_URL must be set there, in the EAS dashboard, once the production backend URL actually exists - see docs/OPERATIONS.md. It is deliberately not in this file: a URL committed before the endpoint exists is a build that points at nothing. EXPO_PUBLIC_* values are public build-time configuration and are embedded in the app bundle, so no secret - and in particular no Supabase service-role key, Gemini key or Sentry backend DSN - may ever be put in an EAS environment the client reads.",
+      "environment": "production",
       "android": {
         "buildType": "app-bundle"
       },
