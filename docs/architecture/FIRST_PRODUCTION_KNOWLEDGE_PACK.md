@@ -116,3 +116,170 @@ null is a statement that the source is silent, not an oversight:
 The compiler rejects each of these fields being filled with an inferred value —
 including `2026-01-02` as a publication date, `global`/`US`/`international` as a
 jurisdiction, and `PubMed` as the article publisher.
+
+## Knowing what packs exist, once there is more than one
+
+One pack fits in a person's head. A dozen will not, and by then the questions
+that matter are boring and structural rather than scientific: which packs exist,
+does each still own a unique `PACK_ID`, does each own a distinct `REASON_KEY`,
+does each still declare the compiler the Step 8H release workflow calls by name.
+
+`backend/app/knowledge_packs/inspection.py` answers exactly those questions, and
+an offline command reports them:
+
+```bash
+python scripts/inspect_knowledge_packs.py
+python scripts/inspect_knowledge_packs.py --json
+```
+
+Exit `0` means every committed pack satisfies the structural contract; a non-zero
+exit names the file, the field and the finding.
+
+**It parses source. It never runs it.** Candidate pack files are read as text and
+parsed with `ast`. No pack is imported, executed, `eval`-ed, `exec`-ed or run
+through `runpy`. That is not tidiness — part of the point of an inventory is to
+notice a pack that has grown an import-time side effect (a database call, a
+network call, a file write, a provider call, a release operation), and a tool
+that imported packs to inspect them would trigger every such side effect in the
+repository at once, on an operator's laptop, in the course of asking a question.
+Tests hold the property directly: a synthetic pack that writes a sentinel file at
+module level is inspected, and the sentinel does not appear.
+
+Be precise about what that buys. Four sentences, and no more than four:
+
+- The inspector does not execute candidate source.
+- Every statically represented binding attempt that occurs in the module's own
+  execution scope is observed, for the five governed names.
+- Nested lexical and class-body locals are not treated as module declarations.
+- A governed name may never be declared `global` in a pack, anywhere.
+
+It is **not** a claim that any pack has been proven side-effect-free, and no
+attempt is made to see through dynamic writes — `exec(...)`,
+`globals()["PACK_ID"] = …`, `setattr` on the module object, or anything of that
+shape. Step 14A does not sandbox Python.
+
+The consequence is that identity must be **statically legible**, and the check
+for that runs in two layers.
+
+**Layer one sees every attempt.** The inspector walks module scope and records
+every statement that binds, rebinds or deletes one of the five governed names —
+`PACK_ID`, `DOMAIN`, `CATEGORY`, `REASON_KEY`, and
+`build_release_manifest_from_published_entry`. Plain and annotated assignment,
+destructuring and starred targets, chained and augmented assignment, walrus
+expressions, imports, `del`, loop targets, `with ... as`, `except ... as`, `match`
+capture patterns, and function and class definitions all count, including inside
+module-scope control flow (`if`, `for`, `while`, `try`, `with`, `match`), because
+those bodies really do bind module names when they run.
+
+It also counts **definition time**, which is easy to forget. A `def` is a
+statement before it is a scope: its decorators, default values, annotations and
+return annotation are evaluated *where the `def` sits*, in the enclosing scope, at
+the moment the statement executes. So are a lambda's defaults, and a class's
+decorators, bases and keywords. A walrus in any of them binds a module name:
+
+```python
+def helper(value=(PACK_ID := "for_you.skin_care.escape.v1")):
+    pass
+```
+
+The walk that finds these is deliberately generic — it follows every AST child,
+not only the ones that are themselves expressions, because Python's grammar hangs
+expressions off semantic wrappers (`ast.keyword`, `ast.comprehension`,
+`ast.arguments`, `ast.arg`, `ast.match_case`, `ast.withitem`,
+`ast.ExceptHandler`) that a type-filtered walk treats as dead ends. It prunes at
+three places and only three: nested statements (the statement walker owns those),
+a function's or class's body, and a lambda's body. A comprehension is not pruned,
+because a walrus inside one binds in the enclosing scope.
+
+This layer has to be complete rather than convenient. The failure it prevents is
+not a wrong answer but *no* answer: `PACK_ID, other = ("…", 1)` genuinely binds
+`PACK_ID`, and a collector that only recognised `NAME = …` would classify the file
+as infrastructure and drop a governed pack out of the inventory in silence.
+
+Bindings inside a nested *body* — a function, an async function, a class body, a
+lambda body — are not module bindings and are not counted. A `PACK_ID` local to a
+helper, or assigned in a class body, does not make the file a pack.
+
+**With one exception, which has to be named: `global`.** A class body is not
+module scope, until a `global` statement says otherwise:
+
+```python
+class Holder:
+    global PACK_ID
+    PACK_ID = "for_you.skin_care.escape.v1"
+```
+
+When that class statement executes, the assignment writes to the module
+namespace. Pruning the body misses it entirely, and missing it is fail-open.
+
+The rule adopted is blunter than Python's semantics on purpose: a governed name
+appearing in **any** `global` statement, anywhere in the file — a class body, a
+nested class, a function nobody calls, a branch nobody takes — is a finding. A
+bare `global PACK_ID` with no assignment is enough to make the file a governed
+candidate and fail it closed. Deciding case by case would mean modelling when
+each enclosing block runs, which is a small interpreter and a new place for
+holes; a version-controlled specification has no legitimate reason to redirect
+these five identities, so refusing all of them costs nothing real.
+
+`nonlocal` is not covered and does not need to be — it binds in an enclosing
+*function* scope and can never reach module state. A `global` naming something
+that is not one of the five governed names is nobody's business here.
+
+**Layer two accepts two forms.** For a descriptor field, exactly one module-scope
+binding, written as `NAME = "literal"` or `NAME: str = "literal"`. For the
+compiler, exactly one plain top-level `def`. Everything else fails closed:
+
+| Situation | Finding |
+| --- | --- |
+| Value cannot be read without running the module — a call, an f-string, a name, a destructuring target, a loop target, an import, a bare `NAME: str`, a conditional declaration | `NON_STATIC_METADATA` |
+| The name is touched more than once at module scope — a second declaration, a rebinding, a `del` | `DUPLICATE_DECLARATION` |
+| No module-scope binding at all | `MISSING_DOMAIN` / `MISSING_CATEGORY` / `MISSING_REASON_KEY`, or `MISSING_COMPILER`; for `PACK_ID`, the file is simply not a pack |
+| The compiler's last module-scope binding is not a plain `def` — a class, an import, a shadowing assignment, a `del`, or a coroutine (Step 8H calls it synchronously) | `COMPILER_NOT_A_FUNCTION` |
+
+A stale earlier `def` is never reported as the valid compiler when a later
+module-scope statement would replace or remove it: whatever binds last is what the
+release workflow would reach for. The function is named, never called — compiling
+requires a reviewed published evidence entry, which an inventory tool has no
+business inventing.
+
+Any module-scope attempt to bind `PACK_ID`, in any of those forms, makes the file a
+governed-pack candidate. That is deliberate: a pack whose identity cannot be read
+must appear in the report as broken, never disappear as though it were never
+written.
+
+**A filename is never an exemption.** Every `.py` file in the pack directory is
+inspected except two named outright: `__init__.py` and `inspection.py`. There is
+no rule about leading underscores or any other prefix, because such a rule would
+mean a governed pack could leave the inventory by being renamed `_hidden_pack.py`.
+A file that simply does not declare `PACK_ID` is not a governed pack and is not an
+error.
+
+**Nothing else is touched.** No database connection, no network call, no
+credential, no environment variable — running the command with the production
+configuration absent, empty or deliberately wrong produces byte-identical output,
+and a test holds that. It never compiles a manifest, never prepares, publishes,
+activates, deactivates or rolls back a release, and never evaluates a customer
+decision. Inventory is not activation, and the boundary described above is
+unchanged by it.
+
+**A pack stays inert.** Discovery lives in `inspection.py`, not in the package's
+`__init__.py`, which remains a docstring and imports nothing. Importing
+`app.knowledge_packs` still loads no pack; importing the inspector still loads no
+pack; importing the application still loads neither. The inspector finds its own
+directory through `__file__` and names it through `__package__` rather than
+spelling the dotted path, so the standing rule that no module under `app/` may
+name `app.knowledge_packs` — the rule that stops an accidental runtime import —
+needs no exception for it.
+
+**What a descriptor holds.** Module, `PACK_ID`, `DOMAIN`, `CATEGORY`, `REASON_KEY`
+and the compiler's name. Deliberately no evidence summary, source locator, fact
+condition or strength: those belong to the reviewed evidence record, and a
+cross-pack listing must not become a second, unreviewed copy of them. Future hair,
+cosmetics or food packs will not share the scientific shape of this one, and the
+inventory does not ask them to.
+
+**Two packs may not share a reason key.** That would put two reviewed knowledge
+claims in competition for the same sentence a customer reads, with nothing in the
+release manifest to say which wins. It is rejected by default. If shared ownership
+is ever wanted, that is a reviewed change to the rule, not something an inventory
+tool should quietly permit.
