@@ -9,8 +9,14 @@
 # qualified by the gate they govern, so every input to container qualification
 # now sets `container`, and this test says so out loud.
 #
+# The same shape of bug has since been found twice more: `render.yaml` matched
+# nothing, and so did the Python entrypoints that operate on governed
+# knowledge. Each time the symptom was identical -- an all-skipped green pull
+# request touching something that governs production.
+#
 # Deliberately small: it asserts the container flag on the paths that matter,
-# backend self-qualification, and narrow positive and negative controls.
+# backend self-qualification, knowledge-operations entrypoints, and narrow
+# positive and negative controls.
 #
 #     bash .github/scripts/detect-ci-scope.test.sh
 
@@ -112,6 +118,49 @@ expect_scope "backend/app/release.py" release true
 expect_scope "backend/app/release.py" backend true
 expect_scope "backend/app/release.py" container false
 
+# --- Knowledge-operations entrypoints ---------------------------------------
+#
+# The third hole this file pins. A pull request changing only one of the
+# Python entrypoints that operate on the governed knowledge, evidence and
+# release architecture matched no case at all: every scope was false, every
+# job skipped, and the pull request reported green without running the backend
+# suite that holds the contracts those scripts depend on.
+#
+# The inventory gate in the scope job runs on every event regardless of paths,
+# so a broken pack is caught either way — but the gate only inspects pack
+# source. The compiler's exact manifest, the operator's manual-only boundary
+# and the inventory's own rules are backend tests, and a change to their
+# entrypoints has to run them.
+expect_scope "scripts/inspect_knowledge_packs.py" backend true
+expect_scope "scripts/build_step8i_petrolatum_release.py" backend true
+# The Phase B operator is matched by the same rule through a glob. Its real
+# filename is deliberately absent from this file: a Phase B test forbids that
+# name anywhere under `.github/`, because naming the production activation
+# script inside CI is how it stops being manual-only. The glob is asserted
+# here; that the real file resolves to backend=true is asserted from
+# backend/tests/test_knowledge_pack_inspection.py, which may name it.
+expect_scope "scripts/operate_step8i_example_probe.py" backend true
+
+# Narrow, and asserted to stay narrow. These are Python entrypoints, not
+# deployment artefacts: they cannot change what is inside the image, they are
+# not a credential surface, and they are not the `python -m app.release`
+# rehearsal the release job performs.
+for scope in schema frontend mobile web python_deps node_deps container security release; do
+  expect_scope "scripts/inspect_knowledge_packs.py" "$scope" false
+done
+expect_scope "scripts/build_step8i_petrolatum_release.py" container false
+expect_scope "scripts/build_step8i_petrolatum_release.py" release false
+expect_scope "scripts/operate_step8i_example_probe.py" container false
+expect_scope "scripts/operate_step8i_example_probe.py" release false
+
+# And `scripts/**` as a whole did not become backend work.
+expect_scope "scripts/protect_main_branch.sh" backend false
+expect_scope "scripts/simulate_backup_restore.sh" backend false
+expect_scope "scripts/systemd/glamgenius-notifications.timer" backend false
+
+# The existing deployment script scope is unchanged by the rule above.
+expect_scope "scripts/deploy_production.sh" release true
+
 # The negative case: scoping must stay narrow. Documentation does not rebuild
 # or rescan the image, and the deployment paths above must not have widened
 # it into a run-everything switch.
@@ -127,7 +176,9 @@ expect_scope "deploy/render/Dockerfile" schema false
 # A deployment change can never produce an all-skipped green pull request.
 # This is the property the scenarios above add up to, asserted directly so it
 # cannot be lost by editing one of them.
-for path in "render.yaml" "deploy/render/Dockerfile" "deploy/render/entrypoint.sh" ".dockerignore"; do
+for path in "render.yaml" "deploy/render/Dockerfile" "deploy/render/entrypoint.sh" ".dockerignore" \
+            "scripts/inspect_knowledge_packs.py" "scripts/build_step8i_petrolatum_release.py" \
+            "scripts/operate_step8i_example_probe.py"; do
   any_true=false
   for scope in backend schema frontend mobile web python_deps node_deps container security release; do
     if [[ "$(scope_for "$path" "$scope")" == "true" ]]; then

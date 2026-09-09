@@ -283,3 +283,54 @@ claims in competition for the same sentence a customer reads, with nothing in th
 release manifest to say which wins. It is rejected by default. If shared ownership
 is ever wanted, that is a reviewed change to the rule, not something an inventory
 tool should quietly permit.
+
+## The inventory is checked on every CI run, not on request
+
+Everything above describes a command somebody has to remember to run. That is
+fine for one pack and untenable for dozens, because the inventory that most
+needs checking is the one in a pull request nobody thought was about packs — a
+duplicated `PACK_ID`, a compiler renamed during a refactor, two packs that have
+quietly come to own the same customer sentence.
+
+So CI runs it, in the `CI scope` job:
+
+```yaml
+- name: Knowledge-pack governance
+  run: python scripts/inspect_knowledge_packs.py --json
+```
+
+**Still offline.** The step installs nothing. The inspector reads committed
+source and parses it with `ast`: no pack is imported, no database is opened, no
+network call is made, no credential is read. The job it sits in has no service
+container and no secrets. Standing up the pinned interpreter is the only thing
+added, and `PYTHON_VERSION` is the workflow's existing authority.
+
+**Unconditional, and that is the point.** It is not gated on changed paths, it
+runs on pull requests, pushes to `main`, manual dispatch and the scheduled
+audit alike, and it runs *before* the step that emits the path scope. Governance
+a scope rule can switch off is not governance: if the inventory were only
+checked when someone happened to touch a pack, the case that matters would be
+the case nobody checks.
+
+**An invalid inventory cannot be merged green.** The step fails, which fails the
+`CI scope` job. The PR gate — the one recommended branch-protection check —
+begins by refusing to interpret a failed scope job as "nothing needed to run",
+so the failure reaches branch protection rather than disappearing into a set of
+skipped jobs. `backend/tests/test_knowledge_pack_inspection.py` asserts that the
+step exists, is in the always-run job, is not conditional, has no
+`continue-on-error` escape, and runs ahead of scope detection — so the gate
+cannot be removed in the same pull request it would have blocked.
+
+**Changing the knowledge tooling qualifies it.** `scripts/inspect_knowledge_packs.py`,
+`scripts/build_step8i_petrolatum_release.py` and the Phase B operator now select
+`backend=true`. Before, a pull request touching only one of them matched no scope
+case at all and reported green with nothing run. The always-on gate covers pack
+source, but the contracts these entrypoints depend on — the compiler's exact
+manifest, the operator's manual-only boundary, the inventory's own rules — are
+backend tests, and a change to their entrypoints has to run them. Nothing else is
+widened: not frontend, not schema, not container, not release.
+
+**It activates nothing.** This is a structural check on committed source. It
+compiles no manifest, publishes no evidence, contacts no provider or production
+database, and runs no Phase B operation. Inventory is not activation, in CI as
+anywhere else.

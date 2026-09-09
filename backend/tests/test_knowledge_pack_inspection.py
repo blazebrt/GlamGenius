@@ -36,6 +36,9 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import os
+import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -74,6 +77,8 @@ INSPECTION_SOURCE = PACK_DIRECTORY / "inspection.py"
 PACKAGE_INIT = PACK_DIRECTORY / "__init__.py"
 REVIEWED_PACK_SOURCE = PACK_DIRECTORY / "petrolatum_dry_skin_v1.py"
 CLI_PATH = REPOSITORY_ROOT / "scripts" / "inspect_knowledge_packs.py"
+CI_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
+SCOPE_SCRIPT = REPOSITORY_ROOT / ".github" / "scripts" / "detect-ci-scope.sh"
 
 REVIEWED_MODULE = "app.knowledge_packs.petrolatum_dry_skin_v1"
 SYNTHETIC_PACKAGE = "synthetic_knowledge_packs"
@@ -1967,6 +1972,232 @@ class TestCompiledKnowledgeIsUnchanged:
         assert pack.CATEGORY == "skin_care"
         assert pack.REASON_KEY == "for_you.skin_care.petrolatum.dry_skin.dermatologist_guidance"
         assert DESCRIPTOR_FIELDS == ("PACK_ID", "DOMAIN", "CATEGORY", "REASON_KEY")
+
+
+# ---------------------------------------------------------------------------
+# Step 14B: the inventory gate is wired into CI, and cannot quietly be removed
+# ---------------------------------------------------------------------------
+def _workflow_job_block(name: str) -> list[str]:
+    """The lines belonging to one job in ``ci.yml``, comment-only lines removed.
+
+    Not a YAML parser, and deliberately not: the production-runtime suite
+    already carries a bespoke reader for ``render.yaml`` and it is a large
+    thing to maintain. The question here is narrow — is this step inside the
+    always-run job — and indentation answers it. Jobs are the two-space keys
+    under ``jobs:``; a job's block runs from its key to the next key at that
+    indentation. Comments are dropped so the workflow's own prose about the
+    gate cannot satisfy an assertion about the gate.
+    """
+    lines = CI_WORKFLOW.read_text(encoding="utf-8").splitlines()
+    start = next(index for index, line in enumerate(lines) if line.rstrip() == "jobs:")
+    block: list[str] = []
+    collecting = False
+    for line in lines[start + 1 :]:
+        if re.fullmatch(r"  [A-Za-z0-9_-]+:", line.rstrip()):
+            if collecting:
+                break
+            collecting = line.strip() == f"{name}:"
+            continue
+        if collecting and line.strip() and not line.lstrip().startswith("#"):
+            block.append(line)
+    assert block, f"no job named {name!r} in {CI_WORKFLOW}"
+    return block
+
+
+def _scope_for(path: str, key: str) -> str:
+    """Ask the real scope script what one changed path selects."""
+    completed = subprocess.run(
+        ["bash", str(SCOPE_SCRIPT), "base", "head", "pull_request"],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "CI_SCOPE_CHANGED_FILES": path},
+    )
+    assert completed.returncode == 0, completed.stderr
+    for line in completed.stdout.splitlines():
+        if line.startswith(f"{key}="):
+            return line.split("=", 1)[1]
+    raise AssertionError(f"{key} not emitted for {path}")
+
+
+class TestTheInventoryGateIsWiredIntoCi:
+    """Step 14A made the inventory checkable. This makes it checked.
+
+    Until now somebody had to remember to run the command. That is fine for
+    one pack and untenable for dozens: the inventory that most needs checking
+    is the one in a pull request nobody thought was about packs. The gate is
+    therefore unconditional, in the one job that always runs, ahead of the
+    step that decides what else may skip.
+
+    A gate that can be deleted in the same pull request it would have blocked
+    is not a gate, so its presence is asserted here — from the backend suite,
+    which a change to the workflow now selects.
+    """
+
+    def test_the_scope_job_runs_the_exact_inventory_command(self) -> None:
+        block = _workflow_job_block("scope")
+        assert any(
+            line.strip() == "run: python scripts/inspect_knowledge_packs.py --json"
+            for line in block
+        ), "the always-run scope job does not invoke the knowledge-pack inspector"
+
+    def test_the_gate_lives_nowhere_but_the_always_run_job(self) -> None:
+        # A copy in some conditional job would look like coverage and provide
+        # none, and would make the assertion above pass for the wrong reason.
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        occurrences = workflow.count("scripts/inspect_knowledge_packs.py")
+        assert occurrences == 1, f"the inspector is named {occurrences} times in the workflow"
+
+    def test_the_gate_is_not_conditional_on_anything(self) -> None:
+        # Neither the job nor the step may carry an `if:`. The whole point is
+        # that no scope rule, correct or buggy, gets to decide whether the
+        # inventory is checked today.
+        block = _workflow_job_block("scope")
+        assert not any(line.strip().startswith("if:") for line in block)
+        gate = block.index("        run: python scripts/inspect_knowledge_packs.py --json")
+        assert block[gate - 1].strip() == "- name: Knowledge-pack governance"
+
+    def test_the_gate_cannot_fail_softly(self) -> None:
+        block = _workflow_job_block("scope")
+        for escape in ("continue-on-error", "|| true", "|| exit 0", "set +e"):
+            assert not any(escape in line for line in block), escape
+
+    def test_the_gate_runs_before_the_scope_outputs_are_emitted(self) -> None:
+        # Ordering is the difference between "the inventory was checked" and
+        # "the inventory was checked unless scope detection said otherwise".
+        block = _workflow_job_block("scope")
+        gate = block.index("        run: python scripts/inspect_knowledge_packs.py --json")
+        detect = block.index("        run: bash .github/scripts/detect-ci-scope.sh "
+                             '"$BASE_SHA" "$HEAD_SHA" "$EVENT_NAME"')
+        assert gate < detect
+
+    def test_the_gate_installs_no_backend_dependencies(self) -> None:
+        # The inspector needs none, and a dependency install here would make
+        # the always-run job slow enough that somebody would want to make it
+        # conditional — which is the property being protected.
+        block = _workflow_job_block("scope")
+        joined = "\n".join(block)
+        for forbidden in ("requirements", "pip install", "services:", "postgres"):
+            assert forbidden not in joined, forbidden
+
+    def test_the_interpreter_is_the_governed_one_and_immutably_pinned(self) -> None:
+        block = _workflow_job_block("scope")
+        setup = [line for line in block if "actions/setup-python@" in line]
+        assert len(setup) == 1, setup
+        assert re.search(r"actions/setup-python@[0-9a-f]{40}\b", setup[0]), setup[0]
+        assert any("python-version: ${{ env.PYTHON_VERSION }}" in line for line in block)
+
+    def test_the_pr_gate_still_refuses_to_read_a_failed_scope_as_no_work(self) -> None:
+        # This is how a failed inventory reaches branch protection: the gate
+        # job checks needs.scope.result before anything else. Without it, a
+        # failed scope job would surface as skipped implementation jobs and a
+        # green gate.
+        block = _workflow_job_block("pr-gate")
+        joined = "\n".join(block)
+        assert "needs.scope.result" in joined
+        assert "needs: [scope," in joined or "needs: [scope]" in joined
+
+
+class TestKnowledgeOperationScriptsSelectBackendQualification:
+    """The scope rule, asserted against the real filenames.
+
+    The shell harness under ``.github/`` proves the pattern but may not spell
+    the Phase B operator's filename — a Phase B test forbids that name
+    anywhere in that tree, because naming the production activation script
+    inside CI is how it stops being manual-only. This file is outside that
+    tree and may name it, so the two halves together cover the pattern and the
+    identity without breaching the boundary.
+    """
+
+    @pytest.mark.parametrize(
+        "script",
+        [
+            "scripts/inspect_knowledge_packs.py",
+            "scripts/build_step8i_petrolatum_release.py",
+            "scripts/operate_step8i_petrolatum_release.py",
+        ],
+    )
+    def test_the_real_script_selects_the_backend_suite(self, script: str) -> None:
+        assert (REPOSITORY_ROOT / script).is_file(), f"{script} does not exist"
+        assert _scope_for(script, "backend") == "true"
+
+    @pytest.mark.parametrize(
+        "script",
+        [
+            "scripts/inspect_knowledge_packs.py",
+            "scripts/build_step8i_petrolatum_release.py",
+            "scripts/operate_step8i_petrolatum_release.py",
+        ],
+    )
+    def test_the_real_script_widens_nothing_else(self, script: str) -> None:
+        for key in ("schema", "frontend", "mobile", "web", "container", "security", "release"):
+            assert _scope_for(script, key) == "false", (script, key)
+
+
+class TestTheGateActuallyBlocks:
+    """The command CI runs, run for real, on a good inventory and a bad one."""
+
+    def test_the_exact_ci_command_passes_on_the_real_repository(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "scripts/inspect_knowledge_packs.py", "--json"],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        assert completed.returncode == 0, completed.stderr
+        payload = json.loads(completed.stdout)
+        assert payload["status"] == "ok"
+        assert payload["pack_count"] == 1
+
+    def test_the_exact_ci_command_fails_on_an_invalid_inventory(self, tmp_path: Path) -> None:
+        # The real CLI file, unmodified, run over a pack directory that is not
+        # the repository's. Copying the script rather than editing anything is
+        # what makes this an integration proof: the resolution of the pack
+        # directory is the inspector's own, and the exit code is the one CI
+        # would see.
+        package = tmp_path / "backend" / "app" / "knowledge_packs"
+        package.mkdir(parents=True)
+        (tmp_path / "backend" / "app" / "__init__.py").write_text("", encoding="utf-8")
+        (package / "__init__.py").write_text('"""Temporary pack directory."""\n', encoding="utf-8")
+        shutil.copy(INSPECTION_SOURCE, package / "inspection.py")
+        (package / "broken_pack.py").write_text(
+            "def make_pack_id():\n"
+            '    return "for_you.skin_care.broken.v1"\n'
+            "\n"
+            "\n"
+            "PACK_ID = make_pack_id()\n"
+            'DOMAIN = "skin_care"\n'
+            'CATEGORY = "skin_care"\n'
+            'REASON_KEY = "for_you.skin_care.broken.reason"\n'
+            "\n"
+            "\n"
+            f"def {COMPILER_ATTRIBUTE}(entry):\n"
+            "    return {}\n",
+            encoding="utf-8",
+        )
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        shutil.copy(CLI_PATH, scripts / CLI_PATH.name)
+
+        completed = subprocess.run(
+            [sys.executable, str(scripts / CLI_PATH.name), "--json"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        assert completed.returncode != 0, "an invalid inventory produced a passing CI command"
+        payload = json.loads(completed.stdout)
+        assert payload["status"] == "invalid"
+        assert payload["errors"] == [
+            {
+                "module": "app.knowledge_packs.broken_pack",
+                "field": "PACK_ID",
+                "code": "NON_STATIC_METADATA",
+            }
+        ]
 
 
 # ---------------------------------------------------------------------------
