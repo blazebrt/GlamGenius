@@ -145,16 +145,18 @@ repository at once, on an operator's laptop, in the course of asking a question.
 Tests hold the property directly: a synthetic pack that writes a sentinel file at
 module level is inspected, and the sentinel does not appear.
 
-Be precise about what that buys. Three sentences, and no more than three:
+Be precise about what that buys. Four sentences, and no more than four:
 
 - The inspector does not execute candidate source.
 - Every statically represented binding attempt that occurs in the module's own
   execution scope is observed, for the five governed names.
 - Nested lexical and class-body locals are not treated as module declarations.
+- A governed name may never be declared `global` in a pack, anywhere.
 
 It is **not** a claim that any pack has been proven side-effect-free, and no
-attempt is made to see through dynamic tricks such as `exec(...)` or
-`globals()["PACK_ID"] = …`. Step 14A does not sandbox Python.
+attempt is made to see through dynamic writes — `exec(...)`,
+`globals()["PACK_ID"] = …`, `setattr` on the module object, or anything of that
+shape. Step 14A does not sandbox Python.
 
 The consequence is that identity must be **statically legible**, and the check
 for that runs in two layers.
@@ -197,6 +199,31 @@ as infrastructure and drop a governed pack out of the inventory in silence.
 Bindings inside a nested *body* — a function, an async function, a class body, a
 lambda body — are not module bindings and are not counted. A `PACK_ID` local to a
 helper, or assigned in a class body, does not make the file a pack.
+
+**With one exception, which has to be named: `global`.** A class body is not
+module scope, until a `global` statement says otherwise:
+
+```python
+class Holder:
+    global PACK_ID
+    PACK_ID = "for_you.skin_care.escape.v1"
+```
+
+When that class statement executes, the assignment writes to the module
+namespace. Pruning the body misses it entirely, and missing it is fail-open.
+
+The rule adopted is blunter than Python's semantics on purpose: a governed name
+appearing in **any** `global` statement, anywhere in the file — a class body, a
+nested class, a function nobody calls, a branch nobody takes — is a finding. A
+bare `global PACK_ID` with no assignment is enough to make the file a governed
+candidate and fail it closed. Deciding case by case would mean modelling when
+each enclosing block runs, which is a small interpreter and a new place for
+holes; a version-controlled specification has no legitimate reason to redirect
+these five identities, so refusing all of them costs nothing real.
+
+`nonlocal` is not covered and does not need to be — it binds in an enclosing
+*function* scope and can never reach module state. A `global` naming something
+that is not one of the five governed names is nobody's business here.
 
 **Layer two accepts two forms.** For a descriptor field, exactly one module-scope
 binding, written as `NAME = "literal"` or `NAME: str = "literal"`. For the

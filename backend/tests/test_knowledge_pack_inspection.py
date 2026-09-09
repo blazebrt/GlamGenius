@@ -1042,6 +1042,198 @@ class TestNestedScopesAreNotModuleScope:
 
 
 # ---------------------------------------------------------------------------
+# `global` is the one way a nested body reaches module state
+# ---------------------------------------------------------------------------
+class TestGovernedNamesMayNotBeDeclaredGlobal:
+    """A class body is not module scope — until ``global`` says it is.
+
+    ``class Holder: PACK_ID = "x"`` binds a class attribute and the collector
+    is right to prune it. Add one ``global PACK_ID`` line above it and the
+    same assignment writes to the module namespace instead, which the pruning
+    hides completely.
+
+    The rule adopted is blunter than Python's semantics on purpose: a governed
+    name in *any* ``global`` statement, anywhere, is a finding — even in a
+    function nobody calls or a branch nobody takes. Deciding case by case
+    would mean modelling when each enclosing block runs, which is a small
+    interpreter and a new place for holes. A specification file has no
+    legitimate reason to redirect these five identities.
+    """
+
+    def test_an_ordinary_class_attribute_is_still_not_a_module_binding(
+        self, pack_dir
+    ) -> None:
+        # The control this whole rule has to leave standing.
+        directory, write = pack_dir
+        write("class_local", 'class Holder:\n    PACK_ID = "class-local"\n')
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert result.errors == ()
+
+    def test_a_class_body_global_cannot_smuggle_a_pack_id_in(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "class_global",
+            "class Holder:\n"
+            "    global PACK_ID\n"
+            '    PACK_ID = "for_you.skin_care.escape.v1"\n',
+        )
+        result = _inspect(directory)
+        assert result.ok is False, "a class-body global escaped governance"
+        assert result.packs == ()
+        assert (module, "PACK_ID", "NON_STATIC_METADATA") in _codes(result)
+
+    def test_a_nested_class_global_is_caught_too(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "nested_class_global",
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        global PACK_ID\n"
+            '        PACK_ID = "for_you.skin_care.escape.v1"\n',
+        )
+        result = _inspect(directory)
+        assert result.ok is False
+        assert (module, "PACK_ID", "NON_STATIC_METADATA") in _codes(result)
+
+    def test_a_class_global_invalidates_a_descriptor_that_was_declared_properly(
+        self, pack_dir
+    ) -> None:
+        directory, write = pack_dir
+        module = write(
+            "class_global_domain",
+            VALID_SOURCE + '\nclass Holder:\n    global DOMAIN\n    DOMAIN = "other"\n',
+        )
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert _codes(result) == [(module, "DOMAIN", "DUPLICATE_DECLARATION")]
+
+    def test_a_class_global_invalidates_the_compiler(self, pack_dir) -> None:
+        # The sharpest form: after the class statement runs, the name is None,
+        # and the stale top-level ``def`` must not be reported as valid.
+        directory, write = pack_dir
+        module = write(
+            "class_global_compiler",
+            VALID_SOURCE
+            + "\nclass Holder:\n"
+            f"    global {COMPILER_ATTRIBUTE}\n"
+            f"    {COMPILER_ATTRIBUTE} = None\n",
+        )
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert _codes(result) == sorted(
+            [
+                (module, COMPILER_ATTRIBUTE, "DUPLICATE_DECLARATION"),
+                (module, COMPILER_ATTRIBUTE, "COMPILER_NOT_A_FUNCTION"),
+            ]
+        )
+
+    @pytest.mark.parametrize(
+        ("label", "source"),
+        [
+            ("bare function global", "def helper():\n    global PACK_ID\n"),
+            (
+                "function global with assignment",
+                "def helper():\n"
+                "    global PACK_ID\n"
+                '    PACK_ID = "for_you.skin_care.escape.v1"\n',
+            ),
+            (
+                "async function global",
+                "async def helper():\n    global PACK_ID\n",
+            ),
+            (
+                "global in a branch nobody takes",
+                "if False:\n    def helper():\n        global PACK_ID\n",
+            ),
+            (
+                "global inside a method",
+                "class Holder:\n    def method(self):\n        global PACK_ID\n",
+            ),
+            (
+                "global naming several names at once",
+                "def helper():\n    global other, PACK_ID, another\n",
+            ),
+        ],
+    )
+    def test_a_global_declaration_anywhere_claims_pack_status_and_fails_closed(
+        self, pack_dir, label: str, source: str
+    ) -> None:
+        # Deliberately stricter than runtime-at-import semantics: none of
+        # these mutate the module until something calls them, and they are
+        # rejected anyway.
+        directory, write = pack_dir
+        module = write("function_global", source)
+        result = _inspect(directory)
+        assert result.ok is False, label
+        assert result.packs == (), label
+        assert (module, "PACK_ID", "NON_STATIC_METADATA") in _codes(result), label
+
+    def test_a_global_after_a_good_declaration_is_a_duplicate(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "valid_then_global",
+            VALID_SOURCE + "\ndef helper():\n    global PACK_ID\n",
+        )
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert _codes(result) == [(module, "PACK_ID", "DUPLICATE_DECLARATION")]
+
+    def test_a_global_naming_something_else_is_not_our_business(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "unrelated_global",
+            VALID_SOURCE
+            + "\n_counter = 0\n"
+            "\n\ndef helper():\n"
+            "    global _counter\n"
+            "    _counter += 1\n",
+        )
+        result = _inspect(directory)
+        assert result.ok is True
+        assert [descriptor.module for descriptor in result.packs] == [module]
+
+    def test_nonlocal_is_not_covered_because_it_cannot_reach_the_module(
+        self, pack_dir
+    ) -> None:
+        # `nonlocal` binds in an enclosing *function* scope. It can never
+        # write module state, so it is not a governed-name escape and the
+        # pack stays valid.
+        directory, write = pack_dir
+        module = write(
+            "nonlocal_pack",
+            VALID_SOURCE
+            + "\ndef outer():\n"
+            "    PACK_ID = 1\n"
+            "\n"
+            "    def inner():\n"
+            "        nonlocal PACK_ID\n"
+            "        PACK_ID = 2\n"
+            "\n"
+            "    return inner\n",
+        )
+        result = _inspect(directory)
+        assert result.ok is True
+        assert [descriptor.module for descriptor in result.packs] == [module]
+
+    def test_the_governed_name_set_is_exactly_the_five(self) -> None:
+        assert set(inspection.GOVERNED_NAMES) == {
+            "PACK_ID",
+            "DOMAIN",
+            "CATEGORY",
+            "REASON_KEY",
+            COMPILER_ATTRIBUTE,
+        }
+
+    def test_the_detector_reads_the_tree_not_the_text(self) -> None:
+        # The reviewed pack has the word "global" in a comment. A text scan
+        # would flag it; an AST walk cannot.
+        source = REVIEWED_PACK_SOURCE.read_text(encoding="utf-8")
+        assert "global" in source
+        assert inspection._governed_global_names(ast.parse(source)) == []
+
+
+# ---------------------------------------------------------------------------
 # The compiler, verified structurally and never called
 # ---------------------------------------------------------------------------
 class TestCompilerDeclaration:

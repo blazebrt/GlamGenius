@@ -41,16 +41,24 @@ AST child rather than only expression-shaped ones, because Python hangs
 expressions off semantic wrappers that a type-filtered walk treats as dead
 ends, and prunes only at genuine scope boundaries.
 
-Be precise about what this buys — three claims, and no more:
+Nested lexical and class-body locals are not module declarations — with one
+exception that has to be named, because ``global`` can redirect an otherwise
+nested binding into module state. Rather than model when a nested block runs,
+a governed name appearing in any ``global`` statement anywhere in a pack is
+rejected outright.
+
+Be precise about what this buys — four claims, and no more:
 
 * this tool does not execute candidate source;
 * every statically represented binding attempt occurring in the module's own
   execution scope is observed, for the five governed names;
-* nested lexical and class-body locals are not treated as module declarations.
+* nested lexical and class-body locals are not treated as module declarations;
+* a governed name may never be declared ``global`` in a pack, anywhere.
 
 It is not a claim that any pack has been proven side-effect-free, and no
-attempt is made to see through ``exec`` or ``globals()`` assignment. This is
-not a sandbox.
+attempt is made to see through ``exec(...)``, ``globals()[...]`` assignment,
+``setattr`` on the module object, or any other dynamic write. This is not a
+sandbox.
 
 **What it is not.** Not a registry, not a loader, not a release operator. It
 does not prepare, verify, publish, compile, approve, activate, deactivate or
@@ -106,6 +114,10 @@ PACK_MARKER_ATTRIBUTE = "PACK_ID"
 
 #: The governed descriptor fields, in report order.
 DESCRIPTOR_FIELDS = (PACK_MARKER_ATTRIBUTE, "DOMAIN", "CATEGORY", "REASON_KEY")
+
+#: Every name whose binding this tool governs. A pack may not redirect any of
+#: them through a ``global`` declaration — see :func:`_governed_global_names`.
+GOVERNED_NAMES = frozenset(DESCRIPTOR_FIELDS) | {COMPILER_ATTRIBUTE}
 
 #: The only files in the pack directory that are not asked to be packs.
 #: A closed list, deliberately: anything else added to the directory is
@@ -511,6 +523,44 @@ def _nested_bodies(node: ast.stmt) -> Iterator[list[ast.stmt]]:
         yield case.body
 
 
+def _governed_global_names(tree: ast.Module) -> list[str]:
+    """Governed names declared ``global`` anywhere in this source.
+
+    A class body is not module scope — ``class Holder: PACK_ID = "x"`` binds a
+    class attribute and nothing else, and the collector prunes class bodies
+    for exactly that reason. But ``global`` changes what an assignment
+    *means*:
+
+    .. code-block:: python
+
+        class Holder:
+            global PACK_ID
+            PACK_ID = "for_you.skin_care.escape.v1"
+
+    When that class statement executes, the assignment writes to the module
+    namespace. Pruning the body misses it, and missing it is fail-open.
+
+    The rule here is deliberately blunter than Python's semantics: a governed
+    name appearing in **any** ``global`` statement, anywhere in the file — a
+    class body, a nested class, a function that may never be called, a branch
+    that may never be taken — is a finding. Deciding case by case would mean
+    modelling when each enclosing block runs, which is a small interpreter and
+    a new place for holes. A version-controlled specification has no
+    legitimate reason to redirect these five identities, so refusing all of
+    them costs nothing real and closes the whole class of escape.
+
+    ``nonlocal`` is not covered, and does not need to be: it binds in an
+    enclosing *function* scope and can never reach module state.
+    """
+    return [
+        name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Global)
+        for name in node.names
+        if name in GOVERNED_NAMES
+    ]
+
+
 def _module_scope_bindings(tree: ast.Module) -> dict[str, list[_Binding]]:
     """Every module-scope binding attempt, by name, in source order.
 
@@ -530,6 +580,14 @@ def _module_scope_bindings(tree: ast.Module) -> dict[str, list[_Binding]]:
                 walk(block, nested=True)
 
     walk(tree.body, nested=False)
+
+    # Appended after the walk, so a governed name declared ``global`` anywhere
+    # is always the *last* attempt on that name. That is what stops an earlier
+    # top-level ``def`` from surviving as the accepted compiler when the file
+    # also reserves the right to reassign it from somewhere else.
+    for name in _governed_global_names(tree):
+        bindings.setdefault(name, []).append(_Binding(_BindingForm.OTHER))
+
     return bindings
 
 
