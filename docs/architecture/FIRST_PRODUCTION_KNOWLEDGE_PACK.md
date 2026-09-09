@@ -410,6 +410,18 @@ unchanged. It is the independent oracle the compatibility proof compares
 against — both builders must emit byte-identical manifests and the same content
 hash — and folding it into the generic tool would leave nothing to compare with.
 
+**One pack in means one pack executed, transitively.** The builder imports
+exactly one module and a meta-path recorder proves it — but that proves the
+builder, not the pack. A pack whose own source imported a sibling would drag it
+in through the ordinary import system, and nothing in the builder could stop
+that. So the rule lives with the packs: **a governed pack may not import
+another governed pack**, checked statically over committed source, in all
+three syntactic forms. Infrastructure members of the package are allowed
+(`inspection.py` executes no knowledge), and so is everything outside it —
+importing `app.domains.personal_decision_release.manifest` is exactly what a
+compiler is supposed to do. This is a governance rule about what a
+specification file may reference, not a sandbox.
+
 **Production activation — still manual, still one pack.**
 
 `scripts/operate_step8i_petrolatum_release.py` was not generalised and must not

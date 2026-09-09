@@ -202,6 +202,14 @@ def _compile(
     Parsing happens once. ``main`` receives the canonical document and the
     hash together so the bytes written and the hash reported can only ever
     describe the same manifest.
+
+    All three Step 8H calls sit inside one ``try``. Parsing is not the only
+    step that can fail: canonicalisation and hashing read the same fields
+    again, and hashing encodes them to UTF-8. Today the parser rejects
+    everything they would choke on — every text field is validated there —
+    but "today the first stage happens to catch it" is a property of the
+    manifest authority, not of this tool, and it is not this tool's to rely
+    on. Whatever any of the three raises becomes the same closed refusal.
     """
     try:
         raw = compiler(entry)
@@ -212,12 +220,14 @@ def _compile(
         ) from None
     try:
         parsed = parse_release_manifest(raw)
+        canonical = canonical_manifest(parsed)
+        content_hash = manifest_content_hash(parsed)
     except Exception as error:
         raise Refusal(
             RefusalCode.INVALID_COMPILED_MANIFEST,
             f"{descriptor.pack_id} produced {type(error).__name__}",
         ) from None
-    return canonical_manifest(parsed), manifest_content_hash(parsed)
+    return canonical, content_hash
 
 
 def _write(path: Path, encoded: str) -> None:
@@ -233,14 +243,19 @@ def _write(path: Path, encoded: str) -> None:
         with tempfile.NamedTemporaryFile(
             "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
         ) as handle:
-            handle.write(encoded)
+            # Recorded before the write, not after. The file exists from the
+            # moment it is opened, so a failure inside ``write`` — or in the
+            # flush that happens on close — would otherwise leave a partial
+            # dotfile that the cleanup below never learned about.
             temporary = Path(handle.name)
+            handle.write(encoded)
         os.replace(temporary, path)
         temporary = None
     except OSError:
         raise Refusal(RefusalCode.OUTPUT_WRITE_FAILED, str(path)) from None
     finally:
-        # A failure between creating the temporary sibling and renaming it
+        # A failure anywhere between creating the temporary sibling and
+        # renaming it — the write, the flush on close, or the rename itself —
         # would otherwise leave a stray dotfile next to the real output. The
         # cleanup is suppressed rather than reported: the write failure is
         # what the operator needs to know, and a second exception raised

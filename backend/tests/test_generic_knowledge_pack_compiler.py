@@ -38,7 +38,11 @@ from app.domains.personal_decision_release.manifest import (
     manifest_content_hash,
     parse_release_manifest,
 )
-from app.knowledge_packs.inspection import COMPILER_ATTRIBUTE
+from app.knowledge_packs.inspection import (
+    COMPILER_ATTRIBUTE,
+    INFRASTRUCTURE_FILENAMES,
+    discover_pack_sources,
+)
 
 from tests.test_step8i_first_production_knowledge_pack import _valid_entry
 
@@ -829,6 +833,235 @@ class TestOutputIsOrderIndependent:
         assert first_hash == second_hash
 
 
+class TestTheStep8HBoundaryFailsClosed:
+    """Parse is not the only step that can raise.
+
+    Canonicalisation and hashing read the same fields again, and hashing
+    encodes them to UTF-8. Today the parser rejects everything they would
+    choke on — every text field is validated there, which is why no natural
+    post-parse fixture exists to write. But "the first stage happens to catch
+    it" is a property of the manifest authority, not of this tool, and it is
+    not this tool's to rely on. All three calls sit in one ``try``, and the
+    proof is by injection so it covers whatever any of them raises in future
+    rather than one fixture that works today.
+    """
+
+    def _descriptor(self, builder):
+        return next(d for d in builder.inspect_packs().packs if d.pack_id == REVIEWED_PACK_ID)
+
+    def test_a_parse_failure_is_a_controlled_refusal(self) -> None:
+        builder = _load_builder()
+        with pytest.raises(builder.Refusal) as raised:
+            builder._compile(lambda entry: {"schema_version": 1}, {}, self._descriptor(builder))
+        assert raised.value.code == builder.RefusalCode.INVALID_COMPILED_MANIFEST
+
+    def test_an_unencodable_manifest_is_refused_without_echoing_it(self) -> None:
+        # A lone surrogate cannot be encoded to UTF-8. The manifest authority
+        # happens to reject it during parsing rather than during hashing —
+        # either way it must come back as the same closed refusal, with the
+        # offending value nowhere in sight.
+        builder = _load_builder()
+        raw = _two_rule_manifest(CANONICAL_ORDER)
+        raw["explanation_rules"][0]["source_locator"] = "Section \ud800 one"
+        with pytest.raises(builder.Refusal) as raised:
+            builder._compile(lambda entry: raw, {}, self._descriptor(builder))
+        assert raised.value.code == builder.RefusalCode.INVALID_COMPILED_MANIFEST
+        assert "\ud800" not in raised.value.render()
+        assert "Section" not in raised.value.render()
+
+    @pytest.mark.parametrize("stage", ["parse_release_manifest", "canonical_manifest", "manifest_content_hash"])
+    def test_a_failure_at_any_of_the_three_stages_is_the_same_refusal(
+        self, stage: str, monkeypatch
+    ) -> None:
+        builder = _load_builder()
+
+        def explode(*args: object, **kwargs: object):
+            raise RuntimeError("secret-value-must-not-leak")
+
+        monkeypatch.setattr(builder, stage, explode)
+        with pytest.raises(builder.Refusal) as raised:
+            builder._compile(
+                lambda entry: _two_rule_manifest(CANONICAL_ORDER), {}, self._descriptor(builder)
+            )
+        assert raised.value.code == builder.RefusalCode.INVALID_COMPILED_MANIFEST, stage
+        assert "secret-value-must-not-leak" not in raised.value.render(), stage
+        assert "RuntimeError" in raised.value.render(), stage
+
+    def test_the_three_stages_share_one_try(self) -> None:
+        # Structural, so the boundary cannot be widened back apart without
+        # this failing: all three calls live in the body of the same `try`.
+        tree = ast.parse(GENERIC_BUILDER.read_text(encoding="utf-8"))
+        compile_fn = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_compile"
+        )
+        guarded: set[str] = set()
+        for node in ast.walk(compile_fn):
+            if not isinstance(node, ast.Try):
+                continue
+            body_calls = {
+                child.func.id
+                for statement in node.body
+                for child in ast.walk(statement)
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+            }
+            if "parse_release_manifest" in body_calls:
+                guarded = body_calls
+        assert {
+            "parse_release_manifest",
+            "canonical_manifest",
+            "manifest_content_hash",
+        } <= guarded
+
+    def test_a_refusal_from_the_boundary_carries_no_traceback(self, tmp_path: Path) -> None:
+        path = tmp_path / "entry.json"
+        path.write_text(json.dumps({"claim_key": "x"}), encoding="utf-8")
+        completed = _run("--pack-id", REVIEWED_PACK_ID, str(path))
+        assert completed.returncode != 0
+        assert "Traceback" not in completed.stderr
+
+
+# ---------------------------------------------------------------------------
+# A governed pack may not import another governed pack
+# ---------------------------------------------------------------------------
+PACK_PACKAGE = "app.knowledge_packs"
+
+
+def _cross_pack_imports(source: str, *, own_module: str) -> list[str]:
+    """Governed pack modules this source imports, other than itself.
+
+    Static, like everything else in the discovery half of this system: the
+    file is parsed, never run. Three syntactic forms reach another pack and
+    all three are recognised —
+
+        import app.knowledge_packs.other
+        from app.knowledge_packs.other import X
+        from app.knowledge_packs import other
+
+    Infrastructure members of the package are not packs and are allowed;
+    `inspection.py` executes no knowledge. So is everything outside the
+    package — `app.domains.personal_decision_release.manifest` is exactly what
+    a compiler is supposed to import, and a rule that flagged it would be
+    useless.
+
+    Anything else named under the package is reported, including forms no
+    real pack would use, such as pulling a dunder out of the package root.
+    That is the fail-closed direction and it is cheap: an odd-but-harmless
+    import costs a reviewer a minute, and a missed sibling costs the
+    guarantee that selecting one pack executes one pack.
+    """
+    infrastructure = {Path(name).stem for name in INFRASTRUCTURE_FILENAMES}
+    found: list[str] = []
+
+    def note(dotted: str) -> None:
+        if not dotted.startswith(f"{PACK_PACKAGE}."):
+            return
+        member = dotted[len(PACK_PACKAGE) + 1 :].split(".")[0]
+        if member in infrastructure or dotted == own_module:
+            return
+        found.append(f"{PACK_PACKAGE}.{member}")
+
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                note(alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            if node.module == PACK_PACKAGE:
+                for alias in node.names:
+                    note(f"{PACK_PACKAGE}.{alias.name}")
+            else:
+                note(node.module)
+    return sorted(set(found))
+
+
+class TestNoPackMayImportAnotherPack:
+    """Selecting one pack must execute one pack, transitively.
+
+    The builder imports exactly one module, and a meta-path recorder proves
+    it. That proof covers the builder, not the pack: a pack whose own source
+    imported a sibling would drag it in through the ordinary import system,
+    and the recorder would show two modules for reasons nothing in the
+    builder could prevent.
+
+    So the rule lives with the packs rather than the tool, and it is checked
+    statically over committed source. Nothing here runs a pack, and no
+    sandbox is attempted — this is a governance rule about what a
+    specification file may reference, not an attempt to contain arbitrary
+    Python.
+    """
+
+    def test_the_reviewed_pack_imports_no_other_pack(self) -> None:
+        source = (BACKEND_ROOT / "app" / "knowledge_packs" / "petrolatum_dry_skin_v1.py").read_text(
+            encoding="utf-8"
+        )
+        assert _cross_pack_imports(source, own_module=PACK_MODULE) == []
+
+    def test_every_committed_pack_satisfies_the_rule(self) -> None:
+        # Not just the one we know about: whatever the inspector discovers.
+        checked = 0
+        for path in discover_pack_sources():
+            own = f"{PACK_PACKAGE}.{path.stem}"
+            offenders = _cross_pack_imports(path.read_text(encoding="utf-8"), own_module=own)
+            assert offenders == [], (path.name, offenders)
+            checked += 1
+        assert checked >= 1, "no pack sources were discovered, so nothing was checked"
+
+    @pytest.mark.parametrize(
+        ("label", "statement"),
+        [
+            ("plain import", "import app.knowledge_packs.other_pack"),
+            ("aliased import", "import app.knowledge_packs.other_pack as other"),
+            ("from-import of a member", "from app.knowledge_packs.other_pack import THING"),
+            ("from-import of the module", "from app.knowledge_packs import other_pack"),
+            ("aliased from-import", "from app.knowledge_packs import other_pack as other"),
+            (
+                "deep from-import",
+                "from app.knowledge_packs.other_pack.nested import THING",
+            ),
+        ],
+    )
+    def test_a_pack_reaching_for_a_sibling_is_rejected(self, label: str, statement: str) -> None:
+        source = f"{statement}\n\nPACK_ID = 'for_you.skin_care.a.v1'\n"
+        assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == [
+            f"{PACK_PACKAGE}.other_pack"
+        ], label
+
+    @pytest.mark.parametrize(
+        ("label", "statement"),
+        [
+            (
+                "the manifest authority",
+                "from app.domains.personal_decision_release.manifest import "
+                "parse_release_manifest",
+            ),
+            ("a domain package", "import app.domains.personal_decision_policy"),
+            ("the standard library", "from collections.abc import Mapping"),
+            ("typing", "from typing import NoReturn"),
+            ("future annotations", "from __future__ import annotations"),
+            ("the inspector, which is infrastructure", "from app.knowledge_packs import inspection"),
+        ],
+    )
+    def test_the_imports_a_pack_legitimately_needs_are_allowed(
+        self, label: str, statement: str
+    ) -> None:
+        source = f"{statement}\n\nPACK_ID = 'for_you.skin_care.a.v1'\n"
+        assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == [], label
+
+    def test_a_pack_importing_itself_is_not_a_cross_pack_import(self) -> None:
+        source = "import app.knowledge_packs.a_pack\n"
+        assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == []
+
+    def test_the_rule_catches_a_sibling_hidden_below_a_legitimate_import(self) -> None:
+        source = (
+            "from app.domains.personal_decision_release.manifest import parse_release_manifest\n"
+            "from collections.abc import Mapping\n"
+            "from app.knowledge_packs.other_pack import SUBSTANCE_KEY\n"
+        )
+        assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == [
+            f"{PACK_PACKAGE}.other_pack"
+        ]
+
+
 # ---------------------------------------------------------------------------
 # Output file safety
 # ---------------------------------------------------------------------------
@@ -860,6 +1093,76 @@ class TestOutputFileSafety:
         completed = _run("--pack-id", REVIEWED_PACK_ID, str(entry_file), "--output", str(output))
         assert completed.returncode == 0, completed.stderr
         assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == 1
+
+    def test_a_write_failure_cleans_up_its_temporary_sibling(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # The file exists from the moment it is opened, so a failure inside
+        # ``write`` — or in the flush on close — happens with a partial
+        # dotfile already on disk. Recording the path only after the write
+        # would leave it there, which is the bug this pins.
+        builder = _load_builder()
+        output = tmp_path / "manifest.json"
+        real_factory = builder.tempfile.NamedTemporaryFile
+
+        class ExplodingHandle:
+            def __init__(self, handle: object) -> None:
+                self._handle = handle
+                self.name = handle.name
+
+            def __enter__(self) -> ExplodingHandle:
+                return self
+
+            def __exit__(self, *exc: object) -> bool:
+                self._handle.close()
+                return False
+
+            def write(self, data: str) -> int:
+                raise OSError("no space left on device")
+
+        monkeypatch.setattr(
+            builder.tempfile,
+            "NamedTemporaryFile",
+            lambda *args, **kwargs: ExplodingHandle(real_factory(*args, **kwargs)),
+        )
+        with pytest.raises(builder.Refusal) as raised:
+            builder._write(output, "{}\n")
+        assert raised.value.code == builder.RefusalCode.OUTPUT_WRITE_FAILED
+        assert not output.exists()
+        assert list(tmp_path.iterdir()) == [], "a partial temporary file was left behind"
+
+    def test_a_write_failure_leaves_an_existing_output_byte_intact(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        builder = _load_builder()
+        output = tmp_path / "manifest.json"
+        output.write_bytes(b"PREVIOUS CONTENT\n")
+        real_factory = builder.tempfile.NamedTemporaryFile
+
+        class ExplodingHandle:
+            def __init__(self, handle: object) -> None:
+                self._handle = handle
+                self.name = handle.name
+
+            def __enter__(self) -> ExplodingHandle:
+                return self
+
+            def __exit__(self, *exc: object) -> bool:
+                self._handle.close()
+                return False
+
+            def write(self, data: str) -> int:
+                raise OSError("no space left on device")
+
+        monkeypatch.setattr(
+            builder.tempfile,
+            "NamedTemporaryFile",
+            lambda *args, **kwargs: ExplodingHandle(real_factory(*args, **kwargs)),
+        )
+        with pytest.raises(builder.Refusal):
+            builder._write(output, "{}\n")
+        assert output.read_bytes() == b"PREVIOUS CONTENT\n"
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["manifest.json"]
 
     def test_a_replace_failure_cleans_up_its_temporary_sibling(
         self, entry_file: Path, tmp_path: Path, monkeypatch
