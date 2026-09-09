@@ -524,11 +524,18 @@ async def read_skin_care_for_you(
                 # A corrupt active release is not the same operational state as no
                 # active release, and answering as though it were would show
                 # customers "no reviewed knowledge" while a broken bundle sits
-                # activated. The detail stays in the log; the customer gets none of
-                # the manifest, the hash or the rule identities.
-                # Same reasoning. `PersonalDecisionReleaseInvariantError`
-                # carries manifest and rule detail in its message, which is
-                # exactly what must not reach a log line for a governed 503.
+                # activated.
+                #
+                # The customer gets none of the manifest, hash or rule
+                # identities. Neither does the log: this comment used to say
+                # "the detail stays in the log", which stopped being true when
+                # the privacy fix removed it, and a comment that describes
+                # logging the exception is an invitation to put it back.
+                # `PersonalDecisionReleaseInvariantError` carries manifest and
+                # rule detail in its message, which is exactly what must not
+                # reach a log line on a governed 503. Operational correlation
+                # uses the request id instead; exception detail is deliberately
+                # not logged on this path.
                 logger.error("for_you_active_release_invalid")
                 raise AppError(
                     "This result is not available right now.",

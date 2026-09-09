@@ -43,17 +43,45 @@ _URL_WITH_CREDENTIALS = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@\S
 # trusting, and a looser one would redact software versions. `2.12.5` is not an
 # address and the standard library says so; `203.0.113.42` and `2001:db8::42`
 # are, and it says that too.
-_IP_CANDIDATE = re.compile(r"(?<![\w.:-])((?:\d{1,3}\.){3}\d{1,3}|[0-9A-Fa-f:]{2,45})(?![\w.-])")
+#
+# The second branch admits dots as well as colons, and that is the whole of a
+# fix independent review asked for. An IPv6 address may legally end in a dotted
+# IPv4 part -- `::ffff:192.0.2.128`, `2001:db8::192.0.2.33` -- and a
+# colons-only candidate class cannot represent one. What happened instead was
+# that the two halves were matched separately: `2001:db8::192.0.2.33` became
+# `2001:db8::[Redacted]`, leaving the network prefix in the clear, and
+# `::ffff:192.0.2.128` became two redactions where one address had been. One
+# address should produce one redaction, and no part of it should survive.
+#
+# Requiring a colon in this branch is what keeps version strings out of it:
+# `2.12.5` and `v2.12.5` reach neither branch, so nothing about them depends on
+# `ipaddress` being lenient.
+_IP_CANDIDATE = re.compile(
+    r"(?<![\w.:-])("
+    r"(?:\d{1,3}\.){3}\d{1,3}"
+    r"|(?=[0-9A-Fa-f.:]*:)[0-9A-Fa-f.:]{2,45}"
+    r")(?![\w.-])"
+)
 
 
 def _redact_ip_addresses(value: str) -> str:
     def _replace(match: re.Match[str]) -> str:
         candidate = match.group(1)
+        # Sentence punctuation gets swept into a candidate: an address that
+        # ends a message picks up the full stop after it. A dot is never valid
+        # at either end of an address, so trimming one can only turn a
+        # non-address into an address -- never the reverse -- and the trimmed
+        # characters are put back untouched. Colons are deliberately left
+        # alone: `::1` and `2001:db8::` are real addresses.
+        core = candidate.strip(".")
+        if not core:
+            return candidate
         try:
-            ipaddress.ip_address(candidate)
+            ipaddress.ip_address(core)
         except ValueError:
             return candidate
-        return REDACTED
+        head, _, tail = candidate.partition(core)
+        return f"{head}{REDACTED}{tail}"
 
     return _IP_CANDIDATE.sub(_replace, value)
 

@@ -1077,6 +1077,10 @@ class TestProfileFactsAndAddresses:
             "203.0.113.42", "8.8.8.8", "10.0.0.1", "255.255.255.255",
             "2001:db8::42", "2001:0db8:0000:0000:0000:0000:0000:0042",
             "::1", "fe80::1", "2001:db8:85a3::8a2e:370:7334",
+            # IPv6 with an embedded dotted IPv4 tail. Both are ordinary
+            # addresses a proxy or resolver will happily write into a message.
+            "::ffff:192.0.2.128", "2001:db8::192.0.2.33",
+            "0:0:0:0:0:ffff:192.1.56.10",
         ],
     )
     def test_an_address_inside_free_text_is_redacted(self, address: str) -> None:
@@ -1106,6 +1110,139 @@ class TestProfileFactsAndAddresses:
     ) -> None:
         scrubbed = scrub_event({"extra": {"note": f"saw {not_an_address} here"}})
         assert not_an_address in scrubbed["extra"]["note"]
+
+
+# ---------------------------------------------------------------------------
+# IPv6 addresses that carry a dotted IPv4 tail
+# ---------------------------------------------------------------------------
+#: The IPv4 part of the mapped addresses below. Named on its own because the
+#: point of these tests is that it must not be left behind after the IPv6
+#: prefix is redacted -- a surviving dotted quad still names the endpoint.
+MAPPED_IPV4_TAIL = "192.0.2.128"
+EMBEDDED_IPV4_TAIL = "192.0.2.33"
+MAPPED_IPV6 = f"::ffff:{MAPPED_IPV4_TAIL}"
+EMBEDDED_IPV6 = f"2001:db8::{EMBEDDED_IPV4_TAIL}"
+
+
+class TestMixedIPv6AndDottedIPv4:
+    """One address must produce one redaction, with nothing left over.
+
+    Independent review found that the candidate extractor's IPv6 branch
+    excluded ``.``, so an address with an embedded IPv4 part could not be
+    matched whole. The two halves were matched separately instead, and the
+    failure was not symmetrical:
+
+    * ``::ffff:192.0.2.128`` became two redactions where one address had been
+    * ``2001:db8::192.0.2.33`` became ``2001:db8::[Redacted]``, leaving the
+      network prefix in the clear
+
+    So asserting only "the full original string is absent" would have passed
+    against the broken code in both cases. These tests assert the exact
+    scrubbed output instead: the whole address gone, replaced by exactly one
+    marker, with the surrounding sentence intact.
+
+    Everything goes through the real ``scrub_event`` boundary rather than the
+    candidate helper, because the boundary is what Sentry actually calls.
+    """
+
+    @pytest.mark.parametrize("address", [MAPPED_IPV6, EMBEDDED_IPV6])
+    def test_a_mixed_address_alone_is_replaced_by_exactly_one_marker(
+        self, address: str
+    ) -> None:
+        scrubbed = scrub_event({"extra": {"note": address}})["extra"]["note"]
+        assert scrubbed == REDACTED
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            (f"peer={MAPPED_IPV6}", f"peer={REDACTED}"),
+            (f"peer={EMBEDDED_IPV6}", f"peer={REDACTED}"),
+            (f"[{MAPPED_IPV6}]:443", f"[{REDACTED}]:443"),
+            (f"upstream {EMBEDDED_IPV6} failed", f"upstream {REDACTED} failed"),
+            # An address that ends a sentence picks up the full stop.
+            (f"connect to {MAPPED_IPV6}.", f"connect to {REDACTED}."),
+        ],
+    )
+    def test_realistic_surrounding_syntax_keeps_only_the_syntax(
+        self, raw: str, expected: str
+    ) -> None:
+        assert scrub_event({"extra": {"note": raw}})["extra"]["note"] == expected
+
+    @pytest.mark.parametrize(
+        ("address", "tail"),
+        [(MAPPED_IPV6, MAPPED_IPV4_TAIL), (EMBEDDED_IPV6, EMBEDDED_IPV4_TAIL)],
+    )
+    def test_no_fragment_of_a_mixed_address_survives(
+        self, address: str, tail: str
+    ) -> None:
+        """The four properties, stated one at a time.
+
+        The third is the one the old code failed: a redaction that leaves
+        ``[Redacted by application]:192.0.2.128`` behind has redacted a prefix
+        and published an endpoint.
+        """
+        sentence = f"ConnectionResetError: upstream {address} closed the connection"
+        scrubbed = scrub_event({"exception": {"value": sentence}})["exception"]["value"]
+
+        # 1. the original address text is gone
+        assert address not in scrubbed
+        # 2. the dotted IPv4 tail is not left behind
+        assert tail not in scrubbed
+        # 3. no fragment of the IPv6 side survives either
+        for fragment in ("::ffff", "2001:db8", "db8::"):
+            if fragment in address:
+                assert fragment not in scrubbed
+        # 4. a marker is present and the rest of the sentence is still usable
+        assert REDACTED in scrubbed
+        assert scrubbed == f"ConnectionResetError: upstream {REDACTED} closed the connection"
+
+    def test_a_mapped_address_inside_a_real_exception_message(self) -> None:
+        """The shape this actually arrives in: an exception, nested in an event."""
+        event = {
+            "exception": {
+                "values": [
+                    {
+                        "type": "OSError",
+                        "value": (
+                            f"[Errno 104] Connection reset by peer "
+                            f"[{MAPPED_IPV6}]:443 while reading upstream"
+                        ),
+                    }
+                ]
+            },
+            "breadcrumbs": [{"message": f"resolved upstream to {EMBEDDED_IPV6}"}],
+        }
+        scrubbed = scrub_event(event)
+        rendered = json.dumps(scrubbed)
+
+        for forbidden in (
+            MAPPED_IPV6,
+            EMBEDDED_IPV6,
+            MAPPED_IPV4_TAIL,
+            EMBEDDED_IPV4_TAIL,
+            "2001:db8",
+            "::ffff",
+        ):
+            assert forbidden not in rendered, forbidden
+        # The diagnostics that make the report worth having are still there.
+        assert "[Errno 104] Connection reset by peer" in rendered
+        assert "while reading upstream" in rendered
+        assert "OSError" in rendered
+        assert "443" in rendered
+
+    @pytest.mark.parametrize(
+        "harmless",
+        ["2.12.5", "3.11.9", "16.4", "v2.12.5", "took 12.5 ms", "99.9% availability"],
+    )
+    def test_widening_the_candidate_did_not_swallow_version_strings(
+        self, harmless: str
+    ) -> None:
+        """The false-positive guard, restated against the widened pattern.
+
+        The widened branch requires a colon, which is what keeps dotted
+        version numbers out of it entirely.
+        """
+        assert scrub_event({"extra": {"note": harmless}})["extra"]["note"] == harmless
 
 
 # ---------------------------------------------------------------------------
