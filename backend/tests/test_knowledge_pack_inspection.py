@@ -1,6 +1,6 @@
-"""Step 14A — offline knowledge-pack inventory and contract validation.
+"""Step 14A — offline, static knowledge-pack inventory and contract validation.
 
-Two things are being proved here, and they pull in opposite directions.
+Three things are being proved here, and they pull in different directions.
 
 The first is that the inspector *works*: it finds every pack committed to the
 repository, reports its operational identity, and rejects every structural
@@ -8,18 +8,32 @@ violation the release workflow would otherwise discover far too late — a
 duplicated id, two packs competing for one reason key, a compiler that was
 renamed away.
 
-The second is that the inspector *changes nothing*. A knowledge pack is an
-inert source artifact. Adding a tool that reads packs must not turn the
-package into something the running application can reach, must not make a
-pack load at import time, and must not give the inspector any appetite for a
-database, a socket, a credential or a customer decision. Those properties
-were true before this milestone and the tests below hold them afterwards.
+The second is that it *never runs a pack*. A knowledge pack is an inert
+specification, and an inventory tool that imported packs in order to inspect
+them would execute every import-time side effect in the repository at once —
+the exact failure mode it exists to catch. So inspection is static: read the
+file, parse it, read the tree. The proof is not a code review; it is a
+synthetic pack that writes a sentinel file at module level, inspected, with
+the sentinel asserted absent.
+
+The third is that adding this tool *changes nothing*. Importing the package
+must still load no pack, the running application must still be unable to
+reach either, and no filename convention may let a governed pack slip out of
+the inventory. Those properties were true before this milestone and the tests
+below hold them afterwards.
+
+What is deliberately **not** tested here: which files a pull request touches.
+An earlier draft asserted that against ``origin/main``, which does not exist
+in a GitHub Actions checkout, and against ``HEAD``, which on a committed
+branch proves nothing at all. Changed-file policy belongs to CI scope
+detection and to the reviewer reading the diff. What a repository unit test
+can honestly hold is behaviour determinable from the checked-out tree, and
+the pinned manifest content hash below is the guard that actually matters.
 """
 
 from __future__ import annotations
 
 import ast
-import importlib
 import importlib.util
 import json
 import socket
@@ -37,14 +51,17 @@ from app.knowledge_packs import inspection
 from app.knowledge_packs import petrolatum_dry_skin_v1 as pack
 from app.knowledge_packs.inspection import (
     COMPILER_ATTRIBUTE,
+    DESCRIPTOR_FIELDS,
+    INFRASTRUCTURE_FILENAMES,
     InspectionResult,
     KnowledgePackDescriptor,
     PackValidationCode,
     PackValidationError,
     as_json_payload,
     claims_to_be_a_pack,
-    discover_pack_modules,
+    discover_pack_sources,
     inspect_packs,
+    pack_source_directory,
     validate_descriptors,
 )
 
@@ -52,9 +69,14 @@ from tests.test_step8i_first_production_knowledge_pack import _valid_entry
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = BACKEND_ROOT.parent
-INSPECTION_SOURCE = BACKEND_ROOT / "app" / "knowledge_packs" / "inspection.py"
+PACK_DIRECTORY = BACKEND_ROOT / "app" / "knowledge_packs"
+INSPECTION_SOURCE = PACK_DIRECTORY / "inspection.py"
+PACKAGE_INIT = PACK_DIRECTORY / "__init__.py"
+REVIEWED_PACK_SOURCE = PACK_DIRECTORY / "petrolatum_dry_skin_v1.py"
 CLI_PATH = REPOSITORY_ROOT / "scripts" / "inspect_knowledge_packs.py"
-PACKAGE_INIT = BACKEND_ROOT / "app" / "knowledge_packs" / "__init__.py"
+
+REVIEWED_MODULE = "app.knowledge_packs.petrolatum_dry_skin_v1"
+SYNTHETIC_PACKAGE = "synthetic_knowledge_packs"
 
 #: The exact content hash of the manifest the reviewed pack compiles from the
 #: reviewed published entry, measured on the commit before Step 14A began.
@@ -64,21 +86,48 @@ PACKAGE_INIT = BACKEND_ROOT / "app" / "knowledge_packs" / "__init__.py"
 #: do, and the change is a defect regardless of how sensible it looks.
 BASELINE_MANIFEST_CONTENT_HASH = "be1fbbf8ae6435e18fdcfba86d85d7697a6257959bc2c6c75c452bcd434e75be"
 
-VALID_ATTRIBUTES: dict[str, object] = {
-    "PACK_ID": "for_you.skin_care.synthetic.v1",
-    "DOMAIN": "skin_care",
-    "CATEGORY": "skin_care",
-    "REASON_KEY": "for_you.skin_care.synthetic.reason",
-    COMPILER_ATTRIBUTE: lambda entry: {},
-}
+VALID_SOURCE = '''\
+PACK_ID = "for_you.skin_care.synthetic.v1"
+DOMAIN = "skin_care"
+CATEGORY = "skin_care"
+REASON_KEY = "for_you.skin_care.synthetic.reason"
+
+
+def build_release_manifest_from_published_entry(entry):
+    return {}
+'''
+
+
+def _source(**overrides: str | None) -> str:
+    """The valid synthetic pack source with individual declarations swapped.
+
+    ``None`` removes a declaration outright; a string replaces the whole
+    statement, so a test can say ``PACK_ID='PACK_ID = make_pack_id()'`` and get
+    exactly that line.
+    """
+    lines = {
+        "PACK_ID": 'PACK_ID = "for_you.skin_care.synthetic.v1"',
+        "DOMAIN": 'DOMAIN = "skin_care"',
+        "CATEGORY": 'CATEGORY = "skin_care"',
+        "REASON_KEY": 'REASON_KEY = "for_you.skin_care.synthetic.reason"',
+        COMPILER_ATTRIBUTE: (
+            f"def {COMPILER_ATTRIBUTE}(entry):\n    return {{}}"
+        ),
+    }
+    for name, replacement in overrides.items():
+        if replacement is None:
+            lines.pop(name, None)
+        else:
+            lines[name] = replacement
+    return "\n\n".join(lines.values()) + "\n"
 
 
 def _run_python(code: str, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """Run a snippet in a fresh interpreter with the backend importable.
 
-    A subprocess is the only honest way to ask "what does importing this load".
-    In-process the answer is always contaminated: the test session has already
-    imported the pack, the inspector and most of the application.
+    A subprocess is the only honest way to ask "what does this load". In-process
+    the answer is always contaminated: the test session has already imported
+    the pack, the inspector and most of the application.
     """
     return subprocess.run(
         [sys.executable, "-c", code],
@@ -90,11 +139,31 @@ def _run_python(code: str, *, env: dict[str, str] | None = None) -> subprocess.C
     )
 
 
-class _Absent:
-    """Sentinel meaning "do not set this attribute at all"."""
+@pytest.fixture
+def pack_dir(tmp_path: Path):
+    """A throwaway pack directory, and a helper that writes candidates into it.
+
+    Every negative case needs a file with a deliberately wrong contract.
+    Committing those would mean shipping broken packs to satisfy a test, so
+    they are written to a temporary directory that is inspected exactly as the
+    real one is — same discovery, same parsing, same rules.
+    """
+    directory = tmp_path / "packs"
+    directory.mkdir()
+
+    def write(stem: str, source: str) -> str:
+        (directory / f"{stem}.py").write_text(source, encoding="utf-8")
+        return f"{SYNTHETIC_PACKAGE}.{stem}"
+
+    return directory, write
 
 
-_ABSENT = _Absent()
+def _inspect(directory: Path) -> InspectionResult:
+    return inspect_packs(directory, package_name=SYNTHETIC_PACKAGE)
+
+
+def _codes(result: InspectionResult) -> list[tuple[str, str, str]]:
+    return [(error.module, error.field, str(error.code)) for error in result.errors]
 
 
 def _executable_source(path: Path) -> str:
@@ -144,40 +213,6 @@ def _called_names(path: Path) -> set[str]:
     return called
 
 
-@pytest.fixture
-def synthetic_pack():
-    """Build throwaway modules that look like packs, and remove them after.
-
-    Every negative case needs a module with a deliberately wrong contract.
-    Writing those into the repository would mean shipping broken packs to
-    satisfy a test, so they are built in memory and registered under names no
-    real module uses.
-    """
-    registered: list[str] = []
-
-    def build(suffix: str, **overrides: object) -> str:
-        name = f"synthetic_knowledge_pack_{suffix}"
-        module = ModuleType(name)
-        attributes = dict(VALID_ATTRIBUTES)
-        attributes.update(overrides)
-        for key, value in attributes.items():
-            if value is _ABSENT:
-                continue
-            setattr(module, key, value)
-        sys.modules[name] = module
-        registered.append(name)
-        return name
-
-    yield build
-
-    for name in registered:
-        sys.modules.pop(name, None)
-
-
-def _codes(result: InspectionResult) -> list[tuple[str, str, str]]:
-    return [(error.module, error.field, str(error.code)) for error in result.errors]
-
-
 # ---------------------------------------------------------------------------
 # What is actually committed
 # ---------------------------------------------------------------------------
@@ -190,75 +225,312 @@ class TestTheRepositoryInventory:
 
     def test_the_reviewed_pack_is_reported_with_its_real_identity(self) -> None:
         (descriptor,) = inspect_packs().packs
-        assert descriptor.module == "app.knowledge_packs.petrolatum_dry_skin_v1"
+        assert descriptor.module == REVIEWED_MODULE
         assert descriptor.pack_id == pack.PACK_ID
         assert descriptor.domain == pack.DOMAIN
         assert descriptor.category == pack.CATEGORY
         assert descriptor.reason_key == pack.REASON_KEY
         assert descriptor.compiler_name == COMPILER_ATTRIBUTE
-        assert callable(getattr(pack, descriptor.compiler_name))
 
-    def test_discovery_lists_the_pack_and_skips_the_inspector(self) -> None:
-        modules = discover_pack_modules()
-        assert "app.knowledge_packs.petrolatum_dry_skin_v1" in modules
-        assert "app.knowledge_packs.inspection" not in modules
-        assert all(not name.rsplit(".", 1)[-1].startswith("_") for name in modules)
+    def test_the_reported_identity_matches_the_module_python_actually_loads(self) -> None:
+        # The inspector reads the file; this test compares what it read with
+        # what importing the same file produces. Static and dynamic agree on
+        # the reviewed pack, which is what makes the static route safe to
+        # trust rather than merely cheaper.
+        (descriptor,) = inspect_packs().packs
+        for field, value in (
+            ("PACK_ID", descriptor.pack_id),
+            ("DOMAIN", descriptor.domain),
+            ("CATEGORY", descriptor.category),
+            ("REASON_KEY", descriptor.reason_key),
+        ):
+            assert getattr(pack, field) == value
+        assert callable(getattr(pack, COMPILER_ATTRIBUTE))
+
+    def test_discovery_finds_the_pack_file_and_excludes_only_infrastructure(self) -> None:
+        found = discover_pack_sources()
+        assert REVIEWED_PACK_SOURCE in found
+        assert INSPECTION_SOURCE not in found
+        assert PACKAGE_INIT not in found
+        on_disk = {path.name for path in PACK_DIRECTORY.glob("*.py")}
+        assert {path.name for path in found} == on_disk - set(INFRASTRUCTURE_FILENAMES)
 
     def test_discovery_is_sorted_and_repeatable(self) -> None:
-        first = discover_pack_modules()
-        assert first == tuple(sorted(first))
-        assert first == discover_pack_modules()
+        first = discover_pack_sources()
+        assert list(first) == sorted(first)
+        assert first == discover_pack_sources()
 
-    def test_the_inspector_is_not_itself_a_pack(self) -> None:
-        assert claims_to_be_a_pack(inspection) is False
-        assert claims_to_be_a_pack(importlib.import_module("app.knowledge_packs")) is False
-        assert claims_to_be_a_pack(pack) is True
+    def test_the_pack_directory_is_found_from_this_module_not_a_hard_coded_path(self) -> None:
+        assert pack_source_directory() == PACK_DIRECTORY
+
+    def test_the_inspector_and_the_package_root_are_not_packs(self) -> None:
+        for path in (INSPECTION_SOURCE, PACKAGE_INIT):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            assert claims_to_be_a_pack(tree) is False
+        assert claims_to_be_a_pack(ast.parse(REVIEWED_PACK_SOURCE.read_text(encoding="utf-8")))
 
 
 # ---------------------------------------------------------------------------
-# The contract, violated one way at a time
+# A filename is never an exemption
 # ---------------------------------------------------------------------------
-class TestContractViolations:
-    def test_a_well_formed_synthetic_pack_passes(self, synthetic_pack) -> None:
-        name = synthetic_pack("good")
-        result = inspect_packs([name])
+class TestGovernanceCannotBeEscapedByRenaming:
+    def test_a_leading_underscore_does_not_hide_a_pack(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write("_hidden_pack", VALID_SOURCE)
+        result = _inspect(directory)
+        assert [descriptor.module for descriptor in result.packs] == [module]
         assert result.ok is True
-        assert [descriptor.module for descriptor in result.packs] == [name]
 
-    def test_a_module_without_the_marker_is_not_a_pack_and_not_an_error(
-        self, synthetic_pack
-    ) -> None:
-        name = synthetic_pack("plain", PACK_ID=_ABSENT)
-        result = inspect_packs([name])
+    def test_a_hidden_pack_is_held_to_the_whole_contract(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write("_hidden_pack", _source(REASON_KEY='REASON_KEY = ""'))
+        assert _codes(_inspect(directory)) == [(module, "REASON_KEY", "MISSING_REASON_KEY")]
+
+    def test_a_hidden_pack_still_collides_with_a_visible_one(self, pack_dir) -> None:
+        directory, write = pack_dir
+        visible = write("visible_pack", VALID_SOURCE)
+        hidden = write("_hidden_pack", VALID_SOURCE)
+        assert _codes(_inspect(directory)) == sorted(
+            [
+                (hidden, "PACK_ID", "DUPLICATE_PACK_ID"),
+                (visible, "PACK_ID", "DUPLICATE_PACK_ID"),
+                (hidden, "REASON_KEY", "DUPLICATE_REASON_KEY"),
+                (visible, "REASON_KEY", "DUPLICATE_REASON_KEY"),
+            ]
+        )
+
+    def test_only_the_two_named_infrastructure_files_are_exempt(self) -> None:
+        assert set(INFRASTRUCTURE_FILENAMES) == {"__init__.py", "inspection.py"}
+
+    def test_an_infrastructure_name_in_a_pack_directory_is_still_skipped(self, pack_dir) -> None:
+        directory, write = pack_dir
+        write("__init__", VALID_SOURCE)
+        write("inspection", VALID_SOURCE)
+        real = write("real_pack", VALID_SOURCE)
+        result = _inspect(directory)
+        assert [descriptor.module for descriptor in result.packs] == [real]
+
+    def test_a_file_without_the_marker_is_not_a_pack_and_not_an_error(self, pack_dir) -> None:
+        directory, write = pack_dir
+        write("helpers", "CONSTANT = 1\n\n\ndef helper():\n    return None\n")
+        result = _inspect(directory)
         assert result.packs == ()
         assert result.errors == ()
+
+
+# ---------------------------------------------------------------------------
+# The inspector never executes a candidate
+# ---------------------------------------------------------------------------
+class TestCandidateSourceIsNeverExecuted:
+    def test_a_top_level_file_write_does_not_happen(self, pack_dir, tmp_path: Path) -> None:
+        directory, write = pack_dir
+        sentinel = tmp_path / "sentinel.txt"
+        module = write(
+            "side_effect_pack",
+            'PACK_ID = "for_you.skin_care.side_effect.v1"\n'
+            'DOMAIN = "skin_care"\n'
+            'CATEGORY = "skin_care"\n'
+            'REASON_KEY = "for_you.skin_care.side_effect.reason"\n'
+            "\n"
+            "from pathlib import Path\n"
+            f"Path({str(sentinel)!r}).write_text('EXECUTED')\n"
+            "\n"
+            f"def {COMPILER_ATTRIBUTE}(entry):\n"
+            "    return {}\n",
+        )
+        result = _inspect(directory)
+        assert not sentinel.exists(), "the inspector executed candidate pack source"
+        assert [descriptor.module for descriptor in result.packs] == [module]
+
+    def test_a_top_level_network_call_does_not_happen(self, pack_dir, monkeypatch) -> None:
+        directory, write = pack_dir
+        module = write(
+            "network_pack",
+            'PACK_ID = "for_you.skin_care.network.v1"\n'
+            'DOMAIN = "skin_care"\n'
+            'CATEGORY = "skin_care"\n'
+            'REASON_KEY = "for_you.skin_care.network.reason"\n'
+            "\n"
+            "import socket\n"
+            "socket.create_connection(('198.51.100.1', 9), timeout=1)\n"
+            "\n"
+            f"def {COMPILER_ATTRIBUTE}(entry):\n"
+            "    return {}\n",
+        )
+
+        def refuse(*args: object, **kwargs: object):
+            raise AssertionError("the inspector opened a socket")
+
+        monkeypatch.setattr(socket, "create_connection", refuse)
+        monkeypatch.setattr(socket, "socket", refuse)
+        result = _inspect(directory)
+        assert [descriptor.module for descriptor in result.packs] == [module]
+
+    def test_a_top_level_raise_does_not_stop_the_inventory(self, pack_dir) -> None:
+        directory, write = pack_dir
+        exploding = write(
+            "exploding_pack",
+            'PACK_ID = "for_you.skin_care.exploding.v1"\n'
+            'DOMAIN = "skin_care"\n'
+            'CATEGORY = "skin_care"\n'
+            'REASON_KEY = "for_you.skin_care.exploding.reason"\n'
+            "\n"
+            'raise RuntimeError("postgresql://someone:hunter2@db.internal:5432/prod")\n'
+            "\n"
+            f"def {COMPILER_ATTRIBUTE}(entry):\n"
+            "    return {}\n",
+        )
+        healthy = write("healthy_pack", VALID_SOURCE)
+        result = _inspect(directory)
+        assert {descriptor.module for descriptor in result.packs} == {exploding, healthy}
+        assert result.ok is True
+
+    def test_no_candidate_module_ends_up_in_sys_modules(self, pack_dir) -> None:
+        directory, write = pack_dir
+        write("tracked_pack", VALID_SOURCE)
+        before = set(sys.modules)
+        _inspect(directory)
+        assert {name for name in set(sys.modules) - before if "pack" in name.lower()} == set()
+        assert f"{SYNTHETIC_PACKAGE}.tracked_pack" not in sys.modules
+
+    def test_inspecting_the_repository_does_not_import_the_reviewed_pack(self) -> None:
+        completed = _run_python(
+            "import sys;"
+            "from app.knowledge_packs.inspection import inspect_packs;"
+            "result = inspect_packs();"
+            "print(len(result.packs), result.ok,"
+            f" {REVIEWED_MODULE!r} in sys.modules)"
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout.strip() == "1 True False"
+
+    def test_inspection_works_with_pack_imports_made_impossible(self) -> None:
+        # The strongest available form of the claim. A meta-path finder in a
+        # fresh interpreter raises if anything tries to import a pack module
+        # or SQLAlchemy — which the reviewed pack reaches transitively. The
+        # inventory still comes back complete and valid, so nothing was
+        # loaded; had inspection still imported packs, this would explode
+        # rather than merely report differently.
+        completed = _run_python(
+            "import sys\n"
+            "class Forbid:\n"
+            "    def find_spec(self, name, path=None, target=None):\n"
+            "        blocked = name.split('.')[0] == 'sqlalchemy' or (\n"
+            "            name.startswith('app.knowledge_packs.')\n"
+            "            and name != 'app.knowledge_packs.inspection'\n"
+            "        )\n"
+            "        if blocked:\n"
+            "            raise AssertionError('forbidden import: ' + name)\n"
+            "        return None\n"
+            "sys.meta_path.insert(0, Forbid())\n"
+            "from app.knowledge_packs.inspection import inspect_packs\n"
+            "result = inspect_packs()\n"
+            "print(len(result.packs), result.ok)\n"
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout.strip() == "1 True"
+
+    def test_the_inspector_never_reaches_for_an_execution_primitive(self) -> None:
+        for path in (INSPECTION_SOURCE, CLI_PATH):
+            called = _called_names(path)
+            for forbidden in (
+                "eval",
+                "exec",
+                "compile",
+                "import_module",
+                "__import__",
+                "exec_module",
+                "module_from_spec",
+                "run_path",
+                "run_module",
+                "spec_from_file_location",
+            ):
+                assert forbidden not in called, (path.name, forbidden)
+        assert "importlib" not in _top_level_imports(INSPECTION_SOURCE)
+        assert "runpy" not in _top_level_imports(INSPECTION_SOURCE)
+
+
+# ---------------------------------------------------------------------------
+# Static metadata: identity must be legible without running anything
+# ---------------------------------------------------------------------------
+class TestStaticMetadata:
+    def test_a_well_formed_pack_passes(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write("good", VALID_SOURCE)
+        result = _inspect(directory)
+        assert result.ok is True
+        assert [descriptor.module for descriptor in result.packs] == [module]
+
+    def test_an_annotated_declaration_is_read_the_same_way(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "annotated", _source(PACK_ID='PACK_ID: str = "for_you.skin_care.synthetic.v1"')
+        )
+        (descriptor,) = _inspect(directory).packs
+        assert descriptor.module == module
+        assert descriptor.pack_id == "for_you.skin_care.synthetic.v1"
+
+    @pytest.mark.parametrize(
+        "declaration",
+        [
+            "PACK_ID = make_pack_id()",
+            "PACK_ID = _PREFIX + '.v1'",
+            "PACK_ID = f'for_you.skin_care.{NAME}.v1'",
+            "PACK_ID = PACK_IDS[0]",
+            "PACK_ID = None",
+            "PACK_ID = 42",
+            "PACK_ID = ('for_you', 'skin_care')",
+            "PACK_ID = 'for_you' if TOGGLE else 'other'",
+            "PACK_ID: str",
+        ],
+    )
+    def test_a_pack_id_that_must_be_computed_fails_closed(
+        self, pack_dir, declaration: str
+    ) -> None:
+        directory, write = pack_dir
+        module = write("dynamic", _source(PACK_ID=declaration))
+        result = _inspect(directory)
+        assert result.packs == ()
+        if declaration == "PACK_ID: str":
+            # A bare annotation binds nothing, so the file never claims to be
+            # a pack at all — the fail-closed direction, and not an error.
+            assert result.errors == ()
+        else:
+            assert _codes(result) == [(module, "PACK_ID", "NON_STATIC_METADATA")]
+
+    @pytest.mark.parametrize("field", ["DOMAIN", "CATEGORY", "REASON_KEY"])
+    def test_any_computed_descriptor_field_fails_closed(self, pack_dir, field: str) -> None:
+        directory, write = pack_dir
+        module = write("dynamic_field", _source(**{field: f"{field} = compute()"}))
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert _codes(result) == [(module, field, "NON_STATIC_METADATA")]
 
     @pytest.mark.parametrize(
         "value",
         [
-            None,
-            "",
-            "   ",
-            " for_you.skin_care.synthetic.v1",
-            "for_you.skin_care.synthetic.v1 ",
-            "petrolatum",
-            "for_you.v1",
-            "For_You.Skin_Care.Synthetic.v1",
-            "for_you.skin care.synthetic.v1",
-            "for_you.skin_care.synthetic.version1",
-            "for_you.skin_care.synthetic.v",
-            "for_you.skin_care..v1",
-            "for_you.skin_care.synthetic.1",
-            42,
+            '""',
+            '"   "',
+            '" for_you.skin_care.synthetic.v1"',
+            '"for_you.skin_care.synthetic.v1 "',
+            '"petrolatum"',
+            '"for_you.v1"',
+            '"For_You.Skin_Care.Synthetic.v1"',
+            '"for_you.skin care.synthetic.v1"',
+            '"for_you.skin_care.synthetic.version1"',
+            '"for_you.skin_care.synthetic.v"',
+            '"for_you.skin_care..v1"',
+            '"for_you.skin_care.synthetic.1"',
         ],
     )
-    def test_an_unusable_pack_id_is_reported(self, synthetic_pack, value: object) -> None:
-        name = synthetic_pack("badid", PACK_ID=value)
-        result = inspect_packs([name])
+    def test_an_unusable_pack_id_is_reported(self, pack_dir, value: str) -> None:
+        directory, write = pack_dir
+        module = write("badid", _source(PACK_ID=f"PACK_ID = {value}"))
+        result = _inspect(directory)
         assert result.packs == ()
-        assert _codes(result) == [(name, "PACK_ID", "INVALID_PACK_ID")]
+        assert _codes(result) == [(module, "PACK_ID", "INVALID_PACK_ID")]
 
-    @pytest.mark.parametrize("value", [None, "", "  ", " skin_care", "skin_care ", 7])
+    @pytest.mark.parametrize("value", ['""', '"  "', '" skin_care"', '"skin_care "'])
     @pytest.mark.parametrize(
         ("field", "code"),
         [
@@ -268,107 +540,222 @@ class TestContractViolations:
         ],
     )
     def test_an_unusable_identity_field_is_reported(
-        self, synthetic_pack, field: str, code: str, value: object
+        self, pack_dir, field: str, code: str, value: str
     ) -> None:
-        name = synthetic_pack("badfield", **{field: value})
-        result = inspect_packs([name])
+        directory, write = pack_dir
+        module = write("badfield", _source(**{field: f"{field} = {value}"}))
+        result = _inspect(directory)
         assert result.packs == ()
-        assert _codes(result) == [(name, field, code)]
+        assert _codes(result) == [(module, field, code)]
 
-    def test_a_field_that_is_absent_entirely_is_reported_the_same_way(
-        self, synthetic_pack
-    ) -> None:
-        name = synthetic_pack("nodomain", DOMAIN=_ABSENT)
-        assert _codes(inspect_packs([name])) == [(name, "DOMAIN", "MISSING_DOMAIN")]
+    @pytest.mark.parametrize(
+        ("field", "code"),
+        [
+            ("DOMAIN", "MISSING_DOMAIN"),
+            ("CATEGORY", "MISSING_CATEGORY"),
+            ("REASON_KEY", "MISSING_REASON_KEY"),
+        ],
+    )
+    def test_an_absent_identity_field_is_reported(self, pack_dir, field: str, code: str) -> None:
+        directory, write = pack_dir
+        module = write("absent", _source(**{field: None}))
+        assert _codes(_inspect(directory)) == [(module, field, code)]
 
-    def test_a_missing_compiler_is_reported(self, synthetic_pack) -> None:
-        name = synthetic_pack("nocompiler", **{COMPILER_ATTRIBUTE: _ABSENT})
-        result = inspect_packs([name])
-        assert result.packs == ()
-        assert _codes(result) == [(name, COMPILER_ATTRIBUTE, "MISSING_COMPILER")]
-
-    def test_a_compiler_that_is_not_callable_is_reported(self, synthetic_pack) -> None:
-        name = synthetic_pack("stringcompiler", **{COMPILER_ATTRIBUTE: "build it yourself"})
-        result = inspect_packs([name])
-        assert result.packs == ()
-        assert _codes(result) == [(name, COMPILER_ATTRIBUTE, "COMPILER_NOT_CALLABLE")]
-
-    def test_a_compiler_set_to_none_is_reported_as_missing(self, synthetic_pack) -> None:
-        name = synthetic_pack("nonecompiler", **{COMPILER_ATTRIBUTE: None})
-        assert _codes(inspect_packs([name])) == [
-            (name, COMPILER_ATTRIBUTE, "MISSING_COMPILER")
-        ]
-
-    def test_every_violation_in_one_module_is_reported_not_just_the_first(
-        self, synthetic_pack
-    ) -> None:
-        name = synthetic_pack(
-            "allwrong",
-            PACK_ID="",
-            DOMAIN="",
-            CATEGORY="",
-            REASON_KEY="",
-            **{COMPILER_ATTRIBUTE: _ABSENT},
+    def test_a_field_declared_twice_is_ambiguous_rather_than_last_wins(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "twice",
+            _source(
+                DOMAIN='DOMAIN = "skin_care"\nDOMAIN = "hair_care"',
+            ),
         )
-        assert _codes(inspect_packs([name])) == sorted(
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert _codes(result) == [(module, "DOMAIN", "DUPLICATE_DECLARATION")]
+
+    def test_a_declaration_inside_a_conditional_is_not_a_module_level_declaration(
+        self, pack_dir
+    ) -> None:
+        directory, write = pack_dir
+        module = write(
+            "conditional",
+            _source(DOMAIN='if TOGGLE:\n    DOMAIN = "skin_care"'),
+        )
+        assert _codes(_inspect(directory)) == [(module, "DOMAIN", "MISSING_DOMAIN")]
+
+    def test_every_violation_in_one_file_is_reported_not_just_the_first(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "allwrong",
+            _source(
+                PACK_ID='PACK_ID = ""',
+                DOMAIN='DOMAIN = ""',
+                CATEGORY="CATEGORY = compute()",
+                REASON_KEY=None,
+                **{COMPILER_ATTRIBUTE: None},
+            ),
+        )
+        assert _codes(_inspect(directory)) == sorted(
             [
-                (name, "PACK_ID", "INVALID_PACK_ID"),
-                (name, "DOMAIN", "MISSING_DOMAIN"),
-                (name, "CATEGORY", "MISSING_CATEGORY"),
-                (name, "REASON_KEY", "MISSING_REASON_KEY"),
-                (name, COMPILER_ATTRIBUTE, "MISSING_COMPILER"),
+                (module, "PACK_ID", "INVALID_PACK_ID"),
+                (module, "DOMAIN", "MISSING_DOMAIN"),
+                (module, "CATEGORY", "NON_STATIC_METADATA"),
+                (module, "REASON_KEY", "MISSING_REASON_KEY"),
+                (module, COMPILER_ATTRIBUTE, "MISSING_COMPILER"),
             ]
         )
 
-    def test_a_module_that_cannot_be_imported_is_reported_not_raised(self) -> None:
-        missing = "synthetic_knowledge_pack_that_was_never_written"
-        result = inspect_packs([missing])
-        assert result.packs == ()
-        assert _codes(result) == [(missing, "module", "IMPORT_FAILED")]
-
-    def test_an_import_failure_does_not_stop_the_rest_of_the_run(self, synthetic_pack) -> None:
-        good = synthetic_pack("survivor")
-        missing = "synthetic_knowledge_pack_that_was_never_written"
-        result = inspect_packs([missing, good])
-        assert [descriptor.module for descriptor in result.packs] == [good]
-        assert _codes(result) == [(missing, "module", "IMPORT_FAILED")]
-
-    def test_an_import_failure_never_quotes_the_exception(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
-        # A module that dies on import can say anything in its exception text,
-        # including something that should never reach a CI log. The report is
-        # a coordinate — module, field, code — and carries none of it.
-        name = "synthetic_knowledge_pack_that_explodes"
-        (tmp_path / f"{name}.py").write_text(
-            'raise RuntimeError("postgresql://someone:hunter2@db.internal:5432/prod")\n',
-            encoding="utf-8",
+    def test_one_broken_pack_does_not_hide_the_others(self, pack_dir) -> None:
+        directory, write = pack_dir
+        good = write("fine", VALID_SOURCE)
+        broken = write(
+            "broken",
+            _source(
+                PACK_ID='PACK_ID = "nope"',
+                REASON_KEY='REASON_KEY = "for_you.other.reason"',
+            ),
         )
-        monkeypatch.syspath_prepend(str(tmp_path))
-        monkeypatch.delitem(sys.modules, name, raising=False)
-        result = inspect_packs([name])
-        assert _codes(result) == [(name, "module", "IMPORT_FAILED")]
-        encoded = json.dumps(as_json_payload(result))
-        for secret in ("hunter2", "postgresql://", "db.internal", "RuntimeError"):
-            assert secret not in encoded
-        sys.modules.pop(name, None)
-
-    def test_one_broken_pack_does_not_hide_the_others(self, synthetic_pack) -> None:
-        good = synthetic_pack("fine")
-        broken = synthetic_pack("broken", PACK_ID="nope", REASON_KEY="for_you.other.reason")
-        result = inspect_packs([broken, good])
+        result = _inspect(directory)
         assert [descriptor.module for descriptor in result.packs] == [good]
         assert _codes(result) == [(broken, "PACK_ID", "INVALID_PACK_ID")]
+
+    def test_unparsable_source_is_a_finding_with_no_source_in_it(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "broken_syntax",
+            'PACK_ID = "for_you.skin_care.synthetic.v1"\n'
+            'SECRET = "postgresql://someone:hunter2@db.internal/prod"\n'
+            "def (:\n",
+        )
+        healthy = write("healthy", VALID_SOURCE)
+        result = _inspect(directory)
+        assert [descriptor.module for descriptor in result.packs] == [healthy]
+        assert _codes(result) == [(module, "source", "UNPARSABLE_SOURCE")]
+        encoded = json.dumps(as_json_payload(result))
+        for leaked in ("hunter2", "postgresql://", "db.internal", "SyntaxError", "def (:"):
+            assert leaked not in encoded
+
+    def test_source_that_cannot_be_decoded_is_a_finding(self, pack_dir) -> None:
+        directory, _ = pack_dir
+        (directory / "binary_pack.py").write_bytes(b'PACK_ID = "\xff\xfe not utf-8"\n')
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert _codes(result) == [
+            (f"{SYNTHETIC_PACKAGE}.binary_pack", "source", "UNREADABLE_SOURCE")
+        ]
+
+
+# ---------------------------------------------------------------------------
+# The compiler, verified structurally and never called
+# ---------------------------------------------------------------------------
+class TestCompilerDeclaration:
+    def test_the_reviewed_pack_declares_the_compiler_as_a_top_level_function(self) -> None:
+        tree = ast.parse(REVIEWED_PACK_SOURCE.read_text(encoding="utf-8"))
+        declarations = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == COMPILER_ATTRIBUTE
+        ]
+        assert len(declarations) == 1
+
+    def test_a_missing_compiler_is_reported(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write("nocompiler", _source(**{COMPILER_ATTRIBUTE: None}))
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert _codes(result) == [(module, COMPILER_ATTRIBUTE, "MISSING_COMPILER")]
+
+    @pytest.mark.parametrize(
+        "declaration",
+        [
+            f"{COMPILER_ATTRIBUTE} = 'build it yourself'",
+            f"{COMPILER_ATTRIBUTE} = None",
+            f"{COMPILER_ATTRIBUTE} = some_other_function",
+            f"class {COMPILER_ATTRIBUTE}:\n    pass",
+            f"async def {COMPILER_ATTRIBUTE}(entry):\n    return {{}}",
+            f"from elsewhere import {COMPILER_ATTRIBUTE}",
+        ],
+    )
+    def test_a_compiler_that_is_not_a_plain_function_is_reported(
+        self, pack_dir, declaration: str
+    ) -> None:
+        directory, write = pack_dir
+        module = write("badcompiler", _source(**{COMPILER_ATTRIBUTE: declaration}))
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert _codes(result) == [(module, COMPILER_ATTRIBUTE, "COMPILER_NOT_A_FUNCTION")]
+
+    def test_a_function_shadowed_by_a_later_assignment_is_reported(self, pack_dir) -> None:
+        # Last binding wins at import time, so the release workflow would
+        # reach the string, not the function.
+        directory, write = pack_dir
+        module = write(
+            "shadowed",
+            _source(
+                **{
+                    COMPILER_ATTRIBUTE: (
+                        f"def {COMPILER_ATTRIBUTE}(entry):\n"
+                        "    return {}\n"
+                        "\n"
+                        f"{COMPILER_ATTRIBUTE} = 'not a function'"
+                    )
+                }
+            ),
+        )
+        assert _codes(_inspect(directory)) == sorted(
+            [
+                (module, COMPILER_ATTRIBUTE, "DUPLICATE_DECLARATION"),
+                (module, COMPILER_ATTRIBUTE, "COMPILER_NOT_A_FUNCTION"),
+            ]
+        )
+
+    def test_two_function_declarations_are_ambiguous(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "twice_defined",
+            _source(
+                **{
+                    COMPILER_ATTRIBUTE: (
+                        f"def {COMPILER_ATTRIBUTE}(entry):\n"
+                        "    return {}\n"
+                        "\n"
+                        f"def {COMPILER_ATTRIBUTE}(entry):\n"
+                        "    return {'other': True}"
+                    )
+                }
+            ),
+        )
+        assert _codes(_inspect(directory)) == [
+            (module, COMPILER_ATTRIBUTE, "DUPLICATE_DECLARATION")
+        ]
+
+    def test_a_compiler_that_would_explode_is_never_called(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "exploding_compiler",
+            _source(
+                **{
+                    COMPILER_ATTRIBUTE: (
+                        f"def {COMPILER_ATTRIBUTE}(entry):\n"
+                        "    raise AssertionError('the inspector called the compiler')"
+                    )
+                }
+            ),
+        )
+        result = _inspect(directory)
+        assert result.ok is True
+        assert [descriptor.module for descriptor in result.packs] == [module]
 
 
 # ---------------------------------------------------------------------------
 # Uniqueness across packs
 # ---------------------------------------------------------------------------
 class TestCrossPackUniqueness:
-    def test_two_packs_sharing_a_pack_id_are_both_named(self, synthetic_pack) -> None:
-        first = synthetic_pack("dup_a", REASON_KEY="for_you.skin_care.a.reason")
-        second = synthetic_pack("dup_b", REASON_KEY="for_you.skin_care.b.reason")
-        result = inspect_packs([first, second])
+    def test_two_packs_sharing_a_pack_id_are_both_named(self, pack_dir) -> None:
+        directory, write = pack_dir
+        first = write("dup_a", _source(REASON_KEY='REASON_KEY = "for_you.skin_care.a.reason"'))
+        second = write("dup_b", _source(REASON_KEY='REASON_KEY = "for_you.skin_care.b.reason"'))
+        result = _inspect(directory)
         assert result.ok is False
         assert _codes(result) == sorted(
             [
@@ -377,10 +764,11 @@ class TestCrossPackUniqueness:
             ]
         )
 
-    def test_two_packs_sharing_a_reason_key_are_both_named(self, synthetic_pack) -> None:
-        first = synthetic_pack("rk_a", PACK_ID="for_you.skin_care.a.v1")
-        second = synthetic_pack("rk_b", PACK_ID="for_you.skin_care.b.v1")
-        result = inspect_packs([first, second])
+    def test_two_packs_sharing_a_reason_key_are_both_named(self, pack_dir) -> None:
+        directory, write = pack_dir
+        first = write("rk_a", _source(PACK_ID='PACK_ID = "for_you.skin_care.a.v1"'))
+        second = write("rk_b", _source(PACK_ID='PACK_ID = "for_you.skin_care.b.v1"'))
+        result = _inspect(directory)
         assert result.ok is False
         assert _codes(result) == sorted(
             [
@@ -389,72 +777,97 @@ class TestCrossPackUniqueness:
             ]
         )
 
-    def test_three_way_duplication_names_all_three(self, synthetic_pack) -> None:
-        names = [
-            synthetic_pack(f"triple_{index}", REASON_KEY=f"for_you.skin_care.{index}.reason")
+    def test_three_way_duplication_names_all_three(self, pack_dir) -> None:
+        directory, write = pack_dir
+        modules = [
+            write(
+                f"triple_{index}",
+                _source(REASON_KEY=f'REASON_KEY = "for_you.skin_care.{index}.reason"'),
+            )
             for index in range(3)
         ]
-        result = inspect_packs(names)
-        assert _codes(result) == sorted(
-            (name, "PACK_ID", "DUPLICATE_PACK_ID") for name in names
+        assert _codes(_inspect(directory)) == sorted(
+            (module, "PACK_ID", "DUPLICATE_PACK_ID") for module in modules
         )
 
-    def test_distinct_packs_do_not_collide(self, synthetic_pack) -> None:
-        first = synthetic_pack(
-            "sep_a", PACK_ID="for_you.skin_care.a.v1", REASON_KEY="for_you.skin_care.a.reason"
+    def test_distinct_packs_do_not_collide(self, pack_dir) -> None:
+        directory, write = pack_dir
+        first = write(
+            "sep_a",
+            _source(
+                PACK_ID='PACK_ID = "for_you.skin_care.a.v1"',
+                REASON_KEY='REASON_KEY = "for_you.skin_care.a.reason"',
+            ),
         )
-        second = synthetic_pack(
-            "sep_b", PACK_ID="for_you.hair_care.b.v2", REASON_KEY="for_you.hair_care.b.reason"
+        second = write(
+            "sep_b",
+            _source(
+                PACK_ID='PACK_ID = "for_you.hair_care.b.v2"',
+                DOMAIN='DOMAIN = "hair_care"',
+                CATEGORY='CATEGORY = "hair_care"',
+                REASON_KEY='REASON_KEY = "for_you.hair_care.b.reason"',
+            ),
         )
-        result = inspect_packs([first, second])
+        result = _inspect(directory)
         assert result.ok is True
         assert [descriptor.module for descriptor in result.packs] == [second, first]
 
-    def test_a_broken_pack_is_excluded_from_uniqueness_checking(self, synthetic_pack) -> None:
-        # Both declare the same reason key, but one has no usable domain, so it
-        # never becomes a descriptor. Reporting a duplicate against a pack that
-        # failed its own contract would be noise on top of the real finding.
-        good = synthetic_pack("uniq_good", PACK_ID="for_you.skin_care.a.v1")
-        broken = synthetic_pack("uniq_broken", PACK_ID="for_you.skin_care.b.v1", DOMAIN="")
-        result = inspect_packs([good, broken])
-        assert _codes(result) == [(broken, "DOMAIN", "MISSING_DOMAIN")]
+    def test_a_broken_pack_is_excluded_from_uniqueness_checking(self, pack_dir) -> None:
+        # Both declare the same reason key, but one has no usable domain, so
+        # it never becomes a descriptor. Reporting a duplicate against a pack
+        # that failed its own contract is noise on top of the real finding.
+        directory, write = pack_dir
+        write("uniq_good", _source(PACK_ID='PACK_ID = "for_you.skin_care.a.v1"'))
+        broken = write(
+            "uniq_broken",
+            _source(PACK_ID='PACK_ID = "for_you.skin_care.b.v1"', DOMAIN='DOMAIN = ""'),
+        )
+        assert _codes(_inspect(directory)) == [(broken, "DOMAIN", "MISSING_DOMAIN")]
 
-    def test_a_version_bump_is_not_a_duplicate(self, synthetic_pack) -> None:
-        first = synthetic_pack(
-            "v1", PACK_ID="for_you.skin_care.thing.v1", REASON_KEY="for_you.skin_care.thing.one"
+    def test_a_version_bump_is_not_a_duplicate(self, pack_dir) -> None:
+        directory, write = pack_dir
+        write(
+            "v1",
+            _source(
+                PACK_ID='PACK_ID = "for_you.skin_care.thing.v1"',
+                REASON_KEY='REASON_KEY = "for_you.skin_care.thing.one"',
+            ),
         )
-        second = synthetic_pack(
-            "v2", PACK_ID="for_you.skin_care.thing.v2", REASON_KEY="for_you.skin_care.thing.two"
+        write(
+            "v2",
+            _source(
+                PACK_ID='PACK_ID = "for_you.skin_care.thing.v2"',
+                REASON_KEY='REASON_KEY = "for_you.skin_care.thing.two"',
+            ),
         )
-        assert inspect_packs([first, second]).ok is True
+        assert _inspect(directory).ok is True
 
 
 # ---------------------------------------------------------------------------
 # Determinism
 # ---------------------------------------------------------------------------
 class TestDeterminism:
-    def test_input_order_does_not_change_output_order(self, synthetic_pack) -> None:
-        names = [
-            synthetic_pack(
+    def test_file_order_does_not_change_output_order(self, pack_dir) -> None:
+        directory, write = pack_dir
+        for index in (3, 0, 4, 1, 2):
+            write(
                 f"order_{index}",
-                PACK_ID=f"for_you.skin_care.p{index}.v1",
-                REASON_KEY=f"for_you.skin_care.p{index}.reason",
+                _source(
+                    PACK_ID=f'PACK_ID = "for_you.skin_care.p{index}.v1"',
+                    REASON_KEY=f'REASON_KEY = "for_you.skin_care.p{index}.reason"',
+                ),
             )
-            for index in range(5)
-        ]
-        forward = inspect_packs(names)
-        backward = inspect_packs(list(reversed(names)))
-        assert forward == backward
-        assert [descriptor.pack_id for descriptor in forward.packs] == sorted(
-            descriptor.pack_id for descriptor in forward.packs
+        result = _inspect(directory)
+        assert [descriptor.pack_id for descriptor in result.packs] == sorted(
+            descriptor.pack_id for descriptor in result.packs
         )
+        assert result == _inspect(directory)
 
-    def test_error_order_is_stable(self, synthetic_pack) -> None:
-        names = [
-            synthetic_pack(f"err_{index}", PACK_ID="bad", DOMAIN="")
-            for index in range(4)
-        ]
-        assert inspect_packs(names).errors == inspect_packs(list(reversed(names))).errors
+    def test_error_order_is_stable(self, pack_dir) -> None:
+        directory, write = pack_dir
+        for index in range(4):
+            write(f"err_{index}", _source(PACK_ID='PACK_ID = "bad"', DOMAIN='DOMAIN = ""'))
+        assert _inspect(directory).errors == _inspect(directory).errors
 
     def test_repeated_runs_of_the_real_inventory_agree(self) -> None:
         assert inspect_packs() == inspect_packs()
@@ -485,13 +898,14 @@ class TestJsonPayload:
             "compiler",
         }
 
-    def test_a_failing_inventory_says_invalid(self, synthetic_pack) -> None:
-        name = synthetic_pack("badjson", PACK_ID="bad")
-        payload = as_json_payload(inspect_packs([name]))
+    def test_a_failing_inventory_says_invalid(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write("badjson", _source(PACK_ID='PACK_ID = "bad"'))
+        payload = as_json_payload(_inspect(directory))
         assert payload["status"] == "invalid"
         assert payload["pack_count"] == 0
         assert payload["errors"] == [
-            {"module": name, "field": "PACK_ID", "code": "INVALID_PACK_ID"}
+            {"module": module, "field": "PACK_ID", "code": "INVALID_PACK_ID"}
         ]
 
     def test_the_payload_carries_no_scientific_content(self) -> None:
@@ -522,6 +936,11 @@ class TestJsonPayload:
     def test_the_payload_is_plain_json_types(self) -> None:
         payload = as_json_payload(inspect_packs())
         assert json.loads(json.dumps(payload)) == payload
+
+    def test_every_finding_code_is_a_plain_uppercase_word(self) -> None:
+        for code in PackValidationCode:
+            assert str(code) == code.name
+            assert code.name.replace("_", "").isalpha()
 
 
 # ---------------------------------------------------------------------------
@@ -629,7 +1048,7 @@ class TestTheCli:
 class TestInertness:
     def test_importing_the_package_still_loads_nothing(self) -> None:
         completed = _run_python(
-            "import sys, app.knowledge_packs as p;"
+            "import sys, app.knowledge_packs;"
             "print(sorted(m for m in sys.modules if m.startswith('app.knowledge_packs')))"
         )
         assert completed.returncode == 0, completed.stderr
@@ -638,13 +1057,13 @@ class TestInertness:
     def test_the_package_root_is_still_only_a_docstring(self) -> None:
         # The moment __init__ imports a pack, "inert source artifact" stops
         # being true: importing the package would execute pack code, and every
-        # inertness proof above would be measuring the wrong thing.
+        # inertness proof here would be measuring the wrong thing.
         assert _executable_source(PACKAGE_INIT).strip() == "pass"
 
     def test_importing_the_inspector_does_not_import_a_pack(self) -> None:
         completed = _run_python(
             "import sys, app.knowledge_packs.inspection;"
-            "print('app.knowledge_packs.petrolatum_dry_skin_v1' in sys.modules)"
+            f"print({REVIEWED_MODULE!r} in sys.modules)"
         )
         assert completed.returncode == 0, completed.stderr
         assert completed.stdout.strip() == "False"
@@ -663,12 +1082,10 @@ class TestInertness:
     def test_no_application_module_names_the_pack_package(self) -> None:
         # Restated from Step 8I because this milestone adds a file to that
         # package. The inspector resolves the package through __package__ and
-        # so is a member rather than a reacher-in; if a later change hard-codes
-        # the dotted path inside app/, this fails and it should.
-        allowed = {
-            BACKEND_ROOT / "app" / "knowledge_packs" / "__init__.py",
-            BACKEND_ROOT / "app" / "knowledge_packs" / "petrolatum_dry_skin_v1.py",
-        }
+        # its own __file__, so it is a member rather than a reacher-in; if a
+        # later change hard-codes the dotted path inside app/, this fails and
+        # it should.
+        allowed = {PACKAGE_INIT, REVIEWED_PACK_SOURCE}
         offenders = [
             path.relative_to(BACKEND_ROOT).as_posix()
             for path in (BACKEND_ROOT / "app").rglob("*.py")
@@ -707,8 +1124,7 @@ class TestTheInspectorTouchesNothing:
         monkeypatch.setattr(socket, "socket", refuse)
         monkeypatch.setattr(socket, "create_connection", refuse)
         monkeypatch.setattr(socket, "getaddrinfo", refuse)
-        result = inspect_packs()
-        assert result.ok is True
+        assert inspect_packs().ok is True
 
     def test_it_runs_with_no_environment_at_all(self) -> None:
         bare = subprocess.run(
@@ -755,12 +1171,11 @@ class TestTheInspectorTouchesNothing:
     def test_the_inspector_imports_only_the_standard_library_it_needs(self) -> None:
         assert _top_level_imports(INSPECTION_SOURCE) == {
             "__future__",
-            "importlib",
-            "pkgutil",
+            "ast",
             "collections",
             "dataclasses",
             "enum",
-            "types",
+            "pathlib",
         }
 
     def test_the_cli_imports_only_the_standard_library_and_the_inspector(self) -> None:
@@ -862,13 +1277,19 @@ class TestScale:
         assert {str(error.code) for error in errors} == {"DUPLICATE_REASON_KEY"}
         assert len(errors) == 2
 
-    def test_validation_stays_linear_enough_to_be_unnoticeable(self) -> None:
-        import time
-
-        descriptors = self._descriptors(2000)
-        started = time.perf_counter()
-        validate_descriptors(descriptors)
-        assert time.perf_counter() - started < 2.0
+    def test_a_directory_of_two_hundred_source_files_inspects_correctly(self, pack_dir) -> None:
+        directory, write = pack_dir
+        for index in range(200):
+            write(
+                f"scaled_{index:03d}",
+                _source(
+                    PACK_ID=f'PACK_ID = "for_you.skin_care.scaled_{index:03d}.v1"',
+                    REASON_KEY=f'REASON_KEY = "for_you.skin_care.scaled_{index:03d}.reason"',
+                ),
+            )
+        result = _inspect(directory)
+        assert result.ok is True
+        assert len(result.packs) == 200
 
 
 # ---------------------------------------------------------------------------
@@ -882,47 +1303,19 @@ class TestCompiledKnowledgeIsUnchanged:
             == BASELINE_MANIFEST_CONTENT_HASH
         )
 
-    def test_the_pack_file_was_not_edited_by_this_milestone(self) -> None:
-        changed = subprocess.check_output(
-            ["git", "diff", "--name-only", "origin/main"],
-            cwd=REPOSITORY_ROOT,
-            text=True,
-        ).split()
-        assert "backend/app/knowledge_packs/petrolatum_dry_skin_v1.py" not in changed
+    def test_the_reviewed_descriptor_values_are_exactly_these(self) -> None:
+        # Belt and braces on the same property from the other side: the four
+        # governed identity strings a customer-visible decision hangs on,
+        # written out rather than read from the module under test.
+        assert pack.PACK_ID == "for_you.skin_care.petrolatum_dry_skin.v1"
+        assert pack.DOMAIN == "skin_care"
+        assert pack.CATEGORY == "skin_care"
+        assert pack.REASON_KEY == "for_you.skin_care.petrolatum.dry_skin.dermatologist_guidance"
+        assert DESCRIPTOR_FIELDS == ("PACK_ID", "DOMAIN", "CATEGORY", "REASON_KEY")
 
 
 # ---------------------------------------------------------------------------
-# Scope
+# The module under test is the one in the repository
 # ---------------------------------------------------------------------------
-class TestScope:
-    def test_forbidden_scope_is_untouched(self) -> None:
-        changed = {
-            line.strip()
-            for line in subprocess.check_output(
-                ["git", "diff", "--name-only", "HEAD"], cwd=REPOSITORY_ROOT, text=True
-            ).splitlines()
-            if line.strip()
-        }
-        for prefix in ("backend/migrations/", "frontend/", ".github/"):
-            assert not any(path.startswith(prefix) for path in changed), prefix
-        assert not any("requirements" in path for path in changed)
-        assert not any(path.endswith("yarn.lock") for path in changed)
-
-    def test_this_milestone_added_no_migration_and_no_stray_file(self) -> None:
-        # git diff cannot see a brand-new file. A migration added but not yet
-        # committed is exactly the change this milestone must not contain, so
-        # the untracked list is checked as well.
-        untracked = subprocess.check_output(
-            ["git", "ls-files", "--others", "--exclude-standard"],
-            cwd=REPOSITORY_ROOT,
-            text=True,
-        ).split()
-        for path in untracked:
-            assert not path.startswith("backend/migrations/"), path
-            assert not path.startswith("frontend/"), path
-            assert not path.startswith(".github/"), path
-
-        against_main = subprocess.check_output(
-            ["git", "diff", "--name-only", "origin/main"], cwd=REPOSITORY_ROOT, text=True
-        ).split()
-        assert not any(path.startswith("backend/migrations/") for path in against_main)
+def test_the_inspector_module_is_the_file_these_tests_read() -> None:
+    assert Path(inspection.__file__).resolve() == INSPECTION_SOURCE

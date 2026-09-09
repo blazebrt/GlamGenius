@@ -1,51 +1,69 @@
-"""Offline inventory and contract validation for version-controlled packs.
+"""Offline, static inventory and contract validation for version-controlled packs.
 
 One reviewed pack is easy to hold in your head. Dozens are not, and the
 questions that matter then are boring and structural: which packs exist, is
 every ``PACK_ID`` unique, does each one own a distinct reason key, does each
-still expose the compiler the release workflow calls. This module answers
+still declare the compiler the release workflow calls. This module answers
 those questions and nothing else.
 
-**What it is not.** It is not a registry, not a loader, not a release
-operator. It does not prepare, verify, publish, compile, approve, activate,
-deactivate or roll back anything — those responsibilities already exist in the
-evidence and Step 8H release lifecycles and stay there. Nothing here reads or
-writes a database, opens a socket, touches a provider, or reads a credential.
-Its whole world is source metadata already committed to this repository.
+**It reads source. It never runs it.** A knowledge pack is an inert
+specification, and this module treats it as one: candidate files are read as
+text and parsed with :mod:`ast`. No candidate is imported, executed,
+``eval``-ed, ``exec``-ed or run through :mod:`runpy`. That is not a stylistic
+preference. Part of the point of an inventory tool is to notice a pack that
+has grown an import-time side effect — a database call, a network call, a file
+write, a provider call, a release operation — and a tool that imported packs
+in order to inspect them would trigger exactly the thing it exists to catch,
+across every pack at once, on an operator's laptop.
+
+The cost of that choice is that identity must be *statically legible*. Each
+governed descriptor field has to be a plain string literal at module level. A
+value computed at import time cannot be read without running the module, so it
+is not read: it is reported as a finding and the pack fails closed.
+
+**What it is not.** Not a registry, not a loader, not a release operator. It
+does not prepare, verify, publish, compile, approve, activate, deactivate or
+roll back anything — those responsibilities already exist in the evidence and
+Step 8H release lifecycles and stay there. Nothing here reads or writes a
+database, opens a network connection, touches a provider, or reads a
+credential or an environment variable. Its whole world is source text already
+committed to this repository.
 
 **Why importing this package still imports nothing.** Discovery lives here
 rather than in ``__init__``, and nothing imports this module implicitly. The
-package root remains a docstring: ``import`` of the package does not import
-this module, and this module is only loaded when offline tooling or a test
-asks for it by name. That is what keeps a knowledge pack an inert source
-artifact rather than something the application can reach at runtime.
+package root remains a docstring: importing the package does not import this
+module, and this module is only loaded when offline tooling or a test asks for
+it by name.
 
 **Why the package is found through ``__package__``.** This module never spells
 out the dotted path of the package it inspects; it asks Python which package
-it belongs to. That is the correct way for a module to introspect its own
-package, and it has a second, deliberate effect: the Step 8I boundary test
-scans every file under ``app/`` for a hard-coded reference to the knowledge
-pack package and allows only the two reviewed files. That guard is right — an
-application module that names the pack package is exactly how an accidental
-runtime import begins — and this module is a member of that package rather
-than a reacher-into-it, so it neither trips the guard nor needs it widened.
+it belongs to, and it finds the directory through its own ``__file__``. That
+is the correct way for a module to introspect its own package, and it has a
+second, deliberate effect: the Step 8I boundary test scans every file under
+``app/`` for a hard-coded reference to the knowledge pack package and allows
+only the two reviewed files. That guard is right — an application module that
+names the pack package is exactly how an accidental runtime import begins —
+and this module is a member of that package rather than a reacher-into-it, so
+it neither trips the guard nor needs it widened.
 
-**What qualifies as a pack.** Declaring ``PACK_ID`` is the claim. A module in
-this package without one is not a governed pack and is not an error — it is
-infrastructure, like this file. A module *with* one is held to the whole
+**What qualifies as a pack.** Declaring ``PACK_ID`` at module level is the
+claim, and only the two files named in :data:`INFRASTRUCTURE_FILENAMES` are
+exempt from being asked. A filename is never an exemption: a governed pack
+cannot slip out of the inventory by being called ``_hidden_pack.py``. A file
+that simply does not declare the marker is not a governed pack and is not an
+error — it is infrastructure. A file *with* the marker is held to the whole
 contract, and every violation is reported rather than raised, so one broken
 pack cannot hide the state of the others.
 """
 from __future__ import annotations
 
-import importlib
-import pkgutil
-from collections.abc import Iterable, Sequence
+import ast
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
-from types import ModuleType
+from pathlib import Path
 
-#: The callable every pack must expose for the Step 8H release workflow.
+#: The callable every pack must declare for the Step 8H release workflow.
 #: Named, never invoked: compiling requires a reviewed published evidence
 #: entry, and inventory has no business inventing one.
 COMPILER_ATTRIBUTE = "build_release_manifest_from_published_entry"
@@ -53,6 +71,14 @@ COMPILER_ATTRIBUTE = "build_release_manifest_from_published_entry"
 #: The attribute whose presence means "this module claims to be a governed
 #: pack". Everything else in the contract is mandatory once it is present.
 PACK_MARKER_ATTRIBUTE = "PACK_ID"
+
+#: The governed descriptor fields, in report order.
+DESCRIPTOR_FIELDS = (PACK_MARKER_ATTRIBUTE, "DOMAIN", "CATEGORY", "REASON_KEY")
+
+#: The only files in the pack directory that are not asked to be packs.
+#: A closed list, deliberately: anything else added to the directory is
+#: inspected, whatever it is called.
+INFRASTRUCTURE_FILENAMES = frozenset({"__init__.py", "inspection.py"})
 
 #: Minimum dot-separated segments in a pack id, so an id is namespaced rather
 #: than a bare word.
@@ -64,10 +90,15 @@ class PackValidationCode(StrEnum):
 
     Deliberately coarse. A code plus a module plus a field name is enough for
     a person to open the file and see the problem; anything richer would start
-    quoting source into logs and CI output for no benefit.
+    quoting source into logs and CI output for no benefit. That applies most
+    of all to :data:`UNPARSABLE_SOURCE`, where the underlying exception would
+    happily print the offending line.
     """
 
-    IMPORT_FAILED = "IMPORT_FAILED"
+    UNREADABLE_SOURCE = "UNREADABLE_SOURCE"
+    UNPARSABLE_SOURCE = "UNPARSABLE_SOURCE"
+    NON_STATIC_METADATA = "NON_STATIC_METADATA"
+    DUPLICATE_DECLARATION = "DUPLICATE_DECLARATION"
     INVALID_PACK_ID = "INVALID_PACK_ID"
     DUPLICATE_PACK_ID = "DUPLICATE_PACK_ID"
     MISSING_DOMAIN = "MISSING_DOMAIN"
@@ -75,7 +106,15 @@ class PackValidationCode(StrEnum):
     MISSING_REASON_KEY = "MISSING_REASON_KEY"
     DUPLICATE_REASON_KEY = "DUPLICATE_REASON_KEY"
     MISSING_COMPILER = "MISSING_COMPILER"
-    COMPILER_NOT_CALLABLE = "COMPILER_NOT_CALLABLE"
+    COMPILER_NOT_A_FUNCTION = "COMPILER_NOT_A_FUNCTION"
+
+
+#: Which "this value is unusable" code belongs to which descriptor field.
+_MISSING_CODE_BY_FIELD = {
+    "DOMAIN": PackValidationCode.MISSING_DOMAIN,
+    "CATEGORY": PackValidationCode.MISSING_CATEGORY,
+    "REASON_KEY": PackValidationCode.MISSING_REASON_KEY,
+}
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -134,6 +173,29 @@ def _package_name() -> str:
     return package
 
 
+def pack_source_directory() -> Path:
+    """The directory holding the governed packs: the one this file is in."""
+    return Path(__file__).resolve().parent
+
+
+def discover_pack_sources(directory: Path | None = None) -> tuple[Path, ...]:
+    """Every ``.py`` file in the directory bar the closed infrastructure list.
+
+    Sorted rather than left in filesystem order: two machines listing a
+    directory must produce the same inventory, or the CLI's output is not
+    something a reviewer can diff.
+
+    Note what is *not* here: no filename-prefix rule. An earlier version
+    skipped names beginning with an underscore, which meant a governed pack
+    could leave the inventory by being renamed. Governance is not something a
+    filename gets to opt out of.
+    """
+    root = pack_source_directory() if directory is None else Path(directory)
+    return tuple(
+        sorted(path for path in root.glob("*.py") if path.name not in INFRASTRUCTURE_FILENAMES)
+    )
+
+
 def _is_clean_nonblank_string(value: object) -> bool:
     """A non-empty string carrying no leading or trailing whitespace.
 
@@ -143,6 +205,13 @@ def _is_clean_nonblank_string(value: object) -> bool:
     behave as different ones everywhere else.
     """
     return isinstance(value, str) and value != "" and value == value.strip()
+
+
+def _is_identifier_segment(segment: str) -> bool:
+    return all(
+        character.isascii() and (character.islower() or character.isdigit() or character == "_")
+        for character in segment
+    )
 
 
 def _is_valid_pack_id(value: object) -> bool:
@@ -164,93 +233,137 @@ def _is_valid_pack_id(value: object) -> bool:
     return version.startswith("v") and version[1:].isdigit()
 
 
-def _is_identifier_segment(segment: str) -> bool:
-    return all(
-        character.isascii() and (character.islower() or character.isdigit() or character == "_")
-        for character in segment
-    )
+def _module_name(path: Path, package_name: str) -> str:
+    return f"{package_name}.{path.stem}"
 
 
-def discover_pack_modules() -> tuple[str, ...]:
-    """Dotted names of every module in this package, sorted, offline.
+def _assigned_names(node: ast.stmt) -> list[str]:
+    """The module-level names one top-level statement binds.
 
-    Sorted rather than left in filesystem order: two machines listing a
-    directory must produce the same inventory, or the CLI's output is not
-    something a reviewer can diff.
-
-    No pack is imported here. The package itself is — it has to be, to have a
-    ``__path__`` to list — and importing it loads nothing, because its
-    ``__init__`` is a docstring and stays one. Private modules and this one
-    are skipped by name; whether the rest are packs is decided later, by
-    looking for the marker rather than guessing from the filename.
+    Only the forms a specification file legitimately uses to declare a
+    descriptor — a plain assignment, an annotated assignment, a function or a
+    class — plus imports, which are how a name gets shadowed by accident.
+    Anything more exotic binding a governed name will simply not be seen as a
+    declaration and the field will read as missing, which is the fail-closed
+    direction.
     """
-    package_name = _package_name()
-    package = importlib.import_module(package_name)
-    found = [
-        f"{package_name}.{info.name}"
-        for info in pkgutil.iter_modules(package.__path__)
-        if not info.name.startswith("_") and info.name != __name__.rsplit(".", 1)[-1]
-    ]
-    return tuple(sorted(found))
+    if isinstance(node, ast.Assign):
+        return [target.id for target in node.targets if isinstance(target, ast.Name)]
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        return [node.target.id] if node.value is not None else []
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+        return [node.name]
+    if isinstance(node, ast.Import | ast.ImportFrom):
+        return [alias.asname or alias.name.split(".")[0] for alias in node.names]
+    return []
 
 
-def _describe(module_name: str, module: ModuleType) -> tuple[
-    KnowledgePackDescriptor | None, tuple[PackValidationError, ...]
-]:
+def _top_level_bindings(tree: ast.Module) -> dict[str, list[ast.stmt]]:
+    """Module-level name to the statements that bind it, in source order.
+
+    Only ``tree.body`` is walked. A name bound inside an ``if`` or a function
+    is not a module-level declaration, and treating it as one would let a
+    conditional definition masquerade as a governed constant.
+    """
+    bindings: dict[str, list[ast.stmt]] = {}
+    for node in tree.body:
+        for name in _assigned_names(node):
+            bindings.setdefault(name, []).append(node)
+    return bindings
+
+
+def _literal_string(statement: ast.stmt) -> str | None:
+    """The string this assignment states outright, or ``None``.
+
+    ``None`` means "not knowable without running the module" — a call, a name,
+    an f-string, a concatenation, a conditional expression, a non-string
+    constant. The distinction matters: a value that must be computed is a
+    finding, not a value.
+    """
+    if not isinstance(statement, ast.Assign | ast.AnnAssign):
+        return None
+    value = statement.value
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return value.value
+    return None
+
+
+def claims_to_be_a_pack(tree: ast.Module) -> bool:
+    """Does this source claim governed-pack status?
+
+    Declaring ``PACK_ID`` at module level is the claim. Sitting in the
+    directory is not.
+
+    Presence, not usefulness. ``PACK_ID = None``, ``PACK_ID = ""`` or
+    ``PACK_ID = make_pack_id()`` is a pack that is broken, which is a finding;
+    treating any of them as "not a pack" would let the worst case — a governed
+    pack whose identity cannot be read — vanish from the inventory in silence.
+    """
+    return PACK_MARKER_ATTRIBUTE in _top_level_bindings(tree)
+
+
+def _describe(
+    module_name: str, tree: ast.Module
+) -> tuple[KnowledgePackDescriptor | None, tuple[PackValidationError, ...]]:
+    bindings = _top_level_bindings(tree)
     errors: list[PackValidationError] = []
 
     def note(field: str, code: PackValidationCode) -> None:
         errors.append(PackValidationError(module=module_name, field=field, code=code))
 
-    pack_id = getattr(module, PACK_MARKER_ATTRIBUTE, None)
-    if not _is_valid_pack_id(pack_id):
+    values: dict[str, str] = {}
+    for field in DESCRIPTOR_FIELDS:
+        statements = bindings.get(field, [])
+        if len(statements) > 1:
+            # Two module-level declarations of one governed constant: the last
+            # one silently wins at import time. In a specification file that
+            # is ambiguity, not a shorthand.
+            note(field, PackValidationCode.DUPLICATE_DECLARATION)
+            continue
+        if not statements:
+            if field != PACK_MARKER_ATTRIBUTE:
+                note(field, _MISSING_CODE_BY_FIELD[field])
+            continue
+        literal = _literal_string(statements[0])
+        if literal is None:
+            note(field, PackValidationCode.NON_STATIC_METADATA)
+            continue
+        values[field] = literal
+
+    pack_id = values.get(PACK_MARKER_ATTRIBUTE)
+    if pack_id is not None and not _is_valid_pack_id(pack_id):
         note(PACK_MARKER_ATTRIBUTE, PackValidationCode.INVALID_PACK_ID)
+    for field in ("DOMAIN", "CATEGORY", "REASON_KEY"):
+        value = values.get(field)
+        if value is not None and not _is_clean_nonblank_string(value):
+            note(field, _MISSING_CODE_BY_FIELD[field])
 
-    domain = getattr(module, "DOMAIN", None)
-    if not _is_clean_nonblank_string(domain):
-        note("DOMAIN", PackValidationCode.MISSING_DOMAIN)
-
-    category = getattr(module, "CATEGORY", None)
-    if not _is_clean_nonblank_string(category):
-        note("CATEGORY", PackValidationCode.MISSING_CATEGORY)
-
-    reason_key = getattr(module, "REASON_KEY", None)
-    if not _is_clean_nonblank_string(reason_key):
-        note("REASON_KEY", PackValidationCode.MISSING_REASON_KEY)
-
-    compiler = getattr(module, COMPILER_ATTRIBUTE, None)
-    if compiler is None:
+    compiler_statements = bindings.get(COMPILER_ATTRIBUTE, [])
+    if not compiler_statements:
         note(COMPILER_ATTRIBUTE, PackValidationCode.MISSING_COMPILER)
-    elif not callable(compiler):
-        note(COMPILER_ATTRIBUTE, PackValidationCode.COMPILER_NOT_CALLABLE)
+    else:
+        if len(compiler_statements) > 1:
+            note(COMPILER_ATTRIBUTE, PackValidationCode.DUPLICATE_DECLARATION)
+        # Whatever comes last is what the release workflow would reach for.
+        # A plain top-level ``def`` is the contract: the Step 8H workflow
+        # calls this synchronously, so a coroutine would not satisfy it and is
+        # rejected here rather than at release time.
+        if not isinstance(compiler_statements[-1], ast.FunctionDef):
+            note(COMPILER_ATTRIBUTE, PackValidationCode.COMPILER_NOT_A_FUNCTION)
 
     if errors:
         return None, tuple(errors)
     return (
         KnowledgePackDescriptor(
             module=module_name,
-            pack_id=str(pack_id),
-            domain=str(domain),
-            category=str(category),
-            reason_key=str(reason_key),
+            pack_id=values[PACK_MARKER_ATTRIBUTE],
+            domain=values["DOMAIN"],
+            category=values["CATEGORY"],
+            reason_key=values["REASON_KEY"],
             compiler_name=COMPILER_ATTRIBUTE,
         ),
         (),
     )
-
-
-def claims_to_be_a_pack(module: ModuleType) -> bool:
-    """Does this module claim governed-pack status?
-
-    Declaring ``PACK_ID`` is the claim. Sitting in the directory is not: this
-    module does not declare one and is correctly not a pack.
-
-    Presence, not usefulness. ``PACK_ID = None`` or ``PACK_ID = ""`` is a pack
-    that is broken, which is a finding; treating it as "not a pack" would let
-    the worst case — a governed pack whose identity failed to be written —
-    vanish from the inventory in silence.
-    """
-    return hasattr(module, PACK_MARKER_ATTRIBUTE)
 
 
 def validate_descriptors(
@@ -286,39 +399,55 @@ def validate_descriptors(
     return tuple(sorted(errors))
 
 
-def inspect_packs(module_names: Sequence[str] | None = None) -> InspectionResult:
-    """Import the candidate modules, read their identity, validate the set.
+def inspect_packs(
+    directory: Path | None = None,
+    *,
+    package_name: str | None = None,
+) -> InspectionResult:
+    """Parse every candidate in the directory, read its identity, check the set.
 
-    Importing is unavoidable — the contract is expressed in module attributes,
-    and a pack is a Python module by design. It is also safe: a pack is inert
-    by contract, so importing one runs no side effect, and the Step 8I suite
-    holds that property for the reviewed pack independently of this tool.
+    Reading and parsing are the only things done to a candidate. Nothing is
+    imported and nothing is executed, so a pack that has grown a top-level
+    side effect is inventoried without that side effect happening — which is
+    the whole reason this is static.
 
-    A module that fails to import is reported as a finding rather than
-    allowed to abort the run, for the same reason every other check is: one
-    broken pack must not hide the state of the rest. Only the module name is
-    recorded — never the exception text, which in a syntax or import error
-    quotes source into CI output.
+    Both arguments exist for tests and for nothing else; the defaults are the
+    governed pack directory and this module's own package.
     """
-    names = tuple(module_names) if module_names is not None else discover_pack_modules()
+    package = _package_name() if package_name is None else package_name
+    paths = discover_pack_sources(directory)
     descriptors: list[KnowledgePackDescriptor] = []
     errors: list[PackValidationError] = []
 
-    for module_name in sorted(names):
+    for path in paths:
+        module_name = _module_name(path, package)
         try:
-            module = importlib.import_module(module_name)
-        except Exception:
+            source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
             errors.append(
                 PackValidationError(
                     module=module_name,
-                    field="module",
-                    code=PackValidationCode.IMPORT_FAILED,
+                    field="source",
+                    code=PackValidationCode.UNREADABLE_SOURCE,
                 )
             )
             continue
-        if not claims_to_be_a_pack(module):
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            # Deliberately not the exception text: a SyntaxError quotes the
+            # offending source line, and findings do not carry source.
+            errors.append(
+                PackValidationError(
+                    module=module_name,
+                    field="source",
+                    code=PackValidationCode.UNPARSABLE_SOURCE,
+                )
+            )
             continue
-        descriptor, module_errors = _describe(module_name, module)
+        if not claims_to_be_a_pack(tree):
+            continue
+        descriptor, module_errors = _describe(module_name, tree)
         errors.extend(module_errors)
         if descriptor is not None:
             descriptors.append(descriptor)

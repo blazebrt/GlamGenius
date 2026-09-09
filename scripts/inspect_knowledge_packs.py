@@ -9,11 +9,14 @@ Exit code is the whole answer: ``0`` means every pack in the repository
 satisfies the structural contract, non-zero means at least one does not and
 the report names which file and which field.
 
-This tool reads committed source and nothing else. It opens no database
-connection, makes no network call, reads no credential and needs no
-environment configuration — running it with the production environment
-variables absent, empty or wrong must produce exactly the same output as
-running it with them set, and there is a test that holds that.
+This tool reads committed source and nothing else. Candidate pack files are
+read as text and parsed statically; **no pack module is imported or executed**,
+so a pack that has grown an import-time side effect is inventoried without
+that side effect happening. It opens no database connection, makes no network
+call, reads no credential and needs no environment configuration — running it
+with the production environment variables absent, empty or wrong produces
+exactly the same output as running it with them set, and there is a test that
+holds that. It needs none of the backend's runtime dependencies either.
 
 It also decides nothing about customers. It never compiles a manifest, never
 prepares, publishes, activates or deactivates a release, and never reaches
@@ -66,7 +69,8 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "List the knowledge packs committed to this repository and check that each "
             "one still satisfies the structural contract the release workflow relies on. "
-            "Reads source only: no database, no network, no credentials."
+            "Parses source statically: no pack is imported, no database, no network, "
+            "no credentials."
         )
     )
     parser.add_argument(

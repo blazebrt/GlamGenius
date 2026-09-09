@@ -122,7 +122,7 @@ jurisdiction, and `PubMed` as the article publisher.
 One pack fits in a person's head. A dozen will not, and by then the questions
 that matter are boring and structural rather than scientific: which packs exist,
 does each still own a unique `PACK_ID`, does each own a distinct `REASON_KEY`,
-does each still expose the compiler the Step 8H release workflow calls by name.
+does each still declare the compiler the Step 8H release workflow calls by name.
 
 `backend/app/knowledge_packs/inspection.py` answers exactly those questions, and
 an offline command reports them:
@@ -135,20 +135,55 @@ python scripts/inspect_knowledge_packs.py --json
 Exit `0` means every committed pack satisfies the structural contract; a non-zero
 exit names the file, the field and the finding.
 
-**It reads source and nothing else.** No database connection, no network call, no
-credential, no environment variable — running it with the production configuration
-absent, empty or deliberately wrong produces byte-identical output, and a test holds
-that. It never compiles a manifest, never prepares, publishes, activates,
-deactivates or rolls back a release, and never evaluates a customer decision.
-Inventory is not activation, and the boundary described above is unchanged by it.
+**It parses source. It never runs it.** Candidate pack files are read as text and
+parsed with `ast`. No pack is imported, executed, `eval`-ed, `exec`-ed or run
+through `runpy`. That is not tidiness — part of the point of an inventory is to
+notice a pack that has grown an import-time side effect (a database call, a
+network call, a file write, a provider call, a release operation), and a tool
+that imported packs to inspect them would trigger every such side effect in the
+repository at once, on an operator's laptop, in the course of asking a question.
+Tests hold the property directly: a synthetic pack that writes a sentinel file at
+module level is inspected, and the sentinel does not appear.
+
+The consequence is that identity must be **statically legible**. `PACK_ID`,
+`DOMAIN`, `CATEGORY` and `REASON_KEY` each have to be a plain string literal
+assigned once at module level. A value computed at import time — a call, an
+f-string, a concatenation, a name — cannot be read without running the module, so
+it is not read: the pack fails closed with a `NON_STATIC_METADATA` finding. A
+constant declared twice fails closed too, as `DUPLICATE_DECLARATION`: in a
+specification file, "the last one wins" is ambiguity rather than shorthand.
+
+The compiler is verified the same way. The pack must declare
+`build_release_manifest_from_published_entry` as a single top-level `def`. A
+missing declaration is `MISSING_COMPILER`; a class, an import, an assignment that
+shadows the function, or a coroutine — the Step 8H workflow calls it
+synchronously — is `COMPILER_NOT_A_FUNCTION`. The function is named, never called:
+compiling requires a reviewed published evidence entry, which an inventory tool
+has no business inventing.
+
+**A filename is never an exemption.** Every `.py` file in the pack directory is
+inspected except two named outright: `__init__.py` and `inspection.py`. There is
+no rule about leading underscores or any other prefix, because such a rule would
+mean a governed pack could leave the inventory by being renamed `_hidden_pack.py`.
+A file that simply does not declare `PACK_ID` is not a governed pack and is not an
+error.
+
+**Nothing else is touched.** No database connection, no network call, no
+credential, no environment variable — running the command with the production
+configuration absent, empty or deliberately wrong produces byte-identical output,
+and a test holds that. It never compiles a manifest, never prepares, publishes,
+activates, deactivates or rolls back a release, and never evaluates a customer
+decision. Inventory is not activation, and the boundary described above is
+unchanged by it.
 
 **A pack stays inert.** Discovery lives in `inspection.py`, not in the package's
 `__init__.py`, which remains a docstring and imports nothing. Importing
 `app.knowledge_packs` still loads no pack; importing the inspector still loads no
-pack; importing the application still loads neither. The inspector resolves its own
-package through `__package__` rather than spelling the dotted path, so the standing
-rule that no module under `app/` may name `app.knowledge_packs` — the rule that stops
-an accidental runtime import — needs no exception for it.
+pack; importing the application still loads neither. The inspector finds its own
+directory through `__file__` and names it through `__package__` rather than
+spelling the dotted path, so the standing rule that no module under `app/` may
+name `app.knowledge_packs` — the rule that stops an accidental runtime import —
+needs no exception for it.
 
 **What a descriptor holds.** Module, `PACK_ID`, `DOMAIN`, `CATEGORY`, `REASON_KEY`
 and the compiler's name. Deliberately no evidence summary, source locator, fact
