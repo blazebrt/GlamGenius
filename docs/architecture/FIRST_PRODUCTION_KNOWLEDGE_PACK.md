@@ -414,13 +414,26 @@ hash — and folding it into the generic tool would leave nothing to compare wit
 exactly one module and a meta-path recorder proves it — but that proves the
 builder, not the pack. A pack whose own source imported a sibling would drag it
 in through the ordinary import system, and nothing in the builder could stop
-that. So the rule lives with the packs: **a governed pack may not import
-another governed pack**, checked statically over committed source, in all
-three syntactic forms. Infrastructure members of the package are allowed
-(`inspection.py` executes no knowledge), and so is everything outside it —
-importing `app.domains.personal_decision_release.manifest` is exactly what a
-compiler is supposed to do. This is a governance rule about what a
-specification file may reference, not a sandbox.
+that. So the rule lives with the packs: **a governed pack may not statically
+import another governed pack through either absolute or relative Python import
+statements**, checked over committed source. `import app.knowledge_packs.other`
+and `from .other import X` execute the same module body; a rule that read only
+the absolute spelling would be a rule a sibling import walks straight past, so
+relative forms are resolved the way the import system resolves them
+(`importlib.util.resolve_name`) rather than by matching strings.
+
+Infrastructure members of the package are allowed however they are spelled
+(`inspection.py` executes no knowledge), and so is everything outside the
+package — importing `app.domains.personal_decision_release.manifest`, directly
+or as `..domains...`, is exactly what a compiler is supposed to do. A pack
+naming itself is not a cross-pack import in any spelling.
+
+**This is not a Python sandbox, and does not claim to be.** It is a governance
+rule about what a reviewed specification file may *statically reference*.
+Dynamic mechanisms — `importlib` called at runtime, a custom loader, `exec` on
+a constructed string — are not proved impossible by it. The guarantee on offer
+is the reviewed static import contract: what the committed source says it
+reaches, checked on every run, for every pack the inspector discovers.
 
 **Production activation — still manual, still one pack.**
 

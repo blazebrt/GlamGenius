@@ -927,22 +927,60 @@ class TestTheStep8HBoundaryFailsClosed:
 PACK_PACKAGE = "app.knowledge_packs"
 
 
+def _imported_module(node: ast.ImportFrom, *, own_module: str) -> str | None:
+    """The absolute module a ``from ... import ...`` statement names.
+
+    Relative spellings included. ``from .other_pack import X`` and
+    ``from . import other_pack`` execute a sibling exactly as surely as the
+    absolute spelling does, so the dot count and the — possibly absent —
+    module are resolved the way the import system itself resolves them, with
+    `importlib.util.resolve_name`, rather than by hand-building string cases
+    for every combination of level and shape.
+
+    A relative import is resolved against the *package the module lives in*,
+    which is what Python binds as ``__package__``. Governed packs are single
+    ``.py`` modules and never packages, so the anchor is always the parent:
+    `app.knowledge_packs`.
+
+    ``None`` means the statement names no importable module. That happens when
+    a relative import climbs above the top-level package, which raises
+    `ImportError` for the real import system too — such a statement reaches no
+    sibling because it reaches nothing at all.
+    """
+    if node.level == 0:
+        return node.module
+    anchor = own_module.rpartition(".")[0]
+    try:
+        return importlib.util.resolve_name("." * node.level + (node.module or ""), anchor)
+    except (ImportError, ValueError):
+        return None
+
+
 def _cross_pack_imports(source: str, *, own_module: str) -> list[str]:
     """Governed pack modules this source imports, other than itself.
 
     Static, like everything else in the discovery half of this system: the
-    file is parsed, never run. Three syntactic forms reach another pack and
-    all three are recognised —
+    file is parsed, never run. Every Python import statement that can name
+    another pack is recognised, absolute and relative alike —
 
         import app.knowledge_packs.other
         from app.knowledge_packs.other import X
         from app.knowledge_packs import other
+        from .other import X
+        from . import other
+        from ..knowledge_packs.other import X
+        from ..knowledge_packs import other
 
     Infrastructure members of the package are not packs and are allowed;
     `inspection.py` executes no knowledge. So is everything outside the
-    package — `app.domains.personal_decision_release.manifest` is exactly what
-    a compiler is supposed to import, and a rule that flagged it would be
-    useless.
+    package, however it is spelled — `app.domains.personal_decision_release.
+    manifest` is exactly what a compiler is supposed to import, whether it is
+    reached absolutely or as `..domains...`, and a rule that flagged it would
+    be useless.
+
+    A pack naming itself is not a cross-pack import, in any spelling. It is
+    the same single module either way, so `from . import a_pack` inside
+    `a_pack` is reported as nothing rather than mislabelled as a sibling.
 
     Anything else named under the package is reported, including forms no
     real pack would use, such as pulling a dunder out of the package root.
@@ -965,12 +1003,16 @@ def _cross_pack_imports(source: str, *, own_module: str) -> list[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 note(alias.name)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            if node.module == PACK_PACKAGE:
+        elif isinstance(node, ast.ImportFrom):
+            module = _imported_module(node, own_module=own_module)
+            if module is None:
+                continue
+            if module == PACK_PACKAGE:
+                # `from <the package> import name` — each name is a member.
                 for alias in node.names:
                     note(f"{PACK_PACKAGE}.{alias.name}")
             else:
-                note(node.module)
+                note(module)
     return sorted(set(found))
 
 
@@ -1029,6 +1071,39 @@ class TestNoPackMayImportAnotherPack:
     @pytest.mark.parametrize(
         ("label", "statement"),
         [
+            ("relative from-import of a member", "from .other_pack import THING"),
+            ("relative from-import of the module", "from . import other_pack"),
+            ("aliased relative member", "from .other_pack import THING as other"),
+            ("aliased relative module", "from . import other_pack as other"),
+            (
+                "up-and-back-in from-import of a member",
+                "from ..knowledge_packs.other_pack import THING",
+            ),
+            (
+                "up-and-back-in from-import of the module",
+                "from ..knowledge_packs import other_pack",
+            ),
+            ("deep relative from-import", "from .other_pack.nested import THING"),
+        ],
+    )
+    def test_a_pack_reaching_for_a_sibling_relatively_is_rejected(
+        self, label: str, statement: str
+    ) -> None:
+        """A sibling is a sibling however it is spelled.
+
+        These are ordinary Python and they execute the other pack's module
+        body. The absolute forms were caught from the first round; a checker
+        that read `node.level == 0` let every one of these through, which is
+        the whole of this correction.
+        """
+        source = f"{statement}\n\nPACK_ID = 'for_you.skin_care.a.v1'\n"
+        assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == [
+            f"{PACK_PACKAGE}.other_pack"
+        ], label
+
+    @pytest.mark.parametrize(
+        ("label", "statement"),
+        [
             (
                 "the manifest authority",
                 "from app.domains.personal_decision_release.manifest import "
@@ -1047,8 +1122,66 @@ class TestNoPackMayImportAnotherPack:
         source = f"{statement}\n\nPACK_ID = 'for_you.skin_care.a.v1'\n"
         assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == [], label
 
+    @pytest.mark.parametrize(
+        ("label", "statement"),
+        [
+            ("the inspector, relatively", "from .inspection import inspect_packs"),
+            ("the inspector as a module, relatively", "from . import inspection"),
+            (
+                "the manifest authority, reached by climbing out",
+                "from ..domains.personal_decision_release.manifest import "
+                "parse_release_manifest",
+            ),
+            ("a domain package, reached by climbing out", "from ..domains import "
+             "personal_decision_policy"),
+        ],
+    )
+    def test_relative_imports_that_reach_no_pack_are_allowed(
+        self, label: str, statement: str
+    ) -> None:
+        """Widening the rule to relative form must not swallow the legitimate ones.
+
+        `inspection` is infrastructure and executes no knowledge; a `..domains`
+        import leaves the package entirely and lands where a compiler is
+        supposed to look. Both resolve to real absolute names, and both are
+        judged by the same test as the absolute spelling.
+        """
+        source = f"{statement}\n\nPACK_ID = 'for_you.skin_care.a.v1'\n"
+        assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == [], label
+
     def test_a_pack_importing_itself_is_not_a_cross_pack_import(self) -> None:
         source = "import app.knowledge_packs.a_pack\n"
+        assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == []
+
+    @pytest.mark.parametrize(
+        ("label", "statement"),
+        [
+            ("itself as a module", "from . import a_pack"),
+            ("a member of itself", "from .a_pack import THING"),
+            ("itself, aliased", "from . import a_pack as me"),
+        ],
+    )
+    def test_a_pack_importing_itself_relatively_is_not_a_cross_pack_import(
+        self, label: str, statement: str
+    ) -> None:
+        """Resolving relative names must not mislabel the module as its own sibling.
+
+        `from . import a_pack` inside `a_pack` resolves to `a_pack`. It is the
+        same single module, so it is not another governed pack, and reporting
+        it would be a false offender rather than a strictness.
+        """
+        source = f"{statement}\n\nPACK_ID = 'for_you.skin_care.a.v1'\n"
+        assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == [], label
+
+    def test_a_relative_import_above_the_top_level_package_names_no_pack(self) -> None:
+        """Honest about the one thing that resolves to nothing.
+
+        `from ...x import Y` inside `app.knowledge_packs.a_pack` climbs past
+        the top of the tree. The real import system raises `ImportError` on
+        it, so it executes no sibling — there is nothing to report, and this
+        records that rather than leaving the branch unexplained.
+        """
+        source = "from ...somewhere import THING\n"
         assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == []
 
     def test_the_rule_catches_a_sibling_hidden_below_a_legitimate_import(self) -> None:
@@ -1059,6 +1192,32 @@ class TestNoPackMayImportAnotherPack:
         )
         assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == [
             f"{PACK_PACKAGE}.other_pack"
+        ]
+
+    def test_the_rule_catches_a_relative_sibling_hidden_below_legitimate_imports(self) -> None:
+        source = (
+            "from app.domains.personal_decision_release.manifest import parse_release_manifest\n"
+            "from collections.abc import Mapping\n"
+            "from .inspection import inspect_packs\n"
+            "from .other_pack import SUBSTANCE_KEY\n"
+        )
+        assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == [
+            f"{PACK_PACKAGE}.other_pack"
+        ]
+
+    def test_several_siblings_in_mixed_spellings_are_all_reported(self) -> None:
+        """Absolute and relative offenders are collected into one sorted answer."""
+        source = (
+            "import app.knowledge_packs.alpha_pack\n"
+            "from .beta_pack import THING\n"
+            "from . import gamma_pack\n"
+            "from ..knowledge_packs.delta_pack import OTHER\n"
+        )
+        assert _cross_pack_imports(source, own_module=f"{PACK_PACKAGE}.a_pack") == [
+            f"{PACK_PACKAGE}.alpha_pack",
+            f"{PACK_PACKAGE}.beta_pack",
+            f"{PACK_PACKAGE}.delta_pack",
+            f"{PACK_PACKAGE}.gamma_pack",
         ]
 
 
