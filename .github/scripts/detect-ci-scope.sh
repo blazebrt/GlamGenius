@@ -73,6 +73,26 @@ for path in "${changed_files[@]}"; do
     render.yaml|deploy/*)
       backend=true
       ;;
+    # Python entrypoints that operate on the governed knowledge, evidence and
+    # release architecture. Before this milestone a pull request changing only
+    # one of them matched no case at all: every job skipped and the pull
+    # request reported green -- including the backend suite that holds the
+    # contracts they depend on. The pack inventory gate in the scope job runs
+    # regardless of paths, but it only inspects pack source; the deeper
+    # contracts these scripts rely on (the compiler's exact manifest, the
+    # operator's manual-only boundary, the inventory's own rules) are backend
+    # tests, so a change here has to run them.
+    #
+    # Narrow on purpose: `scripts/**` as a whole is not backend work. The
+    # second and third patterns are globs rather than literal filenames
+    # because a Phase B test forbids the operator's filename from appearing
+    # anywhere under `.github/`. That guard is right -- naming the production
+    # activation script inside CI is how it stops being manual-only -- and
+    # this rule does not need to breach it. The backend suite asserts the real
+    # filenames resolve here, from outside `.github/` where it may name them.
+    scripts/inspect_knowledge_packs.py|scripts/build_step8i_*.py|scripts/operate_step8i_*.py)
+      backend=true
+      ;;
   esac
   case "$path" in
     backend/migrations/*|backend/alembic.ini|backend/app/*/models.py|backend/app/shared/database/*)

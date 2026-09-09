@@ -44,7 +44,14 @@ jobs:
   scope:
     name: CI scope
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    # Two minutes was right when this job was one checkout and one git diff.
+    # It now also stands up the pinned interpreter and runs the knowledge-pack
+    # inventory gate, which together take seconds on a warm toolcache and
+    # noticeably longer on a cold one. A governance gate that fails on runner
+    # variance teaches people to re-run rather than to read, so the ceiling is
+    # raised — but only to five minutes, because this job still has no
+    # dependency install, no database and no network work to do.
+    timeout-minutes: 5
     outputs:
       backend: ${{ steps.scope.outputs.backend }}
       schema: ${{ steps.scope.outputs.schema }}
@@ -66,6 +73,29 @@ jobs:
       # would otherwise be able to skip the job holding its own test.
       - name: Container scope regression test
         run: bash .github/scripts/detect-ci-scope.test.sh
+      # The knowledge-pack inventory gate, and the reason it lives here rather
+      # than in a job of its own.
+      #
+      # It is deliberately unconditional. It is not gated on changed paths, it
+      # sits in the one job that always runs, and it runs before the step that
+      # emits the path scope — so no scope rule, correct or buggy, can decide
+      # that the inventory does not need checking today. Governance a scope
+      # rule can switch off is not governance: the case that matters is a pack
+      # that has quietly become invalid, or two packs that have collided,
+      # which by definition is a pull request nobody thought was about packs.
+      # An invalid inventory fails this job, and the PR gate refuses to
+      # interpret a failed scope job as "nothing needed to run".
+      #
+      # No dependency install appears above it because it needs none. The
+      # inspector reads committed source and parses it with `ast`: it imports
+      # no pack, opens no database, makes no network call and reads no
+      # credential. See docs/architecture/FIRST_PRODUCTION_KNOWLEDGE_PACK.md.
+      - name: Set up Python for the knowledge-pack gate
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Knowledge-pack governance
+        run: python scripts/inspect_knowledge_packs.py --json
       - id: scope
         name: Detect changed paths
         env:
