@@ -17,11 +17,24 @@ class RequestIdFilter(logging.Filter):
 
 
 class OAuthRedactionFilter(logging.Filter):
-    """Redact OAuth callback/token material at the logging boundary."""
+    """Redact credential material at the logging boundary.
+
+    OAuth callback and token material, plus any URL carrying `user:password@`
+    -- a database URL in a driver's error message is the most likely way a
+    credential reaches a log line without anybody choosing to log one.
+
+    This is defence in depth and nothing more. It does not attempt to scrub
+    natural-language health text, ingredient lists or product names, because a
+    regex that claimed to do that reliably would be a lie and would encourage
+    exactly the logging it is meant to prevent. The real protection is that
+    such values are never passed to a logger in the first place; see
+    ``app.shared.observability.operational_events``.
+    """
 
     _query = re.compile(r"([?&](?:code|state|access_token|refresh_token|client_secret)=)[^&#\s]+", re.I)
     _kv = re.compile(r"((?:[\"']?\b(?:code|state|access_token|refresh_token|client_secret)\b[\"']?)\s*[:=]\s*[\"']?)[^\s,}&\"']+", re.I)
     _header = re.compile(r"((?:authorization\s*[:=]\s*)?Bearer\s+)[A-Za-z0-9._~+/=-]+", re.I)
+    _credentialed_url = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@\S*", re.I)
 
     def filter(self, record: logging.LogRecord) -> bool:
         # Materialize parameterized messages before redacting. This covers
@@ -31,6 +44,7 @@ class OAuthRedactionFilter(logging.Filter):
             message = record.getMessage()
         except Exception:  # noqa: BLE001 — logging must never break a request
             message = str(record.msg)
+        message = self._credentialed_url.sub("[REDACTED]", message)
         message = self._header.sub(r"\1[REDACTED]", message)
         message = self._query.sub(r"\1[REDACTED]", message)
         message = self._kv.sub(r"\1[REDACTED]", message)
@@ -41,12 +55,15 @@ class OAuthRedactionFilter(logging.Filter):
             # filter. Preserve a redacted traceback as text and drop the raw
             # exception tuple before any handler sees it.
             trace = "".join(traceback.format_exception(*record.exc_info))
+            trace = self._credentialed_url.sub("[REDACTED]", trace)
             trace = self._header.sub(r"\1[REDACTED]", self._query.sub(r"\1[REDACTED]", self._kv.sub(r"\1[REDACTED]", trace)))
             record.msg = f"{record.msg}\n{trace}"
             record.exc_info = None
         if record.exc_text:
+            record.exc_text = self._credentialed_url.sub("[REDACTED]", record.exc_text)
             record.exc_text = self._kv.sub(r"\1[REDACTED]", self._query.sub(r"\1[REDACTED]", record.exc_text))
         if record.stack_info:
+            record.stack_info = self._credentialed_url.sub("[REDACTED]", record.stack_info)
             record.stack_info = self._kv.sub(r"\1[REDACTED]", self._query.sub(r"\1[REDACTED]", record.stack_info))
         return True
 

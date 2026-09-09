@@ -68,6 +68,7 @@ from app.domains.product.personal_decision import (
 from app.shared.database.sql import get_session
 from app.shared.errors.codes import ErrorCode
 from app.shared.errors.exceptions import AppError
+from app.shared.observability import operational_events
 from app.shared.security.deps import CurrentAccount, get_current_account
 
 logger = logging.getLogger(__name__)
@@ -441,89 +442,112 @@ async def read_skin_care_for_you(
     flags, which exist for the length of the request and are never stored,
     logged or echoed back.
     """
-    care_capture.require_owned_device(device, account_id=current.account_id)
+    # Endpoint health only: did this request finish, and how long did it
+    # take. Not the safety flags, not the decision, not the verdict, not
+    # the reason, not the citation, not the release, not whether a
+    # hand-over to a clinician was required. Counting hand-overs would
+    # break the same contract as storing them.
+    async with operational_events.observe_for_you():
+        care_capture.require_owned_device(device, account_id=current.account_id)
 
-    pack = await pack_context.current_pack(
-        session, barcode=body.barcode, device_id=device.id,
-    )
-    if not pack.is_proven or pack.scan_event is None:
-        # Not an error: the person simply has not confirmed what they are
-        # holding yet. No release is consulted and no global label is reached
-        # for — an answer about some other packet is not a better answer.
-        return build_for_you_response(
-            barcode=body.barcode, pack=pack, snapshot=None,
-            product_category=None, released=None,
+        pack = await pack_context.current_pack(
+            session, barcode=body.barcode, device_id=device.id,
         )
+        if not pack.is_proven or pack.scan_event is None:
+            # Not an error: the person simply has not confirmed what they are
+            # holding yet. No release is consulted and no global label is reached
+            # for — an answer about some other packet is not a better answer.
+            return build_for_you_response(
+                barcode=body.barcode, pack=pack, snapshot=None,
+                product_category=None, released=None,
+            )
 
-    event = pack.scan_event
-    if event.account_id is None or event.account_id != current.account_id:
-        # Owning the device is not the same as owning the capture on it. A
-        # personalised decision must not consume somebody else's confirmation,
-        # and this route does not repair the attribution either.
-        raise AppError(
-            "This pack was confirmed by a different account.",
-            status_code=403,
-            code=ErrorCode.FORBIDDEN,
-            extra={"reason": "current_pack_not_owned"},
-        )
+        event = pack.scan_event
+        if event.account_id is None or event.account_id != current.account_id:
+            # Owning the device is not the same as owning the capture on it. A
+            # personalised decision must not consume somebody else's confirmation,
+            # and this route does not repair the attribution either.
+            raise AppError(
+                "This pack was confirmed by a different account.",
+                status_code=403,
+                code=ErrorCode.FORBIDDEN,
+                extra={"reason": "current_pack_not_owned"},
+            )
 
-    try:
-        snapshot = await resolve_current_pack_label_snapshot(session, pack=pack)
-    except CurrentPackSnapshotUnresolved:
-        # The server said the pack is proven and then could not produce the
-        # label version behind it. That is a broken invariant, not a customer
-        # state, so it fails closed rather than pretending nothing was
-        # confirmed.
-        logger.exception(
-            "for_you_snapshot_unresolved barcode=%s scan_event=%s", body.barcode, event.id,
-        )
-        raise AppError(
-            "This result is not available right now.",
-            status_code=503,
-            code=ErrorCode.FEATURE_UNAVAILABLE,
-        ) from None
-
-    category = care_capture.personal_applicability_category_from_label(snapshot)
-    if category is None:
-        return build_for_you_response(
-            barcode=body.barcode, pack=pack, snapshot=snapshot,
-            product_category=None, released=None,
-        )
-
-    personal = await interpret_label_snapshot_for_account(
-        session,
-        snapshot,
-        account_id=current.account_id,
-        category=category,
-        safety=personal_lens_safety_input(body.safety),
-    )
-
-    if personal.context_status is PersonalLensStatus.HANDOFF_REQUIRED:
-        # The handoff is answered before any release is read. A corrupt or
-        # missing release must never be able to suppress a hand-over to a
-        # clinician — that is the one answer this product owes unconditionally.
-        released = evaluate_personal_decision_with_release(personal, None)
-    else:
         try:
-            release = await load_active_personal_decision_release(session)
-        except PersonalDecisionReleaseInvariantError:
-            # A corrupt active release is not the same operational state as no
-            # active release, and answering as though it were would show
-            # customers "no reviewed knowledge" while a broken bundle sits
-            # activated. The detail stays in the log; the customer gets none of
-            # the manifest, the hash or the rule identities.
-            logger.exception("for_you_active_release_invalid barcode=%s", body.barcode)
+            snapshot = await resolve_current_pack_label_snapshot(session, pack=pack)
+        except CurrentPackSnapshotUnresolved:
+            # The server said the pack is proven and then could not produce the
+            # label version behind it. That is a broken invariant, not a customer
+            # state, so it fails closed rather than pretending nothing was
+            # confirmed.
+            # A fixed event name and nothing else. Removing the identifiers from
+            # the format string was not enough: `logger.exception` attaches
+            # `exc_info`, and `CurrentPackSnapshotUnresolved` says things like
+            # "label snapshot <uuid> does not match the capture that created
+            # it" -- so the snapshot id reached the log anyway, through the
+            # traceback rather than through the message. The customer already
+            # gets a governed fixed 503 here, so the exception text buys nothing
+            # that the request id does not. The root logger stamps that id on
+            # every line, which is how an operator finds this one.
+            logger.error("for_you_snapshot_unresolved")
             raise AppError(
                 "This result is not available right now.",
                 status_code=503,
                 code=ErrorCode.FEATURE_UNAVAILABLE,
             ) from None
-        released = evaluate_personal_decision_with_release(personal, release)
 
-    return build_for_you_response(
-        barcode=body.barcode,
-        pack=pack,
-        snapshot=snapshot,
-        product_category=category.value,
-        released=released,
-    )
+        category = care_capture.personal_applicability_category_from_label(snapshot)
+        if category is None:
+            return build_for_you_response(
+                barcode=body.barcode, pack=pack, snapshot=snapshot,
+                product_category=None, released=None,
+            )
+
+        personal = await interpret_label_snapshot_for_account(
+            session,
+            snapshot,
+            account_id=current.account_id,
+            category=category,
+            safety=personal_lens_safety_input(body.safety),
+        )
+
+        if personal.context_status is PersonalLensStatus.HANDOFF_REQUIRED:
+            # The handoff is answered before any release is read. A corrupt or
+            # missing release must never be able to suppress a hand-over to a
+            # clinician — that is the one answer this product owes unconditionally.
+            released = evaluate_personal_decision_with_release(personal, None)
+        else:
+            try:
+                release = await load_active_personal_decision_release(session)
+            except PersonalDecisionReleaseInvariantError:
+                # A corrupt active release is not the same operational state as no
+                # active release, and answering as though it were would show
+                # customers "no reviewed knowledge" while a broken bundle sits
+                # activated.
+                #
+                # The customer gets none of the manifest, hash or rule
+                # identities. Neither does the log: this comment used to say
+                # "the detail stays in the log", which stopped being true when
+                # the privacy fix removed it, and a comment that describes
+                # logging the exception is an invitation to put it back.
+                # `PersonalDecisionReleaseInvariantError` carries manifest and
+                # rule detail in its message, which is exactly what must not
+                # reach a log line on a governed 503. Operational correlation
+                # uses the request id instead; exception detail is deliberately
+                # not logged on this path.
+                logger.error("for_you_active_release_invalid")
+                raise AppError(
+                    "This result is not available right now.",
+                    status_code=503,
+                    code=ErrorCode.FEATURE_UNAVAILABLE,
+                ) from None
+            released = evaluate_personal_decision_with_release(personal, release)
+
+        return build_for_you_response(
+            barcode=body.barcode,
+            pack=pack,
+            snapshot=snapshot,
+            product_category=category.value,
+            released=released,
+        )
