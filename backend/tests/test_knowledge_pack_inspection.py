@@ -778,6 +778,192 @@ class TestModuleScopeBinding:
 
 
 # ---------------------------------------------------------------------------
+# Definition time is enclosing scope
+# ---------------------------------------------------------------------------
+class TestEnclosingScopeBinding:
+    """A ``def`` is a statement before it is a scope.
+
+    Its body belongs to a new scope; its decorators, defaults and annotations
+    do not — they are evaluated where the ``def`` sits, when it executes. Same
+    for a lambda's defaults and a class's bases. A walrus in any of them binds
+    a module name, and a collector that stopped at the ``def`` keyword would
+    never see it. These are the cases a hand-picked list of "expression-shaped
+    children" misses, which is why the walker is generic and prunes only at
+    real scope boundaries.
+    """
+
+    @pytest.mark.parametrize(
+        ("label", "source"),
+        [
+            (
+                "function default",
+                "def helper(\n"
+                '    value=(PACK_ID := "for_you.skin_care.default_escape.v1")\n'
+                "):\n"
+                "    pass\n",
+            ),
+            (
+                "keyword-only default",
+                'def helper(*, value=(PACK_ID := "for_you.skin_care.kwonly.v1")):\n'
+                "    pass\n",
+            ),
+            (
+                "async function default",
+                'async def helper(value=(PACK_ID := "for_you.skin_care.async.v1")):\n'
+                "    pass\n",
+            ),
+            (
+                "function decorator",
+                "decorator = None\n@((PACK_ID := decorator))\ndef helper():\n    pass\n",
+            ),
+            ("argument annotation", "def helper(value: (PACK_ID := str)):\n    pass\n"),
+            ("return annotation", "def helper() -> (PACK_ID := str):\n    pass\n"),
+            ("class base", "class Helper((PACK_ID := object)):\n    pass\n"),
+            (
+                "class decorator",
+                "decorator = None\n@((PACK_ID := decorator))\nclass Helper:\n    pass\n",
+            ),
+            ("class keyword", "class Helper(metaclass=(PACK_ID := type)):\n    pass\n"),
+            (
+                "lambda default",
+                'helper = lambda value=(PACK_ID := "for_you.skin_care.lambda.v1"): value\n',
+            ),
+            (
+                "keyword argument wrapper",
+                "def some_call(**kw):\n"
+                "    return kw\n"
+                "\n"
+                "\n"
+                'some_call(value=(PACK_ID := "for_you.skin_care.keyword.v1"))\n',
+            ),
+            (
+                "match guard",
+                "value = 1\n"
+                "match value:\n"
+                '    case _ if (PACK_ID := "for_you.skin_care.match.v1"):\n'
+                "        pass\n",
+            ),
+            (
+                "comprehension filter",
+                "values = [1]\n"
+                "[\n"
+                "    item\n"
+                "    for item in values\n"
+                '    if (PACK_ID := "for_you.skin_care.comprehension.v1")\n'
+                "]\n",
+            ),
+            (
+                "with-item expression",
+                "import contextlib\n"
+                'with contextlib.nullcontext((PACK_ID := "for_you.skin_care.with.v1")):\n'
+                "    pass\n",
+            ),
+            (
+                "except-handler type",
+                "try:\n    pass\nexcept (PACK_ID := ValueError):\n    pass\n",
+            ),
+            (
+                "buried inside a default",
+                "def helper(value=[{'k': (PACK_ID := 'for_you.skin_care.deep.v1')}]):\n"
+                "    pass\n",
+            ),
+        ],
+    )
+    def test_a_walrus_evaluated_in_module_scope_is_seen(
+        self, pack_dir, label: str, source: str
+    ) -> None:
+        directory, write = pack_dir
+        module = write("enclosing", source)
+        result = _inspect(directory)
+        assert result.packs == (), label
+        assert (module, "PACK_ID", "NON_STATIC_METADATA") in _codes(result), label
+
+    @pytest.mark.parametrize(
+        ("label", "rebinding"),
+        [
+            (
+                "function default",
+                f"def helper(value=({COMPILER_ATTRIBUTE} := None)):\n    pass",
+            ),
+            (
+                "function decorator",
+                f"@(({COMPILER_ATTRIBUTE} := None))\ndef helper():\n    pass",
+            ),
+            ("class base", f"class Helper(({COMPILER_ATTRIBUTE} := object)):\n    pass"),
+            (
+                "lambda default",
+                f"maker = lambda value=({COMPILER_ATTRIBUTE} := None): value",
+            ),
+            (
+                "keyword wrapper",
+                "def some_call(**kw):\n"
+                "    return kw\n"
+                "\n"
+                "\n"
+                f"some_call(value=({COMPILER_ATTRIBUTE} := None))",
+            ),
+        ],
+    )
+    def test_a_definition_time_walrus_invalidates_the_compiler(
+        self, pack_dir, label: str, rebinding: str
+    ) -> None:
+        # The stale earlier ``def`` must not survive a rebinding hidden in
+        # something that executes at definition time.
+        directory, write = pack_dir
+        module = write("enclosing_compiler", VALID_SOURCE + "\n" + rebinding + "\n")
+        result = _inspect(directory)
+        assert result.packs == (), label
+        assert _codes(result) == sorted(
+            [
+                (module, COMPILER_ATTRIBUTE, "DUPLICATE_DECLARATION"),
+                (module, COMPILER_ATTRIBUTE, "COMPILER_NOT_A_FUNCTION"),
+            ]
+        ), label
+
+    def test_the_semantic_wrappers_are_traversed_not_dead_ends(self) -> None:
+        # A regression guard on the shape of the walker rather than on one
+        # syntax. If it ever goes back to following only ast.expr children,
+        # every wrapper below becomes a hiding place at once.
+        source = (
+            "def some_call(**kw):\n"
+            "    return kw\n"
+            "\n"
+            "\n"
+            "values = [1]\n"
+            "some_call(a=[item for item in values if (FOUND_ONE := item)])\n"
+        )
+        statement = ast.parse(source).body[-1]
+        reached = {
+            type(node).__name__ for node in inspection._enclosing_scope_nodes(statement)
+        }
+        assert {"keyword", "comprehension", "NamedExpr"} <= reached
+
+    def test_a_definition_time_walrus_does_not_disturb_a_valid_pack(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "valid_with_definition_time_helpers",
+            VALID_SOURCE
+            + "\n"
+            "def helper(value=1, *, other=2):\n"
+            '    PACK_ID = "local"\n'
+            "    return PACK_ID, value, other\n"
+            "\n"
+            "\n"
+            "class Holder(object):\n"
+            '    DOMAIN = "class-local"\n'
+            "\n"
+            "\n"
+            'maker = lambda: (CATEGORY := "lambda-local")\n',
+        )
+        result = _inspect(directory)
+        assert result.ok is True
+        (descriptor,) = result.packs
+        assert descriptor.module == module
+        assert descriptor.domain == "skin_care"
+        assert descriptor.category == "skin_care"
+
+
+# ---------------------------------------------------------------------------
 # Nested scopes are not the module
 # ---------------------------------------------------------------------------
 class TestNestedScopesAreNotModuleScope:
@@ -802,6 +988,9 @@ class TestNestedScopesAreNotModuleScope:
             'def helper():\n    for PACK_ID in []:\n        pass\n',
             'def helper():\n    del PACK_ID\n',
             'def helper():\n    from somewhere import PACK_ID\n',
+            'def outer():\n    @((PACK_ID := None))\n    def inner():\n        pass\n',
+            'def outer():\n    def inner(value=(PACK_ID := 1)):\n        pass\n',
+            'class Holder:\n    maker = lambda: (PACK_ID := "class-lambda-local")\n',
         ],
     )
     def test_no_nested_scope_binding_claims_pack_status(self, pack_dir, source: str) -> None:

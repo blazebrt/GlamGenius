@@ -33,9 +33,24 @@ Layer two then accepts only two forms: ``NAME = "literal"`` (or its annotated
 equivalent) for a descriptor field, and a single plain top-level ``def`` for
 the compiler. Everything else is reported and the pack fails closed.
 
-Be precise about what this buys. The guarantee is that *this tool does not
-execute candidate source* — not that any pack has been proven side-effect-free.
-Nothing here analyses what a pack would do if something else ran it.
+Layer one also covers *definition time*, which is easy to forget: a ``def`` is
+a statement before it is a scope, and its decorators, defaults and annotations
+are evaluated in the enclosing scope when the statement runs. So are a
+lambda's defaults and a class's bases. The walk that finds these follows every
+AST child rather than only expression-shaped ones, because Python hangs
+expressions off semantic wrappers that a type-filtered walk treats as dead
+ends, and prunes only at genuine scope boundaries.
+
+Be precise about what this buys — three claims, and no more:
+
+* this tool does not execute candidate source;
+* every statically represented binding attempt occurring in the module's own
+  execution scope is observed, for the five governed names;
+* nested lexical and class-body locals are not treated as module declarations.
+
+It is not a claim that any pack has been proven side-effect-free, and no
+attempt is made to see through ``exec`` or ``globals()`` assignment. This is
+not a sandbox.
 
 **What it is not.** Not a registry, not a loader, not a release operator. It
 does not prepare, verify, publish, compile, approve, activate, deactivate or
@@ -282,10 +297,11 @@ class _Binding:
     value: str | None = None
 
 
-#: Statements that open a new scope. Names bound inside them belong to that
-#: scope, not to the module, so the collector records the *name being defined*
-#: and then stops: a ``PACK_ID`` local to a helper function is not a pack
-#: marker.
+#: Statements that open a new scope. Their *bodies* belong to that scope, not
+#: to the module — a ``PACK_ID`` local to a helper function is not a pack
+#: marker — but their decorators, defaults, annotations, bases and keywords
+#: are evaluated where the statement sits, at the moment it executes, and so
+#: are part of the enclosing scope.
 _SCOPE_STATEMENTS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
@@ -318,22 +334,92 @@ def _literal_string(value: ast.expr | None) -> str | None:
     return None
 
 
-def _own_expressions(node: ast.stmt) -> Iterator[ast.expr]:
-    """Expressions belonging to this statement, not to statements nested in it.
+def _definition_time_expressions(node: ast.AST) -> Iterator[ast.expr]:
+    """The parts of a ``def``, ``lambda`` or ``class`` that run *outside* it.
 
-    Used to find walrus bindings. Pruned at ``lambda``, whose walrus binds in
-    the lambda's own scope; *not* pruned at comprehensions, because a walrus
-    inside one binds in the enclosing scope. A comprehension's own iteration
-    variable is never reached, since it is not an assignment target of any
-    statement.
+    A function's body is a new scope. Its decorators, default values,
+    annotations and return annotation are not: they are evaluated where the
+    statement sits, in the enclosing scope, at the moment the ``def``
+    executes. The same holds for a lambda's defaults and for a class's
+    decorators, bases and keywords. Miss these and a walrus tucked into a
+    default binds a governed name at module scope, invisibly.
+
+    Annotations are included. Under ``from __future__ import annotations``
+    they are never evaluated, so reading them can over-report — which is the
+    direction to be wrong in, since the alternative is a governed pack
+    quietly leaving the inventory.
     """
-    stack = [child for child in ast.iter_child_nodes(node) if isinstance(child, ast.expr)]
+    yield from getattr(node, "decorator_list", None) or ()
+
+    arguments = getattr(node, "args", None)
+    if isinstance(arguments, ast.arguments):
+        yield from arguments.defaults
+        yield from (default for default in arguments.kw_defaults if default is not None)
+        for argument in (
+            *arguments.posonlyargs,
+            *arguments.args,
+            *arguments.kwonlyargs,
+            arguments.vararg,
+            arguments.kwarg,
+        ):
+            if argument is not None and argument.annotation is not None:
+                yield argument.annotation
+
+    returns = getattr(node, "returns", None)
+    if returns is not None:
+        yield returns
+
+    yield from getattr(node, "bases", None) or ()
+    for keyword in getattr(node, "keywords", None) or ():
+        yield keyword.value
+
+
+def _enclosing_scope_nodes(statement: ast.stmt) -> Iterator[ast.AST]:
+    """Every AST node this statement evaluates in its own (module) scope.
+
+    Deliberately generic. An earlier version followed only children that were
+    themselves :class:`ast.expr`, which meant the semantic wrappers Python's
+    grammar uses — :class:`ast.keyword`, :class:`ast.comprehension`,
+    :class:`ast.arguments`, :class:`ast.arg`, :class:`ast.match_case`,
+    :class:`ast.withitem`, :class:`ast.ExceptHandler` — were dead ends, and a
+    walrus behind any of them was invisible. Following every child and pruning
+    explicitly at scope boundaries is the version that cannot quietly grow a
+    new hole when the grammar does.
+
+    Three prunes, each for a reason:
+
+    * **Nested statements.** Owned by the statement walker, which visits them
+      with the right ``nested`` flag; walking them here would double-count.
+    * **A ``def``/``class``'s body.** A new scope. Only its definition-time
+      expressions are followed, via :func:`_definition_time_expressions`.
+    * **A lambda's body.** A new scope too — but its defaults are not, so
+      those are followed and the body is not.
+
+    Comprehensions are *not* pruned: a walrus inside one binds in the
+    enclosing scope. The comprehension's own iteration target is reached but
+    never treated as a binding, because only :class:`ast.NamedExpr` nodes are
+    acted on.
+    """
+    stack: list[ast.AST] = []
+
+    def follow(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.stmt):
+                continue
+            stack.append(child)
+
+    if isinstance(statement, _SCOPE_STATEMENTS):
+        stack.extend(_definition_time_expressions(statement))
+    else:
+        follow(statement)
+
     while stack:
         current = stack.pop()
         yield current
         if isinstance(current, ast.Lambda):
+            stack.extend(_definition_time_expressions(current))
             continue
-        stack.extend(child for child in ast.iter_child_nodes(current) if isinstance(child, ast.expr))
+        follow(current)
 
 
 def _statement_bindings(node: ast.stmt, *, nested: bool) -> Iterator[tuple[str, _Binding]]:
@@ -345,6 +431,15 @@ def _statement_bindings(node: ast.stmt, *, nested: bool) -> Iterator[tuple[str, 
     declaration.
     """
     other = _Binding(_BindingForm.OTHER)
+
+    # Sub-expressions run before the statement binds its own targets — a
+    # function's defaults before its name, an assignment's value before its
+    # target — so walrus bindings are reported first. That order is what makes
+    # "whatever binds last wins" mean the right thing for the compiler.
+    for candidate in _enclosing_scope_nodes(node):
+        if isinstance(candidate, ast.NamedExpr):
+            for name in _target_names(candidate.target):
+                yield name, other
 
     if isinstance(node, ast.FunctionDef):
         yield node.name, (other if nested else _Binding(_BindingForm.FUNCTION))
@@ -394,11 +489,6 @@ def _statement_bindings(node: ast.stmt, *, nested: bool) -> Iterator[tuple[str, 
                     yield pattern.name, other
                 elif isinstance(pattern, ast.MatchMapping) and pattern.rest:
                     yield pattern.rest, other
-
-    for expression in _own_expressions(node):
-        if isinstance(expression, ast.NamedExpr):
-            for name in _target_names(expression.target):
-                yield name, other
 
 
 def _nested_bodies(node: ast.stmt) -> Iterator[list[ast.stmt]]:

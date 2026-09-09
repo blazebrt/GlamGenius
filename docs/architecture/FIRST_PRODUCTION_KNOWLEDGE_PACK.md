@@ -145,9 +145,16 @@ repository at once, on an operator's laptop, in the course of asking a question.
 Tests hold the property directly: a synthetic pack that writes a sentinel file at
 module level is inspected, and the sentinel does not appear.
 
-Be precise about what that buys. The guarantee is **the inspector does not execute
-candidate source** — not that any pack has been proven side-effect-free. Nothing
-here analyses what a pack would do if something else ran it.
+Be precise about what that buys. Three sentences, and no more than three:
+
+- The inspector does not execute candidate source.
+- Every statically represented binding attempt that occurs in the module's own
+  execution scope is observed, for the five governed names.
+- Nested lexical and class-body locals are not treated as module declarations.
+
+It is **not** a claim that any pack has been proven side-effect-free, and no
+attempt is made to see through dynamic tricks such as `exec(...)` or
+`globals()["PACK_ID"] = …`. Step 14A does not sandbox Python.
 
 The consequence is that identity must be **statically legible**, and the check
 for that runs in two layers.
@@ -162,14 +169,34 @@ capture patterns, and function and class definitions all count, including inside
 module-scope control flow (`if`, `for`, `while`, `try`, `with`, `match`), because
 those bodies really do bind module names when they run.
 
+It also counts **definition time**, which is easy to forget. A `def` is a
+statement before it is a scope: its decorators, default values, annotations and
+return annotation are evaluated *where the `def` sits*, in the enclosing scope, at
+the moment the statement executes. So are a lambda's defaults, and a class's
+decorators, bases and keywords. A walrus in any of them binds a module name:
+
+```python
+def helper(value=(PACK_ID := "for_you.skin_care.escape.v1")):
+    pass
+```
+
+The walk that finds these is deliberately generic — it follows every AST child,
+not only the ones that are themselves expressions, because Python's grammar hangs
+expressions off semantic wrappers (`ast.keyword`, `ast.comprehension`,
+`ast.arguments`, `ast.arg`, `ast.match_case`, `ast.withitem`,
+`ast.ExceptHandler`) that a type-filtered walk treats as dead ends. It prunes at
+three places and only three: nested statements (the statement walker owns those),
+a function's or class's body, and a lambda's body. A comprehension is not pruned,
+because a walrus inside one binds in the enclosing scope.
+
 This layer has to be complete rather than convenient. The failure it prevents is
 not a wrong answer but *no* answer: `PACK_ID, other = ("…", 1)` genuinely binds
 `PACK_ID`, and a collector that only recognised `NAME = …` would classify the file
 as infrastructure and drop a governed pack out of the inventory in silence.
 
-Bindings inside a nested scope — a function, an async function, a class, a lambda —
-are not module bindings, and are not counted. A `PACK_ID` local to a helper does
-not make the file a pack.
+Bindings inside a nested *body* — a function, an async function, a class body, a
+lambda body — are not module bindings and are not counted. A `PACK_ID` local to a
+helper, or assigned in a class body, does not make the file a pack.
 
 **Layer two accepts two forms.** For a descriptor field, exactly one module-scope
 binding, written as `NAME = "literal"` or `NAME: str = "literal"`. For the
