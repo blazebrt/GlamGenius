@@ -38,7 +38,7 @@ imported merely to find out what a pack is called.
 skin, evidence strength, sources, signals or actions. Deciding whether a
 published entry is the exact reviewed evidence is the pack compiler's job, and
 validating the result is the Step 8H manifest authority's. This file only
-orchestrates: select, invoke, validate, serialise, hash.
+orchestrates: select, invoke, validate, canonicalise, serialise, hash.
 
 **It is not activation.** No database, no provider, no network, no credential,
 no release row, no Phase B operation. Compiling a manifest offline and putting
@@ -49,6 +49,7 @@ and this is the first one.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import json
 import os
@@ -61,6 +62,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.domains.personal_decision_release.manifest import (  # noqa: E402
+    canonical_manifest,
     manifest_content_hash,
     parse_release_manifest,
 )
@@ -175,29 +177,47 @@ def _compiler(descriptor):
     return compiler
 
 
-def _compile(compiler, entry: Mapping[str, object], descriptor) -> dict[str, object]:
+def _compile(
+    compiler, entry: Mapping[str, object], descriptor
+) -> tuple[dict[str, object], str]:
     """Run the pack's compiler, then hold its output to the Step 8H contract.
 
     A pack returning a dictionary is not the same as a pack returning a valid
     manifest, so the result is parsed by the existing release authority rather
     than trusted. There is no second validator here and there must not be:
     two definitions of a valid manifest is one too many.
+
+    What comes back is the *canonical* manifest, not the compiler's raw
+    dictionary, and the hash is taken from the same parsed object. Emitting
+    the raw dictionary would be a quiet scalability bug: Step 8H sorts
+    semantic rules, policy rules, explanation rules and the identity set
+    inside each policy, so two runs of a future multi-rule compiler that
+    happened to build its lists in different orders are the same manifest and
+    hash the same — but would have written different bytes to disk. "Same
+    hash, different file" is not a state this tool may produce.
+
+    The reviewed petrolatum pack has one rule of each kind and already emits
+    canonical order, which is exactly why this could not be noticed there.
+
+    Parsing happens once. ``main`` receives the canonical document and the
+    hash together so the bytes written and the hash reported can only ever
+    describe the same manifest.
     """
     try:
-        manifest = compiler(entry)
+        raw = compiler(entry)
     except Exception as error:
         raise Refusal(
             RefusalCode.COMPILER_REJECTED_INPUT,
             f"{descriptor.pack_id} raised {type(error).__name__}",
         ) from None
     try:
-        parse_release_manifest(manifest)
+        parsed = parse_release_manifest(raw)
     except Exception as error:
         raise Refusal(
             RefusalCode.INVALID_COMPILED_MANIFEST,
             f"{descriptor.pack_id} produced {type(error).__name__}",
         ) from None
-    return manifest
+    return canonical_manifest(parsed), manifest_content_hash(parsed)
 
 
 def _write(path: Path, encoded: str) -> None:
@@ -208,6 +228,7 @@ def _write(path: Path, encoded: str) -> None:
     renaming means a full disk cannot leave half a manifest on disk looking
     like a compiled release.
     """
+    temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
             "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
@@ -215,8 +236,18 @@ def _write(path: Path, encoded: str) -> None:
             handle.write(encoded)
             temporary = Path(handle.name)
         os.replace(temporary, path)
+        temporary = None
     except OSError:
         raise Refusal(RefusalCode.OUTPUT_WRITE_FAILED, str(path)) from None
+    finally:
+        # A failure between creating the temporary sibling and renaming it
+        # would otherwise leave a stray dotfile next to the real output. The
+        # cleanup is suppressed rather than reported: the write failure is
+        # what the operator needs to know, and a second exception raised
+        # while tidying up would replace that refusal with a traceback.
+        if temporary is not None:
+            with contextlib.suppress(OSError):
+                temporary.unlink()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -240,8 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         inventory = _valid_inventory()
         descriptor = _select(inventory, args.pack_id)
         entry = _published_entry(args.input)
-        manifest = _compile(_compiler(descriptor), entry, descriptor)
-        content_hash = manifest_content_hash(parse_release_manifest(manifest))
+        manifest, content_hash = _compile(_compiler(descriptor), entry, descriptor)
         encoded = json.dumps(manifest, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
         if args.output is not None:
             _write(args.output, encoded)

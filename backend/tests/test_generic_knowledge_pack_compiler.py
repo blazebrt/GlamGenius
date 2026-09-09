@@ -34,6 +34,7 @@ from types import ModuleType
 
 import pytest
 from app.domains.personal_decision_release.manifest import (
+    canonical_manifest,
     manifest_content_hash,
     parse_release_manifest,
 )
@@ -639,6 +640,196 @@ class TestCompilerBoundary:
 
 
 # ---------------------------------------------------------------------------
+# Canonicalisation: the bytes written and the hash reported are the same thing
+# ---------------------------------------------------------------------------
+def _semantic_rule(rule_id: str) -> dict[str, object]:
+    return {
+        "rule_id": rule_id,
+        "rule_version": "1",
+        "category": "skin_care",
+        "substance_key": f"substance_{rule_id}",
+        "claim_key": f"claim:{rule_id}",
+        "claim_version": 1,
+        "signal": "supporting",
+    }
+
+
+def _policy_rule(policy_id: str, rule_ids: list[str]) -> dict[str, object]:
+    return {
+        "policy_id": policy_id,
+        "policy_version": "1",
+        "category": "skin_care",
+        "semantic_rule_identities": [
+            {"rule_id": rule_id, "rule_version": "1"} for rule_id in rule_ids
+        ],
+        "signal_set": "supporting_only",
+        "has_identity_unresolved": False,
+        "has_identity_ambiguous": False,
+        "has_personal_evidence_gap": False,
+        "action": "buy",
+    }
+
+
+def _explanation_rule(explanation_id: str, policy_id: str, rule_id: str) -> dict[str, object]:
+    return {
+        "explanation_id": explanation_id,
+        "explanation_version": "1",
+        "policy_id": policy_id,
+        "policy_version": "1",
+        "action": "buy",
+        "semantic_rule_id": rule_id,
+        "semantic_rule_version": "1",
+        "substance_key": f"substance_{rule_id}",
+        "claim_key": f"claim:{rule_id}",
+        "claim_version": 1,
+        "source_key": f"source.{rule_id}",
+        "source_locator": "Section 1",
+        "reason_key": f"for_you.skin_care.{rule_id}.reason",
+    }
+
+
+def _two_rule_manifest(order: tuple[str, str]) -> dict[str, object]:
+    """A valid two-rule manifest whose list order is whatever you ask for.
+
+    The reviewed petrolatum pack has exactly one rule of each kind, so its
+    output is canonical by accident — which is precisely why emitting raw
+    compiler output could look correct there and be wrong everywhere else.
+    A second rule is the smallest fixture that can tell the difference.
+
+    Deliberately synthetic and deliberately not scientific: no real substance,
+    no real source, no real reason. It exists to exercise ordering, and adding
+    a second scientific authority to this repository to test a sort would be a
+    bad trade.
+    """
+    first, second = order
+    return {
+        "schema_version": 1,
+        "semantic_rules": [_semantic_rule(first), _semantic_rule(second)],
+        "policy_rules": [
+            _policy_rule(f"p_{first}", [first]),
+            _policy_rule(f"p_{second}", [second]),
+        ],
+        "explanation_rules": [
+            _explanation_rule(f"e_{first}", f"p_{first}", first),
+            _explanation_rule(f"e_{second}", f"p_{second}", second),
+        ],
+    }
+
+
+CANONICAL_ORDER = ("alpha", "beta")
+REVERSED_ORDER = ("beta", "alpha")
+
+
+class TestTheEmittedManifestIsCanonical:
+    """`parse_release_manifest` sorts; the emitted bytes have to reflect that.
+
+    Step 8H sorts semantic rules, policy rules, explanation rules and the
+    identity set inside each policy. A compiler is under no obligation to
+    build its lists in that order, and two runs that differ only in list order
+    are the same manifest and hash identically. Serialising the compiler's raw
+    dictionary would therefore have produced *the same hash next to different
+    bytes* — a state this tool must never reach, and one the single-rule
+    petrolatum pack could never have exposed.
+    """
+
+    def test_the_fixture_really_is_non_canonical(self) -> None:
+        # If this ever stops holding, the two tests below are vacuous.
+        raw = _two_rule_manifest(REVERSED_ORDER)
+        assert raw != canonical_manifest(parse_release_manifest(raw))
+        assert [rule["rule_id"] for rule in raw["semantic_rules"]] == ["beta", "alpha"]
+
+    def test_the_fixture_is_a_valid_manifest(self) -> None:
+        for order in (CANONICAL_ORDER, REVERSED_ORDER):
+            assert parse_release_manifest(_two_rule_manifest(order)) is not None
+
+    def test_a_non_canonical_compiler_result_is_emitted_canonically(self) -> None:
+        builder = _load_builder()
+        descriptor = next(
+            d for d in builder.inspect_packs().packs if d.pack_id == REVIEWED_PACK_ID
+        )
+        raw = _two_rule_manifest(REVERSED_ORDER)
+        emitted, content_hash = builder._compile(lambda entry: raw, {}, descriptor)
+
+        expected_parsed = parse_release_manifest(raw)
+        assert emitted == canonical_manifest(expected_parsed)
+        assert content_hash == manifest_content_hash(expected_parsed)
+        assert parse_release_manifest(emitted) is not None
+        assert [rule["rule_id"] for rule in emitted["semantic_rules"]] == ["alpha", "beta"]
+
+    def test_the_raw_compiler_dictionary_is_never_what_gets_emitted(self) -> None:
+        builder = _load_builder()
+        descriptor = next(
+            d for d in builder.inspect_packs().packs if d.pack_id == REVIEWED_PACK_ID
+        )
+        raw = _two_rule_manifest(REVERSED_ORDER)
+        emitted, _ = builder._compile(lambda entry: raw, {}, descriptor)
+        assert emitted != raw
+
+    def test_the_compiler_boundary_returns_the_hash_with_the_document(self) -> None:
+        # One parse, one source of truth. If `main` re-derived the hash from
+        # the raw dictionary, the bytes and the hash could describe different
+        # manifests without anything failing.
+        builder = _load_builder()
+        descriptor = next(
+            d for d in builder.inspect_packs().packs if d.pack_id == REVIEWED_PACK_ID
+        )
+        result = builder._compile(lambda entry: _two_rule_manifest(CANONICAL_ORDER), {}, descriptor)
+        assert isinstance(result, tuple) and len(result) == 2
+        emitted, content_hash = result
+        assert manifest_content_hash(parse_release_manifest(emitted)) == content_hash
+
+    def test_the_builder_parses_the_compiler_result_exactly_once(self) -> None:
+        source = _executable_source(GENERIC_BUILDER)
+        assert source.count("parse_release_manifest(") == 1
+        assert source.count("canonical_manifest(") == 1
+        assert source.count("manifest_content_hash(") == 1
+
+
+class TestOutputIsOrderIndependent:
+    """The scalability proof: same knowledge in, same bytes out.
+
+    Two compiler results that differ only in the order they happened to build
+    their lists are the same manifest. They must produce identical canonical
+    documents, identical serialised bytes and identical hashes — not merely
+    identical hashes.
+    """
+
+    def _compiled(self, order: tuple[str, str]) -> tuple[dict[str, object], str, str]:
+        builder = _load_builder()
+        descriptor = next(
+            d for d in builder.inspect_packs().packs if d.pack_id == REVIEWED_PACK_ID
+        )
+        manifest, content_hash = builder._compile(
+            lambda entry: _two_rule_manifest(order), {}, descriptor
+        )
+        encoded = json.dumps(manifest, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+        return manifest, encoded, content_hash
+
+    def test_reversed_input_order_produces_the_same_canonical_manifest(self) -> None:
+        first, _, _ = self._compiled(CANONICAL_ORDER)
+        second, _, _ = self._compiled(REVERSED_ORDER)
+        assert first == second
+
+    def test_reversed_input_order_produces_the_same_bytes(self) -> None:
+        _, first, _ = self._compiled(CANONICAL_ORDER)
+        _, second, _ = self._compiled(REVERSED_ORDER)
+        assert first.encode("utf-8") == second.encode("utf-8")
+
+    def test_reversed_input_order_produces_the_same_hash(self) -> None:
+        _, _, first = self._compiled(CANONICAL_ORDER)
+        _, _, second = self._compiled(REVERSED_ORDER)
+        assert first == second
+
+    def test_the_same_hash_never_accompanies_different_bytes(self) -> None:
+        # Stated as one assertion because it is the property the other three
+        # add up to, and the one that would be lost by editing any of them.
+        _, first_bytes, first_hash = self._compiled(CANONICAL_ORDER)
+        _, second_bytes, second_hash = self._compiled(REVERSED_ORDER)
+        assert (first_hash == second_hash) == (first_bytes == second_bytes)
+        assert first_hash == second_hash
+
+
+# ---------------------------------------------------------------------------
 # Output file safety
 # ---------------------------------------------------------------------------
 class TestOutputFileSafety:
@@ -669,6 +860,62 @@ class TestOutputFileSafety:
         completed = _run("--pack-id", REVIEWED_PACK_ID, str(entry_file), "--output", str(output))
         assert completed.returncode == 0, completed.stderr
         assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == 1
+
+    def test_a_replace_failure_cleans_up_its_temporary_sibling(
+        self, entry_file: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        # Everything succeeded up to the rename, so the temporary file exists.
+        # A failure there must not leave a stray dotfile beside the real
+        # output for someone to find later and wonder about.
+        builder = _load_builder()
+        output = tmp_path / "manifest.json"
+
+        def failing_replace(source: object, destination: object) -> None:
+            raise OSError("no space left on device")
+
+        monkeypatch.setattr(builder.os, "replace", failing_replace)
+        with pytest.raises(builder.Refusal) as raised:
+            builder._write(output, "{}\n")
+        assert raised.value.code == builder.RefusalCode.OUTPUT_WRITE_FAILED
+        assert not output.exists()
+        assert list(tmp_path.iterdir()) == []
+
+    def test_a_replace_failure_leaves_an_existing_output_byte_intact(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        builder = _load_builder()
+        output = tmp_path / "manifest.json"
+        output.write_bytes(b"PREVIOUS CONTENT\n")
+
+        def failing_replace(source: object, destination: object) -> None:
+            raise OSError("no space left on device")
+
+        monkeypatch.setattr(builder.os, "replace", failing_replace)
+        with pytest.raises(builder.Refusal):
+            builder._write(output, "{}\n")
+        assert output.read_bytes() == b"PREVIOUS CONTENT\n"
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["manifest.json"]
+
+    def test_a_cleanup_failure_does_not_replace_the_write_refusal(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # The operator needs to know the write failed. A second exception
+        # raised while tidying up would bury that under a traceback, so the
+        # unlink is suppressed and OUTPUT_WRITE_FAILED stays authoritative.
+        builder = _load_builder()
+        output = tmp_path / "manifest.json"
+
+        def failing_replace(source: object, destination: object) -> None:
+            raise OSError("no space left on device")
+
+        def failing_unlink(self: Path, *args: object, **kwargs: object) -> None:
+            raise OSError("cannot unlink either")
+
+        monkeypatch.setattr(builder.os, "replace", failing_replace)
+        monkeypatch.setattr(Path, "unlink", failing_unlink)
+        with pytest.raises(builder.Refusal) as raised:
+            builder._write(output, "{}\n")
+        assert raised.value.code == builder.RefusalCode.OUTPUT_WRITE_FAILED
 
     def test_no_temporary_file_is_left_behind(self, entry_file: Path, tmp_path: Path) -> None:
         output = tmp_path / "manifest.json"
@@ -738,8 +985,8 @@ class TestItTouchesNothing:
 
     def test_it_reaches_for_no_database_or_provider(self) -> None:
         assert _top_level_imports(GENERIC_BUILDER) == {
-            "__future__", "argparse", "importlib", "json", "os", "sys",
-            "tempfile", "collections", "enum", "pathlib", "app",
+            "__future__", "argparse", "contextlib", "importlib", "json", "os",
+            "sys", "tempfile", "collections", "enum", "pathlib", "app",
         }
         called = _called_names(GENERIC_BUILDER)
         for forbidden in ("getenv", "environ", "connect", "create_engine", "urlopen", "request"):

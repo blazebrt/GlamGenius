@@ -383,8 +383,27 @@ The tool has no opinion about petrolatum, dry skin, evidence strength or
 actions. Deciding whether a published entry is the exact reviewed evidence
 belongs to the pack compiler; validating the result belongs to the existing
 Step 8H manifest authority. This is orchestration: select, invoke, validate,
-serialise, hash. Exit `0` means a manifest was produced; any non-zero exit
-means it refused and wrote nothing, including no partial output file.
+canonicalise, serialise, hash. Exit `0` means a manifest was produced; any
+non-zero exit means it refused and wrote nothing, including no partial output
+file.
+
+**What gets written is the canonical manifest, not the compiler's raw
+dictionary.** Step 8H sorts semantic rules, policy rules, explanation rules and
+the identity set inside each policy, so:
+
+```
+raw compiler output → parse_release_manifest → canonical_manifest → the file
+                                             → manifest_content_hash → the hash
+```
+
+One parse, and the bytes and the hash come from the same parsed object. This
+matters the moment a pack has more than one rule: a compiler is under no
+obligation to build its lists in canonical order, and two runs that differ only
+in that order are the same manifest and hash identically. Emitting the raw
+dictionary would have produced *the same hash next to different bytes*. The
+reviewed petrolatum pack has one rule of each kind and is canonical by
+accident, which is exactly why this could not be noticed there; a synthetic
+two-rule fixture is what tests it.
 
 `scripts/build_step8i_petrolatum_release.py` is deliberately left in place and
 unchanged. It is the independent oracle the compatibility proof compares
