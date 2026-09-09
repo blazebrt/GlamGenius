@@ -116,3 +116,49 @@ null is a statement that the source is silent, not an oversight:
 The compiler rejects each of these fields being filled with an inferred value —
 including `2026-01-02` as a publication date, `global`/`US`/`international` as a
 jurisdiction, and `PubMed` as the article publisher.
+
+## Knowing what packs exist, once there is more than one
+
+One pack fits in a person's head. A dozen will not, and by then the questions
+that matter are boring and structural rather than scientific: which packs exist,
+does each still own a unique `PACK_ID`, does each own a distinct `REASON_KEY`,
+does each still expose the compiler the Step 8H release workflow calls by name.
+
+`backend/app/knowledge_packs/inspection.py` answers exactly those questions, and
+an offline command reports them:
+
+```bash
+python scripts/inspect_knowledge_packs.py
+python scripts/inspect_knowledge_packs.py --json
+```
+
+Exit `0` means every committed pack satisfies the structural contract; a non-zero
+exit names the file, the field and the finding.
+
+**It reads source and nothing else.** No database connection, no network call, no
+credential, no environment variable — running it with the production configuration
+absent, empty or deliberately wrong produces byte-identical output, and a test holds
+that. It never compiles a manifest, never prepares, publishes, activates,
+deactivates or rolls back a release, and never evaluates a customer decision.
+Inventory is not activation, and the boundary described above is unchanged by it.
+
+**A pack stays inert.** Discovery lives in `inspection.py`, not in the package's
+`__init__.py`, which remains a docstring and imports nothing. Importing
+`app.knowledge_packs` still loads no pack; importing the inspector still loads no
+pack; importing the application still loads neither. The inspector resolves its own
+package through `__package__` rather than spelling the dotted path, so the standing
+rule that no module under `app/` may name `app.knowledge_packs` — the rule that stops
+an accidental runtime import — needs no exception for it.
+
+**What a descriptor holds.** Module, `PACK_ID`, `DOMAIN`, `CATEGORY`, `REASON_KEY`
+and the compiler's name. Deliberately no evidence summary, source locator, fact
+condition or strength: those belong to the reviewed evidence record, and a
+cross-pack listing must not become a second, unreviewed copy of them. Future hair,
+cosmetics or food packs will not share the scientific shape of this one, and the
+inventory does not ask them to.
+
+**Two packs may not share a reason key.** That would put two reviewed knowledge
+claims in competition for the same sentence a customer reads, with nothing in the
+release manifest to say which wins. It is rejected by default. If shared ownership
+is ever wanted, that is a reviewed change to the rule, not something an inventory
+tool should quietly permit.
