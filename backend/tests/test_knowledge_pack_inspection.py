@@ -482,21 +482,49 @@ class TestStaticMetadata:
             "PACK_ID = ('for_you', 'skin_care')",
             "PACK_ID = 'for_you' if TOGGLE else 'other'",
             "PACK_ID: str",
+            'PACK_ID, other = ("for_you.skin_care.synthetic.v1", 1)',
+            '[PACK_ID] = ["for_you.skin_care.synthetic.v1"]',
+            'PACK_ID, *rest = ("for_you.skin_care.synthetic.v1",)',
+            '(PACK_ID := "for_you.skin_care.synthetic.v1")',
+            'from somewhere import PACK_ID',
+            'for PACK_ID in ["for_you.skin_care.synthetic.v1"]:\n    pass',
+            'import contextlib\nwith contextlib.nullcontext("x") as PACK_ID:\n    pass',
+            'try:\n    pass\nexcept ValueError as PACK_ID:\n    pass',
+            'if TOGGLE:\n    PACK_ID = "for_you.skin_care.synthetic.v1"',
         ],
     )
     def test_a_pack_id_that_must_be_computed_fails_closed(
         self, pack_dir, declaration: str
     ) -> None:
+        # A bare annotation is on this list on purpose. It binds nothing at
+        # runtime, so it could be argued the file never claims pack status —
+        # but "someone wrote PACK_ID at module scope and gave it no value" is
+        # exactly the case that must not slip out of the inventory in silence.
         directory, write = pack_dir
         module = write("dynamic", _source(PACK_ID=declaration))
         result = _inspect(directory)
         assert result.packs == ()
-        if declaration == "PACK_ID: str":
-            # A bare annotation binds nothing, so the file never claims to be
-            # a pack at all — the fail-closed direction, and not an error.
-            assert result.errors == ()
-        else:
-            assert _codes(result) == [(module, "PACK_ID", "NON_STATIC_METADATA")]
+        assert _codes(result) == [(module, "PACK_ID", "NON_STATIC_METADATA")]
+
+    def test_a_chained_assignment_binds_both_names_and_neither_is_approved(
+        self, pack_dir
+    ) -> None:
+        # `PACK_ID = DOMAIN = "..."` is statically readable, but it is not one
+        # of the two reviewed forms, and it quietly binds a second governed
+        # name — which here collides with that name's own declaration. Both
+        # facts are reported.
+        directory, write = pack_dir
+        module = write(
+            "chained", _source(PACK_ID='PACK_ID = DOMAIN = "for_you.skin_care.synthetic.v1"')
+        )
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert _codes(result) == sorted(
+            [
+                (module, "PACK_ID", "NON_STATIC_METADATA"),
+                (module, "DOMAIN", "DUPLICATE_DECLARATION"),
+            ]
+        )
 
     @pytest.mark.parametrize("field", ["DOMAIN", "CATEGORY", "REASON_KEY"])
     def test_any_computed_descriptor_field_fails_closed(self, pack_dir, field: str) -> None:
@@ -573,15 +601,16 @@ class TestStaticMetadata:
         assert result.packs == ()
         assert _codes(result) == [(module, "DOMAIN", "DUPLICATE_DECLARATION")]
 
-    def test_a_declaration_inside_a_conditional_is_not_a_module_level_declaration(
-        self, pack_dir
-    ) -> None:
+    def test_a_declaration_inside_a_conditional_is_seen_and_rejected(self, pack_dir) -> None:
+        # It really does bind DOMAIN when the branch runs, so the collector
+        # must see it — reporting it as simply absent would be a different,
+        # wronger story. It runs conditionally, so it is not a declaration.
         directory, write = pack_dir
         module = write(
             "conditional",
             _source(DOMAIN='if TOGGLE:\n    DOMAIN = "skin_care"'),
         )
-        assert _codes(_inspect(directory)) == [(module, "DOMAIN", "MISSING_DOMAIN")]
+        assert _codes(_inspect(directory)) == [(module, "DOMAIN", "NON_STATIC_METADATA")]
 
     def test_every_violation_in_one_file_is_reported_not_just_the_first(self, pack_dir) -> None:
         directory, write = pack_dir
@@ -643,6 +672,184 @@ class TestStaticMetadata:
         assert _codes(result) == [
             (f"{SYNTHETIC_PACKAGE}.binary_pack", "source", "UNREADABLE_SOURCE")
         ]
+
+
+# ---------------------------------------------------------------------------
+# Module-scope binding: every attempt is seen, only two forms are accepted
+# ---------------------------------------------------------------------------
+class TestModuleScopeBinding:
+    """Layer one must be complete, or layer two is checking the wrong file.
+
+    The failure this guards against is not a wrong answer but no answer: a
+    governed name bound in a form the collector does not recognise makes the
+    pack vanish from the inventory, and a pack nobody can see is a pack nobody
+    reviews.
+    """
+
+    def test_a_destructured_pack_id_does_not_escape_governance(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "tuple_marker",
+            'PACK_ID, other = ("for_you.skin_care.escape.v1", 1)\n'
+            'DOMAIN = "skin_care"\n'
+            'CATEGORY = "skin_care"\n'
+            'REASON_KEY = "for_you.skin_care.escape.reason"\n'
+            "\n"
+            f"def {COMPILER_ATTRIBUTE}(entry):\n"
+            "    return {}\n",
+        )
+        result = _inspect(directory)
+        assert result.ok is False, "a destructured PACK_ID left the inventory silently"
+        assert result.packs == ()
+        assert _codes(result) == [(module, "PACK_ID", "NON_STATIC_METADATA")]
+
+    def test_a_pack_id_bound_only_by_a_loop_still_claims_pack_status(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "loop_marker",
+            'for PACK_ID in ["for_you.skin_care.escape.v1"]:\n    pass\n',
+        )
+        result = _inspect(directory)
+        assert result.ok is False
+        assert (module, "PACK_ID", "NON_STATIC_METADATA") in _codes(result)
+        # and the rest of the contract is reported as missing, not skipped
+        assert {code for _, _, code in _codes(result)} == {
+            "NON_STATIC_METADATA",
+            "MISSING_DOMAIN",
+            "MISSING_CATEGORY",
+            "MISSING_REASON_KEY",
+            "MISSING_COMPILER",
+        }
+
+    @pytest.mark.parametrize("field", ["DOMAIN", "CATEGORY", "REASON_KEY"])
+    @pytest.mark.parametrize(
+        "template",
+        [
+            '{field}, other = ("skin_care", 1)',
+            "{field} += 'x'",
+            '({field} := "skin_care")',
+            'for {field} in ["skin_care"]:\n    pass',
+            'import contextlib\nwith contextlib.nullcontext("x") as {field}:\n    pass',
+            "from somewhere import {field}",
+            "del {field}",
+        ],
+    )
+    def test_an_unsupported_binding_of_any_descriptor_fails_closed(
+        self, pack_dir, field: str, template: str
+    ) -> None:
+        directory, write = pack_dir
+        module = write("descriptor_binding", _source(**{field: template.format(field=field)}))
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert [module for module, _, _ in _codes(result)] == [module]
+        assert {code for _, _, code in _codes(result)} <= {
+            "NON_STATIC_METADATA",
+            "DUPLICATE_DECLARATION",
+        }
+
+    def test_a_rebinding_after_a_good_declaration_is_reported(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write("rebound", VALID_SOURCE + '\nPACK_ID += ".v2"\n')
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert _codes(result) == [(module, "PACK_ID", "DUPLICATE_DECLARATION")]
+
+    def test_deleting_a_descriptor_after_declaring_it_is_reported(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write("deleted", VALID_SOURCE + "\ndel PACK_ID\n")
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert _codes(result) == [(module, "PACK_ID", "DUPLICATE_DECLARATION")]
+
+    def test_the_reviewed_literal_forms_still_pass(self, pack_dir) -> None:
+        directory, write = pack_dir
+        plain = write("plain", VALID_SOURCE)
+        annotated = write(
+            "annotated_forms",
+            _source(
+                PACK_ID='PACK_ID: str = "for_you.skin_care.annotated.v1"',
+                DOMAIN='DOMAIN: str = "skin_care"',
+                REASON_KEY='REASON_KEY: str = "for_you.skin_care.annotated.reason"',
+            ),
+        )
+        result = _inspect(directory)
+        assert result.ok is True
+        assert {descriptor.module for descriptor in result.packs} == {plain, annotated}
+
+
+# ---------------------------------------------------------------------------
+# Nested scopes are not the module
+# ---------------------------------------------------------------------------
+class TestNestedScopesAreNotModuleScope:
+    def test_a_pack_id_local_to_a_function_does_not_make_a_pack(self, pack_dir) -> None:
+        directory, write = pack_dir
+        write(
+            "helper_only",
+            "def helper():\n"
+            '    PACK_ID = "not-a-pack"\n'
+            "    return PACK_ID\n",
+        )
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert result.errors == ()
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            'async def helper():\n    PACK_ID = "not-a-pack"\n',
+            'class Holder:\n    PACK_ID = "not-a-pack"\n',
+            'make = lambda: (PACK_ID := "not-a-pack")\n',
+            'def helper():\n    for PACK_ID in []:\n        pass\n',
+            'def helper():\n    del PACK_ID\n',
+            'def helper():\n    from somewhere import PACK_ID\n',
+        ],
+    )
+    def test_no_nested_scope_binding_claims_pack_status(self, pack_dir, source: str) -> None:
+        directory, write = pack_dir
+        write("nested", source)
+        result = _inspect(directory)
+        assert result.packs == ()
+        assert result.errors == ()
+
+    def test_a_nested_compiler_name_does_not_satisfy_the_contract(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "nested_compiler",
+            _source(
+                **{
+                    COMPILER_ATTRIBUTE: (
+                        "class Holder:\n"
+                        f"    def {COMPILER_ATTRIBUTE}(self, entry):\n"
+                        "        return {}"
+                    )
+                }
+            ),
+        )
+        assert _codes(_inspect(directory)) == [
+            (module, COMPILER_ATTRIBUTE, "MISSING_COMPILER")
+        ]
+
+    def test_a_nested_scope_does_not_disturb_a_valid_pack(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "valid_with_helpers",
+            VALID_SOURCE
+            + "\n"
+            "def helper():\n"
+            '    PACK_ID = "not-a-pack"\n'
+            f"    def {COMPILER_ATTRIBUTE}(entry):\n"
+            "        return None\n"
+            "    return PACK_ID\n"
+            "\n"
+            "\n"
+            "class Holder:\n"
+            '    DOMAIN = "not-the-domain"\n',
+        )
+        result = _inspect(directory)
+        assert result.ok is True
+        (descriptor,) = result.packs
+        assert descriptor.module == module
+        assert descriptor.domain == "skin_care"
 
 
 # ---------------------------------------------------------------------------
@@ -727,6 +934,73 @@ class TestCompilerDeclaration:
         )
         assert _codes(_inspect(directory)) == [
             (module, COMPILER_ATTRIBUTE, "DUPLICATE_DECLARATION")
+        ]
+
+    @pytest.mark.parametrize(
+        ("label", "rebinding"),
+        [
+            ("tuple shadow", f"({COMPILER_ATTRIBUTE}, other) = (None, 1)"),
+            ("list shadow", f"[{COMPILER_ATTRIBUTE}] = [None]"),
+            ("starred shadow", f"{COMPILER_ATTRIBUTE}, *rest = (None,)"),
+            ("chained shadow", f"{COMPILER_ATTRIBUTE} = other = None"),
+            ("deletion", f"del {COMPILER_ATTRIBUTE}"),
+            ("walrus", f"({COMPILER_ATTRIBUTE} := None)"),
+            ("loop target", f"for {COMPILER_ATTRIBUTE} in []:\n    pass"),
+            (
+                "conditional shadow",
+                f"if TOGGLE:\n    {COMPILER_ATTRIBUTE} = None",
+            ),
+            (
+                "with target",
+                "import contextlib\n"
+                f"with contextlib.nullcontext(None) as {COMPILER_ATTRIBUTE}:\n    pass",
+            ),
+            ("import shadow", f"from elsewhere import {COMPILER_ATTRIBUTE}"),
+        ],
+    )
+    def test_a_later_module_scope_rebinding_invalidates_the_declaration(
+        self, pack_dir, label: str, rebinding: str
+    ) -> None:
+        # The stale earlier ``def`` must not be reported as the valid
+        # compiler: at import time the last binding wins, and the release
+        # workflow would reach whatever that is.
+        directory, write = pack_dir
+        module = write("rebound_compiler", VALID_SOURCE + "\n" + rebinding + "\n")
+        result = _inspect(directory)
+        assert result.packs == (), label
+        assert _codes(result) == sorted(
+            [
+                (module, COMPILER_ATTRIBUTE, "DUPLICATE_DECLARATION"),
+                (module, COMPILER_ATTRIBUTE, "COMPILER_NOT_A_FUNCTION"),
+            ]
+        ), label
+
+    def test_a_compiler_bound_only_by_a_loop_is_not_a_function(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "loop_compiler",
+            _source(**{COMPILER_ATTRIBUTE: f"for {COMPILER_ATTRIBUTE} in []:\n    pass"}),
+        )
+        assert _codes(_inspect(directory)) == [
+            (module, COMPILER_ATTRIBUTE, "COMPILER_NOT_A_FUNCTION")
+        ]
+
+    def test_a_conditional_definition_is_not_a_plain_declaration(self, pack_dir) -> None:
+        directory, write = pack_dir
+        module = write(
+            "conditional_compiler",
+            _source(
+                **{
+                    COMPILER_ATTRIBUTE: (
+                        "if TOGGLE:\n"
+                        f"    def {COMPILER_ATTRIBUTE}(entry):\n"
+                        "        return {}"
+                    )
+                }
+            ),
+        )
+        assert _codes(_inspect(directory)) == [
+            (module, COMPILER_ATTRIBUTE, "COMPILER_NOT_A_FUNCTION")
         ]
 
     def test_a_compiler_that_would_explode_is_never_called(self, pack_dir) -> None:

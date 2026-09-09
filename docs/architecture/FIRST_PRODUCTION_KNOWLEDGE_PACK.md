@@ -145,21 +145,53 @@ repository at once, on an operator's laptop, in the course of asking a question.
 Tests hold the property directly: a synthetic pack that writes a sentinel file at
 module level is inspected, and the sentinel does not appear.
 
-The consequence is that identity must be **statically legible**. `PACK_ID`,
-`DOMAIN`, `CATEGORY` and `REASON_KEY` each have to be a plain string literal
-assigned once at module level. A value computed at import time — a call, an
-f-string, a concatenation, a name — cannot be read without running the module, so
-it is not read: the pack fails closed with a `NON_STATIC_METADATA` finding. A
-constant declared twice fails closed too, as `DUPLICATE_DECLARATION`: in a
-specification file, "the last one wins" is ambiguity rather than shorthand.
+Be precise about what that buys. The guarantee is **the inspector does not execute
+candidate source** — not that any pack has been proven side-effect-free. Nothing
+here analyses what a pack would do if something else ran it.
 
-The compiler is verified the same way. The pack must declare
-`build_release_manifest_from_published_entry` as a single top-level `def`. A
-missing declaration is `MISSING_COMPILER`; a class, an import, an assignment that
-shadows the function, or a coroutine — the Step 8H workflow calls it
-synchronously — is `COMPILER_NOT_A_FUNCTION`. The function is named, never called:
-compiling requires a reviewed published evidence entry, which an inventory tool
-has no business inventing.
+The consequence is that identity must be **statically legible**, and the check
+for that runs in two layers.
+
+**Layer one sees every attempt.** The inspector walks module scope and records
+every statement that binds, rebinds or deletes one of the five governed names —
+`PACK_ID`, `DOMAIN`, `CATEGORY`, `REASON_KEY`, and
+`build_release_manifest_from_published_entry`. Plain and annotated assignment,
+destructuring and starred targets, chained and augmented assignment, walrus
+expressions, imports, `del`, loop targets, `with ... as`, `except ... as`, `match`
+capture patterns, and function and class definitions all count, including inside
+module-scope control flow (`if`, `for`, `while`, `try`, `with`, `match`), because
+those bodies really do bind module names when they run.
+
+This layer has to be complete rather than convenient. The failure it prevents is
+not a wrong answer but *no* answer: `PACK_ID, other = ("…", 1)` genuinely binds
+`PACK_ID`, and a collector that only recognised `NAME = …` would classify the file
+as infrastructure and drop a governed pack out of the inventory in silence.
+
+Bindings inside a nested scope — a function, an async function, a class, a lambda —
+are not module bindings, and are not counted. A `PACK_ID` local to a helper does
+not make the file a pack.
+
+**Layer two accepts two forms.** For a descriptor field, exactly one module-scope
+binding, written as `NAME = "literal"` or `NAME: str = "literal"`. For the
+compiler, exactly one plain top-level `def`. Everything else fails closed:
+
+| Situation | Finding |
+| --- | --- |
+| Value cannot be read without running the module — a call, an f-string, a name, a destructuring target, a loop target, an import, a bare `NAME: str`, a conditional declaration | `NON_STATIC_METADATA` |
+| The name is touched more than once at module scope — a second declaration, a rebinding, a `del` | `DUPLICATE_DECLARATION` |
+| No module-scope binding at all | `MISSING_DOMAIN` / `MISSING_CATEGORY` / `MISSING_REASON_KEY`, or `MISSING_COMPILER`; for `PACK_ID`, the file is simply not a pack |
+| The compiler's last module-scope binding is not a plain `def` — a class, an import, a shadowing assignment, a `del`, or a coroutine (Step 8H calls it synchronously) | `COMPILER_NOT_A_FUNCTION` |
+
+A stale earlier `def` is never reported as the valid compiler when a later
+module-scope statement would replace or remove it: whatever binds last is what the
+release workflow would reach for. The function is named, never called — compiling
+requires a reviewed published evidence entry, which an inventory tool has no
+business inventing.
+
+Any module-scope attempt to bind `PACK_ID`, in any of those forms, makes the file a
+governed-pack candidate. That is deliberate: a pack whose identity cannot be read
+must appear in the report as broken, never disappear as though it were never
+written.
 
 **A filename is never an exemption.** Every `.py` file in the pack directory is
 inspected except two named outright: `__init__.py` and `inspection.py`. There is

@@ -16,10 +16,26 @@ write, a provider call, a release operation — and a tool that imported packs
 in order to inspect them would trigger exactly the thing it exists to catch,
 across every pack at once, on an operator's laptop.
 
-The cost of that choice is that identity must be *statically legible*. Each
-governed descriptor field has to be a plain string literal at module level. A
-value computed at import time cannot be read without running the module, so it
-is not read: it is reported as a finding and the pack fails closed.
+The cost of that choice is that identity must be *statically legible*, and the
+check runs in two layers. Layer one records **every** module-scope statement
+that binds, rebinds or deletes a governed name — assignment plain, annotated,
+destructured, starred, chained or augmented; a walrus; an import; a ``del``; a
+loop target; a ``with ... as``; an ``except ... as``; a ``match`` capture; a
+function or class definition — including inside module-scope control flow,
+whose bodies really do bind module names when they run. That layer has to be
+complete rather than convenient: the failure it prevents is not a wrong answer
+but no answer, because a collector that missed ``PACK_ID, other = (...)`` would
+classify the file as infrastructure and drop a governed pack out of the
+inventory in silence. Bindings inside a nested scope — a function, a class, a
+lambda — are not module bindings and are not counted.
+
+Layer two then accepts only two forms: ``NAME = "literal"`` (or its annotated
+equivalent) for a descriptor field, and a single plain top-level ``def`` for
+the compiler. Everything else is reported and the pack fails closed.
+
+Be precise about what this buys. The guarantee is that *this tool does not
+execute candidate source* — not that any pack has been proven side-effect-free.
+Nothing here analyses what a pack would do if something else ran it.
 
 **What it is not.** Not a registry, not a loader, not a release operator. It
 does not prepare, verify, publish, compile, approve, activate, deactivate or
@@ -46,9 +62,10 @@ names the pack package is exactly how an accidental runtime import begins —
 and this module is a member of that package rather than a reacher-into-it, so
 it neither trips the guard nor needs it widened.
 
-**What qualifies as a pack.** Declaring ``PACK_ID`` at module level is the
-claim, and only the two files named in :data:`INFRASTRUCTURE_FILENAMES` are
-exempt from being asked. A filename is never an exemption: a governed pack
+**What qualifies as a pack.** Any module-scope attempt to bind ``PACK_ID`` is
+the claim — a literal, a computed value, a destructuring target, a bare
+annotation, even a ``del`` — and only the two files named in
+:data:`INFRASTRUCTURE_FILENAMES` are exempt from being asked. A filename is never an exemption: a governed pack
 cannot slip out of the inventory by being called ``_hidden_pack.py``. A file
 that simply does not declare the marker is not a governed pack and is not an
 error — it is infrastructure. A file *with* the marker is held to the whole
@@ -58,7 +75,7 @@ pack cannot hide the state of the others.
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -97,7 +114,11 @@ class PackValidationCode(StrEnum):
 
     UNREADABLE_SOURCE = "UNREADABLE_SOURCE"
     UNPARSABLE_SOURCE = "UNPARSABLE_SOURCE"
+    #: The value cannot be read without running the module.
     NON_STATIC_METADATA = "NON_STATIC_METADATA"
+    #: The name is bound at module scope more than once — a second
+    #: declaration, a rebinding, or a ``del``. Whichever runs last wins, which
+    #: in a specification file is ambiguity rather than shorthand.
     DUPLICATE_DECLARATION = "DUPLICATE_DECLARATION"
     INVALID_PACK_ID = "INVALID_PACK_ID"
     DUPLICATE_PACK_ID = "DUPLICATE_PACK_ID"
@@ -237,75 +258,217 @@ def _module_name(path: Path, package_name: str) -> str:
     return f"{package_name}.{path.stem}"
 
 
-def _assigned_names(node: ast.stmt) -> list[str]:
-    """The module-level names one top-level statement binds.
+class _BindingForm(StrEnum):
+    """How a module-scope statement binds a name.
 
-    Only the forms a specification file legitimately uses to declare a
-    descriptor — a plain assignment, an annotated assignment, a function or a
-    class — plus imports, which are how a name gets shadowed by accident.
-    Anything more exotic binding a governed name will simply not be seen as a
-    declaration and the field will read as missing, which is the fail-closed
-    direction.
+    Only two forms are approved declarations. Everything else — a
+    destructuring assignment, an augmented assignment, a walrus, a loop
+    target, a ``with ... as``, an import, a ``del``, a binding buried in an
+    ``if`` — is :data:`OTHER`. Not because those forms are exotic curiosities,
+    but because the inspector must *see* them: a governed name touched in a
+    way this contract does not accept has to produce a finding, never silence.
     """
-    if isinstance(node, ast.Assign):
-        return [target.id for target in node.targets if isinstance(target, ast.Name)]
-    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-        return [node.target.id] if node.value is not None else []
-    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-        return [node.name]
-    if isinstance(node, ast.Import | ast.ImportFrom):
-        return [alias.asname or alias.name.split(".")[0] for alias in node.names]
+
+    LITERAL = "literal"
+    FUNCTION = "function"
+    OTHER = "other"
+
+
+@dataclass(frozen=True, slots=True)
+class _Binding:
+    """One module-scope attempt to bind, rebind or delete a name."""
+
+    form: _BindingForm
+    value: str | None = None
+
+
+#: Statements that open a new scope. Names bound inside them belong to that
+#: scope, not to the module, so the collector records the *name being defined*
+#: and then stops: a ``PACK_ID`` local to a helper function is not a pack
+#: marker.
+_SCOPE_STATEMENTS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
+def _target_names(target: ast.expr) -> list[str]:
+    """Every bare name an assignment target binds.
+
+    Recursive, because ``PACK_ID, DOMAIN = ...`` and ``[a, *rest] = ...`` bind
+    names just as surely as ``PACK_ID = ...`` does. An attribute or subscript
+    target binds no bare name and yields nothing.
+    """
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Starred):
+        return _target_names(target.value)
+    if isinstance(target, ast.Tuple | ast.List):
+        return [name for element in target.elts for name in _target_names(element)]
     return []
 
 
-def _top_level_bindings(tree: ast.Module) -> dict[str, list[ast.stmt]]:
-    """Module-level name to the statements that bind it, in source order.
-
-    Only ``tree.body`` is walked. A name bound inside an ``if`` or a function
-    is not a module-level declaration, and treating it as one would let a
-    conditional definition masquerade as a governed constant.
-    """
-    bindings: dict[str, list[ast.stmt]] = {}
-    for node in tree.body:
-        for name in _assigned_names(node):
-            bindings.setdefault(name, []).append(node)
-    return bindings
-
-
-def _literal_string(statement: ast.stmt) -> str | None:
-    """The string this assignment states outright, or ``None``.
+def _literal_string(value: ast.expr | None) -> str | None:
+    """The string this expression states outright, or ``None``.
 
     ``None`` means "not knowable without running the module" — a call, a name,
     an f-string, a concatenation, a conditional expression, a non-string
-    constant. The distinction matters: a value that must be computed is a
-    finding, not a value.
+    constant, or no value at all. The distinction matters: a value that must
+    be computed is a finding, not a value.
     """
-    if not isinstance(statement, ast.Assign | ast.AnnAssign):
-        return None
-    value = statement.value
     if isinstance(value, ast.Constant) and isinstance(value.value, str):
         return value.value
     return None
 
 
+def _own_expressions(node: ast.stmt) -> Iterator[ast.expr]:
+    """Expressions belonging to this statement, not to statements nested in it.
+
+    Used to find walrus bindings. Pruned at ``lambda``, whose walrus binds in
+    the lambda's own scope; *not* pruned at comprehensions, because a walrus
+    inside one binds in the enclosing scope. A comprehension's own iteration
+    variable is never reached, since it is not an assignment target of any
+    statement.
+    """
+    stack = [child for child in ast.iter_child_nodes(node) if isinstance(child, ast.expr)]
+    while stack:
+        current = stack.pop()
+        yield current
+        if isinstance(current, ast.Lambda):
+            continue
+        stack.extend(child for child in ast.iter_child_nodes(current) if isinstance(child, ast.expr))
+
+
+def _statement_bindings(node: ast.stmt, *, nested: bool) -> Iterator[tuple[str, _Binding]]:
+    """Every name this one statement binds at module scope, and how.
+
+    ``nested`` is true inside module-scope control flow — an ``if``, a loop, a
+    ``try``. Such a statement really does bind a module name when it runs, so
+    it is recorded; but it runs conditionally, so it is never an approved
+    declaration.
+    """
+    other = _Binding(_BindingForm.OTHER)
+
+    if isinstance(node, ast.FunctionDef):
+        yield node.name, (other if nested else _Binding(_BindingForm.FUNCTION))
+        return
+    if isinstance(node, ast.AsyncFunctionDef | ast.ClassDef):
+        yield node.name, other
+        return
+
+    if isinstance(node, ast.Assign):
+        literal = _literal_string(node.value)
+        plain = len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+        approved = plain and literal is not None and not nested
+        for target in node.targets:
+            for name in _target_names(target):
+                yield name, (_Binding(_BindingForm.LITERAL, literal) if approved else other)
+    elif isinstance(node, ast.AnnAssign):
+        literal = _literal_string(node.value)
+        approved = literal is not None and not nested
+        for name in _target_names(node.target):
+            yield name, (_Binding(_BindingForm.LITERAL, literal) if approved else other)
+    elif isinstance(node, ast.AugAssign):
+        for name in _target_names(node.target):
+            yield name, other
+    elif isinstance(node, ast.Import | ast.ImportFrom):
+        for alias in node.names:
+            yield (alias.asname or alias.name.split(".")[0]), other
+    elif isinstance(node, ast.Delete):
+        for target in node.targets:
+            for name in _target_names(target):
+                yield name, other
+    elif isinstance(node, ast.For | ast.AsyncFor):
+        for name in _target_names(node.target):
+            yield name, other
+    elif isinstance(node, ast.With | ast.AsyncWith):
+        for item in node.items:
+            if item.optional_vars is not None:
+                for name in _target_names(item.optional_vars):
+                    yield name, other
+    elif isinstance(node, ast.Try | ast.TryStar):
+        for handler in node.handlers:
+            if handler.name:
+                yield handler.name, other
+    elif isinstance(node, ast.Match):
+        for case in node.cases:
+            for pattern in ast.walk(case.pattern):
+                if isinstance(pattern, ast.MatchAs | ast.MatchStar) and pattern.name:
+                    yield pattern.name, other
+                elif isinstance(pattern, ast.MatchMapping) and pattern.rest:
+                    yield pattern.rest, other
+
+    for expression in _own_expressions(node):
+        if isinstance(expression, ast.NamedExpr):
+            for name in _target_names(expression.target):
+                yield name, other
+
+
+def _nested_bodies(node: ast.stmt) -> Iterator[list[ast.stmt]]:
+    """The statement blocks inside this statement that still run at module scope.
+
+    An ``if``, a loop, a ``try``, a ``with`` and a ``match`` all execute their
+    bodies in the module's namespace, so a governed name bound in one is a
+    module binding and must be seen. A function or a class does not, and is
+    not descended into at all.
+    """
+    if isinstance(node, _SCOPE_STATEMENTS):
+        return
+    for field in ("body", "orelse", "finalbody"):
+        block = getattr(node, field, None)
+        if isinstance(block, list) and all(isinstance(item, ast.stmt) for item in block):
+            yield block
+    for handler in getattr(node, "handlers", None) or ():
+        yield handler.body
+    for case in getattr(node, "cases", None) or ():
+        yield case.body
+
+
+def _module_scope_bindings(tree: ast.Module) -> dict[str, list[_Binding]]:
+    """Every module-scope binding attempt, by name, in source order.
+
+    This is the layer that must be complete rather than convenient. If a form
+    of binding is missing from it, a governed name written that way becomes
+    invisible — and invisible is the one outcome this tool exists to prevent.
+    Layer two, in :func:`_describe`, is where the short list of *approved*
+    forms is applied.
+    """
+    bindings: dict[str, list[_Binding]] = {}
+
+    def walk(statements: list[ast.stmt], *, nested: bool) -> None:
+        for node in statements:
+            for name, binding in _statement_bindings(node, nested=nested):
+                bindings.setdefault(name, []).append(binding)
+            for block in _nested_bodies(node):
+                walk(block, nested=True)
+
+    walk(tree.body, nested=False)
+    return bindings
+
+
 def claims_to_be_a_pack(tree: ast.Module) -> bool:
     """Does this source claim governed-pack status?
 
-    Declaring ``PACK_ID`` at module level is the claim. Sitting in the
-    directory is not.
+    Any module-scope attempt to bind ``PACK_ID`` is the claim — a literal, a
+    computed value, a destructuring assignment, a loop target, a bare
+    annotation, even a ``del``. Sitting in the directory is not.
 
-    Presence, not usefulness. ``PACK_ID = None``, ``PACK_ID = ""`` or
-    ``PACK_ID = make_pack_id()`` is a pack that is broken, which is a finding;
-    treating any of them as "not a pack" would let the worst case — a governed
-    pack whose identity cannot be read — vanish from the inventory in silence.
+    Deliberately an attempt rather than a success. ``PACK_ID = None``,
+    ``PACK_ID = make_pack_id()`` and ``PACK_ID, other = (...)`` are all packs
+    that are broken, which is a finding; treating any of them as "not a pack"
+    would let the worst case — a governed pack whose identity cannot be read —
+    vanish from the inventory in silence.
     """
-    return PACK_MARKER_ATTRIBUTE in _top_level_bindings(tree)
+    return PACK_MARKER_ATTRIBUTE in _module_scope_bindings(tree)
 
 
 def _describe(
-    module_name: str, tree: ast.Module
+    module_name: str, bindings: dict[str, list[_Binding]]
 ) -> tuple[KnowledgePackDescriptor | None, tuple[PackValidationError, ...]]:
-    bindings = _top_level_bindings(tree)
+    """Layer two: accept only the approved declaration forms.
+
+    Layer one has already found every module-scope binding attempt. Here each
+    governed name must have exactly one, in exactly the reviewed form —
+    ``NAME = "literal"`` (or its annotated equivalent) for a descriptor field,
+    a plain top-level ``def`` for the compiler. Everything else is a finding.
+    """
     errors: list[PackValidationError] = []
 
     def note(field: str, code: PackValidationCode) -> None:
@@ -313,22 +476,19 @@ def _describe(
 
     values: dict[str, str] = {}
     for field in DESCRIPTOR_FIELDS:
-        statements = bindings.get(field, [])
-        if len(statements) > 1:
-            # Two module-level declarations of one governed constant: the last
-            # one silently wins at import time. In a specification file that
-            # is ambiguity, not a shorthand.
+        attempts = bindings.get(field, [])
+        if len(attempts) > 1:
             note(field, PackValidationCode.DUPLICATE_DECLARATION)
             continue
-        if not statements:
+        if not attempts:
             if field != PACK_MARKER_ATTRIBUTE:
                 note(field, _MISSING_CODE_BY_FIELD[field])
             continue
-        literal = _literal_string(statements[0])
-        if literal is None:
+        binding = attempts[0]
+        if binding.form is not _BindingForm.LITERAL or binding.value is None:
             note(field, PackValidationCode.NON_STATIC_METADATA)
             continue
-        values[field] = literal
+        values[field] = binding.value
 
     pack_id = values.get(PACK_MARKER_ATTRIBUTE)
     if pack_id is not None and not _is_valid_pack_id(pack_id):
@@ -338,17 +498,18 @@ def _describe(
         if value is not None and not _is_clean_nonblank_string(value):
             note(field, _MISSING_CODE_BY_FIELD[field])
 
-    compiler_statements = bindings.get(COMPILER_ATTRIBUTE, [])
-    if not compiler_statements:
+    compiler_attempts = bindings.get(COMPILER_ATTRIBUTE, [])
+    if not compiler_attempts:
         note(COMPILER_ATTRIBUTE, PackValidationCode.MISSING_COMPILER)
     else:
-        if len(compiler_statements) > 1:
+        if len(compiler_attempts) > 1:
             note(COMPILER_ATTRIBUTE, PackValidationCode.DUPLICATE_DECLARATION)
-        # Whatever comes last is what the release workflow would reach for.
-        # A plain top-level ``def`` is the contract: the Step 8H workflow
-        # calls this synchronously, so a coroutine would not satisfy it and is
-        # rejected here rather than at release time.
-        if not isinstance(compiler_statements[-1], ast.FunctionDef):
+        # Whatever comes last is what the release workflow would reach for, so
+        # a later rebinding or a ``del`` invalidates the earlier ``def``
+        # rather than being outvoted by it. A plain top-level ``def`` is the
+        # contract: Step 8H calls this synchronously, so a coroutine does not
+        # satisfy it and is rejected here rather than at release time.
+        if compiler_attempts[-1].form is not _BindingForm.FUNCTION:
             note(COMPILER_ATTRIBUTE, PackValidationCode.COMPILER_NOT_A_FUNCTION)
 
     if errors:
@@ -445,9 +606,10 @@ def inspect_packs(
                 )
             )
             continue
-        if not claims_to_be_a_pack(tree):
+        bindings = _module_scope_bindings(tree)
+        if PACK_MARKER_ATTRIBUTE not in bindings:
             continue
-        descriptor, module_errors = _describe(module_name, tree)
+        descriptor, module_errors = _describe(module_name, bindings)
         errors.extend(module_errors)
         if descriptor is not None:
             descriptors.append(descriptor)
