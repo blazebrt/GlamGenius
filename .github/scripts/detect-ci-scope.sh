@@ -90,7 +90,7 @@ for path in "${changed_files[@]}"; do
     # activation script inside CI is how it stops being manual-only -- and
     # this rule does not need to breach it. The backend suite asserts the real
     # filenames resolve here, from outside `.github/` where it may name them.
-    scripts/inspect_knowledge_packs.py|scripts/build_step8i_*.py|scripts/operate_step8i_*.py)
+    scripts/inspect_knowledge_packs.py|scripts/build_knowledge_pack_release.py|scripts/build_step8i_*.py|scripts/operate_step8i_*.py)
       backend=true
       ;;
   esac

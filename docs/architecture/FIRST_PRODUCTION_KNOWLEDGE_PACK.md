@@ -334,3 +334,110 @@ widened: not frontend, not schema, not container, not release.
 compiles no manifest, publishes no evidence, contacts no provider or production
 database, and runs no Phase B operation. Inventory is not activation, in CI as
 anywhere else.
+
+## Three tools, three different rights over a pack
+
+It is worth being explicit about what each one is allowed to do, because they
+sit on the same source and the differences are the governance.
+
+**Static inventory — reads, never runs.**
+
+```bash
+python scripts/inspect_knowledge_packs.py --json
+```
+
+Parses every committed pack with `ast` and imports none of them. Unconditional
+in CI. Answers *which packs exist and are they well-formed*, and nothing else.
+
+**Generic offline compiler — runs exactly one, on request.**
+
+```bash
+python scripts/build_knowledge_pack_release.py \
+  --pack-id for_you.skin_care.petrolatum_dry_skin.v1 \
+  published_entry.json
+
+python scripts/build_knowledge_pack_release.py \
+  --pack-id for_you.skin_care.petrolatum_dry_skin.v1 \
+  published_entry.json \
+  --output manifest.json
+```
+
+This one *does* execute pack code — that is its purpose. The two coexist
+because of the order it works in: inspect every pack statically, refuse if any
+of them fails the contract, resolve exactly one `PACK_ID`, and only then import
+that single module and call the compiler the inspector said it declares. No
+other pack is imported, and nothing is imported merely to discover what a pack
+is called.
+
+`--pack-id` is mandatory and matched with `==`, case-sensitively, in full.
+There is no `--latest`, no `--default`, and no falling back to the only pack
+that exists. That default would be a landmine: the day a second pack lands,
+muscle memory compiles the wrong knowledge and the mistake looks like success.
+
+The whole inventory must be valid, not just the requested pack. A duplicated
+`PACK_ID` or a shared `REASON_KEY` means the repository can no longer say which
+pack owns which identity, and *"the one I asked for looks fine"* is not an
+answer to that — which one you got is the question.
+
+The tool has no opinion about petrolatum, dry skin, evidence strength or
+actions. Deciding whether a published entry is the exact reviewed evidence
+belongs to the pack compiler; validating the result belongs to the existing
+Step 8H manifest authority. This is orchestration: select, invoke, validate,
+canonicalise, serialise, hash. Exit `0` means a manifest was produced; any
+non-zero exit means it refused and wrote nothing, including no partial output
+file.
+
+**What gets written is the canonical manifest, not the compiler's raw
+dictionary.** Step 8H sorts semantic rules, policy rules, explanation rules and
+the identity set inside each policy, so:
+
+```
+raw compiler output → parse_release_manifest → canonical_manifest → the file
+                                             → manifest_content_hash → the hash
+```
+
+One parse, and the bytes and the hash come from the same parsed object. This
+matters the moment a pack has more than one rule: a compiler is under no
+obligation to build its lists in canonical order, and two runs that differ only
+in that order are the same manifest and hash identically. Emitting the raw
+dictionary would have produced *the same hash next to different bytes*. The
+reviewed petrolatum pack has one rule of each kind and is canonical by
+accident, which is exactly why this could not be noticed there; a synthetic
+two-rule fixture is what tests it.
+
+`scripts/build_step8i_petrolatum_release.py` is deliberately left in place and
+unchanged. It is the independent oracle the compatibility proof compares
+against — both builders must emit byte-identical manifests and the same content
+hash — and folding it into the generic tool would leave nothing to compare with.
+
+**One pack in means one pack executed, transitively.** The builder imports
+exactly one module and a meta-path recorder proves it — but that proves the
+builder, not the pack. A pack whose own source imported a sibling would drag it
+in through the ordinary import system, and nothing in the builder could stop
+that. So the rule lives with the packs: **a governed pack may not statically
+import another governed pack through either absolute or relative Python import
+statements**, checked over committed source. `import app.knowledge_packs.other`
+and `from .other import X` execute the same module body; a rule that read only
+the absolute spelling would be a rule a sibling import walks straight past, so
+relative forms are resolved the way the import system resolves them
+(`importlib.util.resolve_name`) rather than by matching strings.
+
+Infrastructure members of the package are allowed however they are spelled
+(`inspection.py` executes no knowledge), and so is everything outside the
+package — importing `app.domains.personal_decision_release.manifest`, directly
+or as `..domains...`, is exactly what a compiler is supposed to do. A pack
+naming itself is not a cross-pack import in any spelling.
+
+**This is not a Python sandbox, and does not claim to be.** It is a governance
+rule about what a reviewed specification file may *statically reference*.
+Dynamic mechanisms — `importlib` called at runtime, a custom loader, `exec` on
+a constructed string — are not proved impossible by it. The guarantee on offer
+is the reviewed static import contract: what the committed source says it
+reaches, checked on every run, for every pack the inspector discovers.
+
+**Production activation — still manual, still one pack.**
+
+`scripts/operate_step8i_petrolatum_release.py` was not generalised and must not
+be. Compiling a manifest offline and putting one in front of customers are
+different acts. Nothing above writes a release row, contacts a database or a
+provider, or performs any Phase B operation; compilation is not activation.

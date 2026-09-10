@@ -132,6 +132,7 @@ expect_scope "backend/app/release.py" container false
 # and the inventory's own rules are backend tests, and a change to their
 # entrypoints has to run them.
 expect_scope "scripts/inspect_knowledge_packs.py" backend true
+expect_scope "scripts/build_knowledge_pack_release.py" backend true
 expect_scope "scripts/build_step8i_petrolatum_release.py" backend true
 # The Phase B operator is matched by the same rule through a glob. Its real
 # filename is deliberately absent from this file: a Phase B test forbids that
@@ -147,6 +148,7 @@ expect_scope "scripts/operate_step8i_example_probe.py" backend true
 # rehearsal the release job performs.
 for scope in schema frontend mobile web python_deps node_deps container security release; do
   expect_scope "scripts/inspect_knowledge_packs.py" "$scope" false
+  expect_scope "scripts/build_knowledge_pack_release.py" "$scope" false
 done
 expect_scope "scripts/build_step8i_petrolatum_release.py" container false
 expect_scope "scripts/build_step8i_petrolatum_release.py" release false
@@ -177,7 +179,8 @@ expect_scope "deploy/render/Dockerfile" schema false
 # This is the property the scenarios above add up to, asserted directly so it
 # cannot be lost by editing one of them.
 for path in "render.yaml" "deploy/render/Dockerfile" "deploy/render/entrypoint.sh" ".dockerignore" \
-            "scripts/inspect_knowledge_packs.py" "scripts/build_step8i_petrolatum_release.py" \
+            "scripts/inspect_knowledge_packs.py" "scripts/build_knowledge_pack_release.py" \
+            "scripts/build_step8i_petrolatum_release.py" \
             "scripts/operate_step8i_example_probe.py"; do
   any_true=false
   for scope in backend schema frontend mobile web python_deps node_deps container security release; do
