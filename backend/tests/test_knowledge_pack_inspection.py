@@ -81,6 +81,11 @@ CI_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
 SCOPE_SCRIPT = REPOSITORY_ROOT / ".github" / "scripts" / "detect-ci-scope.sh"
 
 REVIEWED_MODULE = "app.knowledge_packs.petrolatum_dry_skin_v1"
+SECOND_REVIEWED_MODULE = "app.knowledge_packs.glycerin_dry_skin_v1"
+#: The exact reviewed inventory. Asserted as an equality, never as a
+#: minimum: "at least one pack" would pass on an inventory that had
+#: silently lost one, which is the failure this module exists to catch.
+REVIEWED_PACK_COUNT = 2
 SYNTHETIC_PACKAGE = "synthetic_knowledge_packs"
 
 #: The exact content hash of the manifest the reviewed pack compiles from the
@@ -226,10 +231,19 @@ class TestTheRepositoryInventory:
         result = inspect_packs()
         assert result.errors == ()
         assert result.ok is True
-        assert len(result.packs) == 1
+        assert len(result.packs) == REVIEWED_PACK_COUNT
+
+    def test_the_committed_packs_have_distinct_identities(self) -> None:
+        packs = inspect_packs().packs
+        assert len({descriptor.pack_id for descriptor in packs}) == REVIEWED_PACK_COUNT
+        assert len({descriptor.reason_key for descriptor in packs}) == REVIEWED_PACK_COUNT
+        assert {descriptor.module for descriptor in packs} == {
+            REVIEWED_MODULE,
+            SECOND_REVIEWED_MODULE,
+        }
 
     def test_the_reviewed_pack_is_reported_with_its_real_identity(self) -> None:
-        (descriptor,) = inspect_packs().packs
+        (descriptor,) = (d for d in inspect_packs().packs if d.module == REVIEWED_MODULE)
         assert descriptor.module == REVIEWED_MODULE
         assert descriptor.pack_id == pack.PACK_ID
         assert descriptor.domain == pack.DOMAIN
@@ -242,7 +256,7 @@ class TestTheRepositoryInventory:
         # what importing the same file produces. Static and dynamic agree on
         # the reviewed pack, which is what makes the static route safe to
         # trust rather than merely cheaper.
-        (descriptor,) = inspect_packs().packs
+        (descriptor,) = (d for d in inspect_packs().packs if d.module == REVIEWED_MODULE)
         for field, value in (
             ("PACK_ID", descriptor.pack_id),
             ("DOMAIN", descriptor.domain),
@@ -407,7 +421,7 @@ class TestCandidateSourceIsNeverExecuted:
             f" {REVIEWED_MODULE!r} in sys.modules)"
         )
         assert completed.returncode == 0, completed.stderr
-        assert completed.stdout.strip() == "1 True False"
+        assert completed.stdout.strip() == f"{REVIEWED_PACK_COUNT} True False"
 
     def test_inspection_works_with_pack_imports_made_impossible(self) -> None:
         # The strongest available form of the claim. A meta-path finder in a
@@ -433,7 +447,7 @@ class TestCandidateSourceIsNeverExecuted:
             "print(len(result.packs), result.ok)\n"
         )
         assert completed.returncode == 0, completed.stderr
-        assert completed.stdout.strip() == "1 True"
+        assert completed.stdout.strip() == f"{REVIEWED_PACK_COUNT} True"
 
     def test_the_inspector_never_reaches_for_an_execution_primitive(self) -> None:
         for path in (INSPECTION_SOURCE, CLI_PATH):
@@ -1546,17 +1560,18 @@ class TestJsonPayload:
         payload = as_json_payload(inspect_packs())
         assert set(payload) == {"status", "pack_count", "packs", "errors"}
         assert payload["status"] == "ok"
-        assert payload["pack_count"] == 1
+        assert payload["pack_count"] == REVIEWED_PACK_COUNT
         assert payload["errors"] == []
-        (entry,) = payload["packs"]
-        assert set(entry) == {
-            "module",
-            "pack_id",
-            "domain",
-            "category",
-            "reason_key",
-            "compiler",
-        }
+        assert len(payload["packs"]) == REVIEWED_PACK_COUNT
+        for entry in payload["packs"]:
+            assert set(entry) == {
+                "module",
+                "pack_id",
+                "domain",
+                "category",
+                "reason_key",
+                "compiler",
+            }
 
     def test_a_failing_inventory_says_invalid(self, pack_dir) -> None:
         directory, write = pack_dir
@@ -2149,7 +2164,7 @@ class TestTheGateActuallyBlocks:
         assert completed.returncode == 0, completed.stderr
         payload = json.loads(completed.stdout)
         assert payload["status"] == "ok"
-        assert payload["pack_count"] == 1
+        assert payload["pack_count"] == REVIEWED_PACK_COUNT
 
     def test_the_exact_ci_command_fails_on_an_invalid_inventory(self, tmp_path: Path) -> None:
         # The real CLI file, unmodified, run over a pack directory that is not
