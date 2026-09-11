@@ -30,6 +30,15 @@ def run_config_test(env_vars: dict) -> subprocess.CompletedProcess:
         "ALLOWED_ORIGINS": "https://example.com",
         "PRIVACY_POLICY_URL": "https://example.org/privacy",
         "SUPPORT_URL": "https://example.org/support",
+        # The scheduler credential. Long enough to clear the minimum
+        # length and not shaped like a placeholder, because production
+        # rejects both and this fixture is the valid case.
+        #
+        # Deliberately repetitive words rather than random hex: the secret
+        # scanner reads a high-entropy string beside a token-shaped key name
+        # as a leaked credential, and it is right to. A fixture should not
+        # look like a secret to anything, a scanner included.
+        "INTERNAL_SCHEDULER_TOKEN": "not-a-real-token-not-a-real-token-not-a-real-token",
     }
     env.update(env_vars)
     
@@ -97,3 +106,69 @@ def test_bad_supabase_keys():
     res = run_config_test({"SUPABASE_ANON_KEY": "placeholder_key"})
     assert res.returncode != 0
     assert "CRITICAL" in res.stderr
+
+
+# ---------------------------------------------------------------------------
+# The scheduler credential, through the real validator
+# ---------------------------------------------------------------------------
+# These run `validate_production_configuration()` itself, in a subprocess with
+# a real production environment, rather than a test-local reimplementation of
+# the rule. A helper that restates the logic passes even when the logic it
+# restates has been deleted, which is the one failure that matters here: the
+# scheduler routes refuse every caller when the token is unset, so a
+# production instance that boots without one has two batch jobs that can
+# never run.
+#
+# Fixture values are deliberately low-entropy and obviously synthetic, so the
+# secret scanner never sees something shaped like a credential and no scanner
+# allowlist is needed.
+
+def test_missing_scheduler_token_refuses_production_boot():
+    res = run_config_test({"INTERNAL_SCHEDULER_TOKEN": ""})
+    assert res.returncode != 0
+    assert "INTERNAL_SCHEDULER_TOKEN" in res.stderr
+    assert "must be set in production" in res.stderr
+
+
+def test_whitespace_only_scheduler_token_refuses_production_boot():
+    res = run_config_test({"INTERNAL_SCHEDULER_TOKEN": "   "})
+    assert res.returncode != 0
+    assert "must be set in production" in res.stderr
+
+
+@pytest.mark.parametrize("short", ["x", "short-token", "a" * 31])
+def test_short_scheduler_token_refuses_production_boot(short):
+    res = run_config_test({"INTERNAL_SCHEDULER_TOKEN": short})
+    assert res.returncode != 0
+    assert "too short" in res.stderr
+
+
+@pytest.mark.parametrize("marker", [
+    "placeholder", "changeme", "change_me", "todo",
+    "your_", "your-", "replace", "secret-here", "xxxx", "example",
+])
+def test_placeholder_scheduler_token_refuses_production_boot(marker):
+    # Padded past the length floor so the refusal is about the shape, not the
+    # length. Every marker the production validator knows is covered, which is
+    # what keeps its list and the readiness report's list the same list.
+    res = run_config_test({"INTERNAL_SCHEDULER_TOKEN": marker + "-token" * 6})
+    assert res.returncode != 0
+    assert "placeholder" in res.stderr
+
+
+def test_a_synthetic_but_acceptable_scheduler_token_boots():
+    res = run_config_test(
+        {"INTERNAL_SCHEDULER_TOKEN": "not-a-real-token-not-a-real-token-not-a-real-token"}
+    )
+    assert res.returncode == 0, res.stderr
+    assert "OK" in res.stdout
+
+
+def test_the_scheduler_token_value_never_reaches_the_refusal_message():
+    # The operator reads stderr. It must name the key and the problem, never
+    # the value, so that a refusal is safe to paste into a ticket.
+    value = "replace-this-scheduler-token-please-0000000"
+    res = run_config_test({"INTERNAL_SCHEDULER_TOKEN": value})
+    assert res.returncode != 0
+    assert value not in res.stderr
+    assert value not in res.stdout

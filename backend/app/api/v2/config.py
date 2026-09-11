@@ -53,6 +53,7 @@ from app.domains.ai_gateway.providers import gemini
 from app.shared.database import sql
 from app.shared.database.sql import get_session
 from app.shared.flags import service as flags
+from app.workers import schedule
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -201,8 +202,17 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
         )
         pending_jobs = jobs_result.scalar() or 0
         if pending_jobs > 0:
+            # The stable scheduled worker, by exact name. This used to be a
+            # LIKE 'account_deletion_worker_%' scan, which belonged to the
+            # always-on daemon topology: every container minted its own row and
+            # readiness read whichever happened to be newest. The scheduled
+            # worker is one logical worker with one deterministic name.
             worker_result = await session.execute(
-                text("SELECT last_heartbeat_at FROM system_worker_status WHERE worker_name LIKE 'account_deletion_worker_%' ORDER BY last_heartbeat_at DESC LIMIT 1")
+                text(
+                    "SELECT last_heartbeat_at FROM system_worker_status "
+                    "WHERE worker_name = :worker_name"
+                ),
+                {"worker_name": schedule.ACCOUNT_DELETION_WORKER_NAME},
             )
             last_heartbeat = worker_result.scalar()
             if not last_heartbeat:
@@ -212,7 +222,9 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
                 now_utc = datetime.datetime.now(datetime.UTC)
                 last_heartbeat_utc = last_heartbeat.replace(tzinfo=datetime.UTC) if last_heartbeat.tzinfo is None else last_heartbeat.astimezone(datetime.UTC)
                 age = (now_utc - last_heartbeat_utc).total_seconds()
-                if age > 300:
+                # Derived from the configured interval, not a second literal:
+                # one spare interval absorbs a scheduler that fires late.
+                if age > schedule.ACCOUNT_DELETION_STALE_AFTER_SECONDS:
                     components["worker_heartbeat"] = "stale"
                     is_ready = False
                 else:

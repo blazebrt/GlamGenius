@@ -98,6 +98,33 @@ def _secret_status(value: str | None) -> Status:
     return Status.CONFIGURED
 
 
+#: config's four words -> this report's four Statuses. The judgement is not
+#: made here; only the translation is.
+_SCHEDULER_TOKEN_STATUS = {
+    config.SCHEDULER_TOKEN_MISSING: Status.MISSING,
+    config.SCHEDULER_TOKEN_INVALID: Status.INVALID,
+    config.SCHEDULER_TOKEN_PLACEHOLDER: Status.PLACEHOLDER,
+    config.SCHEDULER_TOKEN_CONFIGURED: Status.CONFIGURED,
+}
+
+
+def _scheduler_token_status(value: str | None) -> Status:
+    """Status for the scheduler secret, decided by the production validator.
+
+    This used to apply the module's own PLACEHOLDER_MARKERS and its own
+    ordering, which is a different vocabulary from the one that actually
+    refuses production boot: a token containing "replace", "secret-here",
+    "xxxx" or "example" was refused by config and reported ``configured``
+    here. Delegating removes the possibility rather than re-synchronising two
+    lists that would drift again.
+
+    Reported as a status word and never as a value, a length, a prefix or a
+    hash: this report is printed by operators in terminals and pasted into
+    tickets, and a secret that is "nearly" disclosed there is disclosed.
+    """
+    return _SCHEDULER_TOKEN_STATUS[config.classify_scheduler_token(value)]
+
+
 def _url_status(value: str | None, *, require_https: bool = False) -> Status:
     if not _present(value):
         return Status.MISSING
@@ -181,6 +208,11 @@ def _core_requirements() -> dict[str, Status]:
         ),
         "POSTGRES_URL": _postgres_status(),
         "GEMINI_API_KEY": _secret_status(config.GEMINI_API_KEY),
+        # The external scheduler's shared secret. Without it the deletion and
+        # notification cycles cannot be invoked at all in the pre-PMF runtime.
+        "INTERNAL_SCHEDULER_TOKEN": _scheduler_token_status(
+            config.INTERNAL_SCHEDULER_TOKEN
+        ),
         "SENTRY_BACKEND_DSN": _sentry_status(),
         "MEDIA_STORAGE_BACKEND": _media_status(),
         "ALLOWED_ORIGINS": _origins_status(),

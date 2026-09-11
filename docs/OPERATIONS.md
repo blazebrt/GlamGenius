@@ -521,16 +521,117 @@ into a ticket, a log, or this document.
 
 ---
 
-## Render Production Runtime
+## Render Pre-PMF Runtime (zero cost)
 
-The deployment model for production: three Render services in Singapore, one
-image, and the existing Supabase authorities. The Blueprint is `render.yaml`
-at the repository root; the image is `deploy/render/Dockerfile`, built from the
-repository root as its context.
+**One** free Render Docker web service in Singapore, plus the existing Supabase
+authorities. The Blueprint is `render.yaml` at the repository root; the image is
+`deploy/render/Dockerfile`, built from the repository root as its context.
+
+This replaced a three-service estate — API, always-on deletion worker, Render
+cron — because paying for infrastructure before product-market fit is a bet on
+demand nobody has measured. Render's free tier has no background workers and no
+cron, so both batch jobs moved behind HTTP and Supabase Cron now invokes them.
 
 The systemd guidance in §6 is **not** replaced. It remains the correct approach
-for anyone deploying to a host they own. Render's Cron Job takes its place in
-*this* model, and no cron or systemd is installed inside the container.
+for anyone deploying to a host they own.
+
+### What free tier actually means
+
+Say this plainly, because the word `production` appears all over this stack:
+
+- **No SLA.** None. Nothing here is promised to be up.
+- **One instance.** No redundancy, no rolling deploy, no zero-downtime.
+- **It can restart** at any time, and a cold start is a real wait for whoever
+  is first through the door.
+- **It can be suspended** if free quotas are exhausted.
+- **No Render pre-deploy command** — a paid feature. The release gate moved
+  into the start command instead (see below).
+- **No Render background workers or cron** — also not on free.
+- Appropriate for **private beta and PMF validation**, and nothing else.
+
+### The zero-cost invariant: do not attach a payment method
+
+The requirement is **₹0 infrastructure before PMF**, and on Render that is not
+the same thing as choosing free plans.
+
+> **DO NOT ADD A PAYMENT METHOD TO THE RENDER WORKSPACE.**
+
+Render's Free instance types do not charge for the instance. They can still
+accrue supplementary charges — outbound bandwidth over the allowance, and
+build minutes over the allowance. What decides whether that becomes a bill is
+whether a card is on file:
+
+- **No payment method attached** → Render suspends or disables the free
+  resource or the build when an allowance is exhausted. The outcome is
+  downtime, which is recoverable and free.
+- **Payment method attached** → the same overage is billed instead. The
+  outcome is a charge nobody approved.
+
+So the absence of a card is not an oversight to tidy up later. It is the
+mechanism that makes ₹0 a guarantee rather than an intention, and it converts
+every possible surprise bill into a possible outage — which is the right trade
+for a private beta and the wrong one for a funded product. Revisit it when
+there is revenue, deliberately, not while provisioning.
+
+**Outbound bandwidth counts more than people expect.** It includes traffic
+from Render out to Supabase, to Gemini, to Expo Push and to any other external
+API — not only what customers download. A busy beta can therefore exhaust the
+allowance without a single large user-facing response, and without a card that
+means suspension.
+
+Do not weaken the application to reduce this. Do not disable the safety
+validators, skip Store A provisioning, or drop observability to save bytes.
+If the allowance becomes the binding constraint, that is information about
+demand, which is the thing this whole runtime exists to measure.
+
+#### Provider qualification checklist (later, not in this change)
+
+Before declaring the runtime live, verify and record:
+
+- [ ] Render workspace plan is **Hobby / free**
+- [ ] `glamgenius-api` service plan is **free**
+- [ ] **No payment method attached to the workspace**
+- [ ] No paid service of any type exists in the workspace
+- [ ] No Render-managed PostgreSQL exists
+- [ ] No Render Key Value / Redis exists
+
+If a payment method is already attached when you reach this checklist:
+
+> **STOP.**
+
+Do not continue under the claim of a guaranteed ₹0 runtime. Either remove it,
+or record explicitly that the runtime is no longer zero-cost-guaranteed and
+what the exposure is. Those are the only two honest outcomes.
+
+`APP_ENV` stays `production` anyway, deliberately. That is what turns on every
+production safety validator: invite-only, analysis consent, Supabase storage,
+no local media, asymmetric JWT verification. The distinction to hold:
+
+> production **safety configuration** ≠ production-grade **infrastructure SLA**
+
+This runtime has the first. It does **not** have the second, and it is not
+production-grade infrastructure.
+
+### The release gate moved, it did not go away
+
+`preDeployCommand` is a paid feature. The gate is now the first half of the
+start command:
+
+```
+sh -c "python -m app.release && exec uvicorn server:app --host 0.0.0.0 --port $PORT"
+```
+
+- release exits `0` → `exec uvicorn` → the API serves
+- release exits non-zero → the container dies → **the API never serves**
+
+`&&`, never `;`: a `;` would start the API against a database that was never
+migrated. There is no `|| true`, no backgrounding, no best-effort migration.
+
+`python -m app.release` remains the single release authority — production config
+validation, the PostgreSQL advisory lock, `alembic upgrade head`,
+`alembic check`, Store A provisioning, reference-data seeding, consistency
+checks. It is repeat-safe, so running it on every container start is correct
+rather than merely tolerable.
 
 ### Two different events, and why the order matters
 
@@ -542,26 +643,200 @@ for anyone deploying to a host they own. Render's Cron Job takes its place in
 | Automatable | the mechanics, yes | **never** |
 
 **A deployment must never activate knowledge.** Nothing in `render.yaml`, in
-the image, in the pre-deploy command or in the cron job reaches the Phase B
+the image, in the release gate or in either scheduled job reaches the Phase B
 operator. Deploying the code that *contains* the operator changes nothing about
 what customers are told; only step 13 below does, and only after step 14.
 
-### The services
+### The service
 
-| Service | Type | Command | Notes |
+| Service | Type | Plan | Command | Notes |
+| --- | --- | --- | --- | --- |
+| `glamgenius-api` | web | **free** | `sh -c "python -m app.release && exec uvicorn server:app --host 0.0.0.0 --port $PORT"` | readiness `/api/v2/ready` |
+
+There is exactly one. It runs from `/workspace/backend` inside the image,
+declares no disk, and has automatic Git deploy switched off via
+`autoDeployTrigger: "off"` — one field, not two. The deprecated `autoDeploy`
+is deliberately absent: writing both gave the Blueprint parser two sources of
+truth for one decision.
+
+There is no `databases:` block and no Key Value / Redis. The application
+database and Store A are both Supabase, and a third Render-managed authority is
+how the ODbL wall gets breached by accident.
+
+### Supabase Cron runs the two batch jobs
+
+**Enable on the APPLICATION Supabase project only.** Not on the OFF Store A
+project — Store A is a read-only Open Food Facts mirror with no accounts, no
+notifications and nothing to delete, and giving it scheduler jobs would be
+giving it reach it must never have.
+
+Extensions required on the application project:
+
+- `pg_cron` — the scheduler
+- `pg_net` — outbound HTTP from PostgreSQL
+- **Vault** — where the two values below live
+
+Two jobs:
+
+| Name | Schedule | Method | Target |
 | --- | --- | --- | --- |
-| `glamgenius-api` | web | `uvicorn server:app --host 0.0.0.0 --port $PORT` | readiness `/api/v2/ready` |
-| `glamgenius-account-deletion` | worker | `python -m app.workers.account_deletion` | continuous; people are waiting on it |
-| `glamgenius-notifications` | cron | `python -m app.workers.notifications` | `0 * * * *`, UTC |
+| `glamgenius-account-deletion` | `*/5 * * * *` | POST | `<RENDER_API_URL>/api/v2/internal/scheduler/account-deletion` |
+| `glamgenius-notifications` | `0 * * * *` | POST | `<RENDER_API_URL>/api/v2/internal/scheduler/notifications` |
 
-All three run from `/workspace/backend` inside the image, use the same
-Dockerfile and build context, declare no disk, and have automatic Git deploy
-switched off.
+Both read, **at execution time**, from Supabase Vault:
+
+- the Render API base URL
+- the scheduler bearer token (`INTERNAL_SCHEDULER_TOKEN`)
+
+The cron SQL must reference Vault **secret names**, never a secret value. A
+token pasted into a cron definition is a token in the database in plaintext,
+readable by anyone who can read `cron.job`.
+
+Both calls send `Authorization: Bearer <token>`.
+
+#### The HTTP timeout is a reviewed number, not an operator's guess
+
+`pg_net` takes a timeout per request. Leaving it to whoever writes the cron
+definition is how one job ends up with none. The reviewed values:
+
+| Job | Schedule | `timeout_milliseconds` | Why this number |
+| --- | --- | --- | --- |
+| `glamgenius-account-deletion` | `*/5 * * * *` | `90000` (90s) | A free instance can cold-start, and Render documents a cold start of roughly a minute. 90s clears that with margin and still finishes well inside the 5-minute gap, so a hung request cannot overlap the next run. |
+| `glamgenius-notifications` | `0 * * * *` | `120000` (120s) | Same cold start, but the cycle itself compiles Today for every due account, so it needs more room than the deletion call. An hour of headroom makes overlap irrelevant; the ceiling is there to bound a hang, not to pace the job. |
+
+Both are finite, both comfortably exceed ordinary cold-start time, and the
+deletion timeout stays below its own schedule interval so two cycles cannot
+be in flight at once. A request that does hang is bounded: `pg_net` records
+it as `timed_out` and the next tick proceeds.
+
+#### Reading what actually happened: three layers, not one
+
+These are three different questions and they have three different answers.
+Confusing them is how a scheduler that has been failing all week looks
+healthy.
+
+| Layer | Answers | Does **not** answer |
+| --- | --- | --- |
+| `cron.job_run_details` | Did `pg_cron` run the SQL — that is, did it *enqueue* the request? | Whether any HTTP request succeeded, or was even sent |
+| `net._http_response` | The actual HTTP result: `status_code`, `timed_out`, `error_msg`, response body | Whether the application's work succeeded beyond the status code |
+| `system_worker_status` | The durable GlamGenius outcome: last heartbeat, last success, last attempt, bounded error code | Anything about transport |
+
+**`pg_net` is asynchronous.** `cron.job_run_details = succeeded` means the
+enqueue worked. It is *not* evidence that the endpoint returned 2xx — an HTTP
+401 never appears there. Reading only that table is the mistake this section
+exists to prevent.
+
+The HTTP result is in `net._http_response`:
+
+```sql
+select
+    id,
+    status_code,
+    timed_out,
+    error_msg,
+    created
+from net._http_response
+order by created desc
+limit 20;
+```
+
+Use only the operational columns needed for diagnosis. Those five answer
+every routine scheduler question; nothing else is required to qualify a run.
+
+**Where the headers actually live**, because the two are easy to confuse and
+the confusion matters:
+
+| Table | `headers` column holds | Contains the bearer token? |
+| --- | --- | --- |
+| `net.http_request_queue` | the **outbound request** headers, while the request is queued | **Yes** — this is where `Authorization: Bearer …` exists |
+| `net._http_response` | the **response** headers returned by the remote endpoint | No |
+
+So `net._http_response.headers` are the endpoint's response headers, not the
+outbound bearer request headers. They are still not worth selecting: the
+response body and response headers are unnecessary for routine scheduler
+qualification and may carry incidental information, so do not copy or paste
+them without need.
+
+The outbound `Authorization` header lives in pg_net's request path —
+`net.http_request_queue` while the request is queued, from which rows are
+removed once executed. It must never be queried, logged, copied into a
+ticket, or exposed alongside decrypted Vault values.
+
+Reading the result:
+
+| What you see | What it means |
+| --- | --- |
+| `status_code = 200` | The cycle ran and reported success |
+| `status_code = 401` | Token mismatch or missing — the Render env group and the Vault secret have drifted apart. Compare them by *name*, never by printing either value |
+| `status_code = 5xx` | The request arrived and the GlamGenius scheduled cycle failed. `system_worker_status` holds the bounded reason |
+| `timed_out = true` | The request outlived its timeout — a cold start that ran long, or a hang |
+| `error_msg` populated | The request never completed: network, DNS, the service suspended or asleep |
+
+Then, and only then, `system_worker_status` for the application's own view:
+
+```sql
+select worker_name, last_heartbeat_at, last_successful_job_at,
+       last_attempted_job_at, last_error_code, service_version
+from system_worker_status;
+```
+
+> **This repository documents these jobs. It does not create them.** Nothing
+> here enables an extension, writes a Vault secret or schedules a cron job;
+> the change that introduced this section created none of them. Installing
+> them is operator work, done by hand, from the steps above.
+
+### Keeping the instance warm
+
+The 5-minute deletion call is real work that has to happen anyway, and it
+happens to keep the free instance from idling. That is a side effect, not a
+strategy.
+
+Do **not** add UptimeRobot, cron-job.org, any external keepalive provider, or a
+self-ping loop. Synthetic traffic whose only purpose is to defeat the platform's
+idle behaviour is not monitoring and is not free — it costs the quota the free
+tier is metering.
+
+### The scheduler credential
+
+The **real production** `INTERNAL_SCHEDULER_TOKEN` lives in exactly two
+places: the `glamgenius-production-secrets` Render environment group, and
+Supabase Vault.
+
+No production credential and no generated high-entropy scheduler secret
+belongs in `render.yaml`, in `env.example`, in tests, in documentation, or in
+any commit.
+
+Tests are the one deliberate nuance, and it is worth stating rather than
+glossing: they **do** contain scheduler-token fixtures, because the validation
+rules cannot be exercised without one. Those fixtures are explicitly
+synthetic and deliberately low-entropy — repeated words such as
+`not-a-real-token-not-a-real-token-not-a-real-token` — chosen so they cannot
+be mistaken for a production credential by a reader or by a secret scanner.
+That is why no scanner allowlist is needed: nothing in the repository is
+shaped like a real secret in the first place.
+
+It is **not** a customer credential and **not** a Supabase JWT. Those two routes
+run batch work on nobody's behalf, so authorising them with a user token would
+mean any signed-in user could trigger them.
+
+Generate one per environment, never reuse across environments:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Production requires at least 32 characters and refuses anything that looks like
+a placeholder. `python -m app.release_readiness` reports it as
+`configured` / `missing` / `placeholder` / `invalid` and never prints the value.
+
+Rotation: set the new value in Render, redeploy, then update the Vault secret.
+The window between the two is a window of 401s on the scheduler routes — which
+delays a deletion cycle by minutes and a notification cycle by up to an hour,
+and loses nothing.
 
 ### Environment configuration
 
-Two Render environment groups, both referenced by all three services so they
-cannot drift apart:
+Two Render environment groups, both referenced by the one service:
 
 **`glamgenius-production-invariants`** — declared in `render.yaml` and
 version-controlled, because these are governance decisions rather than
@@ -588,6 +863,7 @@ this repository, in a ticket, in a log, or in a screenshot.**
 | `PRIVACY_POLICY_URL` | shown to customers |
 | `SUPPORT_URL` | shown to customers |
 | `CONSENT_VERSION` | the consent text version being enforced |
+| `INTERNAL_SCHEDULER_TOKEN` | the shared secret Supabase Cron presents to the two scheduler routes — the same value must be in Supabase Vault |
 
 `python -m app.release_readiness --json` reports which of these are missing,
 placeholder or invalid, **by key name and status only**. It never prints a
@@ -619,12 +895,12 @@ before the group exists fails, which is the correct failure — it stops before
 creating services that would start unconfigured.
 
 **4. Initial Blueprint sync, then immediately disable Auto Sync.** Point Render
-at the repository and sync `render.yaml`. Render creates the three services and
-the invariants group.
+at the repository and sync `render.yaml`. Render creates the one service and the
+invariants group.
 
 **Two different controls, and the service one is not enough.** This step used to
-say that nothing happens automatically because auto-deploy is off on all three
-services. That was only half true, and the half it missed is the dangerous one:
+say that nothing happens automatically because auto-deploy is off on the
+service. That was only half true, and the half it missed is the dangerous one:
 
 | Control | Where it lives | What it governs |
 | --- | --- | --- |
@@ -660,27 +936,28 @@ not a consequence of pushing a commit.
 No deploy happens automatically once **both** are off.
 
 **5. Deploy one exact reviewed commit.** Choose the SHA a human reviewed and CI
-passed. Deploy that SHA — never a branch tip, never "latest". Record it. Each
-process receives it at runtime as `RENDER_GIT_COMMIT`, and the image's
-entrypoint copies it into `COMMIT_SHA`, which both workers write to
+passed. Deploy that SHA — never a branch tip, never "latest". Record it. The
+service receives it at runtime as `RENDER_GIT_COMMIT`, and the image's
+entrypoint copies it into `COMMIT_SHA`, which both scheduled workers write to
 `system_worker_status.service_version`. That is how the deployed commit stays
 checkable after the fact rather than only at deploy time.
 
-**6. The pre-deploy gate.** The web service and the deletion worker both run
-`python -m app.release` before starting. It validates production configuration,
-takes the PostgreSQL advisory lock (`LOCK_ID = 4829103`), runs
+**6. The release gate.** The service runs `python -m app.release` as the first
+half of its start command, before `exec uvicorn`. It validates production
+configuration, takes the PostgreSQL advisory lock (`LOCK_ID = 4829103`), runs
 `alembic upgrade head`, runs `alembic check` for drift, provisions Store A,
 seeds reference data and verifies the seed version, the seven inventory
 categories, the feature flags and the ingredient catalogue.
 
-*Ordering on a first deployment:* whichever of the two reaches the advisory
-lock first performs the migration; the other blocks until it finishes and then
-finds nothing to do. That lock is the only concurrency authority — do not add a
-second one anywhere. The cron job has no pre-deploy command; if it fires before
-the first migration completes, that hour is skipped and the next hour succeeds.
+*Ordering:* with one service there is one runner, but the advisory lock stays
+the only concurrency authority — do not add a second one anywhere. The
+scheduled jobs have no gate of their own: they reach the API over HTTP, so a
+job that fires before the first release completes gets a connection failure or
+a `503`, and the next run succeeds. A skipped notification hour is skipped, not
+queued.
 
-*Failure behaviour:* a non-zero exit stops the deploy. The previous version
-keeps serving traffic and no customer sees a partially migrated database. The
+*Failure behaviour:* a non-zero exit kills the container before uvicorn starts,
+so the API never serves a request against an unmigrated database. The
 log line names the stage and a fixed classification — for example
 `stage=alembic_upgrade classification=migration_failed returncode=1` — and
 deliberately does **not** include Alembic's stderr, because a failing
@@ -701,25 +978,44 @@ is public and unauthenticated, so it will never quote a driver message, a URL
 or a hostname. `unavailable` means that component raised; use
 `app.release_readiness` and the service logs to find out why.
 
-**9. Verify the deletion worker.** Confirm the service is running and its
-heartbeat is fresh:
+**9. Verify the scheduled deletion cycle.** Within five minutes of the first
+cron run there must be a heartbeat under the scheduled worker's one stable
+name — no hostname suffix, because one logical worker is one row however many
+containers have served it:
 
 ```sql
 SELECT worker_name, last_heartbeat_at, service_version
 FROM system_worker_status
-WHERE worker_name LIKE 'account_deletion_worker_%'
-ORDER BY last_heartbeat_at DESC
-LIMIT 1;
+WHERE worker_name = 'account_deletion_worker';
 ```
 
 `service_version` should equal the commit you deployed in step 5. Readiness
-also treats a heartbeat older than 300 seconds as stale while deletion jobs are
-pending.
+treats that heartbeat as stale once it is older than two intervals (600
+seconds) while deletion jobs are pending; the interval and the grace both come
+from `app/workers/schedule.py`.
 
-**10. Verify the hourly notification job.** Confirm the cron schedule reads
-`0 * * * *` in the dashboard and that it is UTC. After the first hour, check
-the run succeeded and that its heartbeat row carries the same `service_version`.
-The batch never sends late catch-ups, so a skipped hour is skipped, not queued.
+**10. Verify the hourly notification job.** Confirm the Supabase Cron job
+`glamgenius-notifications` reads `0 * * * *` and that `pg_cron` is evaluating
+it in UTC. After the first hour, read the three layers in order — that order
+is the whole point, and taking the first one for an answer is the mistake this
+runbook keeps having to correct:
+
+1. `cron.job_run_details` — the cron SQL ran, so the pg_net request was
+   **enqueued**. Nothing more. A `succeeded` here is not evidence that any
+   HTTP request completed, or that it returned 2xx.
+2. `net._http_response` — the **actual HTTP result**, including the status
+   code. This is the only one of the three that carries an HTTP status.
+3. `system_worker_status` — the `notification_worker` heartbeat, carrying the
+   same `service_version` as the commit deployed in step 5.
+
+The batch never sends late catch-ups, so a skipped hour is skipped, not
+queued.
+
+Both jobs are POSTs carrying the scheduler bearer token.
+
+A **`401` in `net._http_response`** means the Vault scheduler token and the
+Render environment value have drifted apart. Compare the two by location and
+key name; never print either secret value.
 
 **11. Point the app at the backend.** Once the production API URL genuinely
 exists, set `EXPO_PUBLIC_BACKEND_URL` in the **EAS production environment**

@@ -248,6 +248,67 @@ OFF_EXPORT_DIR = _env_str("OFF_EXPORT_DIR", "/data/off-export")
 PRIVACY_POLICY_URL = _env_str("PRIVACY_POLICY_URL", "https://glamgenius.placeholder/privacy")
 SUPPORT_URL = _env_str("SUPPORT_URL", "https://glamgenius.placeholder/support")
 
+# The shared secret the external scheduler presents to
+# /api/v2/internal/scheduler/*. It is not a customer credential and is not a
+# Supabase JWT: those routes run privileged batch work on nobody's behalf, so
+# authorising them with a user token would mean any user token could run them.
+#
+# Never committed, never logged, never returned, never in a URL. The value is
+# generated once by an operator and lives in Render's secret environment and
+# Supabase Vault; this repository only names it.
+INTERNAL_SCHEDULER_TOKEN = _env_str("INTERNAL_SCHEDULER_TOKEN")
+
+#: Below this a token is not worth calling a secret. Not a cryptographic
+#: statement -- just the floor that rejects "test", "changeme" and a hand-typed
+#: word, which is the realistic failure here.
+INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH = 32
+
+#: Substrings that mean somebody copied env.example and did not edit it. Kept
+#: beside the setting that uses it rather than imported from the readiness
+#: report, because config must not depend on a reporting module.
+SCHEDULER_TOKEN_PLACEHOLDER_MARKERS = (
+    "placeholder", "changeme", "change_me", "example", "todo", "your_", "your-",
+    "replace", "secret-here", "xxxx",
+)
+
+#: The four things that can be true of the scheduler token. Strings rather
+#: than an enum so that release_readiness can map them onto its own Status
+#: without either module importing the other's vocabulary.
+SCHEDULER_TOKEN_MISSING = "missing"
+SCHEDULER_TOKEN_INVALID = "invalid"
+SCHEDULER_TOKEN_PLACEHOLDER = "placeholder"
+SCHEDULER_TOKEN_CONFIGURED = "configured"
+
+
+def classify_scheduler_token(value: str | None) -> str:
+    """Decide what the scheduler token is, in one place.
+
+    This exists because there were two places. ``validate_production_
+    configuration`` refused a token containing "replace", "secret-here",
+    "xxxx" or "example"; the readiness report had never heard of those
+    markers and called the same token ``configured``. An operator could
+    therefore read a green readiness report and watch production refuse to
+    boot on the value it had just approved -- and the readiness report is
+    precisely the tool for finding out why production will not boot.
+
+    Order matters and is deliberate: length is judged before shape, so a
+    short placeholder is reported as too short rather than as a placeholder.
+    Both are refusals; what must not happen is the two callers disagreeing
+    about which.
+
+    Returns a status word. Never the value, its length, its prefix or a hash
+    of it -- the caller's job is to say which of four things is true, and
+    every one of them can be said without quoting the secret.
+    """
+    token = (value or "").strip()
+    if not token:
+        return SCHEDULER_TOKEN_MISSING
+    if len(token) < INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH:
+        return SCHEDULER_TOKEN_INVALID
+    if any(marker in token.lower() for marker in SCHEDULER_TOKEN_PLACEHOLDER_MARKERS):
+        return SCHEDULER_TOKEN_PLACEHOLDER
+    return SCHEDULER_TOKEN_CONFIGURED
+
 
 # ---------------------------------------------------------------------------
 # Beta usage controls — non-payment abuse and cost limits
@@ -398,6 +459,24 @@ def validate_production_configuration() -> None:
 
     if not GEMINI_API_KEY:
         raise RuntimeError("CRITICAL: GEMINI_API_KEY must be set in production.")
+
+    # Through the shared classifier, so that what refuses production boot and
+    # what the readiness report prints are the same judgement.
+    scheduler_state = classify_scheduler_token(INTERNAL_SCHEDULER_TOKEN)
+    if scheduler_state == SCHEDULER_TOKEN_MISSING:
+        raise RuntimeError(
+            "CRITICAL: INTERNAL_SCHEDULER_TOKEN must be set in production. "
+            "The account-deletion and notification schedulers cannot run without it."
+        )
+    if scheduler_state == SCHEDULER_TOKEN_INVALID:
+        raise RuntimeError(
+            "CRITICAL: INTERNAL_SCHEDULER_TOKEN is too short to be a secret. "
+            f"At least {INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH} characters are required."
+        )
+    if scheduler_state == SCHEDULER_TOKEN_PLACEHOLDER:
+        raise RuntimeError(
+            "CRITICAL: INTERNAL_SCHEDULER_TOKEN still looks like a placeholder."
+        )
 
     import os
     sentry_dsn = os.environ.get("SENTRY_BACKEND_DSN", "").strip()

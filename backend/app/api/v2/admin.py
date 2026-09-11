@@ -14,6 +14,7 @@ from app.domains.evidence.models import EvidenceClaim
 from app.domains.system.models import WorkerStatus
 from app.shared.database.sql import get_session
 from app.shared.security.deps import CurrentAccount, get_current_account
+from app.workers import schedule
 
 logger = logging.getLogger(__name__)
 
@@ -32,17 +33,16 @@ def require_admin(current: CurrentAccount = Depends(get_current_account)) -> Cur
     return current
 
 
-# Workers a scheduler must invoke, and how often, in seconds. Nothing in this
-# repository can install a schedule; naming the expectation is what lets the
-# endpoint say a run was missed.
-SCHEDULED_WORKERS = {
-    "notification_worker": 3600,
-}
+# Workers a scheduler must invoke, and how often. Nothing in this repository
+# can install a schedule; naming the expectation is what lets the endpoint say
+# a run was missed.
+#
+# Both the interval and the grace come from app/workers/schedule.py, which
+# /api/v2/ready reads too. They used to be literals in two files, which is how
+# readiness and this endpoint came to disagree about the same worker.
+SCHEDULED_WORKERS = schedule.SCHEDULED_WORKERS
 
-# How late a run may be before it counts as missed. One extra interval absorbs
-# a slow run or a scheduler that fires a little late, without hiding a worker
-# that has genuinely stopped.
-_MISSED_GRACE = 2
+_MISSED_GRACE = schedule.MISSED_GRACE_MULTIPLIER
 
 
 def _freshness(worker, now) -> dict:

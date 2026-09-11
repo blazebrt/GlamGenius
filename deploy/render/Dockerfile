@@ -34,7 +34,7 @@
 # a pre-deploy command, not a cron command, not a build step. Production use
 # is an explicit one-off job an operator starts by hand, after proving the
 # deployed commit is the one a human reviewed. See docs/OPERATIONS.md,
-# "Render Production Runtime".
+# "Render Pre-PMF Runtime (zero cost)".
 #
 # Security properties, carried over from backend/Dockerfile deliberately:
 #   * base image pinned by digest (same digest, same update script)

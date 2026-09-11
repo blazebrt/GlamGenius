@@ -185,9 +185,35 @@ def _service(name: str) -> dict:
 
 
 API = "glamgenius-api"
-DELETION_WORKER = "glamgenius-account-deletion"
-NOTIFICATION_CRON = "glamgenius-notifications"
-ALL_SERVICES = (API, DELETION_WORKER, NOTIFICATION_CRON)
+#: There is one service now. This used to be three — the API, an always-on
+#: deletion worker and a Render cron — and the two batch processes moved
+#: behind HTTP when the runtime moved to Render's free tier, which has
+#: neither background workers nor cron. The jobs did not go away; the
+#: invariants that used to be asserted against those services are asserted
+#: below against the scheduled cycles and the runbook that invokes them.
+ALL_SERVICES = (API,)
+
+#: The Supabase Cron job names, which are now where the two batch schedules
+#: live. Documented in docs/OPERATIONS.md; this repository does not install
+#: them.
+DELETION_JOB = "glamgenius-account-deletion"
+NOTIFICATION_JOB = "glamgenius-notifications"
+
+#: The heading the runbook section carries, in one place: every runbook test
+#: below slices the document at it.
+RUNBOOK_HEADING = "## Render Pre-PMF Runtime (zero cost)"
+
+
+def _runbook_section() -> str:
+    """The runtime section of docs/OPERATIONS.md, and only that section.
+
+    Sliced rather than read whole: an assertion satisfied by a sentence in the
+    systemd guidance thirty pages earlier would prove nothing about the Render
+    runbook.
+    """
+    operations = (REPOSITORY_ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
+    assert RUNBOOK_HEADING in operations
+    return operations.split(RUNBOOK_HEADING, 1)[1]
 
 
 # ---------------------------------------------------------------------------
@@ -208,13 +234,20 @@ class TestRenderTopology:
         yaml = pytest.importorskip("yaml")
         assert _blueprint() == yaml.safe_load(RENDER_YAML.read_text(encoding="utf-8"))
 
-    def test_exactly_the_three_production_process_classes_are_declared(self) -> None:
+    def test_exactly_one_free_web_service_is_declared(self) -> None:
         declared = {service["name"]: service["type"] for service in _blueprint()["services"]}
-        assert declared == {
-            API: "web",
-            DELETION_WORKER: "worker",
-            NOTIFICATION_CRON: "cron",
-        }
+        assert declared == {API: "web"}
+
+    def test_the_one_service_is_on_the_free_plan(self) -> None:
+        # The whole point of this shape. A paid plan here would be a bill
+        # nobody agreed to, arriving before there is any evidence of demand.
+        assert _service(API)["plan"] == "free"
+
+    def test_no_worker_or_cron_service_is_declared(self) -> None:
+        # Free tier has neither. A declared one would either fail the sync or
+        # silently start charging.
+        for service in _blueprint()["services"]:
+            assert service["type"] not in {"worker", "cron"}, service["name"]
 
     @pytest.mark.parametrize("name", ALL_SERVICES)
     def test_every_service_runs_in_singapore(self, name: str) -> None:
@@ -223,19 +256,47 @@ class TestRenderTopology:
     @pytest.mark.parametrize("name", ALL_SERVICES)
     def test_no_service_deploys_itself_from_git(self, name: str) -> None:
         service = _service(name)
-        # Both are asserted. autoDeployTrigger supersedes autoDeploy in the
-        # current schema, but a deployment nobody chose is expensive enough
-        # that neither is allowed to be the only thing standing in the way.
-        assert service["autoDeploy"] is False
         # A bare `off` is the YAML 1.1 boolean false, which is not the string
         # the schema expects, so the quoting is part of the contract.
         assert service["autoDeployTrigger"] == "off"
 
+    @pytest.mark.parametrize("name", ALL_SERVICES)
+    def test_exactly_one_field_decides_automatic_deployment(self, name: str) -> None:
+        # This file used to require both autoDeploy and autoDeployTrigger, on
+        # the reasoning that a deployment nobody chose is expensive enough to
+        # deserve two locks. That was wrong in a way only the Blueprint parser
+        # could tell us: two fields for one decision is two sources of truth,
+        # and the deprecated one is the one that must go.
+        assert "autoDeploy" not in _service(name)
+
     def test_the_notification_job_runs_exactly_once_an_hour(self) -> None:
-        assert _service(NOTIFICATION_CRON)["schedule"] == "0 * * * *"
+        # The schedule moved out of render.yaml and into Supabase Cron, so it
+        # is asserted where it now lives: the interval the application expects
+        # and the cron expression the runbook tells the operator to install.
+        from app.workers import schedule
+
+        assert schedule.NOTIFICATION_INTERVAL_SECONDS == 3600
+        runbook = _runbook_section()
+        assert NOTIFICATION_JOB in runbook
+        assert "`0 * * * *`" in runbook
+
+    def test_the_deletion_job_runs_every_five_minutes(self) -> None:
+        from app.workers import schedule
+
+        assert schedule.ACCOUNT_DELETION_INTERVAL_SECONDS == 300
+        runbook = _runbook_section()
+        assert DELETION_JOB in runbook
+        assert "`*/5 * * * *`" in runbook
 
     def test_the_notification_job_is_a_schedule_and_not_a_daemon(self) -> None:
-        assert _service(NOTIFICATION_CRON)["type"] == "cron"
+        # It was a Render cron; it is now a Supabase Cron POST. Either way the
+        # worker must stay a batch that runs once and exits — a daemon loop in
+        # this module would mean an hourly job that never ends.
+        notifications = (BACKEND_ROOT / "app" / "workers" / "notifications.py").read_text(
+            encoding="utf-8"
+        )
+        assert "def run_cycle(" in notifications
+        assert "def run_forever(" not in notifications
 
     def test_readiness_is_the_exact_v2_ready_path(self) -> None:
         assert _service(API)["healthCheckPath"] == "/api/v2/ready"
@@ -287,26 +348,55 @@ class TestCommands:
         # would never receive traffic.
         assert not re.search(r"--port\s+\d+", _service(API)["dockerCommand"])
 
-    def test_the_deletion_worker_runs_the_canonical_worker(self) -> None:
-        assert _service(DELETION_WORKER)["dockerCommand"] == "python -m app.workers.account_deletion"
+    def test_the_deletion_job_reaches_the_canonical_worker(self) -> None:
+        # The command moved to an HTTP call, so what must be canonical is what
+        # the route calls. Not a second deletion implementation behind a door.
+        scheduler = (BACKEND_ROOT / "app" / "api" / "v2" / "internal_scheduler.py").read_text(
+            encoding="utf-8"
+        )
+        assert "account_deletion.run_cycle()" in scheduler
+        assert _runbook_section().count(
+            "/api/v2/internal/scheduler/account-deletion"
+        ) >= 1
 
-    def test_the_notification_job_runs_the_canonical_worker(self) -> None:
-        assert _service(NOTIFICATION_CRON)["dockerCommand"] == "python -m app.workers.notifications"
+    def test_the_notification_job_reaches_the_canonical_worker(self) -> None:
+        scheduler = (BACKEND_ROOT / "app" / "api" / "v2" / "internal_scheduler.py").read_text(
+            encoding="utf-8"
+        )
+        assert "notifications.run_cycle()" in scheduler
+        assert _runbook_section().count("/api/v2/internal/scheduler/notifications") >= 1
 
-    def test_the_deletion_worker_does_not_run_the_api(self) -> None:
-        deletion = _service(DELETION_WORKER)["dockerCommand"]
-        assert "uvicorn" not in deletion
-        assert deletion != _service(API)["dockerCommand"]
+    def test_the_batch_work_is_not_reachable_from_a_customer_route(self) -> None:
+        # What "the worker is not the API" means once they share a process:
+        # the only module that may invoke a worker cycle is the scheduler
+        # router, and it is behind a shared secret rather than a user token.
+        v2 = BACKEND_ROOT / "app" / "api" / "v2"
+        callers = [
+            path.name
+            for path in sorted(v2.glob("*.py"))
+            if "run_cycle()" in path.read_text(encoding="utf-8")
+        ]
+        assert callers == ["internal_scheduler.py"], callers
 
-    def test_the_two_workers_are_not_the_same_process(self) -> None:
-        assert _service(DELETION_WORKER)["dockerCommand"] != _service(NOTIFICATION_CRON)["dockerCommand"]
+    def test_the_two_scheduled_cycles_are_not_the_same_process(self) -> None:
+        from app.workers import account_deletion, notifications
 
-    @pytest.mark.parametrize("name", [API, DELETION_WORKER])
-    def test_the_pre_deploy_gate_is_the_canonical_release_entrypoint(self, name: str) -> None:
+        assert account_deletion.run_cycle is not notifications.run_cycle
+
+    def test_the_release_gate_is_the_canonical_release_entrypoint(self) -> None:
         # Not a bash re-implementation of migrate-then-seed. app.release already
         # owns config validation, the advisory lock, alembic upgrade, alembic
         # check, Store A provisioning, seeding and the consistency checks.
-        assert _service(name)["preDeployCommand"] == "python -m app.release"
+        #
+        # It used to be preDeployCommand, which is a paid feature. It is now
+        # the first half of the start command, joined with `&&` so a failed
+        # release cannot be followed by a served request.
+        service = _service(API)
+        assert "preDeployCommand" not in service
+        command = service["dockerCommand"]
+        assert "python -m app.release && exec uvicorn" in command
+        assert "python -m app.release ;" not in command
+        assert "|| true" not in command
 
     def test_no_second_migration_lock_is_introduced(self) -> None:
         # The PostgreSQL advisory lock in app.release stays the only
@@ -507,9 +597,27 @@ class TestCommitProvenance:
         assert "tini" in entrypoint_line[0]
 
     def test_both_workers_record_the_commit_on_their_heartbeat(self) -> None:
+        # Both resolve it through one helper now, rather than each reading the
+        # environment its own way — which is how they came to disagree about
+        # whether RENDER_GIT_COMMIT counted. The helper is asserted separately
+        # to read COMMIT_SHA first.
+        from app.workers import schedule
+
         for worker in ("account_deletion.py", "notifications.py"):
             text = (BACKEND_ROOT / "app" / "workers" / worker).read_text(encoding="utf-8")
-            assert "COMMIT_SHA" in text, worker
+            assert "service_version" in text, worker
+        assert "COMMIT_SHA" in (
+            BACKEND_ROOT / "app" / "workers" / "schedule.py"
+        ).read_text(encoding="utf-8")
+        monkey = os.environ.get("COMMIT_SHA")
+        os.environ["COMMIT_SHA"] = "deadbeefdeadbeef"
+        try:
+            assert schedule.service_version() == "deadbeefdeadbeef"
+        finally:
+            if monkey is None:
+                del os.environ["COMMIT_SHA"]
+            else:
+                os.environ["COMMIT_SHA"] = monkey
 
     def test_no_source_file_hard_codes_a_moving_production_commit(self) -> None:
         # A 40-hex literal in deployment source or application source would be
@@ -972,7 +1080,7 @@ class TestCIBuildsTheRealProductionImage:
 class TestRunbook:
     def test_the_render_runtime_section_exists(self) -> None:
         operations = (REPOSITORY_ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
-        assert "## Render Production Runtime" in operations
+        assert RUNBOOK_HEADING in operations
 
     def test_the_existing_systemd_guidance_is_not_deleted(self) -> None:
         # Render is one deployment model, not the only valid one.
@@ -981,7 +1089,7 @@ class TestRunbook:
 
     def test_the_runbook_separates_deployment_from_activation(self) -> None:
         operations = (REPOSITORY_ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
-        section = operations.split("## Render Production Runtime", 1)[1]
+        section = operations.split(RUNBOOK_HEADING, 1)[1]
         assert "RENDER_GIT_COMMIT" in section
         assert "operate_step8i_petrolatum_release.py status" in section
         # And it must say where to stop.
@@ -997,7 +1105,7 @@ class TestRunbook:
         field for it — so the runbook is the only place this can be enforced.
         """
         operations = (REPOSITORY_ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
-        section = operations.split("## Render Production Runtime", 1)[1]
+        section = operations.split(RUNBOOK_HEADING, 1)[1]
         assert "Auto Sync" in section
         assert "Auto Sync = No" in section or "→ No" in section
         assert "Manual Sync" in section
@@ -1010,7 +1118,7 @@ class TestRunbook:
 
     def test_the_runbook_no_longer_claims_service_settings_stop_blueprint_sync(self) -> None:
         operations = (REPOSITORY_ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
-        section = operations.split("## Render Production Runtime", 1)[1]
+        section = operations.split(RUNBOOK_HEADING, 1)[1]
         assert (
             "No deploy happens automatically, because automatic deploy is off on all three."
             not in section
@@ -1018,7 +1126,7 @@ class TestRunbook:
 
     def test_the_runbook_lists_key_names_and_no_values(self) -> None:
         operations = (REPOSITORY_ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
-        section = operations.split("## Render Production Runtime", 1)[1]
+        section = operations.split(RUNBOOK_HEADING, 1)[1]
         for key in (
             "POSTGRES_URL",
             "OFF_DATABASE_URL",
