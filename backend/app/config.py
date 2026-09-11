@@ -266,10 +266,48 @@ INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH = 32
 #: Substrings that mean somebody copied env.example and did not edit it. Kept
 #: beside the setting that uses it rather than imported from the readiness
 #: report, because config must not depend on a reporting module.
-_PLACEHOLDER_MARKERS = (
+SCHEDULER_TOKEN_PLACEHOLDER_MARKERS = (
     "placeholder", "changeme", "change_me", "example", "todo", "your_", "your-",
     "replace", "secret-here", "xxxx",
 )
+
+#: The four things that can be true of the scheduler token. Strings rather
+#: than an enum so that release_readiness can map them onto its own Status
+#: without either module importing the other's vocabulary.
+SCHEDULER_TOKEN_MISSING = "missing"
+SCHEDULER_TOKEN_INVALID = "invalid"
+SCHEDULER_TOKEN_PLACEHOLDER = "placeholder"
+SCHEDULER_TOKEN_CONFIGURED = "configured"
+
+
+def classify_scheduler_token(value: str | None) -> str:
+    """Decide what the scheduler token is, in one place.
+
+    This exists because there were two places. ``validate_production_
+    configuration`` refused a token containing "replace", "secret-here",
+    "xxxx" or "example"; the readiness report had never heard of those
+    markers and called the same token ``configured``. An operator could
+    therefore read a green readiness report and watch production refuse to
+    boot on the value it had just approved -- and the readiness report is
+    precisely the tool for finding out why production will not boot.
+
+    Order matters and is deliberate: length is judged before shape, so a
+    short placeholder is reported as too short rather than as a placeholder.
+    Both are refusals; what must not happen is the two callers disagreeing
+    about which.
+
+    Returns a status word. Never the value, its length, its prefix or a hash
+    of it -- the caller's job is to say which of four things is true, and
+    every one of them can be said without quoting the secret.
+    """
+    token = (value or "").strip()
+    if not token:
+        return SCHEDULER_TOKEN_MISSING
+    if len(token) < INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH:
+        return SCHEDULER_TOKEN_INVALID
+    if any(marker in token.lower() for marker in SCHEDULER_TOKEN_PLACEHOLDER_MARKERS):
+        return SCHEDULER_TOKEN_PLACEHOLDER
+    return SCHEDULER_TOKEN_CONFIGURED
 
 
 # ---------------------------------------------------------------------------
@@ -422,18 +460,20 @@ def validate_production_configuration() -> None:
     if not GEMINI_API_KEY:
         raise RuntimeError("CRITICAL: GEMINI_API_KEY must be set in production.")
 
-    scheduler_token = INTERNAL_SCHEDULER_TOKEN.strip()
-    if not scheduler_token:
+    # Through the shared classifier, so that what refuses production boot and
+    # what the readiness report prints are the same judgement.
+    scheduler_state = classify_scheduler_token(INTERNAL_SCHEDULER_TOKEN)
+    if scheduler_state == SCHEDULER_TOKEN_MISSING:
         raise RuntimeError(
             "CRITICAL: INTERNAL_SCHEDULER_TOKEN must be set in production. "
             "The account-deletion and notification schedulers cannot run without it."
         )
-    if len(scheduler_token) < INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH:
+    if scheduler_state == SCHEDULER_TOKEN_INVALID:
         raise RuntimeError(
             "CRITICAL: INTERNAL_SCHEDULER_TOKEN is too short to be a secret. "
             f"At least {INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH} characters are required."
         )
-    if any(marker in scheduler_token.lower() for marker in _PLACEHOLDER_MARKERS):
+    if scheduler_state == SCHEDULER_TOKEN_PLACEHOLDER:
         raise RuntimeError(
             "CRITICAL: INTERNAL_SCHEDULER_TOKEN still looks like a placeholder."
         )

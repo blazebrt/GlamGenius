@@ -110,7 +110,10 @@ async def _write_heartbeat(
             )
             await session.commit()
     except Exception:  # noqa: BLE001 - observability must never break the run
-        logger.exception("account_deletion_scheduled_heartbeat_failed")
+        # Fixed event only, for the same reason as the cycle below: this is
+        # a database failure, and a database failure's text is a connection
+        # string.
+        logger.error("account_deletion_scheduled_heartbeat_failed")
 
 
 async def run_cycle(
@@ -124,16 +127,46 @@ async def run_cycle(
     without describing the person.
     """
     factory = sessionmaker or get_sessionmaker()
+    processed = False
+    state: str | None = None
+    error: str | None = None
     try:
         async with factory() as session:
             job = await deletion_service.claim_next(session)
-            if job is None:
-                await _write_heartbeat(factory, attempted=False, succeeded=False)
-                return CycleSummary(processed=False, ok=True)
-            state, error = await deletion_service.run_job(session, job)
+            if job is not None:
+                processed = True
+                state, error = await deletion_service.run_job(session, job)
+                # The commit, and where it has to be.
+                #
+                # deletion_service only ever flushes -- it leaves the
+                # transaction open for its caller to close, which is how the
+                # daemon has always worked. Without this line the session
+                # context exits, the transaction rolls back, and every
+                # transition run_job just made is discarded: the claim, the
+                # lease, attempt_count, the retry schedule, the terminal
+                # state. The job would look untouched and be picked up again.
+                #
+                # That is not merely lost work. Some stages have already done
+                # something irreversible by this point -- deleted the account's
+                # media from Supabase Storage, revoked an integration, removed
+                # the Supabase Auth user. Rolling back the record of it means
+                # doing it again to an account that no longer has any of it,
+                # against a state machine that thinks it never started.
+                #
+                # After run_job, not before: a commit between claim and run
+                # would persist the claim of a job whose processing then
+                # crashed. A controlled failure result is committed too --
+                # run_job wrote the retry or terminal state into this session,
+                # and that state is the record of the attempt.
+                await session.commit()
     except Exception as exc:  # noqa: BLE001 - the cycle itself failed
-        # The class name, never the message: a database error can quote a row.
-        logger.exception("account_deletion_scheduled_cycle_failed")
+        # A fixed event and nothing else. Not logger.exception, which writes
+        # the traceback and the message: a database error quotes its
+        # connection string, an asyncpg error quotes the row it choked on,
+        # and this runs on a path an unauthenticated caller can reach. The
+        # class name is the most this is allowed to say, and it says it into
+        # system_worker_status rather than the log.
+        logger.error("account_deletion_scheduled_cycle_failed")
         await _write_heartbeat(
             factory,
             attempted=True,
@@ -143,6 +176,12 @@ async def run_cycle(
         )
         return CycleSummary(processed=False, ok=False, error_code="unexpected_worker_error")
 
+    # Heartbeats are written after the job session has closed, in a session of
+    # their own, and _write_heartbeat never raises. A failure to record that
+    # the run happened must not undo the run.
+    if not processed:
+        await _write_heartbeat(factory, attempted=False, succeeded=False)
+        return CycleSummary(processed=False, ok=True)
     if error is None:
         await _write_heartbeat(factory, attempted=True, succeeded=True)
         return CycleSummary(processed=True, ok=True)

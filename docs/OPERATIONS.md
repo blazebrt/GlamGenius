@@ -549,6 +549,60 @@ Say this plainly, because the word `production` appears all over this stack:
 - **No Render background workers or cron** — also not on free.
 - Appropriate for **private beta and PMF validation**, and nothing else.
 
+### The zero-cost invariant: do not attach a payment method
+
+The requirement is **₹0 infrastructure before PMF**, and on Render that is not
+the same thing as choosing free plans.
+
+> **DO NOT ADD A PAYMENT METHOD TO THE RENDER WORKSPACE.**
+
+Render's Free instance types do not charge for the instance. They can still
+accrue supplementary charges — outbound bandwidth over the allowance, and
+build minutes over the allowance. What decides whether that becomes a bill is
+whether a card is on file:
+
+- **No payment method attached** → Render suspends or disables the free
+  resource or the build when an allowance is exhausted. The outcome is
+  downtime, which is recoverable and free.
+- **Payment method attached** → the same overage is billed instead. The
+  outcome is a charge nobody approved.
+
+So the absence of a card is not an oversight to tidy up later. It is the
+mechanism that makes ₹0 a guarantee rather than an intention, and it converts
+every possible surprise bill into a possible outage — which is the right trade
+for a private beta and the wrong one for a funded product. Revisit it when
+there is revenue, deliberately, not while provisioning.
+
+**Outbound bandwidth counts more than people expect.** It includes traffic
+from Render out to Supabase, to Gemini, to Expo Push and to any other external
+API — not only what customers download. A busy beta can therefore exhaust the
+allowance without a single large user-facing response, and without a card that
+means suspension.
+
+Do not weaken the application to reduce this. Do not disable the safety
+validators, skip Store A provisioning, or drop observability to save bytes.
+If the allowance becomes the binding constraint, that is information about
+demand, which is the thing this whole runtime exists to measure.
+
+#### Provider qualification checklist (later, not in this change)
+
+Before declaring the runtime live, verify and record:
+
+- [ ] Render workspace plan is **Hobby / free**
+- [ ] `glamgenius-api` service plan is **free**
+- [ ] **No payment method attached to the workspace**
+- [ ] No paid service of any type exists in the workspace
+- [ ] No Render-managed PostgreSQL exists
+- [ ] No Render Key Value / Redis exists
+
+If a payment method is already attached when you reach this checklist:
+
+> **STOP.**
+
+Do not continue under the claim of a guaranteed ₹0 runtime. Either remove it,
+or record explicitly that the runtime is no longer zero-cost-guaranteed and
+what the exposure is. Those are the only two honest outcomes.
+
 `APP_ENV` stays `production` anyway, deliberately. That is what turns on every
 production safety validator: invite-only, analysis consent, Supabase storage,
 no local media, asymmetric JWT verification. The distinction to hold:
@@ -638,9 +692,75 @@ The cron SQL must reference Vault **secret names**, never a secret value. A
 token pasted into a cron definition is a token in the database in plaintext,
 readable by anyone who can read `cron.job`.
 
-Both calls send `Authorization: Bearer <token>` and must set a **finite HTTP
-timeout** — `pg_net` takes one per request. Without it a hung request holds a
-worker slot until something else times out.
+Both calls send `Authorization: Bearer <token>`.
+
+#### The HTTP timeout is a reviewed number, not an operator's guess
+
+`pg_net` takes a timeout per request. Leaving it to whoever writes the cron
+definition is how one job ends up with none. The reviewed values:
+
+| Job | Schedule | `timeout_milliseconds` | Why this number |
+| --- | --- | --- | --- |
+| `glamgenius-account-deletion` | `*/5 * * * *` | `90000` (90s) | A free instance can cold-start, and Render documents a cold start of roughly a minute. 90s clears that with margin and still finishes well inside the 5-minute gap, so a hung request cannot overlap the next run. |
+| `glamgenius-notifications` | `0 * * * *` | `120000` (120s) | Same cold start, but the cycle itself compiles Today for every due account, so it needs more room than the deletion call. An hour of headroom makes overlap irrelevant; the ceiling is there to bound a hang, not to pace the job. |
+
+Both are finite, both comfortably exceed ordinary cold-start time, and the
+deletion timeout stays below its own schedule interval so two cycles cannot
+be in flight at once. A request that does hang is bounded: `pg_net` records
+it as `timed_out` and the next tick proceeds.
+
+#### Reading what actually happened: three layers, not one
+
+These are three different questions and they have three different answers.
+Confusing them is how a scheduler that has been failing all week looks
+healthy.
+
+| Layer | Answers | Does **not** answer |
+| --- | --- | --- |
+| `cron.job_run_details` | Did `pg_cron` run the SQL — that is, did it *enqueue* the request? | Whether any HTTP request succeeded, or was even sent |
+| `net._http_response` | The actual HTTP result: `status_code`, `timed_out`, `error_msg`, response body | Whether the application's work succeeded beyond the status code |
+| `system_worker_status` | The durable GlamGenius outcome: last heartbeat, last success, last attempt, bounded error code | Anything about transport |
+
+**`pg_net` is asynchronous.** `cron.job_run_details = succeeded` means the
+enqueue worked. It is *not* evidence that the endpoint returned 2xx — an HTTP
+401 never appears there. Reading only that table is the mistake this section
+exists to prevent.
+
+The HTTP result is in `net._http_response`:
+
+```sql
+select
+    id,
+    status_code,
+    timed_out,
+    error_msg,
+    created
+from net._http_response
+order by created desc
+limit 20;
+```
+
+Select those columns and no others. The request headers carry the bearer
+token, and the Vault values are secrets: never `select *` here, never print
+headers, never paste a row containing them into a ticket.
+
+Reading the result:
+
+| What you see | What it means |
+| --- | --- |
+| `status_code = 200` | The cycle ran and reported success |
+| `status_code = 401` | Token mismatch or missing — the Render env group and the Vault secret have drifted apart. Compare them by *name*, never by printing either value |
+| `status_code = 5xx` | The request arrived and the GlamGenius scheduled cycle failed. `system_worker_status` holds the bounded reason |
+| `timed_out = true` | The request outlived its timeout — a cold start that ran long, or a hang |
+| `error_msg` populated | The request never completed: network, DNS, the service suspended or asleep |
+
+Then, and only then, `system_worker_status` for the application's own view:
+
+```sql
+select worker_name, last_heartbeat_at, last_successful_job_at,
+       last_attempted_job_at, last_error_code, service_version
+from system_worker_status;
+```
 
 > **This repository documents these jobs. It does not create them.** Nothing
 > here enables an extension, writes a Vault secret or schedules a cron job;

@@ -831,6 +831,344 @@ class TestTheServiceVersionFallback:
 
 
 # ---------------------------------------------------------------------------
+# 5a. What the scheduler is told over HTTP
+# ---------------------------------------------------------------------------
+class TestTheDeletionRouteReportsFailureAsFailure:
+    """A failed cycle must not look successful to anything that watches.
+
+    pg_cron records the delivery, not the outcome. If a failing cycle answers
+    200, then `cron.job_run_details` says succeeded, `net._http_response` says
+    200, and a deletion that has failed every five minutes for a week looks
+    identical to one that worked — from every angle an operator checks first.
+    """
+
+    @staticmethod
+    def _summary(**kwargs: Any) -> Any:
+        return account_deletion.CycleSummary(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_an_idle_cycle_is_200(
+        self, app_client, scheduler_token: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def run_cycle() -> Any:
+            return self._summary(processed=False, ok=True)
+
+        monkeypatch.setattr(account_deletion, "run_cycle", run_cycle)
+        response = await app_client.post(
+            DELETION_PATH, headers={"Authorization": f"Bearer {scheduler_token}"}
+        )
+        assert response.status_code == 200
+        assert response.json() == {"processed": False, "ok": True}
+
+    @pytest.mark.asyncio
+    async def test_a_processed_cycle_is_200(
+        self, app_client, scheduler_token: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def run_cycle() -> Any:
+            return self._summary(processed=True, ok=True)
+
+        monkeypatch.setattr(account_deletion, "run_cycle", run_cycle)
+        response = await app_client.post(
+            DELETION_PATH, headers={"Authorization": f"Bearer {scheduler_token}"}
+        )
+        assert response.status_code == 200
+        assert response.json() == {"processed": True, "ok": True}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("processed", "error_code"),
+        [
+            (True, "storage_unavailable"),   # a controlled run_job failure
+            (False, "unexpected_worker_error"),  # the cycle itself failed
+        ],
+    )
+    async def test_a_failed_cycle_is_500(
+        self,
+        app_client,
+        scheduler_token: str,
+        monkeypatch: pytest.MonkeyPatch,
+        processed: bool,
+        error_code: str,
+    ) -> None:
+        async def run_cycle() -> Any:
+            return self._summary(processed=processed, ok=False, error_code=error_code)
+
+        monkeypatch.setattr(account_deletion, "run_cycle", run_cycle)
+        response = await app_client.post(
+            DELETION_PATH, headers={"Authorization": f"Bearer {scheduler_token}"}
+        )
+        assert response.status_code == 500
+        assert response.json() == {
+            "detail": "The account-deletion cycle failed. See worker status."
+        }
+
+    @pytest.mark.asyncio
+    async def test_the_failure_body_names_nothing(
+        self, app_client, scheduler_token: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The caller holds a shared secret, not an operator's access. The
+        # reason lives in system_worker_status, which requires being one.
+        async def run_cycle() -> Any:
+            return self._summary(
+                processed=True, ok=False, error_code="storage_unavailable"
+            )
+
+        monkeypatch.setattr(account_deletion, "run_cycle", run_cycle)
+        response = await app_client.post(
+            DELETION_PATH, headers={"Authorization": f"Bearer {scheduler_token}"}
+        )
+        body = response.text
+        # "account-deletion" is the name of the job and belongs in the
+        # sentence. What must not appear is anything identifying: an error
+        # code, an id, a provider or database detail, a traceback.
+        for leaked in (
+            "storage_unavailable", "postgres", "asyncpg", "Traceback",
+            "supabase", "lease", "attempt",
+        ):
+            assert leaked not in body.lower() and leaked not in body, leaked
+        assert not re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-", body), "an id reached the body"
+        assert response.json() == {
+            "detail": "The account-deletion cycle failed. See worker status."
+        }
+
+    @pytest.mark.asyncio
+    async def test_the_route_still_refuses_an_unauthorised_caller_first(
+        self, app_client, scheduler_token: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The 500 path must not be reachable without the credential: a wrong
+        # token must never get far enough to run a cycle at all.
+        ran = False
+
+        async def run_cycle() -> Any:
+            nonlocal ran
+            ran = True
+            return self._summary(processed=False, ok=True)
+
+        monkeypatch.setattr(account_deletion, "run_cycle", run_cycle)
+        response = await app_client.post(
+            DELETION_PATH, headers={"Authorization": "Bearer wrong-token-aaaaaaaaaaaaaaaaaa"}
+        )
+        assert response.status_code == 401
+        assert ran is False
+
+
+# ---------------------------------------------------------------------------
+# 5b. The cycle's transaction, against a real database
+# ---------------------------------------------------------------------------
+class TestTheScheduledCycleCommits:
+    """The regression the mock-session tests could not catch.
+
+    A fake session records that ``commit()`` was called. It cannot record that
+    the row changed, because there is no row. The first version of run_cycle
+    claimed a job, ran it, and let the session context close without
+    committing — every test passed, and every state transition was silently
+    rolled back after the stages had already deleted the account's media,
+    revoked its integrations and removed its Supabase Auth user.
+
+    These tests reload the row in a *new* transaction. Nothing a rolled-back
+    session did is visible from there.
+    """
+
+    @staticmethod
+    async def _reload_only_job() -> dict[str, object]:
+        """Read the job back through a connection that shares no transaction."""
+        from app.shared.database.sql import get_sessionmaker
+        from sqlalchemy import text
+
+        factory = get_sessionmaker()
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT state, attempt_count, lease_owner, started_at, "
+                        "next_retry_at, last_error_code "
+                        "FROM account_deletion_jobs"
+                    )
+                )
+            ).mappings().all()
+        assert len(row) == 1, row
+        return dict(row[0])
+
+    @pytest.mark.asyncio
+    async def test_a_successful_transition_is_visible_from_a_new_transaction(
+        self, db_clean, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await _insert_pending_job()
+
+        async def run_job(session: Any, job: Any) -> tuple[str, None]:
+            # Deterministic, and it touches no provider: the point is the
+            # transaction, not the deletion stages.
+            job.state = "complete"
+            job.completed_at = job.started_at
+            return ("complete", None)
+
+        monkeypatch.setattr(account_deletion.deletion_service, "run_job", run_job)
+        summary = await account_deletion.run_cycle()
+        assert summary.processed is True
+        assert summary.ok is True
+
+        persisted = await self._reload_only_job()
+        assert persisted["state"] == "complete", "run_job's transition was rolled back"
+        # claim_next's own mutations have to survive too — without them a
+        # crashed worker's job looks untouched and is claimed again forever.
+        assert persisted["attempt_count"] == 1, "the claim was rolled back"
+        assert persisted["lease_owner"] is not None, "the lease was rolled back"
+        assert persisted["started_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_a_controlled_failure_persists_its_retry_state(
+        self, db_clean, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed attempt is a fact about the job, and must survive.
+
+        Rolling this back loses the attempt count and the retry schedule, so
+        the job is re-claimed immediately and forever rather than backing off.
+        """
+        import datetime
+
+        await _insert_pending_job()
+
+        async def run_job(session: Any, job: Any) -> tuple[str, str]:
+            job.state = "failed_retryable"
+            job.last_error_code = "storage_unavailable"
+            job.last_error_stage = "storage_deleting"
+            job.next_retry_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
+                minutes=5
+            )
+            return ("failed_retryable", "storage_unavailable")
+
+        monkeypatch.setattr(account_deletion.deletion_service, "run_job", run_job)
+        summary = await account_deletion.run_cycle()
+        assert summary.processed is True
+        assert summary.ok is False
+
+        persisted = await self._reload_only_job()
+        assert persisted["state"] == "failed_retryable"
+        assert persisted["last_error_code"] == "storage_unavailable"
+        assert persisted["next_retry_at"] is not None, "the retry schedule was rolled back"
+        assert persisted["attempt_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_the_commit_happens_after_run_job_not_before(self) -> None:
+        # A commit between claim and run would persist the claim of a job
+        # whose processing then crashed, which is a different bug wearing the
+        # same fix. Ordering is read from source because no observable state
+        # distinguishes the two once both have succeeded.
+        source = _executable_source(
+            BACKEND_ROOT / "app" / "workers" / "account_deletion.py"
+        )
+        cycle = source[source.index("async def run_cycle"):source.index("async def run_forever")]
+        assert "await session.commit()" in cycle
+        assert cycle.index("run_job") < cycle.index("await session.commit()")
+
+    @pytest.mark.asyncio
+    async def test_a_heartbeat_failure_cannot_undo_a_committed_deletion(
+        self, db_clean, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Observability must never be able to reverse the work."""
+
+        async def run_job(session: Any, job: Any) -> tuple[str, None]:
+            job.state = "complete"
+            return ("complete", None)
+
+        async def exploding_heartbeat(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("heartbeat table is on fire")
+
+        await _insert_pending_job()
+        monkeypatch.setattr(account_deletion.deletion_service, "run_job", run_job)
+        monkeypatch.setattr(account_deletion, "_write_heartbeat", exploding_heartbeat)
+
+        with pytest.raises(RuntimeError):
+            await account_deletion.run_cycle()
+
+        persisted = await self._reload_only_job()
+        assert persisted["state"] == "complete", "a heartbeat failure rolled back a deletion"
+
+
+# ---------------------------------------------------------------------------
+# 5c. The failure log says one fixed thing
+# ---------------------------------------------------------------------------
+#: Fake, and shaped exactly like the things a real database error quotes.
+LEAKY_MESSAGE = (
+    "connection failed: postgresql://fake-user:fake-password@example.invalid/private "
+    "while deleting account=11111111-2222-3333-4444-555555555555"
+)
+LEAKY_FRAGMENTS = (
+    "fake-user",
+    "fake-password",
+    "example.invalid",
+    "11111111-2222-3333-4444-555555555555",
+    LEAKY_MESSAGE,
+)
+
+
+class TestTheFailureLogDisclosesNothing:
+    @pytest.mark.asyncio
+    async def test_an_unexpected_failure_logs_a_fixed_event_only(
+        self, db_clean, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """logger.exception writes the traceback, and the traceback is the leak.
+
+        A database error's text is its connection string; an asyncpg error
+        quotes the row it choked on. This path is reached by an
+        unauthenticated caller sending a wrong token often enough to break
+        something, so the log line is a fixed event and the shape of the
+        failure goes to system_worker_status instead.
+        """
+
+        async def exploding_claim(session: Any) -> None:
+            raise RuntimeError(LEAKY_MESSAGE)
+
+        monkeypatch.setattr(account_deletion.deletion_service, "claim_next", exploding_claim)
+        caplog.set_level(logging.DEBUG)
+        summary = await account_deletion.run_cycle()
+
+        assert summary.ok is False
+        assert summary.error_code == "unexpected_worker_error"
+
+        logged = caplog.text
+        for fragment in LEAKY_FRAGMENTS:
+            assert fragment not in logged, fragment
+        assert "account_deletion_scheduled_cycle_failed" in logged
+
+    @pytest.mark.asyncio
+    async def test_no_traceback_is_attached_to_the_failure_record(
+        self, db_clean, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # logger.exception sets exc_info on the record. Asserting on the
+        # record rather than on the rendered text catches a handler that
+        # happens not to format it today.
+        async def exploding_claim(session: Any) -> None:
+            raise RuntimeError(LEAKY_MESSAGE)
+
+        monkeypatch.setattr(account_deletion.deletion_service, "claim_next", exploding_claim)
+        caplog.set_level(logging.DEBUG)
+        await account_deletion.run_cycle()
+
+        failures = [
+            record for record in caplog.records
+            if record.getMessage() == "account_deletion_scheduled_cycle_failed"
+        ]
+        assert failures, "the fixed event must still be logged"
+        for record in failures:
+            assert record.exc_info is None, "the traceback reached the log"
+            assert record.args in (None, ()), "the event carries no interpolated data"
+
+    def test_the_source_does_not_call_logger_exception(self) -> None:
+        source = _executable_source(
+            BACKEND_ROOT / "app" / "workers" / "account_deletion.py"
+        )
+        scheduled = source[source.index("async def _write_heartbeat"):source.index(
+            "async def run_forever"
+        )]
+        assert "logger.exception" not in scheduled
+        assert "exc_info" not in scheduled
+        # The exception's class name may be recorded in the bounded operator
+        # summary; its text may not be recorded anywhere.
+        assert "str(exc)" not in scheduled
+
+
+# ---------------------------------------------------------------------------
 # 6. The scheduler secret is required, and never printed
 # ---------------------------------------------------------------------------
 class TestTheSchedulerSecretConfiguration:
@@ -838,35 +1176,15 @@ class TestTheSchedulerSecretConfiguration:
         assert config.INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH >= 32
 
     @pytest.mark.parametrize("value", ["", "   ", "\t\n"])
-    def test_production_refuses_a_missing_token(
-        self, monkeypatch: pytest.MonkeyPatch, value: str
-    ) -> None:
-        """Pinned to *this* refusal, not merely to some refusal.
-
-        Mutation testing found this gap too: with the presence check removed,
-        an empty token still fell through to the length check and still
-        raised — so a test that only asserted "it raises something naming the
-        key" passed while the requirement itself was gone. The message the
-        operator reads has to be the one that says what to do.
-        """
-        monkeypatch.setattr(config, "INTERNAL_SCHEDULER_TOKEN", value)
-        with pytest.raises(RuntimeError, match="must be set in production"):
-            _validate_only_the_scheduler_token()
-
-    def test_the_requirement_is_not_an_accident_of_the_length_floor(self) -> None:
-        # The presence check must exist in its own right: a future change to
-        # the floor must not be able to make an unset token acceptable.
-        source = _executable_source(BACKEND_ROOT / "app" / "config.py")
-        block = source[source.index("scheduler_token = INTERNAL_SCHEDULER_TOKEN"):]
-        assert "if not scheduler_token:" in block[:400]
+    def test_a_missing_token_is_missing(self, value: str) -> None:
+        assert config.classify_scheduler_token(value) == "missing"
 
     @pytest.mark.parametrize("value", ["short", "abc", "x" * 31])
-    def test_production_refuses_a_short_token(
-        self, monkeypatch: pytest.MonkeyPatch, value: str
-    ) -> None:
-        monkeypatch.setattr(config, "INTERNAL_SCHEDULER_TOKEN", value)
-        with pytest.raises(RuntimeError, match="too short"):
-            _validate_only_the_scheduler_token()
+    def test_a_short_token_is_invalid(self, value: str) -> None:
+        # Length before shape, deliberately: a short placeholder is reported
+        # as too short. Both refuse; what must not happen is the production
+        # validator and the readiness report disagreeing about which.
+        assert config.classify_scheduler_token(value) == "invalid"
 
     @pytest.mark.parametrize(
         "value",
@@ -875,20 +1193,67 @@ class TestTheSchedulerSecretConfiguration:
             "changeme" + "y" * 30,
             "your_scheduler_token_here" + "z" * 20,
             "replace-me" + "q" * 30,
+            "secret-here" + "r" * 30,
+            "xxxx" + "s" * 30,
+            "your-token" + "t" * 30,
+            "example" + "u" * 30,
+            "change_me" + "v" * 30,
+            "TODO" + "w" * 30,
         ],
     )
-    def test_production_refuses_a_placeholder_token(
-        self, monkeypatch: pytest.MonkeyPatch, value: str
-    ) -> None:
-        monkeypatch.setattr(config, "INTERNAL_SCHEDULER_TOKEN", value)
-        with pytest.raises(RuntimeError, match="placeholder"):
-            _validate_only_the_scheduler_token()
+    def test_a_placeholder_token_is_a_placeholder(self, value: str) -> None:
+        assert config.classify_scheduler_token(value) == "placeholder"
 
-    def test_a_real_looking_token_is_accepted(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(config, "INTERNAL_SCHEDULER_TOKEN", "A7f" + "k9Qz" * 12)
-        _validate_only_the_scheduler_token()
+    def test_a_real_looking_token_is_configured(self) -> None:
+        assert config.classify_scheduler_token("A7f" + "k9Qz" * 12) == "configured"
+
+    def test_the_production_validator_uses_the_shared_classifier(self) -> None:
+        """The refusal and the report must be one judgement, not two.
+
+        Read from the validator's own source rather than inferred: the two
+        used to keep separate marker lists, so a token containing "replace",
+        "secret-here", "xxxx" or "example" was refused at boot and reported
+        `configured` by the very tool an operator reaches for to find out why
+        boot was refused.
+        """
+        source = _executable_source(BACKEND_ROOT / "app" / "config.py")
+        block = source[source.index("def validate_production_configuration"):]
+        assert "classify_scheduler_token(INTERNAL_SCHEDULER_TOKEN)" in block
+        # And no second opinion left behind beside it: the validator may name
+        # the floor in the message it raises, but must not apply one itself.
+        assert "len(scheduler_token)" not in block
+        assert "SCHEDULER_TOKEN_PLACEHOLDER_MARKERS" not in block
+
+    def test_the_readiness_report_delegates_rather_than_deciding(self) -> None:
+        source = _executable_source(BACKEND_ROOT / "app" / "release_readiness.py")
+        block = source[source.index("def _scheduler_token_status"):]
+        assert "config.classify_scheduler_token" in block
+        assert "PLACEHOLDER_MARKERS" not in block
+        assert "INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH" not in block
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "", "   ", "short", "x" * 31,
+            "replace" + "a" * 30, "secret-here" + "b" * 30, "xxxx" + "c" * 30,
+            "your-thing" + "d" * 30, "example" + "e" * 30,
+            "placeholder" + "f" * 30, "changeme" + "g" * 30,
+            "not-a-real-token-not-a-real-token-not-a-real-token",
+        ],
+    )
+    def test_config_and_readiness_never_disagree(self, monkeypatch, value: str) -> None:
+        """The parity that did not hold, on the markers where it did not hold.
+
+        Every one of "replace", "secret-here", "xxxx", "your-" and "example"
+        refused production boot while the readiness report said `configured`.
+        """
+        from app import release_readiness
+
+        monkeypatch.setattr(config, "INTERNAL_SCHEDULER_TOKEN", value)
+        report = release_readiness.evaluate()
+        assert report.required["INTERNAL_SCHEDULER_TOKEN"] == (
+            config.classify_scheduler_token(value)
+        )
 
     def test_the_readiness_report_states_status_never_value(
         self, monkeypatch: pytest.MonkeyPatch
@@ -938,25 +1303,6 @@ class TestTheSchedulerSecretConfiguration:
                 after = line.split("INTERNAL_SCHEDULER_TOKEN", 1)[1].lstrip()
                 if after.startswith("="):
                     assert after.strip() == "=", (path.name, line)
-
-
-def _validate_only_the_scheduler_token() -> None:
-    """Run just the scheduler-token half of production validation.
-
-    The full validator needs a complete production environment; this exercises
-    the rule that was added without requiring one.
-    """
-    token = config.INTERNAL_SCHEDULER_TOKEN.strip()
-    if not token:
-        raise RuntimeError(
-            "CRITICAL: INTERNAL_SCHEDULER_TOKEN must be set in production."
-        )
-    if len(token) < config.INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH:
-        raise RuntimeError("CRITICAL: INTERNAL_SCHEDULER_TOKEN is too short to be a secret.")
-    if any(marker in token.lower() for marker in config._PLACEHOLDER_MARKERS):
-        raise RuntimeError(
-            "CRITICAL: INTERNAL_SCHEDULER_TOKEN still looks like a placeholder."
-        )
 
 
 class TestProductionValidationStillRequiresEverythingElse:
@@ -1013,6 +1359,110 @@ class TestTheSupabaseCronRunbook:
 
     def test_a_finite_timeout_is_documented(self) -> None:
         assert "timeout" in self._doc().lower()
+
+    def test_the_timeouts_are_specific_reviewed_numbers(self) -> None:
+        """"Use a finite timeout" is an instruction nobody can get wrong twice.
+
+        Left unspecified it becomes whatever the operator typed, including
+        nothing. The runbook names both values so the cron definitions can be
+        written from it rather than from judgement.
+        """
+        doc = self._doc()
+        assert "timeout_milliseconds" in doc
+        assert "90000" in doc, "the deletion timeout must be a stated number"
+        assert "120000" in doc, "the notification timeout must be a stated number"
+
+    def test_the_deletion_timeout_cannot_overlap_its_own_schedule(self) -> None:
+        # 90s inside a 300s interval. A timeout longer than the interval would
+        # let two cycles be in flight at once.
+        from app.workers import schedule
+
+        assert schedule.ACCOUNT_DELETION_INTERVAL_SECONDS > 90
+
+    def test_the_three_observability_layers_are_distinguished(self) -> None:
+        doc = self._doc()
+        for layer in ("cron.job_run_details", "net._http_response", "system_worker_status"):
+            assert layer in doc, layer
+
+    def test_it_does_not_claim_http_status_appears_in_cron_job_run_details(self) -> None:
+        """pg_net is asynchronous, and this is the mistake it causes.
+
+        `cron.job_run_details = succeeded` means the request was enqueued. An
+        HTTP 401 never appears there. A runbook that sends an operator to that
+        table to find a 401 sends them to a table that will always look fine.
+        """
+        # Emphasis markers stripped: the runbook writes "*not* evidence", and
+        # a scan for "is not evidence" would miss its own denial.
+        prose = " ".join(self._doc().lower().replace("*", "").replace("`", "").split())
+        assert "asynchronous" in prose
+        assert "not evidence that the endpoint returned 2xx" in prose
+        assert "never appears there" in prose
+
+    def test_the_http_result_query_reads_no_headers(self) -> None:
+        """The SQL the operator will paste, not the prose around it.
+
+        The runbook says "never `select *` here", so a scan of the whole
+        section finds that sentence and calls the warning a violation. Only
+        the fenced SQL blocks are checked.
+        """
+        doc = self._doc()
+        sql_blocks = re.findall(r"```sql\n(.*?)```", doc, flags=re.DOTALL)
+        assert sql_blocks, "the runbook must show the query"
+        http_queries = [b for b in sql_blocks if "net._http_response" in b]
+        assert http_queries, "the HTTP-result query must be shown"
+        for block in http_queries:
+            assert "select *" not in block.lower(), block
+            assert "headers" not in block.lower(), block
+            assert "status_code" in block.lower()
+        # And the prose must say why the columns are named.
+        assert "header" in doc.lower()
+
+    def test_each_http_outcome_is_explained(self) -> None:
+        doc = self._doc()
+        for outcome in ("401", "5xx", "timed_out", "error_msg"):
+            assert outcome in doc, outcome
+
+
+class TestTheZeroCostInvariant:
+    """₹0 is a billing configuration, not a plan name."""
+
+    @staticmethod
+    def _doc() -> str:
+        return OPERATIONS_DOC.read_text(encoding="utf-8")
+
+    def test_the_payment_method_rule_is_stated_as_an_invariant(self) -> None:
+        doc = self._doc()
+        assert "DO NOT ADD A PAYMENT METHOD" in doc
+
+    def test_it_explains_what_a_payment_method_changes(self) -> None:
+        prose = " ".join(self._doc().lower().split())
+        # Both halves, because only the pair makes it a guarantee: without a
+        # card an overage suspends, with one it bills.
+        assert "suspend" in prose
+        assert "bandwidth" in prose
+        assert "build" in prose
+
+    def test_outbound_bandwidth_is_stated_to_include_external_traffic(self) -> None:
+        prose = " ".join(self._doc().lower().split())
+        assert "supabase" in prose
+        anchor = "outbound bandwidth counts more than people expect"
+        assert anchor in prose, "the paragraph that makes this point must exist"
+        block = prose[prose.index(anchor):][:600]
+        assert "supabase" in block
+        assert "gemini" in block or "external api" in block
+
+    def test_the_qualification_checklist_exists_and_stops(self) -> None:
+        doc = self._doc()
+        for item in (
+            "workspace plan", "payment method", "paid service",
+        ):
+            assert item.lower() in doc.lower(), item
+        assert "STOP" in doc
+
+    def test_the_checklist_is_not_performed_here(self) -> None:
+        # Documented, never executed: no provider was touched.
+        prose = " ".join(self._doc().lower().split())
+        assert "not in this change" in prose or "does not create them" in prose
 
     def test_it_says_plainly_that_the_jobs_are_not_created_here(self) -> None:
         # A reviewer has to be able to tell what this repository did from what

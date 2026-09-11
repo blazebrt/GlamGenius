@@ -98,21 +98,31 @@ def _secret_status(value: str | None) -> Status:
     return Status.CONFIGURED
 
 
+#: config's four words -> this report's four Statuses. The judgement is not
+#: made here; only the translation is.
+_SCHEDULER_TOKEN_STATUS = {
+    config.SCHEDULER_TOKEN_MISSING: Status.MISSING,
+    config.SCHEDULER_TOKEN_INVALID: Status.INVALID,
+    config.SCHEDULER_TOKEN_PLACEHOLDER: Status.PLACEHOLDER,
+    config.SCHEDULER_TOKEN_CONFIGURED: Status.CONFIGURED,
+}
+
+
 def _scheduler_token_status(value: str | None) -> Status:
-    """Status for the scheduler secret, which also has a length floor.
+    """Status for the scheduler secret, decided by the production validator.
+
+    This used to apply the module's own PLACEHOLDER_MARKERS and its own
+    ordering, which is a different vocabulary from the one that actually
+    refuses production boot: a token containing "replace", "secret-here",
+    "xxxx" or "example" was refused by config and reported ``configured``
+    here. Delegating removes the possibility rather than re-synchronising two
+    lists that would drift again.
 
     Reported as a status word and never as a value, a length, a prefix or a
     hash: this report is printed by operators in terminals and pasted into
     tickets, and a secret that is "nearly" disclosed there is disclosed.
     """
-    if not _present(value):
-        return Status.MISSING
-    token = (value or "").strip()
-    if _looks_like_placeholder(token):
-        return Status.PLACEHOLDER
-    if len(token) < config.INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH:
-        return Status.INVALID
-    return Status.CONFIGURED
+    return _SCHEDULER_TOKEN_STATUS[config.classify_scheduler_token(value)]
 
 
 def _url_status(value: str | None, *, require_https: bool = False) -> Status:

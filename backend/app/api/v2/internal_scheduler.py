@@ -110,12 +110,24 @@ async def run_account_deletion_cycle(
     the queue would be a handler that times out under exactly the backlog it
     was meant to clear, and the scheduler comes back in five minutes anyway.
 
-    The response carries whether a job was processed and whether it succeeded.
-    It carries no account id, no email, no job payload and no database error
-    text — the caller holds a shared secret, not a person's consent.
+    A failed cycle answers 500, not 200. A scheduler that gets 200 back has
+    been told the run was fine, and pg_cron records it as a successful
+    delivery — so a cycle that failed every five minutes would look, from
+    every angle an operator checks, exactly like one that worked.
+
+    The response says whether a job was processed and whether it succeeded,
+    and nothing else: no account id, no email, no job id, no error code, no
+    provider result, no database text. The caller holds a shared secret, not
+    a person's consent. ``system_worker_status`` is where the reason lives,
+    and reading it requires being an operator.
     """
     summary = await account_deletion.run_cycle()
-    return summary.as_dict()
+    if not summary.ok:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The account-deletion cycle failed. See worker status.",
+        )
+    return {"processed": summary.processed, "ok": summary.ok}
 
 
 @router.post("/notifications")
