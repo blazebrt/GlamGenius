@@ -996,14 +996,26 @@ from `app/workers/schedule.py`.
 
 **10. Verify the hourly notification job.** Confirm the Supabase Cron job
 `glamgenius-notifications` reads `0 * * * *` and that `pg_cron` is evaluating
-it in UTC. After the first hour, check `cron.job_run_details` for a successful
-run and that the `notification_worker` heartbeat row carries the same
-`service_version`. The batch never sends late catch-ups, so a skipped hour is
-skipped, not queued.
+it in UTC. After the first hour, read the three layers in order — that order
+is the whole point, and taking the first one for an answer is the mistake this
+runbook keeps having to correct:
 
-Both jobs are POSTs carrying the scheduler bearer token. A `401` in
-`cron.job_run_details` means the Vault secret and the Render environment group
-have drifted apart — compare them, never by printing either value.
+1. `cron.job_run_details` — the cron SQL ran, so the pg_net request was
+   **enqueued**. Nothing more. A `succeeded` here is not evidence that any
+   HTTP request completed, or that it returned 2xx.
+2. `net._http_response` — the **actual HTTP result**, including the status
+   code. This is the only one of the three that carries an HTTP status.
+3. `system_worker_status` — the `notification_worker` heartbeat, carrying the
+   same `service_version` as the commit deployed in step 5.
+
+The batch never sends late catch-ups, so a skipped hour is skipped, not
+queued.
+
+Both jobs are POSTs carrying the scheduler bearer token.
+
+A **`401` in `net._http_response`** means the Vault scheduler token and the
+Render environment value have drifted apart. Compare the two by location and
+key name; never print either secret value.
 
 **11. Point the app at the backend.** Once the production API URL genuinely
 exists, set `EXPO_PUBLIC_BACKEND_URL` in the **EAS production environment**

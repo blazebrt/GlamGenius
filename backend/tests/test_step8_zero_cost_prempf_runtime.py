@@ -1398,6 +1398,114 @@ class TestTheSupabaseCronRunbook:
         assert "not evidence that the endpoint returned 2xx" in prose
         assert "never appears there" in prose
 
+    #: The dotted identifiers have to survive sentence splitting, so they are
+    #: swapped for single tokens before the text is cut on full stops.
+    #: Lowercase on purpose. The text is lowered before substitution, so an
+    #: uppercase token would never match the lowercase needle the tests look
+    #: for — and a scan that matches nothing passes everything.
+    _TABLE_TOKENS = {
+        "cron.job_run_details": "cronruns",
+        "net._http_response": "httpresp",
+        "net.http_request_queue": "reqqueue",
+    }
+
+    #: Words that make a mention a denial rather than a claim.
+    _NEGATIONS = (
+        "not ", "never", "only", "nothing more", "enqueue", "does not",
+        "cannot", "no evidence", "is not",
+    )
+
+    #: Ways of naming the cron layer other than its full identifier. A false
+    #: claim does not have to spell the table out to mislead an operator —
+    #: "the cron table also records the HTTP status" does it just as well.
+    _CRON_ALIASES = ("cronruns", "job_run_details", "cron table", "cron job table")
+
+    @classmethod
+    def _sentences(cls, text: str) -> list[str]:
+        flat = " ".join(text.lower().replace("*", "").replace("`", "").split())
+        for dotted, token in cls._TABLE_TOKENS.items():
+            flat = flat.replace(dotted, token)
+        return [part.strip() for part in re.split(r"[.:;]", flat) if part.strip()]
+
+    @classmethod
+    def _names_the_cron_layer(cls, sentence: str) -> bool:
+        return any(alias in sentence for alias in cls._CRON_ALIASES)
+
+    def test_no_sentence_anywhere_puts_an_http_status_in_cron_job_run_details(self) -> None:
+        """Every mention, not merely the existence of a denial somewhere.
+
+        The previous version asserted the correct sentence appeared in the
+        observability section. It did — and a contradictory sentence sat in
+        the qualification procedure several screens later, telling the
+        operator a 401 shows up in `cron.job_run_details`. Both can be true of
+        a document; only one can be true of pg_net, and the procedure is the
+        half that gets followed under time pressure.
+
+        So this walks every sentence naming the table and refuses any that
+        also names an HTTP status without denying the association.
+        """
+        offenders = []
+        for sentence in self._sentences(self._doc()):
+            if not self._names_the_cron_layer(sentence):
+                continue
+            if not re.search(r"\b(401|2xx|4xx|5xx|status.?code|http status)\b", sentence):
+                continue
+            if not any(marker in sentence for marker in self._NEGATIONS):
+                offenders.append(sentence)
+        assert offenders == [], offenders
+
+    def test_the_http_status_source_is_named_positively(self) -> None:
+        """Saying where the status is not found is only half of it."""
+        positive = [
+            s for s in self._sentences(self._doc())
+            if "httpresp" in s
+            and re.search(r"\b(401|status.?code|http result)\b", s)
+            and not any(m in s for m in ("not ", "never", "cannot"))
+        ]
+        assert positive, "the runbook must say where an HTTP status does come from"
+
+    def test_the_qualification_procedure_sends_the_operator_to_the_right_table(self) -> None:
+        """The section an operator actually follows, checked on its own."""
+        doc = self._doc()
+        anchor = "Verify the hourly notification job"
+        assert anchor in doc
+        section = doc[doc.index(anchor):]
+        section = section[: section.index("**11.")]
+
+        for sentence in self._sentences(section):
+            if self._names_the_cron_layer(sentence) and re.search(
+                r"\b(401|status)\b", sentence
+            ):
+                assert any(m in sentence for m in self._NEGATIONS), sentence
+
+        flat = " ".join(section.lower().replace("*", "").replace("`", "").split())
+        assert "net._http_response" in flat
+        assert "401" in flat
+        index = flat.index("401")
+        assert "net._http_response" in flat[max(0, index - 200):index + 200], (
+            "the 401 must be attributed to net._http_response"
+        )
+        # And the procedure must state positively that the response table is
+        # where an HTTP status comes from, in its own right. Leaning on the
+        # 401 sentence alone lets the statement be deleted while the section
+        # still mentions the table in passing.
+        positive = [
+            sentence for sentence in self._sentences(section)
+            if "httpresp" in sentence
+            and re.search(r"\b(status.?code|http status|http result)\b", sentence)
+            and not any(m in sentence for m in ("not ", "never", "cannot"))
+        ]
+        assert positive, (
+            "the procedure must say that net._http_response carries the HTTP status"
+        )
+
+    def test_the_three_layer_model_survives_in_the_procedure(self) -> None:
+        doc = self._doc()
+        section = doc[doc.index("Verify the hourly notification job"):]
+        section = section[: section.index("**11.")]
+        for layer in ("cron.job_run_details", "net._http_response", "system_worker_status"):
+            assert layer in section, layer
+
     def test_the_http_result_query_reads_no_headers(self) -> None:
         """The SQL the operator will paste, not the prose around it.
 
