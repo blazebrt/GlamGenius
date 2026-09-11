@@ -45,10 +45,13 @@ from app.domains.planning.models import NotificationDelivery, NotificationPrefer
 from app.domains.system.models import WorkerStatus
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_sessionmaker
+from app.workers.schedule import NOTIFICATION_WORKER_NAME, service_version
 
 logger = logging.getLogger(__name__)
 
-WORKER_NAME = "notification_worker"
+#: One name, from the schedule authority, so readiness and the admin
+#: endpoint cannot end up watching a worker under a different spelling.
+WORKER_NAME = NOTIFICATION_WORKER_NAME
 
 EXIT_OK = 0
 EXIT_FAILED = 2
@@ -229,7 +232,7 @@ async def record_heartbeat(summary: RunSummary, *, error: str | None = None) -> 
         "worker_name": WORKER_NAME,
         "last_heartbeat_at": func.now(),
         "last_attempted_job_at": func.now(),
-        "service_version": os.environ.get("COMMIT_SHA", os.environ.get("APP_VERSION", "unknown")),
+        "service_version": service_version(),
     }
     if error is None and summary.ok:
         values["last_successful_job_at"] = func.now()

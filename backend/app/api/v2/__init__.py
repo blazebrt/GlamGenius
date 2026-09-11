@@ -14,6 +14,7 @@ from app.api.v2 import (
     consent,
     family,
     integrations,
+    internal_scheduler,
     inventory,
     jobs,
     maintenance,
@@ -71,6 +72,8 @@ router.include_router(maintenance.router, tags=["v2-maintenance"])
 router.include_router(routines.router, tags=["v2-routines"])
 router.include_router(progress.router, tags=["v2-progress"])
 router.include_router(admin.router, tags=["v2-admin"])
+# Not a customer surface: a shared-secret door for the external scheduler.
+router.include_router(internal_scheduler.router)
 router.include_router(personal_applicability_admin.router, tags=["v2-admin-personal-applicability"])
 router.include_router(
     personal_decision_release_admin.router, tags=["v2-admin-personal-decision-releases"]

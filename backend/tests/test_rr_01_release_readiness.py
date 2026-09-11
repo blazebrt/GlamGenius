@@ -28,6 +28,9 @@ SECRET_GOOGLE = "google-client-secret-must-not-appear"
 SECRET_OPEN_METEO = "open-meteo-key-must-not-appear"
 SECRET_DSN_KEY = "dsnpublickeymustnotappear"
 SECRET_PG_PASSWORD = "pg-password-must-not-appear"
+# Long enough to clear the minimum length the token check enforces, and
+# deliberately not shaped like a placeholder.
+SECRET_SCHEDULER_TOKEN = "scheduler-token-secret-must-not-appear-0000"
 
 
 def _live_environment(monkeypatch, *, provider: str, mode: str) -> None:
@@ -139,6 +142,10 @@ def _complete_production(monkeypatch) -> None:
         f"postgresql+asyncpg://offuser:{SECRET_PG_PASSWORD}@off.realproject.internal:5432/off",
     )
     monkeypatch.setattr(app_config, "GEMINI_API_KEY", SECRET_GEMINI)
+    # The credential the account-deletion and notification schedulers
+    # present. Production refuses to start without it, so a complete
+    # production configuration has one.
+    monkeypatch.setattr(app_config, "INTERNAL_SCHEDULER_TOKEN", SECRET_SCHEDULER_TOKEN)
     monkeypatch.setenv("SENTRY_BACKEND_DSN", f"https://{SECRET_DSN_KEY}@o1.ingest.sentry.io/2")
     monkeypatch.setattr(app_config, "MEDIA_STORAGE_BACKEND", "supabase")
     monkeypatch.setattr(app_config, "ALLOWED_ORIGINS", ["https://app.glamgenius.in"])
@@ -393,6 +400,7 @@ def test_no_secret_value_ever_reaches_the_report_or_its_rendering(monkeypatch):
     for secret in (
         SECRET_ANON, SECRET_SERVICE_ROLE, SECRET_GEMINI, SECRET_GOOGLE,
         SECRET_OPEN_METEO, SECRET_DSN_KEY, SECRET_PG_PASSWORD,
+        SECRET_SCHEDULER_TOKEN,
     ):
         assert secret not in haystack, "a secret value reached the readiness output"
     # The key names themselves must be present, or the report says nothing useful.

@@ -125,6 +125,7 @@ async def test_ready_fails_on_stale_worker_heartbeat(app_client: AsyncClient, db
     import uuid
 
     from app.shared.database.sql import get_sessionmaker
+    from app.workers import schedule
     from sqlalchemy import text
     account_id = uuid.uuid4()
     factory = get_sessionmaker()
@@ -135,10 +136,16 @@ async def test_ready_fails_on_stale_worker_heartbeat(app_client: AsyncClient, db
             {"job_id": str(job_id), "id": str(account_id)}
         )
         
-        stale_time = datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - datetime.timedelta(seconds=400)
+        # Older than two deletion intervals, under the scheduled worker's one
+        # stable name. The name used to carry a hostname suffix, from the days
+        # of an always-on daemon per container; readiness now looks the
+        # scheduled worker up exactly, so the name comes from the schedule
+        # authority rather than being spelled out here.
+        stale_age = schedule.ACCOUNT_DELETION_STALE_AFTER_SECONDS + 100
+        stale_time = datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - datetime.timedelta(seconds=stale_age)
         await session.execute(
-            text("INSERT INTO system_worker_status (id, worker_name, last_heartbeat_at, created_at, updated_at) VALUES (:wid, 'account_deletion_worker_1', :hb, NOW(), NOW())"),
-            {"wid": str(uuid.uuid4()), "hb": stale_time}
+            text("INSERT INTO system_worker_status (id, worker_name, last_heartbeat_at, created_at, updated_at) VALUES (:wid, :worker_name, :hb, NOW(), NOW())"),
+            {"wid": str(uuid.uuid4()), "worker_name": schedule.ACCOUNT_DELETION_WORKER_NAME, "hb": stale_time}
         )
         await session.commit()
     

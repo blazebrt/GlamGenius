@@ -98,6 +98,23 @@ def _secret_status(value: str | None) -> Status:
     return Status.CONFIGURED
 
 
+def _scheduler_token_status(value: str | None) -> Status:
+    """Status for the scheduler secret, which also has a length floor.
+
+    Reported as a status word and never as a value, a length, a prefix or a
+    hash: this report is printed by operators in terminals and pasted into
+    tickets, and a secret that is "nearly" disclosed there is disclosed.
+    """
+    if not _present(value):
+        return Status.MISSING
+    token = (value or "").strip()
+    if _looks_like_placeholder(token):
+        return Status.PLACEHOLDER
+    if len(token) < config.INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH:
+        return Status.INVALID
+    return Status.CONFIGURED
+
+
 def _url_status(value: str | None, *, require_https: bool = False) -> Status:
     if not _present(value):
         return Status.MISSING
@@ -181,6 +198,11 @@ def _core_requirements() -> dict[str, Status]:
         ),
         "POSTGRES_URL": _postgres_status(),
         "GEMINI_API_KEY": _secret_status(config.GEMINI_API_KEY),
+        # The external scheduler's shared secret. Without it the deletion and
+        # notification cycles cannot be invoked at all in the pre-PMF runtime.
+        "INTERNAL_SCHEDULER_TOKEN": _scheduler_token_status(
+            config.INTERNAL_SCHEDULER_TOKEN
+        ),
         "SENTRY_BACKEND_DSN": _sentry_status(),
         "MEDIA_STORAGE_BACKEND": _media_status(),
         "ALLOWED_ORIGINS": _origins_status(),

@@ -30,6 +30,15 @@ def run_config_test(env_vars: dict) -> subprocess.CompletedProcess:
         "ALLOWED_ORIGINS": "https://example.com",
         "PRIVACY_POLICY_URL": "https://example.org/privacy",
         "SUPPORT_URL": "https://example.org/support",
+        # The scheduler credential. Long enough to clear the minimum
+        # length and not shaped like a placeholder, because production
+        # rejects both and this fixture is the valid case.
+        #
+        # Deliberately repetitive words rather than random hex: the secret
+        # scanner reads a high-entropy string beside a token-shaped key name
+        # as a leaked credential, and it is right to. A fixture should not
+        # look like a secret to anything, a scanner included.
+        "INTERNAL_SCHEDULER_TOKEN": "not-a-real-token-not-a-real-token-not-a-real-token",
     }
     env.update(env_vars)
     

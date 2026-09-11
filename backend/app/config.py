@@ -248,6 +248,29 @@ OFF_EXPORT_DIR = _env_str("OFF_EXPORT_DIR", "/data/off-export")
 PRIVACY_POLICY_URL = _env_str("PRIVACY_POLICY_URL", "https://glamgenius.placeholder/privacy")
 SUPPORT_URL = _env_str("SUPPORT_URL", "https://glamgenius.placeholder/support")
 
+# The shared secret the external scheduler presents to
+# /api/v2/internal/scheduler/*. It is not a customer credential and is not a
+# Supabase JWT: those routes run privileged batch work on nobody's behalf, so
+# authorising them with a user token would mean any user token could run them.
+#
+# Never committed, never logged, never returned, never in a URL. The value is
+# generated once by an operator and lives in Render's secret environment and
+# Supabase Vault; this repository only names it.
+INTERNAL_SCHEDULER_TOKEN = _env_str("INTERNAL_SCHEDULER_TOKEN")
+
+#: Below this a token is not worth calling a secret. Not a cryptographic
+#: statement -- just the floor that rejects "test", "changeme" and a hand-typed
+#: word, which is the realistic failure here.
+INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH = 32
+
+#: Substrings that mean somebody copied env.example and did not edit it. Kept
+#: beside the setting that uses it rather than imported from the readiness
+#: report, because config must not depend on a reporting module.
+_PLACEHOLDER_MARKERS = (
+    "placeholder", "changeme", "change_me", "example", "todo", "your_", "your-",
+    "replace", "secret-here", "xxxx",
+)
+
 
 # ---------------------------------------------------------------------------
 # Beta usage controls — non-payment abuse and cost limits
@@ -398,6 +421,22 @@ def validate_production_configuration() -> None:
 
     if not GEMINI_API_KEY:
         raise RuntimeError("CRITICAL: GEMINI_API_KEY must be set in production.")
+
+    scheduler_token = INTERNAL_SCHEDULER_TOKEN.strip()
+    if not scheduler_token:
+        raise RuntimeError(
+            "CRITICAL: INTERNAL_SCHEDULER_TOKEN must be set in production. "
+            "The account-deletion and notification schedulers cannot run without it."
+        )
+    if len(scheduler_token) < INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH:
+        raise RuntimeError(
+            "CRITICAL: INTERNAL_SCHEDULER_TOKEN is too short to be a secret. "
+            f"At least {INTERNAL_SCHEDULER_TOKEN_MIN_LENGTH} characters are required."
+        )
+    if any(marker in scheduler_token.lower() for marker in _PLACEHOLDER_MARKERS):
+        raise RuntimeError(
+            "CRITICAL: INTERNAL_SCHEDULER_TOKEN still looks like a placeholder."
+        )
 
     import os
     sentry_dsn = os.environ.get("SENTRY_BACKEND_DSN", "").strip()
