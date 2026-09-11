@@ -1401,9 +1401,11 @@ class TestTheSupabaseCronRunbook:
     def test_the_http_result_query_reads_no_headers(self) -> None:
         """The SQL the operator will paste, not the prose around it.
 
-        The runbook says "never `select *` here", so a scan of the whole
-        section finds that sentence and calls the warning a violation. Only
-        the fenced SQL blocks are checked.
+        The narrow query stands on its own merits: five operational columns
+        answer every routine scheduler question, and the response body and
+        response headers are unnecessary and may carry incidental
+        information. (The outbound bearer is not in this table at all — see
+        the request/response mapping tests below.)
         """
         doc = self._doc()
         sql_blocks = re.findall(r"```sql\n(.*?)```", doc, flags=re.DOTALL)
@@ -1416,6 +1418,104 @@ class TestTheSupabaseCronRunbook:
             assert "status_code" in block.lower()
         # And the prose must say why the columns are named.
         assert "header" in doc.lower()
+
+    def test_it_does_not_claim_the_token_is_absent_from_tests(self) -> None:
+        """The runbook said "not in any test". It was not true.
+
+        Tests deliberately carry scheduler-token fixtures — the validation
+        rules cannot be exercised without one. An operator document that
+        overstates the rule teaches the reader that the document is
+        approximately true, which is the worst thing a security runbook can
+        teach.
+        """
+        prose = " ".join(self._doc().lower().replace("*", "").replace("`", "").split())
+        # Every way of saying it, because mutation testing showed that
+        # forbidding one phrasing only forbids that phrasing: rewording the
+        # denial walked straight past the first version of this test.
+        for denial in (
+            "not in any test",
+            "in no test",
+            "no test contains",
+            "not in tests",
+            "do not contain scheduler-token fixtures",
+            "contains no scheduler-token",
+        ):
+            assert denial not in prose, denial
+        # And the affirmative, which no denial can satisfy: the document has
+        # to say that the fixtures exist, not merely avoid saying they don't.
+        assert "do contain scheduler-token fixtures" in prose
+
+    def test_it_states_the_real_rule_about_committed_credentials(self) -> None:
+        prose = " ".join(self._doc().lower().replace("*", "").replace("`", "").split())
+        # What must not be committed: a production or generated secret.
+        assert "no production credential" in prose
+        assert "high-entropy" in prose
+        # What may exist: explicitly synthetic fixtures.
+        assert "synthetic" in prose
+        assert "low-entropy" in prose
+
+    def test_the_real_token_still_lives_in_exactly_two_places(self) -> None:
+        prose = " ".join(self._doc().lower().replace("*", "").replace("`", "").split())
+        block = prose[prose.index("the real production internal_scheduler_token"):][:400]
+        assert "render" in block
+        assert "vault" in block
+
+    def test_the_request_and_response_header_tables_are_distinguished(self) -> None:
+        """pg_net keeps the outbound Authorization header somewhere else.
+
+        The runbook used to justify the narrow query by saying
+        `net._http_response` carries the request headers. It does not: its
+        `headers` column is the endpoint's *response* headers. The outbound
+        bearer lives in `net.http_request_queue` while the request is queued.
+        Getting this backwards sends an operator looking for a secret in the
+        wrong table and reassures them about the right one.
+        """
+        doc = self._doc()
+        assert "net.http_request_queue" in doc
+        request_rows = [
+            line for line in doc.splitlines()
+            if "net.http_request_queue" in line and "|" in line
+        ]
+        assert request_rows, "the request-side table must be named in the mapping"
+        for row in request_rows:
+            assert "request" in row.lower(), row
+
+        response_rows = [
+            line for line in doc.splitlines()
+            if "net._http_response" in line and "|" in line and "headers" in line.lower()
+        ]
+        assert response_rows, "the response-side table must be named in the mapping"
+        for row in response_rows:
+            assert "response" in row.lower(), row
+
+    def test_it_never_claims_the_bearer_is_in_the_response_headers(self) -> None:
+        """Asserted on the claim, not on proximity.
+
+        The corrected runbook necessarily mentions `_http_response.headers`
+        and the bearer in the same paragraph — to say they are *not* the same
+        thing. A scan for the two words near each other would read the
+        correction as the error it corrects.
+        """
+        doc = self._doc()
+        rows = [
+            line for line in doc.splitlines()
+            if "net._http_response" in line and line.strip().startswith("|")
+        ]
+        header_rows = [r for r in rows if "headers" in r.lower()]
+        assert header_rows, "the mapping row must exist"
+        for row in header_rows:
+            # The bearer-token column must answer No for this table.
+            assert "no" in row.lower().split("|")[-2], row
+
+        # And the prose must deny it explicitly rather than merely omit it.
+        prose = " ".join(doc.lower().replace("*", "").replace("`", "").split())
+        assert "are the endpoint's response headers, not the outbound bearer" in prose
+
+    def test_the_outbound_authorization_header_is_still_forbidden(self) -> None:
+        prose = " ".join(self._doc().lower().replace("*", "").replace("`", "").split())
+        block = prose[prose.index("the outbound authorization header"):][:500]
+        assert "never be queried" in block
+        assert "vault" in block
 
     def test_each_http_outcome_is_explained(self) -> None:
         doc = self._doc()

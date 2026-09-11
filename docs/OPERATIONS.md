@@ -740,9 +740,27 @@ order by created desc
 limit 20;
 ```
 
-Select those columns and no others. The request headers carry the bearer
-token, and the Vault values are secrets: never `select *` here, never print
-headers, never paste a row containing them into a ticket.
+Use only the operational columns needed for diagnosis. Those five answer
+every routine scheduler question; nothing else is required to qualify a run.
+
+**Where the headers actually live**, because the two are easy to confuse and
+the confusion matters:
+
+| Table | `headers` column holds | Contains the bearer token? |
+| --- | --- | --- |
+| `net.http_request_queue` | the **outbound request** headers, while the request is queued | **Yes** — this is where `Authorization: Bearer …` exists |
+| `net._http_response` | the **response** headers returned by the remote endpoint | No |
+
+So `net._http_response.headers` are the endpoint's response headers, not the
+outbound bearer request headers. They are still not worth selecting: the
+response body and response headers are unnecessary for routine scheduler
+qualification and may carry incidental information, so do not copy or paste
+them without need.
+
+The outbound `Authorization` header lives in pg_net's request path —
+`net.http_request_queue` while the request is queued, from which rows are
+removed once executed. It must never be queried, logged, copied into a
+ticket, or exposed alongside decrypted Vault values.
 
 Reading the result:
 
@@ -780,9 +798,22 @@ tier is metering.
 
 ### The scheduler credential
 
-`INTERNAL_SCHEDULER_TOKEN` lives in the `glamgenius-production-secrets` Render
-environment group **and** in Supabase Vault. Nowhere else — not in
-`render.yaml`, not in `env.example`, not in any test, not in any commit.
+The **real production** `INTERNAL_SCHEDULER_TOKEN` lives in exactly two
+places: the `glamgenius-production-secrets` Render environment group, and
+Supabase Vault.
+
+No production credential and no generated high-entropy scheduler secret
+belongs in `render.yaml`, in `env.example`, in tests, in documentation, or in
+any commit.
+
+Tests are the one deliberate nuance, and it is worth stating rather than
+glossing: they **do** contain scheduler-token fixtures, because the validation
+rules cannot be exercised without one. Those fixtures are explicitly
+synthetic and deliberately low-entropy — repeated words such as
+`not-a-real-token-not-a-real-token-not-a-real-token` — chosen so they cannot
+be mistaken for a production credential by a reader or by a secret scanner.
+That is why no scanner allowlist is needed: nothing in the repository is
+shaped like a real secret in the first place.
 
 It is **not** a customer credential and **not** a Supabase JWT. Those two routes
 run batch work on nobody's behalf, so authorising them with a user token would
