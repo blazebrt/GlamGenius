@@ -74,9 +74,9 @@ FACT_VALUES = ("often_dry_or_tight",)
 EVIDENCE_STRENGTH = "moderate"
 EVIDENCE_SUMMARY = (
     "Retinol is relevant to dry-skin care because dermatologist guidance states that people "
-    "with skin dryness are generally not good candidates for retinoid products and that "
-    "retinol is a retinoid, and reviewed research reports that topical retinoids commonly "
-    "cause local irritation including dryness."
+    "with skin dryness are generally not good candidates for retinoid products and identifies "
+    "retinol as a retinoid. A reviewed scientific article separately reports that topical "
+    "retinoids often lead to cutaneous irritation."
 )
 EVIDENCE_SCOPE = (
     "Ingredient-level, non-medical applicability for a user who reports "
@@ -85,9 +85,11 @@ EVIDENCE_SCOPE = (
     "the suitability of unrelated co-ingredients, or anything about other retinoids."
 )
 EVIDENCE_STRENGTH_RATIONALE = (
-    "Current dermatologist guidance states directly that people with skin dryness are "
-    "generally not good candidates for retinoid products, and reviewed research on topical "
-    "retinoids reports local irritation including dryness as a common effect. Moderate is "
+    "Two paths support this, and they support different things. Current dermatologist "
+    "guidance states directly that people with skin dryness are generally not good candidates "
+    "for retinoid products, and identifies retinol as a retinoid; that is where dryness comes "
+    "from. Reviewed scientific literature separately reports that topical retinoids often "
+    "lead to cutaneous irritation, which is general rather than dryness-specific. Moderate is "
     "used because the evidence is ingredient/family-level rather than an exact-product trial, "
     "and formulation and concentration vary enough that no stronger wording is supportable."
 )
@@ -110,23 +112,34 @@ AAD_SOURCE_USE_NOTE = (
     "GlamGenius stores metadata and a locator, not reproduced AAD article text."
 )
 
-#: The evidence basis for "irritation including dryness is common", and only
-#: that. It is a review of derivatives, carriers and combinations intended to
-#: *reduce* instability and irritation, so it is evidence that the irritation
-#: is a known general problem -- not that any particular product irritates any
-#: particular person, not that every formulation behaves alike, and not that
-#: retinol is categorically unsuitable.
+#: The evidence basis for "cutaneous irritation is a known general problem
+#: with topical retinoids", and only that. It is a review of derivatives,
+#: carriers and combinations intended to *reduce* instability and irritation.
+#:
+#: **It is not this pack's source for dryness.** Its Abstract locator reports
+#: cutaneous irritation in general; it does not say "including dryness", and an
+#: earlier draft of this pack attributed that wording to it. Dryness comes from
+#: the AAD path, which states it directly and specifically. Keeping the two
+#: apart is the point: a source may only be cited for what it actually says.
+#:
+#: Nor is it evidence that any particular product irritates any particular
+#: person, that every formulation behaves alike, or that retinol is
+#: categorically unsuitable.
 PUBMED_SOURCE_TYPE = "peer_reviewed_research"
 PUBMED_SOURCE_TITLE = (
     "Topical retinoids: Novel derivatives, nano lipid-based carriers, and combinations to "
     "improve chemical instability and skin irritation"
 )
-#: The reviewer supplied the journal rather than a corporate publisher for this
-#: article, so the journal is what is recorded. This differs deliberately from
-#: the 2019 article the petrolatum and glycerin packs cite, whose own copyright
-#: line names "Wiley Periodicals, Inc."; which form should be canonical for
-#: this journal is a question for review, not something to guess at here.
-PUBMED_SOURCE_PUBLISHER = "Journal of Cosmetic Dermatology"
+#: The publisher, not the journal. "Journal of Cosmetic Dermatology" is the
+#: journal this article appeared in and was wrongly recorded here as the
+#: publisher; independent review confirmed the 2024 article states
+#: "Wiley Periodicals LLC".
+#:
+#: Note the corporate form differs from the 2019 article the petrolatum and
+#: glycerin packs cite, which states "Wiley Periodicals, Inc." -- the entity
+#: was renamed between them. Both are recorded as each article states it,
+#: rather than normalised to look consistent.
+PUBMED_SOURCE_PUBLISHER = "Wiley Periodicals LLC"
 PUBMED_SOURCE_URL = "https://pubmed.ncbi.nlm.nih.gov/38952060/"
 PUBMED_SOURCE_LOCATOR = "Abstract"
 PUBMED_SOURCE_PUBLICATION_DATE = "2024-07-01"

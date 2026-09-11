@@ -53,6 +53,8 @@ Identity stays exactly `retinol`. Retinal, retinyl palmitate, tretinoin and adap
 
 The reviewed AAD page also discusses pregnancy. **That boundary lives in `app/domains/routines/hard_handoff.py` and stays there.** This pack does not duplicate, inspect, infer or reinterpret it, and the customer reason may not mention it. The guard on the reason lists pregnancy first for exactly that reason: the risk is leakage from a source into a sentence, not invention from nowhere.
 
+**The two evidence paths say different things, and the pack keeps them apart.** AAD states that people with skin dryness are generally not good candidates for retinoid products, and identifies retinol as a retinoid — that is where *dryness* comes from. The reviewed article separately reports that topical retinoids often lead to *cutaneous irritation*, which is general rather than dryness-specific. An earlier draft credited the article's Abstract with "irritation including dryness"; its locator does not say that, and the summary and rationale are now pinned whole so a future re-attribution has to be re-reviewed rather than slipping past a phrase blacklist.
+
 ### Salicylic acid — why two conditions
 
 The reviewed guidance says two things in one breath: ingredients such as salicylic acid can help reduce oiliness, *and* they may be too harsh for some skin. A pack keyed only on oily skin would carry the first half and drop the second.
@@ -83,16 +85,49 @@ Each would be a new global product policy. Any of them would need its own review
 
 ## Source verification status
 
-The independent reviewer opened and verified the public sources for this milestone. The build environment for this branch **cannot** reach them — outbound access is restricted to GitHub, and `www.aad.org`, `www.fda.gov`, `pubmed.ncbi.nlm.nih.gov` and `pubchem.ncbi.nlm.nih.gov` are all refused at CONNECT.
+Every source below was **independently verified during external review**. This build environment still cannot reach any of them — outbound access is restricted to GitHub, and `www.aad.org`, `www.fda.gov`, `pubmed.ncbi.nlm.nih.gov` and `pubchem.ncbi.nlm.nih.gov` are all refused at CONNECT — so nothing here rests on a page this branch opened.
 
-So, precisely:
+### Canonical URLs, independently verified
 
-- **Titles, locators, last-updated dates, PMIDs, DOIs, CAS numbers and PubChem CIDs** came from the independent reviewer, not from this environment.
-- **Canonical URLs for four pages** — AAD *Retinoid or retinol?*, AAD *How to control oily skin*, FDA *Fragrances in Cosmetics*, FDA *Cosmetic Ingredient Names* — were **constructed from each site's canonical path convention and are NOT verified**. They must be confirmed at review.
-- **PubChem and PubMed URLs** were derived from the canonical patterns already reviewed and merged in the petrolatum and glycerin packs, using the reviewer-supplied CIDs and PMIDs.
-- **The AAD dry-skin URL** used by the fragrance pack is copied verbatim from the two merged packs, where it is already reviewed.
+| Page | URL |
+| --- | --- |
+| AAD, *Dermatologists' top tips for relieving dry skin* | `https://www.aad.org/public/everyday-care/skin-care-basics/dry/dermatologists-tips-relieve-dry-skin` |
+| AAD, *Retinoid or retinol?* | `https://www.aad.org/public/everyday-care/skin-care-secrets/anti-aging/retinoid-retinol` |
+| AAD, *How to control oily skin* | `https://www.aad.org/public/everyday-care/skin-care-basics/dry/oily-skin` |
+| FDA, *Fragrances in Cosmetics* | `https://www.fda.gov/cosmetics/cosmetic-ingredients/fragrances-cosmetics` |
+| FDA, *Cosmetic Ingredient Names* | `https://www.fda.gov/cosmetics/cosmetics-labeling/cosmetic-ingredient-names` |
 
-Nothing was inferred beyond that, and no metadata field was invented to fill a gap.
+> The FDA nomenclature page lives under **`cosmetics-labeling`**, plural. An earlier draft of this roster constructed it as `cosmetic-labeling`, singular, and the test then in place checked only that the URL began with `https://www.fda.gov/cosmetics/` — so the wrong path passed. Both FDA URLs are now pinned whole, and a mutation probe turns the plural back to the singular to prove the regression bites.
+
+### Identity, independently verified
+
+| Substance | PubChem CID | CAS |
+| --- | --- | --- |
+| Retinol | 445354 | 68-26-8 |
+| Salicylic Acid | 338 | 69-72-7 |
+
+`fragrance` deliberately has neither: it is a mixture, and an identifier would assert a molecule.
+
+### Page revisions, independently verified
+
+| Page | Last updated |
+| --- | --- |
+| AAD dry skin | 2026-01-02 |
+| AAD retinoid/retinol | 2021-05-25 |
+| AAD oily skin | 2024-09-03 |
+
+In every case an update date stays an update date: `publication_date` is `null` and the revision is recorded as a version.
+
+### Bibliographic records, independently verified
+
+| Article | Publisher |
+| --- | --- |
+| PMID 38952060, DOI 10.1111/jocd.16415, *Journal of Cosmetic Dermatology*, epub 2024-07-01 | Wiley Periodicals LLC |
+| PMID 40233838, DOI 10.1016/j.jaad.2025.04.021, *J Am Acad Dermatol*, epub 2025-04-14 | Elsevier Inc. |
+
+> The first was recorded as "Journal of Cosmetic Dermatology" in an earlier draft. That is the **journal**, not the publisher, and conflating them misattributes the work exactly as naming the database would. The corporate form also differs from the 2019 article the petrolatum and glycerin packs cite — "Wiley Periodicals, Inc." — because the entity was renamed between them. Each article is recorded as it states itself rather than normalised to look consistent.
+
+Nothing was inferred, and no metadata field was invented to fill a gap.
 
 ---
 

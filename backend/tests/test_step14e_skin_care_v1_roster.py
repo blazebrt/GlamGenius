@@ -424,8 +424,26 @@ class TestFragranceIdentity:
         assert fragrance.IDENTITY_SOURCE_PUBLISHER == "U.S. Food and Drug Administration"
         assert fragrance.IDENTITY_SOURCE_TITLE == "Fragrances in Cosmetics"
         assert fragrance.IDENTITY_NAMING_SOURCE_TITLE == "Cosmetic Ingredient Names"
-        for url in (fragrance.IDENTITY_SOURCE_URL, fragrance.IDENTITY_NAMING_SOURCE_URL):
-            assert url.startswith("https://www.fda.gov/cosmetics/")
+
+    def test_the_fda_urls_are_pinned_whole_not_by_prefix(self) -> None:
+        # This assertion used to be `startswith("https://www.fda.gov/cosmetics/")`,
+        # and a wrong canonical path sailed through it: the nomenclature page
+        # lives under "cosmetics-labeling", plural, and the singular spelling
+        # was just as good a prefix match. A URL is the citation a reader
+        # follows, so it is pinned whole.
+        assert fragrance.IDENTITY_SOURCE_URL == (
+            "https://www.fda.gov/cosmetics/cosmetic-ingredients/fragrances-cosmetics"
+        )
+        assert fragrance.IDENTITY_NAMING_SOURCE_URL == (
+            "https://www.fda.gov/cosmetics/cosmetics-labeling/cosmetic-ingredient-names"
+        )
+
+    def test_the_nomenclature_url_uses_the_plural_labeling_segment(self) -> None:
+        # Stated separately because it is the exact character the correction
+        # turned on, and a reader of this suite should not have to diff two
+        # long strings to see it.
+        assert "/cosmetics-labeling/" in fragrance.IDENTITY_NAMING_SOURCE_URL
+        assert "/cosmetic-labeling/" not in fragrance.IDENTITY_NAMING_SOURCE_URL
 
 
 class TestRetinolIdentity:
@@ -581,6 +599,67 @@ class TestEvidence:
     def test_the_retinol_scope_denies_a_pregnancy_or_medication_boundary(self) -> None:
         assert "pregnancy or medication boundary" in retinol.EVIDENCE_SCOPE
 
+    def test_the_retinol_summary_is_pinned_whole(self) -> None:
+        # Pinned entire rather than blacklisting one phrase. The defect this
+        # replaces was an attribution -- the summary credited the PubMed
+        # abstract with "irritation including dryness" when its locator reports
+        # cutaneous irritation in general and says nothing about dryness. A
+        # blacklist would have caught that one wording; pinning the sentence
+        # means any future re-attribution has to be re-reviewed.
+        assert retinol.EVIDENCE_SUMMARY == (
+            "Retinol is relevant to dry-skin care because dermatologist guidance states "
+            "that people with skin dryness are generally not good candidates for retinoid "
+            "products and identifies retinol as a retinoid. A reviewed scientific article "
+            "separately reports that topical retinoids often lead to cutaneous irritation."
+        )
+
+    def test_the_retinol_strength_rationale_is_pinned_whole(self) -> None:
+        assert retinol.EVIDENCE_STRENGTH_RATIONALE == (
+            "Two paths support this, and they support different things. Current "
+            "dermatologist guidance states directly that people with skin dryness are "
+            "generally not good candidates for retinoid products, and identifies retinol as "
+            "a retinoid; that is where dryness comes from. Reviewed scientific literature "
+            "separately reports that topical retinoids often lead to cutaneous irritation, "
+            "which is general rather than dryness-specific. Moderate is used because the "
+            "evidence is ingredient/family-level rather than an exact-product trial, and "
+            "formulation and concentration vary enough that no stronger wording is "
+            "supportable."
+        )
+
+    @pytest.mark.parametrize("text_field", ["EVIDENCE_SUMMARY", "EVIDENCE_STRENGTH_RATIONALE"])
+    def test_dryness_is_never_attributed_to_the_research_path(self, text_field: str) -> None:
+        # The two paths say different things and the reviewed prose must keep
+        # them apart: AAD is where dryness comes from, the article is where
+        # general cutaneous irritation comes from.
+        text = getattr(retinol, text_field).lower()
+        for smuggled in (
+            "irritation including dryness",
+            "including dryness",
+            "dryness as a common effect",
+            "research reports that topical retinoids commonly cause local irritation "
+            "including dryness",
+        ):
+            assert smuggled not in text, (text_field, smuggled)
+
+    def test_both_retinol_evidence_paths_are_present_and_distinguished(self) -> None:
+        summary = retinol.EVIDENCE_SUMMARY.lower()
+        rationale = retinol.EVIDENCE_STRENGTH_RATIONALE.lower()
+        # The AAD half: dryness, specifically, plus the family link.
+        assert "skin dryness" in summary
+        assert "retinol as a retinoid" in summary
+        # The article half: general cutaneous irritation, and said separately.
+        assert "cutaneous irritation" in summary
+        assert "separately" in summary
+        # And the rationale states which path carries which.
+        assert "that is where dryness comes from" in rationale
+        assert "general rather than dryness-specific" in rationale
+
+    def test_the_customer_reason_may_still_speak_of_dryness(self) -> None:
+        # It is attached to the AAD locator, which states dryness directly.
+        # The boundary restricts what the *article* may be credited with, not
+        # what the pack may say at all.
+        assert "dry" in retinol.FUTURE_REASON_INTENT.lower()
+
     @pytest.mark.parametrize("pack", NEW_PACKS)
     def test_no_summary_characterises_or_promises(self, pack: ModuleType) -> None:
         summary = pack.EVIDENCE_SUMMARY.lower()
@@ -612,11 +691,36 @@ class TestReviewedSourceMetadata:
         assert retinol.AAD_SOURCE_URL.startswith("https://www.aad.org/")
 
     def test_exact_retinol_research_metadata(self) -> None:
+        # Every bibliographic field pinned whole. The publisher previously held
+        # the *journal* title, which no assertion here contradicted -- the only
+        # check was that it was not "PubMed", and a journal name passes that.
         assert retinol.PUBMED_SOURCE_TYPE == "peer_reviewed_research"
-        assert retinol.PUBMED_SOURCE_VERSION == "PMID 38952060; DOI 10.1111/jocd.16415"
-        assert retinol.PUBMED_SOURCE_PUBLICATION_DATE == "2024-07-01"
+        assert retinol.PUBMED_SOURCE_TITLE == (
+            "Topical retinoids: Novel derivatives, nano lipid-based carriers, and "
+            "combinations to improve chemical instability and skin irritation"
+        )
+        assert retinol.PUBMED_SOURCE_PUBLISHER == "Wiley Periodicals LLC"
         assert retinol.PUBMED_SOURCE_URL == "https://pubmed.ncbi.nlm.nih.gov/38952060/"
-        assert retinol.PUBMED_SOURCE_TITLE.startswith("Topical retinoids:")
+        assert retinol.PUBMED_SOURCE_PUBLICATION_DATE == "2024-07-01"
+        assert retinol.PUBMED_SOURCE_VERSION == "PMID 38952060; DOI 10.1111/jocd.16415"
+        assert retinol.PUBMED_SOURCE_LOCATOR == "Abstract"
+        assert retinol.PUBMED_SOURCE_JURISDICTION is None
+
+    def test_the_journal_is_never_recorded_as_the_publisher(self) -> None:
+        # A journal is where an article appeared; a publisher is who published
+        # it. Conflating them misattributes the work exactly as naming the
+        # database would.
+        assert retinol.PUBMED_SOURCE_PUBLISHER != "Journal of Cosmetic Dermatology"
+        assert "Journal of" not in retinol.PUBMED_SOURCE_PUBLISHER
+        assert "Journal of" not in salicylic.DELPHI_SOURCE_PUBLISHER
+
+    def test_the_two_wiley_articles_record_their_own_corporate_forms(self) -> None:
+        # The entity was renamed between the 2019 and 2024 articles. Each is
+        # recorded as its own article states it rather than normalised to look
+        # consistent, so neither is silently restated as the other.
+        assert retinol.PUBMED_SOURCE_PUBLISHER == "Wiley Periodicals LLC"
+        assert petrolatum.PUBMED_SOURCE_PUBLISHER == "Wiley Periodicals, Inc."
+        assert glycerin.PUBMED_SOURCE_PUBLISHER == "Wiley Periodicals, Inc."
 
     def test_exact_salicylic_aad_metadata(self) -> None:
         assert salicylic.AAD_SOURCE_TYPE == "professional_consensus"
@@ -1468,6 +1572,46 @@ class TestTheFreezeDocument:
     @pytest.mark.parametrize("state", ["sometimes_reactive", "often_reactive"])
     def test_it_records_the_reactivity_states_v1_does_not_cover(self, state: str) -> None:
         assert state in FREEZE_DOCUMENT.read_text(encoding="utf-8"), state
+
+    def test_it_records_the_independently_verified_canonical_urls(self) -> None:
+        # The document used to say four URLs were constructed and unverified.
+        # Independent review has since confirmed them, and one was wrong; the
+        # document must now carry the verified strings rather than the caveat.
+        text = FREEZE_DOCUMENT.read_text(encoding="utf-8")
+        for url in (
+            "https://www.aad.org/public/everyday-care/skin-care-secrets/anti-aging/retinoid-retinol",
+            "https://www.aad.org/public/everyday-care/skin-care-basics/dry/oily-skin",
+            "https://www.fda.gov/cosmetics/cosmetic-ingredients/fragrances-cosmetics",
+            "https://www.fda.gov/cosmetics/cosmetics-labeling/cosmetic-ingredient-names",
+        ):
+            assert url in text, url
+        assert "independently verified" in text.lower()
+        assert "NOT verified" not in text
+
+    def test_it_does_not_claim_this_environment_opened_the_sources(self) -> None:
+        # Still true, and still stated: the egress block is unchanged. The
+        # verification is the reviewer's, and the document says whose it is.
+        text = FREEZE_DOCUMENT.read_text(encoding="utf-8")
+        assert "refused at CONNECT" in text
+        assert "nothing here rests on a page this branch opened" in text
+
+    def test_it_records_the_verified_identities_and_revisions(self) -> None:
+        text = FREEZE_DOCUMENT.read_text(encoding="utf-8")
+        for fact in ("445354", "68-26-8", "338", "69-72-7",
+                     "2026-01-02", "2021-05-25", "2024-09-03"):
+            assert fact in text, fact
+
+    def test_it_records_the_corrected_publisher_and_why(self) -> None:
+        text = FREEZE_DOCUMENT.read_text(encoding="utf-8")
+        assert "Wiley Periodicals LLC" in text
+        assert "Elsevier Inc." in text
+        assert "journal" in text.lower() and "not the publisher" in text.lower()
+
+    def test_it_keeps_the_salicylic_boundary_described_as_a_restriction(self) -> None:
+        # Must never drift into sounding like evidence of tolerance.
+        text = FREEZE_DOCUMENT.read_text(encoding="utf-8")
+        assert "conservative eligibility boundary, not a scientific finding" in text
+        assert "guarantees anyone will tolerate anything" in text
 
     def test_it_records_that_not_enough_information_remains_legitimate(self) -> None:
         text = FREEZE_DOCUMENT.read_text(encoding="utf-8")

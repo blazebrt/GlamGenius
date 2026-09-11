@@ -65,8 +65,15 @@ IDENTITY_SOURCE_PUBLISHER = "U.S. Food and Drug Administration"
 IDENTITY_SOURCE_URL = "https://www.fda.gov/cosmetics/cosmetic-ingredients/fragrances-cosmetics"
 #: The second FDA page, which carries the common/usual-name example
 #: "Fragrance (Parfum)". Recorded because the naming claim rests on it.
+#:
+#: The path segment is "cosmetics-labeling", plural. The singular form
+#: reads just as plausibly and is what this URL was first guessed as; the
+#: plural is what independent review confirmed, and a test now pins the
+#: whole string rather than its prefix.
 IDENTITY_NAMING_SOURCE_TITLE = "Cosmetic Ingredient Names"
-IDENTITY_NAMING_SOURCE_URL = "https://www.fda.gov/cosmetics/cosmetic-labeling/cosmetic-ingredient-names"
+IDENTITY_NAMING_SOURCE_URL = (
+    "https://www.fda.gov/cosmetics/cosmetics-labeling/cosmetic-ingredient-names"
+)
 #: No CAS number, no external id. See IDENTITY_ENTITY_KIND.
 IDENTITY_CAS_NUMBER = None
 IDENTITY_SOURCE_EXTERNAL_ID = None
