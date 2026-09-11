@@ -859,28 +859,46 @@ class TestCompiledManifest:
 # The two-pack inventory, on the real committed files
 # ---------------------------------------------------------------------------
 class TestTwoPackInventory:
-    def test_the_committed_inventory_is_exactly_two_valid_packs(self) -> None:
+    """That these two packs coexist with distinct identities.
+
+    Step 14D proved it when they were the whole inventory. Step 14E froze a
+    five-pack roster, so "the inventory is exactly two" is no longer true and
+    the exact-count authority moved to
+    ``tests/test_step14e_skin_care_v1_roster.py`` and
+    ``tests/test_knowledge_pack_inspection.py``.
+
+    What this class asserted is unchanged in substance and still worth
+    holding: both of *these* packs are present, valid, and distinct from each
+    other. The assertions are scoped to that pair rather than to the size of
+    the inventory around them.
+    """
+
+    def test_the_committed_inventory_is_valid_and_contains_both_packs(self) -> None:
         result = inspect_packs()
         assert result.errors == ()
         assert result.ok is True
-        assert len(result.packs) == 2
+        ids = {descriptor.pack_id for descriptor in result.packs}
+        assert {GLYCERIN_PACK_ID, PETROLATUM_PACK_ID} <= ids
 
     def test_both_pack_ids_are_the_reviewed_ones_and_are_distinct(self) -> None:
-        ids = sorted(descriptor.pack_id for descriptor in inspect_packs().packs)
-        assert ids == sorted([GLYCERIN_PACK_ID, PETROLATUM_PACK_ID])
-        assert len(set(ids)) == 2
+        ids = [descriptor.pack_id for descriptor in inspect_packs().packs]
+        assert GLYCERIN_PACK_ID in ids
+        assert PETROLATUM_PACK_ID in ids
+        assert GLYCERIN_PACK_ID != PETROLATUM_PACK_ID
+        assert len(set(ids)) == len(ids), "every committed pack id must be unique"
 
     def test_both_reason_keys_are_distinct(self) -> None:
         keys = [descriptor.reason_key for descriptor in inspect_packs().packs]
-        assert len(set(keys)) == 2
+        assert len(set(keys)) == len(keys), "every committed reason key must be unique"
         assert pack.REASON_KEY in keys
         assert first_pack.REASON_KEY in keys
+        assert pack.REASON_KEY != first_pack.REASON_KEY
 
     def test_both_packs_declare_a_valid_compiler(self) -> None:
         for descriptor in inspect_packs().packs:
             assert descriptor.compiler_name == COMPILER_ATTRIBUTE
 
-    def test_the_ci_governance_command_passes_with_two_packs(self) -> None:
+    def test_the_ci_governance_command_passes_with_both_packs_present(self) -> None:
         completed = subprocess.run(
             [sys.executable, "scripts/inspect_knowledge_packs.py", "--json"],
             cwd=REPOSITORY_ROOT,
@@ -891,8 +909,10 @@ class TestTwoPackInventory:
         assert completed.returncode == 0, completed.stderr
         payload = json.loads(completed.stdout)
         assert payload["status"] == "ok"
-        assert payload["pack_count"] == 2
         assert payload["errors"] == []
+        reported = {entry["pack_id"] for entry in payload["packs"]}
+        assert {GLYCERIN_PACK_ID, PETROLATUM_PACK_ID} <= reported
+        assert payload["pack_count"] == len(payload["packs"])
 
     def test_the_new_pack_is_reported_with_its_real_identity(self) -> None:
         (descriptor,) = (
@@ -1006,7 +1026,11 @@ class TestNoCrossPackImport:
             offenders = _cross_pack_imports(path.read_text(encoding="utf-8"), own_module=own)
             assert offenders == [], (path.name, offenders)
             checked += 1
-        assert checked == 2, "the two-pack rule must be checked against two packs"
+        # Both of these packs must be among what was checked. The exact size
+        # of the committed roster is Step 14E's authority, not this module's.
+        stems = {path.stem for path in discover_pack_sources()}
+        assert {"glycerin_dry_skin_v1", "petrolatum_dry_skin_v1"} <= stems
+        assert checked == len(stems)
 
     def test_the_only_application_import_is_the_manifest_authority(self) -> None:
         tree = ast.parse(PACK_SOURCE.read_text(encoding="utf-8"))
