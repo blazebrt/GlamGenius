@@ -82,10 +82,20 @@ SCOPE_SCRIPT = REPOSITORY_ROOT / ".github" / "scripts" / "detect-ci-scope.sh"
 
 REVIEWED_MODULE = "app.knowledge_packs.petrolatum_dry_skin_v1"
 SECOND_REVIEWED_MODULE = "app.knowledge_packs.glycerin_dry_skin_v1"
-#: The exact reviewed inventory. Asserted as an equality, never as a
-#: minimum: "at least one pack" would pass on an inventory that had
-#: silently lost one, which is the failure this module exists to catch.
-REVIEWED_PACK_COUNT = 2
+#: The exact reviewed inventory: the frozen Skin-Care V1 roster of five packs.
+#: Asserted as an equality, never as a minimum -- "at least five" would pass on
+#: an inventory that had silently lost one, which is the failure this module
+#: exists to catch. The roster itself is frozen by
+#: ``docs/architecture/SKIN_CARE_V1_KNOWLEDGE_ROSTER.md`` and held by
+#: ``tests/test_step14e_skin_care_v1_roster.py``.
+REVIEWED_MODULES = frozenset({
+    REVIEWED_MODULE,
+    SECOND_REVIEWED_MODULE,
+    "app.knowledge_packs.fragrance_dry_skin_v1",
+    "app.knowledge_packs.retinol_dry_skin_v1",
+    "app.knowledge_packs.salicylic_acid_oily_skin_v1",
+})
+REVIEWED_PACK_COUNT = 5
 SYNTHETIC_PACKAGE = "synthetic_knowledge_packs"
 
 #: The exact content hash of the manifest the reviewed pack compiles from the
@@ -237,10 +247,7 @@ class TestTheRepositoryInventory:
         packs = inspect_packs().packs
         assert len({descriptor.pack_id for descriptor in packs}) == REVIEWED_PACK_COUNT
         assert len({descriptor.reason_key for descriptor in packs}) == REVIEWED_PACK_COUNT
-        assert {descriptor.module for descriptor in packs} == {
-            REVIEWED_MODULE,
-            SECOND_REVIEWED_MODULE,
-        }
+        assert {descriptor.module for descriptor in packs} == REVIEWED_MODULES
 
     def test_the_reviewed_pack_is_reported_with_its_real_identity(self) -> None:
         (descriptor,) = (d for d in inspect_packs().packs if d.module == REVIEWED_MODULE)
