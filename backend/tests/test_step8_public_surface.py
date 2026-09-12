@@ -113,8 +113,14 @@ def test_render_url_is_ignored_without_renders_own_platform_marker():
 @pytest.mark.parametrize("bad_url", [
     "http://glamgenius-api.onrender.com",
     "https://localhost",
+    "https://foo.localhost",
     "https://127.0.0.1",
     "https://*.onrender.com",
+    "https://example.org",
+    "https://sub.example.com",
+    "https://example.invalid",
+    "https://example.test",
+    "https://bad host.onrender.com",
     "https://glamgenius-api.onrender.com/path",
     "https://user:password@glamgenius-api.onrender.com",
     "https://glamgenius-api.onrender.com?query=1",
@@ -122,6 +128,23 @@ def test_render_url_is_ignored_without_renders_own_platform_marker():
 ])
 def test_malformed_render_urls_fail_closed_in_production(bad_url: str):
     result = _config_snapshot({"RENDER": "true", "RENDER_EXTERNAL_URL": bad_url})
+    assert result.returncode != 0
+    assert "invalid public production configuration" in result.stderr
+
+
+@pytest.mark.parametrize("setting", ["PRIVACY_POLICY_URL", "SUPPORT_URL"])
+@pytest.mark.parametrize("bad_page_url", [
+    "https://foo.localhost/privacy",
+    "https://example.org/privacy",
+    "https://example.invalid/privacy",
+    "https://bad host.onrender.com/privacy",
+])
+def test_explicit_public_page_urls_fail_closed_in_production(setting: str, bad_page_url: str):
+    result = _config_snapshot({
+        "RENDER": "true",
+        "RENDER_EXTERNAL_URL": "https://glamgenius-api.onrender.com",
+        setting: bad_page_url,
+    })
     assert result.returncode != 0
     assert "invalid public production configuration" in result.stderr
 

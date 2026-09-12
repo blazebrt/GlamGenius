@@ -262,13 +262,25 @@ PUBLIC_CONFIGURATION_ERRORS: list[str] = []
 
 def _is_loopback_or_unspecified_host(host: str) -> bool:
     lowered = host.lower().rstrip(".")
-    if lowered == "localhost":
+    if lowered == "localhost" or lowered.endswith(".localhost"):
         return True
     try:
         address = ipaddress.ip_address(lowered)
     except ValueError:
         return False
     return address.is_loopback or address.is_unspecified
+
+
+def _is_placeholder_or_reserved_host(host: str) -> bool:
+    lowered = host.lower().rstrip(".")
+    if "placeholder" in lowered:
+        return True
+    if lowered.endswith((".example", ".invalid", ".test")):
+        return True
+    return any(
+        lowered == domain or lowered.endswith(f".{domain}")
+        for domain in ("example.com", "example.net", "example.org")
+    )
 
 
 def _normalise_public_origin(value: str, *, setting: str) -> str:
@@ -300,8 +312,8 @@ def _normalise_public_origin(value: str, *, setting: str) -> str:
         raise ValueError("has an invalid hostname")
     if _is_loopback_or_unspecified_host(host):
         raise ValueError("must not use localhost or a loopback address")
-    if "placeholder" in host or host.endswith(".example") or host == "example.com":
-        raise ValueError("must not use a placeholder hostname")
+    if _is_placeholder_or_reserved_host(host):
+        raise ValueError("must not use a placeholder or reserved hostname")
     # Keep the provider's host/port spelling, but normalise the scheme and the
     # optional trailing slash away so CORS receives exactly one origin.
     return urlunparse((parsed.scheme.lower(), parsed.netloc, "", "", "", ""))
@@ -330,10 +342,12 @@ def _normalise_public_page_url(value: str, *, setting: str) -> str:
     if parsed.query or parsed.fragment:
         raise ValueError("must not include a query or fragment")
     host = parsed.hostname.lower().rstrip(".")
+    if not host or host.startswith(".") or any(char.isspace() for char in host):
+        raise ValueError("has an invalid hostname")
     if _is_loopback_or_unspecified_host(host):
         raise ValueError("must not use localhost or a loopback address")
-    if "placeholder" in host or host.endswith(".example") or host == "example.com":
-        raise ValueError("must not use a placeholder hostname")
+    if _is_placeholder_or_reserved_host(host):
+        raise ValueError("must not use a placeholder or reserved hostname")
     return candidate.rstrip("/")
 
 
