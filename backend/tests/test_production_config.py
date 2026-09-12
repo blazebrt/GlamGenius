@@ -27,9 +27,9 @@ def run_config_test(env_vars: dict) -> subprocess.CompletedProcess:
         "REQUIRE_ANALYSIS_CONSENT": "1",
         "CONSENT_VERSION": "v1",
         "MEDIA_STORAGE_BACKEND": "supabase",
-        "ALLOWED_ORIGINS": "https://example.com",
-        "PRIVACY_POLICY_URL": "https://example.org/privacy",
-        "SUPPORT_URL": "https://example.org/support",
+        "ALLOWED_ORIGINS": "https://glamgenius-fixture.onrender.com",
+        "PRIVACY_POLICY_URL": "https://glamgenius-fixture.onrender.com/privacy",
+        "SUPPORT_URL": "https://glamgenius-fixture.onrender.com/support",
         # The scheduler credential. Long enough to clear the minimum
         # length and not shaped like a placeholder, because production
         # rejects both and this fixture is the valid case.
