@@ -121,6 +121,14 @@ def test_render_url_is_ignored_without_renders_own_platform_marker():
     "https://example.invalid",
     "https://example.test",
     "https://bad host.onrender.com",
+    "https://singlelabel",
+    "https://-bad.onrender.com",
+    "https://bad-.onrender.com",
+    "https://bad..onrender.com",
+    "https://bad_name.onrender.com",
+    "https://192.168.1.1",
+    "https://169.254.1.1",
+    "https://glamgenius-api.onrender.com.",
     "https://glamgenius-api.onrender.com/path",
     "https://user:password@glamgenius-api.onrender.com",
     "https://glamgenius-api.onrender.com?query=1",
@@ -138,6 +146,9 @@ def test_malformed_render_urls_fail_closed_in_production(bad_url: str):
     "https://example.org/privacy",
     "https://example.invalid/privacy",
     "https://bad host.onrender.com/privacy",
+    "https://singlelabel/privacy",
+    "https://bad_name.onrender.com/privacy",
+    "https://10.0.0.1/privacy",
 ])
 def test_explicit_public_page_urls_fail_closed_in_production(setting: str, bad_page_url: str):
     result = _config_snapshot({
@@ -193,6 +204,18 @@ async def test_privacy_and_support_point_to_governed_customer_controls(app_clien
     assert "account deletion from profile" in support
     assert 'href="/privacy"' in support
     assert 'href="/support"' in privacy
+
+
+async def test_privacy_escapes_operator_controlled_consent_version(
+    app_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+):
+    import server
+
+    monkeypatch.setattr(server, "CONSENT_VERSION", '</p><style>body{display:none}</style><p>')
+    response = await app_client.get("/privacy")
+    assert response.status_code == 200
+    assert "<style>body{display:none}</style>" not in response.text
+    assert "&lt;/p&gt;&lt;style&gt;body{display:none}&lt;/style&gt;&lt;p&gt;" in response.text
 
 
 async def test_public_pages_do_not_change_customer_api_authentication(app_client: AsyncClient):

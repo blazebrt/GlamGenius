@@ -7,6 +7,8 @@ no local password store or payment stack.
 """
 from __future__ import annotations
 
+from html import escape
+
 # Sentry must be initialised before FastAPI so its middleware can attach to
 # the exception path. A missing DSN is fine — init_sentry() no-ops.
 from app.shared.observability.sentry_bootstrap import init_sentry
@@ -59,7 +61,7 @@ def _public_page(title: str, body: str) -> HTMLResponse:
     return HTMLResponse(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        f"<title>{title}</title>"
+        f"<title>{escape(title)}</title>"
         "<style>body{max-width:46rem;margin:2rem auto;padding:0 1rem;"
         "font:16px/1.55 system-ui,sans-serif;color:#1f2937}h1{line-height:1.2}"
         "a{color:#155e75}</style></head><body>"
@@ -74,7 +76,7 @@ async def privacy_information() -> HTMLResponse:
     return _public_page(
         "GlamGenius beta privacy information",
         f"<h1>GlamGenius beta privacy information</h1>"
-        f"<p>Policy and consent version: {CONSENT_VERSION}.</p>"
+        f"<p>Policy and consent version: {escape(CONSENT_VERSION)}.</p>"
         "<p>GlamGenius is an invite-only beta. It uses account and authentication "
         "information needed to operate an account; product or label images and "
         "other information you deliberately submit for analysis; profile and "

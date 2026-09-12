@@ -260,20 +260,35 @@ PUBLIC_BASE_URL_SOURCE = "none"
 PUBLIC_CONFIGURATION_ERRORS: list[str] = []
 
 
-def _is_loopback_or_unspecified_host(host: str) -> bool:
-    lowered = host.lower().rstrip(".")
-    if lowered == "localhost" or lowered.endswith(".localhost"):
-        return True
+def _is_valid_public_host(host: str) -> bool:
+    """Accept only a public IP address or an unambiguous ASCII DNS hostname."""
+    lowered = host.lower()
+    if not lowered or len(lowered) > 253 or lowered.endswith("."):
+        return False
     try:
         address = ipaddress.ip_address(lowered)
     except ValueError:
-        return False
-    return address.is_loopback or address.is_unspecified
+        labels = lowered.split(".")
+        if len(labels) < 2:
+            return False
+        return all(
+            label
+            and len(label) <= 63
+            and label[0].isalnum()
+            and label[-1].isalnum()
+            and all(char.isascii() and (char.isalnum() or char == "-") for char in label)
+            for label in labels
+        )
+    return address.is_global
 
 
 def _is_placeholder_or_reserved_host(host: str) -> bool:
     lowered = host.lower().rstrip(".")
     if "placeholder" in lowered:
+        return True
+    if lowered == "localhost" or lowered.endswith((".localhost", ".local")):
+        return True
+    if lowered in {"example", "invalid", "test"}:
         return True
     if lowered.endswith((".example", ".invalid", ".test")):
         return True
@@ -307,11 +322,9 @@ def _normalise_public_origin(value: str, *, setting: str) -> str:
         raise ValueError("must not include a query or fragment")
     if parsed.path not in ("", "/") or parsed.params:
         raise ValueError("must not include a path")
-    host = parsed.hostname.lower().rstrip(".")
-    if not host or host.startswith(".") or any(char.isspace() for char in host):
-        raise ValueError("has an invalid hostname")
-    if _is_loopback_or_unspecified_host(host):
-        raise ValueError("must not use localhost or a loopback address")
+    host = parsed.hostname.lower()
+    if not _is_valid_public_host(host):
+        raise ValueError("must use a valid public hostname or IP address")
     if _is_placeholder_or_reserved_host(host):
         raise ValueError("must not use a placeholder or reserved hostname")
     # Keep the provider's host/port spelling, but normalise the scheme and the
@@ -341,11 +354,9 @@ def _normalise_public_page_url(value: str, *, setting: str) -> str:
         raise ValueError("must not include credentials")
     if parsed.query or parsed.fragment:
         raise ValueError("must not include a query or fragment")
-    host = parsed.hostname.lower().rstrip(".")
-    if not host or host.startswith(".") or any(char.isspace() for char in host):
-        raise ValueError("has an invalid hostname")
-    if _is_loopback_or_unspecified_host(host):
-        raise ValueError("must not use localhost or a loopback address")
+    host = parsed.hostname.lower()
+    if not _is_valid_public_host(host):
+        raise ValueError("must use a valid public hostname or IP address")
     if _is_placeholder_or_reserved_host(host):
         raise ValueError("must not use a placeholder or reserved hostname")
     return candidate.rstrip("/")
