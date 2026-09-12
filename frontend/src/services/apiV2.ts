@@ -19,6 +19,9 @@ export const V2 = '/api/v2';
 
 export type ErrorCode =
   | 'ANALYSIS_UNAVAILABLE'
+  // Returned with 429 when the account has spent its hourly AI budget. The
+  // request never reached the provider, so nothing was charged for it.
+  | 'AI_RATE_LIMITED'
   | 'CONSENT_REQUIRED'
   | 'UNSUPPORTED_MEDIA_TYPE'
   | 'MEDIA_TOO_LARGE'

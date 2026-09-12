@@ -166,7 +166,10 @@ class ScoreExplanation(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "score_explanations"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    # Indexed: the privacy export filters this table by account and
+    # account deletion cascades through it; without it both read the
+    # whole table. See migration d0e1f2g3h4.
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     metric_event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("metric_events.id", ondelete="CASCADE"), nullable=False)
     metric_key: Mapped[str] = mapped_column(String(48), nullable=False)
     formula_version: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -257,7 +260,10 @@ class GoalUpdate(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "goal_updates"
 
     goal_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("progress_goals.id", ondelete="CASCADE"), nullable=False)
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    # Indexed: the privacy export filters this table by account and
+    # account deletion cascades through it; without it both read the
+    # whole table. See migration d0e1f2g3h4.
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     value: Mapped[float | None] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(24), nullable=False, default="metric", server_default="metric")
     note: Mapped[str | None] = mapped_column(String(500))
@@ -333,7 +339,10 @@ class MemoryCategoryPreference(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "memory_category_preferences"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    # Indexed: the privacy export filters this table by account and
+    # account deletion cascades through it; without it both read the
+    # whole table. See migration d0e1f2g3h4.
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     category: Mapped[str] = mapped_column(String(32), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
 
@@ -417,7 +426,10 @@ class Streak(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "streaks"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    # Indexed: the privacy export filters this table by account and
+    # account deletion cascades through it; without it both read the
+    # whole table. See migration d0e1f2g3h4.
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     behaviour: Mapped[str] = mapped_column(String(48), nullable=False)
     current_length: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     longest_length: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

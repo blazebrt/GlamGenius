@@ -38,6 +38,14 @@ def get_engine() -> AsyncEngine:
             pool_size=POSTGRES_POOL_SIZE,
             max_overflow=POSTGRES_MAX_OVERFLOW,
             pool_pre_ping=True,
+            # A database error's message embeds the statement *and its bound
+            # parameters* by default. The parameters are the data: an account
+            # id, an email, a barcode, whatever the failing query was filtering
+            # on. That string then travels wherever the exception does — the
+            # log, the traceback, Sentry — which is how personal data ends up
+            # somewhere nobody decided to put it. The statement alone is what
+            # diagnosis needs; the values are not.
+            hide_parameters=True,
         )
     return _engine
 

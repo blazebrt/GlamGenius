@@ -120,6 +120,10 @@ async def confirmed_inventory(session: AsyncSession, account_id: uuid.UUID) -> t
     )).scalars().all()
     owned: list[OwnedItem] = []
     drafts = 0
+    confirmed = [row for row in rows if row.verification_state == "confirmed"]
+    # One query per category present rather than one per item; this is read on
+    # every styling request, and the shelf it reads is the whole wardrobe.
+    details_by_item = await inventory_service.details_for_many(session, confirmed)
     for row in rows:
         if row.verification_state != "confirmed":
             drafts += 1
@@ -127,7 +131,7 @@ async def confirmed_inventory(session: AsyncSession, account_id: uuid.UUID) -> t
         owned.append(OwnedItem(
             id=row.id, category=row.category, subcategory=row.subcategory,
             display_name=row.display_name, brand=row.brand,
-            details=await inventory_service.details_for(session, row),
+            details=details_by_item[row.id],
             condition=row.condition, usage_count=row.usage_count, last_used_at=row.last_used_at,
             purchase_price=float(row.purchase_price) if row.purchase_price is not None else None,
             currency=row.currency,

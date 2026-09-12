@@ -433,7 +433,10 @@ class MaintenancePreference(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "maintenance_preferences"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    # Indexed: the privacy export filters this table by account and
+    # account deletion cascades through it; without it both read the
+    # whole table. See migration d0e1f2g3h4.
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     kind_key: Mapped[str] = mapped_column(String(48), nullable=False)
     tracked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     interval_days: Mapped[int | None] = mapped_column(Integer)

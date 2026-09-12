@@ -30,6 +30,12 @@ import re
 from dataclasses import dataclass
 
 from app.domains.nutrition.safety import NUTRITION_DISCLAIMER  # noqa: F401
+from app.domains.routines.safety_classifier import (
+    BLOCKING,
+    classify,
+    is_blocked_for_display,
+    rule_ids_for,
+)
 
 PROFESSIONAL_BOUNDARY = (
     "This is outside what GlamGenius can help with. We track what you own and how you use it — "
@@ -60,7 +66,11 @@ DIAGNOSTIC_TERMS: tuple[str, ...] = (
     "eczema", "psoriasis", "rosacea", "dermatitis", "fungal acne", "seborrheic",
     "alopecia", "folliculitis", "infection", "disease", "disorder", "syndrome",
     "deficiency", "deficient in", "hormonal imbalance", "pcos", "thyroid",
-    "cure", "cures", "treats ", "treatment for", "heal your", "clinically proven to treat",
+    "cure", "cures", "treats ", "treatment for", "clinically proven to treat",
+    # Every inflection of the same treatment claim. "heal your" alone left
+    # "it heals your skin" and "it is healing your skin" passing, which is the
+    # same sentence with the same promise in it.
+    "heal your", "heals your", "healing your",
     "medicated", "prescription strength", "anti-fungal", "antifungal treatment",
 )
 
@@ -95,21 +105,43 @@ def narrative_is_safe(text: str | None) -> bool:
     Applied to every AI-written string and to the deterministic strings too —
     the rules that generate them are reviewed, but a sweep costs nothing and
     catches a careless edit later.
+
+    Two layers, and the order is deliberate. The word list above is cheap and
+    catches the obvious; the reviewed patterns in ``safety_classifier`` catch
+    the phrasings a word list never predicts ("this is rosacea", "guaranteed to
+    clear"). The classifier was written to be the primary defence and then
+    never called from anywhere — 212 lines of reviewed rules that no request
+    ever reached. This is where it is reached.
+
+    Only the classifier's BLOCKING categories refuse text here. The
+    informational ones — a referral, a pregnancy note — are how our own
+    disclaimers are written, and blocking those would mean the boundary
+    refusing the sentence that states the boundary.
     """
     lowered = (text or "").lower()
     if any(term in lowered for term in BANNED_TERMS):
         return False
-    return not _DOSE_PATTERN.search(lowered)
+    if _DOSE_PATTERN.search(lowered):
+        return False
+    return not is_blocked_for_display(text)
 
 
 def first_violation(text: str | None) -> str | None:
-    """Which term tripped the check. For logs and tests, never for users."""
+    """What tripped the check — a banned term, a dose, or a reviewed rule id.
+
+    For logs and tests, never for users.
+    """
     lowered = (text or "").lower()
     for term in BANNED_TERMS:
         if term in lowered:
             return term
     match = _DOSE_PATTERN.search(lowered)
-    return match.group(0) if match else None
+    if match:
+        return match.group(0)
+    for rule_id in rule_ids_for(text):
+        if not classify(text).isdisjoint(BLOCKING):
+            return rule_id
+    return None
 
 
 # --- Questions that need a professional --------------------------------------

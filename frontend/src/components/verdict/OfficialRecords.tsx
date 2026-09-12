@@ -1,9 +1,10 @@
 import React from 'react';
-import { Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import type { VerdictSource } from '../../services/verdictModel';
 import { S } from '../../strings/verdict';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
+import { openExternalUrl } from '../../services/externalLinks';
 
 export function OfficialRecords({ officialRecords }: { officialRecords: VerdictSource['officialRecords'] }) {
   const records = officialRecords?.records ?? [];
@@ -37,7 +38,7 @@ export function OfficialRecords({ officialRecords }: { officialRecords: VerdictS
               !!lastObserved && <Text style={styles.context}>{S.officialRecords.lastObserved}: {lastObserved}</Text>
             )}
             {!!officialRecords?.last_successful_check_at && <Text style={styles.context}>{S.officialRecords.checked}: {officialRecords.last_successful_check_at.slice(0, 10)}</Text>}
-            <TouchableOpacity accessibilityRole="link" accessibilityLabel={S.officialRecords.openSource} onPress={() => void Linking.openURL(record.source_url)}>
+            <TouchableOpacity accessibilityRole="link" accessibilityLabel={S.officialRecords.openSource} onPress={() => void openExternalUrl(record.source_url)}>
               <Text style={styles.link}>{S.officialRecords.openSource}</Text>
             </TouchableOpacity>
           </View>

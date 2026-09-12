@@ -864,6 +864,8 @@ this repository, in a ticket, in a log, or in a screenshot.**
 | `SUPPORT_URL` | shown to customers; may derive to the guarded same-service `/support` page on Render |
 | `CONSENT_VERSION` | the consent text version being enforced |
 | `INTERNAL_SCHEDULER_TOKEN` | the shared secret Supabase Cron presents to the two scheduler routes — the same value must be in Supabase Vault |
+| `AUDIT_IP_HASH_KEY` | the key the audit trail's address hashes are computed under. A secret, not a label: there are only 2^32 IPv4 addresses, so a hash computed from a constant that lives in the source can be reversed in core-hours by anyone who can read the source. At least 32 characters, generated randomly (`python -c "import secrets; print(secrets.token_urlsafe(48))"`), never committed. Changing it does not break anything, but hashes written before the change stop matching hashes written after, so an investigation cannot link across a rotation |
+| `TRUSTED_PROXY_HOPS` | how many proxies sit in front of the container, for working out who the caller is. **Not a secret.** `1` on Render, which puts one load balancer in front; `0` anywhere the container is directly reachable. At `0` behind a proxy the app sees the load balancer for every request: the invite rate limiter becomes one shared bucket for the whole product, and every audit row records the same address |
 
 `python -m app.release_readiness --json` reports which of these are missing,
 placeholder or invalid, **by key name and status only**. It never prints a

@@ -159,3 +159,13 @@ envVarGroups:
         value: supabase
       - key: MEDIA_ALLOW_LOCAL_IN_PRODUCTION
         value: "false"
+      # Render routes every request to this container through its own load
+      # balancer, and the container is not otherwise addressable, so exactly
+      # one proxy is in front and the address it appends is the real caller.
+      # At 0 the app would see the load balancer for every request: the invite
+      # rate limiter would be one shared bucket for the whole product, and
+      # every audit row would carry the same address. Confirm this is still one
+      # hop before changing hosting; more hops in front means a higher number,
+      # never a guess.
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"

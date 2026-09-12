@@ -22,6 +22,7 @@ from app.config import (
     ALLOWED_ORIGINS,
     ALLOWED_ORIGINS_IS_DEFAULT,
     CONSENT_VERSION,
+    MAX_REQUEST_BODY_BYTES,
     MEDIA_STORAGE_BACKEND,
     SUPABASE_JWKS_URL,
     SUPABASE_URL,
@@ -31,6 +32,7 @@ from app.shared.database import sql
 from app.shared.errors.handlers import register_error_handlers
 from app.shared.observability.logging import configure_logging
 from app.shared.observability.request_id import RequestIdMiddleware
+from app.shared.security.body_limit import BodySizeLimitMiddleware
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import HTMLResponse
@@ -121,6 +123,13 @@ async def support_information() -> HTMLResponse:
 
 # Structured, logged, correlated failures for every route.
 register_error_handlers(app)
+
+# Outermost, deliberately: Starlette buffers a whole body before any handler,
+# dependency or authentication runs, so every other size limit in this app
+# bounds what gets stored rather than what gets allocated. Measured, a 60 MB
+# anonymous request cost ~220 MB of RSS and still came back 401. On one 512 MB
+# instance that is all an attacker needs, and they need no account to do it.
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BODY_BYTES)
 
 app.add_middleware(
     CORSMiddleware,

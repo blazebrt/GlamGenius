@@ -166,7 +166,10 @@ class ItemExpiryEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
 class ItemRelationship(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "item_relationships"
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    # Indexed: the privacy export filters this table by account and
+    # account deletion cascades through it; without it both read the
+    # whole table. See migration d0e1f2g3h4.
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     from_item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     to_item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
     relationship_type: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -183,7 +186,10 @@ class DuplicateCandidate(UUIDPrimaryKey, TimestampMixin, Base):
 
 class InventoryImportJob(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "inventory_import_jobs"
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    # Indexed: the privacy export filters this table by account and
+    # account deletion cascades through it; without it both read the
+    # whole table. See migration d0e1f2g3h4.
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     capture_type: Mapped[str] = mapped_column(String(32), nullable=False); status: Mapped[str] = mapped_column(String(24), nullable=False); media_asset_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("media_assets.id", ondelete="SET NULL")); ai_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL")); detected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0"); error_code: Mapped[str | None] = mapped_column(String(64)); completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

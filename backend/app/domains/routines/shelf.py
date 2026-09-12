@@ -137,6 +137,11 @@ async def gather(
     owned: list[OwnedItem] = []
     low_use_ids: set[uuid.UUID] = set()
     drafts = 0
+    confirmed = [row for row in rows if row.verification_state == "confirmed"]
+    # One query per category present rather than one per item. This runs on
+    # every Today compile and once per account per hour in the notification
+    # worker, so it was the shelf's cost scaling with the size of the shelf.
+    details_by_item = await inventory_service.details_for_many(session, confirmed)
     for row in rows:
         if row.verification_state != "confirmed":
             drafts += 1
@@ -146,7 +151,7 @@ async def gather(
         owned.append(OwnedItem(
             id=row.id, category=row.category, subcategory=row.subcategory,
             display_name=row.display_name, brand=row.brand,
-            details=await inventory_service.details_for(session, row),
+            details=details_by_item[row.id],
             condition=row.condition, usage_count=row.usage_count, last_used_at=row.last_used_at,
             purchase_price=float(row.purchase_price) if row.purchase_price is not None else None,
             currency=row.currency,

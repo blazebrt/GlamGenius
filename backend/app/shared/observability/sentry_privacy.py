@@ -26,6 +26,26 @@ _EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 _PHONE = re.compile(r"(?<!\w)(?:\+?\d[\d ().-]{7,}\d)(?!\w)")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b")
 _BASE64_LIKE = re.compile(r"^[A-Za-z0-9+/=_-]{80,}$")
+#: The same shape, but *embedded* in a longer string rather than being the
+#: whole of it.
+#
+# _BASE64_LIKE is a fullmatch, so it only catches a value that is nothing but
+# base64. An image that arrives inside a sentence does not match it, and the
+# most likely way an image arrives here is inside a sentence: a provider error
+# quoting the request it rejected, chained onto the exception we raise and
+# serialised by sentry-sdk into exception.values[].value.
+#
+# §4 of CLAUDE.md is absolute — image bytes are never retained anywhere, whole
+# or truncated — and this scrubber is the last thing standing between an
+# exception chain and an external service. Key-name redaction cannot help
+# here: the payload is in free text under a key like "value".
+#
+# 80 characters of unbroken base64 alphabet is far longer than a UUID (36, and
+# hyphenated), a git SHA (40) or any ordinary word, so prose is left alone.
+_BASE64_RUN = re.compile(r"[A-Za-z0-9+/_-]{80,}={0,2}")
+#: A data URI announces itself, and its payload may be shorter than the run
+#: threshold while still being an image.
+_DATA_URI = re.compile(r"data:[\w.+-]+/[\w.+-]+;base64,[A-Za-z0-9+/=\s]*", re.I)
 _APIKEY_QUERY = re.compile(r"([?&]apikey=)[^&#\s]+", re.I)
 _OAUTH_QUERY = re.compile(r"([?&](?:code|state|access_token|refresh_token|client_secret)=)[^&#\s]+", re.I)
 _OAUTH_KV = re.compile(r"((?:[\"']?\b(?:code|state|access_token|refresh_token|client_secret)\b[\"']?)\s*[:=]\s*[\"']?)[^\s,}&\"']+", re.I)
@@ -161,6 +181,10 @@ def _clean(value: Any, key: str = "") -> Any:
         stripped = value.strip()
         if _BASE64_LIKE.fullmatch(stripped):
             return REDACTED
+        # Embedded payloads first: a data URI contains a base64 run, so the
+        # more specific pattern goes before the general one.
+        value = _DATA_URI.sub(REDACTED, value)
+        value = _BASE64_RUN.sub(REDACTED, value)
         value = _URL_WITH_CREDENTIALS.sub(REDACTED, value)
         # Before the phone pattern: a dotted quad also looks like a long run of
         # digits and separators, and "redacted as an address" is the truthful

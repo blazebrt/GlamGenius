@@ -655,6 +655,10 @@ class TestNoSecretsInDeploymentConfiguration:
             "REQUIRE_ANALYSIS_CONSENT": "true",
             "MEDIA_STORAGE_BACKEND": "supabase",
             "MEDIA_ALLOW_LOCAL_IN_PRODUCTION": "false",
+            # How many proxies sit in front of the container. A deployment
+            # fact, not a secret — and the blueprint is where a deployment
+            # fact belongs. See app/shared/security/network.py.
+            "TRUSTED_PROXY_HOPS": "1",
         }
         for group in blueprint["envVarGroups"]:
             for entry in group["envVars"]:

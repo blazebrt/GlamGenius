@@ -63,7 +63,7 @@ export function classifyFailure(err: any): Failure {
     };
   }
 
-  if (status === 429 || detail?.code === ('AI_RATE_LIMIT' as any)) {
+  if (status === 429 || detail?.code === 'AI_RATE_LIMITED') {
     return {
       kind: 'rate_limited',
       message:

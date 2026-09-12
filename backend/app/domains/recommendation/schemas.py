@@ -29,6 +29,7 @@ from app.domains.recommendation.occasions import (
     WEATHER_CONDITIONS,
     get_occasion,
 )
+from app.domains.routines.safety import narrative_is_safe as boundary_narrative_is_safe
 
 SCHEMA_VERSION_LOOK_EXPLANATION = "look_explanation.v1"
 SCHEMA_VERSION_SHOPPING_ITEM = "shopping_candidate.v1"
@@ -287,5 +288,17 @@ BANNED_NARRATIVE_TERMS = (
 
 
 def narrative_is_safe(text: str) -> bool:
+    """The style-narrative sweep, plus the whole-product medical boundary.
+
+    The list above is the styling half and is the only place several of its
+    terms appear. It is not the whole boundary: nothing in it names a skin
+    condition, a dosage or a deficiency, so on its own it passed sentences
+    like "this will calm your eczema" and "take 500 mg daily". The Phase 6
+    sweep in ``routines.safety`` is the product-wide medical boundary, so a
+    narrative has to clear both. Rejected text is discarded and the
+    deterministic wording is used instead — the look is unaffected either way.
+    """
     lowered = (text or "").lower()
-    return not any(term in lowered for term in BANNED_NARRATIVE_TERMS)
+    if any(term in lowered for term in BANNED_NARRATIVE_TERMS):
+        return False
+    return boundary_narrative_is_safe(lowered)

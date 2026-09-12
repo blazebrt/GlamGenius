@@ -17,6 +17,8 @@ visible, reviewable act, which is exactly what it should be.
 """
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 
@@ -149,15 +151,73 @@ def _check_instance(instance: object) -> None:
             raise ProprietaryFieldError(_describe(key))
 
 
-def guard_off_session(session: Session) -> None:
-    """Refuse a flush that would carry anything proprietary into Store A.
+#: SQL shapes that can put a new column into Store A or write one. A statement
+#: naming a proprietary word in one of these is the licence breach this module
+#: exists to stop, whether it arrives as ORM, Core or hand-written SQL.
+_WRITING_STATEMENT = re.compile(
+    r"^\s*(insert\s+into|update\s|alter\s+table|create\s+table|copy\s)", re.IGNORECASE
+)
 
-    The last line of defence. It runs on the real write path, so it catches a
-    value set dynamically — a dictionary unpacked from a proprietary record,
-    for instance — that no static check could see.
+
+def _check_statement_text(sql: str) -> None:
+    """Refuse hand-written SQL that would carry a proprietary column into Store A.
+
+    ``before_flush`` sees only what the ORM is tracking. A Core statement or a
+    ``text()`` string goes straight past it — and bulk ingestion of a few
+    million Open Food Facts products is exactly the job somebody reaches for
+    Core or COPY to do. An ``ALTER TABLE ... ADD COLUMN asli_score`` followed by
+    an ``INSERT`` naming it was, until this existed, entirely unnoticed: Store A
+    would quietly become a derived database, and ODbL's share-alike clause
+    would oblige us to publish the whole product.
+
+    This is not a SQL parser and does not pretend to be one. It refuses the
+    recognisable shapes — a write statement mentioning a word from
+    ``PROPRIETARY_MARKERS`` — which is the mistake a person actually makes. The
+    allowlist and the separate metadata remain the real enforcement; this closes
+    the path that reached neither.
+    """
+    if not _WRITING_STATEMENT.match(sql or ""):
+        return
+    lowered = sql.lower()
+    for marker in PROPRIETARY_MARKERS:
+        # Word-ish boundary so "categories" does not trip on "category".
+        if re.search(rf"[^a-z0-9_]{re.escape(marker)}[a-z0-9_]*", lowered):
+            raise ProprietaryFieldError(
+                f"This statement writes to Store A and mentions {marker!r}, which reads "
+                f"as proprietary. Store A holds only data Open Food Facts publishes; "
+                f"put this in Store B and join on barcode.\n  {sql.strip()[:200]}"
+            )
+
+
+def guard_off_session(session: Session) -> None:
+    """Refuse a write that would carry anything proprietary into Store A.
+
+    Two hooks, because there are two ways to write.
+
+    ``before_flush`` catches the ORM path, including a value set dynamically —
+    a dictionary unpacked from a proprietary record — that no static check
+    could see.
+
+    ``do_orm_execute`` catches everything else that goes through this session:
+    a Core ``insert()``/``update()``, and hand-written ``text()`` SQL. The flush
+    hook never sees those, so for a while they were the one way into Store A
+    that met no wall at all.
     """
 
     @event.listens_for(session, "before_flush")
     def _before_flush(sess, _flush_context, _instances):  # noqa: ANN001, ANN202
         for instance in (*sess.new, *sess.dirty):
             _check_instance(instance)
+
+    @event.listens_for(session, "do_orm_execute")
+    def _do_orm_execute(state):  # noqa: ANN001, ANN202
+        statement = getattr(state, "statement", None)
+        if statement is None:
+            return
+        # Core insert/update: check the columns it actually names.
+        parameters = getattr(statement, "_values", None) or {}
+        named = {getattr(key, "name", str(key)) for key in parameters}
+        for column in named:
+            if column not in OFF_FIELDS:
+                raise ProprietaryFieldError(_describe(column))
+        _check_statement_text(str(statement))

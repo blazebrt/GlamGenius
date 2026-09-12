@@ -199,7 +199,10 @@ class LookAdjustment(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "look_adjustments"
 
     look_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("looks.id", ondelete="CASCADE"), nullable=False)
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    # Indexed: the privacy export filters this table by account and
+    # account deletion cascades through it; without it both read the
+    # whole table. See migration d0e1f2g3h4.
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     adjustment_type: Mapped[str] = mapped_column(String(24), nullable=False)
     slot: Mapped[str | None] = mapped_column(String(24))
     from_item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("inventory_items.id", ondelete="SET NULL"))
