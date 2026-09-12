@@ -859,9 +859,9 @@ this repository, in a ticket, in a log, or in a screenshot.**
 | `SUPABASE_STORAGE_BUCKET` | media bucket name |
 | `GEMINI_API_KEY` | the AI gateway's only credential |
 | `SENTRY_BACKEND_DSN` | backend error reporting |
-| `ALLOWED_ORIGINS` | CORS allowlist; must not be the development default |
-| `PRIVACY_POLICY_URL` | shown to customers |
-| `SUPPORT_URL` | shown to customers |
+| `ALLOWED_ORIGINS` | explicit CORS allowlist; omit only for the guarded same-service Render fallback |
+| `PRIVACY_POLICY_URL` | shown to customers; may derive to the guarded same-service `/privacy` page on Render |
+| `SUPPORT_URL` | shown to customers; may derive to the guarded same-service `/support` page on Render |
 | `CONSENT_VERSION` | the consent text version being enforced |
 | `INTERNAL_SCHEDULER_TOKEN` | the shared secret Supabase Cron presents to the two scheduler routes — the same value must be in Supabase Vault |
 
