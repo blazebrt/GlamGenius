@@ -87,18 +87,18 @@ def test_explicit_operator_values_override_render_defaults():
     result = _config_snapshot({
         "RENDER": "true",
         "RENDER_EXTERNAL_URL": "https://glamgenius-api.onrender.com",
-        "PUBLIC_BASE_URL": "https://beta.glamgenius.example/",
-        "PRIVACY_POLICY_URL": "https://legal.glamgenius.example/privacy",
-        "SUPPORT_URL": "https://help.glamgenius.example/support",
-        "ALLOWED_ORIGINS": "https://app.glamgenius.example",
+        "PUBLIC_BASE_URL": "https://explicit-override-under-test.onrender.com/",
+        "PRIVACY_POLICY_URL": "https://legal-override-under-test.onrender.com/privacy",
+        "SUPPORT_URL": "https://help-override-under-test.onrender.com/support",
+        "ALLOWED_ORIGINS": "https://app-override-under-test.onrender.com",
     })
     assert result.returncode == 0, result.stderr
     snapshot = json.loads(result.stdout)
-    assert snapshot["base"] == "https://beta.glamgenius.example"
+    assert snapshot["base"] == "https://explicit-override-under-test.onrender.com"
     assert snapshot["base_source"] == "explicit"
-    assert snapshot["privacy"] == "https://legal.glamgenius.example/privacy"
-    assert snapshot["support"] == "https://help.glamgenius.example/support"
-    assert snapshot["origins"] == ["https://app.glamgenius.example"]
+    assert snapshot["privacy"] == "https://legal-override-under-test.onrender.com/privacy"
+    assert snapshot["support"] == "https://help-override-under-test.onrender.com/support"
+    assert snapshot["origins"] == ["https://app-override-under-test.onrender.com"]
     assert snapshot["origins_derived"] is False
 
 

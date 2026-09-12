@@ -10,8 +10,8 @@ outside the scope of the current architecture.
 """
 from __future__ import annotations
 
-import os
 import ipaddress
+import os
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
