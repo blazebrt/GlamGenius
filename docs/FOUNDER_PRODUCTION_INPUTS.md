@@ -71,19 +71,25 @@ strips emails, phone numbers, tokens and storage keys before anything is sent.
 
 ### 5. Real Privacy Policy URL
 
-**What:** A published, reachable privacy policy page.
+**What:** A published, reachable privacy policy page. On the zero-cost Render
+runtime, the same service publishes `/privacy` and derives this URL from
+Render's validated `RENDER_EXTERNAL_URL`; a future custom URL may be supplied
+explicitly.
 **Why:** It is linked from the app, and the product handles face scans and
-health-adjacent preferences. The placeholder is rejected in production.
-**Where configured:** `PRIVACY_POLICY_URL`.
+health-adjacent preferences. A placeholder is still rejected in production.
+**Where configured:** `PRIVACY_POLICY_URL`, or the guarded Render fallback.
 **Secret?** No.
 **Can the app launch without it?** No.
 **Optional feature only?** No.
 
 ### 6. Real Support URL
 
-**What:** A published support or contact page.
-**Why:** Customers need a way to reach you. The placeholder is rejected.
-**Where configured:** `SUPPORT_URL`.
+**What:** A published support page. On the zero-cost Render runtime, the same
+service publishes `/support` and derives this URL from Render's validated
+`RENDER_EXTERNAL_URL`; a future custom URL may be supplied explicitly.
+**Why:** Customers need a truthful self-service route. The placeholder is
+rejected.
+**Where configured:** `SUPPORT_URL`, or the guarded Render fallback.
 **Secret?** No.
 **Can the app launch without it?** No.
 **Optional feature only?** No.
@@ -91,10 +97,11 @@ health-adjacent preferences. The placeholder is rejected in production.
 ### 7. Production origin (your domain)
 
 **What:** The exact origin(s) the app is served from, e.g.
-`https://app.yourdomain.com`.
+`https://app.yourdomain.com`. For the zero-cost Render runtime only, the
+validated Render service origin is the one derived browser origin.
 **Why:** CORS. The development default (`localhost`) is rejected in production,
 and wildcards are refused outright.
-**Where configured:** `ALLOWED_ORIGINS`.
+**Where configured:** `ALLOWED_ORIGINS`, or the guarded Render fallback.
 **Secret?** No.
 **Can the app launch without it?** No.
 **Optional feature only?** No.

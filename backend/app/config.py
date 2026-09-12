@@ -10,8 +10,10 @@ outside the scope of the current architecture.
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 from dotenv import load_dotenv
 
@@ -243,10 +245,170 @@ OFF_EXPORT_DIR = _env_str("OFF_EXPORT_DIR", "/data/off-export")
 
 
 # ---------------------------------------------------------------------------
-# Policy and Support URLs
+# Public beta surface
 # ---------------------------------------------------------------------------
-PRIVACY_POLICY_URL = _env_str("PRIVACY_POLICY_URL", "https://glamgenius.placeholder/privacy")
-SUPPORT_URL = _env_str("SUPPORT_URL", "https://glamgenius.placeholder/support")
+# The FastAPI service itself is the deliberately narrow, zero-cost public
+# surface for the invite-only beta. A future custom domain always wins: these
+# defaults exist only when Render has supplied its own external HTTPS URL to a
+# process that is actually running on Render. Request headers are never a
+# configuration source.
+_PRODUCTION_TIERS = frozenset({"production", "staging"})
+RUNNING_ON_RENDER = _env_str("RENDER").lower() == "true"
+_EXPLICIT_PUBLIC_BASE_URL = _env_str("PUBLIC_BASE_URL")
+_RENDER_EXTERNAL_URL = _env_str("RENDER_EXTERNAL_URL")
+PUBLIC_BASE_URL_SOURCE = "none"
+PUBLIC_CONFIGURATION_ERRORS: list[str] = []
+
+
+def _is_valid_public_host(host: str) -> bool:
+    """Accept only a public IP address or an unambiguous ASCII DNS hostname."""
+    lowered = host.lower()
+    if not lowered or len(lowered) > 253 or lowered.endswith("."):
+        return False
+    try:
+        address = ipaddress.ip_address(lowered)
+    except ValueError:
+        labels = lowered.split(".")
+        if len(labels) < 2:
+            return False
+        return all(
+            label
+            and len(label) <= 63
+            and label[0].isalnum()
+            and label[-1].isalnum()
+            and all(char.isascii() and (char.isalnum() or char == "-") for char in label)
+            for label in labels
+        )
+    return address.is_global
+
+
+def _is_placeholder_or_reserved_host(host: str) -> bool:
+    lowered = host.lower().rstrip(".")
+    if "placeholder" in lowered:
+        return True
+    if lowered == "localhost" or lowered.endswith((".localhost", ".local")):
+        return True
+    if lowered in {"example", "invalid", "test"}:
+        return True
+    if lowered.endswith((".example", ".invalid", ".test")):
+        return True
+    return any(
+        lowered == domain or lowered.endswith(f".{domain}")
+        for domain in ("example.com", "example.net", "example.org")
+    )
+
+
+def _normalise_public_origin(value: str, *, setting: str) -> str:
+    """Return one safe browser origin, never a URL assembled from a request."""
+    candidate = value.strip()
+    if not candidate:
+        raise ValueError("must not be empty")
+    if "*" in candidate:
+        raise ValueError("must not contain a wildcard")
+    try:
+        parsed = urlparse(candidate)
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("has a malformed port") from exc
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("must use http or https")
+    if APP_ENV in _PRODUCTION_TIERS and parsed.scheme != "https":
+        raise ValueError("must use HTTPS in production")
+    if not parsed.netloc or not parsed.hostname:
+        raise ValueError("must include a hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("must not include credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError("must not include a query or fragment")
+    if parsed.path not in ("", "/") or parsed.params:
+        raise ValueError("must not include a path")
+    host = parsed.hostname.lower()
+    if not _is_valid_public_host(host):
+        raise ValueError("must use a valid public hostname or IP address")
+    if _is_placeholder_or_reserved_host(host):
+        raise ValueError("must not use a placeholder or reserved hostname")
+    # Keep the provider's host/port spelling, but normalise the scheme and the
+    # optional trailing slash away so CORS receives exactly one origin.
+    return urlunparse((parsed.scheme.lower(), parsed.netloc, "", "", "", ""))
+
+
+def _normalise_public_page_url(value: str, *, setting: str) -> str:
+    """Validate an explicit policy/support URL without requiring root path."""
+    candidate = value.strip()
+    if not candidate:
+        raise ValueError("must not be empty")
+    if "*" in candidate:
+        raise ValueError("must not contain a wildcard")
+    try:
+        parsed = urlparse(candidate)
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("has a malformed port") from exc
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("must use http or https")
+    if APP_ENV in _PRODUCTION_TIERS and parsed.scheme != "https":
+        raise ValueError("must use HTTPS in production")
+    if not parsed.netloc or not parsed.hostname:
+        raise ValueError("must include a hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("must not include credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError("must not include a query or fragment")
+    host = parsed.hostname.lower()
+    if not _is_valid_public_host(host):
+        raise ValueError("must use a valid public hostname or IP address")
+    if _is_placeholder_or_reserved_host(host):
+        raise ValueError("must not use a placeholder or reserved hostname")
+    return candidate.rstrip("/")
+
+
+def _resolve_public_base_url() -> str:
+    global PUBLIC_BASE_URL_SOURCE
+    if _EXPLICIT_PUBLIC_BASE_URL:
+        try:
+            resolved = _normalise_public_origin(
+                _EXPLICIT_PUBLIC_BASE_URL, setting="PUBLIC_BASE_URL"
+            )
+        except ValueError as exc:
+            PUBLIC_CONFIGURATION_ERRORS.append(f"PUBLIC_BASE_URL {exc}")
+            return ""
+        PUBLIC_BASE_URL_SOURCE = "explicit"
+        return resolved
+    if RUNNING_ON_RENDER and _RENDER_EXTERNAL_URL:
+        try:
+            resolved = _normalise_public_origin(
+                _RENDER_EXTERNAL_URL, setting="RENDER_EXTERNAL_URL"
+            )
+        except ValueError as exc:
+            PUBLIC_CONFIGURATION_ERRORS.append(f"RENDER_EXTERNAL_URL {exc}")
+            return ""
+        PUBLIC_BASE_URL_SOURCE = "render"
+        return resolved
+    return ""
+
+
+PUBLIC_BASE_URL = _resolve_public_base_url()
+
+
+def _resolve_public_page_url(*, setting: str, default_path: str) -> str:
+    explicit = _env_str(setting)
+    if explicit:
+        try:
+            return _normalise_public_page_url(explicit, setting=setting)
+        except ValueError as exc:
+            PUBLIC_CONFIGURATION_ERRORS.append(f"{setting} {exc}")
+            return ""
+    if PUBLIC_BASE_URL:
+        return f"{PUBLIC_BASE_URL}{default_path}"
+    # Preserve the former fail-closed placeholder state outside the Render
+    # fallback. The production validator still refuses it.
+    return f"https://glamgenius.placeholder{default_path}"
+
+
+PRIVACY_POLICY_URL = _resolve_public_page_url(
+    setting="PRIVACY_POLICY_URL", default_path="/privacy"
+)
+SUPPORT_URL = _resolve_public_page_url(setting="SUPPORT_URL", default_path="/support")
 
 # The shared secret the external scheduler presents to
 # /api/v2/internal/scheduler/*. It is not a customer credential and is not a
@@ -344,11 +506,23 @@ MAX_IMAGE_BASE64_CHARS = _env_int("MAX_IMAGE_BASE64_CHARS", 12_000_000)
 # CORS
 # ---------------------------------------------------------------------------
 _DEV_ORIGINS = "http://localhost:8081,http://localhost:19006,http://127.0.0.1:8081"
-_allowed_origins_raw = _env_str("ALLOWED_ORIGINS", _DEV_ORIGINS)
-ALLOWED_ORIGINS = [
-    o.strip().rstrip("/") for o in _allowed_origins_raw.split(",") if o.strip()
-]
-ALLOWED_ORIGINS_IS_DEFAULT = "ALLOWED_ORIGINS" not in os.environ
+ALLOWED_ORIGINS_IS_DERIVED = False
+if "ALLOWED_ORIGINS" in os.environ:
+    _allowed_origins_raw = _env_str("ALLOWED_ORIGINS")
+    ALLOWED_ORIGINS = [
+        o.strip().rstrip("/") for o in _allowed_origins_raw.split(",") if o.strip()
+    ]
+    ALLOWED_ORIGINS_IS_DEFAULT = False
+elif RUNNING_ON_RENDER and PUBLIC_BASE_URL:
+    # Render's platform URL is an explicit, single-origin CORS allowlist for
+    # the pre-PMF web surface. Native Expo calls have no browser Origin and
+    # are unaffected.
+    ALLOWED_ORIGINS = [PUBLIC_BASE_URL]
+    ALLOWED_ORIGINS_IS_DEFAULT = False
+    ALLOWED_ORIGINS_IS_DERIVED = True
+else:
+    ALLOWED_ORIGINS = _env_csv("ALLOWED_ORIGINS", _DEV_ORIGINS)
+    ALLOWED_ORIGINS_IS_DEFAULT = True
 
 
 def validate_production_configuration() -> None:
@@ -364,6 +538,11 @@ def validate_production_configuration() -> None:
         raise RuntimeError("CRITICAL: LIVE_ENVIRONMENT_PROVIDER must be open_meteo or empty.")
     if APP_ENV not in ("production", "staging"):
         return
+    if PUBLIC_CONFIGURATION_ERRORS:
+        raise RuntimeError(
+            "CRITICAL: invalid public production configuration: "
+            + "; ".join(PUBLIC_CONFIGURATION_ERRORS)
+        )
     if PUSH_DELIVERY_MODE == "dry_run":
         raise RuntimeError(
             "CRITICAL: PUSH_DELIVERY_MODE=dry_run silently drops every notification. "
@@ -508,20 +687,11 @@ def validate_production_configuration() -> None:
     if ALLOWED_ORIGINS_IS_DEFAULT or not ALLOWED_ORIGINS:
         raise RuntimeError("CRITICAL: ALLOWED_ORIGINS must be set and non-empty in production.")
 
-    if "*" in ALLOWED_ORIGINS:
-        raise RuntimeError("CRITICAL: ALLOWED_ORIGINS cannot contain wildcards in production.")
-        
     for origin in ALLOWED_ORIGINS:
-        o_parsed = urllib.parse.urlparse(origin)
-        if o_parsed.scheme not in ("http", "https") or not o_parsed.netloc:
-            raise RuntimeError(f"CRITICAL: Invalid origin scheme or format: {origin}")
-        if o_parsed.path and o_parsed.path != "/":
-            raise RuntimeError(f"CRITICAL: Origin cannot contain paths: {origin}")
-        if o_parsed.username or o_parsed.password:
-            raise RuntimeError(f"CRITICAL: Origin cannot contain credentials: {origin}")
-        host = o_parsed.hostname.lower() if o_parsed.hostname else ""
-        if host == "localhost" or host == "127.0.0.1":
-            raise RuntimeError(f"CRITICAL: ALLOWED_ORIGINS cannot contain localhost/loopback in production: {origin}")
+        try:
+            _normalise_public_origin(origin, setting="ALLOWED_ORIGINS")
+        except ValueError as exc:
+            raise RuntimeError(f"CRITICAL: ALLOWED_ORIGINS is invalid: {exc}") from exc
             
     # Validate Admin User IDs
     import uuid
@@ -530,4 +700,3 @@ def validate_production_configuration() -> None:
             uuid.UUID(admin_id)
         except ValueError:
             raise RuntimeError(f"CRITICAL: Invalid UUID in SUPABASE_ADMIN_USER_IDS: {admin_id}")
-
