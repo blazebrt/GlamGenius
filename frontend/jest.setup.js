@@ -71,6 +71,33 @@ jest.mock('react-native-safe-area-context', () => {
   };
 });
 
+// The keychain. Every suite gets one, because a suite that imports the real
+// module gets a native shim whose reads are undefined — which is how an
+// unbounded chunk-removal loop in secureSessionStorage span until the worker
+// was killed for running out of memory, with the failure reported as a dead
+// jest worker rather than as a hang.
+jest.mock('expo-secure-store', () => {
+  const store = new Map();
+  return {
+    __store: store,
+    getItemAsync: jest.fn(async (key) => (store.has(key) ? store.get(key) : null)),
+    setItemAsync: jest.fn(async (key, value) => {
+      store.set(key, value);
+    }),
+    deleteItemAsync: jest.fn(async (key) => {
+      store.delete(key);
+    }),
+  };
+});
+
+// The keychain is real storage, unlike the AsyncStorage stub below, which
+// always reads empty. Left uncleared, a device or session written by one test
+// is still there for the next one, and a test asserting "nothing is stored
+// yet" passes or fails depending on what ran before it.
+beforeEach(() => {
+  jest.requireMock('expo-secure-store').__store.clear();
+});
+
 jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: jest.fn(() => Promise.resolve(null)),
   setItem: jest.fn(() => Promise.resolve()),

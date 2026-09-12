@@ -31,6 +31,7 @@ SECRET_PG_PASSWORD = "pg-password-must-not-appear"
 # Long enough to clear the minimum length the token check enforces, and
 # deliberately not shaped like a placeholder.
 SECRET_SCHEDULER_TOKEN = "scheduler-token-secret-must-not-appear-0000"
+SECRET_AUDIT_IP_HASH_KEY = "audit-ip-hash-key-secret-must-not-appear-000000"
 
 
 def _live_environment(monkeypatch, *, provider: str, mode: str) -> None:
@@ -146,6 +147,10 @@ def _complete_production(monkeypatch) -> None:
     # present. Production refuses to start without it, so a complete
     # production configuration has one.
     monkeypatch.setattr(app_config, "INTERNAL_SCHEDULER_TOKEN", SECRET_SCHEDULER_TOKEN)
+    # The key the audit trail's address hashes are computed under. Production
+    # refuses to start without it, so a complete production configuration
+    # has one.
+    monkeypatch.setattr(app_config, "AUDIT_IP_HASH_KEY", SECRET_AUDIT_IP_HASH_KEY)
     monkeypatch.setenv("SENTRY_BACKEND_DSN", f"https://{SECRET_DSN_KEY}@o1.ingest.sentry.io/2")
     monkeypatch.setattr(app_config, "MEDIA_STORAGE_BACKEND", "supabase")
     monkeypatch.setattr(app_config, "ALLOWED_ORIGINS", ["https://app.glamgenius.in"])

@@ -9,9 +9,10 @@
  * licence condition, not copy. See docs/architecture/ODBL_DATA_WALL.md.
  */
 import React from 'react';
-import { Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { COLORS, FONTS, SPACING } from '../../theme/colors';
+import { openExternalUrl } from '../../services/externalLinks';
 
 export const ODBL_ATTRIBUTION_TEXT =
   'Contains information from Open Food Facts, made available under the Open Database License (ODbL)';
@@ -27,14 +28,14 @@ export function OpenFoodFactsAttribution() {
         <TouchableOpacity
           accessibilityRole="link"
           accessibilityLabel="Open Food Facts"
-          onPress={() => void Linking.openURL(OFF_SOURCE_URL)}
+          onPress={() => void openExternalUrl(OFF_SOURCE_URL)}
         >
           <Text style={styles.link}>Open Food Facts</Text>
         </TouchableOpacity>
         <TouchableOpacity
           accessibilityRole="link"
           accessibilityLabel="Open Database License"
-          onPress={() => void Linking.openURL(ODBL_LICENSE_URL)}
+          onPress={() => void openExternalUrl(ODBL_LICENSE_URL)}
         >
           <Text style={styles.link}>Licence</Text>
         </TouchableOpacity>

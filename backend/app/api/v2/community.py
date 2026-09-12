@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v2.admin import require_admin
-from app.api.v2.product import current_device
+from app.api.v2.product import BARCODE_PATH, current_device
 from app.domains.community import service as community
 from app.domains.community.models import (
     MODERATION_REASONS,
@@ -60,7 +60,7 @@ async def read_observation_vocabulary():
 
 @router.get("/community/observations/context/{barcode}")
 async def read_pack_context(
-    barcode: str,
+    barcode: str = BARCODE_PATH,
     device: ScanDevice = Depends(current_device),
     session: AsyncSession = Depends(get_session),
 ):
@@ -74,7 +74,7 @@ async def read_pack_context(
 
 @router.get("/community/observations/mine/{barcode}")
 async def read_own_observations(
-    barcode: str,
+    barcode: str = BARCODE_PATH,
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):

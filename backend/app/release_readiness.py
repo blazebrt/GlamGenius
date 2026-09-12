@@ -98,6 +98,16 @@ def _secret_status(value: str | None) -> Status:
     return Status.CONFIGURED
 
 
+def _audit_ip_hash_key_status(value: str | None) -> Status:
+    """Status for the audit hash key. Short is as good as absent."""
+    status = _secret_status(value)
+    if status is not Status.CONFIGURED:
+        return status
+    if len(value or "") < config.AUDIT_IP_HASH_KEY_MIN_LENGTH:
+        return Status.INVALID
+    return Status.CONFIGURED
+
+
 #: config's four words -> this report's four Statuses. The judgement is not
 #: made here; only the translation is.
 _SCHEDULER_TOKEN_STATUS = {
@@ -213,6 +223,10 @@ def _core_requirements() -> dict[str, Status]:
         "INTERNAL_SCHEDULER_TOKEN": _scheduler_token_status(
             config.INTERNAL_SCHEDULER_TOKEN
         ),
+        # The key the audit trail's address hashes are computed under. Without
+        # it those hashes come from a constant in the source, which anyone
+        # holding the source can reverse across the whole IPv4 space.
+        "AUDIT_IP_HASH_KEY": _audit_ip_hash_key_status(config.AUDIT_IP_HASH_KEY),
         "SENTRY_BACKEND_DSN": _sentry_status(),
         "MEDIA_STORAGE_BACKEND": _media_status(),
         "ALLOWED_ORIGINS": _origins_status(),

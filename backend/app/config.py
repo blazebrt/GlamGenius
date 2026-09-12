@@ -174,6 +174,18 @@ MEDIA_ALLOWED_MIME = _env_csv(
     "MEDIA_ALLOWED_MIME", "image/jpeg,image/png,image/webp"
 )
 MEDIA_SIGNED_URL_TTL_SECONDS = _env_int("MEDIA_SIGNED_URL_TTL_SECONDS", 300)
+
+# How many proxies sit in front of this container. 0 means none we trust, and
+# the socket peer is used as the caller's address. See
+# app/shared/security/network.py for why this is a count rather than a boolean.
+TRUSTED_PROXY_HOPS = _env_int("TRUSTED_PROXY_HOPS", 0)
+
+# Secret key for the audit trail's address hashes. A secret, not a label: the
+# hash is only one-way to somebody who does not have this. See
+# app/domains/audit/service.py. Required in production and staging by
+# validate_production_configuration().
+AUDIT_IP_HASH_KEY = os.getenv("AUDIT_IP_HASH_KEY", "").strip()
+AUDIT_IP_HASH_KEY_MIN_LENGTH = 32
 # Development/test only. A production pod loses uploads on redeploy so the
 # storage factory refuses ``local`` when APP_ENV=production.
 MEDIA_ALLOW_LOCAL_IN_PRODUCTION = _env_bool("MEDIA_ALLOW_LOCAL_IN_PRODUCTION", False)
@@ -501,6 +513,13 @@ AI_COST_PER_1K_OUTPUT_USD = _env_float("AI_COST_PER_1K_OUTPUT_USD", 0.0025)
 # ---------------------------------------------------------------------------
 MAX_IMAGE_BASE64_CHARS = _env_int("MAX_IMAGE_BASE64_CHARS", 12_000_000)
 
+# The ceiling on a whole request body, enforced before the body is read. Every
+# other size limit here is checked after the body is already in memory, so this
+# is the one that bounds what an anonymous caller can make the process
+# allocate. Comfortably above a full-size image (~12 MB of base64) plus the
+# JSON around it. See app/shared/security/body_limit.py.
+MAX_REQUEST_BODY_BYTES = _env_int("MAX_REQUEST_BODY_BYTES", 16 * 1024 * 1024)
+
 
 # ---------------------------------------------------------------------------
 # CORS
@@ -700,3 +719,21 @@ def validate_production_configuration() -> None:
             uuid.UUID(admin_id)
         except ValueError:
             raise RuntimeError(f"CRITICAL: Invalid UUID in SUPABASE_ADMIN_USER_IDS: {admin_id}")
+
+    # Last, deliberately. This check is newer than the ones above, and a newer
+    # check that runs first changes which refusal an operator sees for a
+    # configuration that was already wrong — the ODbL two-stores refusal above
+    # in particular, which is the most important invariant this product has.
+    # Added at the end, it can only ever add a refusal.
+    if not AUDIT_IP_HASH_KEY:
+        raise RuntimeError(
+            "CRITICAL: AUDIT_IP_HASH_KEY is required in production. Without it the "
+            "audit trail's address hashes are computed from a constant in the "
+            "source, and the whole IPv4 space can be reversed in core-hours."
+        )
+    if len(AUDIT_IP_HASH_KEY) < AUDIT_IP_HASH_KEY_MIN_LENGTH:
+        raise RuntimeError(
+            f"CRITICAL: AUDIT_IP_HASH_KEY must be at least {AUDIT_IP_HASH_KEY_MIN_LENGTH} "
+            "characters. A short key is brute-forced as easily as no key."
+        )
+

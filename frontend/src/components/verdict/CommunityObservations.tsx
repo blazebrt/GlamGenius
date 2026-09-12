@@ -1,9 +1,10 @@
 import React from 'react';
-import { Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import type { VerdictSource } from '../../services/verdictModel';
 import { S } from '../../strings/verdict';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
+import { openExternalUrl } from '../../services/externalLinks';
 
 /**
  * Shopper observations, below the scientific evidence and never competing with it.
@@ -77,7 +78,7 @@ export function CommunityObservations({
         <TouchableOpacity
           accessibilityRole="link"
           accessibilityLabel={S.communityObservations.brandRightOfReply}
-          onPress={() => void Linking.openURL(replyUrl)}
+          onPress={() => void openExternalUrl(replyUrl)}
         >
           <Text style={styles.link}>{S.communityObservations.brandRightOfReply}</Text>
         </TouchableOpacity>

@@ -86,10 +86,30 @@ describe('classifyFailure', () => {
   });
 
   it('recognises the hourly speed limit and knows nothing was spent', () => {
-    const failure = classifyFailure(withDetail(429, { code: 'AI_RATE_LIMIT', message: 'slow down' }));
+    const failure = classifyFailure(
+      withDetail(429, { code: 'AI_RATE_LIMITED', message: 'slow down' }),
+    );
 
     expect(failure.kind).toBe('rate_limited');
     expect(failure.allowancePreserved).toBe(true);
+  });
+
+  it('recognises the hourly speed limit from the code alone', () => {
+    // The gateway raises this before the provider is called, so a caller that
+    // only sees the body still has to reach the same conclusion.
+    const failure = classifyFailure(
+      withDetail(429, {
+        code: 'AI_RATE_LIMITED',
+        message: 'You have made a lot of checks in the past hour.',
+        feature: 'ai.request',
+        period: 'hour',
+        allowance_consumed: false,
+      }),
+    );
+
+    expect(failure.kind).toBe('rate_limited');
+    expect(failure.allowancePreserved).toBe(true);
+    expect(failure.retryable).toBe(true);
   });
 
   it('recognises a missing consent', () => {

@@ -27,7 +27,7 @@ import socket
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.identity.models import (
@@ -228,6 +228,11 @@ async def run_job(session: AsyncSession, job: AccountDeletionJob) -> tuple[str, 
             await session.flush()
 
         if job.state == STATE_DATABASE_DELETING:
+            # Before the cascade: rows the cascade will not reach, and which
+            # could not be found by account afterwards.
+            await _delete_ai_outputs(session, job.account_id)
+            await _delete_analytics_events(session, job.account_id)
+            await _scrub_audit_events(session, job.account_id)
             await _delete_account_row(session, job.account_id)
             job.state = STATE_DATABASE_COMPLETE
             await session.flush()
@@ -340,6 +345,91 @@ async def _remove_external_integrations(session: AsyncSession, account_id: uuid.
     )
     await session.execute(
         delete(NotificationDevice).where(NotificationDevice.account_id == account_id)
+    )
+    await session.flush()
+
+
+async def _delete_ai_outputs(session: AsyncSession, account_id: uuid.UUID) -> None:
+    """Delete the AI content produced about this person.
+
+    ``ai_runs.account_id`` is ``ON DELETE SET NULL`` on purpose: the run row is
+    the cost and provenance ledger (provider, model, latency, tokens, spend)
+    that audit finding F24 exists to preserve, and none of those columns
+    describe a person. The *output* row is different. ``ai_run_outputs.payload``
+    holds what the model actually said — for ``scan_analyse`` that is the
+    structured reading of somebody's face, for the baseline path it is their
+    appearance twin. Severing ``account_id`` does not anonymise a paragraph
+    about an individual, so severing it and keeping the payload would leave the
+    most personal thing we hold outside erasure entirely.
+
+    ``ai_run_outputs`` is classified ``INCLUDED`` in
+    :data:`app.domains.privacy.REGISTRY` — we hand it to the account holder as
+    their own data in a subject-access export. Anything we export as theirs has
+    to be erasable when they ask, and erasure has to run before the cascade
+    takes the account row away, because after that the rows can no longer be
+    found by ``account_id`` at all.
+
+    Idempotent: a resumed job deletes nothing the second time.
+    """
+    from app.domains.ai_gateway.models import AIRun, AIRunOutput
+
+    await session.execute(
+        delete(AIRunOutput).where(
+            AIRunOutput.ai_run_id.in_(
+                select(AIRun.id).where(AIRun.account_id == account_id)
+            )
+        )
+    )
+    await session.flush()
+
+
+async def _delete_analytics_events(session: AsyncSession, account_id: uuid.UUID) -> None:
+    """Delete this account's product-analytics events.
+
+    ``app_events.account_id`` is ``ON DELETE SET NULL``, and for this table that
+    is not enough. ``properties`` is a free-form JSONB: unlike the AI run
+    ledger, whose columns are a fixed schema of provider, latency and cost that
+    can be shown to describe no one, there is nothing about an analytics
+    property bag that can be guaranteed impersonal today or kept that way as
+    new events are added. ``app_events`` is classified ``INCLUDED``, so the rows
+    are the account holder's, and the only treatment that stays correct however
+    the table is used later is to delete them.
+
+    Idempotent.
+    """
+    from app.domains.analytics.models import AppEvent
+
+    await session.execute(delete(AppEvent).where(AppEvent.account_id == account_id))
+    await session.flush()
+
+
+async def _scrub_audit_events(session: AsyncSession, account_id: uuid.UUID) -> None:
+    """Strip the identifiers out of this account's audit rows, keeping the trail.
+
+    ``audit_events.account_id`` is ``ON DELETE SET NULL``, which on its own does
+    not anonymise anything here. Two columns defeat it:
+
+    * ``subject_id`` carries ``str(account_id)`` verbatim on the privacy
+      actions — the export and the deletion request itself — so severing
+      ``account_id`` only moves the same UUID one column to the right.
+    * ``ip_hash`` is a keyed HMAC, which is a stable pseudonym: every row the
+      person ever produced from one network still links to every other, and to
+      any future row from that address.
+
+    What an audit trail is *for* survives this scrub intact: the action and its
+    timestamp. The identity it belonged to is held deliberately, and only, by
+    the ``account_deletion_jobs`` tombstone, which is classified
+    ``LEGALLY_RETAINED`` precisely so that this table does not have to be.
+
+    Runs before the account row is deleted, because afterwards ``account_id``
+    is already NULL and the rows can no longer be found. Idempotent.
+    """
+    from app.domains.audit.models import AuditEvent
+
+    await session.execute(
+        update(AuditEvent)
+        .where(AuditEvent.account_id == account_id)
+        .values(ip_hash=None, subject_id=None)
     )
     await session.flush()
 

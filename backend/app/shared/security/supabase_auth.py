@@ -27,6 +27,12 @@ JWKS is fetched on the first verification that needs it and cached in
 memory for up to five minutes. A cache miss on a fresh ``kid`` triggers a
 single re-fetch; if the re-fetch also fails to produce a matching key the
 request is rejected. The cache is per-process and thread-safe.
+
+That re-fetch is on a cooldown, because ``kid`` is attacker-controlled: it
+is read from the token header before anything has been verified, so anyone
+who can reach the API can ask for a key that does not exist. Without the
+cooldown each such request cost one outbound fetch to Supabase and threw
+away the warm client, making every *legitimate* caller wait for a fetch too.
 """
 from __future__ import annotations
 
@@ -39,7 +45,7 @@ from typing import Any
 
 import httpx
 import jwt
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
 from jwt.exceptions import InvalidTokenError, PyJWKClientError
@@ -49,6 +55,7 @@ from app.config import (
     SUPABASE_JWKS_URL,
     SUPABASE_JWT_ISSUER,
 )
+from app.shared.security.network import client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +95,12 @@ class SupabaseUser:
 
 _JWKS_TTL_SECONDS = 300
 
+# How often an unknown ``kid`` may force a refresh ahead of the TTL. Key
+# rotation is a once-in-a-while event, so a minute costs a genuine rotation
+# almost nothing; a made-up ``kid`` is free to send, so without a bound it
+# buys one outbound fetch per request.
+_JWKS_FORCED_REFRESH_COOLDOWN_SECONDS = 60
+
 
 class _JWKSCache:
     """PyJWKClient with a bounded refresh policy.
@@ -95,40 +108,146 @@ class _JWKSCache:
     PyJWKClient itself caches, but has no TTL and no way to force a refresh
     when a new kid appears. We wrap it: keep one client per JWKS URL, rebuild
     it after ``_JWKS_TTL_SECONDS`` or on demand.
+
+    "On demand" is the dangerous half. The ``kid`` that triggers it is read
+    from an unverified token header, so it is chosen by whoever sent the
+    request — including someone with no credentials at all. Rebuilding is what
+    makes a refresh actually reach the network: a fresh ``PyJWKClient`` starts
+    with an empty key set, so the next lookup fetches. Unbounded, that is one
+    outbound request to Supabase per inbound request, and it discards the warm
+    client every time, so real users pay for the fetch as well.
+
+    So a forced rebuild is allowed at most once per
+    ``_JWKS_FORCED_REFRESH_COOLDOWN_SECONDS``. Inside the cooldown the existing
+    client is returned untouched and the unknown ``kid`` simply fails to
+    resolve, which is a 401 — the right answer for a key we have never heard
+    of.
     """
 
     def __init__(self, url: str) -> None:
         self._url = url
         self._client: PyJWKClient | None = None
         self._built_at: float = 0.0
+        # -inf, not 0.0: ``time.monotonic()`` has an arbitrary origin, so a
+        # zero here would mean "a forced refresh is allowed" or "is not"
+        # depending only on how long the machine had been up.
+        self._last_forced_at: float = float("-inf")
         self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _kid_is_absent(client: PyJWKClient, kid: str | None) -> bool:
+        """Is ``kid`` provably not in the key set we already hold?
+
+        Answers from the client's own cache only — it never fetches, which is
+        the whole point. ``False`` therefore means "not proven absent", covering
+        both a genuine hit and a cold cache we cannot consult; in either case
+        the caller goes on to ask the client properly.
+
+        A missing ``kid`` counts as absent: there is nothing to look up, so
+        there is nothing worth going to the network for.
+        """
+        if not kid:
+            return True
+        cache = getattr(client, "jwk_set_cache", None)
+        if cache is None:
+            return False
+        cached = cache.get()
+        if cached is None:
+            # Cold or expired — we hold no key set, so we cannot rule anything
+            # out. Fetching to find out is the normal first request.
+            return False
+
+        # PyJWT annotates this cache as holding a ``PyJWKSet`` but stores the
+        # raw decoded JSON, so today it is a plain ``{"keys": [...]}`` dict.
+        # Both shapes are handled rather than trusting either: reading the
+        # wrong one would make ``.keys`` a dict method and quietly rule every
+        # key absent, refusing tokens that are perfectly valid.
+        if isinstance(cached, dict):
+            entries = cached.get("keys") or []
+            return not any(
+                isinstance(entry, dict) and entry.get("kid") == kid
+                for entry in entries
+            )
+
+        entries = getattr(cached, "keys", None)
+        if not isinstance(entries, (list, tuple)):
+            # An unrecognised shape. Say "not proven absent" so the lookup goes
+            # ahead as it always did: losing the bound costs some traffic,
+            # while a wrong "absent" would reject a real user's token.
+            return False
+        return not any(getattr(entry, "key_id", None) == kid for entry in entries)
+
+    @staticmethod
+    def _warm(client: PyJWKClient) -> None:
+        """Fetch the key set once so the cache can be consulted.
+
+        Swallows a failure on purpose: the caller's next step reports the
+        problem with the context it has, and a warm-up is an optimisation, not
+        the check itself.
+        """
+        try:
+            client.get_signing_keys()
+        except Exception:  # noqa: BLE001 - see docstring
+            pass
 
     async def signing_key(self, token: str) -> Any:
         """Return the signing key for ``token``. Refreshes JWKS once if needed."""
         client = await self._ensure_client()
+
         try:
-            return await asyncio.to_thread(client.get_signing_key_from_jwt, token)
-        except PyJWKClientError:
-            # Unknown kid — the project may have rotated keys. Force one refresh.
-            client = await self._ensure_client(force=True)
-            return await asyncio.to_thread(client.get_signing_key_from_jwt, token)
+            kid = jwt.get_unverified_header(token).get("kid")
+        except InvalidTokenError:
+            kid = None
+
+        if await asyncio.to_thread(self._kid_is_absent, client, kid):
+            # Not in the set we hold. Either the project rotated its keys, or
+            # the caller invented the kid — and only one of those is worth an
+            # outbound request, so it gets at most one per cooldown.
+            #
+            # Asking the client directly here instead would defeat the bound:
+            # ``get_signing_key`` re-fetches on a miss by itself, every time.
+            refreshed = await self._ensure_client(force=True)
+            if refreshed is client:
+                raise PyJWKClientError(
+                    f'Unable to find a signing key that matches: "{kid}"'
+                )
+            client = refreshed
+
+            # The rebuilt client starts cold. Fill it once and look again, so a
+            # kid that is still absent has cost a single fetch — handing the
+            # token to ``get_signing_key_from_jwt`` while cold would spend one
+            # fetch filling the cache and a second on its own internal retry.
+            await asyncio.to_thread(self._warm, client)
+            if await asyncio.to_thread(self._kid_is_absent, client, kid):
+                raise PyJWKClientError(
+                    f'Unable to find a signing key that matches: "{kid}"'
+                )
+
+        return await asyncio.to_thread(client.get_signing_key_from_jwt, token)
 
     async def _ensure_client(self, *, force: bool = False) -> PyJWKClient:
-        async with self._lock:
-            fresh = (
-                self._client is not None
-                and not force
-                and (time.monotonic() - self._built_at) < _JWKS_TTL_SECONDS
-            )
-            if not fresh:
-                # PyJWKClient uses urllib under the hood which is synchronous —
-                # confine that to a worker thread rather than the event loop.
-                def _build() -> PyJWKClient:
-                    return PyJWKClient(self._url, cache_keys=True)
+        """Return the cached client, rebuilding it if it is stale or forced.
 
-                self._client = await asyncio.to_thread(_build)
-                self._built_at = time.monotonic()
-            assert self._client is not None
+        Returns the *existing* client unchanged when a forced rebuild is asked
+        for inside the cooldown; the caller compares identity to tell.
+        """
+        async with self._lock:
+            now = time.monotonic()
+            if self._client is not None:
+                if force:
+                    if (now - self._last_forced_at) < _JWKS_FORCED_REFRESH_COOLDOWN_SECONDS:
+                        return self._client
+                    self._last_forced_at = now
+                elif (now - self._built_at) < _JWKS_TTL_SECONDS:
+                    return self._client
+
+            # PyJWKClient uses urllib under the hood which is synchronous —
+            # confine that to a worker thread rather than the event loop.
+            def _build() -> PyJWKClient:
+                return PyJWKClient(self._url, cache_keys=True)
+
+            self._client = await asyncio.to_thread(_build)
+            self._built_at = now
             return self._client
 
 
@@ -264,10 +383,6 @@ async def get_current_admin(
     if not user.is_admin:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return user
-
-
-def client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
 
 
 __all__ = [

@@ -39,6 +39,10 @@ def run_config_test(env_vars: dict) -> subprocess.CompletedProcess:
         # as a leaked credential, and it is right to. A fixture should not
         # look like a secret to anything, a scanner included.
         "INTERNAL_SCHEDULER_TOKEN": "not-a-real-token-not-a-real-token-not-a-real-token",
+        # The key the audit trail's address hashes are computed under.
+        # Production refuses to start without it, so the valid case has one.
+        # Repetitive words for the same reason as the token above.
+        "AUDIT_IP_HASH_KEY": "not-a-real-key-not-a-real-key-not-a-real-key",
     }
     env.update(env_vars)
     

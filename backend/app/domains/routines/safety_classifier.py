@@ -146,7 +146,10 @@ _PATTERNS: tuple = (
     _p(SafetyCategory.UNSUPPORTED_CAUSAL_CLAIM, "safety.cause.hormones",       r"\byour (hormones|hormonal imbalance) (is|are) causing\b"),
 
     # -------- emergency symptom (route to a clinician immediately) ----------
-    _p(SafetyCategory.EMERGENCY_SYMPTOM,     "safety.emergency.swelling_lips", r"\b(swelling of|swollen) (lips|throat|tongue|face)\b"),
+    # "swelling of the lips" is how anyone actually writes it, and the article
+    # made the rule miss it. Widening only: it matches strictly more than
+    # before, which is the one direction a safety rule may move.
+    _p(SafetyCategory.EMERGENCY_SYMPTOM,     "safety.emergency.swelling_lips", r"\b(swelling of|swollen) (the |your )?(lips|throat|tongue|face)\b"),
     _p(SafetyCategory.EMERGENCY_SYMPTOM,     "safety.emergency.breathing",     r"\b(difficulty breathing|trouble breathing|shortness of breath)\b"),
     _p(SafetyCategory.EMERGENCY_SYMPTOM,     "safety.emergency.bleeding",      r"\b(heavy|severe) bleeding\b"),
     _p(SafetyCategory.EMERGENCY_SYMPTOM,     "safety.emergency.anaphylaxis",   r"\banaphylaxis\b"),

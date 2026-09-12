@@ -33,9 +33,10 @@
  * exposes a release, an evidence id, a safety flag or a payload.
  */
 import React from 'react';
-import { Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
+import { openExternalUrl } from '../../services/externalLinks';
 import {
   REASON_KEY_PERSONAL_CONTEXT,
   type ForYouResponse,
@@ -81,7 +82,7 @@ function Citation({ citation }: { citation: NonNullable<ForYouResponse['result']
   const open = React.useCallback(() => {
     // Exactly the URL the server selected. Never a publisher homepage, never a
     // search, never a reconstruction.
-    Linking.openURL(citation.canonical_url).catch(() => setFailed(true));
+    openExternalUrl(citation.canonical_url).catch(() => setFailed(true));
   }, [citation.canonical_url]);
 
   return (

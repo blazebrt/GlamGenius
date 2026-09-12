@@ -27,6 +27,7 @@ def _production_environment() -> dict[str, str]:
         "GEMINI_API_KEY": "synthetic-gemini-key",
         "SENTRY_BACKEND_DSN": "https://public@sentry.invalid/1",
         "INTERNAL_SCHEDULER_TOKEN": "not-a-real-token-not-a-real-token-not-a-real-token",
+        "AUDIT_IP_HASH_KEY": "not-a-real-key-not-a-real-key-not-a-real-key",
         "INVITE_REQUIRED": "true",
         "REQUIRE_ANALYSIS_CONSENT": "true",
         "CONSENT_VERSION": "2026-01-01",
