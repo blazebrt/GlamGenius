@@ -1,4 +1,4 @@
-"""PostgreSQL race proof for Step 9A candidate-backed decision snapshots."""
+"""PostgreSQL race and guard-state proofs for Step 9A candidate snapshots."""
 from __future__ import annotations
 
 import asyncio
@@ -6,6 +6,8 @@ import asyncio
 import pytest
 from app.domains.purchase import check_service
 from app.domains.purchase import service as purchase_service
+from app.domains.recommendation.models import PurchaseDecision, ShoppingCandidate
+from sqlalchemy import select
 
 from tests.conftest import auth
 from tests.test_step9a_purchase_memory_guard import _make_candidate_exact
@@ -65,3 +67,41 @@ async def test_candidate_confirmation_waits_for_decision_snapshot_lock(
     # so the old event must not be reinterpreted as history for the new identity.
     assert guard.json()["guard_state"] == "no_step9a_prior_event"
     assert guard.json()["prior_consideration_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_identity_insufficient_precedes_legacy_coverage_state(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    candidate_id = await _make_candidate_exact(account_id)
+
+    from app.shared.database.sql import get_sessionmaker
+    async with get_sessionmaker()() as session:
+        session.add(PurchaseDecision(
+            account_id=account_id,
+            candidate_id=candidate_id,
+            evaluation_id=None,
+            strategy_key="care_purchase",
+            recommendation_verdict="wait",
+            recommendation_version="legacy",
+            recommendation_snapshot={},
+            decision="waiting",
+            followed_recommendation=True,
+        ))
+        candidate = await session.scalar(select(ShoppingCandidate).where(
+            ShoppingCandidate.id == candidate_id,
+            ShoppingCandidate.account_id == account_id,
+        ))
+        candidate.brand = None
+        await session.commit()
+
+    response = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/purchase-guard",
+        headers=auth(token),
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["identity"]["state"] == "insufficient"
+    assert body["guard_state"] == "identity_insufficient"
+    assert body["prior_consideration_count"] == 0
