@@ -139,6 +139,7 @@ REGISTRY: dict[str, Classification] = {
     "purchase_evaluations": Classification.INCLUDED,
     "purchase_evaluation_factors": Classification.INCLUDED,  # via purchase_evaluations
     "purchase_decisions": Classification.INCLUDED,
+    "purchase_decision_events": Classification.INCLUDED,
     # --- Planning + weather ---
     "daily_plans": Classification.INCLUDED,
     "daily_plan_actions": Classification.INCLUDED,  # via daily_plans
