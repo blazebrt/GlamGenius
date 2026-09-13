@@ -5,8 +5,7 @@ import asyncio
 import uuid
 
 import pytest
-from app.domains.purchase import check_service
-from app.domains.purchase import decision_memory
+from app.domains.purchase import check_service, decision_memory
 from app.domains.purchase import service as purchase_service
 from app.domains.recommendation.models import (
     PurchaseDecision,
