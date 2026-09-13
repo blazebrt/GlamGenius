@@ -655,10 +655,10 @@ class TestNoSecretsInDeploymentConfiguration:
             "REQUIRE_ANALYSIS_CONSENT": "true",
             "MEDIA_STORAGE_BACKEND": "supabase",
             "MEDIA_ALLOW_LOCAL_IN_PRODUCTION": "false",
-            # How many proxies sit in front of the container. A deployment
-            # fact, not a secret — and the blueprint is where a deployment
-            # fact belongs. See app/shared/security/network.py.
-            "TRUSTED_PROXY_HOPS": "1",
+            # The Render-specific network boundary uses the provider-controlled
+            # CF-Connecting-IP signal. This fallback remains disabled unless a
+            # non-Render deployment explicitly configures trusted proxies.
+            "TRUSTED_PROXY_HOPS": "0",
         }
         for group in blueprint["envVarGroups"]:
             for entry in group["envVars"]:

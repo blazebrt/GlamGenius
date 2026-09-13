@@ -199,12 +199,10 @@ class TestTheRenderBlueprint:
             "REQUIRE_ANALYSIS_CONSENT": "true",
             "MEDIA_STORAGE_BACKEND": "supabase",
             "MEDIA_ALLOW_LOCAL_IN_PRODUCTION": "false",
-            # Render puts exactly one load balancer in front of the container.
-            # At the default of 0 the app reads the socket peer, which is that
-            # load balancer for every request: one shared rate-limit bucket for
-            # the whole product, and one address in every audit row. See
-            # app/shared/security/network.py.
-            "TRUSTED_PROXY_HOPS": "1",
+            # The Render-specific network boundary uses the provider-controlled
+            # CF-Connecting-IP signal. This fallback remains disabled unless a
+            # non-Render deployment explicitly configures trusted proxies.
+            "TRUSTED_PROXY_HOPS": "0",
         }
 
     def test_no_secret_value_is_declared_in_the_blueprint(self) -> None:
