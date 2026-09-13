@@ -343,6 +343,7 @@ def test_purchase_metadata_has_one_persistence_engine():
         "purchase_evaluations",
         "purchase_evaluation_factors",
         "purchase_decisions",
+        "purchase_decision_events",
     }
 
 
