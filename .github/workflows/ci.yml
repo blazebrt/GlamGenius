@@ -110,9 +110,10 @@ jobs:
     needs: scope
     if: needs.scope.outputs.backend == 'true' || needs.scope.outputs.schema == 'true' || (github.event_name == 'pull_request' && needs.scope.outputs.python_deps == 'true')
     runs-on: ubuntu-latest
-    # The growing canonical PostgreSQL suite can reach the former 25-minute
-    # ceiling under normal runner variance; its command and coverage are unchanged.
-    timeout-minutes: 35
+    # CI #659 reached approximately 98% before the 35-minute ceiling. Forty-five
+    # minutes provides runner-variance headroom for the unchanged canonical
+    # suite and its invite-reservation follow-up.
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16-alpine

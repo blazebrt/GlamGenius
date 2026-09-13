@@ -13,3 +13,8 @@
 # VC-04 redaction fixture used to prove commercial provider keys never leak.
 # Deterministic test marker, not a credential.
 d7cad0dca5369dd91dbb5ac81f8dd807b0b4a63a:backend/tests/test_vc_04_open_meteo.py:generic-api-key:208
+
+# Historical deterministic device-storage migration fixtures, not credentials.
+# The live fixture was subsequently made explicitly test-only.
+007b6998d9fc00288b70c55c665564e374620365:frontend/src/__tests__/deviceTokenStorage.test.ts:generic-api-key:79
+2a2c72b410aef9af6445da007193189b1b448f96:frontend/src/__tests__/deviceTokenStorage.test.ts:generic-api-key:79

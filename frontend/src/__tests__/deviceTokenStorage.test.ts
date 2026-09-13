@@ -76,7 +76,7 @@ jest.mock('axios', () => {
 const DEVICE_KEY = 'glamgenius_scan_device_v1';
 
 
-const LEGACY = { device_key: 'abc123def456', token: '__TEST_DEVICE_TOKEN__', claimed_for: undefined };
+const LEGACY = { device_key: '__TEST_DEVICE_KEY__', token: '__TEST_DEVICE_TOKEN__', claimed_for: undefined };
 
 beforeEach(() => {
   jest.clearAllMocks();
