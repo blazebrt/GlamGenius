@@ -76,7 +76,7 @@ jest.mock('axios', () => {
 const DEVICE_KEY = 'glamgenius_scan_device_v1';
 
 
-const LEGACY = { device_key: 'abc123def456', token: 'device-token-value', claimed_for: undefined };
+const LEGACY = { device_key: 'abc123def456', token: '__TEST_DEVICE_TOKEN__', claimed_for: undefined };
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -158,13 +158,13 @@ describe('a fresh install', () => {
   it('registers and stores the token in the keychain', async () => {
     const axios = jest.requireMock('axios');
     const instance = axios.default.create();
-    instance.post.mockResolvedValueOnce({ data: { token: 'brand-new-token' } });
+    instance.post.mockResolvedValueOnce({ data: { token: '__TEST_NEW_DEVICE_TOKEN__' } });
 
     const device = await ensureDevice();
 
-    expect(device?.token).toBe('brand-new-token');
+    expect(device?.token).toBe('__TEST_NEW_DEVICE_TOKEN__');
     const secure = JSON.parse((await secureSessionStorage.getItem(DEVICE_KEY)) as string);
-    expect(secure.token).toBe('brand-new-token');
+    expect(secure.token).toBe('__TEST_NEW_DEVICE_TOKEN__');
     expect(await AsyncStorage.getItem(DEVICE_KEY)).toBeNull();
   });
 });

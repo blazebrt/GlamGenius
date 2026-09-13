@@ -29,10 +29,13 @@ So it is read only when the deployment says how many proxies sit in front, via
 Counting from the right is the whole security property. The left-most entry is
 the one every naive implementation reads, and it is the one the caller writes.
 
-Set it to the number of proxies your platform actually puts in front of the
-container — for a single managed router (Render, Heroku, Fly, App Runner) that
-is ``1``. Leave it at ``0`` anywhere the container can be reached directly,
-because then the header proves nothing.
+On Render production web services, the provider documents that every inbound
+request passes through Cloudflare and that Cloudflare overwrites
+``CF-Connecting-IP``.  That provider-controlled signal is used there instead
+of guessing a proxy-hop count.  Everywhere else, set ``TRUSTED_PROXY_HOPS`` to
+the number of proxies your deployment actually puts in front of the container.
+Leave it at ``0`` anywhere the container can be reached directly, because then
+the header proves nothing.
 """
 from __future__ import annotations
 
@@ -40,9 +43,11 @@ import ipaddress
 
 from fastapi import Request
 
-from app.config import TRUSTED_PROXY_HOPS
+from app.config import APP_ENV, RENDER_SERVICE_TYPE, RUNNING_ON_RENDER, TRUSTED_PROXY_HOPS
 
 FORWARDED_FOR_HEADER = "x-forwarded-for"
+RENDER_CLIENT_IP_HEADER = "cf-connecting-ip"
+MAX_FORWARDED_ENTRIES = 32
 
 
 def _valid_address(value: str) -> str | None:
@@ -66,9 +71,30 @@ def _valid_address(value: str) -> str | None:
         return None
 
 
+def _uses_render_client_ip() -> bool:
+    """Whether the provider-controlled Render/Cloudflare signal is available.
+
+    These values are set by Render at runtime and are not derived from request
+    headers.  Restricting the path to production web services prevents a local
+    or test deployment from treating an arbitrary client header as authority.
+    """
+    return (
+        APP_ENV == "production"
+        and RUNNING_ON_RENDER
+        and RENDER_SERVICE_TYPE == "web"
+    )
+
+
 def client_ip(request: Request) -> str | None:
     """The caller's address, or ``None`` when it cannot be established."""
     peer = request.client.host if request.client else None
+
+    if _uses_render_client_ip():
+        # Render documents that Cloudflare overwrites this header before the
+        # request reaches a public web service.  If it is absent or malformed,
+        # fail conservatively to the socket peer; never fall through to the
+        # caller-controllable XFF chain in this deployment mode.
+        return _valid_address(request.headers.get(RENDER_CLIENT_IP_HEADER, "")) or peer
 
     if TRUSTED_PROXY_HOPS < 1:
         return peer
@@ -79,7 +105,7 @@ def client_ip(request: Request) -> str | None:
         return peer
 
     entries = [entry for entry in (part.strip() for part in forwarded.split(",")) if entry]
-    if len(entries) < TRUSTED_PROXY_HOPS:
+    if len(entries) > MAX_FORWARDED_ENTRIES or len(entries) < TRUSTED_PROXY_HOPS:
         # Fewer hops than configured: something is in front that we did not
         # expect. Trusting the left-most entry here is exactly the mistake this
         # module exists to avoid, so fall back to the peer.

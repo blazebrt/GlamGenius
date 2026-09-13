@@ -9,9 +9,9 @@ Reading ``X-Forwarded-For`` instead is the other mistake, and it is worse: the
 caller writes that header, so trusting its left-most entry lets every request
 claim a fresh address and removes the limiter altogether.
 
-``TRUSTED_PROXY_HOPS`` is how the deployment says which of those is true, and
-the tests below pin both ends: nothing is trusted at 0, and at 1 a forged
-header cannot move the answer.
+``TRUSTED_PROXY_HOPS`` is how non-Render deployments state which proxies they
+trust. Render production uses its provider-controlled Cloudflare client-IP
+signal instead; neither path trusts client-supplied forwarding headers blindly.
 """
 from __future__ import annotations
 
@@ -37,6 +37,41 @@ def hops(monkeypatch):
     def _set(value: int):
         monkeypatch.setattr(network, "TRUSTED_PROXY_HOPS", value)
     return _set
+
+
+@pytest.fixture
+def render_production(monkeypatch):
+    monkeypatch.setattr(network, "APP_ENV", "production")
+    monkeypatch.setattr(network, "RUNNING_ON_RENDER", True)
+    monkeypatch.setattr(network, "RENDER_SERVICE_TYPE", "web")
+
+
+class TestTrustedRenderProduction:
+    def test_provider_controlled_header_wins_over_malicious_xff(self, render_production, hops):
+        hops(99)
+        request = _Request(
+            "10.0.0.1",
+            {
+                "CF-Connecting-IP": "203.0.113.9",
+                "X-Forwarded-For": "198.51.100.1, 198.51.100.2",
+            },
+        )
+        assert network.client_ip(request) == "203.0.113.9"
+
+    def test_provider_header_accepts_ipv6(self, render_production):
+        assert network.client_ip(_Request("10.0.0.1", {"CF-Connecting-IP": "2001:db8::42"})) == "2001:db8::42"
+
+    def test_missing_or_malformed_provider_header_falls_back_to_peer(self, render_production):
+        assert network.client_ip(_Request("10.0.0.1")) == "10.0.0.1"
+        assert network.client_ip(_Request("10.0.0.1", {"CF-Connecting-IP": "not-an-ip"})) == "10.0.0.1"
+
+    def test_header_is_not_trusted_outside_render_production(self, monkeypatch):
+        monkeypatch.setattr(network, "APP_ENV", "development")
+        monkeypatch.setattr(network, "RUNNING_ON_RENDER", False)
+        monkeypatch.setattr(network, "RENDER_SERVICE_TYPE", "")
+        monkeypatch.setattr(network, "TRUSTED_PROXY_HOPS", 0)
+        request = _Request("10.0.0.1", {"CF-Connecting-IP": "203.0.113.9"})
+        assert network.client_ip(request) == "10.0.0.1"
 
 
 class TestNothingTrusted:
@@ -79,6 +114,11 @@ class TestOneTrustedProxy:
         forged = ", ".join(f"1.2.3.{n}" for n in range(1, 30))
         request = _Request("10.0.0.1", {"X-Forwarded-For": f"{forged}, 203.0.113.9"})
         assert network.client_ip(request) == "203.0.113.9"
+
+    def test_an_unbounded_forwarded_chain_falls_back_to_peer(self, hops):
+        hops(1)
+        chain = ", ".join(f"203.0.113.{index}" for index in range(1, 34))
+        assert network.client_ip(_Request("10.0.0.1", {"X-Forwarded-For": chain})) == "10.0.0.1"
 
     def test_two_callers_behind_one_proxy_are_told_apart(self, hops):
         """What the rate limiter needs and did not have."""

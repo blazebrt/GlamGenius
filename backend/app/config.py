@@ -175,10 +175,19 @@ MEDIA_ALLOWED_MIME = _env_csv(
 )
 MEDIA_SIGNED_URL_TTL_SECONDS = _env_int("MEDIA_SIGNED_URL_TTL_SECONDS", 300)
 
-# How many proxies sit in front of this container. 0 means none we trust, and
-# the socket peer is used as the caller's address. See
-# app/shared/security/network.py for why this is a count rather than a boolean.
+# How many proxies sit in front of this container outside the production Render
+# web-service path. 0 means none we trust, and the socket peer is used as the
+# caller's address. See app/shared/security/network.py for why this is a count
+# rather than a boolean.
 TRUSTED_PROXY_HOPS = _env_int("TRUSTED_PROXY_HOPS", 0)
+
+# Render sets RENDER=true for its runtime.  Its public web-service edge passes
+# through Cloudflare, which overwrites CF-Connecting-IP before forwarding to
+# the service.  The network boundary uses that header only in production on a
+# Render web service; this environment fact is deployment configuration, never
+# inferred from an HTTP request header.
+RUNNING_ON_RENDER = _env_bool("RENDER", False)
+RENDER_SERVICE_TYPE = _env_str("RENDER_SERVICE_TYPE")
 
 # Secret key for the audit trail's address hashes. A secret, not a label: the
 # hash is only one-way to somebody who does not have this. See
