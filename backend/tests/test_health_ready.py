@@ -7,15 +7,15 @@ from httpx import AsyncClient
 pytestmark = pytest.mark.asyncio
 
 CORE_SEED_DOMAINS = (
-    "ingredients",
-    "metric_definitions",
-    "plans",
-    "product_coverage",
-    "dupes",
-    "looks",
-    "style_rubric",
-    "visual_taxonomy",
-    "community_reference",
+    "inventory_categories",
+    "inventory_subtypes",
+    "ingredients_and_rules",
+    "ingredient_contraindications",
+    "ingredient_sensitivities",
+    "routine_templates",
+    "perfume_context",
+    "supplement_context",
+    "progress",
     "feature_flags",
 )
 
@@ -114,7 +114,7 @@ async def test_ready_fails_on_seed_mismatch(app_client: AsyncClient, db_clean):
             {"id": str(uuid.uuid4())},
         )
         for domain in CORE_SEED_DOMAINS:
-            version = "invalid-version" if domain == "ingredients" else SEED_VERSION
+            version = "invalid-version" if domain == "ingredients_and_rules" else SEED_VERSION
             await session.execute(
                 text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, :domain, :version, 1, NOW())"),
                 {"id": str(uuid.uuid4()), "domain": domain, "version": version},
