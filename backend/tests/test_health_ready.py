@@ -6,6 +6,19 @@ from httpx import AsyncClient
 
 pytestmark = pytest.mark.asyncio
 
+CORE_SEED_DOMAINS = (
+    "ingredients",
+    "metric_definitions",
+    "plans",
+    "product_coverage",
+    "dupes",
+    "looks",
+    "style_rubric",
+    "visual_taxonomy",
+    "community_reference",
+    "feature_flags",
+)
+
 
 async def test_health_ok_during_normal_operation(app_client: AsyncClient):
     resp = await app_client.get("/api/v2/health")
@@ -20,23 +33,29 @@ async def test_ready_ok_during_normal_operation(app_client: AsyncClient, db_clea
     monkeypatch.setattr(gemini_mod, "is_configured", lambda: True)
     import app.api.v2.config as config_mod
     monkeypatch.setattr(config_mod, "validate_production_configuration", lambda: None)
-    
+
     import uuid
 
+    from app.bootstrap import SEED_VERSION
     from app.shared.database.sql import get_sessionmaker
     from sqlalchemy import text
-    
-    # db_clean truncates seed_version_records, so we must insert it to pass the ready check.
-    # We DO NOT insert into alembic_version, because db_clean does not truncate it,
-    # and modifying it will break subsequent tests that run alembic.
+
+    # The production table contains independently versioned evidence audit rows
+    # alongside one record per core seed domain. Insert an unrelated row first
+    # so an unordered LIMIT 1 reproduces the live Render failure.
     factory = get_sessionmaker()
     async with factory() as session:
         await session.execute(
-            text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, 'core', '2026.02.16', 1, NOW())"),
-            {"id": str(uuid.uuid4())}
+            text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, 'evidence_rules', 'evidence-v1', 1, NOW())"),
+            {"id": str(uuid.uuid4())},
         )
+        for domain in CORE_SEED_DOMAINS:
+            await session.execute(
+                text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, :domain, :version, 1, NOW())"),
+                {"id": str(uuid.uuid4()), "domain": domain, "version": SEED_VERSION},
+            )
         await session.commit()
-    
+
     resp = await app_client.get("/api/v2/ready")
     if resp.status_code != 200:
         print("READY FAILURE:", resp.json())
@@ -44,14 +63,14 @@ async def test_ready_ok_during_normal_operation(app_client: AsyncClient, db_clea
     body = resp.json()
     assert body["status"] == "ready"
     assert "postgres" in body["components"]
-    assert "seed_version" in body["components"]
-    
+    assert body["components"]["seed_version"] == SEED_VERSION
+    assert body["components"]["seed_version_status"] == "ok"
+
     # Ensure no secrets leaked
     text = resp.text.lower()
     assert "secret" not in text
     assert "key" not in text
     assert "password" not in text
-
 
 
 async def test_health_ok_during_database_outage(app_client: AsyncClient, monkeypatch):
@@ -60,7 +79,7 @@ async def test_health_ok_during_database_outage(app_client: AsyncClient, monkeyp
     async def mock_ping():
         return False
     monkeypatch.setattr(sql, "ping", mock_ping)
-    
+
     resp = await app_client.get("/api/v2/health")
     assert resp.status_code == 200
     assert resp.json()["status"] == "alive"
@@ -72,7 +91,7 @@ async def test_ready_fails_during_database_outage(app_client: AsyncClient, monke
     async def mock_ping():
         return False
     monkeypatch.setattr(sql, "ping", mock_ping)
-    
+
     resp = await app_client.get("/api/v2/ready")
     assert resp.status_code == 503
     assert resp.json()["status"] == "not_ready"
@@ -80,16 +99,28 @@ async def test_ready_fails_during_database_outage(app_client: AsyncClient, monke
 
 
 async def test_ready_fails_on_seed_mismatch(app_client: AsyncClient, db_clean):
-    # Intentionally insert an invalid seed version in the database
+    # All core domains must be present at the current version. One stale core
+    # domain is sufficient to fail readiness; unrelated evidence versions are
+    # deliberately ignored.
     import uuid
 
+    from app.bootstrap import SEED_VERSION
     from app.shared.database.sql import get_sessionmaker
     from sqlalchemy import text
     factory = get_sessionmaker()
     async with factory() as session:
-        await session.execute(text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, 'core', 'invalid-version', 1, NOW())"), {"id": str(uuid.uuid4())})
+        await session.execute(
+            text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, 'evidence_rules', 'another-evidence-version', 1, NOW())"),
+            {"id": str(uuid.uuid4())},
+        )
+        for domain in CORE_SEED_DOMAINS:
+            version = "invalid-version" if domain == "ingredients" else SEED_VERSION
+            await session.execute(
+                text("INSERT INTO seed_version_records (id, seed_domain, seed_version, rows_written, applied_at) VALUES (:id, :domain, :version, 1, NOW())"),
+                {"id": str(uuid.uuid4()), "domain": domain, "version": version},
+            )
         await session.commit()
-    
+
     resp = await app_client.get("/api/v2/ready")
     assert resp.status_code == 503
     assert resp.json()["status"] == "not_ready"
@@ -106,7 +137,7 @@ async def test_ready_fails_on_alembic_mismatch(app_client: AsyncClient, db_clean
         version_num = result.scalar()
         await session.execute(text("DELETE FROM alembic_version"))
         await session.commit()
-    
+
     try:
         resp = await app_client.get("/api/v2/ready")
         assert resp.status_code == 503
@@ -135,7 +166,7 @@ async def test_ready_fails_on_stale_worker_heartbeat(app_client: AsyncClient, db
             text("INSERT INTO account_deletion_jobs (id, account_id, state, attempt_count, requested_at, created_at, updated_at) VALUES (:job_id, :id, 'requested', 0, NOW(), NOW(), NOW())"),
             {"job_id": str(job_id), "id": str(account_id)}
         )
-        
+
         # Older than two deletion intervals, under the scheduled worker's one
         # stable name. The name used to carry a hostname suffix, from the days
         # of an always-on daemon per container; readiness now looks the
@@ -148,7 +179,7 @@ async def test_ready_fails_on_stale_worker_heartbeat(app_client: AsyncClient, db
             {"wid": str(uuid.uuid4()), "worker_name": schedule.ACCOUNT_DELETION_WORKER_NAME, "hb": stale_time}
         )
         await session.commit()
-    
+
     resp = await app_client.get("/api/v2/ready")
     assert resp.status_code == 503
     assert resp.json()["status"] == "not_ready"
