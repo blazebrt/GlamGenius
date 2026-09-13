@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.purchase.contract import (
@@ -14,7 +14,13 @@ from app.domains.purchase.contract import (
     is_active_care_category,
     is_active_fragrance_category,
 )
-from app.domains.recommendation.models import PurchaseDecision, PurchaseEvaluation, ShoppingCandidate
+from app.domains.purchase.identity import identity_for_candidate
+from app.domains.recommendation.models import (
+    PurchaseDecision,
+    PurchaseDecisionEvent,
+    PurchaseEvaluation,
+    ShoppingCandidate,
+)
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 
 
@@ -67,6 +73,86 @@ def style_recommendation_snapshot(evaluation: PurchaseEvaluation) -> dict[str, A
         "roi_version": evaluation.roi_version,
         "roi_score": evaluation.roi_score,
     }
+
+
+async def record_decision_event(
+    session: AsyncSession, *, row: PurchaseDecision, candidate: ShoppingCandidate,
+) -> PurchaseDecisionEvent:
+    """Append immutable history in the same transaction as the current state."""
+    identity = identity_for_candidate(candidate)
+    event = PurchaseDecisionEvent(
+        account_id=row.account_id, candidate_id=candidate.id, decision_id=row.id,
+        category=candidate.category, strategy_key=row.strategy_key,
+        candidate_display_name=candidate.display_name,
+        identity_version=identity["version"], identity_state=identity["state"],
+        identity_fingerprint=identity["fingerprint"],
+        recommendation_verdict=row.recommendation_verdict,
+        recommendation_version=row.recommendation_version,
+        recommendation_fingerprint=row.recommendation_fingerprint,
+        recommendation_snapshot=row.recommendation_snapshot,
+        decision=row.decision, followed_recommendation=row.followed_recommendation,
+    )
+    session.add(event)
+    await session.flush()
+    return event
+
+
+def serialize_decision_event(row: PurchaseDecisionEvent) -> dict[str, Any]:
+    return {
+        "id": str(row.id), "candidate_id": str(row.candidate_id), "category": row.category,
+        "strategy": row.strategy_key, "candidate_display_name": row.candidate_display_name,
+        "identity": {"version": row.identity_version, "state": row.identity_state,
+                     "fingerprint": row.identity_fingerprint},
+        "recommendation_at_decision": {"verdict": row.recommendation_verdict,
+            "version": row.recommendation_version, "fingerprint": row.recommendation_fingerprint},
+        "decision": row.decision, "followed_recommendation": row.followed_recommendation,
+        "occurred_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+async def decision_history(session: AsyncSession, *, account_id: uuid.UUID, limit: int, before: uuid.UUID | None = None) -> list[PurchaseDecisionEvent]:
+    statement = select(PurchaseDecisionEvent).where(PurchaseDecisionEvent.account_id == account_id)
+    if before is not None:
+        cursor = await session.scalar(select(PurchaseDecisionEvent).where(
+            PurchaseDecisionEvent.id == before, PurchaseDecisionEvent.account_id == account_id,
+        ))
+        if cursor is None:
+            raise NotFoundError("We could not find that decision history cursor.")
+        statement = statement.where(or_(
+            PurchaseDecisionEvent.created_at < cursor.created_at,
+            and_(PurchaseDecisionEvent.created_at == cursor.created_at, PurchaseDecisionEvent.id < cursor.id),
+        ))
+    return (await session.execute(statement.order_by(
+        PurchaseDecisionEvent.created_at.desc(), PurchaseDecisionEvent.id.desc()).limit(limit))).scalars().all()
+
+
+async def purchase_guard(session: AsyncSession, *, account_id: uuid.UUID, candidate: ShoppingCandidate) -> dict[str, Any]:
+    """Project exact prior facts without recalculating a purchase verdict."""
+    identity = identity_for_candidate(candidate)
+    base = {"purchase_guard_version": "step-9a-v1", "candidate_id": str(candidate.id), "identity": identity,
+            "prior_consideration_count": 0, "most_recent": None, "guard_state": "no_prior_memory",
+            "owned_redundancy": None}
+    if identity["state"] != "exact":
+        base["guard_state"] = "identity_insufficient"
+        return base
+    where = (PurchaseDecisionEvent.account_id == account_id,
+             PurchaseDecisionEvent.identity_fingerprint == identity["fingerprint"],
+             PurchaseDecisionEvent.identity_state == "exact")
+    count = await session.scalar(select(func.count()).select_from(PurchaseDecisionEvent).where(*where))
+    event = (await session.execute(select(PurchaseDecisionEvent).where(*where).order_by(
+        PurchaseDecisionEvent.created_at.desc(), PurchaseDecisionEvent.id.desc()).limit(1))).scalar_one_or_none()
+    base["prior_consideration_count"] = int(count or 0)
+    if event is None:
+        return base
+    base["most_recent"] = serialize_decision_event(event)
+    state = {"bought": "exact_prior_bought", "waiting": "exact_prior_waiting", "skipped": "exact_prior_skipped"}.get(event.decision, "exact_prior_consideration")
+    base["guard_state"] = state
+    snapshot = event.recommendation_snapshot or {}
+    exact_owned = snapshot.get("exact_owned_count")
+    if isinstance(exact_owned, int) and exact_owned > 0:
+        base["owned_redundancy"] = {"state": "strategy_proven_exact_owned", "count": exact_owned}
+        base["guard_state"] = "strategy_proven_exact_owned"
+    return base
 
 
 async def save_care_decision(
@@ -143,6 +229,7 @@ async def save_care_decision(
         row.followed_recommendation = followed
     await session.flush()
     await session.refresh(row)
+    await record_decision_event(session, row=row, candidate=candidate)
     return row
 
 
@@ -200,11 +287,16 @@ async def save_fragrance_decision(
         row.followed_recommendation = followed
     await session.flush()
     await session.refresh(row)
+    await record_decision_event(session, row=row, candidate=candidate)
     return row
 
 
 __all__ = [
     "current_purchase_decision",
+    "decision_history",
+    "purchase_guard",
+    "record_decision_event",
+    "serialize_decision_event",
     "save_care_decision",
     "save_fragrance_decision",
     "serialize_purchase_decision",

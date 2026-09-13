@@ -255,6 +255,38 @@ async def get_purchase_decision_memory(
     }
 
 
+@router.get("/shopping/decision-history")
+async def get_purchase_decision_history(
+    limit: int = Query(20, ge=1, le=50),
+    before: uuid.UUID | None = None,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Bounded newest-first longitudinal purchase history for this account."""
+    rows = await decision_memory.decision_history(
+        session, account_id=current.account_id, limit=limit, before=before,
+    )
+    return {
+        "purchase_decision_event_version": "step-9a-v1",
+        "items": [decision_memory.serialize_decision_event(row) for row in rows],
+        "next_before": str(rows[-1].id) if len(rows) == limit else None,
+    }
+
+
+@router.get("/shopping/candidates/{candidate_id}/purchase-guard")
+async def get_purchase_guard(
+    candidate_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Exact historical/owned context only; the active strategy remains decisive."""
+    candidate = await purchase_service.owned_purchase_candidate(session, current.account_id, candidate_id)
+    strategy = resolve_purchase_strategy(candidate.category)
+    if strategy is None or strategy.state != "active":
+        raise ValidationFailedError("This candidate is not eligible for a purchase guard.", field="category")
+    return await decision_memory.purchase_guard(session, account_id=current.account_id, candidate=candidate)
+
+
 @router.get("/shopping/roi-model")
 async def get_roi_model():
     """The Appearance ROI formula, in the open.

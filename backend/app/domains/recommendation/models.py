@@ -352,6 +352,34 @@ class PurchaseDecision(UUIDPrimaryKey, TimestampMixin, Base):
     )
 
 
+class PurchaseDecisionEvent(UUIDPrimaryKey, TimestampMixin, Base):
+    """Immutable account-owned record of a decision at the time it was made."""
+
+    __tablename__ = "purchase_decision_events"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    candidate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shopping_candidates.id", ondelete="CASCADE"), nullable=False)
+    decision_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("purchase_decisions.id", ondelete="SET NULL"))
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    strategy_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    candidate_display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    identity_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    identity_state: Mapped[str] = mapped_column(String(24), nullable=False)
+    identity_fingerprint: Mapped[str | None] = mapped_column(String(128))
+    recommendation_verdict: Mapped[str] = mapped_column(String(16), nullable=False)
+    recommendation_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    recommendation_fingerprint: Mapped[str | None] = mapped_column(String(128))
+    recommendation_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    followed_recommendation: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+    __table_args__ = (
+        Index("ix_purchase_decision_events_account_created", "account_id", "created_at"),
+        Index("ix_purchase_decision_events_account_identity_created", "account_id", "identity_fingerprint", "created_at"),
+        Index("ix_purchase_decision_events_candidate", "candidate_id", "created_at"),
+    )
+
+
 class CompatibilityEdge(UUIDPrimaryKey, TimestampMixin, Base):
     """A cached deterministic score between two owned items.
 

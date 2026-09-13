@@ -507,10 +507,13 @@ VERDICT_TO_DECISION = {"buy": "bought", "wait": "waiting", "skip": "skipped"}
 
 
 async def save_decision(session: AsyncSession, evaluation: PurchaseEvaluation, decision: str, note: str | None) -> PurchaseDecision:
-    from app.domains.purchase.decision_memory import style_recommendation_snapshot
+    from app.domains.purchase.decision_memory import record_decision_event, style_recommendation_snapshot
 
+    # Serialize an evaluation's current state and its append-only history.
+    # A process-local lock would not protect another API worker.
+    await session.execute(select(PurchaseEvaluation.id).where(PurchaseEvaluation.id == evaluation.id).with_for_update())
     row = (await session.execute(
-        select(PurchaseDecision).where(PurchaseDecision.evaluation_id == evaluation.id, PurchaseDecision.account_id == evaluation.account_id)
+        select(PurchaseDecision).where(PurchaseDecision.evaluation_id == evaluation.id, PurchaseDecision.account_id == evaluation.account_id).with_for_update()
     )).scalar_one_or_none()
     followed = VERDICT_TO_DECISION.get(evaluation.verdict) == decision
     if row is None:
@@ -536,6 +539,9 @@ async def save_decision(session: AsyncSession, evaluation: PurchaseEvaluation, d
         row.recommendation_snapshot = style_recommendation_snapshot(evaluation)
         row.decision, row.note, row.followed_recommendation = decision, note, followed
     await session.flush()
+    candidate = await session.get(ShoppingCandidate, evaluation.candidate_id)
+    if candidate is not None:
+        await record_decision_event(session, row=row, candidate=candidate)
     return row
 
 
