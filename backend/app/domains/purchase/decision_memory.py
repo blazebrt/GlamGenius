@@ -153,12 +153,12 @@ async def purchase_guard(session: AsyncSession, *, account_id: uuid.UUID, candid
             "history_coverage": {"state": "step_9a_events_only", "legacy_current_decisions_included": False},
             "prior_consideration_count": 0, "most_recent": None, "guard_state": "no_step9a_prior_event",
             "owned_redundancy": None}
+    if identity["state"] != "exact":
+        base["guard_state"] = "identity_insufficient"
+        return base
     legacy_incomplete = await has_incomplete_legacy_context(
         session, account_id=account_id, candidate_id=candidate.id,
     )
-    if identity["state"] != "exact":
-        base["guard_state"] = "historical_context_incomplete" if legacy_incomplete else "identity_insufficient"
-        return base
     where = (PurchaseDecisionEvent.account_id == account_id,
              PurchaseDecisionEvent.category == candidate.category,
              PurchaseDecisionEvent.strategy_key == resolve_purchase_strategy(candidate.category).key,
