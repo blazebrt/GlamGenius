@@ -60,18 +60,18 @@ logger = logging.getLogger(__name__)
 
 # ``app.bootstrap.run`` writes one audit record per core seed domain, then
 # evidence bootstraps write their own independently versioned audit records to
-# the same table. Readiness must therefore validate the complete core set, not
-# whichever row PostgreSQL happens to return first.
+# the same table. Readiness must therefore validate the exact core audit keys
+# emitted by that orchestrator, not whichever row PostgreSQL returns first.
 _READINESS_SEED_DOMAINS = (
-    "ingredients",
-    "metric_definitions",
-    "plans",
-    "product_coverage",
-    "dupes",
-    "looks",
-    "style_rubric",
-    "visual_taxonomy",
-    "community_reference",
+    "inventory_categories",
+    "inventory_subtypes",
+    "ingredients_and_rules",
+    "ingredient_contraindications",
+    "ingredient_sensitivities",
+    "routine_templates",
+    "perfume_context",
+    "supplement_context",
+    "progress",
     "feature_flags",
 )
 
