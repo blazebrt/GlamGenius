@@ -26,7 +26,7 @@ matching.
 
 The guard is a current, read-only projection (`step-9a-v2`) of exact matching
 events scoped by identity version, category and strategy. It returns
-neutral/no-memory, identity-insufficient, historical-context-incomplete, or
+event-scoped no-prior-event, identity-insufficient, historical-context-incomplete, or
 exact prior bought/waiting/skipped. It counts distinct candidate considerations,
 not every decision transition. A historical event is not current inventory
 truth: its snapshot can never produce a current owned/redundancy state. The

@@ -377,6 +377,7 @@ class PurchaseDecisionEvent(UUIDPrimaryKey, TimestampMixin, Base):
         Index("ix_purchase_decision_events_account_created", "account_id", "created_at"),
         Index("ix_purchase_decision_events_account_identity_created", "account_id", "identity_fingerprint", "created_at"),
         Index("ix_purchase_decision_events_candidate", "candidate_id", "created_at"),
+        Index("ix_purchase_decision_events_decision_created", "decision_id", "created_at"),
     )
 
 

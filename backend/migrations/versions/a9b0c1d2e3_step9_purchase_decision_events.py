@@ -44,9 +44,11 @@ def upgrade() -> None:
     op.create_index("ix_purchase_decision_events_account_created", "purchase_decision_events", ["account_id", "created_at"])
     op.create_index("ix_purchase_decision_events_account_identity_created", "purchase_decision_events", ["account_id", "identity_fingerprint", "created_at"])
     op.create_index("ix_purchase_decision_events_candidate", "purchase_decision_events", ["candidate_id", "created_at"])
+    op.create_index("ix_purchase_decision_events_decision_created", "purchase_decision_events", ["decision_id", "created_at"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_purchase_decision_events_decision_created", table_name="purchase_decision_events")
     op.drop_index("ix_purchase_decision_events_candidate", table_name="purchase_decision_events")
     op.drop_index("ix_purchase_decision_events_account_identity_created", table_name="purchase_decision_events")
     op.drop_index("ix_purchase_decision_events_account_created", table_name="purchase_decision_events")

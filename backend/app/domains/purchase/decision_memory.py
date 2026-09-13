@@ -150,7 +150,8 @@ async def purchase_guard(session: AsyncSession, *, account_id: uuid.UUID, candid
     """Project exact prior facts without recalculating a purchase verdict."""
     identity = identity_for_candidate(candidate)
     base = {"purchase_guard_version": PURCHASE_GUARD_VERSION, "candidate_id": str(candidate.id), "identity": identity,
-            "prior_consideration_count": 0, "most_recent": None, "guard_state": "no_prior_memory",
+            "history_coverage": {"state": "step_9a_events_only", "legacy_current_decisions_included": False},
+            "prior_consideration_count": 0, "most_recent": None, "guard_state": "no_step9a_prior_event",
             "owned_redundancy": None}
     legacy_incomplete = await has_incomplete_legacy_context(
         session, account_id=account_id, candidate_id=candidate.id,

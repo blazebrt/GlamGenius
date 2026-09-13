@@ -55,6 +55,11 @@ def test_identity_is_strategy_scoped_and_ignores_fragrance_use_context():
     assert identity_for_candidate(draft_style)["state"] == "insufficient"
 
 
+def test_event_lookup_index_covers_current_decision_idempotency_queries():
+    indexes = {index.name: tuple(column.name for column in index.columns) for index in PurchaseDecisionEvent.__table__.indexes}
+    assert indexes["ix_purchase_decision_events_decision_created"] == ("decision_id", "created_at")
+
+
 @pytest.mark.asyncio
 async def test_history_is_append_only_and_guard_is_account_scoped(app_client, db_clean, registered_supabase_user):
     token, account_id = await registered_supabase_user()
@@ -85,6 +90,16 @@ async def test_history_is_append_only_and_guard_is_account_scoped(app_client, db
     assert guard.json()["guard_state"] == "exact_prior_bought"
     assert guard.json()["prior_consideration_count"] == 1
     assert guard.json()["owned_redundancy"] is None
+    assert guard.json()["history_coverage"]["state"] == "step_9a_events_only"
+
+    no_event_id = await _seed_db_candidate(account_id)
+    async with factory() as session:
+        no_event = await session.get(ShoppingCandidate, no_event_id)
+        no_event.brand = "Example Labs"
+        await session.commit()
+    no_event_guard = await app_client.get(f"/api/v2/shopping/candidates/{no_event_id}/purchase-guard", headers=auth(token))
+    assert no_event_guard.status_code == 200, no_event_guard.text
+    assert no_event_guard.json()["guard_state"] == "no_step9a_prior_event"
 
     other_token, _ = await registered_supabase_user()
     assert (await app_client.get("/api/v2/shopping/decision-history", headers=auth(other_token))).json()["items"] == []
