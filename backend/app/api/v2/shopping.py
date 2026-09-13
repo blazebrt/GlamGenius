@@ -218,6 +218,10 @@ async def record_candidate_decision(
 ):
     """Persist a customer Care or Fragrance outcome from its canonical check."""
     candidate = await purchase_service.owned_purchase_candidate(session, current.account_id, candidate_id)
+    # Freeze the trusted candidate facts before composing the canonical check.
+    # Otherwise a concurrent confirmation could pair an old recommendation
+    # snapshot with a newly changed Step 9A identity fingerprint.
+    await session.refresh(candidate, with_for_update=True)
     strategy = resolve_purchase_strategy(candidate.category)
     if strategy is None or strategy.state != "active":
         raise ValidationFailedError("This candidate is not eligible for an active purchase strategy.", field="category")
