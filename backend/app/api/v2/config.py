@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, Response, status
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bootstrap import SEED_VERSION
@@ -57,6 +57,23 @@ from app.workers import schedule
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# ``app.bootstrap.run`` writes one audit record per core seed domain, then
+# evidence bootstraps write their own independently versioned audit records to
+# the same table. Readiness must therefore validate the exact core audit keys
+# emitted by that orchestrator, not whichever row PostgreSQL returns first.
+_READINESS_SEED_DOMAINS = (
+    "inventory_categories",
+    "inventory_subtypes",
+    "ingredients_and_rules",
+    "ingredient_contraindications",
+    "ingredient_sensitivities",
+    "routine_templates",
+    "perfume_context",
+    "supplement_context",
+    "progress",
+    "feature_flags",
+)
 
 
 @router.get("/config")
@@ -148,14 +165,33 @@ async def v2_ready(response: Response, session: AsyncSession = Depends(get_sessi
     else:
         components["storage"] = MEDIA_STORAGE_BACKEND.lower()
 
-    # 4. Expected reference-data seed version
+    # 4. Expected reference-data seed version. The audit table also contains
+    # independently versioned evidence domains, so selecting an arbitrary row
+    # makes readiness depend on heap order. Validate the latest record for each
+    # core domain instead.
     try:
+        seed_query = text(
+            "SELECT DISTINCT ON (seed_domain) seed_domain, seed_version "
+            "FROM seed_version_records "
+            "WHERE seed_domain IN :seed_domains "
+            "ORDER BY seed_domain, applied_at DESC, id DESC"
+        ).bindparams(bindparam("seed_domains", expanding=True))
         seed_result = await session.execute(
-            text("SELECT seed_version FROM seed_version_records LIMIT 1")
+            seed_query,
+            {"seed_domains": _READINESS_SEED_DOMAINS},
         )
-        current_seed = seed_result.scalar()
-        components["seed_version"] = current_seed
-        if current_seed != SEED_VERSION:
+        current_by_domain = {
+            row.seed_domain: row.seed_version for row in seed_result.all()
+        }
+        core_seed_current = (
+            len(current_by_domain) == len(_READINESS_SEED_DOMAINS)
+            and all(
+                current_by_domain.get(domain) == SEED_VERSION
+                for domain in _READINESS_SEED_DOMAINS
+            )
+        )
+        components["seed_version"] = SEED_VERSION if core_seed_current else None
+        if not core_seed_current:
             # SEED_VERSION is a constant from this repository, not from the
             # failure, so naming it tells an operator what to deploy.
             components["seed_version_status"] = f"mismatch: expected {SEED_VERSION}"
