@@ -11,7 +11,7 @@
  * inline.
  */
 import React from 'react';
-import { Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { S, t } from '../../strings/verdict';
@@ -20,6 +20,7 @@ import type {
   VerdictFactor,
 } from '../../services/verdictModel';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
+import { openExternalUrl } from '../../services/externalLinks';
 
 /** The three answers, as colour. Chosen for contrast against the letter, not decoration. */
 export const BAND_COLOURS: Record<ColourBand, { fill: string; ink: string; name: string }> = {
@@ -199,7 +200,7 @@ export function ComponentRow({
           accessibilityRole="link"
           accessibilityLabel={`${S.why.sourceLead}: ${component.source}`}
           disabled={!component.sourceUrl}
-          onPress={() => { if (component.sourceUrl) void Linking.openURL(component.sourceUrl); }}
+          onPress={() => { if (component.sourceUrl) void openExternalUrl(component.sourceUrl); }}
         >
           <Text style={styles.bodySource}>{component.source}</Text>
         </TouchableOpacity>
@@ -259,7 +260,7 @@ export function FactorSection({
             <Text style={styles.ingredientDescription}>{S.factors[row.explanation as keyof typeof S.factors] ?? row.explanation}</Text>
             {row.sources.map((source) => (
               <TouchableOpacity key={source.name} accessibilityRole="link" disabled={!source.url}
-                onPress={() => { if (source.url) void Linking.openURL(source.url); }}>
+                onPress={() => { if (source.url) void openExternalUrl(source.url); }}>
                 <Text style={styles.bodySource}>{source.name}</Text>
               </TouchableOpacity>
             ))}
@@ -325,7 +326,7 @@ export function IngredientList({
                   <TouchableOpacity
                     accessibilityRole="link"
                     accessibilityLabel={t(S.a11y.openSource, { name: shown })}
-                    onPress={() => { if (source.url) void Linking.openURL(source.url); }}
+                    onPress={() => { if (source.url) void openExternalUrl(source.url); }}
                     hitSlop={8}
                   >
                     <Text style={styles.actionLink}>{S.why.sourceLink}</Text>
@@ -396,7 +397,7 @@ export function IngredientDetail({ ingredient }: { ingredient: VerdictIngredient
         <TouchableOpacity
           accessibilityRole="link"
           accessibilityLabel={t(S.a11y.openSource, { name: shown })}
-          onPress={() => void Linking.openURL(source.url as string)}
+          onPress={() => void openExternalUrl(source.url as string)}
         >
           <Text style={styles.bodySource}>{S.ingredients.openSource}</Text>
         </TouchableOpacity>

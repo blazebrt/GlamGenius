@@ -159,3 +159,8 @@ envVarGroups:
         value: supabase
       - key: MEDIA_ALLOW_LOCAL_IN_PRODUCTION
         value: "false"
+      # Render production web services use its documented Cloudflare-overwritten
+      # CF-Connecting-IP signal. TRUSTED_PROXY_HOPS remains an explicit fallback
+      # for non-Render deployments and is deliberately not a topology guess.
+      - key: TRUSTED_PROXY_HOPS
+        value: "0"

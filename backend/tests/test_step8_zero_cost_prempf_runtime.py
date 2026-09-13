@@ -199,6 +199,10 @@ class TestTheRenderBlueprint:
             "REQUIRE_ANALYSIS_CONSENT": "true",
             "MEDIA_STORAGE_BACKEND": "supabase",
             "MEDIA_ALLOW_LOCAL_IN_PRODUCTION": "false",
+            # The Render-specific network boundary uses the provider-controlled
+            # CF-Connecting-IP signal. This fallback remains disabled unless a
+            # non-Render deployment explicitly configures trusted proxies.
+            "TRUSTED_PROXY_HOPS": "0",
         }
 
     def test_no_secret_value_is_declared_in_the_blueprint(self) -> None:

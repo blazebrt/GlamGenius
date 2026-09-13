@@ -48,6 +48,7 @@ from app.shared.errors.codes import AIFailureType
 from app.shared.errors.exceptions import (
     DEFAULT_PHOTO_GUIDANCE,
     PROVIDER_DOWN_GUIDANCE,
+    AIRateLimitedError,
     AnalysisUnavailableError,
 )
 from app.shared.observability.request_id import get_request_id
@@ -196,6 +197,94 @@ async def _record_run(**fields: Any) -> uuid.UUID | None:
         return None
 
 
+async def _assert_within_hourly_cap(account_id_str: str | None) -> None:
+    """Refuse the call if this account has used its hourly AI budget.
+
+    Every route that reaches a provider costs real money per call. Only
+    ``scan.analyse`` carried a cap; the twelve other paths into
+    :func:`run_structured` — inventory extraction, batch shelf capture, label
+    transcription, purchase and fragrance extraction, the baseline, and the
+    written explanations — had none, so one signed-in account could spend the
+    whole budget in a loop. ``beta_access`` already declared
+    ``FEATURE_AI_REQUEST`` with an hourly limit for exactly this and nothing
+    ever called it.
+
+    Checking here rather than in each route is deliberate: the gateway is the
+    single controlled path to the provider, so a route added later is covered
+    without anyone remembering to add a gate.
+
+    Signed-out previews pass through. They are capped by the anonymous device
+    limits at the routes that allow them, and there is no account to meter.
+
+    Fails **closed**: if the cap cannot be read, the call does not happen. That
+    is the opposite of :func:`_record_run`, which swallows its errors — a
+    ledger that breaks the feature it measures is worse than no ledger, but a
+    cost control that fails open is not a cost control. It costs nothing in
+    practice, because every authenticated route already needs the database to
+    resolve the caller at all.
+    """
+    if not account_id_str:
+        return
+
+    from app.domains.beta_access import service as beta
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        account = await identity.get_account(session, account_id_str)
+        if account is None:
+            # No account row, so no per-account budget to charge. The route's
+            # own authorisation decides whether this caller may be here.
+            return
+        try:
+            await beta.check_limit(
+                session, account_id=account.id, feature=beta.FEATURE_AI_REQUEST
+            )
+        except beta.UsageExceeded as exc:
+            raise AIRateLimitedError(
+                "You have made a lot of checks in the past hour. "
+                "Please try again shortly.",
+                extra={
+                    "feature": exc.feature,
+                    "limit": exc.limit,
+                    "period": exc.period,
+                    "allowance_consumed": False,
+                },
+            ) from exc
+
+
+async def _record_hourly_usage(account_id_str: str | None, run_id: uuid.UUID | None) -> None:
+    """Count one successful, cost-bearing call against the hourly budget.
+
+    After success only: a failed run must not consume an allowance, which is
+    the same rule ``record_usage`` documents and the scan route follows. Keyed
+    by the run id so a repeat cannot double-count.
+
+    Never raises. At this point the provider has already been paid and the
+    caller is holding a good result; losing a counter is not worth turning that
+    into an error.
+    """
+    if not account_id_str or run_id is None:
+        return
+
+    from app.domains.beta_access import service as beta
+
+    try:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            account = await identity.get_account(session, account_id_str)
+            if account is None:
+                return
+            await beta.record_usage(
+                session,
+                account_id=account.id,
+                feature=beta.FEATURE_AI_REQUEST,
+                idempotency_key=str(run_id),
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 - see docstring
+        logger.exception("ai_hourly_usage_recording_failed run_id=%s", run_id)
+
+
 def _fail(
     failure_type: AIFailureType, run_id: uuid.UUID | None
 ) -> AnalysisUnavailableError:
@@ -226,6 +315,9 @@ async def run_structured(
         AnalysisUnavailableError: for every failure mode. The error carries the
             failure type, user-facing guidance, and ``allowance_consumed: False``.
     """
+    # Before anything is spent: the hourly ceiling for this account.
+    await _assert_within_hourly_cap(account_id_str)
+
     started = time.perf_counter()
 
     base_record: dict[str, Any] = {
@@ -333,6 +425,8 @@ async def run_structured(
             "output_confidence": confidence,
         }
     )
+
+    await _record_hourly_usage(account_id_str, run_id)
 
     logger.info(
         "ai_run_succeeded feature=%s model=%s latency_ms=%s cost_usd=%s",

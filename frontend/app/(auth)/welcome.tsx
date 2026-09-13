@@ -55,7 +55,9 @@ export default function AuthWelcome() {
       setResetSent(true);
     } catch (err) {
        
-      console.error('reset error', err);
+      // The message, not the error object: a Supabase auth error can carry
+      // the request that produced it, and that request has credentials in it.
+      console.error('reset error', err instanceof Error ? err.message : 'unknown');
       notify('Reset error', 'Something went wrong. Please try again.');
     }
   };
@@ -104,7 +106,7 @@ export default function AuthWelcome() {
       }
     } catch (err) {
        
-      console.error('auth failed', err);
+      console.error('auth failed', err instanceof Error ? err.message : 'unknown');
       notify('Auth error', 'Something went wrong. Please try again.');
     }
   };

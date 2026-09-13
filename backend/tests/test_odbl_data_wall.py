@@ -21,7 +21,7 @@ from app.domains.off.attribution import ATTRIBUTION_TEXT, attribution
 from app.domains.off.client import request_headers, user_agent
 from app.domains.off.export import DATA_FILE, LICENSE_FILE, MANIFEST_FILE, export
 from app.domains.off.join import join_on_barcode
-from app.domains.off.models import OffBase, OffProduct
+from app.domains.off.models import OFF_SCHEMA, OffBase, OffProduct
 from app.domains.off.store import create_off_schema, get_off_engine, get_off_sessionmaker
 from app.domains.off.wall import (
     OFF_FIELDS,
@@ -32,7 +32,7 @@ from app.domains.off.wall import (
     guard_off_session,
 )
 from app.shared.database.registry import Base
-from sqlalchemy import Column, String, Table
+from sqlalchemy import Column, String, Table, insert, text
 from sqlalchemy import select as sa_select
 
 
@@ -129,6 +129,94 @@ async def test_an_ordinary_open_food_facts_record_still_writes(off_clean):
         ))
         await session.flush()
         await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Writes that never touch the ORM
+# ---------------------------------------------------------------------------
+#
+# ``before_flush`` sees only what the ORM is tracking. A Core statement or a
+# ``text()`` string goes straight past it — and bulk ingestion of a few million
+# Open Food Facts products is exactly the job somebody reaches for Core or COPY
+# to do. Before ``do_orm_execute`` was hooked, this sequence was unnoticed:
+#
+#     ALTER TABLE off_data.off_products ADD COLUMN asli_score varchar(4);
+#     INSERT INTO off_data.off_products (barcode, asli_score) VALUES (...);
+#
+# Two statements, and Store A is a derived database — which is the point at
+# which ODbL's share-alike clause obliges us to publish the absorption
+# knowledge base, the thresholds and the decision memory.
+
+
+@pytest.mark.asyncio
+async def test_raw_sql_cannot_smuggle_a_proprietary_column_into_store_a(off_clean):
+    factory = get_off_sessionmaker()
+    async with factory() as session:
+        guard_off_session(session.sync_session)
+        with pytest.raises(ProprietaryFieldError) as caught:
+            await session.execute(text(
+                f'ALTER TABLE {OFF_SCHEMA}.off_products ADD COLUMN IF NOT EXISTS asli_score varchar(4)'
+            ))
+    assert "asli" in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_raw_sql_cannot_write_a_proprietary_value_into_store_a(off_clean):
+    factory = get_off_sessionmaker()
+    async with factory() as session:
+        guard_off_session(session.sync_session)
+        with pytest.raises(ProprietaryFieldError):
+            await session.execute(text(
+                f"INSERT INTO {OFF_SCHEMA}.off_products (barcode, product_name, asli_score, fetched_at) "
+                "VALUES ('8901234500001', 'Smuggled', 'D', now())"
+            ))
+
+
+@pytest.mark.asyncio
+async def test_a_core_insert_naming_a_proprietary_column_is_refused(off_clean):
+    """The shape bulk ingestion would take."""
+    factory = get_off_sessionmaker()
+    async with factory() as session:
+        guard_off_session(session.sync_session)
+        with pytest.raises(ProprietaryFieldError):
+            await session.execute(text(
+                f"UPDATE {OFF_SCHEMA}.off_products SET evidence_tier = 'strong' WHERE barcode = '1'"
+            ))
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_core_insert_of_open_food_facts_data_still_works(off_clean):
+    """The wall must not block the ingestion it exists to make safe."""
+    factory = get_off_sessionmaker()
+    async with factory() as session:
+        guard_off_session(session.sync_session)
+        await session.execute(
+            insert(OffProduct.__table__).values(
+                barcode="8901234500002",
+                product_name="Ordinary biscuit",
+                brands="Test",
+                fetched_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+
+    async with factory() as session:
+        stored = (await session.execute(
+            sa_select(OffProduct).where(OffProduct.barcode == "8901234500002")
+        )).scalar_one()
+    assert stored.product_name == "Ordinary biscuit"
+
+
+@pytest.mark.asyncio
+async def test_a_read_of_store_a_is_never_blocked(off_clean):
+    """Only writes are inspected. A SELECT mentioning anything is still a read."""
+    factory = get_off_sessionmaker()
+    async with factory() as session:
+        guard_off_session(session.sync_session)
+        result = await session.execute(text(
+            f"SELECT barcode FROM {OFF_SCHEMA}.off_products WHERE product_name = 'no score here'"
+        ))
+        assert result.fetchall() == []
 
 
 # ---------------------------------------------------------------------------

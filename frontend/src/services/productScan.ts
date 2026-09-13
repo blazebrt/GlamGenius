@@ -15,6 +15,8 @@
  *    result.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { secureSessionStorage } from './secureSessionStorage';
 import axios from 'axios';
 
 import { getInstallationId } from './deviceIdentity';
@@ -176,6 +178,51 @@ interface StoredDevice {
 
 let devicePromise: Promise<StoredDevice | null> | null = null;
 
+/**
+ * Read the stored device, moving it into the keychain if it is still in the
+ * old place.
+ *
+ * ``token`` here is a credential: it is what ``X-Device-Token`` presents, and
+ * it is what ties this phone's scans to this phone. It used to sit in
+ * AsyncStorage, which is an unencrypted file whose only protection is the app
+ * sandbox — the same reason the signed-in session moved to the keychain.
+ *
+ * The migration is the important half. The server refuses to re-register a
+ * known ``device_key`` without its current token, so an install that simply
+ * lost this blob could not recover its identity: it would mint a new key and
+ * orphan every scan it had already made. So the old location is read once, its
+ * contents moved, and only then cleared.
+ */
+async function readStoredDevice(): Promise<StoredDevice | null> {
+  const secure = await secureSessionStorage.getItem(DEVICE_KEY);
+  if (secure) {
+    try {
+      return JSON.parse(secure) as StoredDevice;
+    } catch {
+      return null;
+    }
+  }
+  const legacy = await readJson<StoredDevice | null>(DEVICE_KEY, null);
+  if (legacy?.token) {
+    await writeStoredDevice(legacy);
+    try {
+      await AsyncStorage.removeItem(DEVICE_KEY);
+    } catch {
+      // Keeping a copy in the old place is worse than leaving it, but losing
+      // the identity is worse still. The keychain copy is written first.
+    }
+  }
+  return legacy;
+}
+
+async function writeStoredDevice(device: StoredDevice): Promise<void> {
+  try {
+    await secureSessionStorage.setItem(DEVICE_KEY, JSON.stringify(device));
+  } catch {
+    // An unavailable keychain must not break a scan.
+  }
+}
+
 async function registerDevice(): Promise<StoredDevice | null> {
   const deviceKey = (await getInstallationId()).replace(/-/g, '');
   try {
@@ -184,7 +231,7 @@ async function registerDevice(): Promise<StoredDevice | null> {
       platform: 'mobile',
     });
     const stored: StoredDevice = { device_key: deviceKey, token: response.data.token };
-    await writeJson(DEVICE_KEY, stored);
+    await writeStoredDevice(stored);
     return stored;
   } catch {
     // Offline on first launch. The cache and queue still work.
@@ -194,7 +241,7 @@ async function registerDevice(): Promise<StoredDevice | null> {
 
 /** Register once, then reuse. Called on launch, before anything is scanned. */
 export async function ensureDevice(): Promise<StoredDevice | null> {
-  const existing = await readJson<StoredDevice | null>(DEVICE_KEY, null);
+  const existing = await readStoredDevice();
   if (existing?.token) return existing;
   if (!devicePromise) devicePromise = registerDevice().finally(() => { devicePromise = null; });
   return devicePromise;
@@ -212,20 +259,23 @@ async function deviceHeaders(): Promise<Record<string, string>> {
  * again on the same phone does not repeat the call on every launch.
  */
 export async function tokenToClaimFor(accountId: string): Promise<string | null> {
-  const device = await readJson<StoredDevice | null>(DEVICE_KEY, null);
+  const device = await readStoredDevice();
   if (!device?.token || device.claimed_for === accountId) return null;
   return device.token;
 }
 
 /** Remember that this phone now belongs to that account. */
 export async function markDeviceClaimed(accountId: string): Promise<void> {
-  const device = await readJson<StoredDevice | null>(DEVICE_KEY, null);
+  const device = await readStoredDevice();
   if (!device) return;
-  await writeJson(DEVICE_KEY, { ...device, claimed_for: accountId });
+  await writeStoredDevice({ ...device, claimed_for: accountId });
 }
 
 /** Forget the device — used when the server no longer recognises the token. */
 async function forgetDevice(): Promise<void> {
+  // Both places: an install part-way through the migration has it in one or
+  // the other, and a token left behind is a credential left behind.
+  await secureSessionStorage.removeItem(DEVICE_KEY);
   await AsyncStorage.removeItem(DEVICE_KEY).catch(() => {});
 }
 

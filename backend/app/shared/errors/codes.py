@@ -9,6 +9,7 @@ from enum import StrEnum
 class ErrorCode(StrEnum):
     # --- AI ---
     ANALYSIS_UNAVAILABLE = "ANALYSIS_UNAVAILABLE"
+    AI_RATE_LIMITED = "AI_RATE_LIMITED"
 
     # --- Access and identity ---
     NOT_FOUND = "NOT_FOUND"

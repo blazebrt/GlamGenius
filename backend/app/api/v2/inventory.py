@@ -160,7 +160,9 @@ async def get_inventory_item(item_id: uuid.UUID, current: CurrentAccount = Depen
 
 @router.patch("/inventory/items/{item_id}")
 async def patch_inventory_item(item_id: uuid.UUID, body: ItemPatch, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    item = await service.owned_item(session, current.account_id, item_id)
+    # Locked: this is a read-modify-write, and ``expected_version`` is only a
+    # real check if nothing can change the row between the read and the write.
+    item = await service.owned_item(session, current.account_id, item_id, for_update=True)
     try:
         await service.update_item(session, item, body)
     except ValueError as exc:
@@ -171,26 +173,26 @@ async def patch_inventory_item(item_id: uuid.UUID, body: ItemPatch, current: Cur
 
 @router.delete("/inventory/items/{item_id}")
 async def delete_inventory_item(item_id: uuid.UUID, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    item = await service.owned_item(session, current.account_id, item_id)
+    item = await service.owned_item(session, current.account_id, item_id, for_update=True)
     await service.archive_item(session, item); await session.commit()
     return {"id": str(item.id), "status": "archived", "message": "Item removed from your active inventory. Its history is retained."}
 
 
 @router.post("/inventory/items/{item_id}/confirm")
 async def confirm_inventory_item(item_id: uuid.UUID, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    item = await service.owned_item(session, current.account_id, item_id); await service.confirm_item(session, item); await session.commit()
+    item = await service.owned_item(session, current.account_id, item_id, for_update=True); await service.confirm_item(session, item); await session.commit()
     return await service.serialize_item(session, item, include_history=True)
 
 
 @router.post("/inventory/items/{item_id}/usage")
 async def log_item_usage(item_id: uuid.UUID, body: UsageCreate, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    item = await service.owned_item(session, current.account_id, item_id); await service.log_usage(session, item, body.used_on, body.quantity, body.note); await session.commit()
+    item = await service.owned_item(session, current.account_id, item_id, for_update=True); await service.log_usage(session, item, body.used_on, body.quantity, body.note); await session.commit()
     return await service.serialize_item(session, item, include_history=True)
 
 
 @router.post("/inventory/items/{item_id}/condition")
 async def log_item_condition(item_id: uuid.UUID, body: ConditionCreate, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    item = await service.owned_item(session, current.account_id, item_id); await service.log_condition(session, item, body.condition, body.note); await session.commit()
+    item = await service.owned_item(session, current.account_id, item_id, for_update=True); await service.log_condition(session, item, body.condition, body.note); await session.commit()
     return await service.serialize_item(session, item, include_history=True)
 
 

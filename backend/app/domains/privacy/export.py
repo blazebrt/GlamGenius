@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from typing import Any
 
@@ -588,11 +588,60 @@ async def _ai_and_ops(session: AsyncSession, account_id: uuid.UUID) -> dict[str,
         select(BetaUsageEvent).where(BetaUsageEvent.account_id == account_id),
     )
     return {
+        # What an AI provider returned about this account, as recorded. Some of
+        # it is wording the app refused to show — the language boundary runs on
+        # the way out to a screen, and the ledger keeps what came back so the
+        # record of a run is a true one. Both facts belong in an export: the
+        # text is this person's data and withholding it would make the export
+        # incomplete, and a sentence the product declined to say must not
+        # arrive here looking like a sentence the product said.
+        "ai_output_note": AI_OUTPUT_NOTE,
         "ai_runs": [_row_dict(r, [c.name for c in AIRun.__table__.columns]) for r in runs],
-        "ai_run_outputs": [_row_dict(r, [c.name for c in AIRunOutput.__table__.columns]) for r in outputs],
+        "ai_run_outputs": [_ai_output_dict(r) for r in outputs],
         "audit_events": [_row_dict(r, [c.name for c in AuditEvent.__table__.columns]) for r in audit],
         "beta_usage_events": [_row_dict(r, [c.name for c in BetaUsageEvent.__table__.columns]) for r in beta],
     }
+
+
+#: Shown with the AI outputs in an export. States what the rows are rather than
+#: characterising them, and says plainly that the app is not their author.
+#:
+#: Worded around the banned-term sweep, the same way ``ROUTINE_DISCLAIMER`` is:
+#: the obvious phrasing names what it rules out, and naming it is what the sweep
+#: catches. Weakening the sweep so a disclaimer can pass would weaken it for
+#: everything else, so the wording moves instead. The promise is unchanged.
+AI_OUTPUT_NOTE = (
+    "These are the replies an AI provider returned about your account, kept as they "
+    "arrived. GlamGenius checks wording before showing it, so some of this was never "
+    "shown to you. Each row records whether it passes that check today. None of it is "
+    "medical advice, and none of it is what the app decided."
+)
+
+#: The key added to each exported AI output row.
+AI_OUTPUT_BOUNDARY_KEY = "passes_language_boundary"
+
+
+def _payload_strings(value: Any) -> Iterator[str]:
+    """Every string anywhere in a recorded payload."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _payload_strings(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _payload_strings(item)
+
+
+def _ai_output_dict(row: AIRunOutput) -> dict[str, Any]:
+    """One recorded AI output, labelled with whether the app would show it."""
+    from app.domains.routines.safety import narrative_is_safe
+
+    data = _row_dict(row, [c.name for c in AIRunOutput.__table__.columns])
+    data[AI_OUTPUT_BOUNDARY_KEY] = all(
+        narrative_is_safe(text) for text in _payload_strings(row.payload)
+    )
+    return data
 
 
 DomainHandler = Callable[[AsyncSession, uuid.UUID], Any]
@@ -621,8 +670,28 @@ async def build_export(session: AsyncSession, account_id: uuid.UUID) -> dict[str
     for name, handler in DOMAIN_HANDLERS.items():
         try:
             domains[name] = await handler(session, account_id)
-        except Exception:  # noqa: BLE001 — one domain must not sink the export
-            logger.exception("privacy_export_domain_failed domain=%s", name)
+        except Exception as exc:  # noqa: BLE001 — one domain must not sink the export
+            # The domain and the exception type, never the exception text.
+            # A database error's message carries the driver's rendering of the
+            # failing value, and every value in this file is one person's own
+            # data. ``hide_parameters=True`` on the engine removes SQLAlchemy's
+            # parameter list; the driver's own wording is why this is not
+            # ``logger.exception``.
+            logger.error(
+                "privacy_export_domain_failed domain=%s type=%s",
+                name,
+                type(exc).__name__,
+            )
+            # Every handler shares this session. A failed statement leaves its
+            # transaction unusable, and PostgreSQL then refuses everything that
+            # follows — so without this the first domain to fail took all the
+            # domains after it down with it, each carrying the same marker and
+            # none of them actually tried. Nothing here writes, so there is
+            # nothing to lose by rolling back.
+            try:
+                await session.rollback()
+            except Exception:  # noqa: BLE001 — a session we cannot reset is already lost
+                logger.error("privacy_export_rollback_failed domain=%s", name)
             # Emit an explicit failure marker so the user can see something
             # went wrong for that domain rather than silently missing it.
             domains[name] = {"error": "domain_export_failed"}

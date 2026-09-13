@@ -19,9 +19,7 @@ after step 1 has already accepted the invite.
 from __future__ import annotations
 
 import logging
-import time
 import uuid
-from collections import defaultdict, deque
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -36,6 +34,7 @@ from app.domains.beta_access.models import Invite, InviteRedemption
 from app.domains.identity import service as identity
 from app.shared.database.sql import get_session
 from app.shared.security.deps import CurrentAccount, get_current_account
+from app.shared.security.rate_limit import FixedWindowLimiter
 from app.shared.security.supabase_auth import (
     SupabaseUser,
     client_ip,
@@ -53,21 +52,33 @@ router = APIRouter()
 # A real deployment should sit behind a proper edge rate limiter, but we
 # guarantee a floor here so a leaked endpoint cannot be enumerated at
 # millions of RPS from one host.
+#
+# The table is bounded, and that is a security property rather than tidiness:
+# an unauthenticated caller could otherwise walk the process out of memory with
+# distinct keys alone. The implementation, and the reasoning behind the sweep
+# throttle and the fail-closed ceiling, live in
+# ``app/shared/security/rate_limit.py`` — device registration needs the same
+# thing with different numbers, and one copy of this is enough.
 # ---------------------------------------------------------------------------
 _RATE_LIMIT_WINDOW_SECONDS = 60.0
 _RATE_LIMIT_MAX_PER_WINDOW = 10  # per IP + per email
-_rate_state: dict[str, deque[float]] = defaultdict(deque)
+_RATE_LIMIT_MAX_KEYS = 20_000
+_RATE_LIMIT_SWEEP_INTERVAL_SECONDS = 5.0
+
+_limiter = FixedWindowLimiter(
+    window_seconds=_RATE_LIMIT_WINDOW_SECONDS,
+    max_per_window=_RATE_LIMIT_MAX_PER_WINDOW,
+    max_keys=_RATE_LIMIT_MAX_KEYS,
+    sweep_interval_seconds=_RATE_LIMIT_SWEEP_INTERVAL_SECONDS,
+)
+
+#: The same dict the limiter uses, not a copy — tests and the autouse reset
+#: fixture in conftest clear it through this name.
+_rate_state = _limiter.state
 
 
 def _hit_rate_limit(key: str) -> bool:
-    now = time.monotonic()
-    bucket = _rate_state[key]
-    while bucket and now - bucket[0] > _RATE_LIMIT_WINDOW_SECONDS:
-        bucket.popleft()
-    if len(bucket) >= _RATE_LIMIT_MAX_PER_WINDOW:
-        return True
-    bucket.append(now)
-    return False
+    return _limiter.hit(key)
 
 
 def _reservation_error(exc: beta.InviteReservationError) -> HTTPException:

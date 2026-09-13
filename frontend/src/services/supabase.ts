@@ -5,13 +5,15 @@
  * against Supabase Auth and nothing else. Every product data call goes through
  * FastAPI, which validates the JWT independently.
  *
- * Session persistence uses AsyncStorage on native and localStorage on web
- * (Supabase's own defaults handle web; we plug AsyncStorage in for native).
+ * Session persistence uses the device keychain on native (iOS Keychain,
+ * Android Keystore) and localStorage on web, where Supabase's own defaults
+ * apply.
  */
 import { Platform } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import 'react-native-url-polyfill/auto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+
+import { secureSessionStorage } from './secureSessionStorage';
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -29,12 +31,15 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
  * Storage adapter that Supabase can use for session persistence. On web we
  * let Supabase use its own localStorage default (autoStorage is enabled),
  * so this only wires up native.
+ *
+ * Native uses the keychain rather than AsyncStorage. What is being stored is a
+ * refresh token — a long-lived key to the account, not a password somebody can
+ * change — and AsyncStorage is an unencrypted file whose only protection is
+ * the app sandbox. See ``secureSessionStorage`` for why that adapter is more
+ * than a passthrough: the keychain caps a value at 2048 bytes and a Supabase
+ * session is usually larger.
  */
-const nativeStorage = {
-  getItem: (key: string) => AsyncStorage.getItem(key),
-  setItem: (key: string, value: string) => AsyncStorage.setItem(key, value),
-  removeItem: (key: string) => AsyncStorage.removeItem(key),
-};
+const nativeStorage = secureSessionStorage;
 
 export const supabase: SupabaseClient = createClient(
   SUPABASE_URL || 'https://placeholder.supabase.co',

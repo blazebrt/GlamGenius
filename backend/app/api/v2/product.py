@@ -9,7 +9,18 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Path,
+    Request,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,11 +43,20 @@ from app.domains.value import service as value_service
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account
+from app.shared.security.network import client_ip
+from app.shared.security.rate_limit import FixedWindowLimiter
 
 router = APIRouter()
 
 #: A photo of a pack, not a photo album. Bigger than this is a mistake.
 MAX_REPORT_PHOTO_BYTES = 6 * 1024 * 1024
+
+
+# The body schemas have always bounded a barcode at 6-64 characters. The
+# address did not, so the same value arriving in the path went unchecked into a
+# database lookup and an outbound Open Food Facts request. Same product, same
+# rule, wherever it arrives.
+BARCODE_PATH = Path(..., min_length=6, max_length=64)
 
 
 class DeviceRegisterBody(BaseModel):
@@ -89,13 +109,48 @@ async def current_device(
     return device
 
 
+# Device registration is the one write in this file that takes no credential of
+# any kind — it is where a phone gets its first one. Each unknown device_key
+# inserts a row, and device_key is chosen by the caller, so without a bound
+# anyone can insert rows until the database is full. On the free tier that is a
+# cheap outage.
+#
+# The limit is per address and deliberately loose. Mobile India is largely
+# behind carrier-grade NAT: thousands of real people share one public address,
+# and a tight limit would lock out a whole carrier to inconvenience one
+# attacker. Twenty first launches a minute from a single address is far more
+# than a carrier produces and far less than a flood, and it turns "unbounded"
+# into a number.
+_DEVICE_REGISTRATION_WINDOW_SECONDS = 60.0
+_DEVICE_REGISTRATIONS_PER_WINDOW = 20
+
+_device_registration_limiter = FixedWindowLimiter(
+    window_seconds=_DEVICE_REGISTRATION_WINDOW_SECONDS,
+    max_per_window=_DEVICE_REGISTRATIONS_PER_WINDOW,
+)
+
+
 @router.post("/scan/device", status_code=status.HTTP_201_CREATED)
 async def register_device(
     body: DeviceRegisterBody,
+    request: Request,
     x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
     session: AsyncSession = Depends(get_session),
 ):
     """Register the phone. Called once on first launch, before anything else."""
+    # Re-registration of a known device_key proves possession of the current
+    # token further down, so only the row-creating path needs bounding — but
+    # the check is here, before the lookup, because distinguishing the two
+    # would tell an unauthenticated caller which device keys exist.
+    if _device_registration_limiter.hit(f"device-register:{client_ip(request) or 'unknown'}"):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "code": "rate_limited",
+                "message": "Too many registration attempts. Please wait a moment and try again.",
+                "retryable": True,
+            },
+        )
     device, token = await devices.register(
         session, device_key=body.device_key, platform=body.platform, proof_token=x_device_token,
     )
@@ -125,7 +180,7 @@ async def claim_device(
 
 @router.get("/scan/lookup/{barcode}")
 async def lookup_barcode(
-    barcode: str,
+    barcode: str = BARCODE_PATH,
     device: ScanDevice = Depends(current_device),
     session: AsyncSession = Depends(get_session),
 ):
@@ -264,7 +319,7 @@ async def transcribe_label(
 
 @router.get("/scan/verdict/{barcode}")
 async def read_product_verdict(
-    barcode: str,
+    barcode: str = BARCODE_PATH,
     physical_pack_context: bool = True,
     device: ScanDevice = Depends(current_device),
     session: AsyncSession = Depends(get_session),

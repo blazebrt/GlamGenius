@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from calendar import monthrange
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -66,10 +67,30 @@ async def ensure_categories(session: AsyncSession) -> None:
     await session.flush()
 
 
-async def owned_item(session: AsyncSession, account_id: uuid.UUID, item_id: uuid.UUID, *, include_archived: bool = False) -> InventoryItem:
+async def owned_item(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    item_id: uuid.UUID,
+    *,
+    include_archived: bool = False,
+    for_update: bool = False,
+) -> InventoryItem:
+    """One account's item.
+
+    ``for_update`` takes a row lock, and every caller that is about to write
+    should pass it. ``update_item`` refuses a stale ``expected_version``, but a
+    version compared in Python against a row read without a lock proves
+    nothing: under READ COMMITTED two requests both read version 1, both find
+    the version they expected, both write version 2, and both commit. One
+    person's edit is silently gone and the counter says one edit happened. The
+    lock makes the read-modify-write a single serialised step, which is what
+    the refusal message already promises the caller.
+    """
     stmt = select(InventoryItem).where(InventoryItem.id == item_id, InventoryItem.account_id == account_id)
     if not include_archived:
         stmt = stmt.where(InventoryItem.status != "archived")
+    if for_update:
+        stmt = stmt.with_for_update()
     item = (await session.execute(stmt)).scalar_one_or_none()
     if item is None:
         raise NotFoundError("We could not find that inventory item.")
@@ -296,11 +317,14 @@ async def details_for(session: AsyncSession, item: InventoryItem) -> dict[str, A
     return _plain_details(await _detail_row(session, item))
 
 
-async def serialize_item(session: AsyncSession, item: InventoryItem, *, include_history: bool = False) -> dict[str, Any]:
-    details = await details_for(session, item)
-    attributes = (await session.execute(select(InventoryAttribute).where(InventoryAttribute.item_id == item.id).order_by(InventoryAttribute.key))).scalars().all()
-    images = (await session.execute(select(InventoryItemImage).where(InventoryItemImage.item_id == item.id).order_by(InventoryItemImage.position))).scalars().all()
-    body: dict[str, Any] = {
+def _item_body(item: InventoryItem, details: dict[str, Any], attributes: Sequence[Any], images: Sequence[Any]) -> dict[str, Any]:
+    """Shape one item for the API.
+
+    The single place an item becomes a response body. :func:`serialize_item`
+    and :func:`serialize_items` differ only in how they fetch what they pass
+    in here, so the one-item and many-item paths cannot drift apart.
+    """
+    return {
         "id": str(item.id), "category": item.category, "subcategory": item.subcategory, "display_name": item.display_name,
         "brand": item.brand, "source": item.source, "verification_state": item.verification_state, "confidence": item.confidence,
         "status": item.status, "purchase_date": item.purchase_date.isoformat() if item.purchase_date else None,
@@ -312,6 +336,81 @@ async def serialize_item(session: AsyncSession, item: InventoryItem, *, include_
         "attributes": [{"key": row.key, "value": row.value, "source": row.source, "confidence": row.confidence, "verification_state": row.verification_state, "model_version": row.model_version, "prompt_version": row.prompt_version, "schema_version": row.schema_version, "source_ai_run_id": str(row.source_ai_run_id) if row.source_ai_run_id else None} for row in attributes],
         "created_at": item.created_at.isoformat() if item.created_at else None, "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
+
+
+async def details_for_many(session: AsyncSession, items: Sequence[InventoryItem]) -> dict[uuid.UUID, dict[str, Any]]:
+    """Detail rows for many items: one query per category present, not per item.
+
+    The per-item :func:`details_for` is a query each, and the callers that
+    matter run over every item an account owns.
+    """
+    if not items:
+        return {}
+    ids_by_category: dict[str, list[uuid.UUID]] = defaultdict(list)
+    for item in items:
+        ids_by_category[item.category].append(item.id)
+
+    rows: dict[uuid.UUID, Any] = {}
+    for category, ids in ids_by_category.items():
+        model = DETAIL_MODELS[category]
+        found = (await session.execute(select(model).where(model.item_id.in_(ids)))).scalars().all()
+        for row in found:
+            rows[row.item_id] = row
+    return {item.id: _plain_details(rows.get(item.id)) for item in items}
+
+
+async def serialize_items(session: AsyncSession, items: Sequence[InventoryItem]) -> list[dict[str, Any]]:
+    """Serialise many items in a fixed number of queries.
+
+    :func:`serialize_item` costs three queries per item — the detail row, the
+    attributes and the images — so a screen of twenty-four items cost
+    seventy-four, and the whole-inventory reports (expiring, low-use, value to
+    recover, and the summary that calls all three) cost one query per item on
+    top of that. Measured on an account with two hundred items, the summary
+    alone was four hundred and four queries.
+
+    This is the same work as a loop over :func:`serialize_item`, batched: at
+    most one query per category present, plus one for attributes and one for
+    images, whatever the number of items. There is a test that compares the
+    output of the two paths item for item, because the only acceptable
+    difference between them is how long they take.
+
+    ``include_history`` has no batch form on purpose: only the single-item
+    routes ask for history, and each history is separately limited to a
+    hundred events.
+    """
+    if not items:
+        return []
+    ids = [item.id for item in items]
+    details = await details_for_many(session, items)
+
+    attributes: dict[uuid.UUID, list[Any]] = defaultdict(list)
+    for row in (await session.execute(
+        select(InventoryAttribute)
+        .where(InventoryAttribute.item_id.in_(ids))
+        .order_by(InventoryAttribute.item_id, InventoryAttribute.key)
+    )).scalars().all():
+        attributes[row.item_id].append(row)
+
+    images: dict[uuid.UUID, list[Any]] = defaultdict(list)
+    for row in (await session.execute(
+        select(InventoryItemImage)
+        .where(InventoryItemImage.item_id.in_(ids))
+        .order_by(InventoryItemImage.item_id, InventoryItemImage.position)
+    )).scalars().all():
+        images[row.item_id].append(row)
+
+    return [
+        _item_body(item, details[item.id], attributes[item.id], images[item.id])
+        for item in items
+    ]
+
+
+async def serialize_item(session: AsyncSession, item: InventoryItem, *, include_history: bool = False) -> dict[str, Any]:
+    details = await details_for(session, item)
+    attributes = (await session.execute(select(InventoryAttribute).where(InventoryAttribute.item_id == item.id).order_by(InventoryAttribute.key))).scalars().all()
+    images = (await session.execute(select(InventoryItemImage).where(InventoryItemImage.item_id == item.id).order_by(InventoryItemImage.position))).scalars().all()
+    body = _item_body(item, details, attributes, images)
     if include_history:
         events = (await session.execute(select(InventoryEvent).where(InventoryEvent.item_id == item.id).order_by(InventoryEvent.created_at.desc()).limit(100))).scalars().all()
         body["history"] = [{"event_type": event.event_type, "actor": event.actor, "payload": event.payload, "created_at": event.created_at.isoformat() if event.created_at else None} for event in events]
@@ -339,46 +438,74 @@ async def list_items(session: AsyncSession, account_id: uuid.UUID, *, page: int 
     ordered = stmt.order_by(LIST_SORTS.get(sort, LIST_SORTS["newest"]))
     if expiry_status:
         candidates = list((await session.execute(ordered)).scalars().all()); today = date.today(); rows = []
+        # Every candidate is inspected before the page is cut, so this ran one
+        # query per item the account owns just to render one page of it.
+        candidate_details = await details_for_many(session, candidates)
         for item in candidates:
-            expiry = effective_expiry_from_details(await details_for(session, item)); days = (expiry - today).days if expiry else None
+            expiry = effective_expiry_from_details(candidate_details[item.id]); days = (expiry - today).days if expiry else None
             matches = expiry_status == "missing" and expiry is None or expiry_status == "expired" and days is not None and days < 0 or expiry_status == "expiring_soon" and days is not None and 0 <= days <= 90 or expiry_status == "current" and days is not None and days > 90
             if matches: rows.append(item)
         total = len(rows); rows = rows[(page - 1) * page_size:page * page_size]
     else:
         total = int((await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one())
         rows = (await session.execute(ordered.offset((page - 1) * page_size).limit(page_size))).scalars().all()
-    return {"items": [await serialize_item(session, row) for row in rows], "pagination": {"page": page, "page_size": page_size, "total": total, "pages": (total + page_size - 1) // page_size}}
+    return {"items": await serialize_items(session, list(rows)), "pagination": {"page": page, "page_size": page_size, "total": total, "pages": (total + page_size - 1) // page_size}}
 
 
 async def expiring_items(session: AsyncSession, account_id: uuid.UUID, days: int = 90) -> list[dict[str, Any]]:
-    rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived"))).scalars().all(); today = date.today(); result = []
-    for item in rows:
-        details = await details_for(session, item); expiry = effective_expiry_from_details(details)
-        if expiry and (expiry - today).days <= days:
-            body = await serialize_item(session, item); body["days_to_expiry"] = (expiry - today).days; body["expiry_status"] = "expired" if expiry < today else "expiring_soon"; result.append(body)
+    rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived"))).scalars().all()
+    details_by_item = await details_for_many(session, rows); today = date.today()
+    dated = [(item, effective_expiry_from_details(details_by_item[item.id])) for item in rows]
+    due = [(item, expiry) for item, expiry in dated if expiry and (expiry - today).days <= days]
+    bodies = await serialize_items(session, [item for item, _ in due])
+    result = []
+    for body, expiry in zip(bodies, [expiry for _, expiry in due], strict=True):
+        body["days_to_expiry"] = (expiry - today).days
+        body["expiry_status"] = "expired" if expiry < today else "expiring_soon"
+        result.append(body)
     return sorted(result, key=lambda row: row["effective_expiry"])
 
 
 async def low_use_items(session: AsyncSession, account_id: uuid.UUID) -> list[dict[str, Any]]:
     rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived"))).scalars().all()
-    return [await serialize_item(session, item) for item in rows if is_low_use(item)]
+    return await serialize_items(session, [item for item in rows if is_low_use(item)])
 
 
 async def value_report(session: AsyncSession, account_id: uuid.UUID, *, record: bool = False) -> dict[str, Any]:
     rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived"))).scalars().all(); estimates = []
+    details_by_item = await details_for_many(session, rows)
     for item in rows:
-        estimate = value_to_recover(item, await details_for(session, item)); estimates.append(estimate)
+        estimate = value_to_recover(item, details_by_item[item.id]); estimates.append(estimate)
         if record: session.add(InventoryValueEvent(item_id=item.id, metric_version="v1", estimated_value=estimate["estimated_value"], currency=item.currency, inputs=estimate["inputs"], explanation=estimate["explanation"]))
     known = [Decimal(str(row["estimated_value"])) for row in estimates if row["estimated_value"] is not None]
     return {"label": "Value to Recover", "estimated_total": float(sum(known, Decimal("0"))), "currency": "INR", "is_estimate": True, "metric_version": "v1", "items": estimates, "explanation": "A transparent estimate using only entered price, remaining amount or usage, condition, inactivity and expiry. Missing prices are excluded; this is never exact."}
 
 
 async def duplicates(session: AsyncSession, account_id: uuid.UUID) -> list[dict[str, Any]]:
-    rows = (await session.execute(select(DuplicateCandidate).where(DuplicateCandidate.account_id == account_id, DuplicateCandidate.status == "pending").order_by(DuplicateCandidate.created_at.desc()))).scalars().all(); result = []
-    for row in rows:
-        a = await owned_item(session, account_id, row.item_a_id); b = await owned_item(session, account_id, row.item_b_id)
-        result.append({"id": str(row.id), "confidence": row.confidence, "reason": row.reason, "status": row.status, "item_a": await serialize_item(session, a), "item_b": await serialize_item(session, b)})
-    return result
+    rows = (await session.execute(select(DuplicateCandidate).where(DuplicateCandidate.account_id == account_id, DuplicateCandidate.status == "pending").order_by(DuplicateCandidate.created_at.desc()))).scalars().all()
+    if not rows:
+        return []
+    # Both sides of every pair in one go. ``owned_item`` per side was eight
+    # queries a pair; both filters it enforced are kept here in the ``where``,
+    # so a candidate naming somebody else's item, or an archived one, still
+    # resolves to nothing rather than being served.
+    wanted = {candidate.item_a_id for candidate in rows} | {candidate.item_b_id for candidate in rows}
+    items = (await session.execute(
+        select(InventoryItem).where(
+            InventoryItem.account_id == account_id,
+            InventoryItem.id.in_(wanted),
+            InventoryItem.status != "archived",
+        )
+    )).scalars().all()
+    bodies = {item.id: body for item, body in zip(items, await serialize_items(session, items), strict=True)}
+    missing = wanted - set(bodies)
+    if missing:
+        raise NotFoundError("We could not find one of the items in a duplicate pair.")
+    return [
+        {"id": str(row.id), "confidence": row.confidence, "reason": row.reason, "status": row.status,
+         "item_a": bodies[row.item_a_id], "item_b": bodies[row.item_b_id]}
+        for row in rows
+    ]
 
 
 async def resolve_duplicate(session: AsyncSession, account_id: uuid.UUID, candidate_id: uuid.UUID, resolution: str, canonical_item_id: uuid.UUID | None) -> DuplicateCandidate:

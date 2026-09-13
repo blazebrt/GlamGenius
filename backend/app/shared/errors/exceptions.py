@@ -96,6 +96,24 @@ PROVIDER_DOWN_GUIDANCE: list[str] = [
 ]
 
 
+class AIRateLimitedError(AppError):
+    """The account has made too many AI requests in the current hour.
+
+    A cost control, not a payment wall and not a judgement about the request:
+    every call to the provider costs real money, and without an hourly ceiling
+    one signed-in account can spend the entire budget in a loop. Separate from
+    :class:`AnalysisUnavailableError` because nothing is wrong with the service
+    — waiting fixes it — and the app should say so rather than show a failure.
+
+    ``allowance_consumed`` is False: the request never reached the provider, so
+    it must not count against the caller's monthly feature allowance either.
+    """
+
+    status_code = 429
+    code = ErrorCode.AI_RATE_LIMITED
+    retryable = True
+
+
 class ConsentRequiredError(AppError):
     status_code = 403
     code = ErrorCode.CONSENT_REQUIRED

@@ -21,6 +21,7 @@
 import { create } from 'zustand';
 import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { secureSessionStorage } from '../services/secureSessionStorage';
 import { supabase } from '../services/supabase';
 import {
   isRegistrationRequired,
@@ -135,20 +136,62 @@ const emptyProfile = (id: string, email?: string): UserProfile => ({
   preferences: {},
 });
 
+/**
+ * Read the reservation challenge, moving it into the keychain if it is still
+ * in the old place.
+ *
+ * The challenge is a bearer secret: presented with the matching email it
+ * finalises a registration and spends an invite. It lived in AsyncStorage,
+ * an unencrypted file whose only protection is the app sandbox — the same
+ * reason the signed-in session and the device token moved to the keychain.
+ *
+ * Its window is short, which is why this is defence in depth rather than an
+ * open door: the reservation expires in thirty minutes, and the challenge is
+ * cleared as soon as registration finishes or the server calls it expired. It
+ * is the install that starts sign-up and never confirms the email that leaves
+ * one sitting there.
+ *
+ * The migration matters for exactly that case. Someone who signed up, closed
+ * the app and is waiting on a confirmation email has their only copy of the
+ * challenge in the old location; dropping it would cost them the invite.
+ */
 async function readStoredChallenge(): Promise<string | null> {
+  const secure = await secureSessionStorage.getItem(CHALLENGE_STORAGE_KEY);
+  if (secure) return secure;
+
+  let legacy: string | null = null;
   try {
-    return await AsyncStorage.getItem(CHALLENGE_STORAGE_KEY);
+    legacy = await AsyncStorage.getItem(CHALLENGE_STORAGE_KEY);
   } catch {
     return null;
   }
+  if (legacy) {
+    await writeStoredChallenge(legacy);
+    try {
+      await AsyncStorage.removeItem(CHALLENGE_STORAGE_KEY);
+    } catch {
+      // Leaving the old copy behind is worse than not leaving it, but losing
+      // the reservation is worse still. The keychain copy is written first.
+    }
+  }
+  return legacy;
 }
 
 async function writeStoredChallenge(value: string | null): Promise<void> {
   try {
-    if (value) await AsyncStorage.setItem(CHALLENGE_STORAGE_KEY, value);
-    else await AsyncStorage.removeItem(CHALLENGE_STORAGE_KEY);
+    if (value) await secureSessionStorage.setItem(CHALLENGE_STORAGE_KEY, value);
+    else await secureSessionStorage.removeItem(CHALLENGE_STORAGE_KEY);
   } catch {
     // Non-fatal: worst case the user has to re-reserve.
+  }
+  if (!value) {
+    // Clear any pre-migration copy too, so signing out or finishing
+    // registration does not leave the secret in the old place.
+    try {
+      await AsyncStorage.removeItem(CHALLENGE_STORAGE_KEY);
+    } catch {
+      // Best effort.
+    }
   }
 }
 

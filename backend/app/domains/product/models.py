@@ -105,9 +105,11 @@ class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):
     )
 
 
+    # Indexed: the privacy export filters this table by account and
+    # account deletion cascades through it; without it both read the
+    # whole table. See migration d0e1f2g3h4.
     account_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("accounts.id", ondelete="CASCADE"),
-    )
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
     client_report_id: Mapped[str] = mapped_column(String(64), nullable=False)
     barcode: Mapped[str | None] = mapped_column(String(64))
     #: What was on screen when they tapped: a number, an ingredient, the grade.
@@ -136,9 +138,11 @@ class FssaiComplaintHandoff(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "fssai_complaint_handoffs"
 
+    # Indexed: the privacy export filters this table by account and
+    # account deletion cascades through it; without it both read the
+    # whole table. See migration d0e1f2g3h4.
     account_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
-    )
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     barcode: Mapped[str] = mapped_column(String(64), nullable=False)
     # food_safety | label_information | misleading_claim | packaging
     reason: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -183,9 +187,11 @@ class ScanEvent(UUIDPrimaryKey, TimestampMixin, Base):
     device_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("scan_devices.id", ondelete="CASCADE"),
     )
+    # Indexed: the privacy export filters this table by account and
+    # account deletion cascades through it; without it both read the
+    # whole table. See migration d0e1f2g3h4.
     account_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("accounts.id", ondelete="CASCADE"),
-    )
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
     barcode: Mapped[str] = mapped_column(String(64), nullable=False)
     #: found_local | found_off | not_found | label_captured
     outcome: Mapped[str] = mapped_column(String(24), nullable=False)

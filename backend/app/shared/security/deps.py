@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.identity import service as identity
@@ -24,6 +24,7 @@ from app.domains.identity.models import Account
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import FeatureUnavailableError
 from app.shared.flags import service as flags
+from app.shared.security.network import client_ip
 from app.shared.security.supabase_auth import (
     SupabaseUser,
     get_current_supabase_user,
@@ -106,10 +107,6 @@ async def get_current_account(
 # is the same callable — renaming the import site is optional and does not
 # change semantics.
 get_registered_account = get_current_account
-
-
-def client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
 
 
 def require_flag(key: str):

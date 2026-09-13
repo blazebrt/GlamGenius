@@ -68,7 +68,7 @@ export const isRateLimited = (err: unknown): boolean => {
   };
   return (
     anyErr?.response?.status === 429 ||
-    anyErr?.response?.data?.detail?.code === 'AI_RATE_LIMIT'
+    anyErr?.response?.data?.detail?.code === 'AI_RATE_LIMITED'
   );
 };
 

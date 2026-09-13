@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import UTC
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -45,9 +46,26 @@ SCHEDULED_WORKERS = schedule.SCHEDULED_WORKERS
 _MISSED_GRACE = schedule.MISSED_GRACE_MULTIPLIER
 
 
+def _as_utc(value):
+    """A worker timestamp that can be compared with ``utcnow()``.
+
+    ``system_worker_status`` is the one table in the schema whose timestamps are
+    ``TIMESTAMP WITHOUT TIME ZONE``, so these five columns read back naive while
+    every other datetime in the product is aware. Subtracting a naive value from
+    an aware one is a ``TypeError``, not a wrong number — this endpoint answered
+    only while the table was empty, which is the state the tests left it in and
+    the opposite of the state production is in. The worker writes them with the
+    database's own ``now()``, so the wall clock is already UTC and only the
+    label is missing. ``app/api/v2/config.py`` does the same thing for readiness.
+    """
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 def _freshness(worker, now) -> dict:
     """Age of the last run, so staleness is readable without date arithmetic."""
-    last = worker.last_heartbeat_at
+    last = _as_utc(worker.last_heartbeat_at)
     return {
         "last_heartbeat_age_seconds": int((now - last).total_seconds()) if last else None,
     }
@@ -66,7 +84,7 @@ def _scheduled_state(name: str, interval_seconds: int, worker, now) -> dict:
                 "installed — see docs/OPERATIONS.md section 6."
             ),
         }
-    age = int((now - worker.last_heartbeat_at).total_seconds())
+    age = int((now - _as_utc(worker.last_heartbeat_at)).total_seconds())
     overdue = age > interval_seconds * _MISSED_GRACE
     failing = worker.last_error_code is not None and (
         worker.last_successful_job_at is None
