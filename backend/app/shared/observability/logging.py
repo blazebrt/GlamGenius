@@ -36,35 +36,54 @@ class OAuthRedactionFilter(logging.Filter):
     _header = re.compile(r"((?:authorization\s*[:=]\s*)?Bearer\s+)[A-Za-z0-9._~+/=-]+", re.I)
     _credentialed_url = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@\S*", re.I)
 
+    def _redact_text(self, value: str) -> str:
+        value = self._credentialed_url.sub("[REDACTED]", value)
+        value = self._header.sub(r"\1[REDACTED]", value)
+        value = self._query.sub(r"\1[REDACTED]", value)
+        return self._kv.sub(r"\1[REDACTED]", value)
+
     def filter(self, record: logging.LogRecord) -> bool:
-        # Materialize parameterized messages before redacting. This covers
-        # dicts/tuples passed as args and prevents a later formatter or handler
-        # from reconstructing the secret from the original arguments.
-        try:
-            message = record.getMessage()
-        except Exception:  # noqa: BLE001 — logging must never break a request
-            message = str(record.msg)
-        message = self._credentialed_url.sub("[REDACTED]", message)
-        message = self._header.sub(r"\1[REDACTED]", message)
-        message = self._query.sub(r"\1[REDACTED]", message)
-        message = self._kv.sub(r"\1[REDACTED]", message)
-        record.msg = message
-        record.args = ()
+        # Uvicorn's AccessFormatter requires exactly five structured arguments:
+        # client address, method, path, HTTP version and status. Replacing the
+        # record with a preformatted string makes every access log raise while
+        # formatting. Redact the request target in place and preserve that
+        # contract. Running the filter twice is safe and remains idempotent.
+        if (
+            record.name == "uvicorn.access"
+            and isinstance(record.args, tuple)
+            and len(record.args) == 5
+        ):
+            client_addr, method, full_path, http_version, status_code = record.args
+            record.args = (
+                client_addr,
+                method,
+                self._redact_text(str(full_path)),
+                http_version,
+                status_code,
+            )
+        else:
+            # Materialize ordinary parameterized messages before redacting.
+            # This covers dicts/tuples passed as args and prevents a later
+            # formatter or handler from reconstructing the secret from the
+            # original arguments.
+            try:
+                message = record.getMessage()
+            except Exception:  # noqa: BLE001 — logging must never break a request
+                message = str(record.msg)
+            record.msg = self._redact_text(message)
+            record.args = ()
         if record.exc_info:
             # Formatting an exception later would otherwise bypass this
             # filter. Preserve a redacted traceback as text and drop the raw
             # exception tuple before any handler sees it.
             trace = "".join(traceback.format_exception(*record.exc_info))
-            trace = self._credentialed_url.sub("[REDACTED]", trace)
-            trace = self._header.sub(r"\1[REDACTED]", self._query.sub(r"\1[REDACTED]", self._kv.sub(r"\1[REDACTED]", trace)))
+            trace = self._redact_text(trace)
             record.msg = f"{record.msg}\n{trace}"
             record.exc_info = None
         if record.exc_text:
-            record.exc_text = self._credentialed_url.sub("[REDACTED]", record.exc_text)
-            record.exc_text = self._kv.sub(r"\1[REDACTED]", self._query.sub(r"\1[REDACTED]", record.exc_text))
+            record.exc_text = self._redact_text(record.exc_text)
         if record.stack_info:
-            record.stack_info = self._credentialed_url.sub("[REDACTED]", record.stack_info)
-            record.stack_info = self._kv.sub(r"\1[REDACTED]", self._query.sub(r"\1[REDACTED]", record.stack_info))
+            record.stack_info = self._redact_text(record.stack_info)
         return True
 
 
