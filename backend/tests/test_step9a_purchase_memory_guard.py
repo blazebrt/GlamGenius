@@ -224,3 +224,209 @@ async def test_concurrent_candidate_and_style_retries_append_one_event(
         ))
     assert care_rows == care_events == 1
     assert style_events == 1
+
+
+def test_identity_canonicalization_is_deterministic_but_not_fuzzy():
+    canonical = identity_for_candidate(_candidate(
+        brand=" Example   Labs ",
+        display_name=" Gentle   Cleanser ",
+        details={"product_type": " Cleanser ", "active_ingredients": ["Niacinamide", " Glycerin "]},
+    ))
+    equivalent = identity_for_candidate(_candidate(
+        brand="example labs",
+        display_name="gentle cleanser",
+        details={"product_type": "cleanser", "active_ingredients": ["glycerin", "NIACINAMIDE", "glycerin"]},
+    ))
+    materially_different = identity_for_candidate(_candidate(
+        brand="example labs",
+        display_name="gentle cleanser plus",
+        details={"product_type": "cleanser", "active_ingredients": ["glycerin", "niacinamide"]},
+    ))
+    assert canonical == equivalent
+    assert materially_different["state"] == "exact"
+    assert materially_different["fingerprint"] != canonical["fingerprint"]
+
+
+def test_identity_insufficiency_matrix_and_category_isolation():
+    insufficient = [
+        _candidate(brand=None),
+        _candidate(display_name="   "),
+        _candidate(details={"active_ingredients": ["Glycerin"]}),
+        _candidate(details={"product_type": "cleanser", "active_ingredients": []}),
+        _candidate(category="perfumes", details={"fragrance_family": "woody"}),
+        _candidate(category="perfumes", details={"concentration": "edp"}),
+        _candidate(category="wardrobe", subcategory=None, size="m", fabric="cotton", colour="blue", details={}),
+        _candidate(category="wardrobe", subcategory="shirt", size=None, fabric="cotton", colour="blue", details={}),
+        _candidate(category="wardrobe", subcategory="shirt", size="m", fabric=None, colour="blue", details={}),
+        _candidate(category="wardrobe", subcategory="shirt", size="m", fabric="cotton", colour=None, details={}),
+        _candidate(category="wardrobe", verification_state="draft", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={}),
+        _candidate(uncertain_fields=["brand"]),
+    ]
+    assert all(identity_for_candidate(candidate)["state"] == "insufficient" for candidate in insufficient)
+
+    beauty = identity_for_candidate(_candidate(category="beauty"))
+    hair = identity_for_candidate(_candidate(category="hair"))
+    assert beauty["state"] == hair["state"] == "exact"
+    assert beauty["fingerprint"] != hair["fingerprint"]
+
+    style_m = identity_for_candidate(_candidate(
+        category="wardrobe", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={},
+    ))
+    style_l = identity_for_candidate(_candidate(
+        category="wardrobe", subcategory="shirt", size="l", fabric="cotton", colour="blue", details={},
+    ))
+    fragrance_edp = identity_for_candidate(_candidate(
+        category="perfumes", details={"fragrance_family": "woody", "concentration": "edp"},
+    ))
+    fragrance_edt = identity_for_candidate(_candidate(
+        category="perfumes", details={"fragrance_family": "woody", "concentration": "edt"},
+    ))
+    assert style_m["fingerprint"] != style_l["fingerprint"]
+    assert fragrance_edp["fingerprint"] != fragrance_edt["fingerprint"]
+
+
+@pytest.mark.asyncio
+async def test_meaningful_transitions_append_without_rewriting_prior_event(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    candidate_id = await _make_candidate_exact(account_id)
+    await _decide(app_client, token, candidate_id, "waiting")
+    await _decide(app_client, token, candidate_id, "bought")
+    from app.shared.database.sql import get_sessionmaker
+    async with get_sessionmaker()() as session:
+        events = (await session.execute(
+            select(PurchaseDecisionEvent).where(
+                PurchaseDecisionEvent.account_id == account_id,
+                PurchaseDecisionEvent.candidate_id == candidate_id,
+            ).order_by(PurchaseDecisionEvent.created_at.asc(), PurchaseDecisionEvent.id.asc())
+        )).scalars().all()
+        current = await session.scalar(select(PurchaseDecision).where(
+            PurchaseDecision.account_id == account_id,
+            PurchaseDecision.candidate_id == candidate_id,
+        ))
+    assert [event.decision for event in events] == ["waiting", "bought"]
+    assert current is not None and current.decision == "bought"
+
+
+@pytest.mark.asyncio
+async def test_event_write_failure_rolls_back_mutable_decision(
+    app_client, db_clean, registered_supabase_user, monkeypatch,
+):
+    from app.domains.purchase import decision_memory
+    from app.shared.database.sql import get_sessionmaker
+
+    token, account_id = await registered_supabase_user()
+    candidate_id = await _make_candidate_exact(account_id)
+
+    async def fail_event(*_args, **_kwargs):
+        raise RuntimeError("forced Step 9A event failure")
+
+    monkeypatch.setattr(decision_memory, "record_decision_event", fail_event)
+    with pytest.raises(RuntimeError, match="forced Step 9A event failure"):
+        await app_client.post(
+            f"/api/v2/shopping/candidates/{candidate_id}/decision?on=2026-08-20",
+            headers=auth(token), json={"decision": "waiting"},
+        )
+
+    async with get_sessionmaker()() as session:
+        decisions = await session.scalar(select(func.count()).select_from(PurchaseDecision).where(
+            PurchaseDecision.account_id == account_id,
+            PurchaseDecision.candidate_id == candidate_id,
+        ))
+        events = await session.scalar(select(func.count()).select_from(PurchaseDecisionEvent).where(
+            PurchaseDecisionEvent.account_id == account_id,
+            PurchaseDecisionEvent.candidate_id == candidate_id,
+        ))
+    assert decisions == events == 0
+
+
+@pytest.mark.asyncio
+async def test_history_same_timestamp_cursor_and_limits_are_safe(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    first, second = await _make_candidate_exact(account_id), await _make_candidate_exact(account_id)
+    await _decide(app_client, token, first, "waiting")
+    await _decide(app_client, token, first, "bought")
+    await _decide(app_client, token, second, "waiting")
+
+    from app.shared.database.sql import get_sessionmaker
+    async with get_sessionmaker()() as session:
+        rows = (await session.execute(select(PurchaseDecisionEvent).where(
+            PurchaseDecisionEvent.account_id == account_id,
+        ))).scalars().all()
+        anchor = rows[0].created_at
+        for row in rows:
+            row.created_at = anchor
+        await session.commit()
+        expected = [str(event_id) for event_id in (await session.execute(
+            select(PurchaseDecisionEvent.id).where(
+                PurchaseDecisionEvent.account_id == account_id,
+            ).order_by(PurchaseDecisionEvent.created_at.desc(), PurchaseDecisionEvent.id.desc())
+        )).scalars().all()]
+
+    seen, before = [], None
+    while True:
+        suffix = f"&before={before}" if before else ""
+        response = await app_client.get(
+            f"/api/v2/shopping/decision-history?limit=1{suffix}", headers=auth(token),
+        )
+        assert response.status_code == 200, response.text
+        page = response.json()
+        seen.extend(item["id"] for item in page["items"])
+        before = page["next_before"]
+        if before is None:
+            break
+    assert seen == expected
+    assert len(seen) == len(set(seen)) == 3
+    assert (await app_client.get("/api/v2/shopping/decision-history?limit=50", headers=auth(token))).status_code == 200
+    assert (await app_client.get("/api/v2/shopping/decision-history?limit=0", headers=auth(token))).status_code == 422
+    assert (await app_client.get("/api/v2/shopping/decision-history?limit=51", headers=auth(token))).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_purchase_guard_refuses_cross_account_candidate(
+    app_client, db_clean, registered_supabase_user,
+):
+    _, owner_account_id = await registered_supabase_user()
+    candidate_id = await _make_candidate_exact(owner_account_id)
+    other_token, _ = await registered_supabase_user()
+    response = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/purchase-guard",
+        headers=auth(other_token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_account_deletion_preserves_other_accounts_purchase_events(
+    app_client, db_clean, registered_supabase_user, monkeypatch,
+):
+    token, account_id = await registered_supabase_user()
+    other_token, other_account_id = await registered_supabase_user()
+    candidate_id = await _make_candidate_exact(account_id)
+    other_candidate_id = await _make_candidate_exact(other_account_id)
+    await _decide(app_client, token, candidate_id, "waiting")
+    await _decide(app_client, other_token, other_candidate_id, "waiting")
+
+    async def no_external(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(deletion_service, "_delete_supabase_identity", no_external)
+    monkeypatch.setattr(deletion_service, "_remove_external_integrations", no_external)
+    from app.shared.database.sql import get_sessionmaker
+    async with get_sessionmaker()() as session:
+        await deletion_service.request_deletion(session, account_id)
+        await session.commit()
+        await deletion_service.drain_all(session)
+        await session.commit()
+    async with get_sessionmaker()() as session:
+        deleted_count = await session.scalar(select(func.count()).select_from(PurchaseDecisionEvent).where(
+            PurchaseDecisionEvent.account_id == account_id,
+        ))
+        survivor_count = await session.scalar(select(func.count()).select_from(PurchaseDecisionEvent).where(
+            PurchaseDecisionEvent.account_id == other_account_id,
+        ))
+    assert deleted_count == 0
+    assert survivor_count == 1
