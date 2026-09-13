@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import logging
 
-from uvicorn.logging import AccessFormatter
-
 from app.shared.observability.logging import OAuthRedactionFilter
+from uvicorn.logging import AccessFormatter
 
 
 def test_uvicorn_access_redaction_preserves_formatter_contract() -> None:
