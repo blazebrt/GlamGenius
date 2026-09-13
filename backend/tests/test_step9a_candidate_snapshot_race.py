@@ -7,6 +7,7 @@ import uuid
 import pytest
 from app.domains.purchase import check_service, decision_memory
 from app.domains.purchase import service as purchase_service
+from app.domains.purchase.identity import identity_for_candidate
 from app.domains.recommendation.models import (
     PurchaseDecision,
     PurchaseDecisionEvent,
@@ -17,6 +18,66 @@ from sqlalchemy import func, select
 from tests.conftest import auth
 from tests.test_domain_shopping import _evaluate
 from tests.test_step9a_purchase_memory_guard import _make_candidate_exact
+
+
+@pytest.mark.asyncio
+async def test_guard_snapshot_is_consistent_during_separate_session_event_commit(
+    db_clean, registered_supabase_user,
+):
+    """A committed event is either wholly visible to the guard or absent.
+
+    The writer holds an uncommitted matching event in one PostgreSQL session
+    while a separate reader executes the real guard query.  Explicit events,
+    rather than timing sleeps, coordinate the two transactions.
+    """
+    _token, account_id = await registered_supabase_user()
+    candidate_id = await _make_candidate_exact(account_id)
+    from app.shared.database.sql import get_sessionmaker
+    factory = get_sessionmaker()
+    writer_ready, release_writer = asyncio.Event(), asyncio.Event()
+
+    async def writer():
+        async with factory() as session:
+            candidate = await session.get(ShoppingCandidate, candidate_id)
+            identity = identity_for_candidate(candidate)
+            session.add(PurchaseDecisionEvent(
+                account_id=account_id, candidate_id=candidate_id, decision_id=None,
+                category=candidate.category, strategy_key="care_purchase",
+                candidate_display_name=candidate.display_name,
+                identity_version=identity["version"], identity_state="exact",
+                identity_fingerprint=identity["fingerprint"],
+                recommendation_verdict="wait", recommendation_version="v3-05.5",
+                recommendation_snapshot={}, decision="waiting", followed_recommendation=True,
+            ))
+            await session.flush()
+            writer_ready.set()
+            await release_writer.wait()
+            await session.commit()
+
+    write_task = asyncio.create_task(writer())
+    await asyncio.wait_for(writer_ready.wait(), timeout=2)
+    async with factory() as reader:
+        candidate = await reader.get(ShoppingCandidate, candidate_id)
+        before_commit = await decision_memory.purchase_guard(
+            reader, account_id=account_id, candidate=candidate,
+        )
+    release_writer.set()
+    await write_task
+    async with factory() as reader:
+        candidate = await reader.get(ShoppingCandidate, candidate_id)
+        after_commit = await decision_memory.purchase_guard(
+            reader, account_id=account_id, candidate=candidate,
+        )
+    for result in (before_commit, after_commit):
+        if result["most_recent"] is not None:
+            assert result["prior_consideration_count"] >= 1
+        assert not (
+            result["guard_state"].startswith("exact_prior_")
+            and result["prior_consideration_count"] == 0
+        )
+    assert before_commit["prior_consideration_count"] == 0
+    assert after_commit["prior_consideration_count"] == 1
+    assert after_commit["most_recent"]["decision"] == "waiting"
 
 
 @pytest.mark.asyncio

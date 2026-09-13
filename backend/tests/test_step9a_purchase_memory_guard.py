@@ -64,6 +64,13 @@ def test_care_identity_uses_canonical_active_ingredient_keys_fail_closed():
     assert canonical["fingerprint"] != hair["fingerprint"]
 
 
+def test_care_identity_fails_closed_for_ambiguous_active_declaration():
+    ambiguous = identity_for_candidate(_candidate(details={
+        "product_type": "cleanser", "active_ingredients": ["Glycerin and Niacinamide"],
+    }))
+    assert ambiguous == {"version": PURCHASE_IDENTITY_VERSION, "state": "insufficient", "fingerprint": None}
+
+
 def test_identity_is_strategy_scoped_and_ignores_fragrance_use_context():
     first = _candidate(
         category="perfumes", details={"fragrance_family": "woody", "concentration": "edp", "season": "winter", "occasion": "evening"},
