@@ -37,6 +37,24 @@ def test_identity_is_exact_conservative_and_price_or_tracking_does_not_change_it
     assert insufficient == {"version": PURCHASE_IDENTITY_VERSION, "state": "insufficient", "fingerprint": None}
 
 
+def test_identity_is_strategy_scoped_and_ignores_fragrance_use_context():
+    first = _candidate(
+        category="perfumes", details={"fragrance_family": "woody", "concentration": "edp", "season": "winter", "occasion": "evening"},
+    )
+    changed_use = _candidate(
+        category="perfumes", details={"fragrance_family": "woody", "concentration": "edp", "season": "summer", "occasion": "office", "longevity_user_reported": "long"},
+    )
+    changed_product = _candidate(
+        category="perfumes", details={"fragrance_family": "woody", "concentration": "edt"},
+    )
+    draft_style = _candidate(
+        category="wardrobe", verification_state="draft", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={},
+    )
+    assert identity_for_candidate(first)["fingerprint"] == identity_for_candidate(changed_use)["fingerprint"]
+    assert identity_for_candidate(first)["fingerprint"] != identity_for_candidate(changed_product)["fingerprint"]
+    assert identity_for_candidate(draft_style)["state"] == "insufficient"
+
+
 @pytest.mark.asyncio
 async def test_history_is_append_only_and_guard_is_account_scoped(app_client, db_clean, registered_supabase_user):
     token, account_id = await registered_supabase_user()
@@ -49,7 +67,7 @@ async def test_history_is_append_only_and_guard_is_account_scoped(app_client, db
         candidate.brand = "Example Labs"
         await session.commit()
 
-    for decision in ("waiting", "bought"):
+    for decision in ("waiting", "bought", "bought"):
         response = await app_client.post(
             f"/api/v2/shopping/candidates/{candidate_id}/decision?on=2026-08-20",
             headers=auth(token), json={"decision": decision},
@@ -65,7 +83,8 @@ async def test_history_is_append_only_and_guard_is_account_scoped(app_client, db
     guard = await app_client.get(f"/api/v2/shopping/candidates/{candidate_id}/purchase-guard", headers=auth(token))
     assert guard.status_code == 200, guard.text
     assert guard.json()["guard_state"] == "exact_prior_bought"
-    assert guard.json()["prior_consideration_count"] == 2
+    assert guard.json()["prior_consideration_count"] == 1
+    assert guard.json()["owned_redundancy"] is None
 
     other_token, _ = await registered_supabase_user()
     assert (await app_client.get("/api/v2/shopping/decision-history", headers=auth(other_token))).json()["items"] == []

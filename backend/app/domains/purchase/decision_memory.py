@@ -11,8 +11,10 @@ from app.domains.purchase.contract import (
     CARE_PURCHASE_VERDICT_VERSION,
     FRAGRANCE_PURCHASE_VERDICT_VERSION,
     PURCHASE_DECISION_MEMORY_VERSION,
+    PURCHASE_GUARD_VERSION,
     is_active_care_category,
     is_active_fragrance_category,
+    resolve_purchase_strategy,
 )
 from app.domains.purchase.identity import identity_for_candidate
 from app.domains.recommendation.models import (
@@ -78,8 +80,26 @@ def style_recommendation_snapshot(evaluation: PurchaseEvaluation) -> dict[str, A
 async def record_decision_event(
     session: AsyncSession, *, row: PurchaseDecision, candidate: ShoppingCandidate,
 ) -> PurchaseDecisionEvent:
-    """Append immutable history in the same transaction as the current state."""
+    """Append only a meaningful current-state transition in this transaction."""
     identity = identity_for_candidate(candidate)
+    previous = (await session.execute(
+        select(PurchaseDecisionEvent).where(PurchaseDecisionEvent.decision_id == row.id).order_by(
+            PurchaseDecisionEvent.created_at.desc(), PurchaseDecisionEvent.id.desc()).limit(1)
+    )).scalar_one_or_none()
+    if previous is not None and all((
+        previous.category == candidate.category,
+        previous.strategy_key == row.strategy_key,
+        previous.identity_version == identity["version"],
+        previous.identity_state == identity["state"],
+        previous.identity_fingerprint == identity["fingerprint"],
+        previous.recommendation_verdict == row.recommendation_verdict,
+        previous.recommendation_version == row.recommendation_version,
+        previous.recommendation_fingerprint == row.recommendation_fingerprint,
+        previous.recommendation_snapshot == row.recommendation_snapshot,
+        previous.decision == row.decision,
+        previous.followed_recommendation == row.followed_recommendation,
+    )):
+        return previous
     event = PurchaseDecisionEvent(
         account_id=row.account_id, candidate_id=candidate.id, decision_id=row.id,
         category=candidate.category, strategy_key=row.strategy_key,
@@ -129,30 +149,49 @@ async def decision_history(session: AsyncSession, *, account_id: uuid.UUID, limi
 async def purchase_guard(session: AsyncSession, *, account_id: uuid.UUID, candidate: ShoppingCandidate) -> dict[str, Any]:
     """Project exact prior facts without recalculating a purchase verdict."""
     identity = identity_for_candidate(candidate)
-    base = {"purchase_guard_version": "step-9a-v1", "candidate_id": str(candidate.id), "identity": identity,
+    base = {"purchase_guard_version": PURCHASE_GUARD_VERSION, "candidate_id": str(candidate.id), "identity": identity,
             "prior_consideration_count": 0, "most_recent": None, "guard_state": "no_prior_memory",
             "owned_redundancy": None}
+    legacy_incomplete = await has_incomplete_legacy_context(
+        session, account_id=account_id, candidate_id=candidate.id,
+    )
     if identity["state"] != "exact":
-        base["guard_state"] = "identity_insufficient"
+        base["guard_state"] = "historical_context_incomplete" if legacy_incomplete else "identity_insufficient"
         return base
     where = (PurchaseDecisionEvent.account_id == account_id,
+             PurchaseDecisionEvent.category == candidate.category,
+             PurchaseDecisionEvent.strategy_key == resolve_purchase_strategy(candidate.category).key,
+             PurchaseDecisionEvent.identity_version == identity["version"],
              PurchaseDecisionEvent.identity_fingerprint == identity["fingerprint"],
              PurchaseDecisionEvent.identity_state == "exact")
-    count = await session.scalar(select(func.count()).select_from(PurchaseDecisionEvent).where(*where))
+    count = await session.scalar(select(func.count(func.distinct(PurchaseDecisionEvent.candidate_id))).where(*where))
     event = (await session.execute(select(PurchaseDecisionEvent).where(*where).order_by(
         PurchaseDecisionEvent.created_at.desc(), PurchaseDecisionEvent.id.desc()).limit(1))).scalar_one_or_none()
     base["prior_consideration_count"] = int(count or 0)
     if event is None:
+        if legacy_incomplete:
+            base["guard_state"] = "historical_context_incomplete"
         return base
     base["most_recent"] = serialize_decision_event(event)
     state = {"bought": "exact_prior_bought", "waiting": "exact_prior_waiting", "skipped": "exact_prior_skipped"}.get(event.decision, "exact_prior_consideration")
     base["guard_state"] = state
-    snapshot = event.recommendation_snapshot or {}
-    exact_owned = snapshot.get("exact_owned_count")
-    if isinstance(exact_owned, int) and exact_owned > 0:
-        base["owned_redundancy"] = {"state": "strategy_proven_exact_owned", "count": exact_owned}
-        base["guard_state"] = "strategy_proven_exact_owned"
+    # Historical snapshots remain historical provenance only. They never prove
+    # something is owned now; current strategy-owned context is unavailable
+    # here until the strategy exposes its own current projection.
     return base
+
+
+async def has_incomplete_legacy_context(
+    session: AsyncSession, *, account_id: uuid.UUID, candidate_id: uuid.UUID,
+) -> bool:
+    """A pre-Step-9 current row is not evidence that no history exists."""
+    decision = await session.scalar(select(PurchaseDecision.id).where(
+        PurchaseDecision.account_id == account_id, PurchaseDecision.candidate_id == candidate_id,
+    ).limit(1))
+    if decision is None:
+        return False
+    event = await session.scalar(select(PurchaseDecisionEvent.id).where(PurchaseDecisionEvent.decision_id == decision))
+    return event is None
 
 
 async def save_care_decision(
@@ -293,6 +332,7 @@ async def save_fragrance_decision(
 
 __all__ = [
     "current_purchase_decision",
+    "has_incomplete_legacy_context",
     "decision_history",
     "purchase_guard",
     "record_decision_event",

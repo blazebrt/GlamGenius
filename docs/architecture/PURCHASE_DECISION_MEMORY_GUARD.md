@@ -12,21 +12,31 @@ recomputed from today's purchase rules.
 
 ## Exact identity
 
-`step-9a-v1` identity is account-independent SHA-256 over canonical stored
-candidate facts. It excludes price, timestamps, recommendation values, user
-decisions, AI identifiers, and URL tracking/fragment components. A stable
-merchant product URL is sufficient. Without one, the stored category, brand,
-display name, and at least two structured candidate facts are required.
-Anything less is `insufficient`; no history match is claimed. There is no
-fuzzy, name-similarity, embedding, or AI matching.
+`step-9a-v2` identity is account-independent SHA-256 over a small
+strategy-specific allowlist of trusted candidate facts. It excludes price,
+timestamps, recommendation values, user decisions, AI identifiers, URLs and
+their tracking parameters. Care requires brand/name, product type and a
+canonical active-ingredient set; Fragrance requires brand/name, concentration
+and family; Style requires a trusted non-draft candidate with brand/name,
+subcategory, size, fabric and colour. Anything less is `insufficient`; no
+history match is claimed. There is no fuzzy, name-similarity, embedding, or AI
+matching.
 
 ## Guard
 
-The guard is a current, read-only projection (`step-9a-v1`) of exact matching
-events. It returns neutral/no-memory, identity-insufficient, exact prior
-bought/waiting/skipped, or existing-strategy-proven exact-owned context. It
-does not recalculate or override Style ROI, Care verdicts, or Fragrance
+The guard is a current, read-only projection (`step-9a-v2`) of exact matching
+events scoped by identity version, category and strategy. It returns
+neutral/no-memory, identity-insufficient, historical-context-incomplete, or
+exact prior bought/waiting/skipped. It counts distinct candidate considerations,
+not every decision transition. A historical event is not current inventory
+truth: its snapshot can never produce a current owned/redundancy state. The
+guard does not recalculate or override Style ROI, Care verdicts, or Fragrance
 coverage rules. Supplements remain prohibited.
+
+The history feed covers Step 9A events only. Existing pre-Step-9 current
+decisions are not reconstructed; when one is detected for the current
+candidate without a corresponding event, the guard reports
+`historical_context_incomplete`.
 
 ## Privacy and data boundaries
 

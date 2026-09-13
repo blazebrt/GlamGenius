@@ -268,6 +268,7 @@ async def get_purchase_decision_history(
     )
     return {
         "purchase_decision_event_version": "step-9a-v1",
+        "history_coverage": {"state": "step_9a_events_only", "legacy_current_decisions_included": False},
         "items": [decision_memory.serialize_decision_event(row) for row in rows],
         "next_before": str(rows[-1].id) if len(rows) == limit else None,
     }
