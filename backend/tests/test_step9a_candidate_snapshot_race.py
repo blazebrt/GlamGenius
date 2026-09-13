@@ -1,0 +1,67 @@
+"""PostgreSQL race proof for Step 9A candidate-backed decision snapshots."""
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from app.domains.purchase import check_service
+from app.domains.purchase import service as purchase_service
+
+from tests.conftest import auth
+from tests.test_step9a_purchase_memory_guard import _make_candidate_exact
+
+
+@pytest.mark.asyncio
+async def test_candidate_confirmation_waits_for_decision_snapshot_lock(
+    app_client, db_clean, registered_supabase_user, monkeypatch,
+):
+    """A decision must snapshot recommendation and identity from one candidate state."""
+    token, account_id = await registered_supabase_user()
+    candidate_id = await _make_candidate_exact(account_id)
+
+    check_entered = asyncio.Event()
+    release_check = asyncio.Event()
+    confirmation_read_candidate = asyncio.Event()
+    original_check = check_service.resolve_care_purchase_check
+    original_apply = purchase_service._apply_candidate_corrections
+
+    async def paused_check(*args, **kwargs):
+        check_entered.set()
+        await release_check.wait()
+        return await original_check(*args, **kwargs)
+
+    def marked_apply(row, body):
+        confirmation_read_candidate.set()
+        return original_apply(row, body)
+
+    monkeypatch.setattr(check_service, "resolve_care_purchase_check", paused_check)
+    monkeypatch.setattr(purchase_service, "_apply_candidate_corrections", marked_apply)
+
+    decision_task = asyncio.create_task(app_client.post(
+        f"/api/v2/shopping/candidates/{candidate_id}/decision?on=2026-08-20",
+        headers=auth(token), json={"decision": "waiting"},
+    ))
+    await asyncio.wait_for(check_entered.wait(), timeout=2)
+
+    confirm_task = asyncio.create_task(app_client.post(
+        f"/api/v2/shopping/candidates/{candidate_id}/confirm",
+        headers=auth(token), json={"brand": "Changed Labs"},
+    ))
+    await asyncio.wait_for(confirmation_read_candidate.wait(), timeout=2)
+    await asyncio.sleep(0)
+    assert not confirm_task.done(), "candidate confirmation bypassed the decision snapshot row lock"
+
+    release_check.set()
+    decision_response, confirm_response = await asyncio.gather(decision_task, confirm_task)
+    assert decision_response.status_code == 200, decision_response.text
+    assert confirm_response.status_code == 200, confirm_response.text
+
+    guard = await app_client.get(
+        f"/api/v2/shopping/candidates/{candidate_id}/purchase-guard",
+        headers=auth(token),
+    )
+    assert guard.status_code == 200, guard.text
+    # Confirmation changed the trusted exact identity after the decision commit,
+    # so the old event must not be reinterpreted as history for the new identity.
+    assert guard.json()["guard_state"] == "no_step9a_prior_event"
+    assert guard.json()["prior_consideration_count"] == 0
