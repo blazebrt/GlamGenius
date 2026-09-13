@@ -8,6 +8,7 @@ from typing import Any
 
 from app.domains.purchase.contract import resolve_purchase_strategy
 from app.domains.recommendation.models import ShoppingCandidate
+from app.domains.routines.parser import canonical_declared_keys
 
 PURCHASE_IDENTITY_VERSION = "step-9a-v2"
 _TRUSTED_STATES = {"user_declared", "confirmed"}
@@ -54,7 +55,7 @@ def identity_for_candidate(candidate: ShoppingCandidate) -> dict[str, str | None
     details = candidate.details if isinstance(candidate.details, dict) else {}
     if strategy.key == "care_purchase":
         product_type = _text(details.get("product_type"))
-        ingredients = _set(details.get("active_ingredients"))
+        ingredients = canonical_declared_keys(details.get("active_ingredients"))
         # Purpose is a role, not product identity. Do not use it alone.
         if not product_type or not ingredients:
             return _insufficient()

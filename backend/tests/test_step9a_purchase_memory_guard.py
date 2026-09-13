@@ -41,6 +41,29 @@ def test_identity_is_exact_conservative_and_price_or_tracking_does_not_change_it
     assert insufficient == {"version": PURCHASE_IDENTITY_VERSION, "state": "insufficient", "fingerprint": None}
 
 
+def test_care_identity_uses_canonical_active_ingredient_keys_fail_closed():
+    canonical = identity_for_candidate(_candidate(details={
+        "product_type": "cleanser", "active_ingredients": ["Glycerin", "Niacinamide"],
+    }))
+    aliases = identity_for_candidate(_candidate(details={
+        "product_type": "cleanser", "active_ingredients": [" niacinamide ", "GLYCERINE", "glycerol"],
+    }))
+    different = identity_for_candidate(_candidate(details={
+        "product_type": "cleanser", "active_ingredients": ["Glycerin", "Hyaluronic acid"],
+    }))
+    unresolved = identity_for_candidate(_candidate(details={
+        "product_type": "cleanser", "active_ingredients": ["Glycerin", "Unknown active"],
+    }))
+    hair = identity_for_candidate(_candidate(category="hair", details={
+        "product_type": "cleanser", "active_ingredients": ["Glycerin", "Niacinamide"],
+    }))
+    assert canonical["state"] == aliases["state"] == "exact"
+    assert canonical["fingerprint"] == aliases["fingerprint"]
+    assert canonical["fingerprint"] != different["fingerprint"]
+    assert unresolved == {"version": PURCHASE_IDENTITY_VERSION, "state": "insufficient", "fingerprint": None}
+    assert canonical["fingerprint"] != hair["fingerprint"]
+
+
 def test_identity_is_strategy_scoped_and_ignores_fragrance_use_context():
     first = _candidate(
         category="perfumes", details={"fragrance_family": "woody", "concentration": "edp", "season": "winter", "occasion": "evening"},

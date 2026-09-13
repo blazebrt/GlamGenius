@@ -159,6 +159,31 @@ def parse_declared(values: Sequence[str] | None, *, source: str = SOURCE_USER) -
     return results
 
 
+def canonical_declared_keys(values: Sequence[str] | None) -> list[str] | None:
+    """Return canonical keys only when every declared active is unambiguous.
+
+    Purchase identity needs a stricter boundary than routine guidance: a partial
+    parse must never become an "exact" product identity.  This deliberately
+    reuses the reviewed ontology alias authority above rather than inventing a
+    second synonym map.
+    """
+    if not isinstance(values, Sequence) or isinstance(values, str) or not values:
+        return None
+    keys: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            return None
+        cleaned = _clean(value)
+        matches = _match_in(cleaned)
+        # A single exact alias is the only unambiguous declaration.  A phrase
+        # which merely contains a known alias is not silently treated as that
+        # ingredient, and neither is a multi-ingredient declaration.
+        if len(matches) != 1 or cleaned != matches[0][1]:
+            return None
+        keys.add(matches[0][0])
+    return sorted(keys) or None
+
+
 def parse_product(details: dict[str, Any], *, source: str = SOURCE_USER) -> list[ParsedIngredient]:
     """Everything we can read from one inventory item's recorded details.
 

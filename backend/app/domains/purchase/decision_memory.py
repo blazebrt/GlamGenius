@@ -4,8 +4,9 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.domains.purchase.contract import (
     CARE_PURCHASE_VERDICT_VERSION,
@@ -165,10 +166,23 @@ async def purchase_guard(session: AsyncSession, *, account_id: uuid.UUID, candid
              PurchaseDecisionEvent.identity_version == identity["version"],
              PurchaseDecisionEvent.identity_fingerprint == identity["fingerprint"],
              PurchaseDecisionEvent.identity_state == "exact")
-    count = await session.scalar(select(func.count(func.distinct(PurchaseDecisionEvent.candidate_id))).where(*where))
-    event = (await session.execute(select(PurchaseDecisionEvent).where(*where).order_by(
-        PurchaseDecisionEvent.created_at.desc(), PurchaseDecisionEvent.id.desc()).limit(1))).scalar_one_or_none()
-    base["prior_consideration_count"] = int(count or 0)
+    # One statement gives READ COMMITTED one database snapshot for both the
+    # distinct-candidate count and newest event.  Separate statements could
+    # otherwise observe a just-committed event only on the second read.
+    matching = select(PurchaseDecisionEvent).where(*where).cte("matching_events")
+    latest = select(matching).order_by(
+        matching.c.created_at.desc(), matching.c.id.desc(),
+    ).limit(1).cte("latest_event")
+    latest_event = aliased(PurchaseDecisionEvent, latest)
+    count = select(
+        func.count(func.distinct(matching.c.candidate_id)).label("consideration_count"),
+    ).cte("consideration_count")
+    result = await session.execute(
+        select(count.c.consideration_count, latest_event)
+        .select_from(count.outerjoin(latest, true()))
+    )
+    count_value, event = result.one()
+    base["prior_consideration_count"] = int(count_value or 0)
     if event is None:
         if legacy_incomplete:
             base["guard_state"] = "historical_context_incomplete"
