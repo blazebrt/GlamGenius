@@ -9,11 +9,10 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
 from sqlalchemy import ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
-
-from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
 
 
 class QuizSubmission(UUIDPrimaryKey, TimestampMixin, Base):

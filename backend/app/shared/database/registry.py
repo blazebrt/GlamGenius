@@ -28,7 +28,6 @@ from app.domains.official_records import models as official_records_models
 from app.domains.personal_decision_release.models import PersonalDecisionRelease
 from app.domains.planning import models as planning_models
 from app.domains.privacy.models import AccountDeletionJob
-from app.domains.quiz import models as legacy_quiz_models
 from app.domains.product.models import (
     FssaiComplaintHandoff,
     LabelErrorReport,
@@ -49,6 +48,7 @@ from app.domains.profile.models import (
     UserConstraint,
 )
 from app.domains.progress import models as progress_models
+from app.domains.quiz import models as legacy_quiz_models
 from app.domains.recommendation import models as recommendation_models
 from app.domains.reference import (
     IngredientContraindicationRule,

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 BACKEND = ROOT / "backend"
@@ -52,3 +51,18 @@ def test_agent_handoff_is_governed_by_the_product_constitution() -> None:
 def test_active_server_identity_is_product_decision_engine() -> None:
     server = (BACKEND / "server.py").read_text(encoding="utf-8")
     assert "Personal Appearance Operating System" not in server
+def test_active_route_reachability() -> None:
+    from server import app
+    paths = [route.path for route in app.routes if hasattr(route, "path")]
+    legacy_patterns = [
+        "/api/v2/style",
+        "/api/v2/quiz",
+        "/api/v2/shopping/roi-model",
+        "/api/v2/shopping/evaluate",
+        "/api/v2/shopping/evaluations",
+        "/api/v2/today",
+        "/api/v2/planner",
+    ]
+    for path in paths:
+        for legacy in legacy_patterns:
+            assert not path.startswith(legacy), f"Legacy route {path} is still mounted"
