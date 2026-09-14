@@ -110,8 +110,8 @@ def test_profile_active_allowlist_forbids_legacy_keys(monkeypatch: pytest.Monkey
         ]
     }))
     monkeypatch.setattr(profile_service, "change_history", AsyncMock(return_value=[
-        {"key": "care_skin_usual_feel", "old": None, "new": "often_dry_or_tight"},
-        {"key": "preferred_style", "old": None, "new": "classic"}
+        {"attribute_key": "care_skin_usual_feel", "old_value": None, "new_value": "often_dry_or_tight", "source": "user", "reason": None, "created_at": "2024-01-01T00:00:00Z"},
+        {"attribute_key": "preferred_style", "old_value": None, "new_value": "classic", "source": "user", "reason": None, "created_at": "2024-01-01T00:00:00Z"}
     ]))
     
     mock_row = MagicMock()
@@ -156,7 +156,7 @@ def test_profile_active_allowlist_forbids_legacy_keys(monkeypatch: pytest.Monkey
             assert "care_skin_usual_feel" in keys
             assert "preferred_style" not in keys
             assert "favourite_colours" not in keys
-            history_keys = [item["key"] for item in data.get("change_history", [])]
+            history_keys = [item["attribute_key"] for item in data.get("change_history", [])]
             assert "care_skin_usual_feel" in history_keys
             assert "preferred_style" not in history_keys
             

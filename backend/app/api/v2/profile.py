@@ -29,7 +29,7 @@ def _filter_profile(body: dict) -> dict:
     if "change_history" in body:
         body["change_history"] = [
             item for item in body["change_history"]
-            if item.get("key") in ALLOWED_KEYS
+            if item.get("attribute_key") in ALLOWED_KEYS
         ]
         
     return body
