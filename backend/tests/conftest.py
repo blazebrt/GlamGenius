@@ -311,9 +311,9 @@ def bypass_profile_allowlist_for_test_setup(monkeypatch):
 @pytest.fixture(autouse=True, scope="session")
 def mount_legacy_routers_for_tests():
     try:
-        import app.api.v2.today as today_router
         import app.api.v2.planner as planner_router
         import app.api.v2.progress as progress_router
+        import app.api.v2.today as today_router
         from server import app
         if not any(getattr(r, "path", None) == "/api/v2/today" for r in app.routes):
             app.include_router(today_router.router, prefix="/api/v2", tags=["v2-today"])
