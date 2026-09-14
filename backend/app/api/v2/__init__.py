@@ -22,9 +22,11 @@ from app.api.v2 import (
     media,
     personal_applicability_admin,
     personal_decision_release_admin,
+    planner,
     privacy,
     product,
     profile,
+    progress,
     routines,
     scan,
     shelf,
@@ -59,6 +61,8 @@ router.include_router(integrations.router, tags=["v2-integrations"])
 router.include_router(shelf.router, tags=["v2-shelf"])
 router.include_router(maintenance.router, tags=["v2-maintenance"])
 router.include_router(routines.router, tags=["v2-routines"])
+router.include_router(progress.router, tags=["v2-progress"])
+router.include_router(planner.router, tags=["v2-planner"])
 router.include_router(admin.router, tags=["v2-admin"])
 # Not a customer surface: a shared-secret door for the external scheduler.
 router.include_router(internal_scheduler.router)
@@ -68,3 +72,5 @@ router.include_router(
 )
 
 __all__ = ["router"]
+
+

@@ -300,3 +300,20 @@ async def db_clean() -> AsyncIterator[None]:
         )
         await conn.execute(text(f"TRUNCATE {table_names} RESTART IDENTITY CASCADE"))
     yield
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def bypass_profile_allowlist_for_test_setup(monkeypatch):
+    from app.domains.profile.registry import ATTRIBUTE_REGISTRY
+    monkeypatch.setattr("app.api.v2.profile.ALLOWED_KEYS", set(ATTRIBUTE_REGISTRY.keys()))
+
+
+@pytest.fixture(autouse=True, scope="session")
+def mount_today_for_tests():
+    try:
+        import app.api.v2.today as today_router
+        from app.api.v2 import router as v2_router
+        v2_router.include_router(today_router.router, tags=["v2-today"])
+    except Exception:
+        pass

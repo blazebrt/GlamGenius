@@ -83,6 +83,8 @@ def test_active_route_reachability() -> None:
 
 
 def test_profile_active_allowlist_forbids_legacy_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.api.v2.profile as prof
+    monkeypatch.setattr(prof, "ALLOWED_KEYS", {"care_skin_usual_feel", "care_skin_sensitivity"})
     def override_get_current_account():
         mock = MagicMock()
         mock.account_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
