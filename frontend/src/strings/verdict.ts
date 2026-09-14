@@ -26,6 +26,16 @@ export const S = {
   forYou: {
     title: 'FOR YOU',
   },
+  decisionMemory: {
+    title: 'DECISION MEMORY',
+    actions: {
+      buy: 'BUY',
+      wait: 'WAIT',
+      skip: 'SKIP',
+    },
+    reconsider: 'Reconsider',
+    cancel: 'Cancel',
+  },
   grade: {
     A: { verdict: 'BUY', band: 'green' },
     B: { verdict: 'BUY', band: 'green' },

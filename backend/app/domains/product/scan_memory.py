@@ -67,18 +67,25 @@ async def record_scan_decision(
         note=note,
         idempotency_key=idempotency_key,
     )
-    session.add(event)
     try:
-        await session.flush()
+        async with session.begin_nested():
+            session.add(event)
+            await session.flush()
     except IntegrityError:
-        await session.rollback()
         existing = await session.scalar(
             select(ScanDecisionEvent).where(
                 ScanDecisionEvent.account_id == account_id,
                 ScanDecisionEvent.idempotency_key == idempotency_key
             )
         )
-        if existing and existing.decision == decision and existing.label_snapshot_id == label_snapshot_id:
+        if existing and (
+            existing.decision == decision
+            and existing.note == note
+            and existing.barcode == barcode
+            and existing.label_snapshot_id == label_snapshot_id
+            and existing.label_version == label_version
+            and existing.content_fingerprint == content_fingerprint
+        ):
             return existing
         raise ValueError("idempotency_conflict")
 

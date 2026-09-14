@@ -107,8 +107,9 @@ export default function VerdictScreen() {
   const [memory, setMemory] = useState<ScanDecisionMemory | null>(null);
   const memoryToken = useRef(0);
   
-  const loadMemory = useCallback(async () => {
-    if (!barcode || !signedIn || referenceView) {
+  const loadMemory = useCallback(async (currentSource?: any) => {
+    const src = currentSource || source;
+    if (!barcode || !signedIn || referenceView || !src || !src.labelVersion) {
       setMemory(null);
       return;
     }
@@ -116,26 +117,36 @@ export default function VerdictScreen() {
     try {
       const data = await readScanMemory(barcode);
       if (memoryToken.current === token) {
-        // Runtime type guard (Blocker 13)
         if (!data || !data.identity || typeof data.identity.label_version !== 'number' || typeof data.identity.content_fingerprint !== 'string' || !Array.isArray(data.history) || typeof data.scan_decision_memory_version !== 'string') {
           setMemory(null);
-        } else {
-          setMemory(data);
+          return;
         }
+        if (
+          data.identity.barcode !== barcode ||
+          data.identity.label_snapshot_id !== src.labelVersion.id ||
+          data.identity.label_version !== src.labelVersion.versionNumber ||
+          data.identity.content_fingerprint !== src.labelVersion.contentFingerprint
+        ) {
+          setMemory(null);
+          return;
+        }
+        setMemory(data);
       }
     } catch {
       if (memoryToken.current === token) {
         setMemory(null);
       }
     }
-  }, [barcode, signedIn, referenceView]);
+  }, [barcode, signedIn, referenceView, source]);
 
   useEffect(() => {
-    setMemory(null); // clear prior memory immediately when active identity changes
-    if (loadState === 'ready' && !referenceView) {
+    // Invalidate request generation on identity/auth/reference changes (Blocker 6)
+    memoryToken.current++;
+    setMemory(null);
+    if (loadState === 'ready' && !referenceView && source?.labelVersion && signedIn) {
       void loadMemory();
     }
-  }, [loadState, loadMemory, referenceView]);
+  }, [barcode, source?.labelVersion?.id, source?.labelVersion?.versionNumber, source?.labelVersion?.contentFingerprint, signedIn, referenceView, loadState, loadMemory]);
 
   const view = useMemo(() => (source ? buildVerdict(source) : null), [source]);
 
@@ -422,6 +433,7 @@ export default function VerdictScreen() {
             {!referenceView && source.labelVersion && memory !== undefined && (
               <ScanDecisionMemorySection
                 barcode={barcode!}
+                labelSnapshotId={source.labelVersion.id}
                 labelVersion={source.labelVersion.versionNumber}
                 contentFingerprint={source.labelVersion.contentFingerprint}
                 memory={memory}

@@ -578,6 +578,7 @@ async def report_label_error(
 
 class ScanDecisionInput(BaseModel):
     decision: Literal['BUY', 'WAIT', 'SKIP']
+    label_snapshot_id: str
     label_version: int
     content_fingerprint: str
     idempotency_key: str
@@ -625,7 +626,7 @@ async def record_scan_decision_event(
     if not snapshot:
         raise HTTPException(status_code=409, detail="conflict")
         
-    if snapshot.version_number != body.label_version or snapshot.content_fingerprint != body.content_fingerprint:
+    if str(snapshot.id) != body.label_snapshot_id or snapshot.version_number != body.label_version or snapshot.content_fingerprint != body.content_fingerprint:
         raise HTTPException(status_code=409, detail="conflict")
         
     try:

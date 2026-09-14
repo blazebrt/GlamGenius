@@ -241,12 +241,15 @@ class ScanDecisionEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     barcode: Mapped[str] = mapped_column(String(64), nullable=False)
-    label_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("product_label_snapshots.id", ondelete="SET NULL"))
+    label_snapshot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("product_label_snapshots.id", ondelete="RESTRICT"), nullable=False)
     label_version: Mapped[int] = mapped_column(Integer, nullable=False)
     content_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
     note: Mapped[str | None] = mapped_column(String(500))
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
 
     __table_args__ = (
         Index("ix_scan_decision_events_account_barcode_created", "account_id", "barcode", "created_at"),
+        UniqueConstraint("account_id", "idempotency_key", name="uq_scan_decision_event_idempotency"),
+        CheckConstraint("decision IN ('BUY', 'WAIT', 'SKIP')", name="ck_scan_decision_event_decision"),
     )

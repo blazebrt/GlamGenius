@@ -7,12 +7,14 @@ import { S } from '../../strings/verdict';
 
 export function ScanDecisionMemorySection({
   barcode,
+  labelSnapshotId,
   labelVersion,
   contentFingerprint,
   memory,
   onMemoryUpdated
 }: {
   barcode: string;
+  labelSnapshotId: string;
   labelVersion: number;
   contentFingerprint: string;
   memory: ScanDecisionMemory | null;
@@ -20,16 +22,27 @@ export function ScanDecisionMemorySection({
 }) {
   const [busy, setBusy] = useState(false);
   const [reconsidering, setReconsidering] = useState(false);
+  const draftKey = useRef<{ signature: string, id: string } | null>(null);
 
   const handleDecision = async (decision: 'BUY' | 'WAIT' | 'SKIP') => {
     setBusy(true);
-    const idempotencyKey = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const currentMemoryId = memory?.decision?.id ?? 'none';
+    const signature = `${barcode}|${labelSnapshotId}|${currentMemoryId}|${decision}`;
+    
+    if (draftKey.current?.signature !== signature) {
+      draftKey.current = {
+        signature,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+      };
+    }
+
     try {
       await saveScanDecision(barcode, {
         decision,
+        label_snapshot_id: labelSnapshotId,
         label_version: labelVersion,
         content_fingerprint: contentFingerprint,
-        idempotency_key: idempotencyKey,
+        idempotency_key: draftKey.current.id,
       });
       setReconsidering(false);
       onMemoryUpdated();
@@ -50,7 +63,7 @@ export function ScanDecisionMemorySection({
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>{S.forYou?.title || 'FOR YOU'}</Text>
+      <Text style={styles.title}>{S.decisionMemory?.title || 'DECISION MEMORY'}</Text>
       
       {busy ? (
         <View style={styles.loadingContainer}><ActivityIndicator color={COLORS.primary} /></View>
@@ -74,12 +87,12 @@ export function ScanDecisionMemorySection({
 
           {hasDecision && (
             <TouchableOpacity accessibilityRole="button" style={styles.reconsiderButton} onPress={() => setReconsidering(true)}>
-              <Text style={styles.reconsiderText}>Reconsider</Text>
+              <Text style={styles.reconsiderText}>{S.decisionMemory?.reconsider}</Text>
             </TouchableOpacity>
           )}
           {reconsidering && (
             <TouchableOpacity accessibilityRole="button" style={styles.reconsiderButton} onPress={() => setReconsidering(false)}>
-              <Text style={styles.reconsiderText}>Cancel</Text>
+              <Text style={styles.reconsiderText}>{S.decisionMemory?.cancel}</Text>
             </TouchableOpacity>
           )}
         </>

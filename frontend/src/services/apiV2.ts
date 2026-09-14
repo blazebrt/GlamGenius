@@ -3063,7 +3063,7 @@ export const readScanMemory = async (barcode: string): Promise<ScanDecisionMemor
 
 export const saveScanDecision = async (
   barcode: string,
-  payload: { decision: 'BUY' | 'WAIT' | 'SKIP'; label_version: number; content_fingerprint: string; note?: string | null; idempotency_key: string }
+  payload: { decision: 'BUY' | 'WAIT' | 'SKIP'; label_snapshot_id: string; label_version: number; content_fingerprint: string; note?: string | null; idempotency_key: string }
 ): Promise<ScanDecisionEvent> => {
   const result = await api.post<ScanDecisionEvent>(`${V2}/scan/verdict/${encodeURIComponent(barcode)}/memory`, payload);
   return result.data;

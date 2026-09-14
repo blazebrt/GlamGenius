@@ -2,6 +2,8 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react-native';
 import { ScanDecisionMemorySection } from '../components/shopping/ScanDecisionMemorySection';
 import * as apiV2 from '../services/apiV2';
+import { S } from '../strings/verdict';
+import { PURCHASE_MEMORY } from '../strings/purchaseMemory';
 
 jest.mock('../services/apiV2');
 
@@ -14,13 +16,15 @@ describe('ScanDecisionMemorySection', () => {
     render(
       <ScanDecisionMemorySection
         barcode="123"
+        labelSnapshotId="x"
         labelVersion={1}
         contentFingerprint="fp"
         memory={null}
         onMemoryUpdated={jest.fn()}
       />
     );
-    expect(screen.getByText('Would you buy this?')).toBeTruthy();
+    expect(screen.getByText(S.decisionMemory.title)).toBeTruthy();
+    expect(screen.getByText(S.decisionMemory.actions.buy)).toBeTruthy();
   });
 
   it('renders memory and allows reconsidering', async () => {
@@ -34,16 +38,17 @@ describe('ScanDecisionMemorySection', () => {
     render(
       <ScanDecisionMemorySection
         barcode="123"
+        labelSnapshotId="x"
         labelVersion={1}
         contentFingerprint="fp"
         memory={memory}
         onMemoryUpdated={jest.fn()}
       />
     );
-    expect(screen.getByText('You decided to BUY this')).toBeTruthy();
+    expect(screen.getByText(PURCHASE_MEMORY.bought)).toBeTruthy();
     
-    fireEvent.press(screen.getByText('Change Decision'));
-    expect(screen.getByText('Would you buy this?')).toBeTruthy();
+    fireEvent.press(screen.getByText(S.decisionMemory.reconsider));
+    expect(screen.getByText(S.decisionMemory.actions.buy)).toBeTruthy();
   });
 
   it('calls save API when a decision is made', async () => {
@@ -53,6 +58,7 @@ describe('ScanDecisionMemorySection', () => {
     render(
       <ScanDecisionMemorySection
         barcode="123"
+        labelSnapshotId="x"
         labelVersion={1}
         contentFingerprint="fp"
         memory={null}
@@ -60,10 +66,11 @@ describe('ScanDecisionMemorySection', () => {
       />
     );
     
-    fireEvent.press(screen.getByText('SKIP'));
+    fireEvent.press(screen.getByText(S.decisionMemory.actions.skip));
     await waitFor(() => {
       expect(apiV2.saveScanDecision).toHaveBeenCalledWith('123', expect.objectContaining({
         decision: 'SKIP',
+        label_snapshot_id: 'x',
         label_version: 1,
         content_fingerprint: 'fp',
         idempotency_key: expect.any(String)
