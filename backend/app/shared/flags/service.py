@@ -40,10 +40,10 @@ KNOWN_FLAGS: dict[str, str] = {
     "v2_privacy": "Data export and account deletion requests",
     "v2_consent": "Record and enforce photo-analysis consent",
     "v2_ai_gateway": "Route AI calls through the recorded gateway",
-    "v2_profile": "Appearance digital twin and progressive onboarding",
-    "v2_inventory": "Complete appearance inventory",
+    "v2_profile": "Governed body-product context and progressive onboarding",
+    "v2_inventory": "Governed body-product shelf",
     "v2_inventory_batch": "Multi-item capture: one shelf photo, one tap per item",
-    "v2_recommendations": "Internal look engine used by Event Ready",
+    "v2_recommendations": "INTERNAL ONLY — Event Ready candidate-selection primitive",
     "v2_shopping_decisions": "Shopping decisions: should I buy this?",
     "v2_today": "The Today engine: one plan for the day",
     "v2_planner": "The Monday-to-Sunday weekly planner",
@@ -54,11 +54,8 @@ KNOWN_FLAGS: dict[str, str] = {
         "Explainable progress metrics, goals, milestones and controlled memory"
     ),
     "v2_scan": "Face/hair/hands photo analysis with consent enforcement",
-    "v2_quiz": "Style vibe quiz. Rejected product surface; keep this off.",
     "v2_beta_access": "Invite reservation, redemption and beta usage limiter",
     "v2_onboarding": "Progressive onboarding flow",
-    "v2_virtual_tryon": "Virtual try-on. No provider is selected; keep this off.",
-    "v2_packing": "Packing decision engine. Not yet implemented; keep this off.",
 }
 
 
@@ -83,11 +80,8 @@ STABLE_BETA_DEFAULTS: dict[str, bool] = {
     "v2_routines": True,
     "v2_progress": True,
     "v2_scan": True,
-    "v2_quiz": False,
     "v2_beta_access": True,
     "v2_onboarding": True,
-    "v2_virtual_tryon": False,
-    "v2_packing": False,
 }
 
 
@@ -134,7 +128,6 @@ def env_enabled(key: str) -> bool:
 #
 # "Essential" means the beta is broken without it, not merely that the code
 # exists. Two flags are deliberately absent:
-#   v2_quiz            — a rejected product surface, defaulted off above.
 #   v2_recommendations — the look engine is retained, but only as internal
 #                        infrastructure Event Ready calls. It stays on by
 #                        default so Event Ready works; it is not standalone

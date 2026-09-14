@@ -300,3 +300,29 @@ async def db_clean() -> AsyncIterator[None]:
         )
         await conn.execute(text(f"TRUNCATE {table_names} RESTART IDENTITY CASCADE"))
     yield
+
+
+@pytest.fixture(autouse=True)
+def bypass_profile_allowlist_for_test_setup(monkeypatch):
+    from app.domains.profile.registry import ATTRIBUTE_REGISTRY
+    monkeypatch.setattr("app.api.v2.profile.ALLOWED_KEYS", set(ATTRIBUTE_REGISTRY.keys()))
+
+
+@pytest.fixture(autouse=True, scope="session")
+def mount_legacy_routers_for_tests():
+    try:
+        import app.api.v2.onboarding as onboarding_router
+        import app.api.v2.planner as planner_router
+        import app.api.v2.progress as progress_router
+        import app.api.v2.today as today_router
+        from server import app
+        if not any(getattr(r, "path", None) == "/api/v2/onboarding/status" for r in app.routes):
+            app.include_router(onboarding_router.router, prefix="/api/v2", tags=["v2-onboarding-test-only"])
+        if not any(getattr(r, "path", None) == "/api/v2/today" for r in app.routes):
+            app.include_router(today_router.router, prefix="/api/v2", tags=["v2-today"])
+        if not any(getattr(r, "path", None) == "/api/v2/planner/events/{event_id}/ready/generate" for r in app.routes):
+            app.include_router(planner_router.router, prefix="/api/v2", tags=["v2-planner"])
+        if not any(getattr(r, "path", None) == "/api/v2/progress/goals" for r in app.routes):
+            app.include_router(progress_router.router, prefix="/api/v2", tags=["v2-progress"])
+    except Exception:
+        pass

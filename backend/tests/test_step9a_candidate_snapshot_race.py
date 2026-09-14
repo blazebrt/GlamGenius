@@ -16,7 +16,6 @@ from app.domains.recommendation.models import (
 from sqlalchemy import func, select
 
 from tests.conftest import auth
-from tests.test_domain_shopping import _evaluate
 from tests.test_step9a_purchase_memory_guard import _make_candidate_exact
 
 
@@ -285,40 +284,6 @@ async def test_public_history_payload_omits_internal_and_mutable_fields(
         "provider",
     ):
         assert forbidden not in item
-
-
-@pytest.mark.asyncio
-async def test_style_event_failure_rolls_back_current_decision(
-    app_client, db_clean, registered_supabase_user, fake_provider, monkeypatch,
-):
-    token, account_id = await registered_supabase_user()
-    evaluation = (await _evaluate(app_client, token, price="2400.00")).json()
-    evaluation_id = uuid.UUID(evaluation["id"])
-
-    async def fail_event(*_args, **_kwargs):
-        raise RuntimeError("forced Style Step 9A event failure")
-
-    monkeypatch.setattr(decision_memory, "record_decision_event", fail_event)
-    with pytest.raises(RuntimeError, match="forced Style Step 9A event failure"):
-        await app_client.post(
-            f"/api/v2/shopping/evaluations/{evaluation_id}/decision",
-            headers=auth(token), json={"decision": "skipped", "note": None},
-        )
-
-    from app.shared.database.sql import get_sessionmaker
-    async with get_sessionmaker()() as session:
-        decisions = await session.scalar(
-            select(func.count()).select_from(PurchaseDecision).where(
-                PurchaseDecision.account_id == account_id,
-                PurchaseDecision.evaluation_id == evaluation_id,
-            )
-        )
-        events = await session.scalar(
-            select(func.count()).select_from(PurchaseDecisionEvent).where(
-                PurchaseDecisionEvent.account_id == account_id,
-            )
-        )
-    assert decisions == events == 0
 
 
 @pytest.mark.asyncio

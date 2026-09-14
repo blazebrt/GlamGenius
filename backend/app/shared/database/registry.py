@@ -48,7 +48,7 @@ from app.domains.profile.models import (
     UserConstraint,
 )
 from app.domains.progress import models as progress_models
-from app.domains.quiz.models import QuizSubmission
+from app.domains.quiz import models as legacy_quiz_models
 from app.domains.recommendation import models as recommendation_models
 from app.domains.reference import (
     IngredientContraindicationRule,
@@ -92,11 +92,11 @@ __all__ = [
     "Invite",
     "InviteRedemption",
     "BetaUsageEvent",
-    "QuizSubmission",
     "Scan",
     "inventory_models",
     "recommendation_models",
     "planning_models",
+    "legacy_quiz_models",
     "routines_models",
     "progress_models",
     "SeedVersionRecord",

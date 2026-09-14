@@ -208,7 +208,7 @@ export default function ImproveScreen() {
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityLabel="Confirm ingredients we read at low confidence"
-            onPress={() => router.push('/(tabs)/care')}
+            onPress={() => router.push('/scan')}
             style={styles.confirm}
           >
             <Ionicons name="help-circle-outline" size={19} color={COLORS.primary} />
@@ -224,7 +224,7 @@ export default function ImproveScreen() {
         <TouchableOpacity
           accessibilityRole="button"
           accessibilityLabel="Open upkeep timing"
-          onPress={() => router.push('/(tabs)/services')}
+          onPress={() => router.push('/scan')}
           style={styles.confirm}
         >
           <Ionicons name="time-outline" size={19} color={COLORS.primary} />

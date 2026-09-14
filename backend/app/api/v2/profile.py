@@ -1,26 +1,38 @@
-"""Appearance digital twin routes."""
+"""Structured Care Profile routes."""
 from __future__ import annotations
-
-import uuid
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import MAX_IMAGE_BASE64_CHARS
-from app.domains.consent import service as consent_service
-from app.domains.profile import baseline, observations, service
+from app.domains.profile import service
 from app.domains.profile.registry import ATTRIBUTE_REGISTRY
-from app.domains.profile.schemas import BaselineRequest, ObservationEdit, ProfilePatch
+from app.domains.profile.schemas import ProfilePatch
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_profile"))])
 
+ALLOWED_KEYS = {"care_skin_usual_feel", "care_skin_sensitivity"}
 
 async def _profile(session: AsyncSession, current: CurrentAccount):
     return await service.get_or_create_profile(session, current.account_id)
 
+def _filter_profile(body: dict) -> dict:
+    """Filter legacy appearance attributes out of the active customer payload."""
+    if "attributes" in body:
+        body["attributes"] = [attr for attr in body["attributes"] if attr.get("key") in ALLOWED_KEYS]
+    
+    body.pop("baseline_status", None)
+    body.pop("readiness", None)
+    
+    if "change_history" in body:
+        body["change_history"] = [
+            item for item in body["change_history"]
+            if item.get("attribute_key") in ALLOWED_KEYS
+        ]
+        
+    return body
 
 @router.get("/profile")
 async def get_profile(current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
@@ -28,19 +40,22 @@ async def get_profile(current: CurrentAccount = Depends(get_current_account), se
     body = await service.serialize_profile(session, profile)
     body["change_history"] = await service.change_history(session, profile.id)
     await session.commit()
-    return body
-
+    return _filter_profile(body)
 
 @router.patch("/profile")
 async def patch_profile(body: ProfilePatch, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
+    for item in body.attributes:
+        if item.key not in ALLOWED_KEYS:
+            raise ValidationFailedError(f"Profile key '{item.key}' is retired or invalid.", field="attributes")
+            
     profile = await _profile(session, current)
     try:
-        await service.apply_attributes(session, profile, [item.model_dump() for item in body.attributes])
+        await service.apply_attributes(session, profile, [item.model_dump() for item in body.attributes if item.key in ALLOWED_KEYS])
     except ValueError as exc:
         raise ValidationFailedError(str(exc)) from exc
     await session.commit()
-    return await service.serialize_profile(session, profile)
-
+    body_res = await service.serialize_profile(session, profile)
+    return _filter_profile(body_res)
 
 @router.get("/profile/attributes")
 async def get_attributes(current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
@@ -48,7 +63,7 @@ async def get_attributes(current: CurrentAccount = Depends(get_current_account),
     rows = await service.attributes_for(session, profile.id)
     await session.commit()
     return {
-        "attributes": [service.serialize_attribute(row) for row in rows],
+        "attributes": [service.serialize_attribute(row) for row in rows if row.key in ALLOWED_KEYS],
         "registry": [
             {
                 "key": spec.key,
@@ -59,56 +74,7 @@ async def get_attributes(current: CurrentAccount = Depends(get_current_account),
                 "min_items": spec.min_items,
                 "exclusive_choices": list(spec.exclusive_choices) or None,
             }
-            for spec in ATTRIBUTE_REGISTRY.values()
+            for spec in ATTRIBUTE_REGISTRY.values() if spec.key in ALLOWED_KEYS
         ],
-        "readiness": service.readiness(rows), "weight_required": False,
+        "weight_required": False,
     }
-
-
-@router.get("/profile/observations")
-async def get_observations(current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    profile = await _profile(session, current)
-    rows = await observations.list_for_profile(session, profile.id)
-    await session.commit()
-    return {"observations": [observations.serialize(row) for row in rows]}
-
-
-@router.post("/profile/observations/{observation_id}/confirm")
-async def confirm_observation(observation_id: uuid.UUID, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    profile = await _profile(session, current)
-    row = await observations.owned(session, profile.id, observation_id)
-    await observations.confirm(session, profile, row)
-    await session.commit()
-    return observations.serialize(row)
-
-
-@router.post("/profile/observations/{observation_id}/reject")
-async def reject_observation(observation_id: uuid.UUID, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    profile = await _profile(session, current)
-    row = await observations.owned(session, profile.id, observation_id)
-    observations.reject(row)
-    await session.commit()
-    return observations.serialize(row)
-
-
-@router.patch("/profile/observations/{observation_id}")
-async def edit_observation(observation_id: uuid.UUID, body: ObservationEdit, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    profile = await _profile(session, current)
-    row = await observations.owned(session, profile.id, observation_id)
-    try:
-        observations.edit(row, body.value, body.verification_state)
-    except ValueError as exc:
-        raise ValidationFailedError(str(exc)) from exc
-    await session.commit()
-    return observations.serialize(row)
-
-
-@router.post("/profile/baseline-analysis")
-async def baseline_analysis(body: BaselineRequest, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    if len(body.image_base64) > MAX_IMAGE_BASE64_CHARS:
-        raise ValidationFailedError("That image is too large. Please choose a smaller photo.", field="image_base64")
-    await consent_service.require_analysis_consent(session, current.account_id)
-    profile = await _profile(session, current)
-    result = await baseline.analyse(session, profile, account_id_str=current.account_id_str, image_base64=body.image_base64)
-    await session.commit()
-    return result

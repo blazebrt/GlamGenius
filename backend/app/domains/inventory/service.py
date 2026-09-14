@@ -13,7 +13,6 @@ from sqlalchemy import String, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.inventory.models import (
-    AccessoryItemDetail,
     BeautyProductDetail,
     DuplicateCandidate,
     HairProductDetail,
@@ -28,9 +27,7 @@ from app.domains.inventory.models import (
     ItemRelationship,
     ItemUsageEvent,
     PerfumeDetail,
-    ShoeItemDetail,
     SupplementDetail,
-    WardrobeItemDetail,
 )
 from app.domains.inventory.schemas import ItemCreate, ItemPatch
 from app.domains.inventory.taxonomy import (
@@ -47,9 +44,7 @@ from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import ConflictError, NotFoundError, ValidationFailedError
 
 DETAIL_MODELS = {
-    "wardrobe": WardrobeItemDetail, "shoes": ShoeItemDetail,
-    "accessories": AccessoryItemDetail, "beauty": BeautyProductDetail,
-    "hair": HairProductDetail, "perfumes": PerfumeDetail,
+    "beauty": BeautyProductDetail, "hair": HairProductDetail, "perfumes": PerfumeDetail,
     "supplements": SupplementDetail,
 }
 LIST_SORTS = {
@@ -86,7 +81,11 @@ async def owned_item(
     lock makes the read-modify-write a single serialised step, which is what
     the refusal message already promises the caller.
     """
-    stmt = select(InventoryItem).where(InventoryItem.id == item_id, InventoryItem.account_id == account_id)
+    stmt = select(InventoryItem).where(
+        InventoryItem.id == item_id,
+        InventoryItem.account_id == account_id,
+        InventoryItem.category.in_(CATEGORIES),
+    )
     if not include_archived:
         stmt = stmt.where(InventoryItem.status != "archived")
     if for_update:
@@ -219,6 +218,12 @@ async def update_item(session: AsyncSession, item: InventoryItem, body: ItemPatc
     if body.expected_version is not None and body.expected_version != item.version:
         raise ConflictError("This item changed on another device. Refresh it before saving.", current_version=item.version)
     fields = body.model_dump(exclude_unset=True, exclude={"expected_version", "details", "attributes", "image_ids"})
+    reserved_care_controls = {"care_routine_paused", "care_routine_preferred"}
+    if reserved_care_controls & {row.key for row in body.attributes}:
+        raise ValidationFailedError(
+            "Use the dedicated Care product controls to change routine participation.",
+            field="attributes",
+        )
     for key, value in fields.items():
         setattr(item, key, value.strip() if isinstance(value, str) else value)
     if body.details:
@@ -422,7 +427,13 @@ def _attr_filter(key: str, value: str):
 
 
 async def list_items(session: AsyncSession, account_id: uuid.UUID, *, page: int = 1, page_size: int = 24, q: str | None = None, category: str | None = None, brand: str | None = None, colour: str | None = None, ingredient: str | None = None, occasion: str | None = None, season: str | None = None, condition: str | None = None, expiry_status: str | None = None, usage_level: str | None = None, verification_state: str | None = None, sort: str = "newest") -> dict[str, Any]:
-    stmt = select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived")
+    if category is not None and category not in CATEGORIES:
+        raise ValidationFailedError("That product category is not available in your shelf.", field="category")
+    stmt = select(InventoryItem).where(
+        InventoryItem.account_id == account_id,
+        InventoryItem.status != "archived",
+        InventoryItem.category.in_(CATEGORIES),
+    )
     if q: stmt = stmt.where(or_(InventoryItem.display_name.ilike(f"%{q}%"), InventoryItem.brand.ilike(f"%{q}%"), InventoryItem.subcategory.ilike(f"%{q}%"), _attr_filter("ingredients_text", q), _attr_filter("active_ingredients", q)))
     if category: stmt = stmt.where(InventoryItem.category == category)
     if brand: stmt = stmt.where(InventoryItem.brand.ilike(f"%{brand}%"))
@@ -453,7 +464,7 @@ async def list_items(session: AsyncSession, account_id: uuid.UUID, *, page: int 
 
 
 async def expiring_items(session: AsyncSession, account_id: uuid.UUID, days: int = 90) -> list[dict[str, Any]]:
-    rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived"))).scalars().all()
+    rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived", InventoryItem.category.in_(CATEGORIES)))).scalars().all()
     details_by_item = await details_for_many(session, rows); today = date.today()
     dated = [(item, effective_expiry_from_details(details_by_item[item.id])) for item in rows]
     due = [(item, expiry) for item, expiry in dated if expiry and (expiry - today).days <= days]
@@ -467,12 +478,12 @@ async def expiring_items(session: AsyncSession, account_id: uuid.UUID, days: int
 
 
 async def low_use_items(session: AsyncSession, account_id: uuid.UUID) -> list[dict[str, Any]]:
-    rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived"))).scalars().all()
+    rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived", InventoryItem.category.in_(CATEGORIES)))).scalars().all()
     return await serialize_items(session, [item for item in rows if is_low_use(item)])
 
 
 async def value_report(session: AsyncSession, account_id: uuid.UUID, *, record: bool = False) -> dict[str, Any]:
-    rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived"))).scalars().all(); estimates = []
+    rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived", InventoryItem.category.in_(CATEGORIES)))).scalars().all(); estimates = []
     details_by_item = await details_for_many(session, rows)
     for item in rows:
         estimate = value_to_recover(item, details_by_item[item.id]); estimates.append(estimate)
@@ -495,6 +506,7 @@ async def duplicates(session: AsyncSession, account_id: uuid.UUID) -> list[dict[
             InventoryItem.account_id == account_id,
             InventoryItem.id.in_(wanted),
             InventoryItem.status != "archived",
+            InventoryItem.category.in_(CATEGORIES),
         )
     )).scalars().all()
     bodies = {item.id: body for item, body in zip(items, await serialize_items(session, items), strict=True)}
@@ -519,7 +531,7 @@ async def resolve_duplicate(session: AsyncSession, account_id: uuid.UUID, candid
 
 
 async def summary(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
-    rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived"))).scalars().all(); counts = {key: 0 for key in CATEGORIES}
+    rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived", InventoryItem.category.in_(CATEGORIES)))).scalars().all(); counts = {key: 0 for key in CATEGORIES}
     for item in rows: counts[item.category] += 1
     low = sum(1 for item in rows if is_low_use(item)); expiring = len(await expiring_items(session, account_id)); dupes = len(await duplicates(session, account_id)); values = await value_report(session, account_id)
     known_prices = sum(1 for item in rows if item.purchase_price is not None); used = sum(1 for item in rows if item.usage_count > 0)

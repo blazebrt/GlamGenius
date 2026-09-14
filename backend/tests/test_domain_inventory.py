@@ -1,7 +1,7 @@
-"""Full-lifecycle regression coverage for the seven-category appearance inventory.
+"""Full-lifecycle regression coverage for the four-category care inventory.
 
-Every canonical category (``wardrobe``, ``shoes``, ``accessories``, ``beauty``,
-``hair``, ``perfumes``, ``supplements``) is exercised through:
+Every canonical category (``beauty``, ``hair``, ``perfumes``, ``supplements``)
+is exercised through:
 
     create → read → update → usage (idempotency) → condition → archive
 
@@ -53,37 +53,6 @@ pytestmark = pytest.mark.asyncio
 
 
 CATEGORY_TEMPLATES: dict[str, dict] = {
-    "wardrobe": {
-        "display_name": "Charcoal Blazer",
-        "brand": "Studio 41",
-        "details": {
-            "colour": "charcoal",
-            "fabric": "wool blend",
-            "season": ["autumn", "winter"],
-            "occasion": ["work", "evening"],
-            "formality": "smart",
-        },
-    },
-    "shoes": {
-        "display_name": "Oxford Lace-ups",
-        "brand": "Bombay Bootery",
-        "details": {
-            "shoe_type": "oxford",
-            "colour": "tan",
-            "occasion": ["work"],
-            "weather_suitability": ["dry"],
-        },
-    },
-    "accessories": {
-        "display_name": "Leather Belt",
-        "brand": "Hidesign",
-        "details": {
-            "accessory_type": "belt",
-            "colour": "brown",
-            "material": "leather",
-            "occasion": ["casual", "work"],
-        },
-    },
     "beauty": {
         "display_name": "Vitamin C Serum",
         "brand": "Minimalist",
@@ -228,7 +197,7 @@ async def test_usage_event_increments_counter_and_is_not_double_counted(db_clean
     account_id = await _seed_and_account()
 
     async with factory() as session:
-        item = await inv.create_item(session, account_id, _make_body("shoes"))
+        item = await inv.create_item(session, account_id, _make_body("hair"))
         await session.commit()
         item_id = item.id
 
@@ -262,7 +231,7 @@ async def test_condition_event_persists_and_updates_item(db_clean):
     account_id = await _seed_and_account()
 
     async with factory() as session:
-        item = await inv.create_item(session, account_id, _make_body("wardrobe"))
+        item = await inv.create_item(session, account_id, _make_body("beauty"))
         await session.commit()
         item_id = item.id
 
@@ -299,7 +268,7 @@ async def test_unsupported_detail_field_rejected_per_category():
     with pytest.raises(Exception):
         ItemCreate.model_validate(
             {
-                "category": "wardrobe",
+                "category": "beauty",
                 "display_name": "Coat",
                 "details": {"heel_height": 3},
             }
@@ -390,17 +359,17 @@ async def test_list_items_filters_by_category_and_paginates(db_clean):
     account_id = await _seed_and_account()
 
     async with factory() as session:
-        for category in ("wardrobe", "shoes", "accessories"):
+        for category in ("beauty", "hair", "perfumes"):
             body = _make_body(category)
             await inv.create_item(session, account_id, body)
         await session.commit()
 
     async with factory() as session:
         result = await inv.list_items(
-            session, account_id, page=1, page_size=2, category="wardrobe"
+            session, account_id, page=1, page_size=2, category="beauty"
         )
     assert result["pagination"]["total"] == 1
-    assert result["items"][0]["category"] == "wardrobe"
+    assert result["items"][0]["category"] == "beauty"
 
     async with factory() as session:
         page1 = await inv.list_items(session, account_id, page=1, page_size=2)
@@ -440,7 +409,7 @@ async def test_archived_item_hidden_from_default_listing(db_clean):
     account_id = await _seed_and_account()
 
     async with factory() as session:
-        item = await inv.create_item(session, account_id, _make_body("accessories"))
+        item = await inv.create_item(session, account_id, _make_body("perfumes"))
         await session.commit()
         item_id = item.id
     async with factory() as session:
@@ -458,7 +427,7 @@ async def test_inventory_events_are_recorded_for_every_lifecycle_step(db_clean):
     account_id = await _seed_and_account()
 
     async with factory() as session:
-        item = await inv.create_item(session, account_id, _make_body("wardrobe"))
+        item = await inv.create_item(session, account_id, _make_body("beauty"))
         await session.commit()
         item_id = item.id
 
@@ -521,7 +490,7 @@ async def test_inventory_summary_counts_every_category(db_clean):
     account_id = await _seed_and_account()
 
     async with factory() as session:
-        await inv.create_item(session, account_id, _make_body("wardrobe"))
+        await inv.create_item(session, account_id, _make_body("beauty"))
         await inv.create_item(session, account_id, _make_body("supplements"))
         await session.commit()
 
@@ -530,9 +499,8 @@ async def test_inventory_summary_counts_every_category(db_clean):
 
     assert summary["total_items"] == 2
     assert set(summary["categories"].keys()) == {
-        "wardrobe", "shoes", "accessories", "beauty",
-        "hair", "perfumes", "supplements",
+        "beauty", "hair", "perfumes", "supplements",
     }
-    assert summary["categories"]["wardrobe"] == 1
+    assert summary["categories"]["beauty"] == 1
     assert summary["categories"]["supplements"] == 1
-    assert summary["categories"]["shoes"] == 0
+    assert summary["categories"]["hair"] == 0

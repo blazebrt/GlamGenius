@@ -150,8 +150,6 @@ async def test_export_carries_a_record_from_every_active_domain(
     assert domains["inventory"]["items"]
     assert domains["media"]["assets"]
     assert domains["scans"]["scans"]
-    assert domains["quiz_and_styling"]["quiz_submissions"]
-    assert domains["shopping"]["candidates"]
     assert domains["planning"]["daily_plans"]
     assert domains["routines"]["routines"]
     assert domains["progress_and_memory"]["memory_facts"]
@@ -302,7 +300,7 @@ async def test_routines_export_includes_all_owned_records_and_is_account_scoped(
     assert str(account_b) not in export_a.__repr__()
 
 
-async def test_export_covers_all_seven_inventory_categories(
+async def test_export_covers_all_care_inventory_categories(
     app_client, db_clean, registered_supabase_user, fake_provider, storage
 ):
     token, _, _ = await _seeded_account(app_client, registered_supabase_user)
@@ -311,7 +309,7 @@ async def test_export_covers_all_seven_inventory_categories(
 
     categories = {row["category"] for row in export["domains"]["inventory"]["items"]}
     assert categories == {
-        "wardrobe", "shoes", "accessories", "beauty", "hair", "perfumes", "supplements",
+        "beauty", "hair", "perfumes", "supplements",
     }
 
 
@@ -360,7 +358,7 @@ async def test_export_is_scoped_to_the_caller(
     ok(await app_client.post(
         "/api/v2/inventory/items",
         headers=auth(token_b),
-        json={"category": "wardrobe", "display_name": "Account B Only Jacket"},
+        json={"category": "beauty", "display_name": "Account B Only Jacket"},
     ))
 
     export_a = await app_client.get("/api/v2/privacy/export", headers=auth(token_a))

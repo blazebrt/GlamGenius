@@ -1,4 +1,4 @@
-"""Phase 3 complete appearance inventory domain."""
+"""Governed body-product shelf domain."""
 
 from app.domains.inventory.models import InventoryItem
 

@@ -259,7 +259,7 @@ export function RetiredInventoryBatchScreen() {
           unsent={unsent}
           onRetryUnsent={() => void retryUnsent()}
           onScanAnother={startOver}
-          onOpenInventory={() => router.replace('/(tabs)/care')}
+          onOpenInventory={() => router.replace('/shelf')}
         />
       ) : (
         <EmptyCapture onRetake={startOver} />

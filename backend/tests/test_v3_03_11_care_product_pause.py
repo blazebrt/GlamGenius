@@ -271,13 +271,13 @@ async def test_pause_validation_generic_patch_and_cross_account_ownership(
     assert cross_pause.status_code == 404
     assert cross_resume.status_code == 404
 
-    wardrobe = await app_client.post(
+    unsupported_item = await app_client.post(
         "/api/v2/inventory/items", headers=auth(token_a),
-        json={"category": "wardrobe", "display_name": "Blue Shirt"},
+        json={"category": "perfumes", "display_name": "Cedar Eau de Parfum"},
     )
-    assert wardrobe.status_code in (200, 201), wardrobe.text
+    assert unsupported_item.status_code in (200, 201), unsupported_item.text
     unsupported = await app_client.post(
-        f"/api/v2/routines/products/{wardrobe.json()['id']}/pause", headers=auth(token_a),
+        f"/api/v2/routines/products/{unsupported_item.json()['id']}/pause", headers=auth(token_a),
     )
     assert unsupported.status_code == 422
     assert "Only Skin Care and Hair Care products can be paused from Care routines." in str(unsupported.json())

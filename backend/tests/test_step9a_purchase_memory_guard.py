@@ -13,7 +13,6 @@ from app.domains.recommendation.models import PurchaseDecision, PurchaseDecision
 from sqlalchemy import func, select
 
 from tests.conftest import auth
-from tests.test_domain_shopping import _evaluate
 from tests.test_v3_05_7_care_purchase_experience import _seed_db_candidate
 
 
@@ -82,7 +81,7 @@ def test_identity_is_strategy_scoped_and_ignores_fragrance_use_context():
         category="perfumes", details={"fragrance_family": "woody", "concentration": "edt"},
     )
     draft_style = _candidate(
-        category="wardrobe", verification_state="draft", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={},
+        category="beauty", verification_state="draft", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={},
     )
     assert identity_for_candidate(first)["fingerprint"] == identity_for_candidate(changed_use)["fingerprint"]
     assert identity_for_candidate(first)["fingerprint"] != identity_for_candidate(changed_product)["fingerprint"]
@@ -216,8 +215,8 @@ async def test_purchase_events_export_and_delete_through_real_state_machine(app_
 
 
 @pytest.mark.asyncio
-async def test_concurrent_candidate_and_style_retries_append_one_event(
-    app_client, db_clean, registered_supabase_user, fake_provider,
+async def test_concurrent_candidate_retries_append_one_event(
+    app_client, db_clean, registered_supabase_user,
 ):
     """The real route sessions prove database locks, not a process-local mutex."""
     token, account_id = await registered_supabase_user()
@@ -227,33 +226,16 @@ async def test_concurrent_candidate_and_style_retries_append_one_event(
         _decide(app_client, token, candidate_id, "waiting"),
     )
     assert responses == [None, None]
-    evaluation = (await _evaluate(app_client, token, price="2400.00")).json()
-    style_responses = await asyncio.gather(*[
-        app_client.post(
-            f"/api/v2/shopping/evaluations/{evaluation['id']}/decision",
-            headers=auth(token), json={"decision": "skipped", "note": None},
-        )
-        for _ in range(2)
-    ])
-    assert all(response.status_code == 200 for response in style_responses)
     from app.shared.database.sql import get_sessionmaker
     async with get_sessionmaker()() as session:
         care_rows = await session.scalar(select(func.count()).select_from(PurchaseDecision).where(
             PurchaseDecision.account_id == account_id,
             PurchaseDecision.candidate_id == candidate_id,
         ))
-        style_row = await session.scalar(select(PurchaseDecision).where(
-            PurchaseDecision.account_id == account_id,
-            PurchaseDecision.evaluation_id == uuid.UUID(evaluation["id"]),
-        ))
-        style_events = await session.scalar(select(func.count()).select_from(PurchaseDecisionEvent).where(
-            PurchaseDecisionEvent.decision_id == style_row.id,
-        ))
         care_events = await session.scalar(select(func.count()).select_from(PurchaseDecisionEvent).where(
             PurchaseDecisionEvent.candidate_id == candidate_id,
         ))
     assert care_rows == care_events == 1
-    assert style_events == 1
 
 
 def test_identity_canonicalization_is_deterministic_but_not_fuzzy():
@@ -285,11 +267,9 @@ def test_identity_insufficiency_matrix_and_category_isolation():
         _candidate(details={"product_type": "cleanser", "active_ingredients": []}),
         _candidate(category="perfumes", details={"fragrance_family": "woody"}),
         _candidate(category="perfumes", details={"concentration": "edp"}),
-        _candidate(category="wardrobe", subcategory=None, size="m", fabric="cotton", colour="blue", details={}),
-        _candidate(category="wardrobe", subcategory="shirt", size=None, fabric="cotton", colour="blue", details={}),
-        _candidate(category="wardrobe", subcategory="shirt", size="m", fabric=None, colour="blue", details={}),
-        _candidate(category="wardrobe", subcategory="shirt", size="m", fabric="cotton", colour=None, details={}),
-        _candidate(category="wardrobe", verification_state="draft", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={}),
+        _candidate(category="beauty", subcategory=None, details={}),
+        _candidate(category="beauty", subcategory="cleanser", details={}),
+        _candidate(category="beauty", verification_state="draft"),
         _candidate(uncertain_fields=["brand"]),
     ]
     assert all(identity_for_candidate(candidate)["state"] == "insufficient" for candidate in insufficient)
@@ -299,11 +279,11 @@ def test_identity_insufficiency_matrix_and_category_isolation():
     assert beauty["state"] == hair["state"] == "exact"
     assert beauty["fingerprint"] != hair["fingerprint"]
 
-    style_m = identity_for_candidate(_candidate(
-        category="wardrobe", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={},
+    cleanser = identity_for_candidate(_candidate(
+        category="beauty", subcategory="cleanser", details={"product_type": "cleanser", "active_ingredients": ["glycerin"]},
     ))
-    style_l = identity_for_candidate(_candidate(
-        category="wardrobe", subcategory="shirt", size="l", fabric="cotton", colour="blue", details={},
+    serum = identity_for_candidate(_candidate(
+        category="beauty", subcategory="serum", details={"product_type": "serum", "active_ingredients": ["glycerin"]},
     ))
     fragrance_edp = identity_for_candidate(_candidate(
         category="perfumes", details={"fragrance_family": "woody", "concentration": "edp"},
@@ -311,7 +291,7 @@ def test_identity_insufficiency_matrix_and_category_isolation():
     fragrance_edt = identity_for_candidate(_candidate(
         category="perfumes", details={"fragrance_family": "woody", "concentration": "edt"},
     ))
-    assert style_m["fingerprint"] != style_l["fingerprint"]
+    assert cleanser["fingerprint"] != serum["fingerprint"]
     assert fragrance_edp["fingerprint"] != fragrance_edt["fingerprint"]
 
 

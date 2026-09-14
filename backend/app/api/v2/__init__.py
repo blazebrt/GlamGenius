@@ -20,24 +20,18 @@ from app.api.v2 import (
     maintenance,
     me,
     media,
-    onboarding,
     personal_applicability_admin,
     personal_decision_release_admin,
-    planner,
     privacy,
     product,
     profile,
-    progress,
-    quiz,
     routines,
     scan,
     shelf,
     shopping,
     skin_care_personal_decision,
     skin_care_scan,
-    style,
     supplements,
-    today,
 )
 
 router = APIRouter(prefix="/api/v2")
@@ -51,7 +45,6 @@ router.include_router(media.router, tags=["v2-media"])
 router.include_router(jobs.router, tags=["v2-jobs"])
 router.include_router(privacy.router, tags=["v2-privacy"])
 router.include_router(profile.router, tags=["v2-profile"])
-router.include_router(onboarding.router, tags=["v2-onboarding"])
 router.include_router(inventory.router, tags=["v2-inventory"])
 router.include_router(supplements.router, tags=["v2-supplements"])
 router.include_router(scan.router, tags=["v2-scan"])
@@ -61,16 +54,11 @@ router.include_router(
     skin_care_personal_decision.router, tags=["v2-skin-care-for-you"]
 )
 router.include_router(community.router, tags=["v2-community"])
-router.include_router(quiz.router, tags=["v2-quiz"])
-router.include_router(style.router, tags=["v2-style"])
 router.include_router(shopping.router, tags=["v2-shopping"])
-router.include_router(today.router, tags=["v2-today"])
-router.include_router(planner.router, tags=["v2-planner"])
 router.include_router(integrations.router, tags=["v2-integrations"])
 router.include_router(shelf.router, tags=["v2-shelf"])
 router.include_router(maintenance.router, tags=["v2-maintenance"])
 router.include_router(routines.router, tags=["v2-routines"])
-router.include_router(progress.router, tags=["v2-progress"])
 router.include_router(admin.router, tags=["v2-admin"])
 # Not a customer surface: a shared-secret door for the external scheduler.
 router.include_router(internal_scheduler.router)
@@ -80,3 +68,5 @@ router.include_router(
 )
 
 __all__ = ["router"]
+
+

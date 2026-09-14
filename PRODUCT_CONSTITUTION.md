@@ -12,10 +12,11 @@ Food, cosmetics, supplements, cookware, salon upkeep. India only.
 
 ## The master rule
 The engine judges effect on the body. It never judges appearance.
-INTERNAL EXCEPTION: the recommendation/Look engine is retained as
-infrastructure for Event Ready, answering "what do you already own that
-suits this occasion". This exception covers backend modules only. No
-Style, quiz, or colour-analysis SCREEN may exist.
+INTERNAL EXCEPTION: a minimal Event Ready candidate-selection primitive is
+retained for the narrow question "what already-owned eligible items suit this
+event context". This exception covers implementation detail only. It does not
+permit a Style product, wardrobe cataloguing, customer Look management, a
+style profile, quiz, colour-analysis screen, or generic outfit generation.
 
 ## The manager rule
 The app decides. It does not offer menus. Every result is a decision

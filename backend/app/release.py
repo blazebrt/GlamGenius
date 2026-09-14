@@ -139,13 +139,13 @@ async def release() -> None:
                         found=counts["seed_version"],
                     )
 
-                # Verify seven inventory categories
+                # Verify every retained inventory category was seeded.
                 cat_count = await session.scalar(select(func.count(InventoryCategory.key)))
-                if cat_count != 7:
+                if cat_count != 4:
                     _fail(
                         "verify_inventory_categories",
                         "category_count_mismatch",
-                        expected=7,
+                        expected=4,
                         found=cat_count,
                     )
                 

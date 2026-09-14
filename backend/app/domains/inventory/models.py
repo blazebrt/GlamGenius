@@ -1,4 +1,10 @@
-"""Relational models for the complete appearance inventory."""
+"""Relational models for the governed body-product shelf.
+
+The three legacy detail models below remain registered only so existing
+production rows are not orphaned or destructively dropped.  They are
+``LEGACY_STORAGE_ONLY — NOT PRODUCT AUTHORITY`` and have no active API,
+taxonomy, or customer surface.
+"""
 from __future__ import annotations
 
 import uuid
@@ -90,6 +96,7 @@ class InventoryAttribute(UUIDPrimaryKey, TimestampMixin, Base):
 
 
 class WardrobeItemDetail(UUIDPrimaryKey, TimestampMixin, Base):
+    # LEGACY_STORAGE_ONLY — NOT PRODUCT AUTHORITY.
     __tablename__ = "wardrobe_item_details"
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False, unique=True)
     colour: Mapped[str | None] = mapped_column(String(80)); pattern: Mapped[str | None] = mapped_column(String(80))
@@ -100,6 +107,7 @@ class WardrobeItemDetail(UUIDPrimaryKey, TimestampMixin, Base):
 
 
 class ShoeItemDetail(UUIDPrimaryKey, TimestampMixin, Base):
+    # LEGACY_STORAGE_ONLY — NOT PRODUCT AUTHORITY.
     __tablename__ = "shoe_item_details"
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False, unique=True)
     shoe_type: Mapped[str | None] = mapped_column(String(80)); colour: Mapped[str | None] = mapped_column(String(80)); size: Mapped[str | None] = mapped_column(String(40))
@@ -109,6 +117,7 @@ class ShoeItemDetail(UUIDPrimaryKey, TimestampMixin, Base):
 
 
 class AccessoryItemDetail(UUIDPrimaryKey, TimestampMixin, Base):
+    # LEGACY_STORAGE_ONLY — NOT PRODUCT AUTHORITY.
     __tablename__ = "accessory_item_details"
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False, unique=True)
     accessory_type: Mapped[str | None] = mapped_column(String(80)); colour: Mapped[str | None] = mapped_column(String(80)); metal: Mapped[str | None] = mapped_column(String(80)); material: Mapped[str | None] = mapped_column(String(100)); style: Mapped[str | None] = mapped_column(String(100))

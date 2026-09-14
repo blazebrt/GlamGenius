@@ -397,7 +397,7 @@ async def test_purchase_metadata_round_trips(
         "/api/v2/inventory/items",
         headers=auth(token),
         json={
-            "category": "wardrobe",
+            "category": "beauty",
             "display_name": "Charcoal Blazer",
             "brand": "Fable",
             "purchase_date": "2025-11-02",
@@ -426,7 +426,7 @@ async def test_negative_purchase_price_is_refused(
         "/api/v2/inventory/items",
         headers=auth(token),
         json={
-            "category": "wardrobe", "display_name": "Impossible Blazer",
+            "category": "beauty", "display_name": "Impossible Blazer",
             "purchase_price": "-10.00",
         },
     )
@@ -442,7 +442,7 @@ async def test_archived_item_keeps_its_history_and_can_be_confirmed_back(
     created = ok(await app_client.post(
         "/api/v2/inventory/items",
         headers=auth(token),
-        json={"category": "shoes", "display_name": "Brown Derbies"},
+        json={"category": "hair", "display_name": "Brown Derbies"},
     ))
     ok(await app_client.post(
         f"/api/v2/inventory/items/{created['id']}/usage",
@@ -562,4 +562,4 @@ async def test_failed_seed_rolls_back_completely(db_clean, monkeypatch):
         monkeypatch.undo()
         result = await bootstrap.run(session)
         await session.commit()
-    assert result["counts"]["inventory_categories"] == 7
+    assert result["counts"]["inventory_categories"] == 4

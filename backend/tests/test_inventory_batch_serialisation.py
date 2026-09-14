@@ -64,15 +64,12 @@ async def _account() -> uuid.UUID:
     return account_id
 
 
-# One per category, each carrying the kind of detail its own table holds, so
-# the grouped lookup has to get all seven right rather than one.
+# One per retained category, each carrying the kind of detail its own table
+# holds, so the grouped lookup has to cover every active detail table.
 _SPECIMENS = [
-    ("wardrobe", "Blue cotton shirt", {"colour": "blue", "fabric": "cotton"}),
-    ("shoes", "Running shoes", {"colour": "black"}),
-    ("accessories", "Leather belt", {"colour": "brown"}),
-    ("beauty", "Vitamin C serum", {"expiry_date": "2027-01-31", "opened_date": "2026-01-05"}),
-    ("hair", "Argan hair oil", {"expiry_date": "2026-11-30"}),
-    ("perfumes", "Citrus eau de parfum", {}),
+    ("beauty", "Vitamin C serum", {"product_type": "serum", "expiry_date": "2027-01-31", "opened_date": "2026-01-05"}),
+    ("hair", "Argan hair oil", {"product_type": "hair_oil", "expiry_date": "2026-11-30"}),
+    ("perfumes", "Citrus eau de parfum", {"fragrance_family": "citrus"}),
     ("supplements", "Vitamin D3", {"expiry_date": "2027-06-30"}),
 ]
 
@@ -124,7 +121,7 @@ async def test_the_batched_path_returns_exactly_what_the_loop_returned(db_clean)
 
 
 async def test_details_agree_for_every_category(db_clean):
-    """The grouped lookup picks a different table per category; all seven."""
+    """The grouped lookup picks a different table per retained category."""
     account_id = await _account()
     await _seed_one_of_each(account_id)
 
@@ -143,7 +140,7 @@ async def test_an_item_with_no_detail_row_still_appears(db_clean):
     async with get_sessionmaker()() as session:
         await inv.ensure_categories(session)
         item = InventoryItem(
-            account_id=account_id, category="wardrobe", display_name="Bare",
+            account_id=account_id, category="beauty", display_name="Bare",
             source="user_declared", verification_state="confirmed", status="active",
             usage_count=0, version=1,
         )
@@ -338,7 +335,7 @@ async def test_duplicate_pairs_serialise_the_same_as_before(db_clean):
 
 
 async def _seed_shelf(account_id: uuid.UUID, count: int) -> None:
-    categories = ["beauty", "hair", "wardrobe", "shoes"]
+    categories = ["beauty", "hair", "beauty", "hair"]
     async with get_sessionmaker()() as session:
         await inv.ensure_categories(session)
         for index in range(count):

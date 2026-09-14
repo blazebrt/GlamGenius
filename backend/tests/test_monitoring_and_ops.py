@@ -297,7 +297,7 @@ async def test_database_flags_are_readable_through_config(app_client, db_clean):
 
     features = resp.json()["features"]
     assert features, "the client must be told which features are on"
-    # Nothing unfinished may be switched on by the seeded defaults.
+    # Config reports exactly the flags currently understood by the product.
     assert set(features) == set(flags.KNOWN_FLAGS)
-    for unfinished in ("v2_virtual_tryon", "v2_packing"):
-        assert features[unfinished] is False, f"{unfinished} must stay off"
+    assert "v2_virtual_tryon" not in features
+    assert "v2_packing" not in features

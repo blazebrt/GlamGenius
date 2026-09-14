@@ -269,7 +269,7 @@ async def test_empty_attribute_list_is_refused(
     assert resp.status_code == 422
 
 
-async def test_attribute_registry_is_published_with_readiness(
+async def test_attribute_registry_is_published_without_retired_readiness(
     app_client, db_clean, registered_supabase_user
 ):
     token, _ = await registered_supabase_user()
@@ -280,15 +280,15 @@ async def test_attribute_registry_is_published_with_readiness(
 
     assert body["registry"], "the app must be told which attributes exist"
     assert {"key", "label", "section", "kind"} <= set(body["registry"][0])
-    assert "readiness" in body
+    assert "readiness" not in body
     assert body["weight_required"] is False, "weight is deliberately not asked for"
 
 
 # ---------------------------------------------------------------------------
-# Baseline observations and user correction
+# Retired baseline-observation surface
 # ---------------------------------------------------------------------------
 
-async def test_baseline_analysis_requires_consent(
+async def test_retired_baseline_analysis_route_is_not_exposed(
     app_client, db_clean, registered_supabase_user, fake_provider
 ):
     token, _ = await registered_supabase_user()
@@ -299,16 +299,14 @@ async def test_baseline_analysis_requires_consent(
         json={"image_base64": _image()},
     )
 
-    assert resp.status_code == 403
-    assert resp.json()["detail"]["code"] == "CONSENT_REQUIRED"
-    assert resp.json()["detail"]["consent_type"] == CONSENT_PHOTO_ANALYSIS
+    assert resp.status_code == 404
 
 
-async def test_user_correction_outranks_an_inferred_observation(
+async def test_retired_observation_routes_are_not_exposed(
     app_client, db_clean, registered_supabase_user
 ):
-    """The user is the authority on themselves. An observation the app made
-    from a photo must yield to what they say."""
+    """The pivot removed photo-observation persistence; profile attributes
+    remain user-declared through the supported profile route."""
     token, uid = await registered_supabase_user()
     profile = (await app_client.get("/api/v2/profile", headers=auth(token))).json()
 
@@ -327,25 +325,16 @@ async def test_user_correction_outranks_an_inferred_observation(
         await session.commit()
         observation_id = observation.id
 
-    listed = (await app_client.get(
-        "/api/v2/profile/observations", headers=auth(token)
-    )).json()
-    assert any(row["id"] == str(observation_id) for row in listed["observations"])
-
     corrected = await app_client.patch(
         f"/api/v2/profile/observations/{observation_id}",
         headers=auth(token),
         json={"value": "medium"},
     )
 
-    assert corrected.status_code == 200, corrected.text
-    assert corrected.json()["value"] == "medium"
-    assert corrected.json()["source"] == "user_declared", (
-        "a corrected observation must be attributed to the user, not the photo"
-    )
+    assert corrected.status_code == 404, corrected.text
 
 
-async def test_observation_can_be_confirmed_or_rejected(
+async def test_retired_observation_confirmation_routes_are_not_exposed(
     app_client, db_clean, registered_supabase_user
 ):
     token, _ = await registered_supabase_user()
@@ -376,20 +365,8 @@ async def test_observation_can_be_confirmed_or_rejected(
         f"/api/v2/profile/observations/{reject_id}/reject", headers=auth(token)
     )
 
-    assert confirmed.status_code == 200, confirmed.text
-    assert confirmed.json()["verification_state"] == "confirmed"
-    assert rejected.status_code == 200, rejected.text
-    assert rejected.json()["verification_state"] == "rejected"
-
-    # A confirmed observation becomes a profile attribute; a rejected one does not.
-    attributes = {
-        row["key"]: row["value"]
-        for row in (await app_client.get(
-            "/api/v2/profile", headers=auth(token)
-        )).json()["attributes"]
-    }
-    assert attributes.get("hair_type") == "wavy"
-    assert "undertone" not in attributes
+    assert confirmed.status_code == 404, confirmed.text
+    assert rejected.status_code == 404, rejected.text
 
 
 async def test_another_accounts_observation_is_not_reachable(

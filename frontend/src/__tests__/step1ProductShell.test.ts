@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 const appRoot = join(__dirname, '..', '..', 'app');
@@ -23,27 +23,21 @@ describe('Step 1 scan-first product shell', () => {
     expect(service).toContain('offline');
   });
 
-  it('quarantines rejected Style entry routes at Scan', () => {
-    const style = readFileSync(join(appRoot, '(tabs)', 'style.tsx'), 'utf8');
+  it('removes rejected Style entry routes while retaining the scanner', () => {
     const legacyScan = readFileSync(join(appRoot, 'scan.tsx'), 'utf8');
-    expect(style).toContain('<Redirect href="/scan-product"');
+    expect(existsSync(join(appRoot, '(tabs)', 'style.tsx'))).toBe(false);
+    expect(existsSync(join(appRoot, 'look.tsx'))).toBe(false);
     expect(legacyScan).toContain('<Redirect href="/scan-product"');
   });
 
-  it('keeps only explicit Care inventory entry points and quarantines retired routes', () => {
-    const home = readFileSync(join(appRoot, '(tabs)', 'home.tsx'), 'utf8');
-    const today = readFileSync(join(appRoot, '(tabs)', 'today.tsx'), 'utf8');
+  it('removes retired tab files and keeps the product shelf Care-only', () => {
     const inventory = readFileSync(join(appRoot, '(tabs)', 'inventory.tsx'), 'utf8');
     const add = readFileSync(join(appRoot, 'inventory-add.tsx'), 'utf8');
-    const insights = readFileSync(join(appRoot, 'inventory-insights.tsx'), 'utf8');
     const item = readFileSync(join(appRoot, 'inventory-item.tsx'), 'utf8');
-    const batch = readFileSync(join(appRoot, 'inventory-batch.tsx'), 'utf8');
-    expect(home).toContain('<Redirect href="/scan-product" />');
-    expect(today).toContain('<Redirect href="/scan-product" />');
-    expect(inventory).toContain("params.domain !== 'care'");
+    expect(existsSync(join(appRoot, '(tabs)', 'home.tsx'))).toBe(false);
+    expect(existsSync(join(appRoot, '(tabs)', 'today.tsx'))).toBe(false);
+    expect(inventory).toContain('PRODUCT SHELF');
     expect(add).toContain("params.domain !== 'care'");
-    expect(insights).toContain("params.domain !== 'care'");
     expect(item).toContain("['beauty', 'hair', 'perfumes', 'supplements']");
-    expect(batch).toContain('<Redirect href="/scan-product" />');
   });
 });

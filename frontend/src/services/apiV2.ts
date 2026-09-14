@@ -587,9 +587,7 @@ export const completeOnboarding = async (): Promise<OnboardingStatus> =>
 
 // --- Complete appearance inventory ----------------------------------------
 
-export const INVENTORY_CATEGORIES = [
-  'wardrobe', 'shoes', 'accessories', 'beauty', 'hair', 'perfumes', 'supplements',
-] as const;
+export const INVENTORY_CATEGORIES = ['beauty', 'hair', 'perfumes', 'supplements'] as const;
 export type InventoryCategory = typeof INVENTORY_CATEGORIES[number];
 
 export interface InventoryAttribute {
@@ -755,7 +753,7 @@ export interface InventoryImport {
 export const extractInventoryBatch = async (
   media_asset_id: string,
   category_hint?: InventoryCategory,
-  capture_type: 'shelf_photo' | 'wardrobe_photo' | 'counter_photo' = 'shelf_photo'
+  capture_type: 'shelf_photo' | 'counter_photo' = 'shelf_photo'
 ): Promise<InventoryImport> =>
   (await api.post<InventoryImport>(`${V2}/inventory/extract/batch`, {
     media_asset_id, category_hint, capture_type,

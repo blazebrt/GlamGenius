@@ -99,7 +99,7 @@ async def test_explicit_feedback_is_scoped_taxonomized_and_non_adaptive(
     token, account_id, created = await _seeded_account(app_client, registered_supabase_user)
     beauty_id = created["inventory"]["beauty"][0]
     hair_id = created["inventory"]["hair"][0]
-    wardrobe_id = created["inventory"]["wardrobe"][0]
+    unsupported_id = created["inventory"]["perfumes"][0]
     before = await _care_side_effect_state(account_id)
 
     response = await _post(
@@ -127,7 +127,7 @@ async def test_explicit_feedback_is_scoped_taxonomized_and_non_adaptive(
         dimension="routine_fit", sentiment="neutral",
     ))["id"] != saved["id"]
 
-    assert (await _post(app_client, token, subject_id=wardrobe_id)).status_code == 404
+    assert (await _post(app_client, token, subject_id=unsupported_id)).status_code == 404
     assert (await _post(
         app_client, token, subject_id=beauty_id, experienced_on="2099-01-01",
     )).status_code == 422
@@ -141,7 +141,7 @@ async def test_explicit_feedback_is_scoped_taxonomized_and_non_adaptive(
         app_client, token, subject_id=beauty_id, dimension="unsafe",
     )).status_code == 422
     assert (await _post(
-        app_client, token, subject_id=beauty_id, subject_type="wardrobe",
+        app_client, token, subject_id=beauty_id, subject_type="beauty",
     )).status_code == 422
     assert (await _post(
         app_client, token, subject_id=beauty_id, sentiment="uncertain",

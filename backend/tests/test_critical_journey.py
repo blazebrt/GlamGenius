@@ -36,11 +36,8 @@ from app.shared.database.sql import get_sessionmaker
 pytestmark = pytest.mark.asyncio
 
 
-# The seven inventory categories as their canonical internal keys.
-SEVEN_CATEGORIES = [
-    "wardrobe", "shoes", "accessories",
-    "beauty", "hair", "perfumes", "supplements",
-]
+# The retained inventory categories as their canonical internal keys.
+ACTIVE_CATEGORIES = ["beauty", "hair", "perfumes", "supplements"]
 
 
 class _FakeStorage:
@@ -140,7 +137,7 @@ async def test_critical_journey_end_to_end(db_clean, fake_admin, fake_storage):
     # 8. One item in every inventory category.
     # ------------------------------------------------------------
     async with factory() as session:
-        for cat in SEVEN_CATEGORIES:
+        for cat in ACTIVE_CATEGORIES:
             session.add(InventoryItem(
                 account_id=account_id, category=cat,
                 display_name=f"journey-{cat}",
@@ -190,7 +187,7 @@ async def test_critical_journey_end_to_end(db_clean, fake_admin, fake_storage):
         payload = await export_service.build_export(session, account_id)
     assert payload["schema_version"] == export_service.EXPORT_SCHEMA_VERSION
     assert payload["account"]["id"] == str(account_id)
-    assert len(payload["domains"]["inventory"]["items"]) == 7
+    assert len(payload["domains"]["inventory"]["items"]) == len(ACTIVE_CATEGORIES)
     assert len(payload["domains"]["media"]["assets"]) == 1
     assert len(payload["domains"]["consent"]["entries"]) >= 1
     # No storage key leak.

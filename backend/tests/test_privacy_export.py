@@ -101,9 +101,6 @@ async def test_registry_covers_all_seven_inventory_categories():
     from app.domains.inventory.taxonomy import CATEGORIES
 
     expected_internal = {
-        "wardrobe",
-        "shoes",
-        "accessories",
         "beauty",
         "hair",
         "perfumes",
@@ -142,10 +139,10 @@ async def test_export_only_returns_calling_accounts_data(db_clean):
         await identity.register_account(session, account_b)
         # Each account gets a distinct inventory item.
         session.add(InventoryItem(
-            account_id=account_a, display_name="A-Blazer", category="wardrobe",
+            account_id=account_a, display_name="A-Blazer", category="beauty",
         ))
         session.add(InventoryItem(
-            account_id=account_b, display_name="B-Sneakers", category="shoes",
+            account_id=account_b, display_name="B-Sneakers", category="hair",
         ))
         await session.commit()
 
