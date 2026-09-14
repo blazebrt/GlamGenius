@@ -30,6 +30,8 @@ import {
   flushReports, makeReport, submitReport, type ReportReason,
 } from '../src/services/errorReports';
 import { getProductVerdict } from '../src/services/verdictClient';
+import { ScanDecisionMemorySection } from '../src/components/shopping/ScanDecisionMemorySection';
+import { readScanMemory, type ScanDecisionMemory } from '../src/services/apiV2';
 import { buildVerdictShareText } from '../src/services/verdictShare';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import { OfficialRecords } from '../src/components/verdict/OfficialRecords';
@@ -100,6 +102,24 @@ export default function VerdictScreen() {
   }, [load]);
 
   useEffect(() => () => { void stopSpeaking(); }, []);
+
+  
+  const [memory, setMemory] = useState<ScanDecisionMemory | null>(null);
+  const loadMemory = useCallback(async () => {
+    if (!barcode || !signedIn || referenceView) return;
+    try {
+      const data = await readScanMemory(barcode);
+      setMemory(data);
+    } catch {
+      setMemory(null);
+    }
+  }, [barcode, signedIn, referenceView]);
+  
+  useEffect(() => {
+    if (loadState === 'ready') {
+      void loadMemory();
+    }
+  }, [loadState, loadMemory]);
 
   const view = useMemo(() => (source ? buildVerdict(source) : null), [source]);
 

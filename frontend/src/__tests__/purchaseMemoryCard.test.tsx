@@ -27,29 +27,29 @@ describe('PurchaseMemoryCard', () => {
     ['exact_prior_skipped', 'Last time, you chose to skip this.'],
     ['exact_prior_consideration', 'You have considered this exact product before.'],
   ] as const)('renders the exact prior decision for %s', (state, copy) => {
-    render(<PurchaseMemoryCard guard={guard(state)} />);
+    render(<PurchaseMemoryCard guardState={state} occurredAt="2026-09-01T00:00:00Z" considerationCount={1} />);
     expect(screen.getByText(copy)).toBeTruthy();
     expect(screen.getByLabelText(`Purchase memory. ${copy}`)).toBeTruthy();
     expect(screen.queryByText('not-rendered')).toBeNull();
   });
 
   it('keeps incomplete history and insufficient identity separate from a prior-decision claim', () => {
-    const { rerender } = render(<PurchaseMemoryCard guard={guard('historical_context_incomplete')} />);
+    const { rerender } = render(<PurchaseMemoryCard guardState="historical_context_incomplete" occurredAt="2026-09-01T00:00:00Z" considerationCount={1} />);
     expect(screen.getByText('Some older purchase history may not be available here.')).toBeTruthy();
-    rerender(<PurchaseMemoryCard guard={guard('identity_insufficient')} />);
+    rerender(<PurchaseMemoryCard guardState="identity_insufficient" occurredAt="2026-09-01T00:00:00Z" considerationCount={1} />);
     expect(screen.getByText('Confirm the product details to compare it with your purchase memory.')).toBeTruthy();
     expect(screen.queryByText(/previously marked/i)).toBeNull();
   });
 
   it('renders nothing when Step 9A has no prior event', () => {
-    const { toJSON } = render(<PurchaseMemoryCard guard={guard('no_step9a_prior_event')} />);
+    const { toJSON } = render(<PurchaseMemoryCard guardState="no_step9a_prior_event" occurredAt="2026-09-01T00:00:00Z" considerationCount={1} />);
     expect(toJSON()).toBeNull();
   });
 
   it('renders a deterministic count and date without exposing internal guard data', () => {
     const value = guard('exact_prior_waiting');
     value.prior_consideration_count = 3;
-    render(<PurchaseMemoryCard guard={value} />);
+    render(<PurchaseMemoryCard guardState="exact_prior_waiting" occurredAt="2026-09-01T00:00:00Z" considerationCount={3} />);
     expect(screen.getByText('You have considered this exact product 3 times.')).toBeTruthy();
     expect(screen.getByText('Last decision: 1 Sept 2026')).toBeTruthy();
     expect(screen.queryByText(/fingerprint|step-9a-v2|event-1|care_purchase|followed/i)).toBeNull();

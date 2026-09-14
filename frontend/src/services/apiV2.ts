@@ -3035,3 +3035,30 @@ export const getKnowledgeVersions = async (
 /** Import pasted CSV. Every row lands as a draft; this cannot publish. */
 export const importKnowledgeCsv = async (csv: string): Promise<KnowledgeImportResult> =>
   (await api.post<KnowledgeImportResult>(`${KNOWLEDGE}/import-text`, { csv })).data;
+
+
+export interface ScanDecisionEvent {
+  id: string;
+  decision: 'BUY' | 'WAIT' | 'SKIP';
+  note: string | null;
+  occurred_at: string | null;
+}
+
+export interface ScanDecisionMemory {
+  scan_decision_memory_version: string;
+  decision: ScanDecisionEvent | null;
+  history: ScanDecisionEvent[];
+}
+
+export const readScanMemory = async (barcode: string): Promise<ScanDecisionMemory> => {
+  const result = await api.get(/scan/verdict//memory);
+  return result.data;
+};
+
+export const saveScanDecision = async (
+  barcode: string,
+  payload: { decision: string; label_version: number; content_fingerprint: string; note?: string | null }
+): Promise<ScanDecisionEvent> => {
+  const result = await api.post(/scan/verdict//memory, payload);
+  return result.data;
+};

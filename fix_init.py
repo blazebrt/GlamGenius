@@ -1,0 +1,6 @@
+﻿content = open('app/api/v2/__init__.py', 'r').read()
+content = content.replace('    planner,\n', '')
+content = content.replace('    progress,\n', '')
+content = content.replace('router.include_router(planner.router, tags=["v2-planner"])\n', '')
+content = content.replace('router.include_router(progress.router, tags=["v2-progress"])\n', '')
+open('app/api/v2/__init__.py', 'w').write(content)
