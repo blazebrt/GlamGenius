@@ -55,10 +55,10 @@ async def _inventory(client, token: str, *, category: str, name: str, subcategor
 
 async def _stock_care_products(client, token: str) -> None:
     for category, name, subcategory, details in (
-        ("beauty", "Gentle Cleanser", "cleanser", {"ingredients": []}),
-        ("beauty", "Daily Moisturiser", "moisturiser", {"ingredients": []}),
-        ("hair", "Gentle Shampoo", "shampoo", {"ingredients": []}),
-        ("hair", "Brown Leather Derbies", "derby", {"colour": "brown", "shoe_type": "derby", "occasion": ["work"]}),
+        ("beauty", "Gentle Cleanser", "cleanser", {"product_type": "cleanser"}),
+        ("beauty", "Daily Moisturiser", "moisturiser", {"product_type": "moisturiser"}),
+        ("hair", "Gentle Shampoo", "shampoo", {"product_type": "shampoo"}),
+        ("hair", "Hair Conditioner", "conditioner", {"product_type": "conditioner"}),
     ):
         await _inventory(client, token, category=category, name=name, subcategory=subcategory, details=details)
 
@@ -260,7 +260,7 @@ async def test_unlocked_appearance_keeps_drafts_ahead_of_expiry_advisory(
     )
     draft_id = await _inventory(
         app_client, token, category="beauty", name="Draft Cleanser", subcategory="cleanser",
-        details={"colour": "white", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]},
+        details={"product_type": "cleanser", "routine_position": "cleanse"},
     )
     factory = get_sessionmaker()
     async with factory() as session:

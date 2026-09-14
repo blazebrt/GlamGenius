@@ -137,11 +137,11 @@ async def test_inventory_balance_becomes_ok_after_items(db_clean):
     account = await _account()
 
     async with factory() as session:
-        for label in ("Charcoal Blazer", "Linen Trousers"):
+        for label, product_type in (("Gentle Cleanser", "cleanser"), ("Daily Moisturiser", "moisturiser")):
             body = ItemCreate.model_validate({
                 "category": "beauty",
                 "display_name": label,
-                "details": {"season": ["autumn"]},
+                "details": {"product_type": product_type},
             })
             await inv_service.create_item(session, account, body)
         await session.commit()
@@ -171,8 +171,8 @@ async def test_goal_create_records_starting_value_and_update_row(db_clean):
             session,
             account,
             GoalCreate.model_validate({
-                "kind": "beauty",
-                "title": "Refresh smart-casual capsule",
+                "kind": "routine",
+                "title": "Keep a consistent care routine",
                 "metric_key": "purchase_efficiency",
                 "target_value": 0.6,
             }),

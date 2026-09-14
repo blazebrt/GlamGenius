@@ -34,15 +34,14 @@ def test_removed_customer_routes_and_routers_do_not_return() -> None:
 
 
 def test_active_customer_shelf_is_limited_to_governed_body_product_categories() -> None:
-    taxonomy = (BACKEND / "app" / "domains" / "inventory" / "taxonomy.py").read_text(encoding="utf-8")
-    schemas = (BACKEND / "app" / "domains" / "inventory" / "schemas.py").read_text(encoding="utf-8")
+    from app.domains.inventory.taxonomy import CATEGORIES
+
     frontend_contract = (FRONTEND / "src" / "services" / "apiV2.ts").read_text(encoding="utf-8")
-    for legacy_category in ('"beauty"', '"hair"', '"perfumes"'):
-        assert legacy_category not in taxonomy
-        assert legacy_category not in schemas
-        # The active shelf declaration, rather than historical Event Ready
-        # implementation types lower in this client, is the customer contract.
-        declaration = frontend_contract.split("export type InventoryCategory", 1)[0]
+    assert set(CATEGORIES) == {"beauty", "hair", "perfumes", "supplements"}
+    # The active shelf declaration, rather than historical Event Ready
+    # implementation types lower in this client, is the customer contract.
+    declaration = frontend_contract.split("export type InventoryCategory", 1)[0]
+    for legacy_category in ('"wardrobe"', '"shoes"', '"accessories"'):
         assert legacy_category not in declaration
 
 

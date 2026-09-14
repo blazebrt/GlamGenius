@@ -192,7 +192,7 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
         seed_result = await run_seed(session)
         await identity.register_account(session, account_id)
         await session.commit()
-    assert seed_result["counts"]["inventory_categories"] == 7
+    assert seed_result["counts"]["inventory_categories"] == 4
     assert seed_result["counts"]["routine_templates"] > 0
     assert seed_result["counts"]["perfume_context"] > 0
     assert seed_result["counts"]["supplement_context"] > 0
@@ -261,10 +261,7 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
     # --------------------------------------------------------------
     # 13. Add one item in every inventory category and a usage event.
     # --------------------------------------------------------------
-    category_keys = [
-        "beauty", "hair", "perfumes",
-        "beauty", "hair", "perfumes", "supplements",
-    ]
+    category_keys = ["beauty", "hair", "perfumes", "supplements"]
     async with factory() as session:
         items = {}
         for cat in category_keys:
@@ -303,7 +300,7 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
                 InventoryCategory.key.in_(category_keys)
             )
         )).scalars().all()
-        assert len(cat_rows) == 7
+        assert len(cat_rows) == len(category_keys)
 
     # --------------------------------------------------------------
     # 14. Upload an image and associate it with the wardrobe item.
@@ -769,7 +766,7 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
         assert all(f.id != fact_id for f in live_facts)
 
     # --------------------------------------------------------------
-    # 24. Privacy export — every touched domain must be present, seven
+    # 24. Privacy export — every touched retained domain must be present.
     #     categories must appear, revision history must survive, secrets
     #     must not appear.
     # --------------------------------------------------------------
@@ -777,8 +774,7 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
         payload = await export_service.build_export(session, account_id)
 
     assert payload["schema_version"] == export_service.EXPORT_SCHEMA_VERSION
-    # Seven inventory items exported.
-    assert len(payload["domains"]["inventory"]["items"]) == 7
+    assert len(payload["domains"]["inventory"]["items"]) == 4
     # Media metadata is present.
     assert len(payload["domains"]["media"]["assets"]) == 1
     # No storage-key leak.

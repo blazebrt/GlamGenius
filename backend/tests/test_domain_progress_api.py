@@ -562,4 +562,4 @@ async def test_failed_seed_rolls_back_completely(db_clean, monkeypatch):
         monkeypatch.undo()
         result = await bootstrap.run(session)
         await session.commit()
-    assert result["counts"]["inventory_categories"] == 7
+    assert result["counts"]["inventory_categories"] == 4

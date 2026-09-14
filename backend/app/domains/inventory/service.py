@@ -218,6 +218,12 @@ async def update_item(session: AsyncSession, item: InventoryItem, body: ItemPatc
     if body.expected_version is not None and body.expected_version != item.version:
         raise ConflictError("This item changed on another device. Refresh it before saving.", current_version=item.version)
     fields = body.model_dump(exclude_unset=True, exclude={"expected_version", "details", "attributes", "image_ids"})
+    reserved_care_controls = {"care_routine_paused", "care_routine_preferred"}
+    if reserved_care_controls & {row.key for row in body.attributes}:
+        raise ValidationFailedError(
+            "Use the dedicated Care product controls to change routine participation.",
+            field="attributes",
+        )
     for key, value in fields.items():
         setattr(item, key, value.strip() if isinstance(value, str) else value)
     if body.details:

@@ -36,11 +36,8 @@ from app.shared.database.sql import get_sessionmaker
 pytestmark = pytest.mark.asyncio
 
 
-# The seven inventory categories as their canonical internal keys.
-SEVEN_CATEGORIES = [
-    "beauty", "hair", "perfumes",
-    "beauty", "hair", "perfumes", "supplements",
-]
+# The retained inventory categories as their canonical internal keys.
+ACTIVE_CATEGORIES = ["beauty", "hair", "perfumes", "supplements"]
 
 
 class _FakeStorage:
@@ -140,7 +137,7 @@ async def test_critical_journey_end_to_end(db_clean, fake_admin, fake_storage):
     # 8. One item in every inventory category.
     # ------------------------------------------------------------
     async with factory() as session:
-        for cat in SEVEN_CATEGORIES:
+        for cat in ACTIVE_CATEGORIES:
             session.add(InventoryItem(
                 account_id=account_id, category=cat,
                 display_name=f"journey-{cat}",

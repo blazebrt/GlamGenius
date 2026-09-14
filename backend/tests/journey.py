@@ -23,45 +23,18 @@ from tests.conftest import auth, png_bytes
 JOURNEY_DATE = date(2026, 2, 16)
 
 
-# The seven canonical inventory categories, with a valid detail payload each.
-# ``beauty`` is the Beauty Shelf and ``hair`` the Hair Shelf; those are the
-# internal keys for the two shelf categories.
-SEVEN_CATEGORY_ITEMS: list[dict[str, Any]] = [
-    {
-        "category": "beauty", "display_name": "Charcoal Blazer", "subcategory": "blazer",
-        "brand": "Fable",
-        "details": {"colour": "charcoal", "fabric": "wool", "formality": "smart_casual", "season": ["all"]},
-    },
-    {
-        "category": "beauty", "display_name": "White Cotton Shirt", "subcategory": "shirt",
-        "details": {"colour": "white", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]},
-    },
-    {
-        "category": "beauty", "display_name": "Navy Chinos", "subcategory": "trousers",
-        "details": {"colour": "navy", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]},
-    },
-    {
-        "category": "hair", "display_name": "Brown Leather Derbies", "subcategory": "derby",
-        "details": {"colour": "brown", "shoe_type": "derby", "occasion": ["office"]},
-    },
-    {
-        "category": "perfumes", "display_name": "Tan Leather Belt", "subcategory": "belt",
-        "details": {"colour": "tan", "accessory_type": "belt", "material": "leather"},
-    },
+# The retained inventory categories, with a valid payload for each canonical
+# schema.  The customer-facing labels are Care labels; these are the stable
+# internal keys used by the API.
+ACTIVE_CATEGORY_ITEMS: list[dict[str, Any]] = [
     {
         "category": "beauty", "display_name": "Gentle Foaming Cleanser", "subcategory": "cleanser",
-        "details": {
-            "product_type": "cleanser", "purpose": "cleansing",
-            "routine_position": "cleanse", "use_frequency": "twice_daily",
-            "active_ingredients": ["glycerin"],
-        },
+        "brand": "Fable",
+        "details": {"product_type": "cleanser", "purpose": "cleansing", "routine_position": "cleanse"},
     },
     {
         "category": "hair", "display_name": "Hydrating Shampoo", "subcategory": "shampoo",
-        "details": {
-            "product_type": "shampoo", "purpose": "cleansing",
-            "routine_position": "cleanse", "use_frequency": "twice_weekly",
-        },
+        "details": {"product_type": "shampoo", "purpose": "cleansing", "routine_position": "cleanse"},
     },
     {
         "category": "perfumes", "display_name": "Citrus Eau de Toilette", "subcategory": "edt",
@@ -73,7 +46,7 @@ SEVEN_CATEGORY_ITEMS: list[dict[str, Any]] = [
     },
 ]
 
-SEVEN_CATEGORIES = ["beauty", "hair", "perfumes", "beauty", "hair", "perfumes", "supplements"]
+ACTIVE_CATEGORIES = ["beauty", "hair", "perfumes", "supplements"]
 
 
 def ok(resp, *allowed: int):
@@ -150,13 +123,13 @@ async def grant_photo_consent(client, token) -> dict[str, Any]:
     ))
 
 
-async def stock_seven_categories(client, token) -> dict[str, list[str]]:
-    """Add at least one item in each of the seven categories."""
+async def stock_active_categories(client, token) -> dict[str, list[str]]:
+    """Add at least one item in each retained category."""
     created: dict[str, list[str]] = {}
-    for body in SEVEN_CATEGORY_ITEMS:
+    for body in ACTIVE_CATEGORY_ITEMS:
         item = ok(await client.post("/api/v2/inventory/items", headers=auth(token), json=body))
         created.setdefault(body["category"], []).append(item["id"])
-    assert set(created) == set(SEVEN_CATEGORIES)
+    assert set(created) == set(ACTIVE_CATEGORIES)
     return created
 
 
@@ -297,19 +270,16 @@ async def populate_every_domain(client, token) -> dict[str, Any]:
     created: dict[str, Any] = {}
     await complete_profile_and_onboarding(client, token)
     created["consent"] = await grant_photo_consent(client, token)
-    created["inventory"] = await stock_seven_categories(client, token)
+    created["inventory"] = await stock_active_categories(client, token)
     created["media"] = await upload_inventory_image(
         client, token, created["inventory"]["beauty"][0]
     )
     ok(await client.post(
-        f"/api/v2/inventory/items/{created['inventory']['wardrobe'][0]}/usage",
+        f"/api/v2/inventory/items/{created['inventory']['beauty'][0]}/usage",
         headers=auth(token),
         json={"used_on": JOURNEY_DATE.isoformat()},
     ))
     created["scan"] = await run_scan(client, token)
-    created["quiz"] = await submit_quiz(client, token)
-    created["styling"] = await create_occasion_and_style(client, token)
-    created["shopping"] = await evaluate_a_purchase(client, token)
     created["planning"] = await plan_the_day(client, token)
     created["routines"] = await build_routines(client, token)
     created["goal"] = await set_a_goal(client, token)

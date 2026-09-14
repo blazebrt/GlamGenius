@@ -75,10 +75,10 @@ async def _beauty_product(client, token: str, *, name: str, product_type: str) -
 
 async def _stock_care_products(client, token: str) -> None:
     for category, name, subcategory, details in (
-        ("beauty", "Gentle Cleanser", "cleanser", {"ingredients": []}),
-        ("beauty", "Daily Moisturiser", "moisturiser", {"ingredients": []}),
-        ("hair", "Gentle Shampoo", "shampoo", {"ingredients": []}),
-        ("hair", "Brown Leather Derbies", "derby", {"colour": "brown", "shoe_type": "derby", "occasion": ["work"]}),
+        ("beauty", "Gentle Cleanser", "cleanser", {"product_type": "cleanser"}),
+        ("beauty", "Daily Moisturiser", "moisturiser", {"product_type": "moisturiser"}),
+        ("hair", "Gentle Shampoo", "shampoo", {"product_type": "shampoo"}),
+        ("hair", "Hair Conditioner", "conditioner", {"product_type": "conditioner"}),
     ):
         response = await client.post(
             "/api/v2/inventory/items", headers=auth(token), json={

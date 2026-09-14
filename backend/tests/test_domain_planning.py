@@ -58,34 +58,29 @@ def _deterministic_weather_cache():
     weather_module.clear_cache()
 
 
-WARDROBE = [
+CARE_INVENTORY = [
     {
-        "category": "beauty", "display_name": "Charcoal Blazer", "subcategory": "blazer",
-        "details": {"colour": "charcoal", "fabric": "wool", "formality": "smart_casual", "season": ["all"]},
+        "category": "beauty", "display_name": "Gentle Cleanser", "subcategory": "cleanser",
+        "details": {"product_type": "cleanser", "routine_position": "cleanse"},
     },
     {
-        "category": "beauty", "display_name": "White Cotton Shirt", "subcategory": "shirt",
-        "details": {"colour": "white", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]},
+        "category": "beauty", "display_name": "Daily Moisturiser", "subcategory": "moisturiser",
+        "details": {"product_type": "moisturiser", "routine_position": "moisturise"},
     },
     {
-        "category": "beauty", "display_name": "Navy Chinos", "subcategory": "trousers",
-        "details": {"colour": "navy", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]},
+        "category": "hair", "display_name": "Gentle Shampoo", "subcategory": "shampoo",
+        "details": {"product_type": "shampoo", "routine_position": "cleanse"},
     },
     {
-        "category": "hair", "display_name": "Brown Leather Derbies", "subcategory": "derby",
-        "details": {"colour": "brown", "shoe_type": "derby", "occasion": ["work"]},
+        "category": "hair", "display_name": "Hair Conditioner", "subcategory": "conditioner",
+        "details": {"product_type": "conditioner", "routine_position": "condition"},
     },
 ]
 
 
 async def _stock_wardrobe(client, token):
-    """Enough confirmed inventory for the compiler to build a real outfit.
-
-    Without it the plan comes back ``needs_inventory`` and is recompiled on
-    every read, which is correct behaviour but the wrong thing to test caching
-    against.
-    """
-    for body in WARDROBE:
+    """Stock a valid care shelf so Today has stable care material to compile."""
+    for body in CARE_INVENTORY:
         resp = await client.post("/api/v2/inventory/items", headers=auth(token), json=body)
         assert resp.status_code in (200, 201), resp.text
 

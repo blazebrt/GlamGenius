@@ -42,8 +42,8 @@ from sqlalchemy import func, select
 
 from tests.conftest import auth
 from tests.journey import (
+    ACTIVE_CATEGORIES,
     JOURNEY_DATE,
-    SEVEN_CATEGORIES,
     ok,
     populate_every_domain,
     register_through_invite,
@@ -135,7 +135,7 @@ async def test_critical_journey_through_the_api(
     async with factory() as session:
         seed = await run_seed(session)
         await session.commit()
-    assert seed["counts"]["inventory_categories"] == 7
+    assert seed["counts"]["inventory_categories"] == len(ACTIVE_CATEGORIES)
 
     # ------------------------------------------------------------------
     # 2-6. Admin invite → reserve → Supabase sign-up → register → /me.
@@ -186,13 +186,13 @@ async def test_critical_journey_through_the_api(
     consent = ok(await app_client.get("/api/v2/consent", headers=auth(token)))
     assert consent["photo_analysis"]["granted"] is True
 
-    # --- All seven inventory categories -------------------------------
+    # --- All retained inventory categories ----------------------------
     summary = ok(await app_client.get("/api/v2/inventory/summary", headers=auth(token)))
     counted = summary["categories"]
-    assert set(counted) == set(SEVEN_CATEGORIES), (
-        "the summary must account for exactly the seven canonical categories"
+    assert set(counted) == set(ACTIVE_CATEGORIES), (
+        "the summary must account for exactly the retained categories"
     )
-    for category in SEVEN_CATEGORIES:
+    for category in ACTIVE_CATEGORIES:
         assert counted[category] >= 1, f"{category} has nothing in it"
 
     wardrobe_item_id = created["inventory"]["beauty"][0]
@@ -210,57 +210,6 @@ async def test_critical_journey_through_the_api(
     assert [row["id"] for row in history["scans"]] == [scan["id"]]
     # The image itself is request data, never a stored or returned artefact.
     assert "image_base64" not in str(history)
-
-    # --- Quiz ---------------------------------------------------------
-    latest = ok(await app_client.get("/api/v2/quiz/latest", headers=auth(token)))
-    assert latest["submission"]["id"] == created["quiz"]["id"]
-    assert latest["submission"]["derived_style_vibe"] == created["quiz"]["derived_style_vibe"]
-    assert latest["submission"]["schema_version"] == created["quiz"]["schema_version"]
-
-    # --- Occasion styling ---------------------------------------------
-    occasion = created["styling"]["occasion"]
-    styling = created["styling"]["styling"]
-    assert styling["occasion"]["id"] == occasion["id"], (
-        "the generated looks must reference the occasion they were asked for"
-    )
-    assert styling["looks"], "styling must produce at least one look"
-    look = styling["looks"][0]
-
-    owned_ids = {value for ids in created["inventory"].values() for value in ids}
-    look_item_ids = {row["inventory_item_id"] for row in look["owned_items"]}
-    assert look_item_ids, "a look with no items is not a look"
-    assert look_item_ids <= owned_ids, "styling must only use items the user owns"
-    # Anything the user does not own is labelled as an optional addition rather
-    # than presented as if it were in their wardrobe.
-    for addition in look["optional_additions"]:
-        assert addition["owned"] is False
-        assert addition["inventory_item_id"] is None
-
-    feedback = ok(await app_client.post(
-        f"/api/v2/looks/{look['id']}/feedback",
-        headers=auth(token),
-        json={"rating": "loved", "note": "Good for Mondays."},
-    ))
-    assert feedback["feedback"]["rating"] == "loved"
-    assert feedback["saved"] is True, "a loved look must be kept"
-
-    # --- Shopping -----------------------------------------------------
-    evaluation = created["shopping"]
-    assert evaluation["verdict"] in {"buy", "wait", "skip"}
-    compared = {
-        row["inventory_item_id"]
-        for row in evaluation["similar_owned_products"] + evaluation["existing_alternatives"]
-    }
-    assert compared & owned_ids, (
-        "the evaluation must compare the candidate against what is already owned"
-    )
-
-    decision = ok(await app_client.post(
-        f"/api/v2/shopping/evaluations/{evaluation['id']}/decision",
-        headers=auth(token),
-        json={"decision": "skipped", "note": "Already covered."},
-    ))
-    assert decision["decision"]["decision"] == "skipped"
 
     # --- Today --------------------------------------------------------
     today = created["planning"]["today"]
@@ -453,7 +402,7 @@ async def test_critical_journey_through_the_api(
     exported_categories = {
         row["category"] for row in export["domains"]["inventory"]["items"]
     }
-    assert set(SEVEN_CATEGORIES) <= exported_categories
+    assert set(ACTIVE_CATEGORIES) <= exported_categories
 
     # Nothing internal or secret rides along.
     for secret in ("storage_key", "storage_backend", "image_base64", "service_role", "SUPABASE"):

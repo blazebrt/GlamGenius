@@ -290,10 +290,10 @@ async def test_feature_flag_defaults_seeded(db_clean):
         assert by_key[key].enabled is resolved_default(key), key
         assert by_key[key].description, key
 
-    # Unfinished features stay off: no provider, no flag. Neither is in the
-    # test environment's V2_FEATURES, so the stable default stands.
-    assert by_key["v2_virtual_tryon"].enabled is False
-    assert by_key["v2_packing"].enabled is False
+    # Retired flags are deliberately absent rather than retained as inert
+    # compatibility rows.
+    assert "v2_virtual_tryon" not in by_key
+    assert "v2_packing" not in by_key
 
 
 async def test_seeding_does_not_overrule_an_explicit_feature_environment(db_clean, monkeypatch):

@@ -267,11 +267,9 @@ def test_identity_insufficiency_matrix_and_category_isolation():
         _candidate(details={"product_type": "cleanser", "active_ingredients": []}),
         _candidate(category="perfumes", details={"fragrance_family": "woody"}),
         _candidate(category="perfumes", details={"concentration": "edp"}),
-        _candidate(category="beauty", subcategory=None, size="m", fabric="cotton", colour="blue", details={}),
-        _candidate(category="beauty", subcategory="shirt", size=None, fabric="cotton", colour="blue", details={}),
-        _candidate(category="beauty", subcategory="shirt", size="m", fabric=None, colour="blue", details={}),
-        _candidate(category="beauty", subcategory="shirt", size="m", fabric="cotton", colour=None, details={}),
-        _candidate(category="beauty", verification_state="draft", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={}),
+        _candidate(category="beauty", subcategory=None, details={}),
+        _candidate(category="beauty", subcategory="cleanser", details={}),
+        _candidate(category="beauty", verification_state="draft"),
         _candidate(uncertain_fields=["brand"]),
     ]
     assert all(identity_for_candidate(candidate)["state"] == "insufficient" for candidate in insufficient)
@@ -281,11 +279,11 @@ def test_identity_insufficiency_matrix_and_category_isolation():
     assert beauty["state"] == hair["state"] == "exact"
     assert beauty["fingerprint"] != hair["fingerprint"]
 
-    style_m = identity_for_candidate(_candidate(
-        category="beauty", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={},
+    cleanser = identity_for_candidate(_candidate(
+        category="beauty", subcategory="cleanser", details={"product_type": "cleanser", "active_ingredients": ["glycerin"]},
     ))
-    style_l = identity_for_candidate(_candidate(
-        category="beauty", subcategory="shirt", size="l", fabric="cotton", colour="blue", details={},
+    serum = identity_for_candidate(_candidate(
+        category="beauty", subcategory="serum", details={"product_type": "serum", "active_ingredients": ["glycerin"]},
     ))
     fragrance_edp = identity_for_candidate(_candidate(
         category="perfumes", details={"fragrance_family": "woody", "concentration": "edp"},
@@ -293,7 +291,7 @@ def test_identity_insufficiency_matrix_and_category_isolation():
     fragrance_edt = identity_for_candidate(_candidate(
         category="perfumes", details={"fragrance_family": "woody", "concentration": "edt"},
     ))
-    assert style_m["fingerprint"] != style_l["fingerprint"]
+    assert cleanser["fingerprint"] != serum["fingerprint"]
     assert fragrance_edp["fingerprint"] != fragrance_edt["fingerprint"]
 
 
