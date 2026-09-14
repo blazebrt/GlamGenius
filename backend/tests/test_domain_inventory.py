@@ -1,7 +1,7 @@
-"""Full-lifecycle regression coverage for the seven-category appearance inventory.
+"""Full-lifecycle regression coverage for the four-category care inventory.
 
-Every canonical category (``wardrobe``, ``shoes``, ``accessories``, ``beauty``,
-``hair``, ``perfumes``, ``supplements``) is exercised through:
+Every canonical category (``beauty``, ``hair``, ``perfumes``, ``supplements``)
+is exercised through:
 
     create → read → update → usage (idempotency) → condition → archive
 
@@ -53,37 +53,6 @@ pytestmark = pytest.mark.asyncio
 
 
 CATEGORY_TEMPLATES: dict[str, dict] = {
-    "beauty": {
-        "display_name": "Charcoal Blazer",
-        "brand": "Studio 41",
-        "details": {
-            "colour": "charcoal",
-            "fabric": "wool blend",
-            "season": ["autumn", "winter"],
-            "occasion": ["work", "evening"],
-            "formality": "smart",
-        },
-    },
-    "hair": {
-        "display_name": "Oxford Lace-ups",
-        "brand": "Bombay Bootery",
-        "details": {
-            "shoe_type": "oxford",
-            "colour": "tan",
-            "occasion": ["work"],
-            "weather_suitability": ["dry"],
-        },
-    },
-    "perfumes": {
-        "display_name": "Leather Belt",
-        "brand": "Hidesign",
-        "details": {
-            "accessory_type": "belt",
-            "colour": "brown",
-            "material": "leather",
-            "occasion": ["casual", "work"],
-        },
-    },
     "beauty": {
         "display_name": "Vitamin C Serum",
         "brand": "Minimalist",
@@ -530,8 +499,7 @@ async def test_inventory_summary_counts_every_category(db_clean):
 
     assert summary["total_items"] == 2
     assert set(summary["categories"].keys()) == {
-        "beauty", "hair", "perfumes", "beauty",
-        "hair", "perfumes", "supplements",
+        "beauty", "hair", "perfumes", "supplements",
     }
     assert summary["categories"]["beauty"] == 1
     assert summary["categories"]["supplements"] == 1

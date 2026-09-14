@@ -302,7 +302,7 @@ async def test_routines_export_includes_all_owned_records_and_is_account_scoped(
     assert str(account_b) not in export_a.__repr__()
 
 
-async def test_export_covers_all_seven_inventory_categories(
+async def test_export_covers_all_care_inventory_categories(
     app_client, db_clean, registered_supabase_user, fake_provider, storage
 ):
     token, _, _ = await _seeded_account(app_client, registered_supabase_user)
@@ -311,7 +311,7 @@ async def test_export_covers_all_seven_inventory_categories(
 
     categories = {row["category"] for row in export["domains"]["inventory"]["items"]}
     assert categories == {
-        "beauty", "hair", "perfumes", "beauty", "hair", "perfumes", "supplements",
+        "beauty", "hair", "perfumes", "supplements",
     }
 
 

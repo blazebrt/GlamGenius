@@ -162,7 +162,6 @@ async def test_inventory_subtypes_cover_every_category(db_clean):
             select(InventorySubtypeDefinition.category_key).distinct()
         )).scalars().all()
     assert set(cats_with_subtypes) == {
-        "beauty", "hair", "perfumes",
         "beauty", "hair", "perfumes", "supplements",
     }
 
@@ -235,7 +234,7 @@ async def test_contraindication_and_sensitivity_lookup(db_clean):
     assert "diagnos" not in (pregnancy_flag.guidance or "").lower()
 
 
-async def test_all_seven_inventory_categories_available(db_clean):
+async def test_all_care_inventory_categories_available(db_clean):
     factory = get_sessionmaker()
     async with factory() as session:
         await run_seed(session)
@@ -243,7 +242,6 @@ async def test_all_seven_inventory_categories_available(db_clean):
             select(InventoryCategory.key).order_by(InventoryCategory.position)
         )).scalars().all()
     assert list(rows) == [
-        "beauty", "hair", "perfumes",
         "beauty", "hair", "perfumes", "supplements",
     ]
 

@@ -104,9 +104,6 @@ async def test_registry_covers_all_seven_inventory_categories():
         "beauty",
         "hair",
         "perfumes",
-        "beauty",
-        "hair",
-        "perfumes",
         "supplements",
     }
     assert set(CATEGORIES.keys()) == expected_internal
