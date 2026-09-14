@@ -73,11 +73,11 @@ async def _beauty_product(client, token: str, *, name: str, product_type: str) -
     return item_id
 
 
-async def _stock_wardrobe(client, token: str) -> None:
+async def _stock_care_products(client, token: str) -> None:
     for category, name, subcategory, details in (
-        ("wardrobe", "Charcoal Blazer", "blazer", {"colour": "charcoal", "fabric": "wool", "formality": "smart_casual", "season": ["all"]}),
-        ("wardrobe", "White Cotton Shirt", "shirt", {"colour": "white", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]}),
-        ("wardrobe", "Navy Chinos", "trousers", {"colour": "navy", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]}),
+        ("beauty", "Gentle Cleanser", "cleanser", {"ingredients": []}),
+        ("beauty", "Daily Moisturiser", "moisturiser", {"ingredients": []}),
+        ("hair", "Gentle Shampoo", "shampoo", {"ingredients": []}),
         ("shoes", "Brown Leather Derbies", "derby", {"colour": "brown", "shoe_type": "derby", "occasion": ["work"]}),
     ):
         response = await client.post(
@@ -397,7 +397,7 @@ async def test_locked_today_refreshes_only_care_for_cadence_change(
     monkeypatch.setattr(clock, "part_of_day", lambda _: "morning")
     token, account_id = await registered_supabase_user()
     await _seeded_shelf(app_client, token)
-    await _stock_wardrobe(app_client, token)
+    await _stock_care_products(app_client, token)
     await _profile(app_client, token, "care_hair_wash_frequency", "daily")
     generated = (await _generate(app_client, token)).json()
     shampoo = next(
@@ -446,7 +446,7 @@ async def test_locked_plan_missing_only_cadence_fingerprint_is_upgraded_in_place
     monkeypatch.setattr(clock, "part_of_day", lambda _: "morning")
     token, account_id = await registered_supabase_user()
     await _seeded_shelf(app_client, token)
-    await _stock_wardrobe(app_client, token)
+    await _stock_care_products(app_client, token)
     await _profile(app_client, token, "care_hair_wash_frequency", "daily")
     url = f"/api/v2/today?plan_date={TODAY.isoformat()}"
     await app_client.get(url, headers=auth(token))

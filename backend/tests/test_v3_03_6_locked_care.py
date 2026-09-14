@@ -53,11 +53,11 @@ async def _inventory(client, token: str, *, category: str, name: str, subcategor
     return response.json()["id"]
 
 
-async def _stock_wardrobe(client, token: str) -> None:
+async def _stock_care_products(client, token: str) -> None:
     for category, name, subcategory, details in (
-        ("wardrobe", "Charcoal Blazer", "blazer", {"colour": "charcoal", "fabric": "wool", "formality": "smart_casual", "season": ["all"]}),
-        ("wardrobe", "White Cotton Shirt", "shirt", {"colour": "white", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]}),
-        ("wardrobe", "Navy Chinos", "trousers", {"colour": "navy", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]}),
+        ("beauty", "Gentle Cleanser", "cleanser", {"ingredients": []}),
+        ("beauty", "Daily Moisturiser", "moisturiser", {"ingredients": []}),
+        ("hair", "Gentle Shampoo", "shampoo", {"ingredients": []}),
         ("shoes", "Brown Leather Derbies", "derby", {"colour": "brown", "shoe_type": "derby", "occasion": ["work"]}),
     ):
         await _inventory(client, token, category=category, name=name, subcategory=subcategory, details=details)
@@ -164,7 +164,7 @@ async def test_locked_allergy_refresh_preserves_outfit_and_is_stable(
 ):
     token, account_id = await registered_supabase_user()
     await _seed()
-    await _stock_wardrobe(app_client, token)
+    await _stock_care_products(app_client, token)
     item_id = await _care_product(app_client, token)
     await _today(app_client, token)
     await _lock(app_client, token)
@@ -200,7 +200,7 @@ async def test_locked_care_reversion_refreshes_even_when_full_key_returns_to_a(
 ):
     token, account_id = await registered_supabase_user()
     await _seed()
-    await _stock_wardrobe(app_client, token)
+    await _stock_care_products(app_client, token)
     item_id = await _care_product(app_client, token)
     await _today(app_client, token)
     await _lock(app_client, token)
@@ -225,7 +225,7 @@ async def test_weekly_locked_day_refreshes_care_without_replacing_outfit(
 ):
     token, account_id = await registered_supabase_user()
     await _seed()
-    await _stock_wardrobe(app_client, token)
+    await _stock_care_products(app_client, token)
     item_id = await _care_product(app_client, token)
     await _today(app_client, token)
     await _lock(app_client, token)
@@ -259,7 +259,7 @@ async def test_unlocked_appearance_keeps_drafts_ahead_of_expiry_advisory(
         subcategory="moisturiser", details={"product_type": "moisturiser", "expiry_date": "2026-02-20"},
     )
     draft_id = await _inventory(
-        app_client, token, category="wardrobe", name="Draft Shirt", subcategory="shirt",
+        app_client, token, category="beauty", name="Draft Cleanser", subcategory="cleanser",
         details={"colour": "white", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]},
     )
     factory = get_sessionmaker()
@@ -349,7 +349,7 @@ async def test_locked_care_and_weather_refresh_only_care(
 ):
     token, account_id = await registered_supabase_user()
     await _seed()
-    await _stock_wardrobe(app_client, token)
+    await _stock_care_products(app_client, token)
     item_id = await _care_product(app_client, token)
     await _today(app_client, token)
     await _lock(app_client, token)
@@ -373,7 +373,7 @@ async def test_locked_plan_missing_care_fingerprints_is_upgraded_in_place(
 ):
     token, account_id = await registered_supabase_user()
     await _seed()
-    await _stock_wardrobe(app_client, token)
+    await _stock_care_products(app_client, token)
     await _care_product(app_client, token)
     await _today(app_client, token)
     await _lock(app_client, token)
@@ -403,7 +403,7 @@ async def test_unlock_after_care_refresh_allows_full_recompute(
 ):
     token, account_id = await registered_supabase_user()
     await _seed()
-    await _stock_wardrobe(app_client, token)
+    await _stock_care_products(app_client, token)
     await _care_product(app_client, token)
     await _today(app_client, token)
     await _lock(app_client, token)
@@ -428,7 +428,7 @@ async def test_weekly_locked_unchanged_care_has_no_churn(
 ):
     token, account_id = await registered_supabase_user()
     await _seed()
-    await _stock_wardrobe(app_client, token)
+    await _stock_care_products(app_client, token)
     await _care_product(app_client, token)
     await _lock(app_client, token)
     before = await _snapshot(account_id)
@@ -449,7 +449,7 @@ async def test_weekly_regenerate_locked_true_keeps_explicit_override(
 ):
     token, account_id = await registered_supabase_user()
     await _seed()
-    await _stock_wardrobe(app_client, token)
+    await _stock_care_products(app_client, token)
     await _care_product(app_client, token)
     await _lock(app_client, token)
     before = await _snapshot(account_id)
