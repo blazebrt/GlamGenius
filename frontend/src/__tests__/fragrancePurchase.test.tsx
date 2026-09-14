@@ -9,7 +9,7 @@ import * as api from '../services/apiV2';
 jest.mock('expo-image-picker', () => ({ launchImageLibraryAsync: jest.fn() }));
 jest.mock('../services/apiV2', () => {
   const actual = jest.requireActual('../services/apiV2');
-  return { ...actual, getPurchaseStrategies: jest.fn(), inspectPurchaseCandidate: jest.fn(), confirmPurchaseCandidate: jest.fn(), getFragrancePurchaseCheck: jest.fn(), recordPurchaseCandidateDecision: jest.fn(), uploadMedia: jest.fn(), evaluateItemDetails: jest.fn(), evaluateScreenshot: jest.fn(), getCarePurchaseCheck: jest.fn() };
+  return { ...actual, getPurchaseStrategies: jest.fn(), inspectPurchaseCandidate: jest.fn(), confirmPurchaseCandidate: jest.fn(), getFragrancePurchaseCheck: jest.fn(), getPurchaseGuard: jest.fn(), recordPurchaseCandidateDecision: jest.fn(), uploadMedia: jest.fn(), evaluateItemDetails: jest.fn(), evaluateScreenshot: jest.fn(), getCarePurchaseCheck: jest.fn() };
 });
 
 const mockedApi = api as jest.Mocked<typeof api>;
@@ -37,7 +37,7 @@ const draftCandidate = { ...candidate, review_required: true, facts_trusted: fal
 const savedDecision = { purchase_decision_memory_version: 'v3-05.8' as const, id: 'decision-1', candidate_id: 'fragrance-1', strategy: 'fragrance_purchase' as const, evaluation_id: null, recommendation_at_decision: { verdict: 'buy' as const, version: 'v3-05.9', fingerprint: 'fp-1' }, decision: 'waiting' as const, note: null, followed_recommendation: false, created_at: '', updated_at: '' };
 
 describe('Fragrance Purchase routing', () => {
-  beforeEach(() => { jest.clearAllMocks(); mockedApi.getPurchaseStrategies.mockResolvedValue(strategyResponse); mockedApi.inspectPurchaseCandidate.mockResolvedValue(candidate); mockedApi.getFragrancePurchaseCheck.mockResolvedValue(check); mockedApi.recordPurchaseCandidateDecision.mockResolvedValue(savedDecision); });
+  beforeEach(() => { jest.clearAllMocks(); mockedApi.getPurchaseStrategies.mockResolvedValue(strategyResponse); mockedApi.inspectPurchaseCandidate.mockResolvedValue(candidate); mockedApi.getFragrancePurchaseCheck.mockResolvedValue(check); mockedApi.getPurchaseGuard.mockResolvedValue({ purchase_guard_version: 'step-9a-v2', candidate_id: 'fragrance-1', identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'hidden' }, history_coverage: { state: 'step_9a_events_only', legacy_current_decisions_included: false }, prior_consideration_count: 0, most_recent: null, guard_state: 'no_step9a_prior_event', owned_redundancy: null }); mockedApi.recordPurchaseCandidateDecision.mockResolvedValue(savedDecision); });
 
   it('discovers Perfumes only from the active canonical strategy and keeps Supplements unavailable', async () => {
     render(<ShoppingCheckScreen />); await waitFor(() => expect(screen.getByLabelText('Perfumes')).toBeTruthy()); expect(screen.queryByLabelText('Supplements')).toBeNull();
@@ -65,5 +65,17 @@ describe('Fragrance Purchase routing', () => {
     render(<ShoppingCheckScreen />); await waitFor(() => expect(screen.getByLabelText('Perfumes')).toBeTruthy()); fireEvent.press(screen.getByLabelText('Perfumes')); fireEvent.press(screen.getByLabelText('Enter the details myself')); fireEvent.changeText(screen.getByLabelText('Product name'), 'Rain Garden'); fireEvent.press(screen.getByLabelText('Check this item')); await waitFor(() => expect(screen.getByLabelText('I am waiting')).toBeTruthy());
     let resolve!: (value: typeof savedDecision) => void; mockedApi.recordPurchaseCandidateDecision.mockReturnValueOnce(new Promise((r) => { resolve = r; })); fireEvent.press(screen.getByLabelText('I am waiting')); fireEvent.press(screen.getByLabelText('I am waiting')); expect(mockedApi.recordPurchaseCandidateDecision).toHaveBeenCalledTimes(1); resolve(savedDecision); await waitFor(() => expect(mockedApi.recordPurchaseCandidateDecision).toHaveBeenCalledTimes(1));
     mockedApi.recordPurchaseCandidateDecision.mockRejectedValueOnce(new Error('temporary')); fireEvent.press(screen.getByLabelText('I am waiting')); await waitFor(() => expect(screen.getByLabelText('Try again')).toBeTruthy()); mockedApi.recordPurchaseCandidateDecision.mockResolvedValue(savedDecision); fireEvent.press(screen.getByLabelText('Try again')); await waitFor(() => expect(mockedApi.recordPurchaseCandidateDecision).toHaveBeenCalledTimes(3)); expect(mockedApi.evaluateItemDetails).not.toHaveBeenCalled();
+  });
+
+  it('refreshes Fragrance memory from the server only after saving a decision', async () => {
+    mockedApi.getPurchaseGuard
+      .mockResolvedValueOnce({ purchase_guard_version: 'step-9a-v2', candidate_id: 'fragrance-1', identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'hidden' }, history_coverage: { state: 'step_9a_events_only', legacy_current_decisions_included: false }, prior_consideration_count: 0, most_recent: null, guard_state: 'no_step9a_prior_event', owned_redundancy: null })
+      .mockResolvedValueOnce({ purchase_guard_version: 'step-9a-v2', candidate_id: 'fragrance-1', identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'hidden' }, history_coverage: { state: 'step_9a_events_only', legacy_current_decisions_included: false }, prior_consideration_count: 1, most_recent: { id: 'event-1', candidate_id: 'fragrance-1', category: 'perfumes', strategy: 'fragrance_purchase', candidate_display_name: 'Rain Garden', identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'hidden' }, recommendation_at_decision: { verdict: 'buy', version: 'v1', fingerprint: null }, decision: 'waiting', followed_recommendation: true, occurred_at: null }, guard_state: 'exact_prior_waiting', owned_redundancy: null });
+    render(<ShoppingCheckScreen />); await waitFor(() => expect(screen.getByLabelText('Perfumes')).toBeTruthy()); fireEvent.press(screen.getByLabelText('Perfumes')); fireEvent.press(screen.getByLabelText('Enter the details myself')); fireEvent.changeText(screen.getByLabelText('Product name'), 'Rain Garden'); fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(mockedApi.getPurchaseGuard).toHaveBeenCalledWith('fragrance-1'));
+    expect(screen.queryByText('Last time, you chose to wait.')).toBeNull();
+    fireEvent.press(screen.getByLabelText('I am waiting'));
+    await waitFor(() => expect(mockedApi.getPurchaseGuard).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Last time, you chose to wait.')).toBeTruthy();
   });
 });

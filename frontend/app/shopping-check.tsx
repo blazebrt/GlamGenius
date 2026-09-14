@@ -318,7 +318,7 @@ export default function ShoppingCheckScreen() {
             <TouchableOpacity accessibilityRole="button" accessibilityLabel="Save corrected product facts" onPress={() => void confirmCare()} style={styles.primary}><Text style={styles.primaryText}>Confirm corrections</Text></TouchableOpacity>
           </View>
         )}
-        {careCheck && <><CarePurchaseResult check={careCheck} onReset={reset} busy={careDecisionBusy} onDecide={(value) => void decideCare(value)} /><PurchaseMemoryCard guard={purchaseGuard} /></>}
+        {careCheck && <CarePurchaseResult check={careCheck} onReset={reset} busy={careDecisionBusy} onDecide={(value) => void decideCare(value)} purchaseMemory={<PurchaseMemoryCard guard={purchaseGuard} />} />}
         {fragranceCandidate && !fragranceCheck && !editingFragrance && <FragranceCandidateReview inspection={fragranceCandidate} onConfirm={() => void confirmFragrance()} onCorrect={() => setEditingFragrance(true)} />}
         {fragranceCandidate && !fragranceCheck && editingFragrance && (
           <View style={styles.card} accessibilityLabel="Correct Fragrance product facts">
@@ -333,11 +333,11 @@ export default function ShoppingCheckScreen() {
             <TouchableOpacity accessibilityRole="button" accessibilityLabel="Save corrected fragrance facts" onPress={() => void confirmFragrance()} style={styles.primary}><Text style={styles.primaryText}>Confirm corrections</Text></TouchableOpacity>
           </View>
         )}
-        {fragranceCheck && <><FragranceShoppingResult check={fragranceCheck} onReset={reset} busy={careDecisionBusy} onDecide={(value) => void decideFragrance(value)} /><PurchaseMemoryCard guard={purchaseGuard} /></>}
+        {fragranceCheck && <FragranceShoppingResult check={fragranceCheck} onReset={reset} busy={careDecisionBusy} onDecide={(value) => void decideFragrance(value)} purchaseMemory={<PurchaseMemoryCard guard={purchaseGuard} />} />}
         {evaluation && <>
-          <VerdictCard evaluation={evaluation} />{evaluation.candidate && <ExtractedItemReview candidate={evaluation.candidate} />}
+          <VerdictCard evaluation={evaluation} /><PurchaseMemoryCard guard={purchaseGuard} />{evaluation.candidate && <ExtractedItemReview candidate={evaluation.candidate} />}
           <NewCombinations count={evaluation.new_combinations} /><ROIBreakdown roi={evaluation.appearance_roi} /><OwnedComparisons similar={evaluation.similar_owned_products} alternatives={evaluation.existing_alternatives} /><RiskNotes evaluation={evaluation} />
-          <DecisionActions current={evaluation.decision?.decision} onDecide={(value) => void decide(value)} /><PurchaseMemoryCard guard={purchaseGuard} />{!!evaluation.disclaimer && <Text style={styles.hint}>{evaluation.disclaimer}</Text>}
+          <DecisionActions current={evaluation.decision?.decision} onDecide={(value) => void decide(value)} />{!!evaluation.disclaimer && <Text style={styles.hint}>{evaluation.disclaimer}</Text>}
           <TouchableOpacity accessibilityRole="button" accessibilityLabel="Check something else" onPress={reset}><Text style={styles.link}>Check something else</Text></TouchableOpacity>
         </>}
       </ScrollView>

@@ -244,6 +244,24 @@ describe('ShoppingCheckScreen strategy and Care flows', () => {
     expect(mockedApi.getCarePurchaseCheck).not.toHaveBeenCalled();
   });
 
+  it('refreshes Style purchase memory only after its decision write succeeds', async () => {
+    const styleEvaluation = {
+      id: 'style-evaluation-1', run_id: 'run-1', candidate: { id: 'style-candidate-1', source: 'manual', category: 'wardrobe', subcategory: null, display_name: 'Olive shirt', brand: null, colour: null, size: null, fabric: null, fit: null, formality: null, occasion_tags: [], season_tags: [], price: null, currency: 'INR', product_url: null, extraction_confidence: null, uncertain_fields: [], verification_state: 'user_declared', media_asset_id: null, in_inventory: false, note: 'Candidate', created_at: null }, verdict: 'wait', headline: 'Wait.', appearance_roi: { score: 0, version: 'v1', formula: 'formula', thresholds: { buy: 1, wait: 0 }, factors: [] }, confidence: 1, new_combinations: 0, summary: 'summary', explanation_source: 'deterministic', similar_owned_products: [], existing_alternatives: [], fit_risks: [], colour_risks: [], climate_notes: [], missing_information: [], decision: null, created_at: null,
+    } as any;
+    mockedApi.evaluateItemDetails.mockResolvedValue(styleEvaluation);
+    mockedApi.recordPurchaseDecision.mockResolvedValue({ ...styleEvaluation, decision: { decision: 'waiting', note: null, followed_recommendation: true, created_at: null } });
+    mockedApi.getPurchaseGuard
+      .mockResolvedValueOnce({ purchase_guard_version: 'step-9a-v2', candidate_id: 'style-candidate-1', identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'hidden' }, history_coverage: { state: 'step_9a_events_only', legacy_current_decisions_included: false }, prior_consideration_count: 0, most_recent: null, guard_state: 'no_step9a_prior_event', owned_redundancy: null })
+      .mockResolvedValueOnce({ purchase_guard_version: 'step-9a-v2', candidate_id: 'style-candidate-1', identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'hidden' }, history_coverage: { state: 'step_9a_events_only', legacy_current_decisions_included: false }, prior_consideration_count: 1, most_recent: { id: 'event-1', candidate_id: 'style-candidate-1', category: 'wardrobe', strategy: 'style_purchase', candidate_display_name: 'Olive shirt', identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'hidden' }, recommendation_at_decision: { verdict: 'wait', version: 'v1', fingerprint: null }, decision: 'waiting', followed_recommendation: true, occurred_at: null }, guard_state: 'exact_prior_waiting', owned_redundancy: null });
+    render(<ShoppingCheckScreen />); await waitFor(() => expect(screen.getByLabelText('Wardrobe')).toBeTruthy()); fireEvent.press(screen.getByLabelText('Enter the details myself')); fireEvent.changeText(screen.getByLabelText('Product name'), 'Olive shirt'); fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(mockedApi.getPurchaseGuard).toHaveBeenCalledWith('style-candidate-1'));
+    expect(screen.queryByText('Last time, you chose to wait.')).toBeNull();
+    fireEvent.press(screen.getByLabelText('I am waiting'));
+    await waitFor(() => expect(mockedApi.recordPurchaseDecision).toHaveBeenCalledWith('style-evaluation-1', 'waiting'));
+    await waitFor(() => expect(mockedApi.getPurchaseGuard).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Last time, you chose to wait.')).toBeTruthy();
+  });
+
   it('renders the preserved allowance trust signal for an explicit Style failure response', async () => {
     mockedApi.evaluateItemDetails.mockRejectedValue({ response: { data: { detail: {
       code: 'ANALYSIS_UNAVAILABLE', message: 'Style analysis unavailable', retryable: true, allowance_consumed: false,

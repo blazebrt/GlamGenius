@@ -25,6 +25,7 @@ describe('PurchaseMemoryCard', () => {
     ['exact_prior_bought', 'You previously marked this exact product as bought.'],
     ['exact_prior_waiting', 'Last time, you chose to wait.'],
     ['exact_prior_skipped', 'Last time, you chose to skip this.'],
+    ['exact_prior_consideration', 'You have considered this exact product before.'],
   ] as const)('renders the exact prior decision for %s', (state, copy) => {
     render(<PurchaseMemoryCard guard={guard(state)} />);
     expect(screen.getByText(copy)).toBeTruthy();
@@ -43,5 +44,15 @@ describe('PurchaseMemoryCard', () => {
   it('renders nothing when Step 9A has no prior event', () => {
     const { toJSON } = render(<PurchaseMemoryCard guard={guard('no_step9a_prior_event')} />);
     expect(toJSON()).toBeNull();
+  });
+
+  it('renders a deterministic count and date without exposing internal guard data', () => {
+    const value = guard('exact_prior_waiting');
+    value.prior_consideration_count = 3;
+    render(<PurchaseMemoryCard guard={value} />);
+    expect(screen.getByText('You have considered this exact product 3 times.')).toBeTruthy();
+    expect(screen.getByText('Last decision: 1 Sept 2026')).toBeTruthy();
+    expect(screen.queryByText(/fingerprint|step-9a-v2|event-1|care_purchase|followed/i)).toBeNull();
+    expect(screen.queryByText(/own this|already owned|already in your inventory/i)).toBeNull();
   });
 });

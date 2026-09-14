@@ -180,15 +180,18 @@ export function CarePurchaseResult({
   onReset,
   onDecide,
   busy = false,
+  purchaseMemory,
 }: {
   check: CarePurchaseCheck;
   onReset: () => void;
   onDecide?: (decision: 'bought' | 'waiting' | 'skipped') => void;
   busy?: boolean;
+  purchaseMemory?: React.ReactNode;
 }) {
   return (
     <>
       <CareVerdictCard check={check} />
+      {purchaseMemory}
       <CareWhy check={check} />
       <Text style={styles.noteCenter}>This candidate remains separate from your inventory.</Text>
       {onDecide && <DecisionActions current={check.decision?.decision} onDecide={onDecide} busy={busy} />}
