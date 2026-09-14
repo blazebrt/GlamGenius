@@ -220,7 +220,11 @@ async def test_locked_care_reversion_refreshes_even_when_full_key_returns_to_a(
     reverted_actions = {(row["action_type"], row.get("inventory_item_id")) for row in reverted["primary"] + reverted["optional_modules"]}
     assert ("care_safety", item_id) in blocked_actions
     assert ("care_safety", item_id) not in reverted_actions
-    assert reverted_actions == {(row["action_type"], row.get("inventory_item_id")) for row in before["actions"]}
+    reverted_rows = reverted["primary"] + reverted["optional_modules"]
+    assert {
+        (row["module"], row["action_type"], row["title"])
+        for row in reverted_rows
+    } == set(before["actions"])
     assert after["events"] == before["events"] + 2
 
 
