@@ -209,6 +209,7 @@ async def test_locked_care_reversion_refreshes_even_when_full_key_returns_to_a(
     await _allergy(app_client, token, ["fragrance"])
     blocked = await _today(app_client, token)
     assert any(row.get("inventory_item_id") == item_id and row["action_type"] == "care_safety" for row in blocked["primary"] + blocked["optional_modules"])
+    blocked_actions = {(row["action_type"], row.get("inventory_item_id")) for row in blocked["primary"] + blocked["optional_modules"]}
     await _allergy(app_client, token, [])
     assert await _canonical_key(account_id) == before["cache_key"]
     reverted = await _today(app_client, token)
@@ -216,7 +217,10 @@ async def test_locked_care_reversion_refreshes_even_when_full_key_returns_to_a(
 
     assert after["cache_key"] == before["cache_key"]
     assert after["version"] == before["version"] + 2
-    assert any(row.get("inventory_item_id") == item_id and row["action_type"] == "routine" for row in reverted["primary"] + reverted["optional_modules"])
+    reverted_actions = {(row["action_type"], row.get("inventory_item_id")) for row in reverted["primary"] + reverted["optional_modules"]}
+    assert ("care_safety", item_id) in blocked_actions
+    assert ("care_safety", item_id) not in reverted_actions
+    assert reverted_actions == {(row["action_type"], row.get("inventory_item_id")) for row in before["actions"]}
     assert after["events"] == before["events"] + 2
 
 

@@ -835,7 +835,7 @@ async def compile_day(
             )
             if refreshed:
                 return existing, True
-        if existing.cache_key == key and existing.status == "ready":
+        if existing.cache_key == key and existing.status in {"ready", "needs_inventory"}:
             existing.generated_from = PLAN_SOURCE_CACHE
             return existing, False
         if existing.locked:

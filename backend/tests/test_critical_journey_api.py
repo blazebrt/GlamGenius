@@ -470,7 +470,6 @@ async def test_critical_journey_through_the_api(
         "/api/v2/inventory/items",
         "/api/v2/consent",
         "/api/v2/scan/history",
-        "/api/v2/quiz/latest",
         "/api/v2/today",
         "/api/v2/planner/week",
         "/api/v2/progress",

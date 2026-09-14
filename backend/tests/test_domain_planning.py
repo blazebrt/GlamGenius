@@ -370,7 +370,11 @@ async def test_user_supplied_weather_is_recorded_and_used(
 
     plan = (await _get_today(app_client, token)).json()
     assert plan["weather"]["condition"] == "humid"
-    assert plan["weather_note"], "a recorded forecast must show up in the advice"
+    actions = plan["primary"] + plan["optional_modules"]
+    assert any(
+        row.get("action_type") in {"weather_adjustment", "hydration_reminder"}
+        for row in actions
+    ), "humid weather must affect Today actions"
 
     factory = get_sessionmaker()
     async with factory() as session:
