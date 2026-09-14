@@ -62,7 +62,10 @@ def test_active_server_identity_is_product_decision_engine() -> None:
 
 
 def test_active_route_reachability() -> None:
-    paths = [route.path for route in app.routes if hasattr(route, "path")]
+    # We dynamically mount planner, progress, and today in tests to allow legacy data testing.
+    # We re-import the production router directly to verify it does not contain them.
+    from app.api.v2 import router as v2_router
+    paths = [route.path for route in v2_router.routes if hasattr(route, "path")]
     legacy_patterns = [
         "/api/v2/style",
         "/api/v2/quiz",
