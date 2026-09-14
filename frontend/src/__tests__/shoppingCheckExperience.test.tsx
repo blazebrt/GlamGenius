@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import * as ImagePicker from 'expo-image-picker';
 
 import ShoppingCheckScreen from '../../app/shopping-check';
@@ -19,6 +19,7 @@ jest.mock('../services/apiV2', () => {
     getPurchaseStrategies: jest.fn(),
     inspectPurchaseCandidate: jest.fn(),
     getCarePurchaseCheck: jest.fn(),
+    getPurchaseGuard: jest.fn(),
     recordCarePurchaseDecision: jest.fn(),
     recordPurchaseDecision: jest.fn(),
     confirmPurchaseCandidate: jest.fn(),
@@ -42,10 +43,10 @@ const strategies = (): PurchaseStrategiesResponse => ({
   ],
 });
 
-const candidate = (trusted: boolean, price: number | null = 499, brand: string | null = 'Example'): CareCandidateInspection => ({
+const candidate = (trusted: boolean, price: number | null = 499, brand: string | null = 'Example', id = 'candidate-1'): CareCandidateInspection => ({
   candidate_truth_version: 'v3-05.1', care_purchase_candidate_schema_version: 'v3-05.1',
   candidate: {
-    id: 'candidate-1', source: 'manual', category: 'beauty', subcategory: null,
+    id, source: 'manual', category: 'beauty', subcategory: null,
     display_name: 'Daily cleanser', brand, details: { product_type: 'cleanser', ingredients_text: 'glycerin' },
     price, currency: 'INR', product_url: null, media_asset_id: null, verification_state: trusted ? 'user_declared' : 'draft',
     uncertain_fields: [], extraction_confidence: null, ai_run_id: null, model_version: null, prompt_version: null, schema_version: null, in_inventory: false,
@@ -53,8 +54,8 @@ const candidate = (trusted: boolean, price: number | null = 499, brand: string |
   recognised_ingredient_keys: ['glycerin'], recognised_ingredient_families: ['humectant'], note: 'Prospective candidate.',
 });
 
-const careCheck = (): CarePurchaseCheck => ({
-  care_purchase_check_version: 'v3-05.7', strategy: 'care_purchase', candidate_truth: candidate(true),
+const careCheck = (id = 'candidate-1'): CarePurchaseCheck => ({
+  care_purchase_check_version: 'v3-05.7', strategy: 'care_purchase', candidate_truth: candidate(true, 499, 'Example', id),
   assessment: { plan_date: '2026-08-20', assessment_fingerprint: 'assessment-1', dimensions: { role_utility: { status: 'addresses_required_gap', care_slot: 'cleanser' }, redundancy: { eligible_owned_same_slot: [] }, compatibility: { findings: [] }, identity_confidence: { missing_information: [] } } },
   evidence: { assessment_fingerprint: 'assessment-1', evidence_support: { findings: [] } },
   value: { assessment_fingerprint: 'assessment-1', value_fingerprint: 'value-1', value_context: { owned_value_recovery: { items: [] } } },
@@ -68,6 +69,12 @@ describe('ShoppingCheckScreen strategy and Care flows', () => {
     jest.clearAllMocks();
     mockedApi.getPurchaseStrategies.mockResolvedValue(strategies());
     mockedApi.getCarePurchaseCheck.mockResolvedValue(careCheck());
+    mockedApi.getPurchaseGuard.mockResolvedValue({
+      purchase_guard_version: 'step-9a-v2', candidate_id: 'candidate-1',
+      identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'fingerprint' },
+      history_coverage: { state: 'step_9a_events_only', legacy_current_decisions_included: false },
+      prior_consideration_count: 0, most_recent: null, guard_state: 'no_step9a_prior_event', owned_redundancy: null,
+    });
   });
 
   it('uses the registry for active categories and retries a failed discovery without fallback activation', async () => {
@@ -118,6 +125,24 @@ describe('ShoppingCheckScreen strategy and Care flows', () => {
     await waitFor(() => expect(mockedApi.recordCarePurchaseDecision).toHaveBeenCalledWith('candidate-1', 'waiting', undefined, '2026-08-20'));
     expect(screen.getByLabelText('I am waiting').props.accessibilityState.selected).toBe(true);
     expect(mockedApi.recordPurchaseDecision).not.toHaveBeenCalled();
+  });
+
+  it('loads purchase memory only after the Care verdict exists and refreshes it after a saved decision', async () => {
+    mockedApi.inspectPurchaseCandidate.mockResolvedValue(candidate(true));
+    mockedApi.recordCarePurchaseDecision.mockResolvedValue({
+      purchase_decision_memory_version: 'v3-05.8', id: 'decision-1', candidate_id: 'candidate-1', strategy: 'care_purchase', evaluation_id: null,
+      recommendation_at_decision: { verdict: 'wait', version: 'v3-05.5', fingerprint: 'fp-1' }, decision: 'waiting', note: null,
+      followed_recommendation: true, created_at: '2026-08-20T00:00:00Z', updated_at: '2026-08-20T00:00:00Z',
+    });
+    render(<ShoppingCheckScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Skin Care')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Skin Care'));
+    fireEvent.press(screen.getByLabelText('Enter the details myself'));
+    fireEvent.changeText(screen.getByLabelText('Product name'), 'Daily cleanser');
+    fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(mockedApi.getPurchaseGuard).toHaveBeenCalledWith('candidate-1'));
+    fireEvent.press(screen.getByLabelText('I am waiting'));
+    await waitFor(() => expect(mockedApi.getPurchaseGuard).toHaveBeenCalledTimes(2));
   });
 
   it('retries the failed Care decision save rather than refreshing the check', async () => {
@@ -217,6 +242,46 @@ describe('ShoppingCheckScreen strategy and Care flows', () => {
     ));
     expect(mockedApi.inspectPurchaseCandidate).not.toHaveBeenCalled();
     expect(mockedApi.getCarePurchaseCheck).not.toHaveBeenCalled();
+  });
+
+  it('refreshes Style purchase memory only after its decision write succeeds', async () => {
+    const styleEvaluation = {
+      id: 'style-evaluation-1', run_id: 'run-1', candidate: { id: 'style-candidate-1', source: 'manual', category: 'wardrobe', subcategory: null, display_name: 'Olive shirt', brand: null, colour: null, size: null, fabric: null, fit: null, formality: null, occasion_tags: [], season_tags: [], price: null, currency: 'INR', product_url: null, extraction_confidence: null, uncertain_fields: [], verification_state: 'user_declared', media_asset_id: null, in_inventory: false, note: 'Candidate', created_at: null }, verdict: 'wait', headline: 'Wait.', appearance_roi: { score: 0, version: 'v1', formula: 'formula', thresholds: { buy: 1, wait: 0 }, factors: [] }, confidence: 1, new_combinations: 0, summary: 'summary', explanation_source: 'deterministic', similar_owned_products: [], existing_alternatives: [], fit_risks: [], colour_risks: [], climate_notes: [], missing_information: [], decision: null, created_at: null,
+    } as any;
+    mockedApi.evaluateItemDetails.mockResolvedValue(styleEvaluation);
+    mockedApi.recordPurchaseDecision.mockResolvedValue({ ...styleEvaluation, decision: { decision: 'waiting', note: null, followed_recommendation: true, created_at: null } });
+    mockedApi.getPurchaseGuard
+      .mockResolvedValueOnce({ purchase_guard_version: 'step-9a-v2', candidate_id: 'style-candidate-1', identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'hidden' }, history_coverage: { state: 'step_9a_events_only', legacy_current_decisions_included: false }, prior_consideration_count: 0, most_recent: null, guard_state: 'no_step9a_prior_event', owned_redundancy: null })
+      .mockResolvedValueOnce({ purchase_guard_version: 'step-9a-v2', candidate_id: 'style-candidate-1', identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'hidden' }, history_coverage: { state: 'step_9a_events_only', legacy_current_decisions_included: false }, prior_consideration_count: 1, most_recent: { id: 'event-1', candidate_id: 'style-candidate-1', category: 'wardrobe', strategy: 'style_purchase', candidate_display_name: 'Olive shirt', identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'hidden' }, recommendation_at_decision: { verdict: 'wait', version: 'v1', fingerprint: null }, decision: 'waiting', followed_recommendation: true, occurred_at: null }, guard_state: 'exact_prior_waiting', owned_redundancy: null });
+    render(<ShoppingCheckScreen />); await waitFor(() => expect(screen.getByLabelText('Wardrobe')).toBeTruthy()); fireEvent.press(screen.getByLabelText('Enter the details myself')); fireEvent.changeText(screen.getByLabelText('Product name'), 'Olive shirt'); fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(mockedApi.getPurchaseGuard).toHaveBeenCalledWith('style-candidate-1'));
+    expect(screen.queryByText('Last time, you chose to wait.')).toBeNull();
+    fireEvent.press(screen.getByLabelText('I am waiting'));
+    await waitFor(() => expect(mockedApi.recordPurchaseDecision).toHaveBeenCalledWith('style-evaluation-1', 'waiting'));
+    await waitFor(() => expect(mockedApi.getPurchaseGuard).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Last time, you chose to wait.')).toBeTruthy();
+  });
+
+  it('does not let a late guard for candidate A replace candidate B memory after reset', async () => {
+    let resolveA!: (value: any) => void; let resolveB!: (value: any) => void;
+    mockedApi.inspectPurchaseCandidate.mockResolvedValueOnce(candidate(true, 499, 'Example', 'candidate-a')).mockResolvedValueOnce(candidate(true, 499, 'Example', 'candidate-b'));
+    mockedApi.getCarePurchaseCheck.mockResolvedValueOnce(careCheck('candidate-a')).mockResolvedValueOnce(careCheck('candidate-b'));
+    mockedApi.getPurchaseGuard.mockImplementation((id: string) => new Promise((resolve) => { if (id === 'candidate-a') resolveA = resolve; else resolveB = resolve; }) as any);
+    render(<ShoppingCheckScreen />); await waitFor(() => expect(screen.getByLabelText('Skin Care')).toBeTruthy()); fireEvent.press(screen.getByLabelText('Skin Care')); fireEvent.press(screen.getByLabelText('Enter the details myself')); fireEvent.changeText(screen.getByLabelText('Product name'), 'A'); fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(mockedApi.getPurchaseGuard).toHaveBeenCalledWith('candidate-a'));
+    fireEvent.press(screen.getByLabelText('Check something else')); fireEvent.changeText(screen.getByLabelText('Product name'), 'B'); fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(mockedApi.getPurchaseGuard).toHaveBeenCalledWith('candidate-b'));
+    await act(async () => resolveB({ purchase_guard_version: 'step-9a-v2', candidate_id: 'candidate-b', identity: { version: 'step-9a-v2', state: 'exact', fingerprint: null }, history_coverage: { state: 'step_9a_events_only', legacy_current_decisions_included: false }, prior_consideration_count: 1, most_recent: { occurred_at: null }, guard_state: 'exact_prior_waiting', owned_redundancy: null }));
+    expect(screen.getByText('Last time, you chose to wait.')).toBeTruthy();
+    await act(async () => resolveA({ purchase_guard_version: 'step-9a-v2', candidate_id: 'candidate-a', identity: { version: 'step-9a-v2', state: 'exact', fingerprint: null }, history_coverage: { state: 'step_9a_events_only', legacy_current_decisions_included: false }, prior_consideration_count: 1, most_recent: { occurred_at: null }, guard_state: 'exact_prior_bought', owned_redundancy: null }));
+    expect(screen.queryByText('You previously marked this exact product as bought.')).toBeNull();
+    expect(screen.getByText('Last time, you chose to wait.')).toBeTruthy();
+  });
+
+  it('keeps a successful Care verdict and decision controls when purchase memory fails', async () => {
+    mockedApi.inspectPurchaseCandidate.mockResolvedValue(candidate(true)); mockedApi.getPurchaseGuard.mockRejectedValue(new Error('memory offline'));
+    render(<ShoppingCheckScreen />); await waitFor(() => expect(screen.getByLabelText('Skin Care')).toBeTruthy()); fireEvent.press(screen.getByLabelText('Skin Care')); fireEvent.press(screen.getByLabelText('Enter the details myself')); fireEvent.changeText(screen.getByLabelText('Product name'), 'Daily cleanser'); fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(screen.getByLabelText('Care verdict: Wait')).toBeTruthy()); expect(screen.getByLabelText('I am waiting')).toBeTruthy(); expect(screen.queryByTestId('state-analysis-failed')).toBeNull(); expect(screen.queryByText(/no prior history|never considered/i)).toBeNull();
   });
 
   it('renders the preserved allowance trust signal for an explicit Style failure response', async () => {

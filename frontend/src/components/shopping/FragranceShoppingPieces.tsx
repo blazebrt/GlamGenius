@@ -29,8 +29,8 @@ export function FragranceCandidateReview({
 }
 
 export function FragranceShoppingResult({
-  check, onReset, onDecide, busy = false,
-}: { check: FragrancePurchaseCheck; onReset: () => void; onDecide: (decision: 'bought' | 'waiting' | 'skipped') => void; busy?: boolean }) {
+  check, onReset, onDecide, busy = false, purchaseMemory,
+}: { check: FragrancePurchaseCheck; onReset: () => void; onDecide: (decision: 'bought' | 'waiting' | 'skipped') => void; busy?: boolean; purchaseMemory?: React.ReactNode }) {
   const verdict = check.verdict;
   const context = check.collection_context;
   const missingInformation = check.verdict.missing_information || check.candidate_truth.missing_information;
@@ -39,6 +39,7 @@ export function FragranceShoppingResult({
       <View style={[styles.verdict, { backgroundColor: verdictColor(verdict.verdict) + '20' }]} accessibilityLabel={`Fragrance verdict: ${verdict.verdict[0].toUpperCase()}${verdict.verdict.slice(1)}`}>
         <Text style={styles.eyebrow}>FRAGRANCE PURCHASE</Text><Text style={[styles.verdictLabel, { color: verdictColor(verdict.verdict) }]}>{verdict.verdict.toUpperCase()}</Text><Text style={styles.verdictBlurb}>{verdict.headline}</Text><Text style={styles.body}>{verdict.explanation}</Text>
       </View>
+      {purchaseMemory}
       <View style={styles.card} accessibilityLabel="Fragrance intended use">
         <Text style={styles.title}>Where you said you would use it</Text>
         <Text style={styles.fact}>Occasions: {context.intended_use.occasion.map((value) => contextLabel(context, 'occasion', value)).join(', ') || 'Not specified'}</Text>
