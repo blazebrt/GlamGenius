@@ -288,5 +288,3 @@ async def get_purchase_guard(
     if strategy is None or strategy.state != "active":
         raise ValidationFailedError("This candidate is not eligible for a purchase guard.", field="category")
     return await decision_memory.purchase_guard(session, account_id=current.account_id, candidate=candidate)
-
-

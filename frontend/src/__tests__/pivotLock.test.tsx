@@ -18,7 +18,7 @@ import * as path from 'path';
 
 describe('Frontend Legacy Routing', () => {
   const appDir = path.resolve(__dirname, '../../app');
-  
+
   it('no Style/Look/wardrobe customer screen exists', () => {
     expect(fs.existsSync(path.join(appDir, '(tabs)', 'style.tsx'))).toBe(false);
     expect(fs.existsSync(path.join(appDir, '(tabs)', 'plan.tsx'))).toBe(false);
