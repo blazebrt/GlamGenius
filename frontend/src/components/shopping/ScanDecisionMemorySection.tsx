@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+﻿import React, { useState, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { COLORS, FONTS, SPACING, RADIUS } from '../../theme/colors';
 import { PurchaseMemoryCard } from './PurchaseMemoryCard';
@@ -15,7 +15,7 @@ export function ScanDecisionMemorySection({
   barcode: string;
   labelVersion: number;
   contentFingerprint: string;
-  memory: ScanDecisionMemory;
+  memory: ScanDecisionMemory | null;
   onMemoryUpdated: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -23,11 +23,13 @@ export function ScanDecisionMemorySection({
 
   const handleDecision = async (decision: 'BUY' | 'WAIT' | 'SKIP') => {
     setBusy(true);
+    const idempotencyKey = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     try {
       await saveScanDecision(barcode, {
         decision,
         label_version: labelVersion,
-        content_fingerprint: contentFingerprint
+        content_fingerprint: contentFingerprint,
+        idempotency_key: idempotencyKey,
       });
       setReconsidering(false);
       onMemoryUpdated();
@@ -38,13 +40,13 @@ export function ScanDecisionMemorySection({
     }
   };
 
-  const hasDecision = !!memory.decision && !reconsidering;
+  const hasDecision = !!memory?.decision && !reconsidering;
   const stateMap: Record<string, 'exact_prior_bought' | 'exact_prior_waiting' | 'exact_prior_skipped'> = {
     BUY: 'exact_prior_bought',
     WAIT: 'exact_prior_waiting',
     SKIP: 'exact_prior_skipped'
   };
-  const guardState = memory.decision ? stateMap[memory.decision.decision] : null;
+  const guardState = memory?.decision ? stateMap[memory.decision.decision] : null;
 
   return (
     <View style={styles.container}>
@@ -57,16 +59,16 @@ export function ScanDecisionMemorySection({
           {hasDecision && guardState && (
             <PurchaseMemoryCard
               guardState={guardState}
-              occurredAt={memory.decision?.occurred_at || null}
-              considerationCount={memory.history.length}
+              occurredAt={memory?.decision?.occurred_at || null}
+              considerationCount={memory?.history?.length || 0}
             />
           )}
 
           {!hasDecision && (
             <View style={styles.buttonRow}>
-              <TouchableOpacity accessibilityRole="button" style={[styles.actionButton, { backgroundColor: COLORS.positive }]} onPress={() => void handleDecision('BUY')}><Text style={styles.actionText}>BUY</Text></TouchableOpacity>
+              <TouchableOpacity accessibilityRole="button" style={[styles.actionButton, { backgroundColor: COLORS.success }]} onPress={() => void handleDecision('BUY')}><Text style={styles.actionText}>BUY</Text></TouchableOpacity>
               <TouchableOpacity accessibilityRole="button" style={[styles.actionButton, { backgroundColor: COLORS.warning }]} onPress={() => void handleDecision('WAIT')}><Text style={styles.actionText}>WAIT</Text></TouchableOpacity>
-              <TouchableOpacity accessibilityRole="button" style={[styles.actionButton, { backgroundColor: COLORS.negative }]} onPress={() => void handleDecision('SKIP')}><Text style={styles.actionText}>SKIP</Text></TouchableOpacity>
+              <TouchableOpacity accessibilityRole="button" style={[styles.actionButton, { backgroundColor: COLORS.error }]} onPress={() => void handleDecision('SKIP')}><Text style={styles.actionText}>SKIP</Text></TouchableOpacity>
             </View>
           )}
 

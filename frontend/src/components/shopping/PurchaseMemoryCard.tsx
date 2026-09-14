@@ -1,11 +1,13 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { PurchaseGuard } from '../../services/apiV2';
+
 import { PURCHASE_MEMORY } from '../../strings/purchaseMemory';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 
-const messageFor = (state: PurchaseGuard['guard_state']): string | null => {
+export type PurchaseGuardState = 'exact_prior_bought' | 'exact_prior_waiting' | 'exact_prior_skipped' | 'exact_prior_consideration' | 'historical_context_incomplete' | 'identity_insufficient' | 'no_step9a_prior_event';
+
+const messageFor = (state: PurchaseGuardState): string | null => {
   switch (state) {
     case 'exact_prior_bought': return PURCHASE_MEMORY.bought;
     case 'exact_prior_waiting': return PURCHASE_MEMORY.waiting;

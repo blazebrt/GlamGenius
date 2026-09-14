@@ -105,21 +105,37 @@ export default function VerdictScreen() {
 
   
   const [memory, setMemory] = useState<ScanDecisionMemory | null>(null);
+  const memoryToken = useRef(0);
+  
   const loadMemory = useCallback(async () => {
-    if (!barcode || !signedIn || referenceView) return;
+    if (!barcode || !signedIn || referenceView) {
+      setMemory(null);
+      return;
+    }
+    const token = ++memoryToken.current;
     try {
       const data = await readScanMemory(barcode);
-      setMemory(data);
+      if (memoryToken.current === token) {
+        // Runtime type guard (Blocker 13)
+        if (!data || !data.identity || typeof data.identity.label_version !== 'number' || typeof data.identity.content_fingerprint !== 'string' || !Array.isArray(data.history) || typeof data.scan_decision_memory_version !== 'string') {
+          setMemory(null);
+        } else {
+          setMemory(data);
+        }
+      }
     } catch {
-      setMemory(null);
+      if (memoryToken.current === token) {
+        setMemory(null);
+      }
     }
   }, [barcode, signedIn, referenceView]);
-  
+
   useEffect(() => {
-    if (loadState === 'ready') {
+    setMemory(null); // clear prior memory immediately when active identity changes
+    if (loadState === 'ready' && !referenceView) {
       void loadMemory();
     }
-  }, [loadState, loadMemory]);
+  }, [loadState, loadMemory, referenceView]);
 
   const view = useMemo(() => (source ? buildVerdict(source) : null), [source]);
 
@@ -403,6 +419,15 @@ export default function VerdictScreen() {
               onView={openAlternative}
               mrpComparison={source.mrpComparison}
             />
+            {!referenceView && source.labelVersion && memory !== undefined && (
+              <ScanDecisionMemorySection
+                barcode={barcode!}
+                labelVersion={source.labelVersion.versionNumber}
+                contentFingerprint={source.labelVersion.contentFingerprint}
+                memory={memory}
+                onMemoryUpdated={loadMemory}
+              />
+            )}
             <VerdictActions
               onWhy={() => setTab('why')}
               onListen={onListen}

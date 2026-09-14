@@ -1,3 +1,4 @@
+
 """Erasure has to reach everything the export calls the account holder's own.
 
 ``assert_registry_complete`` already stops a new table from being introduced
@@ -24,6 +25,7 @@ import pytest
 from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, AIRun, AIRunOutput
 from app.domains.identity import service as identity
 from app.domains.privacy import deletion_service, included_tables
+from app.domains.product.models import LabelSnapshot, ScanDecisionEvent
 from app.shared.database.sql import get_engine, get_sessionmaker
 from sqlalchemy import select, text
 
@@ -381,6 +383,10 @@ async def test_analytics_events_do_not_survive_the_person(
         await identity.register_account(session, staying)
         session.add(AppEvent(account_id=leaving, name="scan_opened", properties={"tab": "care"}))
         session.add(AppEvent(account_id=staying, name="scan_opened", properties={"tab": "care"}))
+        snapshot = LabelSnapshot(id=uuid.uuid4(), barcode="111", device_id=uuid.uuid4(), facts={}, confidence="unverified", content_fingerprint="f", version_number=1, changed_fields=[], completeness="none")
+        session.add(snapshot)
+        session.add(ScanDecisionEvent(account_id=leaving, barcode="111", label_snapshot_id=snapshot.id, label_version=1, content_fingerprint="f", decision="BUY", idempotency_key="k1"))
+        session.add(ScanDecisionEvent(account_id=staying, barcode="111", label_snapshot_id=snapshot.id, label_version=1, content_fingerprint="f", decision="BUY", idempotency_key="k2"))
         await session.commit()
 
     await _run_deletion(leaving)

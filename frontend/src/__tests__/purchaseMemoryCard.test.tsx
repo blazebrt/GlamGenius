@@ -2,9 +2,9 @@ import React from 'react';
 import { render, screen } from '@testing-library/react-native';
 
 import { PurchaseMemoryCard } from '../components/shopping/PurchaseMemoryCard';
-import { PurchaseGuard } from '../services/apiV2';
 
-const guard = (state: PurchaseGuard['guard_state']): PurchaseGuard => ({
+
+const guard = (state: any) => ({
   purchase_guard_version: 'step-9a-v2',
   candidate_id: 'candidate-1',
   identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'not-rendered' },

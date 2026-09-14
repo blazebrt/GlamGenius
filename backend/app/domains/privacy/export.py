@@ -63,7 +63,7 @@ from app.domains.planning.models import (
     WeeklyPlan,
 )
 from app.domains.privacy import EXPORT_SCHEMA_VERSION, REGISTRY, Classification
-from app.domains.product.models import LabelErrorReport, ScanEvent
+from app.domains.product.models import LabelErrorReport, ScanDecisionEvent, ScanEvent
 from app.domains.profile.models import (
     AppearanceGoal,
     AppearanceProfile,
@@ -316,9 +316,18 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
         .order_by(LabelErrorReport.created_at.desc()),
     )
     report_fields = [c.name for c in LabelErrorReport.__table__.columns]
+    memory_rows = await _fetch(
+        session,
+        select(ScanDecisionEvent)
+        .where(ScanDecisionEvent.account_id == account_id)
+        .order_by(ScanDecisionEvent.created_at.desc()),
+    )
+    memory_fields = [c.name for c in ScanDecisionEvent.__table__.columns]
+    
     return {
         "scans": [_row_dict(r, fields) for r in rows],
         "label_error_reports": [_row_dict(r, report_fields) for r in reports],
+        "scan_decision_events": [_row_dict(r, memory_fields) for r in memory_rows],
     }
 
 
