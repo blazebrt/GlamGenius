@@ -1,7 +1,7 @@
 """The closed V3-05 purchase strategy and product-quality contract.
 
 This is a routing and policy registry, not an independent purchase engine.
-Style and Care each retain their own domain-specific execution paths.
+Care and fragrance retain their domain-specific execution paths.
 """
 from __future__ import annotations
 
@@ -30,15 +30,14 @@ FRAGRANCE_PURCHASE_CANDIDATE_SCHEMA_VERSION = "v3-05.9"
 FRAGRANCE_PURCHASE_VERDICT_VERSION = "v3-05.9"
 FRAGRANCE_PURCHASE_CHECK_VERSION = "v3-05.9"
 
-STYLE_PURCHASE_CATEGORIES = ("wardrobe", "shoes", "accessories")
+# Kept as an empty compatibility constant while legacy shopping callers are
+# retired. It can never authorize a category or an active strategy.
+STYLE_PURCHASE_CATEGORIES: tuple[str, ...] = ()
 CARE_PURCHASE_CATEGORIES = ("beauty", "hair")
 FRAGRANCE_PURCHASE_CATEGORIES = ("perfumes",)
 PURCHASE_PROHIBITED_CATEGORIES = ("supplements",)
 
 PURCHASE_CATEGORY_LABELS = MappingProxyType({
-    "wardrobe": "Wardrobe",
-    "shoes": "Shoes",
-    "accessories": "Accessories",
     "beauty": "Skin Care",
     "hair": "Hair Care",
     "perfumes": "Perfumes",
@@ -64,7 +63,6 @@ class PurchaseStrategy:
 
 
 PURCHASE_STRATEGY_REGISTRY = (
-    PurchaseStrategy("style_purchase", STYLE_PURCHASE_CATEGORIES, "active", "Style purchase"),
     PurchaseStrategy("care_purchase", CARE_PURCHASE_CATEGORIES, "active", "Care purchase"),
     PurchaseStrategy("fragrance_purchase", FRAGRANCE_PURCHASE_CATEGORIES, "active", "Fragrance purchase"),
     PurchaseStrategy("supplement_purchase", PURCHASE_PROHIBITED_CATEGORIES, "prohibited", "Supplement purchase"),

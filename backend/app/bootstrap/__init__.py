@@ -43,23 +43,20 @@ SEED_VERSION = "2026.02.16"
 
 
 # ---------------------------------------------------------------------------
-# Inventory taxonomy — the seven canonical categories
+# Inventory taxonomy — the four active body-product categories
 # ---------------------------------------------------------------------------
 
 # (internal key, display name, position)
 CANONICAL_INVENTORY_CATEGORIES: list[tuple[str, str, int]] = [
-    ("wardrobe", "Wardrobe", 1),
-    ("shoes", "Shoes", 2),
-    ("accessories", "Accessories", 3),
-    ("beauty", "Beauty Shelf", 4),
-    ("hair", "Hair Shelf", 5),
-    ("perfumes", "Perfumes", 6),
-    ("supplements", "Supplements", 7),
+    ("beauty", "Skin Care", 1),
+    ("hair", "Hair Care", 2),
+    ("perfumes", "Perfumes", 3),
+    ("supplements", "Supplements", 4),
 ]
 
 
 async def seed_inventory_categories(session: AsyncSession) -> int:
-    """Upsert the seven canonical inventory categories.
+    """Upsert the active body-product inventory categories.
 
     Idempotent — a second call is a no-op. Category keys are the same
     internal identifiers used by :mod:`app.domains.inventory.taxonomy`, and
@@ -444,40 +441,7 @@ async def seed_feature_flags(session: AsyncSession) -> int:
 # small; production loads a broader catalogue but the seed here is enough
 # for the routine engine and the shopping evaluation to reason about.
 INVENTORY_SUBTYPES: list[dict] = [
-    # Wardrobe
-    {"cat": "wardrobe", "key": "top", "name": "Top",
-     "req": ["colour"], "opt": ["fabric", "fit", "occasion", "season"],
-     "expiry": False, "condition": True, "usage": True},
-    {"cat": "wardrobe", "key": "bottom", "name": "Bottom",
-     "req": ["colour"], "opt": ["fabric", "fit", "occasion", "season"],
-     "expiry": False, "condition": True, "usage": True},
-    {"cat": "wardrobe", "key": "outerwear", "name": "Outerwear",
-     "req": ["colour"], "opt": ["fabric", "fit", "occasion", "season", "warmth"],
-     "expiry": False, "condition": True, "usage": True},
-    {"cat": "wardrobe", "key": "dress", "name": "Dress",
-     "req": ["colour"], "opt": ["fabric", "fit", "occasion", "season"],
-     "expiry": False, "condition": True, "usage": True},
-    # Shoes
-    {"cat": "shoes", "key": "everyday", "name": "Everyday",
-     "req": ["colour"], "opt": ["material", "occasion", "size"],
-     "expiry": False, "condition": True, "usage": True},
-    {"cat": "shoes", "key": "formal", "name": "Formal",
-     "req": ["colour"], "opt": ["material", "size"],
-     "expiry": False, "condition": True, "usage": True},
-    {"cat": "shoes", "key": "athletic", "name": "Athletic",
-     "req": ["colour"], "opt": ["material", "size"],
-     "expiry": False, "condition": True, "usage": True},
-    # Accessories
-    {"cat": "accessories", "key": "bag", "name": "Bag",
-     "req": ["colour"], "opt": ["material", "occasion"],
-     "expiry": False, "condition": True, "usage": True},
-    {"cat": "accessories", "key": "jewellery", "name": "Jewellery",
-     "req": [], "opt": ["material", "colour", "occasion"],
-     "expiry": False, "condition": True, "usage": True},
-    {"cat": "accessories", "key": "eyewear", "name": "Eyewear",
-     "req": [], "opt": ["colour", "prescription"],
-     "expiry": False, "condition": True, "usage": True},
-    # Beauty shelf
+    # Skin Care
     {"cat": "beauty", "key": "cleanser", "name": "Cleanser",
      "req": ["brand"], "opt": ["skin_type", "ingredients"],
      "expiry": True, "condition": False, "usage": True},
