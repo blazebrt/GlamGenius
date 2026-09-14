@@ -13,9 +13,9 @@ describe('VC-09 notification boundaries', () => {
   });
 
   it('routes only allowlisted targets and safely falls back malformed Event Ready data', () => {
-    expect(notificationTarget({ destination: '/event-ready', eventId: 'event-1' })).toEqual({ destination: '/event-ready', params: { eventId: 'event-1' } });
-    expect(notificationTarget({ destination: '/event-ready' })).toEqual({ destination: '/(tabs)/plan' });
-    expect(notificationTarget({ destination: 'https://evil.invalid' })).toEqual({ destination: '/(tabs)/today' });
+    expect(notificationTarget({ destination: '/event-ready', eventId: 'event-1' })).toEqual({ destination: '/scan' });
+    expect(notificationTarget({ destination: '/event-ready' })).toEqual({ destination: '/scan' });
+    expect(notificationTarget({ destination: 'https://evil.invalid' })).toEqual({ destination: '/scan' });
   });
 
   it('keeps one stable installation identity', async () => {

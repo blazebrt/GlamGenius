@@ -232,7 +232,7 @@ async def record_candidate_decision(
         check = await resolve_fragrance_check(session, account_id=current.account_id, candidate_id=candidate_id)
         row = await decision_memory.save_fragrance_decision(session, account_id=current.account_id, candidate_id=candidate_id, check=check, decision=body.decision, note=body.note)
     else:
-        raise ValidationFailedError("Style decisions must use the evaluation-backed decision endpoint.", field="category")
+        raise ValidationFailedError("This purchase strategy is not supported by this endpoint.", field="category")
     payload = decision_memory.serialize_purchase_decision(row)
     await session.commit()
     return payload

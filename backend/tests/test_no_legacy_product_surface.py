@@ -61,8 +61,72 @@ def test_active_route_reachability() -> None:
         "/api/v2/shopping/evaluate",
         "/api/v2/shopping/evaluations",
         "/api/v2/today",
-        "/api/v2/planner",
+        "/api/v2/planner", "/api/v2/onboarding", "/api/v2/progress", "/api/v2/goals", "/api/v2/milestones", "/api/v2/memory",
     ]
     for path in paths:
         for legacy in legacy_patterns:
             assert not path.startswith(legacy), f"Legacy route {path} is still mounted"
+def test_profile_active_allowlist_forbids_legacy_keys() -> None:
+    from fastapi.testclient import TestClient
+    from server import app
+    from app.shared.security.deps import get_current_account
+    from app.shared.database.sql import get_session
+    from unittest.mock import MagicMock, AsyncMock
+    import uuid
+   
+    def override_get_current_account():
+        mock = MagicMock()
+        mock.account_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
+        mock.account_id_str = "11111111-1111-4111-8111-111111111111"
+        return mock
+
+    async def override_get_session():
+        yield AsyncMock()
+       
+    app.dependency_overrides[get_current_account] = override_get_current_account
+    app.dependency_overrides[get_session] = override_get_session
+    client = TestClient(app)
+   
+    # Actually wait, profile.py service layer tries to read from the db session!
+    # I can just monkeypatch app.domains.profile.service
+    # Let's override the service calls instead so it doesn't need DB at all.
+    import app.domains.profile.service as profile_service
+    profile_service.get_or_create_profile = AsyncMock()
+    profile_service.apply_attributes = AsyncMock()
+    profile_service.serialize_profile = AsyncMock(return_value={"attributes": [
+        {"key": "care_skin_usual_feel", "value": "often_dry_or_tight"},
+        {"key": "preferred_style", "value": "classic"},
+        {"key": "favourite_colours", "value": ["black", "white"]},
+        {"key": "usual_top_size", "value": "M"},
+        {"key": "silhouettes_liked", "value": ["a_line"]},
+        {"key": "appearance_goals", "value": ["look_taller"]},
+    ]})
+    profile_service.change_history = AsyncMock(return_value=[])
+
+    res = client.patch("/api/v2/profile", json={"attributes": [
+        {"key": "care_skin_usual_feel", "value": "often_dry_or_tight"},
+        {"key": "preferred_style", "value": "classic"},
+        {"key": "favourite_colours", "value": ["black", "white"]},
+        {"key": "usual_top_size", "value": "M"},
+        {"key": "silhouettes_liked", "value": ["a_line"]},
+        {"key": "appearance_goals", "value": ["look_taller"]},
+    ]})
+    assert res.status_code == 200, res.text
+   
+    # apply_attributes should have been called with only allowed keys!
+    args, kwargs = profile_service.apply_attributes.call_args
+    passed_attrs = args[2]
+    passed_keys = [attr["key"] for attr in passed_attrs]
+    assert "care_skin_usual_feel" in passed_keys
+    assert "preferred_style" not in passed_keys
+    assert "favourite_colours" not in passed_keys
+   
+    data = res.json()
+    keys = [attr["key"] for attr in data.get("attributes", [])]
+    assert "care_skin_usual_feel" in keys
+    assert "preferred_style" not in keys
+    assert "favourite_colours" not in keys
+    assert "usual_top_size" not in keys
+    assert "silhouettes_liked" not in keys
+    assert "appearance_goals" not in keys
+    app.dependency_overrides.clear()
