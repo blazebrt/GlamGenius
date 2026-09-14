@@ -1,9 +1,9 @@
+import { api } from '../services/api';
+import { getPurchaseGuard } from '../services/apiV2';
+
 jest.mock('../services/api', () => ({
   api: { get: jest.fn() },
 }));
-
-import { api } from '../services/api';
-import { getPurchaseGuard } from '../services/apiV2';
 
 describe('getPurchaseGuard', () => {
   it('uses the authenticated shared V2 client and exact candidate route', async () => {
