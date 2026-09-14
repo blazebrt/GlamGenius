@@ -300,7 +300,6 @@ async def db_clean() -> AsyncIterator[None]:
         )
         await conn.execute(text(f"TRUNCATE {table_names} RESTART IDENTITY CASCADE"))
     yield
-import pytest
 
 
 @pytest.fixture(autouse=True)
