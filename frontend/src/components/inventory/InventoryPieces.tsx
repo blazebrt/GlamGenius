@@ -6,7 +6,7 @@ import { InventoryCategory, InventoryItem, InventorySummary } from '../../servic
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 
 export const CATEGORY_META: Record<InventoryCategory, { label: string; icon: string }> = {
-  wardrobe: { label: 'Wardrobe', icon: 'shirt-outline' },
+  wardrobe: { label: 'Clothing', icon: 'shirt-outline' },
   shoes: { label: 'Shoes', icon: 'footsteps-outline' },
   accessories: { label: 'Accessories', icon: 'diamond-outline' },
   beauty: { label: 'Skin Care', icon: 'sparkles-outline' },

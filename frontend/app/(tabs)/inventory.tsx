@@ -1,17 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
-import { CATEGORY_META, CategoryTile, GuidedSprint, InventoryItemCard, InventoryRecovery } from '../../src/components/inventory/InventoryPieces';
+import { CATEGORY_META, CategoryTile, InventoryItemCard, InventoryRecovery } from '../../src/components/inventory/InventoryPieces';
 import { INVENTORY_CATEGORIES, InventoryCategory, InventoryItem, InventorySummary, getInventoryItems, getInventorySummary } from '../../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../src/theme/colors';
 import { categoriesForDomain } from '../../src/navigation/finalIA';
 
 export default function InventoryScreen() {
-  const params = useLocalSearchParams<{ domain?: string }>();
-  if (params.domain !== 'care') return <Redirect href="/scan-product" />;
   return <CareInventoryScreen />;
 }
 
@@ -54,13 +52,10 @@ function CareInventoryScreen() {
   if (loading && !summary) return <View style={styles.center}><ActivityIndicator color={COLORS.primary} /><Text style={styles.muted}>Opening your inventory…</Text></View>;
   if (error || !summary) return <View style={[styles.center, { paddingTop: insets.top }]}><InventoryRecovery onRetry={() => void load()} onAdd={() => add()} /></View>;
   return <View style={[styles.container, { paddingTop: insets.top }]}><ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 110 }} keyboardShouldPersistTaps="handled">
-    <View style={styles.header}><View><Text style={styles.eyebrow}>{domain === 'care' ? 'YOUR SHELF' : domain === 'style' ? 'YOUR WARDROBE' : 'YOUR COLLECTION'}</Text><Text style={styles.title}>{domain === 'care' ? 'Care items' : domain === 'style' ? 'Style items' : 'Inventory'}</Text></View><TouchableOpacity accessibilityRole="button" accessibilityLabel="Add inventory item" onPress={() => add()} style={styles.add}><Ionicons name="add" size={23} color={COLORS.white} /></TouchableOpacity></View>
-    <Text style={styles.subtitle}>Everything you own for getting ready, organised without judgement.</Text>
+    <View style={styles.header}><View><Text style={styles.eyebrow}>{domain === 'care' ? 'YOUR SHELF' : 'MANAGER'}</Text><Text style={styles.title}>{domain === 'care' ? 'Care items' : 'What you own'}</Text></View><TouchableOpacity accessibilityRole="button" accessibilityLabel="Add inventory item" onPress={() => add()} style={styles.add}><Ionicons name="add" size={23} color={COLORS.white} /></TouchableOpacity></View>
+    <Text style={styles.subtitle}>{domain === 'care' ? 'Everything you own for getting ready, organised without judgement.' : 'GlamGenius keeps track of the things that matter to your decisions. You do not need to add everything.'}</Text>
     <View style={styles.search}><Ionicons name="search-outline" size={19} color={COLORS.textMuted} /><TextInput accessibilityLabel="Search inventory" value={query} onChangeText={setQuery} placeholder="Search brand, colour, ingredient…" placeholderTextColor={COLORS.textMuted} returnKeyType="search" style={styles.searchInput} /><TouchableOpacity accessibilityRole="button" accessibilityLabel="Show inventory filters" onPress={() => setShowFilters(!showFilters)}><Ionicons name="options-outline" size={20} color={COLORS.primary} /></TouchableOpacity></View>
     {showFilters && <View style={styles.filters} accessibilityLabel="Inventory filters"><View style={styles.filterRow}><TextInput accessibilityLabel="Filter by brand" value={brand} onChangeText={setBrand} placeholder="Brand" placeholderTextColor={COLORS.textMuted} style={styles.filterInput} /><TextInput accessibilityLabel="Filter by colour" value={colour} onChangeText={setColour} placeholder="Colour" placeholderTextColor={COLORS.textMuted} style={styles.filterInput} /></View><View style={styles.filterRow}><TextInput accessibilityLabel="Filter by ingredient" value={ingredient} onChangeText={setIngredient} placeholder="Ingredient" placeholderTextColor={COLORS.textMuted} style={styles.filterInput} /><TextInput accessibilityLabel="Filter by occasion" value={occasion} onChangeText={setOccasion} placeholder="Occasion" placeholderTextColor={COLORS.textMuted} style={styles.filterInput} /></View><View style={styles.usageRow}>{(['unused', 'low', 'regular'] as const).map((value) => <TouchableOpacity key={value} accessibilityRole="button" accessibilityLabel={`Filter ${value} usage`} accessibilityState={{ selected: usageLevel === value }} onPress={() => setUsageLevel(usageLevel === value ? undefined : value)} style={[styles.usageChip, usageLevel === value && styles.usageSelected]}><Text style={[styles.usageText, usageLevel === value && styles.usageTextSelected]}>{value}</Text></TouchableOpacity>)}</View></View>}
-
-    {!allowedCategories && summary.total_items < 10 && <GuidedSprint summary={summary} onAdd={add} />}
-    <Text style={styles.sectionTitle}>{domain === 'care' ? 'Your shelf' : domain === 'style' ? 'Your wardrobe' : 'Your categories'}</Text><View style={styles.grid}>{(allowedCategories || INVENTORY_CATEGORIES).map((key) => <CategoryTile key={key} category={key} count={summary.categories[key]} onPress={() => setCategory(category === key ? undefined : key)} />)}</View>
 
     {!allowedCategories && <><Text style={styles.sectionTitle}>Needs your attention</Text><View style={styles.insightRow}>
       <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open low-use products" onPress={() => router.push({ pathname: '/inventory-insights', params: { view: 'low-use' } })} style={styles.insight}><Text style={styles.insightValue}>{summary.low_use_products}</Text><Text style={styles.insightLabel}>Low-Use Products</Text></TouchableOpacity>
@@ -75,8 +70,10 @@ function CareInventoryScreen() {
       <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Open ${domain} duplicate candidates`} onPress={() => router.push({ pathname: '/inventory-insights', params: { view: 'duplicates', domain } })} style={styles.insight}><Text style={styles.insightLabel}>Duplicate candidates</Text></TouchableOpacity>
     </View></>}
 
+    <Text style={styles.sectionTitle}>{domain === 'care' ? 'Your shelf' : 'What you own'}</Text><View style={styles.grid}>{(allowedCategories || INVENTORY_CATEGORIES).map((key) => <CategoryTile key={key} category={key} count={summary.categories[key]} onPress={() => setCategory(category === key ? undefined : key)} />)}</View>
+
     <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>{category ? `In ${CATEGORY_META[category].label}` : query || brand || colour || ingredient || occasion || usageLevel ? 'Filtered results' : 'Recently added'}</Text>{(query || category || brand || colour || ingredient || occasion || usageLevel) && <TouchableOpacity accessibilityRole="button" accessibilityLabel="Clear inventory filters" onPress={() => { setQuery(''); setCategory(undefined); setBrand(''); setColour(''); setIngredient(''); setOccasion(''); setUsageLevel(undefined); }}><Text style={styles.clear}>Clear</Text></TouchableOpacity>}</View>
-    {items.length ? items.map((item) => <InventoryItemCard key={item.id} item={item} onPress={() => router.push({ pathname: '/inventory-item', params: { id: item.id } })} />) : <View style={styles.empty}><Ionicons name="archive-outline" size={28} color={COLORS.primary} /><Text style={styles.emptyTitle}>{query || category ? 'No matching items' : 'Start with one useful item'}</Text><Text style={styles.muted}>You do not need to catalogue everything today.</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Add first inventory item" onPress={() => add(category)}><Text style={styles.clear}>Add an item</Text></TouchableOpacity></View>}
+    {items.length ? items.map((item) => <InventoryItemCard key={item.id} item={item} onPress={() => router.push({ pathname: '/inventory-item', params: { id: item.id } })} />) : <View style={styles.empty}><Ionicons name="archive-outline" size={28} color={COLORS.primary} /><Text style={styles.emptyTitle}>{query || category ? 'No matching items' : 'Nothing recorded here yet.'}</Text><Text style={styles.muted}>GlamGenius does not need your entire closet to help you.</Text>{domain === 'care' && <TouchableOpacity accessibilityRole="button" accessibilityLabel="Add first inventory item" onPress={() => add(category)}><Text style={styles.clear}>Add an item</Text></TouchableOpacity>}</View>}
   </ScrollView></View>;
 }
 
