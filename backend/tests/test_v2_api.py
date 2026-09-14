@@ -105,65 +105,6 @@ async def test_admin_can_create_and_list_invites(
 
 
 @pytest.mark.asyncio
-async def test_quiz_submit_and_retrieve(app_client, db_clean, registered_supabase_user):
-    token, uid = await registered_supabase_user()
-    q = await app_client.get("/api/v2/quiz/questions", headers=auth(token))
-    assert q.status_code == 200
-    assert q.json()["schema_version"].startswith("quiz.")
-
-    answers = {
-        "vibe": "polished",
-        "occasion_focus": "work",
-        "colour_energy": "warm",
-        "silhouette": "structured",
-        "care_time": "under_20",
-    }
-    s = await app_client.post(
-        "/api/v2/quiz/submit", headers=auth(token), json={"answers": answers}
-    )
-    assert s.status_code == 201, s.text
-    submission_id = s.json()["id"]
-
-    latest = await app_client.get("/api/v2/quiz/latest", headers=auth(token))
-    assert latest.status_code == 200
-    assert latest.json()["submission"]["id"] == submission_id
-    assert latest.json()["submission"]["derived_style_vibe"] == "polished"
-
-
-@pytest.mark.asyncio
-async def test_quiz_rejects_missing_answers(app_client, db_clean, registered_supabase_user):
-    token, _ = await registered_supabase_user()
-    r = await app_client.post(
-        "/api/v2/quiz/submit",
-        headers=auth(token),
-        json={"answers": {"vibe": "natural"}},
-    )
-    assert r.status_code == 400
-    assert r.json()["detail"]["code"] == "quiz_answers_invalid"
-
-
-@pytest.mark.asyncio
-async def test_quiz_history_is_scoped_to_caller(
-    app_client, db_clean, registered_supabase_user
-):
-    token_a, _ = await registered_supabase_user()
-    token_b, _ = await registered_supabase_user()
-    answers = {
-        "vibe": "polished",
-        "occasion_focus": "work",
-        "colour_energy": "warm",
-        "silhouette": "structured",
-        "care_time": "under_20",
-    }
-    await app_client.post(
-        "/api/v2/quiz/submit", headers=auth(token_a), json={"answers": answers}
-    )
-    r = await app_client.get("/api/v2/quiz/history", headers=auth(token_b))
-    assert r.status_code == 200
-    assert r.json()["submissions"] == []
-
-
-@pytest.mark.asyncio
 async def test_scan_requires_consent(
     app_client, db_clean, registered_supabase_user, fake_provider
 ):

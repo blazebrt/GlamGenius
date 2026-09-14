@@ -55,7 +55,7 @@ export default function CareScreen() {
       {!!events.length && <><Text style={styles.section}>For an upcoming event</Text>{events.map((item) => <DecisionRow key={item.key} title={item.title} reason={item.body} action="Done" busy={busy === `event:${item.key}`} onPress={() => item.event_id && item.source_action_id && void act(`event:${item.key}`, () => setEventReadyActionComplete(item.event_id!, item.source_action_id!, true))} />)}</>}
       <View style={styles.shelfHeader}><Text style={styles.section}>Your routines and shelf</Text><TouchableOpacity accessibilityRole="button" accessibilityLabel="Manage your care items" onPress={() => openCollection()}><Text style={styles.link}>Manage</Text></TouchableOpacity></View>
       <View style={styles.grid}>{CARE_CATEGORIES.map((category) => <CategoryEntry key={category} category={category} count={summary?.categories[category] || 0} onPress={() => openCollection(category)} onAdd={() => router.push({ pathname: '/inventory-add', params: { domain: 'care', category } })} />)}</View>
-      {summary !== null && countForDomain(summary.categories, 'care') === 0 && <><Empty text="Start with one product you already own" /><Text style={styles.body}>Care will not prompt you to buy something.</Text></>}
+      {summary !== null && countForDomain(summary.categories) === 0 && <><Empty text="Start with one product you already own" /><Text style={styles.body}>Care will not prompt you to buy something.</Text></>}
     </>}
   </ScrollView></View>;
 }

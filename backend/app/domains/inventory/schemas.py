@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domains.inventory.taxonomy import CATEGORIES, validate_attribute_keys, validate_details
 
-Category = Literal["wardrobe", "shoes", "accessories", "beauty", "hair", "perfumes", "supplements"]
+Category = Literal["beauty", "hair", "perfumes", "supplements"]
 VerificationState = Literal["draft", "confirmed", "rejected"]
 
 
@@ -81,7 +81,7 @@ class ExtractRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     media_asset_id: uuid.UUID
     category_hint: Category | None = None
-    capture_type: Literal["item_photo", "screenshot", "shelf_photo", "wardrobe_photo", "wardrobe_video"] = "item_photo"
+    capture_type: Literal["item_photo", "screenshot", "shelf_photo"] = "item_photo"
 
 
 #: The most candidates one photo may yield. A shelf holds more than this in
@@ -96,7 +96,7 @@ class BatchExtractRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     media_asset_id: uuid.UUID
     category_hint: Category | None = None
-    capture_type: Literal["shelf_photo", "wardrobe_photo", "counter_photo"] = "shelf_photo"
+    capture_type: Literal["shelf_photo", "counter_photo"] = "shelf_photo"
 
 
 class CandidateDecision(BaseModel):

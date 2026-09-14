@@ -3,11 +3,9 @@ import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, Platform } from 'react-native';
 import { COLORS, FONTS } from '../../src/theme/colors';
-import { LEGACY_HIDDEN_TAB_ROUTES } from '../../src/navigation/finalIA';
 
 /**
- * Scan is the product home. Account is a secondary destination; retained
- * domains remain routable only for bounded compatibility and future reuse.
+ * Scan is the product home. Account is a secondary destination.
  */
 export default function TabLayout() {
   return (
@@ -28,11 +26,6 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <Ionicons name="person-outline" size={22} color={color} />,
         }}
       />
-
-      {(['today', 'style', 'care', 'plan'] as const).map((name) => <Tabs.Screen key={name} name={name} options={{ href: null }} />)}
-
-      {/* Compatibility routes remain routable but are never primary tabs. */}
-      {LEGACY_HIDDEN_TAB_ROUTES.map((name) => <Tabs.Screen key={name} name={name} options={{ href: null }} />)}
     </Tabs>
   );
 }

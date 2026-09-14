@@ -18,7 +18,6 @@ const strategyResponse = {
   purchase_strategy_registry_version: 'v3-05.9',
   fragrance_context_options: { occasions: [{ key: 'business_meeting', label: 'Business meeting' }], seasons: [{ key: 'summer', label: 'Summer' }] },
   strategies: [
-    { key: 'style_purchase' as const, label: 'Style', state: 'active' as const, categories: [{ key: 'wardrobe' as const, label: 'Wardrobe' }] },
     { key: 'care_purchase' as const, label: 'Care', state: 'active' as const, categories: [{ key: 'beauty' as const, label: 'Skin Care' }] },
     { key: 'fragrance_purchase' as const, label: 'Fragrance', state: 'active' as const, categories: [{ key: 'perfumes' as const, label: 'Perfumes' }] },
     { key: 'supplement_purchase' as const, label: 'Supplements', state: 'prohibited' as const, categories: [{ key: 'supplements' as const, label: 'Supplements' }] },

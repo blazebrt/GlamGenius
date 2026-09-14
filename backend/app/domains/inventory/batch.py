@@ -70,8 +70,8 @@ a product to make the list longer, never repeat the same physical item twice, ne
 brand, and never claim uncertain text is exact.
 Never diagnose and never infer sensitive traits. For supplements, transcribe label information
 only: no dosage advice, prescriptions, disease claims, treatment changes, pregnancy advice or
-interactions. Use one of these categories: wardrobe, shoes, accessories, beauty, hair,
-perfumes, supplements. Each item's confidence describes that item alone and must be honest.
+interactions. Use one of these categories: beauty, hair, perfumes, supplements.
+Each item's confidence describes that item alone and must be honest.
 """
 
 
@@ -194,6 +194,7 @@ async def owned_candidate(
             InventoryImportCandidate.id == candidate_id,
             InventoryImportCandidate.account_id == account_id,
             InventoryImportCandidate.job_id == job_id,
+            InventoryImportCandidate.category.in_(CATEGORIES),
         )
     )).scalar_one_or_none()
     if row is None:
@@ -307,6 +308,7 @@ async def candidates_for(
         .where(
             InventoryImportCandidate.account_id == account_id,
             InventoryImportCandidate.job_id == job_id,
+            InventoryImportCandidate.category.in_(CATEGORIES),
         )
         .order_by(InventoryImportCandidate.position.asc(), InventoryImportCandidate.id.asc())
     )).scalars().all())

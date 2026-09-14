@@ -28,14 +28,12 @@ from app.api.v2 import (
     product,
     profile,
     progress,
-    quiz,
     routines,
     scan,
     shelf,
     shopping,
     skin_care_personal_decision,
     skin_care_scan,
-    style,
     supplements,
     today,
 )
@@ -61,8 +59,6 @@ router.include_router(
     skin_care_personal_decision.router, tags=["v2-skin-care-for-you"]
 )
 router.include_router(community.router, tags=["v2-community"])
-router.include_router(quiz.router, tags=["v2-quiz"])
-router.include_router(style.router, tags=["v2-style"])
 router.include_router(shopping.router, tags=["v2-shopping"])
 router.include_router(today.router, tags=["v2-today"])
 router.include_router(planner.router, tags=["v2-planner"])

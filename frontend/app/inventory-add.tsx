@@ -12,8 +12,7 @@ import { categoriesForDomain } from '../src/navigation/finalIA';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 
 const EXTRA_FIELD: Record<InventoryCategory, { key: string; label: string; placeholder: string }> = {
-  wardrobe: { key: 'colour', label: 'Colour', placeholder: 'Teal' }, shoes: { key: 'shoe_type', label: 'Shoe type', placeholder: 'Loafers' },
-  accessories: { key: 'accessory_type', label: 'Accessory type', placeholder: 'Earrings' }, beauty: { key: 'product_type', label: 'Product type', placeholder: 'Serum' },
+  beauty: { key: 'product_type', label: 'Product type', placeholder: 'Serum' },
   hair: { key: 'product_type', label: 'Product type', placeholder: 'Shampoo' }, perfumes: { key: 'fragrance_family', label: 'Fragrance family', placeholder: 'Floral' },
   supplements: { key: 'user_entered_purpose', label: 'Your inventory note', placeholder: 'Why you keep this item' },
 };
@@ -27,9 +26,9 @@ export default function InventoryAddScreen() {
 function CareInventoryAddScreen() {
   const router = useRouter(); const insets = useSafeAreaInsets(); const params = useLocalSearchParams<{ category?: string; domain?: string }>();
   const allowedCategories = categoriesForDomain(params.domain);
-  const initial = allowedCategories
-    ? allowedCategories.includes(params.category as InventoryCategory) ? params.category as InventoryCategory : allowedCategories[0]
-    : INVENTORY_CATEGORIES.includes(params.category as InventoryCategory) ? params.category as InventoryCategory : 'wardrobe';
+  const initial = allowedCategories.includes(params.category as InventoryCategory)
+    ? params.category as InventoryCategory
+    : allowedCategories[0];
   const [category, setCategory] = useState<InventoryCategory>(initial); const [name, setName] = useState(''); const [brand, setBrand] = useState('');
   const [extra, setExtra] = useState(''); const [price, setPrice] = useState(''); const [expiry, setExpiry] = useState('');
   const [saving, setSaving] = useState(false); const [message, setMessage] = useState('');

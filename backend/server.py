@@ -1,4 +1,4 @@
-"""GlamGenius API — Personal Appearance Operating System.
+"""GlamGenius API — Product Decision Engine.
 
 Customer API routes are mounted under ``/api/v2`` and authenticated with a
 verified Supabase JWT where the route requires it. ``/privacy`` and
@@ -38,7 +38,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import HTMLResponse
 
 app = FastAPI(
-    title="GlamGenius — Personal Appearance Operating System",
+    title="GlamGenius — Product Decision Engine",
     version="2.0.0-supabase",
 )
 

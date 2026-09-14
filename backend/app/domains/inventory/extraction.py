@@ -19,19 +19,19 @@ from app.shared.errors.exceptions import AnalysisUnavailableError
 
 PROMPT_VERSION = "inventory-extract-v1"
 SCHEMA_VERSION = "inventory-item-v1"
-SYSTEM = """You extract visible label and item facts for an appearance inventory.
+SYSTEM = """You extract visible label and product facts for a governed body-product shelf.
 Return one JSON object matching the requested schema. Use only visible evidence.
 Never diagnose, infer sensitive traits, invent a brand, or claim uncertain text is exact.
 For supplements, transcribe label information only. Never provide dosage advice,
 prescriptions, disease claims, treatment changes, pregnancy advice, or interactions.
-Use one of these categories: wardrobe, shoes, accessories, beauty, hair, perfumes,
-supplements. Confidence describes the whole extraction and must be honest.
+Use one of these categories: beauty, hair, perfumes, supplements. Confidence describes
+the whole extraction and must be honest.
 """
 
 
 def prompt(category_hint: str | None) -> str:
     allowed = ", ".join(CATEGORIES)
-    return f"""Inspect this single inventory item or product screenshot.
+    return f"""Inspect this single body-product shelf item or product screenshot.
 Category hint: {category_hint or 'none'}. Allowed categories: {allowed}.
 Return category, subcategory, display_name, brand, confidence, category-specific details,
 searchable attributes with per-field confidence, uncertain_fields, and photo_quality_notes.

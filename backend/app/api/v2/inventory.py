@@ -27,7 +27,7 @@ router = APIRouter(dependencies=[Depends(require_flag("v2_inventory"))])
 
 @router.post("/inventory/extract")
 async def extract_inventory_item(body: ExtractRequest, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    if body.capture_type in {"shelf_photo", "wardrobe_photo", "wardrobe_video"} and not await flag_service.is_enabled(session, "v2_inventory_batch"):
+    if body.capture_type == "shelf_photo" and not await flag_service.is_enabled(session, "v2_inventory_batch"):
         raise FeatureUnavailableError("v2_inventory_batch")
     job, item, extracted = await extraction.analyse(session, account_id=current.account_id, account_id_str=current.account_id_str, media_asset_id=body.media_asset_id, category_hint=body.category_hint, capture_type=body.capture_type)
     await session.commit()

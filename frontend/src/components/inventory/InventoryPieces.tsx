@@ -2,42 +2,16 @@ import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { InventoryCategory, InventoryItem, InventorySummary } from '../../services/apiV2';
+import { InventoryCategory, InventoryItem } from '../../services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 
 export const CATEGORY_META: Record<InventoryCategory, { label: string; icon: string }> = {
-  wardrobe: { label: 'Wardrobe', icon: 'shirt-outline' },
-  shoes: { label: 'Shoes', icon: 'footsteps-outline' },
-  accessories: { label: 'Accessories', icon: 'diamond-outline' },
   beauty: { label: 'Skin Care', icon: 'sparkles-outline' },
   hair: { label: 'Hair Care', icon: 'cut-outline' },
   perfumes: { label: 'Perfumes', icon: 'flower-outline' },
   supplements: { label: 'Supplements', icon: 'leaf-outline' },
 };
 
-export const GUIDED_TASKS = [
-  { label: 'Add five everyday clothes', category: 'wardrobe' as const, target: 5 },
-  { label: 'Add two occasion pieces', category: 'wardrobe' as const, target: 7 },
-  { label: 'Add two pairs of shoes', category: 'shoes' as const, target: 2 },
-  { label: 'Add current skincare products', category: 'beauty' as const, target: 1 },
-  { label: 'Add current hair products', category: 'hair' as const, target: 1 },
-];
-
-export const completedGuidedTasks = (counts: Partial<Record<InventoryCategory, number>>) =>
-  GUIDED_TASKS.filter((task) => (counts[task.category] || 0) >= task.target).length;
-
-export function GuidedSprint({ summary, onAdd }: { summary: InventorySummary; onAdd: (category: InventoryCategory) => void }) {
-  const completed = completedGuidedTasks(summary.categories);
-  const next = GUIDED_TASKS.find((task) => (summary.categories[task.category] || 0) < task.target);
-  return <View style={styles.sprint} accessibilityLabel="Inventory guided sprint">
-    <Text style={styles.eyebrow}>QUICK START</Text>
-    <Text style={styles.sprintTitleInverse}>{completed ? `${completed} starter tasks complete` : 'Build a useful inventory first'}</Text>
-    <Text style={styles.bodyInverse}>You can receive value now. Catalogue the rest whenever it suits you.</Text>
-    {next && <TouchableOpacity accessibilityRole="button" accessibilityLabel={next.label} style={styles.primary} onPress={() => onAdd(next.category)}>
-      <Text style={styles.primaryText}>{next.label}</Text><Ionicons name="arrow-forward" size={18} color={COLORS.white} />
-    </TouchableOpacity>}
-  </View>;
-}
 
 export function CategoryTile({ category, count, onPress }: { category: InventoryCategory; count: number; onPress: () => void }) {
   const meta = CATEGORY_META[category];
