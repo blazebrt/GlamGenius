@@ -22,6 +22,16 @@ def _filter_profile(body: dict) -> dict:
     """Filter legacy appearance attributes out of the active customer payload."""
     if "attributes" in body:
         body["attributes"] = [attr for attr in body["attributes"] if attr.get("key") in ALLOWED_KEYS]
+    
+    body.pop("baseline_status", None)
+    body.pop("readiness", None)
+    
+    if "change_history" in body:
+        body["change_history"] = [
+            item for item in body["change_history"]
+            if item.get("key") in ALLOWED_KEYS
+        ]
+        
     return body
 
 @router.get("/profile")
@@ -34,6 +44,10 @@ async def get_profile(current: CurrentAccount = Depends(get_current_account), se
 
 @router.patch("/profile")
 async def patch_profile(body: ProfilePatch, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
+    for item in body.attributes:
+        if item.key not in ALLOWED_KEYS:
+            raise ValidationFailedError(f"Profile key '{item.key}' is retired or invalid.", field="attributes")
+            
     profile = await _profile(session, current)
     try:
         await service.apply_attributes(session, profile, [item.model_dump() for item in body.attributes if item.key in ALLOWED_KEYS])
@@ -62,5 +76,5 @@ async def get_attributes(current: CurrentAccount = Depends(get_current_account),
             }
             for spec in ATTRIBUTE_REGISTRY.values() if spec.key in ALLOWED_KEYS
         ],
-        "readiness": service.readiness(rows), "weight_required": False,
+        "weight_required": False,
     }
