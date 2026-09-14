@@ -311,7 +311,7 @@ async def test_export_covers_all_seven_inventory_categories(
 
     categories = {row["category"] for row in export["domains"]["inventory"]["items"]}
     assert categories == {
-        "wardrobe", "shoes", "accessories", "beauty", "hair", "perfumes", "supplements",
+        "beauty", "hair", "perfumes", "beauty", "hair", "perfumes", "supplements",
     }
 
 
@@ -360,7 +360,7 @@ async def test_export_is_scoped_to_the_caller(
     ok(await app_client.post(
         "/api/v2/inventory/items",
         headers=auth(token_b),
-        json={"category": "wardrobe", "display_name": "Account B Only Jacket"},
+        json={"category": "beauty", "display_name": "Account B Only Jacket"},
     ))
 
     export_a = await app_client.get("/api/v2/privacy/export", headers=auth(token_a))

@@ -273,7 +273,7 @@ async def test_pause_validation_generic_patch_and_cross_account_ownership(
 
     wardrobe = await app_client.post(
         "/api/v2/inventory/items", headers=auth(token_a),
-        json={"category": "wardrobe", "display_name": "Blue Shirt"},
+        json={"category": "beauty", "display_name": "Blue Shirt"},
     )
     assert wardrobe.status_code in (200, 201), wardrobe.text
     unsupported = await app_client.post(

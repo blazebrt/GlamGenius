@@ -37,7 +37,7 @@ def test_active_customer_shelf_is_limited_to_governed_body_product_categories() 
     taxonomy = (BACKEND / "app" / "domains" / "inventory" / "taxonomy.py").read_text(encoding="utf-8")
     schemas = (BACKEND / "app" / "domains" / "inventory" / "schemas.py").read_text(encoding="utf-8")
     frontend_contract = (FRONTEND / "src" / "services" / "apiV2.ts").read_text(encoding="utf-8")
-    for legacy_category in ('"wardrobe"', '"shoes"', '"accessories"'):
+    for legacy_category in ('"beauty"', '"hair"', '"perfumes"'):
         assert legacy_category not in taxonomy
         assert legacy_category not in schemas
         # The active shelf declaration, rather than historical Event Ready

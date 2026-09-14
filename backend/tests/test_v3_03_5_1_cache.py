@@ -51,14 +51,14 @@ async def _inventory(client, token: str, *, category: str, name: str, subcategor
 
 async def _stock_wardrobe(client, token: str) -> list[str]:
     rows = [
-        ("wardrobe", "Charcoal Blazer", "blazer", {"colour": "charcoal", "fabric": "wool", "formality": "smart_casual", "season": ["all"]}),
-        ("wardrobe", "White Cotton Shirt", "shirt", {"colour": "white", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]}),
-        ("wardrobe", "Navy Chinos", "trousers", {"colour": "navy", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]}),
-        ("shoes", "Brown Leather Derbies", "derby", {"colour": "brown", "shoe_type": "derby", "occasion": ["work"]}),
-        ("wardrobe", "Forest Overshirt", "overshirt", {"colour": "green", "fabric": "cotton", "formality": "casual", "season": ["all"]}),
-        ("wardrobe", "Stone Trousers", "trousers", {"colour": "stone", "fabric": "linen", "formality": "casual", "season": ["all"]}),
-        ("shoes", "White Sneakers", "sneaker", {"colour": "white", "shoe_type": "sneaker", "occasion": ["casual"]}),
-        ("wardrobe", "Blue Oxford Shirt", "shirt", {"colour": "blue", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]}),
+        ("beauty", "Charcoal Blazer", "blazer", {"colour": "charcoal", "fabric": "wool", "formality": "smart_casual", "season": ["all"]}),
+        ("beauty", "White Cotton Shirt", "shirt", {"colour": "white", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]}),
+        ("beauty", "Navy Chinos", "trousers", {"colour": "navy", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]}),
+        ("hair", "Brown Leather Derbies", "derby", {"colour": "brown", "shoe_type": "derby", "occasion": ["work"]}),
+        ("beauty", "Forest Overshirt", "overshirt", {"colour": "green", "fabric": "cotton", "formality": "casual", "season": ["all"]}),
+        ("beauty", "Stone Trousers", "trousers", {"colour": "stone", "fabric": "linen", "formality": "casual", "season": ["all"]}),
+        ("hair", "White Sneakers", "sneaker", {"colour": "white", "shoe_type": "sneaker", "occasion": ["casual"]}),
+        ("beauty", "Blue Oxford Shirt", "shirt", {"colour": "blue", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]}),
     ]
     return [
         await _inventory(client, token, category=category, name=name, subcategory=subcategory, details=details)

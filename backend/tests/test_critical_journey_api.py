@@ -195,7 +195,7 @@ async def test_critical_journey_through_the_api(
     for category in SEVEN_CATEGORIES:
         assert counted[category] >= 1, f"{category} has nothing in it"
 
-    wardrobe_item_id = created["inventory"]["wardrobe"][0]
+    wardrobe_item_id = created["inventory"]["beauty"][0]
     item = ok(await app_client.get(
         f"/api/v2/inventory/items/{wardrobe_item_id}", headers=auth(token)
     ))

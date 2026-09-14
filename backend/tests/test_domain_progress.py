@@ -139,7 +139,7 @@ async def test_inventory_balance_becomes_ok_after_items(db_clean):
     async with factory() as session:
         for label in ("Charcoal Blazer", "Linen Trousers"):
             body = ItemCreate.model_validate({
-                "category": "wardrobe",
+                "category": "beauty",
                 "display_name": label,
                 "details": {"season": ["autumn"]},
             })
@@ -171,7 +171,7 @@ async def test_goal_create_records_starting_value_and_update_row(db_clean):
             session,
             account,
             GoalCreate.model_validate({
-                "kind": "wardrobe",
+                "kind": "beauty",
                 "title": "Refresh smart-casual capsule",
                 "metric_key": "purchase_efficiency",
                 "target_value": 0.6,

@@ -60,19 +60,19 @@ def _deterministic_weather_cache():
 
 WARDROBE = [
     {
-        "category": "wardrobe", "display_name": "Charcoal Blazer", "subcategory": "blazer",
+        "category": "beauty", "display_name": "Charcoal Blazer", "subcategory": "blazer",
         "details": {"colour": "charcoal", "fabric": "wool", "formality": "smart_casual", "season": ["all"]},
     },
     {
-        "category": "wardrobe", "display_name": "White Cotton Shirt", "subcategory": "shirt",
+        "category": "beauty", "display_name": "White Cotton Shirt", "subcategory": "shirt",
         "details": {"colour": "white", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]},
     },
     {
-        "category": "wardrobe", "display_name": "Navy Chinos", "subcategory": "trousers",
+        "category": "beauty", "display_name": "Navy Chinos", "subcategory": "trousers",
         "details": {"colour": "navy", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]},
     },
     {
-        "category": "shoes", "display_name": "Brown Leather Derbies", "subcategory": "derby",
+        "category": "hair", "display_name": "Brown Leather Derbies", "subcategory": "derby",
         "details": {"colour": "brown", "shoe_type": "derby", "occasion": ["work"]},
     },
 ]

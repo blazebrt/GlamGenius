@@ -38,7 +38,7 @@ pytestmark = pytest.mark.asyncio
 
 # The seven inventory categories as their canonical internal keys.
 SEVEN_CATEGORIES = [
-    "wardrobe", "shoes", "accessories",
+    "beauty", "hair", "perfumes",
     "beauty", "hair", "perfumes", "supplements",
 ]
 

@@ -227,7 +227,7 @@ async def test_v3_05_8_migration_backfills_existing_style_decision(
         candidate = ShoppingCandidate(
             account_id=account_id,
             source="manual",
-            category="wardrobe",
+            category="beauty",
             display_name="Historical style candidate",
             currency="INR",
         )

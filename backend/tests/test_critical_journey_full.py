@@ -262,7 +262,7 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
     # 13. Add one item in every inventory category and a usage event.
     # --------------------------------------------------------------
     category_keys = [
-        "wardrobe", "shoes", "accessories",
+        "beauty", "hair", "perfumes",
         "beauty", "hair", "perfumes", "supplements",
     ]
     async with factory() as session:
@@ -280,7 +280,7 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
         # A single usage event on the wardrobe item.
         session.add(InventoryEvent(
             account_id=account_id,
-            item_id=items["wardrobe"].id,
+            item_id=items["beauty"].id,
             event_type="used",
             actor="user",
             payload={"quantity": 1, "used_on": today.isoformat()},
@@ -413,7 +413,7 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
         candidate = ShoppingCandidate(
             account_id=account_id,
             source="user_declared",
-            category="wardrobe",
+            category="beauty",
             display_name="Another linen shirt",
             currency="USD",
         )

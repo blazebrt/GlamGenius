@@ -82,7 +82,7 @@ def test_identity_is_strategy_scoped_and_ignores_fragrance_use_context():
         category="perfumes", details={"fragrance_family": "woody", "concentration": "edt"},
     )
     draft_style = _candidate(
-        category="wardrobe", verification_state="draft", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={},
+        category="beauty", verification_state="draft", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={},
     )
     assert identity_for_candidate(first)["fingerprint"] == identity_for_candidate(changed_use)["fingerprint"]
     assert identity_for_candidate(first)["fingerprint"] != identity_for_candidate(changed_product)["fingerprint"]
@@ -285,11 +285,11 @@ def test_identity_insufficiency_matrix_and_category_isolation():
         _candidate(details={"product_type": "cleanser", "active_ingredients": []}),
         _candidate(category="perfumes", details={"fragrance_family": "woody"}),
         _candidate(category="perfumes", details={"concentration": "edp"}),
-        _candidate(category="wardrobe", subcategory=None, size="m", fabric="cotton", colour="blue", details={}),
-        _candidate(category="wardrobe", subcategory="shirt", size=None, fabric="cotton", colour="blue", details={}),
-        _candidate(category="wardrobe", subcategory="shirt", size="m", fabric=None, colour="blue", details={}),
-        _candidate(category="wardrobe", subcategory="shirt", size="m", fabric="cotton", colour=None, details={}),
-        _candidate(category="wardrobe", verification_state="draft", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={}),
+        _candidate(category="beauty", subcategory=None, size="m", fabric="cotton", colour="blue", details={}),
+        _candidate(category="beauty", subcategory="shirt", size=None, fabric="cotton", colour="blue", details={}),
+        _candidate(category="beauty", subcategory="shirt", size="m", fabric=None, colour="blue", details={}),
+        _candidate(category="beauty", subcategory="shirt", size="m", fabric="cotton", colour=None, details={}),
+        _candidate(category="beauty", verification_state="draft", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={}),
         _candidate(uncertain_fields=["brand"]),
     ]
     assert all(identity_for_candidate(candidate)["state"] == "insufficient" for candidate in insufficient)
@@ -300,10 +300,10 @@ def test_identity_insufficiency_matrix_and_category_isolation():
     assert beauty["fingerprint"] != hair["fingerprint"]
 
     style_m = identity_for_candidate(_candidate(
-        category="wardrobe", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={},
+        category="beauty", subcategory="shirt", size="m", fabric="cotton", colour="blue", details={},
     ))
     style_l = identity_for_candidate(_candidate(
-        category="wardrobe", subcategory="shirt", size="l", fabric="cotton", colour="blue", details={},
+        category="beauty", subcategory="shirt", size="l", fabric="cotton", colour="blue", details={},
     ))
     fragrance_edp = identity_for_candidate(_candidate(
         category="perfumes", details={"fragrance_family": "woody", "concentration": "edp"},

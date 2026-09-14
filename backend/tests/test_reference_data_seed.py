@@ -162,7 +162,7 @@ async def test_inventory_subtypes_cover_every_category(db_clean):
             select(InventorySubtypeDefinition.category_key).distinct()
         )).scalars().all()
     assert set(cats_with_subtypes) == {
-        "wardrobe", "shoes", "accessories",
+        "beauty", "hair", "perfumes",
         "beauty", "hair", "perfumes", "supplements",
     }
 
@@ -243,7 +243,7 @@ async def test_all_seven_inventory_categories_available(db_clean):
             select(InventoryCategory.key).order_by(InventoryCategory.position)
         )).scalars().all()
     assert list(rows) == [
-        "wardrobe", "shoes", "accessories",
+        "beauty", "hair", "perfumes",
         "beauty", "hair", "perfumes", "supplements",
     ]
 

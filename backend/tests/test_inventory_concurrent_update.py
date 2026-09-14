@@ -48,7 +48,7 @@ async def _an_item() -> tuple[uuid.UUID, uuid.UUID, int]:
         item = await inventory.create_item(
             session,
             account_id=account.id,
-            body=ItemCreate(category="wardrobe", display_name="Base"),
+            body=ItemCreate(category="beauty", display_name="Base"),
         )
         await session.commit()
         return account.id, item.id, item.version

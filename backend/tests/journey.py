@@ -28,24 +28,24 @@ JOURNEY_DATE = date(2026, 2, 16)
 # internal keys for the two shelf categories.
 SEVEN_CATEGORY_ITEMS: list[dict[str, Any]] = [
     {
-        "category": "wardrobe", "display_name": "Charcoal Blazer", "subcategory": "blazer",
+        "category": "beauty", "display_name": "Charcoal Blazer", "subcategory": "blazer",
         "brand": "Fable",
         "details": {"colour": "charcoal", "fabric": "wool", "formality": "smart_casual", "season": ["all"]},
     },
     {
-        "category": "wardrobe", "display_name": "White Cotton Shirt", "subcategory": "shirt",
+        "category": "beauty", "display_name": "White Cotton Shirt", "subcategory": "shirt",
         "details": {"colour": "white", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]},
     },
     {
-        "category": "wardrobe", "display_name": "Navy Chinos", "subcategory": "trousers",
+        "category": "beauty", "display_name": "Navy Chinos", "subcategory": "trousers",
         "details": {"colour": "navy", "fabric": "cotton", "formality": "smart_casual", "season": ["all"]},
     },
     {
-        "category": "shoes", "display_name": "Brown Leather Derbies", "subcategory": "derby",
+        "category": "hair", "display_name": "Brown Leather Derbies", "subcategory": "derby",
         "details": {"colour": "brown", "shoe_type": "derby", "occasion": ["office"]},
     },
     {
-        "category": "accessories", "display_name": "Tan Leather Belt", "subcategory": "belt",
+        "category": "perfumes", "display_name": "Tan Leather Belt", "subcategory": "belt",
         "details": {"colour": "tan", "accessory_type": "belt", "material": "leather"},
     },
     {
@@ -73,7 +73,7 @@ SEVEN_CATEGORY_ITEMS: list[dict[str, Any]] = [
     },
 ]
 
-SEVEN_CATEGORIES = ["wardrobe", "shoes", "accessories", "beauty", "hair", "perfumes", "supplements"]
+SEVEN_CATEGORIES = ["beauty", "hair", "perfumes", "beauty", "hair", "perfumes", "supplements"]
 
 
 def ok(resp, *allowed: int):
@@ -222,7 +222,7 @@ async def evaluate_a_purchase(client, token) -> dict[str, Any]:
             "price": "2400.00",
             "currency": "INR",
             "item": {
-                "category": "wardrobe", "display_name": "Another White Shirt",
+                "category": "beauty", "display_name": "Another White Shirt",
                 "subcategory": "shirt", "colour": "white", "fabric": "cotton",
                 "formality": "smart_casual",
             },
@@ -299,7 +299,7 @@ async def populate_every_domain(client, token) -> dict[str, Any]:
     created["consent"] = await grant_photo_consent(client, token)
     created["inventory"] = await stock_seven_categories(client, token)
     created["media"] = await upload_inventory_image(
-        client, token, created["inventory"]["wardrobe"][0]
+        client, token, created["inventory"]["beauty"][0]
     )
     ok(await client.post(
         f"/api/v2/inventory/items/{created['inventory']['wardrobe'][0]}/usage",

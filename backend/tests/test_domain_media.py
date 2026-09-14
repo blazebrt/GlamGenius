@@ -555,7 +555,7 @@ async def test_image_associates_with_an_inventory_item(
         "/api/v2/inventory/items",
         headers=auth(token),
         json={
-            "category": "wardrobe",
+            "category": "beauty",
             "display_name": "Charcoal Blazer",
             "image_ids": [asset_id],
         },
@@ -589,7 +589,7 @@ async def test_cannot_attach_another_accounts_image(
         "/api/v2/inventory/items",
         headers=auth(intruder_token),
         json={
-            "category": "wardrobe",
+            "category": "beauty",
             "display_name": "Borrowed photo",
             "image_ids": [asset_id],
         },

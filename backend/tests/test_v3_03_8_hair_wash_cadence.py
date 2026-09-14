@@ -78,7 +78,7 @@ async def _stock_care_products(client, token: str) -> None:
         ("beauty", "Gentle Cleanser", "cleanser", {"ingredients": []}),
         ("beauty", "Daily Moisturiser", "moisturiser", {"ingredients": []}),
         ("hair", "Gentle Shampoo", "shampoo", {"ingredients": []}),
-        ("shoes", "Brown Leather Derbies", "derby", {"colour": "brown", "shoe_type": "derby", "occasion": ["work"]}),
+        ("hair", "Brown Leather Derbies", "derby", {"colour": "brown", "shoe_type": "derby", "occasion": ["work"]}),
     ):
         response = await client.post(
             "/api/v2/inventory/items", headers=auth(token), json={
