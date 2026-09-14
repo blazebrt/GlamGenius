@@ -1,5 +1,5 @@
 /** The single customer destination for Style and Care purchase checks. */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -12,12 +12,13 @@ import {
 } from '../src/components/shopping/ShoppingPieces';
 import { CareCandidateReview, CarePurchaseResult } from '../src/components/shopping/CareShoppingPieces';
 import { FragranceCandidateReview, FragranceShoppingResult } from '../src/components/shopping/FragranceShoppingPieces';
+import { PurchaseMemoryCard } from '../src/components/shopping/PurchaseMemoryCard';
 import { AnalysisFailedState } from '../src/components/TrustStates';
 import {
   CareCandidateConfirmInput, CareCandidateInspection, CarePurchaseCheck, CarePurchaseItemInput, FragranceCandidateInspection, FragrancePurchaseCheck, FragrancePurchaseItemInput, InventoryCategory,
-  PurchaseEvaluation, PurchaseStrategy, confirmPurchaseCandidate, evaluateItemDetails,
+  PurchaseEvaluation, PurchaseGuard, PurchaseStrategy, confirmPurchaseCandidate, evaluateItemDetails,
   allowanceWasPreserved, evaluateScreenshot, failureGuidance, getCarePurchaseCheck, getPurchaseStrategies,
-  getFragrancePurchaseCheck, inspectPurchaseCandidate, recordCarePurchaseDecision, recordPurchaseCandidateDecision, recordPurchaseDecision, structuredError, uploadMedia,
+  getFragrancePurchaseCheck, getPurchaseGuard, inspectPurchaseCandidate, recordCarePurchaseDecision, recordPurchaseCandidateDecision, recordPurchaseDecision, structuredError, uploadMedia,
 } from '../src/services/apiV2';
 import { COLORS, FONTS, RADIUS, SPACING } from '../src/theme/colors';
 
@@ -48,7 +49,9 @@ export default function ShoppingCheckScreen() {
   const [careDecisionBusy, setCareDecisionBusy] = useState(false);
   const [editingCare, setEditingCare] = useState(false);
   const [editingFragrance, setEditingFragrance] = useState(false);
+  const [purchaseGuard, setPurchaseGuard] = useState<PurchaseGuard | null>(null);
   const [error, setError] = useState<any>(null);
+  const guardRequest = useRef(0);
 
   const loadPurchaseStrategies = useCallback(async () => {
     setError(null);
@@ -76,13 +79,38 @@ export default function ShoppingCheckScreen() {
   const isFragrance = selectedStrategy?.key === 'fragrance_purchase';
 
   const clearError = () => setError(null);
+  const clearPurchaseGuard = useCallback(() => {
+    guardRequest.current += 1;
+    setPurchaseGuard(null);
+  }, []);
+  const loadPurchaseGuard = useCallback(async (candidateId: string) => {
+    const request = ++guardRequest.current;
+    setPurchaseGuard(null);
+    try {
+      const guard = await getPurchaseGuard(candidateId);
+      if (request === guardRequest.current && guard.candidate_id === candidateId) setPurchaseGuard(guard);
+    } catch {
+      // Purchase memory is supplementary. A transient failure must not hide a verdict.
+      if (request === guardRequest.current) setPurchaseGuard(null);
+    }
+  }, []);
   const toggleContext = (values: string[], setValues: (next: string[]) => void, key: string) => {
     setValues(values.includes(key) ? values.filter((value) => value !== key) : [...values, key]);
   };
   const reset = () => {
+    clearPurchaseGuard();
     setEvaluation(null); setCareCandidate(null); setCareCheck(null); setFragranceCandidate(null); setFragranceCheck(null); setPendingCareDecision(null); setCareDecisionBusy(false); setEditingCare(false); setEditingFragrance(false); setName(''); setBrand('');
     setProductType(''); setConcentration(''); setIngredients(''); setSize(''); setColour(''); setIntendedOccasions([]); setIntendedSeasons([]); setPrice(''); setError(null);
   };
+
+  const activeCandidateId = evaluation?.candidate?.id || careCheck?.candidate_truth.candidate.id || fragranceCheck?.candidate_truth.candidate.id || null;
+  useEffect(() => {
+    if (!activeCandidateId) {
+      clearPurchaseGuard();
+      return;
+    }
+    void loadPurchaseGuard(activeCandidateId);
+  }, [activeCandidateId, clearPurchaseGuard, loadPurchaseGuard]);
 
   const inspectCare = async (body: Parameters<typeof inspectPurchaseCandidate>[0]) => {
     setBusy(true); clearError();
@@ -193,7 +221,11 @@ export default function ShoppingCheckScreen() {
 
   const decide = async (decision: 'bought' | 'waiting' | 'skipped') => {
     if (!evaluation) return;
-    try { setEvaluation(await recordPurchaseDecision(evaluation.id, decision)); } catch (err) { setError(err); }
+    try {
+      const saved = await recordPurchaseDecision(evaluation.id, decision);
+      setEvaluation(saved);
+      if (saved.candidate?.id) void loadPurchaseGuard(saved.candidate.id);
+    } catch (err) { setError(err); }
   };
 
   const decideCare = async (decision: 'bought' | 'waiting' | 'skipped') => {
@@ -202,6 +234,7 @@ export default function ShoppingCheckScreen() {
     try {
       const saved = await recordCarePurchaseDecision(careCandidate.candidate.id, decision, undefined, careCheck.assessment.plan_date);
       setCareCheck((current) => current ? { ...current, decision: saved } : current);
+      void loadPurchaseGuard(careCandidate.candidate.id);
       setPendingCareDecision(null);
     } catch (err) { setError(err); } finally { setCareDecisionBusy(false); }
   };
@@ -212,6 +245,7 @@ export default function ShoppingCheckScreen() {
     try {
       const saved = await recordPurchaseCandidateDecision(fragranceCandidate.candidate.id, decision);
       setFragranceCheck((current) => current ? { ...current, decision: saved } : current);
+      void loadPurchaseGuard(fragranceCandidate.candidate.id);
       setPendingCareDecision(null);
     } catch (err) { setError(err); } finally { setCareDecisionBusy(false); }
   };
@@ -284,7 +318,7 @@ export default function ShoppingCheckScreen() {
             <TouchableOpacity accessibilityRole="button" accessibilityLabel="Save corrected product facts" onPress={() => void confirmCare()} style={styles.primary}><Text style={styles.primaryText}>Confirm corrections</Text></TouchableOpacity>
           </View>
         )}
-        {careCheck && <CarePurchaseResult check={careCheck} onReset={reset} busy={careDecisionBusy} onDecide={(value) => void decideCare(value)} />}
+        {careCheck && <><CarePurchaseResult check={careCheck} onReset={reset} busy={careDecisionBusy} onDecide={(value) => void decideCare(value)} /><PurchaseMemoryCard guard={purchaseGuard} /></>}
         {fragranceCandidate && !fragranceCheck && !editingFragrance && <FragranceCandidateReview inspection={fragranceCandidate} onConfirm={() => void confirmFragrance()} onCorrect={() => setEditingFragrance(true)} />}
         {fragranceCandidate && !fragranceCheck && editingFragrance && (
           <View style={styles.card} accessibilityLabel="Correct Fragrance product facts">
@@ -299,11 +333,11 @@ export default function ShoppingCheckScreen() {
             <TouchableOpacity accessibilityRole="button" accessibilityLabel="Save corrected fragrance facts" onPress={() => void confirmFragrance()} style={styles.primary}><Text style={styles.primaryText}>Confirm corrections</Text></TouchableOpacity>
           </View>
         )}
-        {fragranceCheck && <FragranceShoppingResult check={fragranceCheck} onReset={reset} busy={careDecisionBusy} onDecide={(value) => void decideFragrance(value)} />}
+        {fragranceCheck && <><FragranceShoppingResult check={fragranceCheck} onReset={reset} busy={careDecisionBusy} onDecide={(value) => void decideFragrance(value)} /><PurchaseMemoryCard guard={purchaseGuard} /></>}
         {evaluation && <>
           <VerdictCard evaluation={evaluation} />{evaluation.candidate && <ExtractedItemReview candidate={evaluation.candidate} />}
           <NewCombinations count={evaluation.new_combinations} /><ROIBreakdown roi={evaluation.appearance_roi} /><OwnedComparisons similar={evaluation.similar_owned_products} alternatives={evaluation.existing_alternatives} /><RiskNotes evaluation={evaluation} />
-          <DecisionActions current={evaluation.decision?.decision} onDecide={(value) => void decide(value)} />{!!evaluation.disclaimer && <Text style={styles.hint}>{evaluation.disclaimer}</Text>}
+          <DecisionActions current={evaluation.decision?.decision} onDecide={(value) => void decide(value)} /><PurchaseMemoryCard guard={purchaseGuard} />{!!evaluation.disclaimer && <Text style={styles.hint}>{evaluation.disclaimer}</Text>}
           <TouchableOpacity accessibilityRole="button" accessibilityLabel="Check something else" onPress={reset}><Text style={styles.link}>Check something else</Text></TouchableOpacity>
         </>}
       </ScrollView>

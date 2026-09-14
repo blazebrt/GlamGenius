@@ -1617,6 +1617,38 @@ export interface CarePurchaseCheck {
 
 export type PurchaseDecisionValue = 'bought' | 'waiting' | 'skipped';
 
+/** Read-only Step 9A history projection. It never changes a current verdict. */
+export type PurchaseGuardState =
+  | 'no_step9a_prior_event'
+  | 'identity_insufficient'
+  | 'historical_context_incomplete'
+  | 'exact_prior_bought'
+  | 'exact_prior_waiting'
+  | 'exact_prior_skipped'
+  | 'exact_prior_consideration';
+
+export interface PurchaseGuard {
+  purchase_guard_version: 'step-9a-v2';
+  candidate_id: string;
+  identity: { version: 'step-9a-v2'; state: 'exact' | 'insufficient'; fingerprint: string | null };
+  history_coverage: { state: 'step_9a_events_only'; legacy_current_decisions_included: false };
+  prior_consideration_count: number;
+  most_recent: {
+    id: string;
+    candidate_id: string;
+    category: InventoryCategory;
+    strategy: 'style_purchase' | 'care_purchase' | 'fragrance_purchase';
+    candidate_display_name: string;
+    identity: { version: string; state: 'exact' | 'insufficient'; fingerprint: string | null };
+    recommendation_at_decision: { verdict: Verdict; version: string; fingerprint: string | null };
+    decision: PurchaseDecisionValue;
+    followed_recommendation: boolean;
+    occurred_at: string | null;
+  } | null;
+  guard_state: PurchaseGuardState;
+  owned_redundancy: null;
+}
+
 export interface PurchaseDecisionMemory {
   purchase_decision_memory_version: 'v3-05.8';
   id: string;
@@ -1722,6 +1754,9 @@ export const confirmPurchaseCandidate = async (
 
 export const getCarePurchaseCheck = async (id: string, on?: string): Promise<CarePurchaseCheck> =>
   (await api.get<CarePurchaseCheck>(`${V2}/shopping/candidates/${id}/care-check`, { params: on ? { on } : undefined })).data;
+
+export const getPurchaseGuard = async (id: string): Promise<PurchaseGuard> =>
+  (await api.get<PurchaseGuard>(`${V2}/shopping/candidates/${id}/purchase-guard`)).data;
 
 export const recordCarePurchaseDecision = async (
   id: string, decision: PurchaseDecisionValue, note?: string, on?: string

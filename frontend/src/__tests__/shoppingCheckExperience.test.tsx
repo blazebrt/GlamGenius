@@ -19,6 +19,7 @@ jest.mock('../services/apiV2', () => {
     getPurchaseStrategies: jest.fn(),
     inspectPurchaseCandidate: jest.fn(),
     getCarePurchaseCheck: jest.fn(),
+    getPurchaseGuard: jest.fn(),
     recordCarePurchaseDecision: jest.fn(),
     recordPurchaseDecision: jest.fn(),
     confirmPurchaseCandidate: jest.fn(),
@@ -68,6 +69,12 @@ describe('ShoppingCheckScreen strategy and Care flows', () => {
     jest.clearAllMocks();
     mockedApi.getPurchaseStrategies.mockResolvedValue(strategies());
     mockedApi.getCarePurchaseCheck.mockResolvedValue(careCheck());
+    mockedApi.getPurchaseGuard.mockResolvedValue({
+      purchase_guard_version: 'step-9a-v2', candidate_id: 'candidate-1',
+      identity: { version: 'step-9a-v2', state: 'exact', fingerprint: 'fingerprint' },
+      history_coverage: { state: 'step_9a_events_only', legacy_current_decisions_included: false },
+      prior_consideration_count: 0, most_recent: null, guard_state: 'no_step9a_prior_event', owned_redundancy: null,
+    });
   });
 
   it('uses the registry for active categories and retries a failed discovery without fallback activation', async () => {
@@ -118,6 +125,24 @@ describe('ShoppingCheckScreen strategy and Care flows', () => {
     await waitFor(() => expect(mockedApi.recordCarePurchaseDecision).toHaveBeenCalledWith('candidate-1', 'waiting', undefined, '2026-08-20'));
     expect(screen.getByLabelText('I am waiting').props.accessibilityState.selected).toBe(true);
     expect(mockedApi.recordPurchaseDecision).not.toHaveBeenCalled();
+  });
+
+  it('loads purchase memory only after the Care verdict exists and refreshes it after a saved decision', async () => {
+    mockedApi.inspectPurchaseCandidate.mockResolvedValue(candidate(true));
+    mockedApi.recordCarePurchaseDecision.mockResolvedValue({
+      purchase_decision_memory_version: 'v3-05.8', id: 'decision-1', candidate_id: 'candidate-1', strategy: 'care_purchase', evaluation_id: null,
+      recommendation_at_decision: { verdict: 'wait', version: 'v3-05.5', fingerprint: 'fp-1' }, decision: 'waiting', note: null,
+      followed_recommendation: true, created_at: '2026-08-20T00:00:00Z', updated_at: '2026-08-20T00:00:00Z',
+    });
+    render(<ShoppingCheckScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Skin Care')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('Skin Care'));
+    fireEvent.press(screen.getByLabelText('Enter the details myself'));
+    fireEvent.changeText(screen.getByLabelText('Product name'), 'Daily cleanser');
+    fireEvent.press(screen.getByLabelText('Check this item'));
+    await waitFor(() => expect(mockedApi.getPurchaseGuard).toHaveBeenCalledWith('candidate-1'));
+    fireEvent.press(screen.getByLabelText('I am waiting'));
+    await waitFor(() => expect(mockedApi.getPurchaseGuard).toHaveBeenCalledTimes(2));
   });
 
   it('retries the failed Care decision save rather than refreshing the check', async () => {
