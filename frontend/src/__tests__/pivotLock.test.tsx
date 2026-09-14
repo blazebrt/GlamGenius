@@ -27,7 +27,7 @@ describe('Frontend Legacy Routing', () => {
   });
 
   it('Scan remains the primary product entry and You remains the other primary tab', () => {
-    expect(fs.existsSync(path.join(appDir, '(tabs)', 'scan-product.tsx'))).toBe(true);
+    expect(fs.existsSync(path.join(appDir, '(tabs)', 'scan.tsx'))).toBe(true);
     expect(fs.existsSync(path.join(appDir, '(tabs)', 'you.tsx'))).toBe(true);
   });
 
