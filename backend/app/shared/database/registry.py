@@ -28,6 +28,7 @@ from app.domains.official_records import models as official_records_models
 from app.domains.personal_decision_release.models import PersonalDecisionRelease
 from app.domains.planning import models as planning_models
 from app.domains.privacy.models import AccountDeletionJob
+from app.domains.quiz import models as legacy_quiz_models
 from app.domains.product.models import (
     FssaiComplaintHandoff,
     LabelErrorReport,
@@ -95,6 +96,7 @@ __all__ = [
     "inventory_models",
     "recommendation_models",
     "planning_models",
+    "legacy_quiz_models",
     "routines_models",
     "progress_models",
     "SeedVersionRecord",
