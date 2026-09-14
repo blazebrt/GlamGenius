@@ -83,6 +83,7 @@ from app.domains.recommendation.models import (
     LookAdjustment,
     LookFeedback,
     PurchaseDecision,
+    PurchaseDecisionEvent,
     PurchaseEvaluation,
     RecommendationRun,
     ShoppingCandidate,
@@ -383,10 +384,12 @@ async def _shopping(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
     candidates = await _fetch(session, select(ShoppingCandidate).where(ShoppingCandidate.account_id == account_id))
     evaluations = await _fetch(session, select(PurchaseEvaluation).where(PurchaseEvaluation.account_id == account_id))
     decisions = await _fetch(session, select(PurchaseDecision).where(PurchaseDecision.account_id == account_id))
+    decision_events = await _fetch(session, select(PurchaseDecisionEvent).where(PurchaseDecisionEvent.account_id == account_id))
     return {
         "candidates": [_row_dict(r, [c.name for c in ShoppingCandidate.__table__.columns]) for r in candidates],
         "evaluations": [_row_dict(r, [c.name for c in PurchaseEvaluation.__table__.columns]) for r in evaluations],
         "decisions": [_row_dict(r, [c.name for c in PurchaseDecision.__table__.columns]) for r in decisions],
+        "decision_events": [_row_dict(r, [c.name for c in PurchaseDecisionEvent.__table__.columns]) for r in decision_events],
     }
 
 

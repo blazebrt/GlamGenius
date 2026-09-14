@@ -137,6 +137,7 @@ def test_one_purchase_candidate_persistence_family_and_details_column():
         "purchase_evaluations",
         "purchase_evaluation_factors",
         "purchase_decisions",
+        "purchase_decision_events",
     }
     column = ShoppingCandidate.__table__.c.details
     assert isinstance(column.type, JSONB)
