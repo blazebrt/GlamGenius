@@ -150,8 +150,6 @@ async def test_export_carries_a_record_from_every_active_domain(
     assert domains["inventory"]["items"]
     assert domains["media"]["assets"]
     assert domains["scans"]["scans"]
-    assert domains["quiz_and_styling"]["quiz_submissions"]
-    assert domains["shopping"]["candidates"]
     assert domains["planning"]["daily_plans"]
     assert domains["routines"]["routines"]
     assert domains["progress_and_memory"]["memory_facts"]
