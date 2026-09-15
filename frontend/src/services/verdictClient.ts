@@ -151,7 +151,7 @@ export function toVerdictSource(
     confidence: wire.confidence ?? null,
     factsProvenance: wire.facts_provenance ?? null,
     labelVersion: wire.label_version ? {
-      id: wire.label_version.id, versionNumber: wire.label_version.version_number,
+      id: wire.label_version.id, versionNumber: wire.label_version.version_number, contentFingerprint: wire.label_version.content_fingerprint,
       observedAt: wire.label_version.observed_at, changedFields: wire.label_version.changed_fields,
       completeness: wire.label_version.completeness,
     } : null,

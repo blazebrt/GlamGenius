@@ -848,7 +848,7 @@ export interface ProductVerdictWire {
   missing: string[];
   confidence: { level: string; text: string };
   facts_provenance?: 'confirmed_label_snapshot' | 'open_food_facts' | string;
-  label_version?: { id: string; version_number: number; observed_at: string; changed_fields: string[]; completeness: string } | null;
+  label_version?: { id: string; version_number: number; content_fingerprint: string; observed_at: string; changed_fields: string[]; completeness: string } | null;
   attribution: { text: string } | null;
   /** Grams in the pack, when either source states a net quantity. */
   pack_size_g: number | null;
@@ -3035,3 +3035,36 @@ export const getKnowledgeVersions = async (
 /** Import pasted CSV. Every row lands as a draft; this cannot publish. */
 export const importKnowledgeCsv = async (csv: string): Promise<KnowledgeImportResult> =>
   (await api.post<KnowledgeImportResult>(`${KNOWLEDGE}/import-text`, { csv })).data;
+
+
+export interface ScanDecisionEvent {
+  id: string;
+  decision: 'BUY' | 'WAIT' | 'SKIP';
+  note: string | null;
+  occurred_at: string | null;
+}
+
+export interface ScanDecisionMemory {
+  scan_decision_memory_version: string;
+  identity: {
+    barcode: string;
+    label_snapshot_id: string;
+    label_version: number;
+    content_fingerprint: string;
+  };
+  decision: ScanDecisionEvent | null;
+  history: ScanDecisionEvent[];
+}
+
+export const readScanMemory = async (barcode: string): Promise<ScanDecisionMemory> => {
+  const result = await api.get<ScanDecisionMemory>(`${V2}/scan/verdict/${encodeURIComponent(barcode)}/memory`);
+  return result.data;
+};
+
+export const saveScanDecision = async (
+  barcode: string,
+  payload: { decision: 'BUY' | 'WAIT' | 'SKIP'; label_snapshot_id: string; label_version: number; content_fingerprint: string; note?: string | null; idempotency_key: string }
+): Promise<ScanDecisionEvent> => {
+  const result = await api.post<ScanDecisionEvent>(`${V2}/scan/verdict/${encodeURIComponent(barcode)}/memory`, payload);
+  return result.data;
+};

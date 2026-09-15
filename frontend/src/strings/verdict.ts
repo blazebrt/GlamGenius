@@ -23,6 +23,19 @@ export const S = {
   // -----------------------------------------------------------------------
   // The letter itself. Three words at most: the colour has already answered.
   // -----------------------------------------------------------------------
+  forYou: {
+    title: 'FOR YOU',
+  },
+  decisionMemory: {
+    title: 'DECISION MEMORY',
+    actions: {
+      buy: 'BUY',
+      wait: 'WAIT',
+      skip: 'SKIP',
+    },
+    reconsider: 'Reconsider',
+    cancel: 'Cancel',
+  },
   grade: {
     A: { verdict: 'BUY', band: 'green' },
     B: { verdict: 'BUY', band: 'green' },

@@ -1,11 +1,13 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { PurchaseGuard } from '../../services/apiV2';
+
 import { PURCHASE_MEMORY } from '../../strings/purchaseMemory';
 import { COLORS, FONTS, RADIUS, SPACING } from '../../theme/colors';
 
-const messageFor = (state: PurchaseGuard['guard_state']): string | null => {
+export type PurchaseGuardState = 'exact_prior_bought' | 'exact_prior_waiting' | 'exact_prior_skipped' | 'exact_prior_consideration' | 'historical_context_incomplete' | 'identity_insufficient' | 'no_step9a_prior_event';
+
+const messageFor = (state: PurchaseGuardState): string | null => {
   switch (state) {
     case 'exact_prior_bought': return PURCHASE_MEMORY.bought;
     case 'exact_prior_waiting': return PURCHASE_MEMORY.waiting;
@@ -25,16 +27,22 @@ const displayDate = (value: string | null): string | null => {
   });
 };
 
-export function PurchaseMemoryCard({ guard }: { guard: PurchaseGuard | null }) {
-  if (!guard) return null;
-  const message = messageFor(guard.guard_state);
+export interface PurchaseMemoryProps {
+  guardState: 'exact_prior_bought' | 'exact_prior_waiting' | 'exact_prior_skipped' | 'exact_prior_consideration' | 'historical_context_incomplete' | 'identity_insufficient' | 'no_step9a_prior_event' | null;
+  occurredAt: string | null;
+  considerationCount: number;
+}
+
+export function PurchaseMemoryCard({ guardState, occurredAt, considerationCount }: PurchaseMemoryProps) {
+  if (!guardState || guardState === "no_step9a_prior_event") return null;
+  const message = messageFor(guardState);
   if (!message) return null;
-  const date = displayDate(guard.most_recent?.occurred_at || null);
+  const date = displayDate(occurredAt);
   return (
     <View style={styles.card} accessibilityLabel={`Purchase memory. ${message}`}>
       <Text style={styles.title}>{PURCHASE_MEMORY.title}</Text>
       <Text style={styles.body}>{message}</Text>
-      {guard.prior_consideration_count > 1 && <Text style={styles.note}>{PURCHASE_MEMORY.count(guard.prior_consideration_count)}</Text>}
+      {considerationCount > 1 && <Text style={styles.note}>{PURCHASE_MEMORY.count(considerationCount)}</Text>}
       {!!date && <Text style={styles.note}>{PURCHASE_MEMORY.lastDecision(date)}</Text>}
     </View>
   );

@@ -840,7 +840,9 @@ async def test_a_scan_nobody_claimed_is_in_nobodys_export(
     factory = get_sessionmaker()
     async with factory() as session:
         payload = await export_service.build_export(session, account_id)
-    assert payload["domains"]["product_scans"] == {"scans": [], "label_error_reports": []}
+    assert payload["domains"]["product_scans"] == {
+        "scans": [], "label_error_reports": [], "scan_decision_events": [],
+    }
 
 
 @pytest.mark.asyncio
