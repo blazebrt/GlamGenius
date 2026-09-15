@@ -106,6 +106,13 @@ export default function VerdictScreen() {
   
   const [memory, setMemory] = useState<ScanDecisionMemory | null>(null);
   const memoryToken = useRef(0);
+  const activeIdentity = useRef<{ barcode: string; labelSnapshotId: string; labelVersion: number; contentFingerprint: string } | null>(null);
+  activeIdentity.current = source?.labelVersion && barcode ? {
+    barcode,
+    labelSnapshotId: source.labelVersion.id,
+    labelVersion: source.labelVersion.versionNumber,
+    contentFingerprint: source.labelVersion.contentFingerprint,
+  } : null;
   
   const loadMemory = useCallback(async (currentSource?: any) => {
     const src = currentSource || source;
@@ -437,7 +444,11 @@ export default function VerdictScreen() {
                 labelVersion={source.labelVersion.versionNumber}
                 contentFingerprint={source.labelVersion.contentFingerprint}
                 memory={memory}
-                onMemoryUpdated={loadMemory}
+                onMemoryUpdated={(identity) => {
+                  const current = activeIdentity.current;
+                  if (!current || current.barcode !== identity.barcode || current.labelSnapshotId !== identity.labelSnapshotId || current.labelVersion !== identity.labelVersion || current.contentFingerprint !== identity.contentFingerprint) return;
+                  void loadMemory(source);
+                }}
               />
             )}
             <VerdictActions

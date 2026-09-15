@@ -577,12 +577,13 @@ async def report_label_error(
     return {"report_id": str(report.id), "created": created}
 
 class ScanDecisionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     decision: Literal['BUY', 'WAIT', 'SKIP']
-    label_snapshot_id: str
+    label_snapshot_id: uuid.UUID
     label_version: int
-    content_fingerprint: str
-    idempotency_key: str
-    note: str | None = None
+    content_fingerprint: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=1, max_length=64)
+    note: str | None = Field(default=None, max_length=500)
 
 @router.get("/scan/verdict/{barcode}/memory")
 async def get_scan_decision_memory(
@@ -626,7 +627,7 @@ async def record_scan_decision_event(
     if not snapshot:
         raise HTTPException(status_code=409, detail="conflict")
         
-    if str(snapshot.id) != body.label_snapshot_id or snapshot.version_number != body.label_version or snapshot.content_fingerprint != body.content_fingerprint:
+    if snapshot.id != body.label_snapshot_id or snapshot.version_number != body.label_version or snapshot.content_fingerprint != body.content_fingerprint:
         raise HTTPException(status_code=409, detail="conflict")
         
     try:

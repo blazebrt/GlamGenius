@@ -18,7 +18,7 @@ export function ScanDecisionMemorySection({
   labelVersion: number;
   contentFingerprint: string;
   memory: ScanDecisionMemory | null;
-  onMemoryUpdated: () => void;
+  onMemoryUpdated: (identity: { barcode: string; labelSnapshotId: string; labelVersion: number; contentFingerprint: string }) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [reconsidering, setReconsidering] = useState(false);
@@ -45,7 +45,7 @@ export function ScanDecisionMemorySection({
         idempotency_key: draftKey.current.id,
       });
       setReconsidering(false);
-      onMemoryUpdated();
+      onMemoryUpdated({ barcode, labelSnapshotId, labelVersion, contentFingerprint });
     } catch {
       // API failures must not break Product Truth
     } finally {

@@ -533,17 +533,21 @@ async def test_audit_scrub_is_idempotent(db_clean, fake_admin, fake_storage):
     assert rows[0].action == "privacy.exported"
 
 async def test_scan_decision_memory_deletion(db_clean, registered_supabase_user, seed_account):
-    from app.domains.privacy.service import _erase_account
     from app.domains.product.models import LabelSnapshot, ScanDecisionEvent, ScanDevice, ScanEvent
-    
-    leaving = uuid.UUID(registered_supabase_user["account_id"])
+    _, leaving = await registered_supabase_user()
     staying = await seed_account()
 
     factory = get_sessionmaker()
     async with factory() as session:
-        device = ScanDevice(id=uuid.uuid4(), identity_token="test-device-token-del")
+        device = ScanDevice(
+            id=uuid.uuid4(), device_key=f"delete-device-{uuid.uuid4().hex}",
+            token_hash="delete-token-hash", claimed_by_account_id=staying,
+        )
         session.add(device)
-        event = ScanEvent(id=uuid.uuid4(), device_id=device.id, account_id=staying, barcode="111")
+        event = ScanEvent(
+            id=uuid.uuid4(), device_id=device.id, account_id=staying,
+            barcode="111", outcome="found_local", client_scan_id=uuid.uuid4().hex,
+        )
         session.add(event)
         snapshot = LabelSnapshot(
             id=uuid.uuid4(), barcode="111", device_id=device.id, scan_event_id=event.id,
@@ -558,9 +562,7 @@ async def test_scan_decision_memory_deletion(db_clean, registered_supabase_user,
         session.add(ScanDecisionEvent(account_id=staying, barcode="111", label_snapshot_id=snapshot.id, label_version=1, content_fingerprint="f", decision="BUY", idempotency_key="k2"))
         await session.commit()
     
-    async with factory() as session:
-        await _erase_account(session, leaving)
-        await session.commit()
+    await _run_deletion(leaving)
         
     async with factory() as session:
         remaining = (await session.execute(select(ScanDecisionEvent))).scalars().all()

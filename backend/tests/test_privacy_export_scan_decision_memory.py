@@ -5,19 +5,25 @@ import uuid
 import pytest
 from app.domains.privacy.export import export_account
 from app.domains.product.models import LabelSnapshot, ScanDecisionEvent, ScanDevice, ScanEvent
-from app.shared.database.registry import get_sessionmaker
+from app.shared.database.sql import get_sessionmaker
 
 pytestmark = pytest.mark.asyncio
 
 async def test_export_scan_decision_memory_isolation(db_clean, registered_supabase_user, seed_account):
-    user_a = uuid.UUID(registered_supabase_user["account_id"])
+    _, user_a = await registered_supabase_user()
     user_b = await seed_account()
 
     factory = get_sessionmaker()
     async with factory() as session:
-        device = ScanDevice(id=uuid.uuid4(), identity_token="test-device-token-exp")
+        device = ScanDevice(
+            id=uuid.uuid4(), device_key=f"export-device-{uuid.uuid4().hex}",
+            token_hash="export-token-hash", claimed_by_account_id=user_a,
+        )
         session.add(device)
-        event = ScanEvent(id=uuid.uuid4(), device_id=device.id, account_id=user_a, barcode="export111")
+        event = ScanEvent(
+            id=uuid.uuid4(), device_id=device.id, account_id=user_a,
+            barcode="export111", outcome="found_local", client_scan_id=uuid.uuid4().hex,
+        )
         session.add(event)
         snapshot = LabelSnapshot(
             id=uuid.uuid4(), barcode="export111", device_id=device.id, scan_event_id=event.id,
