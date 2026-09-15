@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { COLORS, FONTS, SPACING, RADIUS } from '../../theme/colors';
 import { PurchaseMemoryCard } from './PurchaseMemoryCard';

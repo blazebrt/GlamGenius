@@ -31,7 +31,11 @@ import {
 } from '../src/services/errorReports';
 import { getProductVerdict } from '../src/services/verdictClient';
 import { ScanDecisionMemorySection } from '../src/components/shopping/ScanDecisionMemorySection';
-import { readScanMemory, type ScanDecisionMemory } from '../src/services/apiV2';
+import {
+  readScanMemory, readCommunityPackContext, submitCommunityObservation, uploadMedia,
+  readOwnCommunityReports, withdrawCommunityObservation,
+  type ScanDecisionMemory, type CommunityOwnReport, type CommunityPackContext,
+} from '../src/services/apiV2';
 import { buildVerdictShareText } from '../src/services/verdictShare';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import { OfficialRecords } from '../src/components/verdict/OfficialRecords';
@@ -39,11 +43,6 @@ import { CommunityObservations } from '../src/components/verdict/CommunityObserv
 import { BetterOption, REFERENCE_ALTERNATIVE } from '../src/components/verdict/BetterOption';
 import { CommunityReportSheet, BATCH_SCOPED_CODES } from '../src/components/verdict/CommunityReportSheet';
 import { useUserStore } from '../src/store/userStore';
-import {
-  readCommunityPackContext, submitCommunityObservation, uploadMedia,
-  readOwnCommunityReports, withdrawCommunityObservation,
-  type CommunityOwnReport, type CommunityPackContext,
-} from '../src/services/apiV2';
 import {
   ComponentRow, FactorSection, GradeBlock, IngredientDetail, IngredientList,
   NotGradedCard, ReportSheet, UnknownCard, VerdictActions, VerdictLines,
@@ -146,14 +145,18 @@ export default function VerdictScreen() {
     }
   }, [barcode, signedIn, referenceView, source]);
 
+  const labelSnapshotId = source?.labelVersion?.id;
+  const labelVersion = source?.labelVersion?.versionNumber;
+  const contentFingerprint = source?.labelVersion?.contentFingerprint;
+
   useEffect(() => {
     // Invalidate request generation on identity/auth/reference changes (Blocker 6)
     memoryToken.current++;
     setMemory(null);
-    if (loadState === 'ready' && !referenceView && source?.labelVersion && signedIn) {
+    if (loadState === 'ready' && !referenceView && labelSnapshotId && signedIn) {
       void loadMemory();
     }
-  }, [barcode, source?.labelVersion?.id, source?.labelVersion?.versionNumber, source?.labelVersion?.contentFingerprint, signedIn, referenceView, loadState, loadMemory]);
+  }, [barcode, labelSnapshotId, labelVersion, contentFingerprint, signedIn, referenceView, loadState, loadMemory]);
 
   const view = useMemo(() => (source ? buildVerdict(source) : null), [source]);
 

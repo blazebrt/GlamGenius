@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from app.domains.privacy.export import export_account
+from app.domains.privacy.export import build_export
 from app.domains.product.models import LabelSnapshot, ScanDecisionEvent, ScanDevice, ScanEvent
 from app.shared.database.sql import get_sessionmaker
 
@@ -37,10 +37,12 @@ async def test_export_scan_decision_memory_isolation(db_clean, registered_supaba
         await session.commit()
     
     async with factory() as session:
-        exported = await export_account(session, user_a)
+        exported = await build_export(session, user_a)
         
-    assert "_product_scans" in exported
-    decisions = exported["_product_scans"].get("scan_decision_events", [])
+    decisions = exported["domains"]["product_scans"]["scan_decision_events"]
     assert len(decisions) == 1
     assert decisions[0]["decision"] == "BUY"
     assert decisions[0]["note"] == "a-note"
+    assert decisions[0]["barcode"] == "export111"
+    assert decisions[0]["label_version"] == 1
+    assert decisions[0]["content_fingerprint"] == "f"
