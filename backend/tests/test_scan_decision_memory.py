@@ -22,12 +22,14 @@ async def seeded_snapshot(registered_supabase_user):
             claimed_by_account_id=account_id,
         )
         session.add(device)
+        await session.flush()
         event = ScanEvent(
             id=uuid.uuid4(), device_id=device.id, account_id=account_id,
             barcode="4000123456789", outcome="found_local",
             client_scan_id=uuid.uuid4().hex,
         )
         session.add(event)
+        await session.flush()
         snapshot = LabelSnapshot(
             id=uuid.uuid4(),
             barcode="4000123456789",
@@ -41,6 +43,7 @@ async def seeded_snapshot(registered_supabase_user):
             completeness="complete_for_grading"
         )
         session.add(snapshot)
+        await session.flush()
         await session.commit()
         return {"snapshot": snapshot, "token": token, "account_id": account_id}
 
