@@ -2438,6 +2438,96 @@ export interface ImproveOverview {
   disclaimer: string;
 }
 
+/**
+ * The Skin & Hair manager (Step 10B).
+ *
+ * Every string a person reads here — the decision, the reason, the button and
+ * the override — comes from the server, where it is reviewed copy attached to a
+ * reviewed rule. The app chooses none of the words and derives none of them.
+ *
+ * The unions below are closed on purpose. If the server ever sends a kind this
+ * app does not know, the type checker will have refused the change that added
+ * it before it shipped, which is the point.
+ */
+export type ShelfManagerKind = 'finding' | 'give_back';
+
+export type ShelfManagerActionKind =
+  | 'pause_product'
+  | 'resume_product'
+  | 'prefer_product'
+  | 'unprefer_product'
+  | 'confirm_label'
+  | 'record_date'
+  | 'add_owned_product'
+  | 'open_routine'
+  | 'open_inventory_item'
+  | 'none';
+
+/** What a client may send. It says yes or no; the server decides what that means. */
+export type ShelfManagerChoice = 'accept' | 'override';
+
+/** What the server recorded. Never sent by the app. */
+export type ShelfManagerStoredChoice = 'accepted' | 'overridden' | 'restored' | 'restore_overridden';
+
+export type ShelfManagerSeverity = 'info' | 'caution' | 'avoid';
+
+export interface ShelfManagerAction {
+  kind: ShelfManagerActionKind;
+  label: string;
+  inventory_item_id: string | null;
+  /** True only where accepting changes stored state rather than opening a screen. */
+  mutates: boolean;
+}
+
+export interface ShelfManagerDecision {
+  decision_key: string;
+  decision_fingerprint: string;
+  kind: ShelfManagerKind;
+  category: string | null;
+  rule_id: string;
+  severity: ShelfManagerSeverity;
+  decision: string;
+  reason: string;
+  evidence_note: string;
+  item_ids: string[];
+  slot: string | null;
+  action: ShelfManagerAction;
+  override: { label: string; choice: 'override' };
+}
+
+export interface ShelfManagerQueue {
+  contract_version: 'step-10b-v1';
+  primary: ShelfManagerDecision | null;
+  remaining_count: number;
+  counts: { active: number; overridden: number; give_back: number };
+  message: string | null;
+  disclaimer: string;
+}
+
+export interface ShelfManagerResponse extends ShelfManagerQueue {
+  applied: {
+    choice: ShelfManagerStoredChoice;
+    action_kind: ShelfManagerActionKind;
+    action_applied: boolean;
+    replayed: boolean;
+  };
+}
+
+export interface ShelfManagerRespondRequest {
+  decision_key: string;
+  decision_fingerprint: string;
+  choice: ShelfManagerChoice;
+  client_mutation_id: string;
+}
+
+export const getShelfManager = async (): Promise<ShelfManagerQueue> =>
+  (await api.get<ShelfManagerQueue>(`${V2}/shelf/manager`)).data;
+
+export const respondToShelfManager = async (
+  body: ShelfManagerRespondRequest,
+): Promise<ShelfManagerResponse> =>
+  (await api.post<ShelfManagerResponse>(`${V2}/shelf/manager/respond`, body)).data;
+
 export const analyseShelf = async (climate?: string): Promise<ShelfSummary> =>
   (await api.post<ShelfSummary>(`${V2}/shelf/analyse`, climate ? { climate } : {})).data;
 

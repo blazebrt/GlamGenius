@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   EmptyModule, PerfumeCard, SupplementCard, WarningList,
 } from '../src/components/routines/RoutinePieces';
+import { ShelfManagerCard } from '../src/components/shelf/ShelfManagerCard';
 import {
   PerfumePick, ShelfSummary, SupplementRow, analyseShelf, getPerfumeRecommendation,
   SupplementUtilitySummary, getShelfSummary, getSupplementsSummary,
@@ -41,6 +42,9 @@ export default function ShelfScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [analysing, setAnalysing] = useState(false);
+  // Bumped whenever this screen reloads, so the manager re-reads its queue with
+  // it. The card owns its own request; the screen only says when to look again.
+  const [managerToken, setManagerToken] = useState(0);
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     if (mode === 'refresh') setRefreshing(true);
@@ -59,7 +63,12 @@ export default function ShelfScreen() {
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { void load('refresh'); }, [load]));
+  const reload = useCallback((mode: 'initial' | 'refresh' = 'initial') => {
+    setManagerToken((value) => value + 1);
+    return load(mode);
+  }, [load]);
+
+  useFocusEffect(useCallback(() => { void reload('refresh'); }, [reload]));
 
   const reread = async () => {
     setAnalysing(true);
@@ -76,7 +85,7 @@ export default function ShelfScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView
         contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 40 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load('refresh')} tintColor={COLORS.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void reload('refresh')} tintColor={COLORS.primary} />}
       >
         <View style={styles.header}>
           <TouchableOpacity accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.back()}>
@@ -102,6 +111,10 @@ export default function ShelfScreen() {
             </TouchableOpacity>
           ))}
         </View>
+
+        {tab === 'products' && (
+          <ShelfManagerCard reloadToken={managerToken} onChanged={() => { void load('refresh'); }} />
+        )}
 
         {tab === 'products' && (summary?.counts.products ? (
           <>

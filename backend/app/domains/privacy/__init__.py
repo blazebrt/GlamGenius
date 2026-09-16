@@ -159,6 +159,9 @@ REGISTRY: dict[str, Classification] = {
     "routine_adherence": Classification.INCLUDED,
     "routine_recommendation_runs": Classification.INCLUDED,
     "care_experience_feedback": Classification.INCLUDED,
+    # What the Skin & Hair manager decided and what the person answered.
+    # Identifiers and state only — no free text, nothing off a label.
+    "shelf_manager_decision_events": Classification.INCLUDED,
     # Maintenance timing is entirely customer-declared, so it is theirs.
     "maintenance_preferences": Classification.INCLUDED,
     "maintenance_events": Classification.INCLUDED,

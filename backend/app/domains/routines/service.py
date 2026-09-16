@@ -20,6 +20,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.care import cadence as care_cadence
@@ -35,7 +36,7 @@ from app.domains.inventory.models import InventoryAttribute, InventoryItem
 from app.domains.planning import clock
 from app.domains.planning import context as planning_context
 from app.domains.profile import service as profile_service
-from app.domains.routines import adherence, compiler, explanation, parser, perfume, selection, shelf
+from app.domains.routines import adherence, compiler, explanation, manager, parser, perfume, selection, shelf
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import (
     CARE_EXPERIENCE_FEEDBACK_VERSION,
@@ -46,6 +47,7 @@ from app.domains.routines.models import (
     RoutineAdherence,
     RoutineRecommendationRun,
     RoutineStep,
+    ShelfManagerDecisionEvent,
     UserReportedObservation,
 )
 from app.domains.routines.ontology import INGREDIENT_BY_KEY, ONTOLOGY_VERSION
@@ -63,6 +65,7 @@ from app.domains.routines.schemas import (
     RoutineGenerateRequest,
     RoutineStepComplete,
     ShelfAnalyseRequest,
+    ShelfManagerRespondRequest,
 )
 from app.shared.database.base import utcnow
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
@@ -1699,3 +1702,251 @@ async def improve_overview(session: AsyncSession, *, account_id: uuid.UUID) -> d
         "care_product_controls": care_product_controls,
         "disclaimer": ROUTINE_DISCLAIMER,
     }
+
+
+# --- The Skin & Hair manager -------------------------------------------------
+# The queue itself is compiled in ``manager.py``, which is pure. What lives here
+# is the part that touches the database: reading the queue back out, and — when
+# the person accepts a decision — handing the change to the Care authority that
+# already owns it. Nothing below writes a Care preference directly.
+
+_MANAGER_MUTATIONS = {
+    manager.ACTION_PAUSE_PRODUCT: pause_care_product,
+    manager.ACTION_RESUME_PRODUCT: resume_care_product,
+    manager.ACTION_PREFER_PRODUCT: prefer_care_product,
+    manager.ACTION_UNPREFER_PRODUCT: unprefer_care_product,
+}
+
+_REPLAYABLE_CHOICES = {
+    manager.REQUEST_ACCEPT: (manager.CHOICE_ACCEPTED, manager.CHOICE_RESTORED),
+    manager.REQUEST_OVERRIDE: (manager.CHOICE_OVERRIDDEN, manager.CHOICE_RESTORE_OVERRIDDEN),
+}
+
+STALE_DECISION_MESSAGE = (
+    "Your shelf has changed since this was shown, so we did not act on it. "
+    "Here is what your manager says now."
+)
+
+
+def _manager_payload(queue: manager.ManagerQueue) -> dict[str, Any]:
+    payload = queue.as_dict()
+    payload["disclaimer"] = ROUTINE_DISCLAIMER
+    return payload
+
+
+def _manager_response(
+    queue: manager.ManagerQueue,
+    *,
+    choice: str,
+    action_kind: str,
+    action_applied: bool,
+    replayed: bool,
+) -> dict[str, Any]:
+    payload = _manager_payload(queue)
+    payload["applied"] = {
+        "choice": choice,
+        "action_kind": action_kind,
+        # False for a navigation, and for a replay of something already applied.
+        # A tap that only opened a screen has resolved nothing.
+        "action_applied": action_applied,
+        "replayed": replayed,
+    }
+    return payload
+
+
+async def shelf_manager(session: AsyncSession, *, account_id: uuid.UUID) -> dict[str, Any]:
+    """The one thing your manager has decided, and how much is behind it."""
+    return _manager_payload(await manager.build_queue(session, account_id=account_id))
+
+
+async def _manager_event_for_key(
+    session: AsyncSession, account_id: uuid.UUID, client_mutation_id: str
+) -> ShelfManagerDecisionEvent | None:
+    return (await session.execute(select(ShelfManagerDecisionEvent).where(
+        ShelfManagerDecisionEvent.account_id == account_id,
+        ShelfManagerDecisionEvent.client_mutation_id == client_mutation_id,
+    ))).scalar_one_or_none()
+
+
+async def _manager_replay(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    existing: ShelfManagerDecisionEvent,
+    body: ShelfManagerRespondRequest,
+) -> dict[str, Any]:
+    """Answer a retry without applying anything a second time.
+
+    A retry has to be the same request. Reusing a submission key for a different
+    decision, a different set of inputs or the opposite answer is a mistake on
+    the client's part, and the server says so rather than guessing which of the
+    two was meant.
+    """
+    same_request = (
+        existing.decision_key == body.decision_key
+        and existing.decision_fingerprint == body.decision_fingerprint
+        and existing.choice in _REPLAYABLE_CHOICES[body.choice]
+    )
+    if not same_request:
+        raise ValidationFailedError(
+            "This submission key has already been used for a different answer.",
+            field="client_mutation_id",
+        )
+    queue = await manager.build_queue(session, account_id=account_id)
+    return _manager_response(
+        queue,
+        choice=existing.choice,
+        action_kind=existing.action_kind,
+        action_applied=False,
+        replayed=True,
+    )
+
+
+def _authorised_primary(
+    queue: manager.ManagerQueue, body: ShelfManagerRespondRequest
+) -> manager.ManagerDecision:
+    """The one decision this request is allowed to answer, or a refusal.
+
+    Only the front of the queue. The manager's whole premise is one decision at
+    a time, and the order it is in is the server's judgement, not a rendering
+    detail the app happens to follow. Authorising anything else in
+    ``queue.active`` would let a caller skip past a confirmed-allergy pause to
+    answer something further down, which is precisely the ordering the priority
+    rules exist to impose.
+    """
+    primary = queue.primary
+    if primary is None or primary.decision_key != body.decision_key:
+        raise ValidationFailedError(STALE_DECISION_MESSAGE, field="decision_key")
+    if primary.fingerprint != body.decision_fingerprint:
+        raise ValidationFailedError(STALE_DECISION_MESSAGE, field="decision_fingerprint")
+    return primary
+
+
+async def _lock_target_item(
+    session: AsyncSession, *, account_id: uuid.UUID, item_id: uuid.UUID
+) -> None:
+    """Take the row lock that makes one product's answer a serialised step.
+
+    Two requests carrying different submission keys can both compile the same
+    decision before either has changed anything — a second device, or a retry
+    the app decided was a new attempt. Uniqueness on the submission key does
+    not help there, because the keys genuinely differ. Both would then apply
+    the same Care change, and the second would collide with the unique
+    constraint on the product's preference attribute: a 500, on a button the
+    person pressed twice.
+
+    Locking the product row here means the second request waits, and then
+    recompiles against the state the first one left. What it finds is a
+    decision that has already been settled, which is the truth.
+    """
+    try:
+        await inventory_service.owned_item(session, account_id, item_id, for_update=True)
+    except NotFoundError as error:
+        # Deleted between compiling and answering. Same answer as any other
+        # decision that is no longer current.
+        raise ValidationFailedError(STALE_DECISION_MESSAGE, field="decision_key") from error
+
+
+async def shelf_manager_respond(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    account_id_str: str,
+    body: ShelfManagerRespondRequest,
+) -> dict[str, Any]:
+    """Answer the decision at the front of the queue.
+
+    The queue is recompiled from scratch before anything happens. The request
+    names a decision and the exact inputs it was shown with; everything else —
+    which rule it came from, which product it touches, what the button does — is
+    read off the freshly compiled decision, never off the request. A request
+    that names a decision the server would not produce right now, that names one
+    which is not currently at the front, or whose inputs have moved, is refused
+    without acting.
+
+    Order of operations, and why:
+
+    1. A known submission key replays, without recompiling anything.
+    2. Compile and authorise against the primary, so an obviously stale request
+       is refused before it takes any lock.
+    3. For a decision that changes stored state, lock that product's row and
+       **authorise again** against a freshly compiled queue. Everything after
+       this point is serialised per product.
+    4. Record the answer, idempotently.
+    5. Apply the change through the Care authority that owns it.
+
+    Steps 4 and 5 commit together or not at all. An answer is never recorded
+    for a change that did not happen.
+    """
+    existing = await _manager_event_for_key(session, account_id, body.client_mutation_id)
+    if existing is not None:
+        return await _manager_replay(session, account_id=account_id, existing=existing, body=body)
+
+    decision = _authorised_primary(
+        await manager.build_queue(session, account_id=account_id), body,
+    )
+    target_id = (
+        uuid.UUID(decision.action.inventory_item_id)
+        if decision.action.inventory_item_id is not None else None
+    )
+    mutate = _MANAGER_MUTATIONS.get(decision.action.kind)
+    will_mutate = body.choice == manager.REQUEST_ACCEPT and mutate is not None and target_id is not None
+
+    if will_mutate and target_id is not None:
+        await _lock_target_item(session, account_id=account_id, item_id=target_id)
+        # Two checks under the lock, and the order between them is the whole
+        # difference between a retry and a second answer.
+        #
+        # First the submission key: a retry of the identical request that lost
+        # the race must still be free, and it is the same answer either way.
+        settled = await _manager_event_for_key(session, account_id, body.client_mutation_id)
+        if settled is not None:
+            return await _manager_replay(
+                session, account_id=account_id, existing=settled, body=body,
+            )
+        # Then the queue, which may have moved while we waited: a different
+        # submission key answering a decision somebody else has already applied
+        # is not a retry, and is told so rather than applied twice.
+        decision = _authorised_primary(
+            await manager.build_queue(session, account_id=account_id), body,
+        )
+
+    choice = manager.stored_choice_for(decision.kind, body.choice)
+    # Uniqueness on the submission key is what makes a retry of the *same* key
+    # free. The row lock above is what makes two *different* keys safe.
+    inserted = (await session.execute(
+        pg_insert(ShelfManagerDecisionEvent).values(
+            account_id=account_id,
+            decision_key=decision.decision_key,
+            decision_fingerprint=decision.fingerprint,
+            choice=choice,
+            action_kind=decision.action.kind,
+            target_inventory_item_id=target_id,
+            client_mutation_id=body.client_mutation_id,
+        ).on_conflict_do_nothing(
+            index_elements=["account_id", "client_mutation_id"],
+        ).returning(ShelfManagerDecisionEvent.id)
+    )).scalar_one_or_none()
+    if inserted is None:
+        replayed = await _manager_event_for_key(session, account_id, body.client_mutation_id)
+        if replayed is None:
+            raise ValidationFailedError(
+                "We could not record that answer. Please try again.", field="client_mutation_id",
+            )
+        return await _manager_replay(session, account_id=account_id, existing=replayed, body=body)
+
+    applied = False
+    if will_mutate and mutate is not None and target_id is not None:
+        await mutate(
+            session, account_id=account_id, account_id_str=account_id_str, item_id=target_id,
+        )
+        applied = True
+
+    await session.flush()
+    return _manager_response(
+        await manager.build_queue(session, account_id=account_id),
+        choice=choice,
+        action_kind=decision.action.kind,
+        action_applied=applied,
+        replayed=False,
+    )

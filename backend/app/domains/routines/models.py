@@ -470,3 +470,63 @@ class MaintenanceEvent(UUIDPrimaryKey, TimestampMixin, Base):
         UniqueConstraint("account_id", "kind_key", "done_on", name="uq_maintenance_event_account_kind_date"),
         Index("ix_maintenance_events_account_kind_date", "account_id", "kind_key", "done_on"),
     )
+
+
+class ShelfManagerDecisionEvent(UUIDPrimaryKey, TimestampMixin, Base):
+    """What the Skin & Hair manager decided, and what the person answered.
+
+    A narrow, append-only log. It holds identifiers and state and nothing else:
+    the decision key, the fingerprint of the exact inputs that produced it, the
+    closed-list answer, the closed-list action, and — where the action had one
+    — the account's own inventory item it acted on.
+
+    There is deliberately **no** free-text column and no JSON payload. This
+    table records what happened, not what anybody wrote, so nothing a person
+    typed and nothing read off a label can end up here. It is also why none of
+    it needs redacting on export.
+
+    Three questions are answered by reading it back:
+
+    * has this person already answered this exact decision, so it should not be
+      asked again (``decision_key`` plus ``decision_fingerprint``);
+    * did this manager pause a product, so it can be offered back later
+      (``action_kind`` and ``target_inventory_item_id``);
+    * is a retry the same request as one already applied
+      (``client_mutation_id``, unique per account).
+    """
+
+    __tablename__ = "shelf_manager_decision_events"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    decision_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    decision_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    choice: Mapped[str] = mapped_column(String(24), nullable=False)
+    action_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_inventory_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("inventory_items.id", ondelete="CASCADE")
+    )
+    client_mutation_id: Mapped[str] = mapped_column(String(80), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "choice IN ('accepted', 'overridden', 'restored', 'restore_overridden')",
+            name="ck_shelf_manager_event_choice",
+        ),
+        CheckConstraint(
+            "action_kind IN ('pause_product', 'resume_product', 'prefer_product', "
+            "'unprefer_product', 'confirm_label', 'record_date', 'add_owned_product', "
+            "'open_routine', 'open_inventory_item', 'none')",
+            name="ck_shelf_manager_event_action_kind",
+        ),
+        UniqueConstraint(
+            "account_id", "client_mutation_id", name="uq_shelf_manager_event_client_mutation",
+        ),
+        Index(
+            "ix_shelf_manager_events_account_key",
+            "account_id", "decision_key", "created_at",
+        ),
+        Index(
+            "ix_shelf_manager_events_account_target",
+            "account_id", "target_inventory_item_id", "created_at",
+        ),
+    )
