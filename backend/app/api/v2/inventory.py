@@ -6,7 +6,8 @@ import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.inventory import batch, extraction, service
+from app.api.v2.product import current_device
+from app.domains.inventory import batch, extraction, scan_ownership, service
 from app.domains.inventory.schemas import (
     BatchDecisions,
     BatchExtractRequest,
@@ -15,14 +16,56 @@ from app.domains.inventory.schemas import (
     ExtractRequest,
     ItemCreate,
     ItemPatch,
+    ScanOwnershipCreate,
     UsageCreate,
 )
+from app.domains.product.models import ScanDevice
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import FeatureUnavailableError, ValidationFailedError
 from app.shared.flags import service as flag_service
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_inventory"))])
+
+
+@router.post("/inventory/from-scan")
+async def add_inventory_from_scan(
+    body: ScanOwnershipCreate,
+    current: CurrentAccount = Depends(get_current_account),
+    device: ScanDevice = Depends(current_device),
+    session: AsyncSession = Depends(get_session),
+):
+    """Record explicit ownership of the exact pack confirmed on this device."""
+    try:
+        result = await scan_ownership.add_from_scan(
+            session, account_id=current.account_id, device=device, body=body,
+        )
+    except (ValueError, scan_ownership.OwnershipConflict) as exc:
+        raise ValidationFailedError(str(exc)) from exc
+    await session.commit()
+    return result
+
+
+@router.get("/inventory/from-scan/{barcode}/status")
+async def inventory_from_scan_status(
+    barcode: str,
+    label_snapshot_id: uuid.UUID,
+    label_version: int = Query(..., ge=1),
+    content_fingerprint: str = Query(..., min_length=8, max_length=64),
+    current: CurrentAccount = Depends(get_current_account),
+    device: ScanDevice = Depends(current_device),
+    session: AsyncSession = Depends(get_session),
+):
+    body = ScanOwnershipCreate(
+        barcode=barcode, label_snapshot_id=label_snapshot_id, label_version=label_version,
+        content_fingerprint=content_fingerprint, client_mutation_id="status-read",
+    )
+    try:
+        return await scan_ownership.status_from_scan(
+            session, account_id=current.account_id, device=device, body=body,
+        )
+    except (ValueError, scan_ownership.OwnershipConflict) as exc:
+        raise ValidationFailedError(str(exc)) from exc
 
 
 @router.post("/inventory/extract")

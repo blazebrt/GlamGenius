@@ -87,6 +87,7 @@ REGISTRY: dict[str, Classification] = {
     "nutrition_preferences": Classification.INCLUDED,
     # --- Inventory ---
     "inventory_items": Classification.INCLUDED,
+    "inventory_product_links": Classification.INCLUDED,
     "inventory_attributes": Classification.INCLUDED,  # via inventory_items
     "inventory_events": Classification.INCLUDED,
     "inventory_item_images": Classification.INCLUDED,  # via inventory_items

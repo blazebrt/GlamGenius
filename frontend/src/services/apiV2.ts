@@ -589,11 +589,12 @@ export const completeOnboarding = async (): Promise<OnboardingStatus> =>
 
 export const INVENTORY_CATEGORIES = ['beauty', 'hair', 'perfumes', 'supplements'] as const;
 export type InventoryCategory = typeof INVENTORY_CATEGORIES[number];
+export type InventorySource = 'user_declared' | 'photo_extracted' | 'explicit_scan';
 
 export interface InventoryAttribute {
   key: string;
   value: string | number | string[];
-  source: 'user_declared' | 'photo_extracted';
+  source: InventorySource;
   confidence: number;
   verification_state: 'draft' | 'confirmed' | 'rejected';
   model_version?: string | null;
@@ -608,7 +609,7 @@ export interface InventoryItem {
   subcategory: string | null;
   display_name: string;
   brand: string | null;
-  source: 'user_declared' | 'photo_extracted';
+  source: InventorySource;
   verification_state: 'draft' | 'confirmed' | 'rejected';
   confidence: number;
   status: string;
@@ -3068,3 +3069,32 @@ export const saveScanDecision = async (
   const result = await api.post<ScanDecisionEvent>(`${V2}/scan/verdict/${encodeURIComponent(barcode)}/memory`, payload);
   return result.data;
 };
+
+export interface ScanShelfIdentity {
+  barcode: string;
+  label_snapshot_id: string;
+  label_version: number;
+  content_fingerprint: string;
+}
+
+export interface ScanShelfStatus {
+  contract_version: string;
+  status: 'eligible_not_owned' | 'owned' | 'not_eligible' | 'not_enough_information';
+  identity: ScanShelfIdentity;
+  inventory_item_id: string | null;
+  message?: string;
+}
+
+export const readScanShelfStatus = async (identity: ScanShelfIdentity): Promise<ScanShelfStatus> => {
+  const params = new URLSearchParams({
+    label_snapshot_id: identity.label_snapshot_id,
+    label_version: String(identity.label_version),
+    content_fingerprint: identity.content_fingerprint,
+  });
+  return (await api.get<ScanShelfStatus>(`${V2}/inventory/from-scan/${encodeURIComponent(identity.barcode)}/status?${params}`)).data;
+};
+
+export const addScanProductToShelf = async (
+  identity: ScanShelfIdentity & { client_mutation_id: string },
+): Promise<ScanShelfStatus> =>
+  (await api.post<ScanShelfStatus>(`${V2}/inventory/from-scan`, identity)).data;

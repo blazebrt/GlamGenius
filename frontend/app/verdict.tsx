@@ -31,6 +31,7 @@ import {
 } from '../src/services/errorReports';
 import { getProductVerdict } from '../src/services/verdictClient';
 import { ScanDecisionMemorySection } from '../src/components/shopping/ScanDecisionMemorySection';
+import { ScanShelfOwnershipSection } from '../src/components/shopping/ScanShelfOwnershipSection';
 import {
   readScanMemory, readCommunityPackContext, submitCommunityObservation, uploadMedia,
   readOwnCommunityReports, withdrawCommunityObservation,
@@ -453,6 +454,13 @@ export default function VerdictScreen() {
                   void loadMemory(source);
                 }}
               />
+            )}
+            {!referenceView && signedIn && source.physicalPackContext && source.labelVersion && (
+              <ScanShelfOwnershipSection identity={{
+                barcode: barcode!, label_snapshot_id: source.labelVersion.id,
+                label_version: source.labelVersion.versionNumber,
+                content_fingerprint: source.labelVersion.contentFingerprint,
+              }} />
             )}
             <VerdictActions
               onWhy={() => setTab('why')}

@@ -233,6 +233,7 @@ async def run_job(session: AsyncSession, job: AccountDeletionJob) -> tuple[str, 
             await _delete_ai_outputs(session, job.account_id)
             await _delete_analytics_events(session, job.account_id)
             await _scrub_audit_events(session, job.account_id)
+            await _withdraw_scan_observations(session, job.account_id)
             await _delete_account_row(session, job.account_id)
             job.state = STATE_DATABASE_COMPLETE
             await session.flush()
@@ -430,6 +431,45 @@ async def _scrub_audit_events(session: AsyncSession, account_id: uuid.UUID) -> N
         update(AuditEvent)
         .where(AuditEvent.account_id == account_id)
         .values(ip_hash=None, subject_id=None)
+    )
+    await session.flush()
+
+
+async def _withdraw_scan_observations(session: AsyncSession, account_id: uuid.UUID) -> None:
+    """Withdraw the label readings this account contributed.
+
+    ``scan_events.account_id`` is ``ON DELETE SET NULL`` (migration
+    ``c1d2e3f4g5``) because a confirmed capture is the provenance of a
+    ``product_label_snapshots`` row, and that snapshot is shared Product Truth
+    every other shopper reads. Cascading the account would delete somebody
+    else's evidence through a required edge, so the row has to stay.
+
+    Staying is not the same as still counting. ``latest_confirmed_capture``
+    asks a product-level question — "what did a recent confirmed label for this
+    product state" — and answers it from the newest eligible capture regardless
+    of who made it. Left alone, an erased person's capture remains the newest,
+    and their reading of the price goes on driving a public number after they
+    have asked to be forgotten. Erasure that leaves someone's contribution
+    visibly in front of strangers is not erasure.
+
+    So the row is kept and the reading is withdrawn: ``label_facts`` is
+    cleared, which is precisely the field
+    :func:`app.domains.product.pack_context.is_confirmed_label_capture`
+    requires, so the event stops being a capture and the next newest capture
+    from somebody who is still here becomes the authority. Nothing shared is
+    lost: confirming a label also writes the snapshot and raises the
+    ``product_records`` confidence, and both are untouched here.
+
+    Runs before the account row goes, because afterwards ``account_id`` is
+    already NULL and these rows can no longer be told apart from the captures
+    of people who are still here. Idempotent.
+    """
+    from app.domains.product.models import ScanEvent
+
+    await session.execute(
+        update(ScanEvent)
+        .where(ScanEvent.account_id == account_id)
+        .values(label_facts=None)
     )
     await session.flush()
 

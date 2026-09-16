@@ -127,6 +127,12 @@ EXPLICITLY_ERASED = {
 ANONYMISED_IN_PLACE = {
     "ai_runs",
     "audit_events",
+    # A scan is also the provenance of a label snapshot, and a label snapshot
+    # is shared Product Truth that every other shopper reads. Deleting the
+    # scan would delete the evidence for a public fact, so the account link is
+    # severed and the reading of the pack is kept. See the column-by-column
+    # proof below.
+    "scan_events",
 }
 
 
@@ -572,3 +578,97 @@ async def test_scan_decision_memory_deletion(db_clean, registered_supabase_user,
         
     assert len(remaining) == 1
     assert remaining[0].account_id == staying
+
+
+# ---------------------------------------------------------------------------
+# scan_events: kept as the provenance of shared Product Truth, de-identified
+# ---------------------------------------------------------------------------
+
+
+async def _seed_scan_event(account_id: uuid.UUID, barcode: str = "8901234567890"):
+    """One real scan, with an account, a device claimed by it, and pack facts."""
+    from app.domains.product.devices import _hash
+    from app.domains.product.models import LabelSnapshot, ProductRecord, ScanDevice, ScanEvent
+
+    raw_token = f"erasure-token-{uuid.uuid4().hex}"
+    async with get_sessionmaker()() as session:
+        await identity.register_account(session, account_id)
+        device = ScanDevice(
+            device_key=f"erasure-{uuid.uuid4().hex}", token_hash=_hash(raw_token),
+            claimed_by_account_id=account_id,
+        )
+        session.add(device)
+        session.add(ProductRecord(barcode=barcode, origin="label_capture", confidence="unverified"))
+        await session.flush()
+        event = ScanEvent(
+            device_id=device.id, account_id=account_id, barcode=barcode,
+            outcome="label_captured", client_scan_id=uuid.uuid4().hex,
+            label_facts={"product_category": "beauty", "product_name": "A cleanser"},
+        )
+        session.add(event)
+        await session.flush()
+        snapshot = LabelSnapshot(
+            barcode=barcode, device_id=device.id, scan_event_id=event.id,
+            facts={"product_category": "beauty"}, confidence="unverified",
+            content_fingerprint="a" * 64, version_number=1, changed_fields=[],
+            completeness="complete_for_grading",
+        )
+        session.add(snapshot)
+        await session.commit()
+        return event.id, device.id, snapshot.id
+
+
+async def test_a_scan_survives_its_scanner_because_the_label_snapshot_must(
+    db_clean, fake_admin, fake_storage,
+):
+    """The reason scan_events is not simply deleted with the account."""
+    from app.domains.product.models import LabelSnapshot, ScanEvent
+
+    account_id = uuid.uuid4()
+    event_id, _, snapshot_id = await _seed_scan_event(account_id)
+
+    await _run_deletion(account_id)
+
+    async with get_sessionmaker()() as session:
+        event = await session.get(ScanEvent, event_id)
+        snapshot = await session.get(LabelSnapshot, snapshot_id)
+    assert event is not None, "deleting the scan would orphan a published label snapshot"
+    assert snapshot is not None
+    assert snapshot.scan_event_id == event_id
+    # The row survives as the snapshot's provenance; the person's reading does
+    # not. Leaving ``label_facts`` in place would keep an erased account's
+    # capture as the newest confirmed observation of the product, which is what
+    # ``_withdraw_scan_observations`` exists to prevent.
+    assert event.label_facts is None
+    # The shared artefacts the snapshot carries are untouched.
+    assert snapshot.facts == {"product_category": "beauty"}
+
+
+async def test_no_scan_event_column_still_identifies_the_deleted_person(
+    db_clean, fake_admin, fake_storage,
+):
+    """Held to the same standard as the other ANONYMISED_IN_PLACE tables."""
+    from app.domains.product.models import ScanDevice, ScanEvent
+
+    account_id = uuid.uuid4()
+    event_id, device_id, _ = await _seed_scan_event(account_id)
+
+    await _run_deletion(account_id)
+
+    async with get_sessionmaker()() as session:
+        events = (await session.execute(select(ScanEvent))).scalars().all()
+        device = await session.get(ScanDevice, device_id)
+
+    haystack = {
+        str(getattr(row, column.name))
+        for row in events
+        for column in ScanEvent.__table__.columns
+    }
+    assert str(account_id) not in haystack, "the account UUID survived in a scan_events column"
+    for row in events:
+        assert row.account_id is None
+
+    # The device the scan points at is unclaimed too, so the surviving row
+    # cannot be walked back to the person through it either.
+    assert device is not None
+    assert device.claimed_by_account_id is None

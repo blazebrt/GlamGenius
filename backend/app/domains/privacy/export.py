@@ -47,6 +47,7 @@ from app.domains.inventory.models import (
     InventoryImportCandidate,
     InventoryImportJob,
     InventoryItem,
+    InventoryProductLink,
     SupplementDetail,
 )
 from app.domains.media import service as media_service
@@ -254,6 +255,10 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
         session,
         select(InventoryImportCandidate).where(InventoryImportCandidate.account_id == account_id),
     )
+    product_links = await _fetch(
+        session,
+        select(InventoryProductLink).where(InventoryProductLink.account_id == account_id),
+    )
     return {
         "items": [_row_dict(i, [c.name for c in InventoryItem.__table__.columns]) for i in items],
         "attributes": [_row_dict(a, [c.name for c in InventoryAttribute.__table__.columns]) for a in attrs],
@@ -269,6 +274,10 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
         "import_candidates": [
             _row_dict(row, [c.name for c in InventoryImportCandidate.__table__.columns])
             for row in candidates
+        ],
+        "product_links": [
+            _row_dict(row, [c.name for c in InventoryProductLink.__table__.columns])
+            for row in product_links
         ],
     }
 

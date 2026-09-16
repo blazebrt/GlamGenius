@@ -42,6 +42,22 @@ class ItemCreate(BaseModel):
         return self
 
 
+class ScanOwnershipCreate(BaseModel):
+    """A deliberately narrow declaration of ownership of one scanned pack.
+
+    All descriptive inventory facts are re-derived from the confirmed label
+    snapshot; the client may only identify the exact capture and make its
+    replay-safe mutation request.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    barcode: str = Field(min_length=6, max_length=64)
+    label_snapshot_id: uuid.UUID
+    label_version: int = Field(ge=1)
+    content_fingerprint: str = Field(min_length=8, max_length=64)
+    client_mutation_id: str = Field(min_length=6, max_length=80)
+
+
 class ItemPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_version: int | None = Field(default=None, ge=1)
