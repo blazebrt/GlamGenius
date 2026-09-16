@@ -109,10 +109,7 @@ class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):
     # account deletion cascades through it; without it both read the
     # whole table. See migration d0e1f2g3h4.
     account_id: Mapped[uuid.UUID | None] = mapped_column(
-        # A confirmed label snapshot is shared pack authority.  Removing the
-        # account that captured it must anonymise this event, not delete the
-        # snapshot through its required provenance edge.
-        ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
     client_report_id: Mapped[str] = mapped_column(String(64), nullable=False)
     barcode: Mapped[str | None] = mapped_column(String(64))
     #: What was on screen when they tapped: a number, an ingredient, the grade.
@@ -141,9 +138,9 @@ class FssaiComplaintHandoff(UUIDPrimaryKey, TimestampMixin, Base):
 
     __tablename__ = "fssai_complaint_handoffs"
 
-    # Indexed: the privacy export filters this table by account and
-    # account deletion cascades through it; without it both read the
-    # whole table. See migration d0e1f2g3h4.
+    # Indexed: the privacy export filters this table by account. A confirmed
+    # label snapshot is global pack authority and keeps a required provenance
+    # reference to this event, so deletion anonymises this account relation.
     account_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     barcode: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -194,7 +191,7 @@ class ScanEvent(UUIDPrimaryKey, TimestampMixin, Base):
     # account deletion cascades through it; without it both read the
     # whole table. See migration d0e1f2g3h4.
     account_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+        ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     barcode: Mapped[str] = mapped_column(String(64), nullable=False)
     #: found_local | found_off | not_found | label_captured
     outcome: Mapped[str] = mapped_column(String(24), nullable=False)
