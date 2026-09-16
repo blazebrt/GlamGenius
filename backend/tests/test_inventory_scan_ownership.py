@@ -6,6 +6,8 @@ import uuid
 import pytest
 from app.domains.ai_gateway.models import AIRun
 from app.domains.inventory.models import InventoryItem, InventoryProductLink
+from app.domains.inventory.schemas import ItemCreate
+from app.domains.inventory.service import create_item
 from app.domains.product.devices import _hash
 from app.domains.product.models import LabelSnapshot, ProductRecord, ScanDevice, ScanEvent
 from app.shared.database.sql import get_sessionmaker
@@ -125,5 +127,18 @@ async def test_status_is_account_scoped_for_shared_global_product(app_client: As
     device_b, _, snapshot_b = await _chain(account_b, version=2, fingerprint="b" * 64, product_id=product_id)
     body_b = _body(snapshot_b, "account-b-status")
     response = await app_client.get(f"/api/v2/inventory/from-scan/{snapshot_b.barcode}/status", headers=_headers(token_b, device_b), params={k: body_b[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
+    assert response.status_code == 200
+    assert response.json()["status"] == "eligible_not_owned" and response.json()["inventory_item_id"] is None
+
+
+async def test_status_never_leaks_another_account_link_for_the_exact_same_snapshot(app_client: AsyncClient, db_clean, registered_supabase_user):
+    token_a, account_a = await registered_supabase_user(); token_b, account_b = await registered_supabase_user()
+    device_b, product_id, snapshot = await _chain(account_b)
+    async with get_sessionmaker()() as session:
+        item = await create_item(session, account_a, ItemCreate(category="beauty", display_name="A private item", client_mutation_id="a-seeded-link"))
+        session.add(InventoryProductLink(account_id=account_a, inventory_item_id=item.id, product_record_id=product_id, barcode=snapshot.barcode, label_snapshot_id=snapshot.id, label_version=snapshot.version_number, content_fingerprint=snapshot.content_fingerprint, source="explicit_scan"))
+        await session.commit()
+    body = _body(snapshot, "b-exact-status")
+    response = await app_client.get(f"/api/v2/inventory/from-scan/{snapshot.barcode}/status", headers=_headers(token_b, device_b), params={k: body[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
     assert response.status_code == 200
     assert response.json()["status"] == "eligible_not_owned" and response.json()["inventory_item_id"] is None
