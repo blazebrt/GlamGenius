@@ -589,11 +589,12 @@ export const completeOnboarding = async (): Promise<OnboardingStatus> =>
 
 export const INVENTORY_CATEGORIES = ['beauty', 'hair', 'perfumes', 'supplements'] as const;
 export type InventoryCategory = typeof INVENTORY_CATEGORIES[number];
+export type InventorySource = 'user_declared' | 'photo_extracted' | 'explicit_scan';
 
 export interface InventoryAttribute {
   key: string;
   value: string | number | string[];
-  source: 'user_declared' | 'photo_extracted';
+  source: InventorySource;
   confidence: number;
   verification_state: 'draft' | 'confirmed' | 'rejected';
   model_version?: string | null;
@@ -608,7 +609,7 @@ export interface InventoryItem {
   subcategory: string | null;
   display_name: string;
   brand: string | null;
-  source: 'user_declared' | 'photo_extracted';
+  source: InventorySource;
   verification_state: 'draft' | 'confirmed' | 'rejected';
   confidence: number;
   status: string;
@@ -2367,7 +2368,7 @@ export interface SupplementLabelFact {
   amount: string | null;
   unit: string | null;
   serving_text: string | null;
-  source: 'user_declared' | 'photo_extracted';
+  source: InventorySource;
   verification_state: 'draft' | 'confirmed';
   confidence: number | null;
   schema_version: string;
