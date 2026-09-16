@@ -177,18 +177,26 @@ export function ShelfManagerCard({
         <Text style={styles.evidence}>{primary.evidence_note}</Text>
       )}
 
-      <TouchableOpacity
-        accessibilityRole="button"
-        accessibilityLabel={primary.action.label}
-        accessibilityState={{ disabled: busy, busy }}
-        disabled={busy}
-        onPress={() => void accept()}
-        style={[styles.primaryButton, busy && styles.primaryButtonBusy]}
-      >
-        {busy
-          ? <ActivityIndicator color={COLORS.textInverse} />
-          : <Text style={styles.primaryButtonText}>{primary.action.label}</Text>}
-      </TouchableOpacity>
+      {/*
+        The action list is closed and includes `none`, which has no label
+        because there is nothing to do. A button with no words on it is worse
+        than no button, so a decision with nothing to act on shows the words
+        and the override and stops there.
+      */}
+      {!!primary.action.label && (
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={primary.action.label}
+          accessibilityState={{ disabled: busy, busy }}
+          disabled={busy}
+          onPress={() => void accept()}
+          style={[styles.primaryButton, busy && styles.primaryButtonBusy]}
+        >
+          {busy
+            ? <ActivityIndicator color={COLORS.textInverse} />
+            : <Text style={styles.primaryButtonText}>{primary.action.label}</Text>}
+        </TouchableOpacity>
+      )}
 
       <TouchableOpacity
         accessibilityRole="button"

@@ -182,6 +182,20 @@ describe('what the manager card shows', () => {
     expect(screen.getByText('A server override')).toBeTruthy();
   });
 
+  it('shows no button at all for a decision with nothing to act on', async () => {
+    // `none` is in the closed action list and carries no label. An empty
+    // button would be worse than none; the override still works.
+    mocked.getShelfManager.mockResolvedValue(queue({
+      primary: decision({
+        action: { kind: 'none', label: '', inventory_item_id: null, mutates: false },
+      }),
+    }));
+    render(<ShelfManagerCard />);
+
+    expect(await screen.findByText('Not now')).toBeTruthy();
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+  });
+
   it('never shows a rule id, a fingerprint or an item id to the person', async () => {
     render(<ShelfManagerCard />);
     await screen.findByText('Pause it');
