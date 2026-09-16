@@ -68,7 +68,7 @@ async def test_foreign_authority_mismatch_and_off_like_facts_create_nothing(app_
     token_a, account_a = await registered_supabase_user(); token_b, account_b = await registered_supabase_user(); device, _, snap = await _chain(account_a)
     response = await app_client.post("/api/v2/inventory/from-scan", headers=_headers(token_b, device), json=_body(snap))
     assert response.status_code == 422 and await _rows(account_b) == ([], [])
-    device, _, snap = await _chain(account_a, facts={"ingredients_text": "public fallback is prohibited"})
+    device, _, snap = await _chain(account_a, barcode="8901234567891", facts={"ingredients_text": "public fallback is prohibited"})
     response = await app_client.post("/api/v2/inventory/from-scan", headers=_headers(token_a, device), json=_body(snap, "off-key"))
     assert response.status_code == 422 and await _rows(account_a) == ([], [])
 
