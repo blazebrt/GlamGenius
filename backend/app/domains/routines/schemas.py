@@ -239,12 +239,30 @@ class IngredientExplanationResponse(BaseModel):
     notes: list[IngredientNarrative] = Field(default_factory=list, max_length=12)
 
 
+class ShelfManagerRespondRequest(BaseModel):
+    """The only four things a client may send about a manager decision.
+
+    Everything else the server works out for itself by recompiling the queue.
+    There is no field here for the rule, the product, the action, the severity
+    or the reason — not because a client would not send them honestly, but
+    because a field that exists can be forged, and none of these needs to.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision_key: str = Field(min_length=1, max_length=200)
+    decision_fingerprint: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    choice: Literal["accept", "override"]
+    client_mutation_id: str = Field(min_length=6, max_length=80)
+
+
 __all__ = [
     "SCHEMA_VERSION_ROUTINE_EXPLANATION",
     "SCHEMA_VERSION_INGREDIENT_EXPLANATION",
     "SHELF_CATEGORIES",
     "CLIMATES",
     "ShelfAnalyseRequest",
+    "ShelfManagerRespondRequest",
     "IngredientCheckRequest",
     "IngredientConfirmRequest",
     "RoutineGenerateRequest",

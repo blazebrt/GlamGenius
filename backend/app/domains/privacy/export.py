@@ -105,6 +105,7 @@ from app.domains.routines.models import (
     RoutineAdherence,
     RoutineRecommendationRun,
     RoutineStep,
+    ShelfManagerDecisionEvent,
     SupplementSafetyFlag,
     UserReportedObservation,
 )
@@ -485,6 +486,10 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         session,
         select(CareExperienceFeedback).where(CareExperienceFeedback.account_id == account_id),
     )
+    manager_decision_events = await _fetch(
+        session,
+        select(ShelfManagerDecisionEvent).where(ShelfManagerDecisionEvent.account_id == account_id),
+    )
     maintenance_preferences = await _fetch(
         session,
         select(MaintenancePreference).where(MaintenancePreference.account_id == account_id),
@@ -540,6 +545,10 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         "experience_feedback": [
             _row_dict(r, [c.name for c in CareExperienceFeedback.__table__.columns])
             for r in experience_feedback
+        ],
+        "shelf_manager_decision_events": [
+            _row_dict(r, [c.name for c in ShelfManagerDecisionEvent.__table__.columns])
+            for r in manager_decision_events
         ],
     }
 
