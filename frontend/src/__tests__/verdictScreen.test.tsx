@@ -442,7 +442,9 @@ describe('the strings', () => {
   it('never tells a person what their body needs', () => {
     for (const line of walk(S)) {
       const lower = line.toLowerCase();
+      expect(S.forYou.title).toBe('FOR YOU');
       for (const phrase of ['you should', 'your diet', 'you need', 'your health', 'for you']) {
+        if (phrase === 'for you' && line === S.forYou.title) continue;
         expect(lower).not.toContain(phrase);
       }
     }

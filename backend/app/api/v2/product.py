@@ -1,3 +1,4 @@
+
 """Scanning a packaged product.
 
 These routes accept an anonymous device token (``X-Device-Token``) as well as a
@@ -8,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import (
     APIRouter,
@@ -380,6 +382,7 @@ async def read_product_verdict(
     payload["facts_provenance"] = "confirmed_label_snapshot" if snapshot else "open_food_facts"
     payload["label_version"] = ({
         "id": str(snapshot.id), "version_number": snapshot.version_number,
+        "content_fingerprint": snapshot.content_fingerprint,
         "observed_at": snapshot.created_at.isoformat(),
         "changed_fields": snapshot.changed_fields,
         "completeness": snapshot.completeness,
@@ -572,3 +575,75 @@ async def report_label_error(
     )
     await session.commit()
     return {"report_id": str(report.id), "created": created}
+
+class ScanDecisionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal['BUY', 'WAIT', 'SKIP']
+    label_snapshot_id: uuid.UUID
+    label_version: int
+    content_fingerprint: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=1, max_length=64)
+    note: str | None = Field(default=None, max_length=500)
+
+@router.get("/scan/verdict/{barcode}/memory")
+async def get_scan_decision_memory(
+    barcode: str = BARCODE_PATH,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Read memory for the exact current scanned product version."""
+    from fastapi import HTTPException
+
+    from app.domains.product import scan_memory
+    
+    snapshot = await service.latest_label_snapshot(session, barcode)
+    if not snapshot:
+        # Fail closed
+        raise HTTPException(status_code=409, detail="conflict")
+        
+    envelope = await scan_memory.read_scan_memory(
+        session,
+        account_id=current.account_id,
+        barcode=barcode,
+        label_snapshot_id=snapshot.id,
+        label_version=snapshot.version_number,
+        content_fingerprint=snapshot.content_fingerprint,
+    )
+    return envelope
+
+@router.post("/scan/verdict/{barcode}/memory")
+async def record_scan_decision_event(
+    body: ScanDecisionInput,
+    barcode: str = BARCODE_PATH,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Save BUY/WAIT/SKIP for the exact current scanned product version."""
+    from fastapi import HTTPException
+
+    from app.domains.product import scan_memory
+    
+    snapshot = await service.latest_label_snapshot(session, barcode)
+    if not snapshot:
+        raise HTTPException(status_code=409, detail="conflict")
+        
+    if snapshot.id != body.label_snapshot_id or snapshot.version_number != body.label_version or snapshot.content_fingerprint != body.content_fingerprint:
+        raise HTTPException(status_code=409, detail="conflict")
+        
+    try:
+        event = await scan_memory.record_scan_decision(
+            session,
+            account_id=current.account_id,
+            barcode=barcode,
+            label_snapshot_id=snapshot.id,
+            label_version=snapshot.version_number,
+            content_fingerprint=snapshot.content_fingerprint,
+            decision=body.decision,
+            idempotency_key=body.idempotency_key,
+            note=body.note,
+        )
+        await session.commit()
+    except ValueError:
+        raise HTTPException(status_code=409, detail="idempotency_conflict")
+    
+    return scan_memory.serialize_scan_decision(event)

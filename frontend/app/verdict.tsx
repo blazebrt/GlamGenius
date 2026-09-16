@@ -30,6 +30,12 @@ import {
   flushReports, makeReport, submitReport, type ReportReason,
 } from '../src/services/errorReports';
 import { getProductVerdict } from '../src/services/verdictClient';
+import { ScanDecisionMemorySection } from '../src/components/shopping/ScanDecisionMemorySection';
+import {
+  readScanMemory, readCommunityPackContext, submitCommunityObservation, uploadMedia,
+  readOwnCommunityReports, withdrawCommunityObservation,
+  type ScanDecisionMemory, type CommunityOwnReport, type CommunityPackContext,
+} from '../src/services/apiV2';
 import { buildVerdictShareText } from '../src/services/verdictShare';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import { OfficialRecords } from '../src/components/verdict/OfficialRecords';
@@ -37,11 +43,6 @@ import { CommunityObservations } from '../src/components/verdict/CommunityObserv
 import { BetterOption, REFERENCE_ALTERNATIVE } from '../src/components/verdict/BetterOption';
 import { CommunityReportSheet, BATCH_SCOPED_CODES } from '../src/components/verdict/CommunityReportSheet';
 import { useUserStore } from '../src/store/userStore';
-import {
-  readCommunityPackContext, submitCommunityObservation, uploadMedia,
-  readOwnCommunityReports, withdrawCommunityObservation,
-  type CommunityOwnReport, type CommunityPackContext,
-} from '../src/services/apiV2';
 import {
   ComponentRow, FactorSection, GradeBlock, IngredientDetail, IngredientList,
   NotGradedCard, ReportSheet, UnknownCard, VerdictActions, VerdictLines,
@@ -100,6 +101,62 @@ export default function VerdictScreen() {
   }, [load]);
 
   useEffect(() => () => { void stopSpeaking(); }, []);
+
+  
+  const [memory, setMemory] = useState<ScanDecisionMemory | null>(null);
+  const memoryToken = useRef(0);
+  const activeIdentity = useRef<{ barcode: string; labelSnapshotId: string; labelVersion: number; contentFingerprint: string } | null>(null);
+  activeIdentity.current = source?.labelVersion && barcode ? {
+    barcode,
+    labelSnapshotId: source.labelVersion.id,
+    labelVersion: source.labelVersion.versionNumber,
+    contentFingerprint: source.labelVersion.contentFingerprint,
+  } : null;
+  
+  const loadMemory = useCallback(async (currentSource?: any) => {
+    const src = currentSource || source;
+    if (!barcode || !signedIn || referenceView || !src || !src.labelVersion) {
+      setMemory(null);
+      return;
+    }
+    const token = ++memoryToken.current;
+    try {
+      const data = await readScanMemory(barcode);
+      if (memoryToken.current === token) {
+        if (!data || !data.identity || typeof data.identity.label_version !== 'number' || typeof data.identity.content_fingerprint !== 'string' || !Array.isArray(data.history) || typeof data.scan_decision_memory_version !== 'string') {
+          setMemory(null);
+          return;
+        }
+        if (
+          data.identity.barcode !== barcode ||
+          data.identity.label_snapshot_id !== src.labelVersion.id ||
+          data.identity.label_version !== src.labelVersion.versionNumber ||
+          data.identity.content_fingerprint !== src.labelVersion.contentFingerprint
+        ) {
+          setMemory(null);
+          return;
+        }
+        setMemory(data);
+      }
+    } catch {
+      if (memoryToken.current === token) {
+        setMemory(null);
+      }
+    }
+  }, [barcode, signedIn, referenceView, source]);
+
+  const labelSnapshotId = source?.labelVersion?.id;
+  const labelVersion = source?.labelVersion?.versionNumber;
+  const contentFingerprint = source?.labelVersion?.contentFingerprint;
+
+  useEffect(() => {
+    // Invalidate request generation on identity/auth/reference changes (Blocker 6)
+    memoryToken.current++;
+    setMemory(null);
+    if (loadState === 'ready' && !referenceView && labelSnapshotId && signedIn) {
+      void loadMemory();
+    }
+  }, [barcode, labelSnapshotId, labelVersion, contentFingerprint, signedIn, referenceView, loadState, loadMemory]);
 
   const view = useMemo(() => (source ? buildVerdict(source) : null), [source]);
 
@@ -383,6 +440,20 @@ export default function VerdictScreen() {
               onView={openAlternative}
               mrpComparison={source.mrpComparison}
             />
+            {!referenceView && source.labelVersion && memory !== undefined && (
+              <ScanDecisionMemorySection
+                barcode={barcode!}
+                labelSnapshotId={source.labelVersion.id}
+                labelVersion={source.labelVersion.versionNumber}
+                contentFingerprint={source.labelVersion.contentFingerprint}
+                memory={memory}
+                onMemoryUpdated={(identity) => {
+                  const current = activeIdentity.current;
+                  if (!current || current.barcode !== identity.barcode || current.labelSnapshotId !== identity.labelSnapshotId || current.labelVersion !== identity.labelVersion || current.contentFingerprint !== identity.contentFingerprint) return;
+                  void loadMemory(source);
+                }}
+              />
+            )}
             <VerdictActions
               onWhy={() => setTab('why')}
               onListen={onListen}
