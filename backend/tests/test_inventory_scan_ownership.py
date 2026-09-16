@@ -88,3 +88,21 @@ async def test_later_formula_version_does_not_inherit_owned_status(app_client: A
     assert status.status_code == 200 and status.json()["status"] == "eligible_not_owned"
     _, links = await _rows(account); assert len(links) == 1
     assert links[0].label_snapshot_id == first.id and links[0].label_version == 1 and links[0].content_fingerprint == "a" * 64
+
+
+@pytest.mark.parametrize("change", ["barcode", "snapshot", "version", "fingerprint"])
+async def test_exact_identity_mismatches_create_no_ownership(app_client: AsyncClient, db_clean, registered_supabase_user, change):
+    token, account = await registered_supabase_user(); device, _, snapshot = await _chain(account); body = _body(snapshot, f"bad-{change}")
+    if change == "barcode": body["barcode"] = "8900000000001"
+    elif change == "snapshot": body["label_snapshot_id"] = str(uuid.uuid4())
+    elif change == "version": body["label_version"] = 2
+    else: body["content_fingerprint"] = "b" * 64
+    response = await app_client.post("/api/v2/inventory/from-scan", headers=_headers(token, device), json=body)
+    assert response.status_code == 422 and await _rows(account) == ([], [])
+
+
+async def test_unauthenticated_shelf_routes_are_private(app_client: AsyncClient, db_clean, registered_supabase_user):
+    _, account = await registered_supabase_user(); _, _, snapshot = await _chain(account); body = _body(snapshot)
+    post = await app_client.post("/api/v2/inventory/from-scan", json=body)
+    status = await app_client.get(f"/api/v2/inventory/from-scan/{snapshot.barcode}/status", params={k: body[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
+    assert post.status_code == status.status_code == 401
