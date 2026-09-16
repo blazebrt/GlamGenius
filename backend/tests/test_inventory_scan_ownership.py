@@ -17,20 +17,25 @@ from tests.conftest import auth
 pytestmark = pytest.mark.asyncio
 
 
-async def _chain(account_id, *, facts=None):
-    raw = f"device-token-{uuid.uuid4().hex}"; barcode = "8901234567890"
+async def _chain(account_id, *, barcode="8901234567890", version=1, fingerprint="a" * 64, facts=None, product_id=None):
+    raw = f"device-token-{uuid.uuid4().hex}"
     async with get_sessionmaker()() as s:
         d = ScanDevice(device_key=f"step10a-{uuid.uuid4().hex}", token_hash=_hash(raw), claimed_by_account_id=account_id)
-        p = ProductRecord(barcode=barcode, origin="label_capture", confidence="unverified")
-        s.add_all([d, p]); await s.flush()
+        if product_id is None:
+            product = ProductRecord(barcode=barcode, origin="label_capture", confidence="unverified")
+            s.add(product)
+        else:
+            product = await s.get(ProductRecord, product_id)
+            assert product is not None
+        s.add(d); await s.flush()
         run = AIRun(account_id=account_id, feature="label_capture", provider="test", model="test", prompt_version="test", schema_version="test", status="succeeded", validation_passed=True)
         s.add(run); await s.flush()
         f = facts if facts is not None else {"product_category": "beauty", "product_name": "Verified Cleanser", "brand": "Verified Brand"}
         e = ScanEvent(device_id=d.id, account_id=account_id, barcode=barcode, outcome="label_captured", client_scan_id=uuid.uuid4().hex, label_facts=f, ai_run_id=run.id)
         s.add(e); await s.flush()
-        snap = LabelSnapshot(barcode=barcode, device_id=d.id, scan_event_id=e.id, facts=f, confidence="unverified", content_fingerprint="a" * 64, version_number=1, changed_fields=[], completeness="complete_for_grading")
+        snap = LabelSnapshot(barcode=barcode, device_id=d.id, scan_event_id=e.id, facts=f, confidence="unverified", content_fingerprint=fingerprint, version_number=version, changed_fields=[], completeness="complete_for_grading")
         s.add(snap); await s.commit()
-        return raw, p.id, snap
+        return raw, product.id, snap
 
 
 def _headers(auth_token, device_token): return {**auth(auth_token), "X-Device-Token": device_token}
@@ -72,3 +77,14 @@ async def test_same_key_replays_and_changed_identity_conflicts(app_client: Async
     changed = await app_client.post("/api/v2/inventory/from-scan", headers=headers, json={**body, "content_fingerprint": "b" * 64})
     assert changed.status_code == 422
     items, links = await _rows(account); assert len(items) == len(links) == 1
+
+
+async def test_later_formula_version_does_not_inherit_owned_status(app_client: AsyncClient, db_clean, registered_supabase_user):
+    token, account = await registered_supabase_user(); device1, product_id, first = await _chain(account)
+    first_body = _body(first); assert (await app_client.post("/api/v2/inventory/from-scan", headers=_headers(token, device1), json=first_body)).status_code == 200
+    device2, _, second = await _chain(account, version=2, fingerprint="b" * 64, product_id=product_id)
+    second_body = _body(second, "second-version-key")
+    status = await app_client.get(f"/api/v2/inventory/from-scan/{second.barcode}/status", headers=_headers(token, device2), params={k: second_body[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
+    assert status.status_code == 200 and status.json()["status"] == "eligible_not_owned"
+    _, links = await _rows(account); assert len(links) == 1
+    assert links[0].label_snapshot_id == first.id and links[0].label_version == 1 and links[0].content_fingerprint == "a" * 64

@@ -2368,7 +2368,7 @@ export interface SupplementLabelFact {
   amount: string | null;
   unit: string | null;
   serving_text: string | null;
-  source: InventorySource;
+  source: 'user_declared' | 'photo_extracted';
   verification_state: 'draft' | 'confirmed';
   confidence: number | null;
   schema_version: string;
