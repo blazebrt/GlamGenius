@@ -162,11 +162,20 @@ export function ShelfManagerCard({
   return (
     <View
       style={styles.card}
-      accessibilityLabel={`${heading}. ${primary.decision} ${primary.reason}`}
+      accessibilityLabel={`${heading}. ${primary.decision} ${primary.reason}. ${primary.evidence_note}`}
     >
       <Text style={styles.eyebrow}>{heading}</Text>
       <Text style={styles.decision}>{primary.decision}</Text>
       <Text style={styles.reason}>{primary.reason}</Text>
+      {/*
+        LEGAL_RULES.md rule 6: every negative statement carries its source,
+        visible without tapping. The note names what the decision was worked
+        out from — a date the person recorded, a reviewed rule, a confirmed
+        ingredient — so no claim on this card stands on its own word.
+      */}
+      {!!primary.evidence_note && (
+        <Text style={styles.evidence}>{primary.evidence_note}</Text>
+      )}
 
       <TouchableOpacity
         accessibilityRole="button"
@@ -226,6 +235,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     marginTop: 5,
+  },
+  evidence: {
+    fontFamily: FONTS.family.body,
+    color: COLORS.textMuted,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 6,
   },
   primaryButton: {
     marginTop: SPACING.md,

@@ -103,6 +103,14 @@ describe('what the manager card shows', () => {
     expect(screen.getByText(S.heading)).toBeTruthy();
   });
 
+  it('shows where the decision came from, without anybody having to tap', async () => {
+    // LEGAL_RULES.md rule 6. A negative statement about somebody's product
+    // cannot stand on our own word alone.
+    render(<ShelfManagerCard />);
+
+    expect(await screen.findByText('Computed from the dates you recorded.')).toBeTruthy();
+  });
+
   it('counts what is behind the one on screen', async () => {
     render(<ShelfManagerCard />);
 
@@ -499,7 +507,8 @@ describe('how the card reads', () => {
     expect(await screen.findByLabelText('Pause it')).toBeTruthy();
     expect(screen.getByLabelText('Not now')).toBeTruthy();
     expect(screen.getByLabelText(
-      'YOUR MANAGER. Pause this until you replace it. Expired Cleanser is past its date',
+      'YOUR MANAGER. Pause this until you replace it. Expired Cleanser is past its date. '
+      + 'Computed from the dates you recorded.',
     )).toBeTruthy();
   });
 
