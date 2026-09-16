@@ -9,7 +9,7 @@ from app.domains.ai_gateway.models import AIRun
 from app.domains.inventory import scan_ownership
 from app.domains.inventory.models import InventoryItem, InventoryProductLink
 from app.domains.inventory.schemas import ItemCreate
-from app.domains.inventory.service import create_item
+from app.domains.inventory.service import create_item, serialize_item
 from app.domains.product.devices import _hash
 from app.domains.product.models import LabelSnapshot, ProductRecord, ScanDevice, ScanEvent
 from app.shared.database.sql import get_sessionmaker
@@ -204,3 +204,13 @@ async def test_concurrent_same_key_different_identity_conflicts_without_hybrid_l
         (product_a, snapshot_a.barcode, snapshot_a.id, snapshot_a.version_number, snapshot_a.content_fingerprint),
         (product_b, snapshot_b.barcode, snapshot_b.id, snapshot_b.version_number, snapshot_b.content_fingerprint),
     }
+
+
+async def test_manual_inventory_remains_valid_without_product_link(db_clean, registered_supabase_user):
+    _, account = await registered_supabase_user()
+    async with get_sessionmaker()() as session:
+        item = await create_item(session, account, ItemCreate(category="beauty", display_name="Manual cleanser", client_mutation_id="manual-without-link"))
+        await session.commit()
+        payload = await serialize_item(session, item)
+    items, links = await _rows(account)
+    assert payload["id"] == str(item.id) and len(items) == 1 and links == []
