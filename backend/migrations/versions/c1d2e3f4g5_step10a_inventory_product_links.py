@@ -16,6 +16,15 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Label snapshots are global exact-pack authority and retain a required
+    # scan-event provenance link.  Deleting an account must therefore
+    # anonymise its scan event rather than cascade-delete the event and block
+    # deletion on the snapshot's RESTRICT foreign key.
+    op.drop_constraint("scan_events_account_id_fkey", "scan_events", type_="foreignkey")
+    op.create_foreign_key(
+        "scan_events_account_id_fkey", "scan_events", "accounts",
+        ["account_id"], ["id"], ondelete="SET NULL",
+    )
     op.create_table(
         "inventory_product_links",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -44,3 +53,8 @@ def downgrade() -> None:
     op.drop_index("ix_inventory_product_links_snapshot", table_name="inventory_product_links")
     op.drop_index("ix_inventory_product_links_account_barcode", table_name="inventory_product_links")
     op.drop_table("inventory_product_links")
+    op.drop_constraint("scan_events_account_id_fkey", "scan_events", type_="foreignkey")
+    op.create_foreign_key(
+        "scan_events_account_id_fkey", "scan_events", "accounts",
+        ["account_id"], ["id"], ondelete="CASCADE",
+    )

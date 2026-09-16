@@ -109,7 +109,10 @@ class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):
     # account deletion cascades through it; without it both read the
     # whole table. See migration d0e1f2g3h4.
     account_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+        # A confirmed label snapshot is shared pack authority.  Removing the
+        # account that captured it must anonymise this event, not delete the
+        # snapshot through its required provenance edge.
+        ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     client_report_id: Mapped[str] = mapped_column(String(64), nullable=False)
     barcode: Mapped[str | None] = mapped_column(String(64))
     #: What was on screen when they tapped: a number, an ingredient, the grade.

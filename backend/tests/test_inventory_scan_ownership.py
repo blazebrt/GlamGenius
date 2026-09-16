@@ -10,6 +10,9 @@ from app.domains.inventory import scan_ownership
 from app.domains.inventory.models import InventoryItem, InventoryProductLink
 from app.domains.inventory.schemas import ItemCreate
 from app.domains.inventory.service import create_item, serialize_item
+from app.domains.off.models import OffProduct
+from app.domains.off.store import get_off_sessionmaker
+from app.domains.privacy import deletion_service
 from app.domains.product.devices import _hash
 from app.domains.product.models import LabelSnapshot, ProductRecord, ScanDevice, ScanEvent
 from app.shared.database.sql import get_sessionmaker
@@ -71,6 +74,27 @@ async def test_foreign_authority_mismatch_and_off_like_facts_create_nothing(app_
     device, _, snap = await _chain(account_a, barcode="8901234567891", facts={"ingredients_text": "public fallback is prohibited"})
     response = await app_client.post("/api/v2/inventory/from-scan", headers=_headers(token_a, device), json=_body(snap, "off-key"))
     assert response.status_code == 422 and await _rows(account_a) == ([], [])
+
+
+async def test_store_a_facts_never_cross_the_odbl_wall_into_shelf_ownership(app_client: AsyncClient, db_clean, off_clean, registered_supabase_user):
+    """OFF may know a product, but Store B pack facts alone establish a shelf item."""
+    token, account = await registered_supabase_user()
+    barcode = "8901234567892"
+    async with get_off_sessionmaker()() as off_session:
+        off_session.add(OffProduct(
+            barcode=barcode, product_name="OFF catalogue name", brands="OFF catalogue brand",
+            ingredients_text="OFF catalogue ingredients",
+        ))
+        await off_session.commit()
+    device, _, snapshot = await _chain(account, barcode=barcode, facts={})
+    response = await app_client.post(
+        "/api/v2/inventory/from-scan", headers=_headers(token, device), json=_body(snapshot, "odbl-wall"),
+    )
+    assert response.status_code == 422
+    assert await _rows(account) == ([], [])
+    async with get_off_sessionmaker()() as off_session:
+        stored = await off_session.get(OffProduct, barcode)
+    assert stored is not None and stored.product_name == "OFF catalogue name"
 
 
 async def test_same_key_replays_and_changed_identity_conflicts(app_client: AsyncClient, db_clean, registered_supabase_user):
@@ -214,3 +238,49 @@ async def test_manual_inventory_remains_valid_without_product_link(db_clean, reg
         payload = await serialize_item(session, item)
     items, links = await _rows(account)
     assert payload["id"] == str(item.id) and len(items) == 1 and links == []
+
+
+async def test_exact_shelf_link_exports_and_deletion_anonymises_pack_authority(
+    app_client: AsyncClient, db_clean, registered_supabase_user, monkeypatch,
+):
+    """The real privacy paths remove A's shelf row but retain global pack records."""
+    token_a, account_a = await registered_supabase_user()
+    _, account_b = await registered_supabase_user()
+    device, product_id, snapshot = await _chain(account_a)
+    added = await app_client.post(
+        "/api/v2/inventory/from-scan", headers=_headers(token_a, device), json=_body(snapshot, "privacy-link"),
+    )
+    assert added.status_code == 200
+    async with get_sessionmaker()() as session:
+        item_b = await create_item(session, account_b, ItemCreate(
+            category="beauty", display_name="B manual item", client_mutation_id="b-manual-item",
+        ))
+        await session.commit()
+        item_b_id = item_b.id
+    exported = await app_client.get("/api/v2/privacy/export", headers=auth(token_a))
+    assert exported.status_code == 200
+    links = exported.json()["domains"]["inventory"]["product_links"]
+    assert [link["inventory_item_id"] for link in links] == [added.json()["inventory_item_id"]]
+
+    class _Admin:
+        class auth:
+            class admin:
+                @staticmethod
+                def delete_user(_uid):
+                    return None
+
+    monkeypatch.setattr(deletion_service, "get_supabase_admin", lambda: _Admin())
+    requested = await app_client.delete("/api/v2/privacy/account", headers=auth(token_a))
+    assert requested.status_code == 202
+    async with get_sessionmaker()() as session:
+        await deletion_service.drain_all(session)
+        await session.commit()
+    async with get_sessionmaker()() as session:
+        assert await session.get(InventoryItem, uuid.UUID(added.json()["inventory_item_id"])) is None
+        assert (await session.execute(select(InventoryProductLink).where(InventoryProductLink.account_id == account_a))).scalars().all() == []
+        assert await session.get(InventoryItem, item_b_id) is not None
+        assert await session.get(ProductRecord, product_id) is not None
+        preserved = await session.get(LabelSnapshot, snapshot.id)
+        assert preserved is not None
+        event = await session.get(ScanEvent, preserved.scan_event_id)
+        assert event is not None and event.account_id is None
