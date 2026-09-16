@@ -196,6 +196,17 @@ describe('what the manager card shows', () => {
     expect(screen.getAllByRole('button')).toHaveLength(1);
   });
 
+  it('shows one decision and no way to reach the ones behind it', async () => {
+    // The manager decides; it does not offer a menu. The count of what is
+    // behind is a sentence, not a list somebody can open.
+    render(<ShelfManagerCard />);
+    await screen.findByText('Pause it');
+
+    const buttons = screen.getAllByRole('button');
+    expect(buttons.map((row) => row.props.accessibilityLabel)).toEqual(['Pause it', 'Not now']);
+    expect(screen.getByText('2 more things after this').props.accessibilityRole).toBeUndefined();
+  });
+
   it('never shows a rule id, a fingerprint or an item id to the person', async () => {
     render(<ShelfManagerCard />);
     await screen.findByText('Pause it');
@@ -498,6 +509,33 @@ describe('reloading', () => {
     view.rerender(<ShelfManagerCard reloadToken={1} />);
 
     await waitFor(() => expect(mocked.getShelfManager).toHaveBeenCalledTimes(2));
+  });
+
+  it('cannot be overwritten by a read that started earlier and landed later', async () => {
+    const slow = deferred<apiV2.ShelfManagerQueue>();
+    mocked.getShelfManager.mockResolvedValueOnce(queue()).mockReturnValueOnce(slow.promise);
+    mocked.respondToShelfManager.mockResolvedValue(response({
+      primary: decision({
+        decision_key: 'rule.low_use_product:item:item-9',
+        decision_fingerprint: 'd'.repeat(64),
+        decision: 'Use this before replacing it.',
+      }),
+      remaining_count: 0,
+    }));
+    const view = render(<ShelfManagerCard reloadToken={0} />);
+    await screen.findByText('Pause it');
+
+    view.rerender(<ShelfManagerCard reloadToken={1} />);
+    fireEvent.press(screen.getByText('Pause it'));
+    expect(await screen.findByText('Use this before replacing it.')).toBeTruthy();
+
+    // The earlier read finally arrives, carrying the decision that has since
+    // been answered. It is not what is true any more.
+    slow.resolve(queue());
+
+    await waitFor(() => expect(mocked.getShelfManager).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Use this before replacing it.')).toBeTruthy();
+    expect(screen.queryByText('Pause this until you replace it.')).toBeNull();
   });
 
   it('does not re-read when nothing has asked it to', async () => {
