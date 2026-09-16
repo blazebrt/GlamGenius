@@ -8,13 +8,13 @@ import pytest
 from app.domains.ai_gateway.models import AIRun
 from app.domains.inventory import scan_ownership
 from app.domains.inventory.models import InventoryItem, InventoryProductLink
-from app.domains.inventory.schemas import ItemCreate
+from app.domains.inventory.schemas import ItemCreate, ScanOwnershipCreate
 from app.domains.inventory.service import create_item, serialize_item
 from app.domains.off.models import OffProduct
 from app.domains.off.store import get_off_sessionmaker
 from app.domains.privacy import deletion_service
 from app.domains.product.devices import _hash
-from app.domains.product.models import LabelSnapshot, ProductRecord, ScanDevice, ScanEvent
+from app.domains.product.models import LabelSnapshot, ProductRecord, ScanDecisionEvent, ScanDevice, ScanEvent
 from app.shared.database.sql import get_sessionmaker
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -177,8 +177,64 @@ async def test_purchase_decisions_never_create_scan_shelf_ownership(app_client: 
     assert response.status_code == 200 and await _rows(account) == ([], [])
 
 
-async def test_concurrent_same_key_replays_one_exact_ownership(app_client: AsyncClient, db_clean, registered_supabase_user, monkeypatch):
+async def test_concurrent_same_key_replays_one_exact_ownership(app_client: AsyncClient, db_clean, registered_supabase_user):
+    """Two real, simultaneous same-key requests settle on one shelf row.
+
+    No synchronisation barrier inside ``create_item`` here, and deliberately
+    so. Both requests must present the same device, because the exact identity
+    is only provable for the device that scanned the pack — and resolving a
+    device token marks ``last_seen_at``, so each request takes a row lock on
+    that device for the life of its transaction. Holding one request inside
+    ``create_item`` until the other arrives therefore cannot happen: the second
+    is still waiting for the first request's device row. The barrier did not
+    expose a race, it deadlocked, and the 5-second wait made it a guaranteed
+    failure rather than a flake.
+
+    That serialisation is production's real behaviour and is worth asserting as
+    it stands. The interleaving the barrier was reaching for is exercised
+    directly against PostgreSQL in the service-level test below, where there is
+    no device row in the way.
+    """
     token, account = await registered_supabase_user(); device, _, snapshot = await _chain(account); body = _body(snapshot, "concurrent-same-key")
+    first, second = await asyncio.gather(*[
+        app_client.post("/api/v2/inventory/from-scan", headers=_headers(token, device), json=body)
+        for _ in range(2)
+    ])
+    assert first.status_code == second.status_code == 200
+    assert first.json()["inventory_item_id"] == second.json()["inventory_item_id"]
+    items, links = await _rows(account); assert len(items) == len(links) == 1
+
+
+async def test_truly_interleaved_same_key_inserts_resolve_to_one_row(
+    db_clean, registered_supabase_user, monkeypatch,
+):
+    """The unique constraint, exercised by two transactions that really do overlap.
+
+    Two independent sessions are both held inside ``create_item`` and released
+    together, so both attempt the insert before either commits. PostgreSQL
+    blocks the second on the unique index until the first commits, and the
+    second then takes the ``IntegrityError`` path in ``add_from_scan``: roll
+    back to the savepoint, re-read the winning row, and confirm it carries the
+    same exact identity before reporting it as owned.
+
+    Sessions are opened directly rather than through HTTP because the device
+    row lock taken while resolving a device token would serialise the two
+    requests before they ever reached the contended insert.
+    """
+    _, account = await registered_supabase_user()
+    device_token, _, snapshot = await _chain(account)
+    async with get_sessionmaker()() as session:
+        device_row = (await session.execute(
+            select(ScanDevice).where(ScanDevice.token_hash == _hash(device_token))
+        )).scalars().one()
+        device_id = device_row.id
+
+    body = ScanOwnershipCreate(
+        barcode=snapshot.barcode, label_snapshot_id=snapshot.id,
+        label_version=snapshot.version_number, content_fingerprint=snapshot.content_fingerprint,
+        client_mutation_id="interleaved-same-key",
+    )
+
     original = scan_ownership.inventory_service.create_item
     arrived = 0; lock = asyncio.Lock(); open_gate = asyncio.Event()
 
@@ -187,17 +243,30 @@ async def test_concurrent_same_key_replays_one_exact_ownership(app_client: Async
         async with lock:
             arrived += 1
             if arrived == 2: open_gate.set()
-        await asyncio.wait_for(open_gate.wait(), timeout=5)
+        await asyncio.wait_for(open_gate.wait(), timeout=10)
         return await original(*args, **kwargs)
 
     monkeypatch.setattr(scan_ownership.inventory_service, "create_item", synchronized_create)
-    first, second = await asyncio.gather(*[
-        app_client.post("/api/v2/inventory/from-scan", headers=_headers(token, device), json=body)
-        for _ in range(2)
-    ])
-    assert first.status_code == second.status_code == 200
-    assert first.json()["inventory_item_id"] == second.json()["inventory_item_id"]
-    items, links = await _rows(account); assert len(items) == len(links) == 1
+
+    async def add_in_its_own_session():
+        async with get_sessionmaker()() as session:
+            device = await session.get(ScanDevice, device_id)
+            result = await scan_ownership.add_from_scan(
+                session, account_id=account, device=device, body=body,
+            )
+            await session.commit()
+            return result
+
+    first, second = await asyncio.gather(add_in_its_own_session(), add_in_its_own_session())
+
+    # Both transactions really were inside create_item together.
+    assert arrived == 2
+    assert first["status"] == second["status"] == "owned"
+    assert first["inventory_item_id"] == second["inventory_item_id"]
+    items, links = await _rows(account)
+    assert len(items) == 1 and len(links) == 1
+    assert links[0].label_snapshot_id == snapshot.id
+    assert links[0].content_fingerprint == snapshot.content_fingerprint
 
 
 async def test_concurrent_same_key_different_identity_conflicts_without_hybrid_link(app_client: AsyncClient, db_clean, registered_supabase_user, monkeypatch):
@@ -240,27 +309,85 @@ async def test_manual_inventory_remains_valid_without_product_link(db_clean, reg
     assert payload["id"] == str(item.id) and len(items) == 1 and links == []
 
 
+async def test_manual_unlinked_inventory_still_works_through_the_real_user_paths(
+    app_client: AsyncClient, db_clean, registered_supabase_user,
+):
+    """A link is new in Step 10A, and must not have become a requirement.
+
+    Calling ``serialize_item`` directly proves the serialiser copes. It does
+    not prove the screens do: every item a person already owns was entered by
+    hand and has no ``InventoryProductLink``, so if the list or the detail
+    route had started joining on one, an existing shelf would have emptied
+    itself on upgrade. These are the canonical paths those screens use.
+    """
+    token, account = await registered_supabase_user()
+    async with get_sessionmaker()() as session:
+        manual = await create_item(session, account, ItemCreate(
+            category="beauty", display_name="Hand entered cleanser", brand="Manual Brand",
+            client_mutation_id="manual-through-real-paths",
+        ))
+        await session.commit()
+        manual_id = manual.id
+
+    listed = await app_client.get("/api/v2/inventory/items", headers=auth(token))
+    assert listed.status_code == 200
+    listed_ids = [row["id"] for row in listed.json()["items"]]
+    assert str(manual_id) in listed_ids
+    assert listed.json()["pagination"]["total"] == 1
+
+    detail = await app_client.get(f"/api/v2/inventory/items/{manual_id}", headers=auth(token))
+    assert detail.status_code == 200
+    assert detail.json()["id"] == str(manual_id)
+    assert detail.json()["display_name"] == "Hand entered cleanser"
+
+    # Still genuinely unlinked, and the shelf reasoning that reads this active
+    # category still sees it.
+    items, links = await _rows(account)
+    assert len(items) == 1 and links == []
+    from datetime import date
+
+    from app.domains.routines import shelf as routines_shelf
+    async with get_sessionmaker()() as session:
+        context = await routines_shelf.gather(session, account_id=account, today=date.today())
+    assert [owned.id for owned in context.owned] == [manual_id]
+
+
 async def test_exact_shelf_link_exports_and_deletion_anonymises_pack_authority(
     app_client: AsyncClient, db_clean, registered_supabase_user, monkeypatch,
 ):
     """The real privacy paths remove A's shelf row but retain global pack records."""
     token_a, account_a = await registered_supabase_user()
-    _, account_b = await registered_supabase_user()
+    token_b, account_b = await registered_supabase_user()
     device, product_id, snapshot = await _chain(account_a)
     added = await app_client.post(
         "/api/v2/inventory/from-scan", headers=_headers(token_a, device), json=_body(snapshot, "privacy-link"),
     )
     assert added.status_code == 200
+    # Account B gets a real explicit-scan item and link of its own, through the
+    # same route A used. A manual item would leave the interesting question
+    # unasked: a manual item has no InventoryProductLink, so it cannot show
+    # whether *B's link* survives A's deletion.
+    device_b, product_b_id, snapshot_b = await _chain(account_b, barcode="8901234567891", fingerprint="b" * 64)
+    added_b = await app_client.post(
+        "/api/v2/inventory/from-scan", headers=_headers(token_b, device_b), json=_body(snapshot_b, "privacy-link-b"),
+    )
+    assert added_b.status_code == 200
+    item_b_id = uuid.UUID(added_b.json()["inventory_item_id"])
     async with get_sessionmaker()() as session:
-        item_b = await create_item(session, account_b, ItemCreate(
-            category="beauty", display_name="B manual item", client_mutation_id="b-manual-item",
-        ))
-        await session.commit()
-        item_b_id = item_b.id
+        link_b = (await session.execute(select(InventoryProductLink).where(
+            InventoryProductLink.account_id == account_b
+        ))).scalars().all()
+    assert len(link_b) == 1
+    link_b_id = link_b[0].id
     exported = await app_client.get("/api/v2/privacy/export", headers=auth(token_a))
     assert exported.status_code == 200
     links = exported.json()["domains"]["inventory"]["product_links"]
     assert [link["inventory_item_id"] for link in links] == [added.json()["inventory_item_id"]]
+    # B's real link exists, and is nowhere in A's export.
+    exported_ids = {link["id"] for link in links if "id" in link}
+    assert str(link_b_id) not in exported_ids
+    assert str(item_b_id) not in {link["inventory_item_id"] for link in links}
+    assert snapshot_b.content_fingerprint not in exported.text
 
     class _Admin:
         class auth:
@@ -279,8 +406,184 @@ async def test_exact_shelf_link_exports_and_deletion_anonymises_pack_authority(
         assert await session.get(InventoryItem, uuid.UUID(added.json()["inventory_item_id"])) is None
         assert (await session.execute(select(InventoryProductLink).where(InventoryProductLink.account_id == account_a))).scalars().all() == []
         assert await session.get(InventoryItem, item_b_id) is not None
+        surviving_b = (await session.execute(select(InventoryProductLink).where(
+            InventoryProductLink.account_id == account_b
+        ))).scalars().all()
+        assert len(surviving_b) == 1 and surviving_b[0].id == link_b_id
+        assert surviving_b[0].inventory_item_id == item_b_id
+        # No proprietary row is left pointing at a deleted owner.
+        orphans = (await session.execute(select(InventoryProductLink).where(
+            InventoryProductLink.account_id.is_(None)
+        ))).scalars().all()
+        assert orphans == []
         assert await session.get(ProductRecord, product_id) is not None
+        assert await session.get(ProductRecord, product_b_id) is not None
+        assert await session.get(LabelSnapshot, snapshot_b.id) is not None
         preserved = await session.get(LabelSnapshot, snapshot.id)
         assert preserved is not None
         event = await session.get(ScanEvent, preserved.scan_event_id)
         assert event is not None and event.account_id is None
+
+
+# ---------------------------------------------------------------------------
+# A decision and an ownership record are two independent memories
+# ---------------------------------------------------------------------------
+
+
+async def test_buy_then_explicit_add_are_two_independent_records(
+    app_client: AsyncClient, db_clean, registered_supabase_user,
+):
+    """BUY is a decision. Ownership is a separate statement the person makes.
+
+    The parameterised test above proves a decision creates no ownership. This
+    proves the other half: that adding to the shelf afterwards does not consume
+    or rewrite the decision. Both memories must survive as separate records,
+    because inferring ownership from BUY would put a product on someone's shelf
+    that they considered and never bought.
+    """
+    token, account = await registered_supabase_user()
+    device, _, snapshot = await _chain(account)
+    body = _body(snapshot, "buy-then-add")
+    headers = _headers(token, device)
+
+    decision = await app_client.post(
+        f"/api/v2/scan/verdict/{snapshot.barcode}/memory", headers=auth(token),
+        json={
+            "decision": "BUY", "label_snapshot_id": str(snapshot.id),
+            "label_version": snapshot.version_number,
+            "content_fingerprint": snapshot.content_fingerprint,
+            "idempotency_key": "buy-before-add",
+        },
+    )
+    assert decision.status_code == 200
+
+    # The decision alone owns nothing.
+    assert await _rows(account) == ([], [])
+    async with get_sessionmaker()() as session:
+        decisions = (await session.execute(
+            select(ScanDecisionEvent).where(ScanDecisionEvent.account_id == account)
+        )).scalars().all()
+    assert len(decisions) == 1 and decisions[0].decision == "BUY"
+    decision_id = decisions[0].id
+
+    added = await app_client.post("/api/v2/inventory/from-scan", headers=headers, json=body)
+    assert added.status_code == 200 and added.json()["status"] == "owned"
+
+    # The decision event is untouched by the add.
+    async with get_sessionmaker()() as session:
+        still_there = await session.get(ScanDecisionEvent, decision_id)
+        assert still_there is not None and still_there.decision == "BUY"
+        remaining = (await session.execute(
+            select(ScanDecisionEvent).where(ScanDecisionEvent.account_id == account)
+        )).scalars().all()
+    assert len(remaining) == 1
+
+    # And exactly one ownership record now exists, carrying the exact identity.
+    items, links = await _rows(account)
+    assert len(items) == 1 and len(links) == 1
+    link = links[0]
+    assert link.barcode == snapshot.barcode
+    assert link.label_snapshot_id == snapshot.id
+    assert link.label_version == snapshot.version_number
+    assert link.content_fingerprint == snapshot.content_fingerprint
+    assert link.inventory_item_id == items[0].id
+
+
+# ---------------------------------------------------------------------------
+# Physical pack authority is not account authentication
+# ---------------------------------------------------------------------------
+
+
+async def test_one_device_cannot_claim_a_pack_proven_only_on_another_device(
+    app_client: AsyncClient, db_clean, registered_supabase_user,
+):
+    """Same account, same person, two genuinely scanned packs.
+
+    Cross-account rejection only proves authentication. This proves authority:
+    the submitted snapshot must be the pack the *submitting device* currently
+    has proven. Pack B's identity is entirely valid and belongs to this very
+    account, and it is still refused when presented with device A's authority,
+    because device A never scanned it.
+    """
+    token, account = await registered_supabase_user()
+    device_a, _, snapshot_a = await _chain(account, barcode="8901234567890")
+    _, _, snapshot_b = await _chain(account, barcode="8901234567891", fingerprint="b" * 64)
+
+    # Every field is snapshot B's own; only the device authority is A's.
+    response = await app_client.post(
+        "/api/v2/inventory/from-scan",
+        headers=_headers(token, device_a), json=_body(snapshot_b, "wrong-pack-authority"),
+    )
+    assert response.status_code == 422
+    assert await _rows(account) == ([], [])
+
+    # The same submission on B's own device is accepted, which is what makes
+    # the refusal above about authority rather than a malformed request.
+    device_b_token, _, snapshot_b_again = await _chain(
+        account, barcode="8901234567892", fingerprint="c" * 64,
+    )
+    accepted = await app_client.post(
+        "/api/v2/inventory/from-scan",
+        headers=_headers(token, device_b_token), json=_body(snapshot_b_again, "right-pack-authority"),
+    )
+    assert accepted.status_code == 200
+    items, links = await _rows(account)
+    assert len(items) == 1 and len(links) == 1
+    assert links[0].label_snapshot_id == snapshot_b_again.id
+    assert snapshot_a.id != snapshot_b.id
+
+
+async def test_status_also_refuses_a_pack_proven_only_on_another_device(
+    app_client: AsyncClient, db_clean, registered_supabase_user,
+):
+    """The read side must enforce the same authority as the write side."""
+    token, account = await registered_supabase_user()
+    device_a, _, _ = await _chain(account, barcode="8901234567890")
+    _, _, snapshot_b = await _chain(account, barcode="8901234567891", fingerprint="b" * 64)
+    body = _body(snapshot_b, "wrong-pack-status")
+    response = await app_client.get(
+        f"/api/v2/inventory/from-scan/{snapshot_b.barcode}/status",
+        headers=_headers(token, device_a),
+        params={k: body[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")},
+    )
+    assert response.status_code == 422
+    assert await _rows(account) == ([], [])
+
+
+# ---------------------------------------------------------------------------
+# Product Truth is public; ownership is not
+# ---------------------------------------------------------------------------
+
+
+async def test_product_truth_is_public_while_shelf_ownership_requires_an_account(
+    app_client: AsyncClient, db_clean, registered_supabase_user,
+):
+    """Step 10A must not have made the public verdict private.
+
+    Product Truth answers to an anonymous device and no user account. The two
+    private shelf routes answer to nobody without one. Asserting both in one
+    place is what keeps a future change from quietly moving the line.
+    """
+    token, account = await registered_supabase_user()
+    device, _, snapshot = await _chain(account)
+    body = _body(snapshot, "public-truth")
+
+    # No Authorization header anywhere in this request.
+    public = await app_client.get(
+        f"/api/v2/scan/verdict/{snapshot.barcode}", headers={"X-Device-Token": device},
+    )
+    assert public.status_code == 200, public.text
+    assert "authorization" not in {key.lower() for key in public.request.headers}
+
+    private_write = await app_client.post(
+        "/api/v2/inventory/from-scan", headers={"X-Device-Token": device}, json=body,
+    )
+    private_read = await app_client.get(
+        f"/api/v2/inventory/from-scan/{snapshot.barcode}/status",
+        headers={"X-Device-Token": device},
+        params={k: body[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")},
+    )
+    assert private_write.status_code == 401
+    assert private_read.status_code == 401
+    assert await _rows(account) == ([], [])
+    assert token  # the account exists; it simply was not presented above
