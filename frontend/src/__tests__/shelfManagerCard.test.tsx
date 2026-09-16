@@ -321,6 +321,22 @@ describe('a decision that only opens a screen', () => {
     }));
   });
 
+  it('does not navigate when the answer was refused', async () => {
+    mocked.getShelfManager.mockResolvedValue(queue({
+      primary: decision({
+        action: { kind: 'record_date', label: 'Add the date', inventory_item_id: 'item-1', mutates: false },
+      }),
+    }));
+    // The product was deleted between reading the queue and answering, so the
+    // server refuses. Opening its screen would send somebody nowhere real.
+    mocked.respondToShelfManager.mockRejectedValue(new Error('stale'));
+    render(<ShelfManagerCard />);
+    fireEvent.press(await screen.findByText('Add the date'));
+
+    await waitFor(() => expect(mocked.getShelfManager).toHaveBeenCalledTimes(2));
+    expect(mockRouterPush).not.toHaveBeenCalled();
+  });
+
   it('does not navigate when the person says not now', async () => {
     mocked.getShelfManager.mockResolvedValue(queue({
       primary: decision({

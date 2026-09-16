@@ -79,7 +79,8 @@ export function ShelfManagerCard({
 
   if (!primary || !signature) return null;
 
-  const answer = async (choice: ShelfManagerChoice) => {
+  /** Returns whether this answer landed and is still the current one. */
+  const answer = async (choice: ShelfManagerChoice): Promise<boolean> => {
     const decision = primary;
     const expected = decisionSignature(decision);
     // One submission key per decision, reused on a retry of that same decision
@@ -99,14 +100,15 @@ export function ShelfManagerCard({
         choice,
         client_mutation_id: mutationKey.current.id,
       });
-      if (request.current === current) {
-        setQueue(value);
-        onChanged?.();
-      }
+      if (request.current !== current) return false;
+      setQueue(value);
+      onChanged?.();
+      return true;
     } catch {
       // The shelf moved under us, or the answer did not land. Re-read rather
       // than guess: the server is the only thing that knows what is true now.
       if (request.current === current) await load();
+      return false;
     } finally {
       // Clear the busy flag this call set, and only that one. Keying it on the
       // request token instead would leave the spinner running forever whenever
@@ -142,10 +144,15 @@ export function ShelfManagerCard({
 
   const accept = async () => {
     const decision = primary;
-    await answer('accept');
+    const landed = await answer('accept');
     // A navigation action is recorded and then taken. Recording it resolves
     // nothing on its own, which is exactly what the server says too.
-    if (!decision.action.mutates) openFor(decision);
+    //
+    // It is only taken if the answer landed. A refused answer means the server
+    // would not produce that decision any more — the product may be gone — so
+    // opening the screen it named would send somebody somewhere that is no
+    // longer true. They stay here and see what the manager says now.
+    if (landed && !decision.action.mutates) openFor(decision);
   };
 
   const giveBack = primary.kind === 'give_back';
