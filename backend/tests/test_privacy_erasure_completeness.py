@@ -635,8 +635,13 @@ async def test_a_scan_survives_its_scanner_because_the_label_snapshot_must(
     assert event is not None, "deleting the scan would orphan a published label snapshot"
     assert snapshot is not None
     assert snapshot.scan_event_id == event_id
-    # The pack reading itself is about the product, not the person.
-    assert event.label_facts == {"product_category": "beauty", "product_name": "A cleanser"}
+    # The row survives as the snapshot's provenance; the person's reading does
+    # not. Leaving ``label_facts`` in place would keep an erased account's
+    # capture as the newest confirmed observation of the product, which is what
+    # ``_withdraw_scan_observations`` exists to prevent.
+    assert event.label_facts is None
+    # The shared artefacts the snapshot carries are untouched.
+    assert snapshot.facts == {"product_category": "beauty"}
 
 
 async def test_no_scan_event_column_still_identifies_the_deleted_person(

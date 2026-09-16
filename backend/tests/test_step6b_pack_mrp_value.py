@@ -2313,7 +2313,20 @@ async def test_deleting_an_account_removes_its_price_observation(
         remaining = (await session.execute(
             select(ScanEvent).where(ScanEvent.barcode == CURRENT)
         )).scalars().all()
-    assert [event.account_id for event in remaining] == [other_account]
+    # The deleted owner's row is still here, and deliberately so: a confirmed
+    # capture is the provenance of a label snapshot, and that snapshot is
+    # shared Product Truth other people read, so Step 10A's migration
+    # (``c1d2e3f4g5``) made this relation ON DELETE SET NULL rather than let a
+    # cascade take somebody else's evidence with it.
+    #
+    # What must go is the reading, not the row. Both are asserted here, because
+    # "the row vanished" was only ever a proxy for "the observation stopped
+    # counting", and the row no longer vanishes.
+    by_account = {event.account_id: event for event in remaining}
+    assert set(by_account) == {other_account, None}
+    withdrawn = by_account[None]
+    assert withdrawn.label_facts is None, "the erased account's reading still counts"
+    assert by_account[other_account].label_facts is not None
 
     after = await verdict(app_client, device)
     # The observation that is now newest — not a resurrection of the deleted one.
