@@ -106,3 +106,24 @@ async def test_unauthenticated_shelf_routes_are_private(app_client: AsyncClient,
     post = await app_client.post("/api/v2/inventory/from-scan", json=body)
     status = await app_client.get(f"/api/v2/inventory/from-scan/{snapshot.barcode}/status", params={k: body[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
     assert post.status_code == status.status_code == 401
+
+
+async def test_real_snapshot_from_another_barcode_is_rejected(app_client: AsyncClient, db_clean, registered_supabase_user):
+    token, account = await registered_supabase_user()
+    device_a, _, snapshot_a = await _chain(account, barcode="8901234567890")
+    _, _, snapshot_b = await _chain(account, barcode="8901234567891")
+    body = _body(snapshot_b, "cross-barcode-key")
+    body["barcode"] = snapshot_a.barcode
+    response = await app_client.post("/api/v2/inventory/from-scan", headers=_headers(token, device_a), json=body)
+    assert response.status_code == 422 and await _rows(account) == ([], [])
+
+
+async def test_status_is_account_scoped_for_shared_global_product(app_client: AsyncClient, db_clean, registered_supabase_user):
+    token_a, account_a = await registered_supabase_user(); token_b, account_b = await registered_supabase_user()
+    device_a, product_id, snapshot_a = await _chain(account_a)
+    assert (await app_client.post("/api/v2/inventory/from-scan", headers=_headers(token_a, device_a), json=_body(snapshot_a))).status_code == 200
+    device_b, _, snapshot_b = await _chain(account_b, version=2, fingerprint="b" * 64, product_id=product_id)
+    body_b = _body(snapshot_b, "account-b-status")
+    response = await app_client.get(f"/api/v2/inventory/from-scan/{snapshot_b.barcode}/status", headers=_headers(token_b, device_b), params={k: body_b[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
+    assert response.status_code == 200
+    assert response.json()["status"] == "eligible_not_owned" and response.json()["inventory_item_id"] is None
