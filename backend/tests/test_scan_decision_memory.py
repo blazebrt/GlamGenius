@@ -12,7 +12,7 @@ from tests.conftest import auth
 pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
-async def seeded_snapshot(registered_supabase_user):
+async def seeded_snapshot(db_clean, registered_supabase_user):
     token, account_id = await registered_supabase_user()
     factory = get_sessionmaker()
     async with factory() as session:
