@@ -1,10 +1,12 @@
 """PostgreSQL/API acceptance proof for Step 10A exact scan ownership."""
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
 from app.domains.ai_gateway.models import AIRun
+from app.domains.inventory import scan_ownership
 from app.domains.inventory.models import InventoryItem, InventoryProductLink
 from app.domains.inventory.schemas import ItemCreate
 from app.domains.inventory.service import create_item
@@ -149,3 +151,26 @@ async def test_purchase_decisions_never_create_scan_shelf_ownership(app_client: 
     token, account = await registered_supabase_user(); _, _, snapshot = await _chain(account)
     response = await app_client.post(f"/api/v2/scan/verdict/{snapshot.barcode}/memory", headers=auth(token), json={"decision": decision, "label_snapshot_id": str(snapshot.id), "label_version": snapshot.version_number, "content_fingerprint": snapshot.content_fingerprint, "idempotency_key": f"decision-{decision.lower()}"})
     assert response.status_code == 200 and await _rows(account) == ([], [])
+
+
+async def test_concurrent_same_key_replays_one_exact_ownership(app_client: AsyncClient, db_clean, registered_supabase_user, monkeypatch):
+    token, account = await registered_supabase_user(); device, _, snapshot = await _chain(account); body = _body(snapshot, "concurrent-same-key")
+    original = scan_ownership.inventory_service.create_item
+    arrived = 0; lock = asyncio.Lock(); open_gate = asyncio.Event()
+
+    async def synchronized_create(*args, **kwargs):
+        nonlocal arrived
+        async with lock:
+            arrived += 1
+            if arrived == 2: open_gate.set()
+        await asyncio.wait_for(open_gate.wait(), timeout=5)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(scan_ownership.inventory_service, "create_item", synchronized_create)
+    first, second = await asyncio.gather(*[
+        app_client.post("/api/v2/inventory/from-scan", headers=_headers(token, device), json=body)
+        for _ in range(2)
+    ])
+    assert first.status_code == second.status_code == 200
+    assert first.json()["inventory_item_id"] == second.json()["inventory_item_id"]
+    items, links = await _rows(account); assert len(items) == len(links) == 1
