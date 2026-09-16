@@ -142,3 +142,10 @@ async def test_status_never_leaks_another_account_link_for_the_exact_same_snapsh
     response = await app_client.get(f"/api/v2/inventory/from-scan/{snapshot.barcode}/status", headers=_headers(token_b, device_b), params={k: body[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
     assert response.status_code == 200
     assert response.json()["status"] == "eligible_not_owned" and response.json()["inventory_item_id"] is None
+
+
+@pytest.mark.parametrize("decision", ["BUY", "WAIT", "SKIP"])
+async def test_purchase_decisions_never_create_scan_shelf_ownership(app_client: AsyncClient, db_clean, registered_supabase_user, decision):
+    token, account = await registered_supabase_user(); _, _, snapshot = await _chain(account)
+    response = await app_client.post(f"/api/v2/scan/verdict/{snapshot.barcode}/memory", headers=auth(token), json={"decision": decision, "label_snapshot_id": str(snapshot.id), "label_version": snapshot.version_number, "content_fingerprint": snapshot.content_fingerprint, "idempotency_key": f"decision-{decision.lower()}"})
+    assert response.status_code == 200 and await _rows(account) == ([], [])
