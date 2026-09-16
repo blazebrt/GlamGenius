@@ -1802,6 +1802,51 @@ async def _manager_replay(
     )
 
 
+def _authorised_primary(
+    queue: manager.ManagerQueue, body: ShelfManagerRespondRequest
+) -> manager.ManagerDecision:
+    """The one decision this request is allowed to answer, or a refusal.
+
+    Only the front of the queue. The manager's whole premise is one decision at
+    a time, and the order it is in is the server's judgement, not a rendering
+    detail the app happens to follow. Authorising anything else in
+    ``queue.active`` would let a caller skip past a confirmed-allergy pause to
+    answer something further down, which is precisely the ordering the priority
+    rules exist to impose.
+    """
+    primary = queue.primary
+    if primary is None or primary.decision_key != body.decision_key:
+        raise ValidationFailedError(STALE_DECISION_MESSAGE, field="decision_key")
+    if primary.fingerprint != body.decision_fingerprint:
+        raise ValidationFailedError(STALE_DECISION_MESSAGE, field="decision_fingerprint")
+    return primary
+
+
+async def _lock_target_item(
+    session: AsyncSession, *, account_id: uuid.UUID, item_id: uuid.UUID
+) -> None:
+    """Take the row lock that makes one product's answer a serialised step.
+
+    Two requests carrying different submission keys can both compile the same
+    decision before either has changed anything — a second device, or a retry
+    the app decided was a new attempt. Uniqueness on the submission key does
+    not help there, because the keys genuinely differ. Both would then apply
+    the same Care change, and the second would collide with the unique
+    constraint on the product's preference attribute: a 500, on a button the
+    person pressed twice.
+
+    Locking the product row here means the second request waits, and then
+    recompiles against the state the first one left. What it finds is a
+    decision that has already been settled, which is the truth.
+    """
+    try:
+        await inventory_service.owned_item(session, account_id, item_id, for_update=True)
+    except NotFoundError as error:
+        # Deleted between compiling and answering. Same answer as any other
+        # decision that is no longer current.
+        raise ValidationFailedError(STALE_DECISION_MESSAGE, field="decision_key") from error
+
+
 async def shelf_manager_respond(
     session: AsyncSession,
     *,
@@ -1815,28 +1860,60 @@ async def shelf_manager_respond(
     names a decision and the exact inputs it was shown with; everything else —
     which rule it came from, which product it touches, what the button does — is
     read off the freshly compiled decision, never off the request. A request
-    that names a decision the server would not produce right now, or one whose
-    inputs have moved, is refused without acting.
+    that names a decision the server would not produce right now, that names one
+    which is not currently at the front, or whose inputs have moved, is refused
+    without acting.
+
+    Order of operations, and why:
+
+    1. A known submission key replays, without recompiling anything.
+    2. Compile and authorise against the primary, so an obviously stale request
+       is refused before it takes any lock.
+    3. For a decision that changes stored state, lock that product's row and
+       **authorise again** against a freshly compiled queue. Everything after
+       this point is serialised per product.
+    4. Record the answer, idempotently.
+    5. Apply the change through the Care authority that owns it.
+
+    Steps 4 and 5 commit together or not at all. An answer is never recorded
+    for a change that did not happen.
     """
     existing = await _manager_event_for_key(session, account_id, body.client_mutation_id)
     if existing is not None:
         return await _manager_replay(session, account_id=account_id, existing=existing, body=body)
 
-    queue = await manager.build_queue(session, account_id=account_id)
-    decision = queue.find(body.decision_key)
-    if decision is None or decision.fingerprint != body.decision_fingerprint:
-        raise ValidationFailedError(
-            STALE_DECISION_MESSAGE,
-            field="decision_key" if decision is None else "decision_fingerprint",
-        )
-
-    choice = manager.stored_choice_for(decision.kind, body.choice)
+    decision = _authorised_primary(
+        await manager.build_queue(session, account_id=account_id), body,
+    )
     target_id = (
         uuid.UUID(decision.action.inventory_item_id)
         if decision.action.inventory_item_id is not None else None
     )
-    # The insert is the lock. Two retries racing each other both compile the
-    # same decision, and exactly one of them gets to apply it.
+    mutate = _MANAGER_MUTATIONS.get(decision.action.kind)
+    will_mutate = body.choice == manager.REQUEST_ACCEPT and mutate is not None and target_id is not None
+
+    if will_mutate and target_id is not None:
+        await _lock_target_item(session, account_id=account_id, item_id=target_id)
+        # Two checks under the lock, and the order between them is the whole
+        # difference between a retry and a second answer.
+        #
+        # First the submission key: a retry of the identical request that lost
+        # the race must still be free, and it is the same answer either way.
+        settled = await _manager_event_for_key(session, account_id, body.client_mutation_id)
+        if settled is not None:
+            return await _manager_replay(
+                session, account_id=account_id, existing=settled, body=body,
+            )
+        # Then the queue, which may have moved while we waited: a different
+        # submission key answering a decision somebody else has already applied
+        # is not a retry, and is told so rather than applied twice.
+        decision = _authorised_primary(
+            await manager.build_queue(session, account_id=account_id), body,
+        )
+
+    choice = manager.stored_choice_for(decision.kind, body.choice)
+    # Uniqueness on the submission key is what makes a retry of the *same* key
+    # free. The row lock above is what makes two *different* keys safe.
     inserted = (await session.execute(
         pg_insert(ShelfManagerDecisionEvent).values(
             account_id=account_id,
@@ -1859,8 +1936,7 @@ async def shelf_manager_respond(
         return await _manager_replay(session, account_id=account_id, existing=replayed, body=body)
 
     applied = False
-    mutate = _MANAGER_MUTATIONS.get(decision.action.kind)
-    if body.choice == manager.REQUEST_ACCEPT and mutate is not None and target_id is not None:
+    if will_mutate and mutate is not None and target_id is not None:
         await mutate(
             session, account_id=account_id, account_id_str=account_id_str, item_id=target_id,
         )

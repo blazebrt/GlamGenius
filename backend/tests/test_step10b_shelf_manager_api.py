@@ -170,6 +170,66 @@ async def _expired_shelf(client, token: str) -> str:
     return item_id
 
 
+async def _compiled(account_id: uuid.UUID) -> manager.ManagerQueue:
+    """The queue as the server itself compiles it.
+
+    Used to obtain a genuine decision key and fingerprint for a decision that
+    is *not* at the front. Forging a hash would only prove the hash check
+    works; this proves the ordering is authority even when the values are real.
+    """
+    async with get_sessionmaker()() as session:
+        return await manager.build_queue(session, account_id=account_id)
+
+
+async def _make_low_use(item_id: str) -> None:
+    """Backdate an item so the canonical low-use rule recognises it.
+
+    ``inventory_service.is_low_use`` reads the date the item was catalogued,
+    and an item created a moment ago can never qualify. Nothing else about the
+    row is touched, so the rule that fires is the reviewed one.
+    """
+    async with get_sessionmaker()() as session:
+        item = await session.get(InventoryItem, uuid.UUID(item_id))
+        item.created_at = utcnow() - timedelta(days=60)
+        await session.commit()
+
+
+async def _confirm_allergen(account_id: uuid.UUID, item_id: str, key: str = "fragrance") -> None:
+    async with get_sessionmaker()() as session:
+        session.add(ProductIngredient(
+            account_id=account_id, item_id=uuid.UUID(item_id), ingredient_key=key,
+            matched_text=key, confidence=1.0, source="user_declared",
+            needs_confirmation=False, confirmed_at=utcnow(),
+        ))
+        await session.commit()
+
+
+async def _declare_allergy(client, token: str, value: str = "fragrance") -> None:
+    response = await client.patch(
+        "/api/v2/profile", headers=auth(token),
+        json={"attributes": [{"key": "allergies", "value": [value]}]},
+    )
+    assert response.status_code == 200, response.text
+
+
+async def _shelf_rules_for(client, token: str, item_id: str) -> set[str]:
+    """Every reviewed rule the shelf report still raises about one product."""
+    body = (await client.get("/api/v2/shelf/summary", headers=auth(token))).json()
+    found: set[str] = set()
+    for report in body["reports"].values():
+        for warning in report["warnings"]:
+            if item_id in warning["item_ids"]:
+                found.add(warning["rule_id"])
+    return found
+
+
+def _use_instructions(payload: dict) -> list[dict]:
+    primary = payload.get("primary")
+    if primary is None:
+        return []
+    return [primary] if primary["decision"].lower().startswith("use ") else []
+
+
 # ---------------------------------------------------------------------------
 # Reading the queue
 # ---------------------------------------------------------------------------
@@ -971,6 +1031,297 @@ async def test_an_action_the_care_authority_refuses_records_nothing(
     assert response.status_code == 422, response.text
     assert await _events(account_id) == []
     assert await _is_paused(item_id) is False
+
+
+# ---------------------------------------------------------------------------
+# Only the front of the queue may be answered
+# ---------------------------------------------------------------------------
+
+
+async def test_a_real_decision_further_down_the_queue_cannot_be_answered(
+    app_client, db_clean, registered_supabase_user,
+):
+    """Priority is the server's judgement, not a rendering convention.
+
+    The key and fingerprint here are the server's own, taken from the compiler
+    rather than invented, so nothing about this request is malformed. It is
+    refused because it is not the decision at the front — which is the only
+    thing that makes "one decision at a time" a property of the product rather
+    than a habit of the app.
+    """
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    item_id = await _expired_shelf(app_client, token)
+
+    queue = await _compiled(account_id)
+    assert len(queue.active) >= 2
+    first, second = queue.active[0], queue.active[1]
+    assert first.rule_id == rules_engine.RULE_EXPIRED
+    assert second.decision_key != first.decision_key
+
+    response = await app_client.post(
+        "/api/v2/shelf/manager/respond",
+        headers=auth(token),
+        json={
+            "decision_key": second.decision_key,
+            "decision_fingerprint": second.fingerprint,
+            "choice": "accept",
+            "client_mutation_id": "mut-queue-jump",
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["field"] == "decision_key"
+    assert await _events(account_id) == []
+    assert await _is_paused(item_id) is False
+    # The front of the queue is untouched, and so is the one behind it.
+    after = await _manager(app_client, token)
+    assert after["primary"]["decision_key"] == first.decision_key
+    assert second.decision_key in str(await _compiled(account_id))
+
+
+async def test_that_same_decision_is_answerable_once_it_reaches_the_front(
+    app_client, db_clean, registered_supabase_user,
+):
+    """The refusal is about position, not about the request."""
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    await _expired_shelf(app_client, token)
+
+    queue = await _compiled(account_id)
+    first, second = queue.active[0], queue.active[1]
+
+    refused = await app_client.post(
+        "/api/v2/shelf/manager/respond", headers=auth(token),
+        json={
+            "decision_key": second.decision_key,
+            "decision_fingerprint": second.fingerprint,
+            "choice": "accept", "client_mutation_id": "mut-too-early",
+        },
+    )
+    assert refused.status_code == 422
+
+    # Clear the one in front, without touching the one behind it.
+    cleared = await _respond(
+        app_client, token,
+        {"decision_key": first.decision_key, "decision_fingerprint": first.fingerprint},
+        "override", key="mut-clear-front",
+    )
+    assert cleared.status_code == 200, cleared.text
+
+    now_first = (await _manager(app_client, token))["primary"]
+    assert now_first["decision_key"] == second.decision_key
+    assert now_first["decision_fingerprint"] == second.fingerprint
+
+    accepted = await app_client.post(
+        "/api/v2/shelf/manager/respond", headers=auth(token),
+        json={
+            "decision_key": second.decision_key,
+            "decision_fingerprint": second.fingerprint,
+            "choice": "accept", "client_mutation_id": "mut-now-front",
+        },
+    )
+
+    assert accepted.status_code == 200, accepted.text
+    assert [row.decision_key for row in await _events(account_id)] == [
+        first.decision_key, second.decision_key,
+    ]
+
+
+# ---------------------------------------------------------------------------
+# The manager never tells you to use a product Care would refuse
+# ---------------------------------------------------------------------------
+
+
+async def _expired_and_unused(client, token: str) -> str:
+    item_id = await _add(
+        client, token, name="Expired And Unused", product_type="cleanser",
+        expiry=TODAY - timedelta(days=30),
+    )
+    await _make_low_use(item_id)
+    await _add(client, token, name="Good Moisturiser", product_type="moisturiser",
+               expiry=TODAY + timedelta(days=400))
+    await _add(client, token, name="Good Sunscreen", product_type="sunscreen",
+               expiry=TODAY + timedelta(days=400))
+    return item_id
+
+
+async def test_a_paused_expired_product_is_never_later_told_to_be_used(
+    app_client, db_clean, registered_supabase_user,
+):
+    """The sequence that makes this worth a test.
+
+    Expired and unused at once. The manager rightly decides the expiry first.
+    Once that pause is accepted, the low-use finding is next in line — and
+    saying "use this before replacing it" about a product we have just paused
+    for being out of date would contradict the decision we made a moment ago.
+    """
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    item_id = await _expired_and_unused(app_client, token)
+
+    assert rules_engine.RULE_LOW_USE in await _shelf_rules_for(app_client, token, item_id)
+
+    primary = (await _manager(app_client, token))["primary"]
+    assert primary["rule_id"] == rules_engine.RULE_EXPIRED
+    assert (await _respond(app_client, token, primary, "accept", key="mut-pause-expired")).status_code == 200
+    assert await _is_paused(item_id) is True
+
+    after = await _manager(app_client, token)
+    assert _use_instructions(after) == []
+    assert all(
+        row.rule_id != rules_engine.RULE_LOW_USE for row in (await _compiled(account_id)).active
+    )
+    # The shelf still reports the truth. Only the instruction is withheld.
+    assert rules_engine.RULE_LOW_USE in await _shelf_rules_for(app_client, token, item_id)
+
+
+async def test_setting_the_expiry_decision_aside_still_never_invites_use(
+    app_client, db_clean, registered_supabase_user,
+):
+    """"Not now" on the pause does not make the product any less out of date."""
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    item_id = await _expired_and_unused(app_client, token)
+
+    primary = (await _manager(app_client, token))["primary"]
+    assert (await _respond(app_client, token, primary, "override", key="mut-notnow-expired")).status_code == 200
+    assert await _is_paused(item_id) is False
+
+    after = await _manager(app_client, token)
+    assert _use_instructions(after) == []
+    assert all(
+        row.rule_id != rules_engine.RULE_LOW_USE for row in (await _compiled(account_id)).active
+    )
+    assert rules_engine.RULE_LOW_USE in await _shelf_rules_for(app_client, token, item_id)
+
+
+async def test_a_product_with_a_declared_allergen_is_never_invited_to_be_used(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    await _declare_allergy(app_client, token)
+    item_id = await _add(
+        app_client, token, name="Scented And Unused", product_type="cleanser",
+        expiry=TODAY + timedelta(days=400),
+    )
+    await _make_low_use(item_id)
+    await _confirm_allergen(account_id, item_id)
+    await _add(app_client, token, name="Good Moisturiser", product_type="moisturiser",
+               expiry=TODAY + timedelta(days=400))
+    await _add(app_client, token, name="Good Sunscreen", product_type="sunscreen",
+               expiry=TODAY + timedelta(days=400))
+
+    assert rules_engine.RULE_LOW_USE in await _shelf_rules_for(app_client, token, item_id)
+
+    payload = await _manager(app_client, token)
+    assert payload["primary"]["rule_id"] == rules_engine.RULE_ALLERGY
+    assert _use_instructions(payload) == []
+    assert all(
+        row.rule_id != rules_engine.RULE_LOW_USE for row in (await _compiled(account_id)).active
+    )
+
+    assert (await _respond(
+        app_client, token, payload["primary"], "accept", key="mut-allergy-pause",
+    )).status_code == 200
+    assert _use_instructions(await _manager(app_client, token)) == []
+    assert rules_engine.RULE_LOW_USE in await _shelf_rules_for(app_client, token, item_id)
+
+
+async def test_a_product_you_paused_yourself_is_never_told_to_be_used_next(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    item_id = await _add(
+        app_client, token, name="Paused And Running Out", product_type="cleanser",
+        expiry=TODAY + timedelta(days=10),
+    )
+    await _add(app_client, token, name="Good Moisturiser", product_type="moisturiser",
+               expiry=TODAY + timedelta(days=400))
+    await _add(app_client, token, name="Good Sunscreen", product_type="sunscreen",
+               expiry=TODAY + timedelta(days=400))
+
+    before = await _compiled(account_id)
+    assert any(row.rule_id == rules_engine.RULE_EXPIRING for row in before.active)
+
+    paused = await app_client.post(
+        f"/api/v2/routines/products/{item_id}/pause", headers=auth(token),
+    )
+    assert paused.status_code == 200, paused.text
+
+    assert _use_instructions(await _manager(app_client, token)) == []
+    assert all(
+        row.rule_id != rules_engine.RULE_EXPIRING for row in (await _compiled(account_id)).active
+    )
+    assert rules_engine.RULE_EXPIRING in await _shelf_rules_for(app_client, token, item_id)
+
+
+async def test_a_product_already_preferred_is_not_asked_for_again(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    item_id = await _add(
+        app_client, token, name="Already Preferred", product_type="cleanser",
+        expiry=TODAY + timedelta(days=10),
+    )
+    await _add(app_client, token, name="Good Moisturiser", product_type="moisturiser",
+               expiry=TODAY + timedelta(days=400))
+    await _add(app_client, token, name="Good Sunscreen", product_type="sunscreen",
+               expiry=TODAY + timedelta(days=400))
+
+    offered = (await _compiled(account_id)).active
+    assert any(row.rule_id == rules_engine.RULE_EXPIRING for row in offered)
+
+    preferred = await app_client.post(
+        f"/api/v2/routines/products/{item_id}/prefer", headers=auth(token),
+    )
+    assert preferred.status_code == 200, preferred.text
+
+    assert _use_instructions(await _manager(app_client, token)) == []
+    assert all(
+        row.rule_id != rules_engine.RULE_EXPIRING for row in (await _compiled(account_id)).active
+    )
+
+
+async def test_a_product_with_no_routine_role_is_not_invited_to_be_used(
+    app_client, db_clean, registered_supabase_user,
+):
+    """Being able to open its page is not a reason to say "use this"."""
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    item_id = await _add(
+        app_client, token, name="Unplaceable Product", product_type="mystery",
+        expiry=TODAY + timedelta(days=10),
+    )
+
+    assert _use_instructions(await _manager(app_client, token)) == []
+    assert all(
+        row.rule_id != rules_engine.RULE_EXPIRING for row in (await _compiled(account_id)).active
+    )
+    assert rules_engine.RULE_EXPIRING in await _shelf_rules_for(app_client, token, item_id)
+
+
+async def test_a_group_of_unused_products_is_silent_when_one_of_them_is_blocked(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    fine = await _add(app_client, token, name="Unused Toner", product_type="toner",
+                      expiry=TODAY + timedelta(days=400))
+    blocked = await _add(app_client, token, name="Unused And Expired", product_type="face_oil",
+                         expiry=TODAY - timedelta(days=10))
+    for item_id in (fine, blocked):
+        await _make_low_use(item_id)
+
+    assert rules_engine.RULE_LOW_USE in await _shelf_rules_for(app_client, token, fine)
+
+    assert all(
+        row.rule_id != rules_engine.RULE_LOW_USE for row in (await _compiled(account_id)).active
+    )
+    assert _use_instructions(await _manager(app_client, token)) == []
 
 
 # ---------------------------------------------------------------------------

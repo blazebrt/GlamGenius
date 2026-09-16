@@ -528,42 +528,169 @@ def test_an_expiring_product_is_offered_for_use_where_the_care_authority_would_a
     assert row.action.kind == manager.ACTION_PREFER_PRODUCT
 
 
-def test_an_expiring_product_that_is_paused_is_opened_rather_than_preferred():
-    """``prefer_care_product`` refuses a paused product, so we do not offer it."""
+# ---------------------------------------------------------------------------
+# Never say "use this" about a product Care would refuse
+#
+# The sentence is the decision. Softening the button while still saying *use
+# this* would leave the manager telling somebody to use a product it has just
+# decided they should not — and the sentence is what they read. Where it cannot
+# ask honestly it says nothing at all, and the reviewed finding stays on the
+# shelf report as information rather than an instruction.
+# ---------------------------------------------------------------------------
+
+
+def _use_decisions(queue: manager.ManagerQueue) -> list[manager.ManagerDecision]:
+    """Every queued decision whose words tell somebody to use a product."""
+    return [
+        row for row in queue.active
+        if row.decision in (
+            manager.DECISION_USE_NEXT,
+            manager.DECISION_USE_BEFORE_REPLACING,
+            manager.DECISION_USE_THESE_BEFORE_REPLACING,
+        )
+    ]
+
+
+def test_a_paused_product_that_is_running_out_is_not_told_to_be_used_next():
     running_out = _item(product_type="cleanser", name="Paused And Running Out",
                         expiry=TODAY + timedelta(days=10))
-    queue = _queue(_context(running_out), paused_item_ids=frozenset({running_out.id}))
-    row = next(r for r in queue.active if r.rule_id == rules_engine.RULE_EXPIRING)
+    context = _context(running_out)
+    queue = _queue(context, paused_item_ids=frozenset({running_out.id}))
 
-    assert row.action.kind == manager.ACTION_OPEN_INVENTORY_ITEM
+    assert _use_decisions(queue) == []
+    assert all(row.rule_id != rules_engine.RULE_EXPIRING for row in queue.active)
+    # The shelf still reports it. Only the instruction is withheld.
+    assert any(
+        row.rule_id == rules_engine.RULE_EXPIRING
+        for row in shelf.findings_for(shelf.build(context, "beauty"), "beauty", context)
+    )
 
 
-def test_an_expired_product_is_never_offered_as_the_one_to_use_next():
-    """``prefer_care_product`` refuses an expired product, so we do not offer it."""
+def test_an_expired_product_is_never_told_to_be_used_before_replacing():
     unused_and_expired = _item(
         product_type="cleanser", name="Expired And Unused", expiry=TODAY - timedelta(days=5),
     )
-    queue = _queue(_context(unused_and_expired, low_use=(unused_and_expired.id,)))
-    low = next(row for row in queue.active if row.rule_id == rules_engine.RULE_LOW_USE)
+    context = _context(unused_and_expired, low_use=(unused_and_expired.id,))
+    queue = _queue(context)
 
-    assert low.action.kind == manager.ACTION_OPEN_INVENTORY_ITEM
+    assert _use_decisions(queue) == []
+    assert all(row.rule_id != rules_engine.RULE_LOW_USE for row in queue.active)
+    # It is still expired, so the manager has something honest to say instead.
+    assert queue.primary.rule_id == rules_engine.RULE_EXPIRED
+    assert any(
+        row.rule_id == rules_engine.RULE_LOW_USE
+        for row in shelf.findings_for(shelf.build(context, "beauty"), "beauty", context)
+    )
 
 
-def test_a_product_with_a_confirmed_allergen_is_never_offered_as_the_one_to_use_next():
+def _with_confirmed_allergen(item: OwnedItem, context: ShelfContext) -> ShelfContext:
     from app.domains.routines.models import ProductIngredient
     from app.shared.database.base import utcnow
 
-    item = _item(product_type="cleanser", name="Scented Cleanser", expiry=TODAY + timedelta(days=400))
-    context = _context(item, allergies=("fragrance",), low_use=(item.id,))
     context.stored_ingredients[str(item.id)] = [ProductIngredient(
         account_id=context.account_id, item_id=item.id, ingredient_key="fragrance",
         matched_text="parfum", confidence=1.0, source="user_declared",
         needs_confirmation=False, confirmed_at=utcnow(),
     )]
-    queue = _queue(context)
-    low = next(row for row in queue.active if row.rule_id == rules_engine.RULE_LOW_USE)
+    return context
 
-    assert low.action.kind == manager.ACTION_OPEN_INVENTORY_ITEM
+
+def test_a_product_carrying_a_declared_allergen_is_never_told_to_be_used():
+    item = _item(product_type="cleanser", name="Scented Cleanser", expiry=TODAY + timedelta(days=400))
+    context = _with_confirmed_allergen(
+        item, _context(item, allergies=("fragrance",), low_use=(item.id,)),
+    )
+    queue = _queue(context)
+
+    assert _use_decisions(queue) == []
+    # What it says instead is the avoid decision, which is the honest one.
+    assert queue.primary.rule_id == rules_engine.RULE_ALLERGY
+    assert queue.primary.action.kind == manager.ACTION_PAUSE_PRODUCT
+    assert any(
+        row.rule_id == rules_engine.RULE_LOW_USE
+        for row in shelf.findings_for(shelf.build(context, "beauty"), "beauty", context)
+    )
+
+
+def test_an_already_preferred_product_is_not_asked_to_be_preferred_again():
+    """Already the product for its step. There is nothing left to decide."""
+    running_out = _item(product_type="cleanser", name="Already Preferred",
+                        expiry=TODAY + timedelta(days=10))
+    context = _context(running_out)
+
+    offered = _queue(context)
+    assert offered.primary.decision == manager.DECISION_USE_NEXT
+    assert offered.primary.action.kind == manager.ACTION_PREFER_PRODUCT
+
+    settled = _queue(context, preferred_item_ids=frozenset({running_out.id}))
+    assert _use_decisions(settled) == []
+
+
+def test_a_product_with_no_routine_step_is_never_told_to_be_used_next():
+    """Opening its page is not a reason to tell somebody to use it."""
+    running_out = _item(product_type="mystery", name="Unknown Product",
+                        expiry=TODAY + timedelta(days=10))
+    context = _context(running_out)
+    queue = _queue(context)
+
+    assert _use_decisions(queue) == []
+    assert all(row.rule_id != rules_engine.RULE_EXPIRING for row in queue.active)
+    assert any(
+        row.rule_id == rules_engine.RULE_EXPIRING
+        for row in shelf.findings_for(shelf.build(context, "beauty"), "beauty", context)
+    )
+
+
+def test_a_group_of_unused_products_is_not_told_to_be_used_when_one_is_blocked():
+    """One reviewed finding names the whole group, so it speaks for all of them.
+
+    There is no honest way to say "use these" while one of them is a product
+    Care says should not be used, and partitioning the group would mean the
+    manager redrawing what the reviewed finding said.
+    """
+    fine_a = _item(product_type="toner", name="Unused Toner", expiry=TODAY + timedelta(days=400))
+    fine_b = _item(product_type="eye", name="Unused Eye Cream", expiry=TODAY + timedelta(days=400))
+    blocked = _item(product_type="face_oil", name="Unused And Expired",
+                    expiry=TODAY - timedelta(days=3))
+    group = (fine_a, fine_b, blocked)
+    context = _context(*group, low_use=tuple(row.id for row in group))
+    queue = _queue(context)
+
+    assert _use_decisions(queue) == []
+    assert all(row.rule_id != rules_engine.RULE_LOW_USE for row in queue.active)
+    assert any(
+        row.rule_id == rules_engine.RULE_LOW_USE
+        for row in shelf.findings_for(shelf.build(context, "beauty"), "beauty", context)
+    )
+
+
+def test_a_group_of_unused_products_is_told_to_be_used_when_none_is_blocked():
+    """The conservative rule must not silence the honest case as well."""
+    first = _item(product_type="toner", name="Unused Toner", expiry=TODAY + timedelta(days=400))
+    second = _item(product_type="eye", name="Unused Eye Cream", expiry=TODAY + timedelta(days=400))
+    group = (first, second)
+    context = _context(*group, low_use=tuple(row.id for row in group))
+    queue = _queue(context)
+
+    low = next(row for row in queue.active if row.rule_id == rules_engine.RULE_LOW_USE)
+    assert low.decision == manager.DECISION_USE_THESE_BEFORE_REPLACING
+    assert low.action.kind == manager.ACTION_OPEN_ROUTINE
+    assert set(low.item_ids) == {str(first.id), str(second.id)}
+
+
+def test_what_the_manager_will_ask_you_to_use_is_what_care_would_accept():
+    """The predicate, stated on its own so it cannot drift by accident."""
+    fine = _item(product_type="cleanser", name="Fine", expiry=TODAY + timedelta(days=400))
+    context = _context(fine)
+    product = shelf.build(context, "beauty")[0]
+
+    assert manager.can_ask_to_use(product, frozenset()) is True
+    assert manager.can_ask_to_use(product, frozenset({fine.id})) is False
+
+    unplaced = _item(product_type="mystery", name="Unplaced", expiry=TODAY + timedelta(days=400))
+    unplaced_product = shelf.build(_context(unplaced), "beauty")[0]
+    assert unplaced_product.slot is None
+    assert manager.can_ask_to_use(unplaced_product, frozenset()) is False
 
 
 def test_what_blocks_a_preference_is_what_the_care_engine_says_blocks_one():
@@ -595,15 +722,6 @@ def test_what_blocks_a_preference_is_what_the_care_engine_says_blocks_one():
 
     assert ours == canonical
     assert fine.item.id not in ours
-
-
-def test_an_expiring_product_with_no_routine_step_is_opened_rather_than_preferred():
-    running_out = _item(product_type="mystery", name="Unknown Product", expiry=TODAY + timedelta(days=10))
-    queue = _queue(_context(running_out))
-    row = next(r for r in queue.active if r.rule_id == rules_engine.RULE_EXPIRING)
-
-    assert row.slot is None
-    assert row.action.kind == manager.ACTION_OPEN_INVENTORY_ITEM
 
 
 # ---------------------------------------------------------------------------
@@ -886,6 +1004,36 @@ def test_the_manager_reads_no_prose_so_there_is_nothing_to_hand_off():
 
     stored = {column.name for column in ShelfManagerDecisionEvent.__table__.columns}
     assert not stored & {"note", "question", "text", "message", "payload", "reason"}
+
+
+def test_the_manager_cannot_reach_the_facts_the_handoff_gate_exists_for():
+    """The gate is unwired because its subject matter is out of reach.
+
+    Everything the manager knows about a person comes through
+    ``shelf.SHELF_ATTRIBUTES``, and that list is the whole surface. None of the
+    six situations ``hard_handoff`` exists to catch — an age below the minimum,
+    something asked on a child's behalf, pregnancy, breastfeeding, a named
+    medication, a condition a clinician is already looking after — can be
+    reached through it. Widening that list is what would make this decision
+    wrong, so this is the test that fails when somebody does.
+    """
+    from app.domains.routines.hard_handoff import HandoffReason
+
+    assert set(shelf.SHELF_ATTRIBUTES) == {
+        "allergies", "climate", "city", "hydration_habits", "preferred_style",
+    }
+    medical = {
+        "age", "date_of_birth", "birth_year", "is_child", "child", "dependent",
+        "pregnant", "pregnancy", "trimester", "breastfeeding", "nursing",
+        "medication", "medications", "prescription", "drug",
+        "condition", "conditions", "diagnosis", "diagnosed", "under_care",
+    }
+    assert not set(shelf.SHELF_ATTRIBUTES) & medical
+    # Named so the two lists are read together when either one changes.
+    assert {str(reason) for reason in HandoffReason} == {
+        "age_under_minimum", "child_subject", "pregnancy", "breastfeeding",
+        "medication", "clinical_condition", "uncertain",
+    }
 
 
 def test_the_stored_choice_is_always_derived_from_the_kind_and_never_sent():

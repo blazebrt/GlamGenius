@@ -396,7 +396,6 @@ def _finding_decision(
     products: dict[str, ShelfProduct],
     today: date,
     blocked_item_ids: frozenset[uuid.UUID],
-    preferred_item_ids: frozenset[uuid.UUID],
 ) -> ManagerDecision | None:
     """One reviewed finding, expressed as a decision — or nothing.
 
@@ -430,9 +429,21 @@ def _finding_decision(
     elif finding.rule_id == rules_engine.RULE_LOW_USE:
         # Named plainly. Never "wasted", never a number with a currency on it.
         if single is not None:
+            if not can_ask_to_use(single, blocked_item_ids):
+                return None
             decision = DECISION_USE_BEFORE_REPLACING
-            action = _prefer_or_open(single, blocked_item_ids, preferred_item_ids)
+            action = ManagerAction(ACTION_PREFER_PRODUCT, item_ids[0])
         else:
+            # One reviewed finding names the whole group, so the manager can
+            # only speak about the whole group. If Care would refuse any one of
+            # them, "use these" is false about that one, and there is no honest
+            # way to say it while the finding covers them all. Fail closed for
+            # the group rather than quietly redrawing what the finding said.
+            if any(
+                product_id in products and products[product_id].item.id in blocked_item_ids
+                for product_id in item_ids
+            ):
+                return None
             decision, action = DECISION_USE_THESE_BEFORE_REPLACING, ManagerAction(ACTION_OPEN_ROUTINE)
         key, reason = _item_key(finding.rule_id, item_ids), finding.detail
     elif len(item_ids) != 1:
@@ -456,8 +467,10 @@ def _finding_decision(
         action = ManagerAction(ACTION_CONFIRM_LABEL, item_ids[0])
         key, reason = _item_key(finding.rule_id, item_ids), finding.headline
     elif finding.rule_id == rules_engine.RULE_EXPIRING:
+        if not can_ask_to_use(single, blocked_item_ids):
+            return None
         decision = DECISION_USE_NEXT
-        action = _prefer_or_open(single, blocked_item_ids, preferred_item_ids)
+        action = ManagerAction(ACTION_PREFER_PRODUCT, item_ids[0])
         key, reason = _item_key(finding.rule_id, item_ids), finding.headline
     elif finding.rule_id == rules_engine.RULE_NO_EXPIRY:
         decision = DECISION_RECORD_DATE
@@ -516,26 +529,23 @@ def preference_blocked_item_ids(
     return frozenset(blocked)
 
 
-def _prefer_or_open(
-    product: ShelfProduct,
-    blocked_item_ids: frozenset[uuid.UUID],
-    preferred_item_ids: frozenset[uuid.UUID],
-) -> ManagerAction:
-    """Offer "use this one" only where the Care authority would accept it.
+def can_ask_to_use(product: ShelfProduct, blocked_item_ids: frozenset[uuid.UUID]) -> bool:
+    """May the manager tell somebody to use this product?
 
-    ``prefer_care_product`` refuses a product with no routine step, one that is
-    paused, and one that is not eligible. Offering a button that the authority
-    would then refuse is worse than offering a plainer one, so anything that
-    does not clearly qualify opens the product instead.
+    Only where the Care authority would accept making it the product for its
+    step. ``prefer_care_product`` refuses a product with no confirmed routine
+    role, one that is paused, one past its date and one carrying a confirmed
+    match against a declared allergy — and refusing is right in every one of
+    those cases.
+
+    The sentence is the decision, not the button. Softening the button to
+    "open this product" while still saying *use this* would leave the manager
+    telling somebody to use a product it has itself just decided they should
+    not. Where it cannot honestly ask, it says nothing: the reviewed finding
+    stays on the shelf report, where it is information rather than an
+    instruction. Narrow beats contradictory.
     """
-    item_id = product.item.id
-    qualifies = (
-        product.slot is not None
-        and item_id not in blocked_item_ids
-        and item_id not in preferred_item_ids
-    )
-    kind = ACTION_PREFER_PRODUCT if qualifies else ACTION_OPEN_INVENTORY_ITEM
-    return ManagerAction(kind, str(item_id))
+    return product.slot is not None and product.item.id not in blocked_item_ids
 
 
 # --- Giving things back -------------------------------------------------------
@@ -694,7 +704,6 @@ def compile_queue(
                 products=products,
                 today=context.today,
                 blocked_item_ids=blocked,
-                preferred_item_ids=preferred_item_ids,
             )
             if decision is not None:
                 raw.append(decision)
@@ -902,6 +911,7 @@ __all__ = [
     "decision_rank",
     "give_back_candidates",
     "give_back_decisions",
+    "can_ask_to_use",
     "preference_blocked_item_ids",
     "stored_choice_for",
 ]
