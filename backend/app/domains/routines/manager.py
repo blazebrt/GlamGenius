@@ -389,6 +389,35 @@ def _nearest_expiry(
     return (soonest - today).days, soonest
 
 
+def _every_named_product_may_be_used(
+    item_ids: Sequence[str],
+    products: dict[str, ShelfProduct],
+    blocked_item_ids: frozenset[uuid.UUID],
+) -> bool:
+    """May the manager invite somebody to use *every* one of these?
+
+    A reviewed finding that names a group speaks about the whole group, so the
+    sentence has to be true of all of them. One product the manager may not ask
+    about on its own — Care would refuse it, or it has no routine role to be
+    used in — is enough to make "use these" false, and there is no honest way
+    to say it while the finding covers them all.
+
+    Fail closed for the group. Dropping the one that does not qualify and
+    saying it about the rest would be the manager redrawing what the reviewed
+    rule said, which is not its to redraw. A product that cannot be resolved at
+    all is treated the same way: we cannot check it, so we do not speak for it.
+
+    The predicate is :func:`can_ask_to_use`, unchanged — the same one a
+    single-product decision has to satisfy. There is one definition of what the
+    manager may ask somebody to use, and this is a use of it rather than a
+    second opinion about it.
+    """
+    return all(
+        product_id in products and can_ask_to_use(products[product_id], blocked_item_ids)
+        for product_id in item_ids
+    )
+
+
 def _finding_decision(
     finding: Finding,
     *,
@@ -434,15 +463,7 @@ def _finding_decision(
             decision = DECISION_USE_BEFORE_REPLACING
             action = ManagerAction(ACTION_PREFER_PRODUCT, item_ids[0])
         else:
-            # One reviewed finding names the whole group, so the manager can
-            # only speak about the whole group. If Care would refuse any one of
-            # them, "use these" is false about that one, and there is no honest
-            # way to say it while the finding covers them all. Fail closed for
-            # the group rather than quietly redrawing what the finding said.
-            if any(
-                product_id in products and products[product_id].item.id in blocked_item_ids
-                for product_id in item_ids
-            ):
+            if not _every_named_product_may_be_used(item_ids, products, blocked_item_ids):
                 return None
             decision, action = DECISION_USE_THESE_BEFORE_REPLACING, ManagerAction(ACTION_OPEN_ROUTINE)
         key, reason = _item_key(finding.rule_id, item_ids), finding.detail

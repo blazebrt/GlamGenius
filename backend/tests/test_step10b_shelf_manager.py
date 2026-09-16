@@ -664,6 +664,67 @@ def test_a_group_of_unused_products_is_not_told_to_be_used_when_one_is_blocked()
     )
 
 
+def test_a_group_of_unused_products_is_silent_when_one_has_no_routine_role():
+    """The group obeys the same predicate one product obeys.
+
+    Neither product is expired, allergen-blocked or paused, so nothing Care
+    restricts is involved. One of them simply has no routine role, which is
+    already reason enough to refuse a use instruction about it on its own. A
+    reviewed finding that names a group speaks about the whole group, so the
+    sentence has to be true of every one of them.
+    """
+    placed = _item(product_type="toner", name="Unused Toner", expiry=TODAY + timedelta(days=400))
+    unplaceable = _item(product_type="mystery", name="Unused Oddment",
+                        expiry=TODAY + timedelta(days=400))
+    group = (placed, unplaceable)
+    context = _context(*group, low_use=tuple(row.id for row in group))
+
+    built = shelf.build(context, "beauty")
+    assert {product.id: product.slot for product in built} == {
+        str(placed.id): "toner", str(unplaceable.id): None,
+    }
+    # The canonical shelf engine names both of them in one reviewed finding.
+    findings = shelf.findings_for(built, "beauty", context)
+    low = next(row for row in findings if row.rule_id == rules_engine.RULE_LOW_USE)
+    assert set(low.item_ids) == {str(placed.id), str(unplaceable.id)}
+
+    queue = _queue(context)
+
+    assert _use_decisions(queue) == []
+    assert all(row.rule_id != rules_engine.RULE_LOW_USE for row in queue.active)
+    assert manager.DECISION_USE_THESE_BEFORE_REPLACING not in str(queue.as_dict())
+    # Neither product is named through that finding, including the eligible one.
+    assert all(
+        not ({str(placed.id), str(unplaceable.id)} & set(row.item_ids))
+        for row in queue.active if row.rule_id == rules_engine.RULE_LOW_USE
+    )
+    # And the shelf finding is exactly as the reviewed engine left it.
+    assert set(low.item_ids) == {str(placed.id), str(unplaceable.id)}
+    assert low.detail == next(
+        row for row in shelf.findings_for(shelf.build(context, "beauty"), "beauty", context)
+        if row.rule_id == rules_engine.RULE_LOW_USE
+    ).detail
+
+
+def test_a_group_still_speaks_when_one_of_them_is_merely_already_preferred():
+    """Already preferred does not make "use these" false.
+
+    Failing closed is for products the manager may not ask about at all, not
+    for every state it can think of. Somebody already using one of these for
+    its step is not a reason to stop mentioning the others.
+    """
+    first = _item(product_type="toner", name="Unused Toner", expiry=TODAY + timedelta(days=400))
+    second = _item(product_type="eye", name="Unused Eye Cream", expiry=TODAY + timedelta(days=400))
+    group = (first, second)
+    context = _context(*group, low_use=tuple(row.id for row in group))
+
+    queue = _queue(context, preferred_item_ids=frozenset({first.id}))
+
+    low = next(row for row in queue.active if row.rule_id == rules_engine.RULE_LOW_USE)
+    assert low.decision == manager.DECISION_USE_THESE_BEFORE_REPLACING
+    assert set(low.item_ids) == {str(first.id), str(second.id)}
+
+
 def test_a_group_of_unused_products_is_told_to_be_used_when_none_is_blocked():
     """The conservative rule must not silence the honest case as well."""
     first = _item(product_type="toner", name="Unused Toner", expiry=TODAY + timedelta(days=400))

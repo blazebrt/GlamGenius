@@ -22,7 +22,7 @@ from app.domains.care.product_preferences import CARE_ROUTINE_PAUSED_ATTRIBUTE_K
 from app.domains.inventory.models import InventoryAttribute, InventoryEvent, InventoryItem
 from app.domains.privacy import deletion_service
 from app.domains.privacy.export import build_export
-from app.domains.routines import manager
+from app.domains.routines import manager, shelf
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import ProductIngredient, RoutineAdherence, ShelfManagerDecisionEvent
 from app.shared.database.base import utcnow
@@ -976,6 +976,120 @@ async def test_the_give_back_log_is_read_per_account_even_when_asked_wrongly(
 
     assert [str(row.item_id) for row in mine] == [item_id]
     assert theirs == []
+
+
+async def _low_use_warning(client, token: str) -> dict | None:
+    """The reviewed low-use warning exactly as ``/shelf/summary`` reports it."""
+    body = (await client.get("/api/v2/shelf/summary", headers=auth(token))).json()
+    for report in body["reports"].values():
+        for warning in report["warnings"]:
+            if warning["rule_id"] == rules_engine.RULE_LOW_USE:
+                return warning
+    return None
+
+
+async def _drain_the_queue(client, token: str, *, limit: int = 12) -> list[dict]:
+    """Answer "not now" to everything, returning each decision as it surfaced.
+
+    Reading one decision proves only that the low-use group is not at the front
+    right now. Walking the whole queue proves it never becomes an instruction.
+    """
+    seen: list[dict] = []
+    for step in range(limit):
+        payload = await _manager(client, token)
+        primary = payload["primary"]
+        if primary is None:
+            return seen
+        seen.append(primary)
+        response = await _respond(client, token, primary, "override", key=f"mut-drain-{step:02d}")
+        assert response.status_code == 200, response.text
+    raise AssertionError(f"queue did not empty within {limit} decisions")
+
+
+async def test_a_low_use_group_naming_an_unplaceable_product_never_asks_for_its_use(
+    app_client, db_clean, registered_supabase_user,
+):
+    """The whole path, from stored inventory to the card.
+
+    Two products, both genuinely unused, neither expired, allergen-blocked or
+    paused. One has a routine role and one has none. The reviewed engine names
+    them together, and it is right to: they are both sitting there unused. The
+    manager may not turn that into "use these", because it would be saying it
+    about a product it has no honest way to ask anybody to use.
+    """
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    placed = await _add(
+        app_client, token, name="Unused Toner", product_type="toner",
+        expiry=TODAY + timedelta(days=400),
+    )
+    unplaceable = await _add(
+        app_client, token, name="Unused Oddment", product_type="mystery",
+        expiry=TODAY + timedelta(days=400),
+    )
+    for item_id in (placed, unplaceable):
+        await _make_low_use(item_id)
+
+    # The reviewed shelf finding names both, and keeps naming both throughout.
+    warning = await _low_use_warning(app_client, token)
+    assert warning is not None
+    assert set(warning["item_ids"]) == {placed, unplaceable}
+
+    async with get_sessionmaker()() as session:
+        built = {
+            product.id: product.slot
+            for product in shelf.build(await shelf.gather(session, account_id=account_id), "beauty")
+        }
+    assert built == {placed: "toner", unplaceable: None}
+
+    # Reading decides nothing and records nothing.
+    first = await _manager(app_client, token)
+    assert _use_instructions(first) == []
+    assert await _events(account_id) == []
+
+    surfaced = await _drain_the_queue(app_client, token)
+
+    assert surfaced, "this shelf should have something to say"
+    assert all(row["rule_id"] != rules_engine.RULE_LOW_USE for row in surfaced), [
+        row["rule_id"] for row in surfaced
+    ]
+    assert all(not row["decision"].lower().startswith("use ") for row in surfaced)
+    assert all(
+        not ({placed, unplaceable} & set(row["item_ids"]))
+        for row in surfaced if row["rule_id"] == rules_engine.RULE_LOW_USE
+    )
+    # Every answer here was "not now"; nothing was applied to either product.
+    assert {row.choice for row in await _events(account_id)} == {"overridden"}
+    assert await _is_paused(placed) is False
+    assert await _is_paused(unplaceable) is False
+
+    # And the shelf report is untouched by any of it.
+    after = await _low_use_warning(app_client, token)
+    assert after is not None
+    assert set(after["item_ids"]) == {placed, unplaceable}
+    assert after["detail"] == warning["detail"]
+    assert after["evidence_note"] == warning["evidence_note"]
+
+
+async def test_a_low_use_group_whose_products_all_have_a_role_still_asks(
+    app_client, db_clean, registered_supabase_user,
+):
+    """Failing closed must not silence the case it was never about."""
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    first = await _add(app_client, token, name="Unused Toner", product_type="toner",
+                       expiry=TODAY + timedelta(days=400))
+    second = await _add(app_client, token, name="Unused Eye Cream", product_type="eye",
+                        expiry=TODAY + timedelta(days=400))
+    for item_id in (first, second):
+        await _make_low_use(item_id)
+
+    active = (await _compiled(account_id)).active
+    low = next(row for row in active if row.rule_id == rules_engine.RULE_LOW_USE)
+
+    assert low.decision == manager.DECISION_USE_THESE_BEFORE_REPLACING
+    assert set(low.item_ids) == {first, second}
+    assert low.action.kind == manager.ACTION_OPEN_ROUTINE
 
 
 # ---------------------------------------------------------------------------
