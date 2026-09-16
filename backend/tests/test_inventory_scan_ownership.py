@@ -1,0 +1,74 @@
+"""PostgreSQL/API acceptance proof for Step 10A exact scan ownership."""
+from __future__ import annotations
+
+import uuid
+
+import pytest
+from app.domains.ai_gateway.models import AIRun
+from app.domains.inventory.models import InventoryItem, InventoryProductLink
+from app.domains.product.devices import _hash
+from app.domains.product.models import LabelSnapshot, ProductRecord, ScanDevice, ScanEvent
+from app.shared.database.sql import get_sessionmaker
+from httpx import AsyncClient
+from sqlalchemy import select
+
+from tests.conftest import auth
+
+pytestmark = pytest.mark.asyncio
+
+
+async def _chain(account_id, *, facts=None):
+    raw = f"device-token-{uuid.uuid4().hex}"; barcode = "8901234567890"
+    async with get_sessionmaker()() as s:
+        d = ScanDevice(device_key=f"step10a-{uuid.uuid4().hex}", token_hash=_hash(raw), claimed_by_account_id=account_id)
+        p = ProductRecord(barcode=barcode, origin="label_capture", confidence="unverified")
+        s.add_all([d, p]); await s.flush()
+        run = AIRun(account_id=account_id, feature="label_capture", provider="test", model="test", prompt_version="test", schema_version="test", status="succeeded", validation_passed=True)
+        s.add(run); await s.flush()
+        f = facts if facts is not None else {"product_category": "beauty", "product_name": "Verified Cleanser", "brand": "Verified Brand"}
+        e = ScanEvent(device_id=d.id, account_id=account_id, barcode=barcode, outcome="label_captured", client_scan_id=uuid.uuid4().hex, label_facts=f, ai_run_id=run.id)
+        s.add(e); await s.flush()
+        snap = LabelSnapshot(barcode=barcode, device_id=d.id, scan_event_id=e.id, facts=f, confidence="unverified", content_fingerprint="a" * 64, version_number=1, changed_fields=[], completeness="complete_for_grading")
+        s.add(snap); await s.commit()
+        return raw, p.id, snap
+
+
+def _headers(auth_token, device_token): return {**auth(auth_token), "X-Device-Token": device_token}
+def _body(snapshot, key="step10a-key"):
+    return {"barcode": snapshot.barcode, "label_snapshot_id": str(snapshot.id), "label_version": snapshot.version_number, "content_fingerprint": snapshot.content_fingerprint, "client_mutation_id": key}
+
+
+async def _rows(account_id):
+    async with get_sessionmaker()() as s:
+        return ((await s.execute(select(InventoryItem).where(InventoryItem.account_id == account_id))).scalars().all(), (await s.execute(select(InventoryProductLink).where(InventoryProductLink.account_id == account_id))).scalars().all())
+
+
+async def test_add_and_exact_status(app_client: AsyncClient, db_clean, registered_supabase_user):
+    token, account = await registered_supabase_user(); device, product_id, snap = await _chain(account); body = _body(snap); headers = _headers(token, device)
+    before = await app_client.get(f"/api/v2/inventory/from-scan/{body['barcode']}/status", headers=headers, params={k: body[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
+    assert before.status_code == 200 and before.json()["status"] == "eligible_not_owned"
+    added = await app_client.post("/api/v2/inventory/from-scan", headers=headers, json=body)
+    assert added.status_code == 200 and added.json()["status"] == "owned"
+    items, links = await _rows(account); assert len(items) == len(links) == 1
+    assert links[0].product_record_id == product_id and links[0].label_snapshot_id == snap.id and links[0].content_fingerprint == "a" * 64
+    after = await app_client.get(f"/api/v2/inventory/from-scan/{body['barcode']}/status", headers=headers, params={k: body[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
+    assert after.json()["status"] == "owned" and after.json()["inventory_item_id"] == added.json()["inventory_item_id"]
+
+
+async def test_foreign_authority_mismatch_and_off_like_facts_create_nothing(app_client: AsyncClient, db_clean, registered_supabase_user):
+    token_a, account_a = await registered_supabase_user(); token_b, account_b = await registered_supabase_user(); device, _, snap = await _chain(account_a)
+    response = await app_client.post("/api/v2/inventory/from-scan", headers=_headers(token_b, device), json=_body(snap))
+    assert response.status_code == 422 and await _rows(account_b) == ([], [])
+    device, _, snap = await _chain(account_a, facts={"ingredients_text": "public fallback is prohibited"})
+    response = await app_client.post("/api/v2/inventory/from-scan", headers=_headers(token_a, device), json=_body(snap, "off-key"))
+    assert response.status_code == 422 and await _rows(account_a) == ([], [])
+
+
+async def test_same_key_replays_and_changed_identity_conflicts(app_client: AsyncClient, db_clean, registered_supabase_user):
+    token, account = await registered_supabase_user(); device, _, snap = await _chain(account); body = _body(snap); headers = _headers(token, device)
+    first = await app_client.post("/api/v2/inventory/from-scan", headers=headers, json=body)
+    replay = await app_client.post("/api/v2/inventory/from-scan", headers=headers, json=body)
+    assert first.status_code == replay.status_code == 200 and first.json()["inventory_item_id"] == replay.json()["inventory_item_id"]
+    changed = await app_client.post("/api/v2/inventory/from-scan", headers=headers, json={**body, "content_fingerprint": "b" * 64})
+    assert changed.status_code == 422
+    items, links = await _rows(account); assert len(items) == len(links) == 1

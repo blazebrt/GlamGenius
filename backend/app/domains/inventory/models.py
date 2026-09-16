@@ -72,6 +72,35 @@ class InventoryItem(UUIDPrimaryKey, TimestampMixin, Base):
     )
 
 
+class InventoryProductLink(UUIDPrimaryKey, TimestampMixin, Base):
+    """Exact physical-label identity explicitly linked to one owned item."""
+
+    __tablename__ = "inventory_product_links"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    inventory_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False
+    )
+    product_record_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("product_records.id", ondelete="RESTRICT"), nullable=False
+    )
+    barcode: Mapped[str] = mapped_column(String(64), nullable=False)
+    label_snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("product_label_snapshots.id", ondelete="RESTRICT"), nullable=False
+    )
+    label_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="explicit_scan", server_default="explicit_scan")
+
+    __table_args__ = (
+        UniqueConstraint("inventory_item_id", name="uq_inventory_product_link_item"),
+        Index("ix_inventory_product_links_account_barcode", "account_id", "barcode"),
+        Index("ix_inventory_product_links_snapshot", "label_snapshot_id"),
+    )
+
+
 class InventoryItemImage(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "inventory_item_images"
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), nullable=False)
