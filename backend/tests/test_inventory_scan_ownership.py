@@ -174,3 +174,33 @@ async def test_concurrent_same_key_replays_one_exact_ownership(app_client: Async
     assert first.status_code == second.status_code == 200
     assert first.json()["inventory_item_id"] == second.json()["inventory_item_id"]
     items, links = await _rows(account); assert len(items) == len(links) == 1
+
+
+async def test_concurrent_same_key_different_identity_conflicts_without_hybrid_link(app_client: AsyncClient, db_clean, registered_supabase_user, monkeypatch):
+    token, account = await registered_supabase_user()
+    device_a, product_a, snapshot_a = await _chain(account, barcode="8901234567890")
+    device_b, product_b, snapshot_b = await _chain(account, barcode="8901234567891", fingerprint="b" * 64)
+    original = scan_ownership.inventory_service.create_item
+    arrived = 0; lock = asyncio.Lock(); open_gate = asyncio.Event()
+
+    async def synchronized_create(*args, **kwargs):
+        nonlocal arrived
+        async with lock:
+            arrived += 1
+            if arrived == 2: open_gate.set()
+        await asyncio.wait_for(open_gate.wait(), timeout=5)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(scan_ownership.inventory_service, "create_item", synchronized_create)
+    key = "concurrent-changed-key"
+    first, second = await asyncio.gather(
+        app_client.post("/api/v2/inventory/from-scan", headers=_headers(token, device_a), json=_body(snapshot_a, key)),
+        app_client.post("/api/v2/inventory/from-scan", headers=_headers(token, device_b), json=_body(snapshot_b, key)),
+    )
+    assert sorted([first.status_code, second.status_code]) == [200, 422]
+    items, links = await _rows(account); assert len(items) == len(links) == 1
+    link = links[0]
+    assert (link.product_record_id, link.barcode, link.label_snapshot_id, link.label_version, link.content_fingerprint) in {
+        (product_a, snapshot_a.barcode, snapshot_a.id, snapshot_a.version_number, snapshot_a.content_fingerprint),
+        (product_b, snapshot_b.barcode, snapshot_b.id, snapshot_b.version_number, snapshot_b.content_fingerprint),
+    }
