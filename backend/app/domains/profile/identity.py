@@ -21,16 +21,28 @@ previously able to leave implicit and get wrong.
 Three things hold this together, and each exists because assuming it was not
 enough.
 
-**The subject is re-resolved from the database, not trusted.**
+**The principal and the subject are two different facts.**
+Who is allowed to reach this data, and whose body a decision is about, are not
+two spellings of one thing. They are carried separately, and the first is never
+read off the second.
+
 :class:`~app.domains.family.subject.ResolvedSubject` is an ordinary public
-dataclass. Any caller can construct one with an arbitrary ``account_id``,
-``subject_id``, ``relation`` or ``age_band``, so an ``isinstance`` check proves
-only that the shape is right — never that the server agreed. Every entry point
-here therefore passes what it is given through :func:`canonical_subject`, which
-throws the claimed fields away and rebuilds them from the stored row under the
-authenticated account. That is also why the age band cannot be talked down: a
-request can name a real under-twelve member and claim they are an adult, and
-the band that reaches the hard-handoff gate is still the stored one.
+dataclass. Any caller can construct one — including a *complete and internally
+consistent* identity belonging to somebody else, where ``account_id`` and
+``subject_id`` agree with each other perfectly and the only thing wrong with
+the pair is that it is not the caller's. Re-resolving the subject under its own
+``account_id`` would confirm that forgery rather than catch it. An
+``isinstance`` check is weaker still: it proves the shape, never that the server
+agreed.
+
+So every entry point here takes ``principal_account_id`` as a separate keyword
+argument, sourced from authenticated context that the caller does not own, and
+:func:`canonical_subject` requires the subject to agree with it before anything
+is read. The claimed ``kind``, ``relation`` and ``age_band`` are then discarded
+and rebuilt from the stored row. That last part is why the age band cannot be
+talked down: a request can name a real under-twelve member of its *own*
+household and claim they are an adult, and the band that reaches the
+hard-handoff gate is still the stored one.
 
 **Ownership is two columns, not one.** A profile bound to a household subject is
 only this account's profile when ``account_id`` agrees as well. The foreign key
@@ -57,6 +69,26 @@ the Supabase user id, written at registration — so it can be locked without
 first creating anything. Household creation and self profile adoption both take
 it before they look at what exists, which is what makes them agree about a
 household that is being created at the same moment.
+
+Concretely, and these are the only locks any write path here takes:
+
+* **Writing for the account holder** — ``resolve_self_profile_for_write`` takes
+  the ``accounts`` row ``FOR UPDATE``, and nothing else. It never takes a
+  ``family_profiles`` lock, because the ``self`` row cannot be deactivated and
+  taking it *after* the account row is the only order that would not invert the
+  one above.
+* **Writing for a named member** — ``canonical_subject_for_write`` takes that
+  member's ``family_profiles`` row ``FOR UPDATE``, and nothing else. No
+  account-wide lock, because a write about one person has no business
+  serialising a household against itself for everybody else in it.
+* **Opening a household** — ``circle_for(create=True)`` takes the ``accounts``
+  row, then inserts the circle and its ``self`` row.
+
+Nothing takes the member lock and then the account lock, so the order holds and
+there is no cycle to deadlock on. The member lock is what keeps a concurrent
+deactivation from landing between "this member is active" and the facts being
+written about them: the two contend on one row, and the pair settles into a
+single order rather than both believing they won.
 """
 from __future__ import annotations
 
@@ -69,7 +101,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.family.subject import (
     HouseholdInvariantError,
     ResolvedSubject,
+    SubjectNotFound,
     resolve_subject,
+    resolve_subject_for_write,
     safety_for,
 )
 from app.domains.identity.models import Account
@@ -89,6 +123,7 @@ __all__ = [
     "ProfileIdentityError",
     "SubjectRef",
     "canonical_subject",
+    "canonical_subject_for_write",
     "lock_account",
     "resolve_self_profile_for_read",
     "resolve_self_profile_for_write",
@@ -115,40 +150,80 @@ class ProfileIdentityError(IdentityInvariantError):
 
 
 async def canonical_subject(
-    session: AsyncSession, subject: object,
+    session: AsyncSession, *, principal_account_id: uuid.UUID, subject: object,
 ) -> ResolvedSubject:
-    """Re-derive a subject from the database. Nothing claimed survives.
+    """Re-derive a subject under the authenticated principal. Nothing claimed survives.
 
-    The type is not the guard, because ``ResolvedSubject`` is a public dataclass
-    with a public constructor. A caller can build one naming somebody else's
-    household member, or naming a real under-twelve member of their own
-    household as an adult, and the shape is indistinguishable from one this
-    server produced. Only a read decides.
+    ``principal_account_id`` is the security principal: who is allowed to reach
+    this data. ``subject`` is a claim about whose body a decision concerns. They
+    are separate arguments because they are separate facts, and because the
+    first must come from somewhere the caller does not control — the
+    authenticated request, a worker's own scope — rather than being read back
+    out of the claim it is meant to check.
 
-    So the only field taken at face value is ``account_id`` — which is not a
-    claim, it is the authenticated principal established before this call — and
-    everything else is re-read under it. ``kind``, ``relation`` and ``age_band``
-    come back from the stored row, so:
+    Taking ``subject.account_id`` as the principal, which this used to do, is
+    exactly as strong as taking nothing at all. A forged
+    ``ResolvedSubject(account_id=B, subject_id=B_MEMBER)`` is internally
+    consistent: re-resolving it under its own account finds the row, agrees
+    with itself, and hands account B's member to whoever asked. The two halves
+    checking each other is not a check.
 
+    So the principal is compared first, and only then is the subject read:
+
+    * a subject naming another account refuses, whether or not its own fields
+      agree with each other;
     * a subject id belonging to another household refuses;
     * a deactivated member refuses;
     * a forged ``kind=account_holder`` on an ordinary member does not delegate
       to the self path, because ``kind`` is recomputed from the stored relation;
     * a forged ``age_band`` is discarded, and the stored band is what reaches
       the hard-handoff gate;
-    * a synthesised "no household" subject is only accepted while the account
+    * a synthesised "no household" subject is only accepted while the principal
       genuinely has no household — once one exists it resolves to the stored
       ``self`` row instead, along with whatever that row says about age.
 
-    Raises :class:`~app.domains.family.subject.SubjectNotFound` for a subject
-    this account may not ask about, and
-    :class:`~app.domains.family.subject.HouseholdInvariantError` when the
-    household exists but has no single account holder.
+    Every refusal is the same :class:`~app.domains.family.subject.SubjectNotFound`
+    with no detail, because saying "that account exists but is not yours" and
+    "no such member" apart would confirm which accounts and members are real.
+    :class:`~app.domains.family.subject.HouseholdInvariantError` is raised when
+    the principal's household exists but has no single account holder.
     """
     if not isinstance(subject, ResolvedSubject):
         raise ValueError("subject must be a ResolvedSubject")
+    if subject.account_id != principal_account_id:
+        # Answered exactly like an unknown subject: which of the two halves was
+        # wrong, and whether either named anything real, is not the caller's to
+        # learn.
+        raise SubjectNotFound("subject_not_found")
     return await resolve_subject(
-        session, account_id=subject.account_id, subject_id=subject.subject_id,
+        session, account_id=principal_account_id, subject_id=subject.subject_id,
+    )
+
+
+async def canonical_subject_for_write(
+    session: AsyncSession, *, principal_account_id: uuid.UUID, subject: object,
+) -> ResolvedSubject:
+    """Canonicalise, and keep the answer true for the rest of the transaction.
+
+    The plain :func:`canonical_subject` re-reads; this one re-reads and holds.
+    For a named household member the ``family_profiles`` row is locked, so a
+    concurrent deactivation cannot land between "this member is active" and the
+    facts being written about them.
+
+    The account holder is deliberately not locked here. Their row cannot be
+    deactivated — ``update_profile`` refuses it — and their write path takes the
+    account row lock, which is *above* ``FamilyProfile`` in the documented
+    order. Taking the member lock first and the account lock second would
+    invert that order and invite a deadlock against household creation, so this
+    path takes neither and leaves the serialisation to the one that does.
+    """
+    subject = await canonical_subject(
+        session, principal_account_id=principal_account_id, subject=subject,
+    )
+    if subject.is_account_holder or subject.subject_id is None:
+        return subject
+    return await resolve_subject_for_write(
+        session, account_id=principal_account_id, subject_id=subject.subject_id,
     )
 
 
@@ -307,25 +382,35 @@ async def resolve_self_profile_for_write(
 
 
 async def resolve_subject_profile_for_read(
-    session: AsyncSession, subject: ResolvedSubject,
+    session: AsyncSession,
+    subject: ResolvedSubject,
+    *,
+    principal_account_id: uuid.UUID,
 ) -> AppearanceProfile | None:
     """A checked subject's profile. Reads only.
 
-    Canonicalises first, so a caller that constructed its own subject reaches
-    the stored one or nothing. Then delegates for the account holder, so that
-    naming yourself and naming nobody cannot reach different rows.
+    Canonicalises under the principal first, so a caller that constructed its
+    own subject — even a complete and self-consistent one belonging to another
+    account — reaches the stored row or nothing. Then delegates for the account
+    holder, so that naming yourself and naming nobody cannot reach different
+    rows.
     """
-    subject = await canonical_subject(session, subject)
+    subject = await canonical_subject(
+        session, principal_account_id=principal_account_id, subject=subject,
+    )
     if subject.is_account_holder:
         return await _self_profile_for_read(session, subject)
     assert subject.subject_id is not None
     return await _profile_for_subject(
-        session, account_id=subject.account_id, subject_id=subject.subject_id,
+        session, account_id=principal_account_id, subject_id=subject.subject_id,
     )
 
 
 async def resolve_subject_profile_for_write(
-    session: AsyncSession, subject: ResolvedSubject,
+    session: AsyncSession,
+    subject: ResolvedSubject,
+    *,
+    principal_account_id: uuid.UUID,
 ) -> AppearanceProfile:
     """A checked subject's profile, created on first write.
 
@@ -346,13 +431,15 @@ async def resolve_subject_profile_for_write(
     holding an account-wide lock to create a second member's profile would
     serialise a household against itself for no gain.
     """
-    subject = await canonical_subject(session, subject)
+    subject = await canonical_subject_for_write(
+        session, principal_account_id=principal_account_id, subject=subject,
+    )
     if subject.is_account_holder:
-        return await resolve_self_profile_for_write(session, subject.account_id)
+        return await resolve_self_profile_for_write(session, principal_account_id)
 
     assert subject.subject_id is not None
     existing = await _profile_for_subject(
-        session, account_id=subject.account_id, subject_id=subject.subject_id,
+        session, account_id=principal_account_id, subject_id=subject.subject_id,
     )
     if existing is not None:
         return existing
@@ -369,7 +456,7 @@ async def resolve_subject_profile_for_write(
     await session.execute(
         pg_insert(AppearanceProfile.__table__)
         .values(
-            account_id=subject.account_id,
+            account_id=principal_account_id,
             household_subject_id=subject.subject_id,
         )
         .on_conflict_do_nothing(
@@ -382,7 +469,7 @@ async def resolve_subject_profile_for_write(
     # corrupt row raises instead of being mistaken for this account's profile
     # having been created.
     profile = await _profile_for_subject(
-        session, account_id=subject.account_id, subject_id=subject.subject_id,
+        session, account_id=principal_account_id, subject_id=subject.subject_id,
     )
     if profile is None:
         raise ProfileIdentityError("subject_profile_could_not_be_created")

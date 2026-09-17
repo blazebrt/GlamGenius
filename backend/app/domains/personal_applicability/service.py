@@ -359,6 +359,7 @@ async def interpret_label_snapshot_for_account(
     snapshot: LabelSnapshot,
     *,
     category: PersonalApplicabilityCategory,
+    principal_account_id: uuid.UUID,
     subject: SubjectRef,
     safety: PersonalLensSafetyInput | None = None,
 ) -> LabelSnapshotPersonalApplicability:
@@ -369,6 +370,7 @@ async def interpret_label_snapshot_for_account(
     context = await build_personal_lens_context(
         session,
         category=_lens_category(category),
+        principal_account_id=principal_account_id,
         subject=subject,
         safety=safety,
     )

@@ -278,6 +278,46 @@ async def resolve_subject(
     return _subject_from(profile, account_id)
 
 
+async def resolve_subject_for_write(
+    session: AsyncSession, *, account_id: uuid.UUID, subject_id: uuid.UUID,
+) -> ResolvedSubject:
+    """Resolve a named member and hold their membership still until commit.
+
+    :func:`resolve_subject` answers "was this member active a moment ago". For a
+    read that is the whole question. For a write it is not: a concurrent
+    deactivation can land between the check and the row being written, and the
+    write would then record facts about somebody the household had already
+    taken out — claiming, in the same transaction, an authority that no longer
+    existed when it committed.
+
+    So the member row is taken ``FOR UPDATE`` and re-read under the lock.
+    Deactivation is an ``UPDATE`` of that same row, so one of the two waits and
+    the pair settles into a single order: either the write completes and the
+    deactivation follows it, or the deactivation commits first and this refuses
+    like any other inactive member.
+
+    Lock order — this is the ``FamilyProfile`` step of the documented
+    ``Account -> FamilyCircle / FamilyProfile -> AppearanceProfile`` order, and
+    it stays inside it. No account-wide lock is taken to write about one member:
+    that would serialise a household against itself for people the write has
+    nothing to do with. The account holder's own path is the one that locks the
+    account, and it does so *before* anything here, never after.
+    """
+    profile = await session.scalar(
+        select(FamilyProfile)
+        .join(FamilyCircle, FamilyCircle.id == FamilyProfile.circle_id)
+        .where(
+            FamilyProfile.id == subject_id,
+            FamilyProfile.active.is_(True),
+            FamilyCircle.account_id == account_id,
+        )
+        .with_for_update(of=FamilyProfile)
+    )
+    if profile is None:
+        raise SubjectNotFound("subject_not_found")
+    return _subject_from(profile, account_id)
+
+
 def safety_for(
     subject: ResolvedSubject,
     *,
@@ -313,5 +353,6 @@ __all__ = [
     "SubjectNotFound",
     "account_holder_subject",
     "resolve_subject",
+    "resolve_subject_for_write",
     "safety_for",
 ]

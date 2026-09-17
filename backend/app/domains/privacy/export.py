@@ -247,12 +247,20 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
     records it and carries on. An export is the one surface where stopping is
     the wrong answer: somebody exercising a data right must still receive their
     data, and a household whose ``self`` row is missing has not stopped owning
-    the rows underneath it. So the account holder is simply left unnamed and
-    the problem is stated in ``invariant_errors``.
+    the rows underneath it. So identity is left unstated, the problem goes in
+    ``invariant_errors``, and every row this account owns is still in the file.
     """
     profiles = await _fetch(
         session,
         select(AppearanceProfile).where(AppearanceProfile.account_id == account_id),
+    )
+    # Whether a household exists is a fact about the circle, not about how many
+    # members happen to be in it. Inferring it from ``members`` would read a
+    # corrupt circle with no rows at all as "this account never opened a
+    # household" — the most alarming state there is, silently reported as the
+    # most ordinary one.
+    circle_id = await session.scalar(
+        select(FamilyCircle.id).where(FamilyCircle.account_id == account_id)
     )
     members = (await _fetch(
         session,
@@ -260,7 +268,7 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
         .join(FamilyCircle, FamilyCircle.id == FamilyProfile.circle_id)
         .where(FamilyCircle.account_id == account_id)
         .order_by(FamilyProfile.position),
-    ))
+    )) if circle_id is not None else []
 
     # Exactly one active account holder, or none named at all. Taking the first
     # of two would label one human as the account holder by insertion order,
@@ -274,7 +282,7 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
         self_row = self_rows[0]
     else:
         self_row = None
-        if members:
+        if circle_id is not None:
             invariant_errors.append({
                 "error": (
                     "household_self_profile_missing" if not self_rows
@@ -320,7 +328,7 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
     # for it — but it is not labelled as anybody's, because the one thing worse
     # than an unlabelled profile is a confidently mislabelled one.
     if legacy is not None and legacy.id not in claimed:
-        unattributed = bool(members) and self_row is None
+        unattributed = circle_id is not None and self_row is None
         subjects.append({
             "household_subject_id": None,
             "relation": None if unattributed else RELATION_SELF,
@@ -332,21 +340,54 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
         })
 
     # A profile bound to a subject this account does not own is a broken
-    # invariant. It is reported, never re-labelled under somebody else's name,
-    # and never repaired here: an export is not the place to decide whose body
-    # facts these were.
+    # invariant, and the two halves of the answer pull in opposite directions.
+    #
+    # The subject id names somebody in *another* household, so it must not
+    # appear here at all: this file is handed to a customer, and a stranger's
+    # member id is a stranger's identity. But the profile row and every child
+    # row under it belong to *this* account by ``account_id``, and those are
+    # the customer's own body facts. Dropping them to avoid the leak would
+    # answer a data-rights request by quietly withholding data.
+    #
+    # So they are exported in full, with the identity stripped rather than
+    # invented: no subject id, no relation, no claim about who this describes.
+    # Nothing is repaired, adopted, merged or deleted — an export is not the
+    # place to decide whose body facts these were.
+    known_member_ids = {m.id for m in members}
     orphaned = [
         p for p in profiles
         if p.household_subject_id is not None
-        and p.household_subject_id not in {m.id for m in members}
+        and p.household_subject_id not in known_member_ids
     ]
 
-    invariant_errors.extend(
-        {"profile_id": str(p.id), "error": "profile_subject_ownership_invalid"}
-        for p in orphaned
-    )
+    unattributed_profiles: list[dict[str, Any]] = []
+    for profile in orphaned:
+        invariant_errors.append(
+            {"profile_id": str(profile.id), "error": "profile_subject_ownership_invalid"}
+        )
+        payload = await _profile_payload(session, profile)
+        # The corrupt link is the one field that names somebody outside this
+        # account. It is replaced rather than echoed.
+        payload["profile"]["household_subject_id"] = None
+        unattributed_profiles.append({
+            "household_subject_id": None,
+            "relation": None,
+            "age_band": None,
+            "active": True,
+            "is_account_holder": False,
+            "adopted": False,
+            **payload,
+        })
 
-    return {"subjects": subjects, "invariant_errors": invariant_errors}
+    return {
+        "subjects": subjects,
+        # Profiles this account owns that no subject of this account explains.
+        # Separate from ``subjects`` on purpose: everything in that list is
+        # attributed to a named human, and these are precisely the rows that
+        # cannot be.
+        "unattributed_profiles": unattributed_profiles,
+        "invariant_errors": invariant_errors,
+    }
 
 
 async def _consent(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:

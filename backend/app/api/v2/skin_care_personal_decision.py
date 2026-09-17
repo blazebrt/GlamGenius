@@ -577,6 +577,7 @@ async def read_skin_care_for_you(
                 session,
                 snapshot,
                 category=category,
+                principal_account_id=current.account_id,
                 safety=personal_lens_safety_input(body.safety, subject),
                 subject=subject,
             )

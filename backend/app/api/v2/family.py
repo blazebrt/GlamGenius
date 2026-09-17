@@ -103,9 +103,17 @@ async def update_subject_care_profile(
     decision for them. Storing what somebody's skin is like and telling them
     what to put on it are different acts, and only the second one is barred.
     """
+    # One ``try`` around the whole identity sequence, not just the first read.
+    # The write resolver canonicalises again on purpose, and a member
+    # deactivated between the two resolutions must answer like any other
+    # unknown member rather than as a server fault. Splitting the catch is how
+    # that race became a 500.
     try:
         subject = await resolve_subject(
             session, account_id=current.account_id, subject_id=profile_id,
+        )
+        profile = await resolve_subject_profile_for_write(
+            session, subject, principal_account_id=current.account_id,
         )
     except SubjectNotFound as exc:
         raise HTTPException(
@@ -113,7 +121,6 @@ async def update_subject_care_profile(
             detail={"code": "family_profile_not_found"},
         ) from exc
 
-    profile = await resolve_subject_profile_for_write(session, subject)
     try:
         await profile_service.apply_attributes(
             session, profile, [item.model_dump() for item in body.attributes],

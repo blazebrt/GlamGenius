@@ -1039,7 +1039,7 @@ class TestStep8BReadiness:
             assert category is PersonalApplicabilityCategory.SKIN_CARE
 
             result = await interpret_label_snapshot_for_account(
-                session, snapshot, subject=account_holder_subject(account_id), category=category,
+                session, snapshot, principal_account_id=account_id, subject=account_holder_subject(account_id), category=category,
             )
 
         assert result.category is PersonalApplicabilityCategory.SKIN_CARE

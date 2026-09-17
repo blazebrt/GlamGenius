@@ -177,6 +177,7 @@ async def build_personal_lens_context(
     session: AsyncSession,
     *,
     category: PersonalLensCategory,
+    principal_account_id: uuid.UUID,
     subject: SubjectRef,
     safety: PersonalLensSafetyInput | None = None,
 ) -> PersonalLensContext:
@@ -187,14 +188,17 @@ async def build_personal_lens_context(
     every member would have shared an answer — which is the one thing a
     household must never do.
 
-    ``account_id`` is deliberately not a separate parameter: it is already
-    authoritative on ``subject``, and two sources for one fact can disagree.
+    ``principal_account_id`` is who is allowed to ask; ``subject`` is who the
+    answer is about. They are separate arguments because they are separate
+    facts, and because the first has to come from authenticated context rather
+    than from the claim it is meant to check. A ``ResolvedSubject`` is a public
+    dataclass: a caller can construct a complete, internally consistent
+    identity belonging to another account, and re-resolving that under its own
+    ``account_id`` would confirm the forgery instead of catching it.
 
-    The subject is re-read from the database before anything is decided with
-    it. ``ResolvedSubject`` is a public dataclass, so being handed one proves
-    only that the shape is right — a caller can construct one naming another
-    household's member, or naming a real under-twelve member of its own
-    household as an adult. Both are answered by the read, not by the type.
+    Everything else about the subject is re-read too, so naming a real
+    under-twelve member of your own household and calling them an adult reaches
+    the gate as a child.
     """
     if not isinstance(category, PersonalLensCategory):
         raise ValueError("category must be a PersonalLensCategory")
@@ -206,7 +210,9 @@ async def build_personal_lens_context(
     # request reach an ordinary answer about a child by simply describing them
     # as an adult. ``safety_for`` only ever adds: a request may tell the gate
     # more than the household recorded, never less.
-    subject = await canonical_subject(session, subject)
+    subject = await canonical_subject(
+        session, principal_account_id=principal_account_id, subject=subject,
+    )
     safety_context = safety or PersonalLensSafetyInput()
     stated_age, subject_is_child = safety_for(
         subject,
@@ -242,7 +248,9 @@ async def build_personal_lens_context(
     #
     # Read-only, on the decision path: it never creates a profile, never adopts
     # a legacy one, and never opens a household.
-    profile = await resolve_subject_profile_for_read(session, subject)
+    profile = await resolve_subject_profile_for_read(
+        session, subject, principal_account_id=principal_account_id,
+    )
     rows = await profile_service.attributes_for(session, profile.id) if profile is not None else []
     rows_by_key = {row.key: row for row in rows}
 

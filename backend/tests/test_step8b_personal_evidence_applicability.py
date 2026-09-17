@@ -771,10 +771,10 @@ class TestStep8AOrchestration:
                 ))
             await session.commit()
             trusted = await build_personal_lens_context(
-                session, subject=account_holder_subject(owners[0]), category=PersonalLensCategory.SKIN_CARE,
+                session, principal_account_id=owners[0], subject=account_holder_subject(owners[0]), category=PersonalLensCategory.SKIN_CARE,
             )
             untrusted = await build_personal_lens_context(
-                session, subject=account_holder_subject(owners[1]), category=PersonalLensCategory.SKIN_CARE,
+                session, principal_account_id=owners[1], subject=account_holder_subject(owners[1]), category=PersonalLensCategory.SKIN_CARE,
             )
             await _add_claim(session)
             await session.commit()
@@ -809,7 +809,8 @@ class TestStep8AOrchestration:
                 result = await interpret_label_snapshot_for_account(
                     session,
                     object(),
-                    subject=account_holder_subject(uuid.uuid4()),
+                    principal_account_id=(stranger := uuid.uuid4()),
+                    subject=account_holder_subject(stranger),
                     category=PersonalApplicabilityCategory.SKIN_CARE,
                     safety=PersonalLensSafetyInput(text=private_text),
                 )
@@ -856,7 +857,7 @@ class TestStep8AOrchestration:
             result = await interpret_label_snapshot_for_account(
                 session,
                 snapshot,
-                subject=account_holder_subject(owner),
+                principal_account_id=owner, subject=account_holder_subject(owner),
                 category=PersonalApplicabilityCategory.PACKAGED_FOOD,
             )
         assert result.context_status is PersonalLensStatus.NOT_ENOUGH_PERSONAL_CONTEXT
@@ -870,7 +871,7 @@ class TestStep8AOrchestration:
         context = _context()
         interpretation = _interpretation()
 
-        async def lens(session, *, category, safety, subject):
+        async def lens(session, *, category, safety, subject, principal_account_id):
             calls.append(("8a", category))
             # Step 11A. A caller that names nobody is asking about the signed-in
             # person, and must reach the lens as such. Arriving here as "somebody
@@ -880,6 +881,8 @@ class TestStep8AOrchestration:
             # naming nobody must still arrive as the account holder, or the
             # signed-in person would be withheld their own facts.
             assert subject.is_account_holder
+            # The principal arrives separately from the claim it authorises.
+            assert principal_account_id == subject.account_id
             return context
 
         async def step7c(session, snapshot, *, category):
@@ -899,7 +902,8 @@ class TestStep8AOrchestration:
         result = await interpret_label_snapshot_for_account(
             object(),
             snapshot,
-            subject=account_holder_subject(uuid.uuid4()),
+            principal_account_id=(stranger := uuid.uuid4()),
+            subject=account_holder_subject(stranger),
             category=PersonalApplicabilityCategory.SKIN_CARE,
         )
         assert [call[0] for call in calls] == ["8a", "7c", "8b"]

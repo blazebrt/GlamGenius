@@ -577,7 +577,7 @@ async def _evaluate(
     applicability = await interpret_label_snapshot_for_account(
         session,
         _snapshot(ingredients),
-        subject=account_holder_subject(account_id),
+        principal_account_id=account_id, subject=account_holder_subject(account_id),
         category=category,
         safety=safety,
     )
