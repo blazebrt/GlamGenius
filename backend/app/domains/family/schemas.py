@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import uuid
-from typing import Literal
+from typing import Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, StrictBool, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 ProfileRelation = Literal["adult", "child", "other"]
 # The bands the product asks for. ``self`` is not offered because the signed-in
@@ -80,3 +80,44 @@ class FamilyCircleResponse(BaseModel):
     profiles: list[FamilyProfileResponse]
     shared_shelf: bool
     shared_verdicts: bool
+
+
+#: The Care facts a household may record about a member.
+#:
+#: Exactly the vocabulary the account holder can already write about themselves
+#: at this commit — not the whole attribute registry, which still holds retired
+#: keys from the withdrawn style product. A member is not a route into facts the
+#: account holder cannot state about themselves.
+#:
+#: Written out here rather than read from the route's runtime allowlist on
+#: purpose. That allowlist is widened by an autouse test fixture, so deriving
+#: the seam from it would mean the test suite silently decided how wide this
+#: seam is. Production authority defines it, and the tuple below is derived from
+#: the type so the two cannot drift apart.
+SubjectCareAttributeKey = Literal["care_skin_usual_feel", "care_skin_sensitivity"]
+
+SUBJECT_CARE_ATTRIBUTE_KEYS: tuple[str, ...] = get_args(SubjectCareAttributeKey)
+
+
+class SubjectCareAttribute(BaseModel):
+    """One structured Care fact. No free text anywhere in it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: SubjectCareAttributeKey
+    value: str = Field(min_length=1, max_length=64)
+
+
+class SubjectCareProfilePatch(BaseModel):
+    """Record or correct Care facts for one named household member."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attributes: list[SubjectCareAttribute] = Field(min_length=1, max_length=8)
+
+
+class SubjectCareProfileResponse(BaseModel):
+    subject_id: uuid.UUID
+    relation: str
+    age_band: str
+    attributes: list[dict[str, object]]

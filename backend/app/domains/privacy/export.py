@@ -70,8 +70,13 @@ from app.domains.profile.models import (
     AppearanceGoal,
     AppearanceProfile,
     AttributeObservation,
+    FitPreference,
+    LifestyleContext,
     OnboardingSession,
     ProfileAttribute,
+    ProfileChangeEvent,
+    StylePreference,
+    UserConstraint,
 )
 from app.domains.progress.models import (
     MetricEvent,
@@ -190,34 +195,123 @@ async def _identity(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
     }
 
 
+#: Every child table that hangs off ``appearance_profiles.id``.
+#:
+#: Five of these — change events, style, fit, lifestyle and constraints — were
+#: classified INCLUDED in the registry and exported by nothing. The registry is
+#: a promise that the account holder can read their own data back, and for
+#: those five it had been making that promise to nobody. Step 11B keeps it.
+_PROFILE_CHILD_TABLES: tuple[tuple[str, Any], ...] = (
+    ("attributes", ProfileAttribute),
+    ("change_events", ProfileChangeEvent),
+    ("observations", AttributeObservation),
+    ("style_preferences", StylePreference),
+    ("fit_preferences", FitPreference),
+    ("lifestyle_context", LifestyleContext),
+    ("user_constraints", UserConstraint),
+    ("goals", AppearanceGoal),
+    ("onboarding_sessions", OnboardingSession),
+)
+
+
+async def _profile_payload(session: AsyncSession, profile: AppearanceProfile) -> dict[str, Any]:
+    """One profile and everything attached to it, by ``profile_id``."""
+    payload: dict[str, Any] = {
+        "profile": _row_dict(profile, [c.name for c in AppearanceProfile.__table__.columns]),
+    }
+    for label, model in _PROFILE_CHILD_TABLES:
+        rows = await _fetch(session, select(model).where(model.profile_id == profile.id))
+        payload[label] = [_row_dict(r, [c.name for c in model.__table__.columns]) for r in rows]
+    return payload
+
+
+def _empty_profile_payload() -> dict[str, Any]:
+    return {"profile": None, **{label: [] for label, _ in _PROFILE_CHILD_TABLES}}
+
+
 async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
+    """The appearance domain, grouped by the human each profile describes.
+
+    A flat list would hand somebody one undifferentiated pile of several
+    people's bodies, which is exactly the confusion a household introduces and
+    the export has to answer.
+
+    This is a **pure read**. A household whose account holder has not yet been
+    adopted is *labelled* as the account holder without the row being touched:
+    an export that adopted as a side effect would mean downloading your data
+    changed it.
+    """
     profiles = await _fetch(
         session,
         select(AppearanceProfile).where(AppearanceProfile.account_id == account_id),
     )
-    profile_ids = [p.id for p in profiles]
-    attributes = await _fetch(
+    members = (await _fetch(
         session,
-        select(ProfileAttribute).where(ProfileAttribute.profile_id.in_(profile_ids)),
-    ) if profile_ids else []
-    goals = await _fetch(
-        session,
-        select(AppearanceGoal).where(AppearanceGoal.profile_id.in_(profile_ids)),
-    ) if profile_ids else []
-    observations = await _fetch(
-        session,
-        select(AttributeObservation).where(AttributeObservation.profile_id.in_(profile_ids)),
-    ) if profile_ids else []
-    onboarding = await _fetch(
-        session,
-        select(OnboardingSession).where(OnboardingSession.profile_id.in_(profile_ids)),
-    ) if profile_ids else []
+        select(FamilyProfile)
+        .join(FamilyCircle, FamilyCircle.id == FamilyProfile.circle_id)
+        .where(FamilyCircle.account_id == account_id)
+        .order_by(FamilyProfile.position),
+    ))
+    self_row = next((m for m in members if m.relation == "self" and m.active), None)
+    by_subject = {p.household_subject_id: p for p in profiles if p.household_subject_id}
+    legacy = next((p for p in profiles if p.household_subject_id is None), None)
+
+    subjects: list[dict[str, Any]] = []
+    claimed: set[uuid.UUID] = set()
+
+    for member in members:
+        profile = by_subject.get(member.id)
+        is_self = self_row is not None and member.id == self_row.id
+        # The unadopted case: no profile is bound to the self row yet, but the
+        # legacy row is that person's. Named here, not rewritten.
+        if profile is None and is_self and legacy is not None:
+            profile = legacy
+        if profile is not None:
+            claimed.add(profile.id)
+        entry: dict[str, Any] = {
+            "household_subject_id": str(member.id),
+            "relation": member.relation,
+            "age_band": member.age_band,
+            "active": member.active,
+            "is_account_holder": is_self,
+            "adopted": profile is not None and profile.household_subject_id is not None,
+        }
+        entry.update(
+            await _profile_payload(session, profile) if profile is not None
+            else _empty_profile_payload()
+        )
+        subjects.append(entry)
+
+    # An account with no household still has an account holder, and their
+    # profile is the legacy row. It appears under a null subject because there
+    # is no household row to name — not because it belongs to nobody.
+    if legacy is not None and legacy.id not in claimed:
+        subjects.append({
+            "household_subject_id": None,
+            "relation": "self",
+            "age_band": None,
+            "active": True,
+            "is_account_holder": True,
+            "adopted": False,
+            **await _profile_payload(session, legacy),
+        })
+
+    # A profile bound to a subject this account does not own is a broken
+    # invariant. It is reported, never re-labelled under somebody else's name,
+    # and never repaired here: an export is not the place to decide whose body
+    # facts these were.
+    orphaned = [
+        p for p in profiles
+        if p.household_subject_id is not None
+        and p.household_subject_id not in {m.id for m in members}
+    ]
+
     return {
-        "profiles": [_row_dict(p, [c.name for c in AppearanceProfile.__table__.columns]) for p in profiles],
-        "attributes": [_row_dict(a, [c.name for c in ProfileAttribute.__table__.columns]) for a in attributes],
-        "goals": [_row_dict(g, [c.name for c in AppearanceGoal.__table__.columns]) for g in goals],
-        "observations": [_row_dict(o, [c.name for c in AttributeObservation.__table__.columns]) for o in observations],
-        "onboarding_sessions": [_row_dict(o, [c.name for c in OnboardingSession.__table__.columns]) for o in onboarding],
+        "subjects": subjects,
+        "invariant_errors": (
+            [{"profile_id": str(p.id), "error": "profile_subject_ownership_invalid"} for p in orphaned]
+            if orphaned else []
+        ),
     }
 
 

@@ -12,8 +12,14 @@ from app.domains.family.schemas import (
     FamilyProfileCreate,
     FamilyProfilePatch,
     FamilyProfileResponse,
+    SubjectCareProfilePatch,
+    SubjectCareProfileResponse,
 )
+from app.domains.family.subject import SubjectNotFound, resolve_subject
+from app.domains.profile import service as profile_service
+from app.domains.profile.identity import resolve_subject_profile_for_write
 from app.shared.database.sql import get_session
+from app.shared.errors.exceptions import ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account
 
 router = APIRouter()
@@ -69,3 +75,57 @@ async def update_family_profile(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": str(exc)}) from exc
     await session.commit()
     return service.serialise_profile(profile)
+
+
+@router.patch(
+    "/family-circle/profiles/{profile_id}/care-profile",
+    response_model=SubjectCareProfileResponse,
+)
+async def update_subject_care_profile(
+    profile_id: uuid.UUID,
+    body: SubjectCareProfilePatch,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    """Record Care facts about one named member of this household.
+
+    The narrow seam that lets a member ever acquire a Personal Lens. Per-subject
+    onboarding is a later slice; without something like this a member could be
+    named and then never described, and the lens would answer "we do not know
+    enough about this person" forever.
+
+    ``profile_id`` is a claim, not an instruction. It goes through the Step 11A
+    resolver, so a member of another household, a deactivated member and an
+    invented id are refused identically and without echoing the id back.
+
+    An under-12 member may have facts recorded and corrected here. That is not
+    permission to advise: the hard handoff still fires on every personalised
+    decision for them. Storing what somebody's skin is like and telling them
+    what to put on it are different acts, and only the second one is barred.
+    """
+    try:
+        subject = await resolve_subject(
+            session, account_id=current.account_id, subject_id=profile_id,
+        )
+    except SubjectNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "family_profile_not_found"},
+        ) from exc
+
+    profile = await resolve_subject_profile_for_write(session, subject)
+    try:
+        await profile_service.apply_attributes(
+            session, profile, [item.model_dump() for item in body.attributes],
+        )
+    except ValueError as exc:
+        raise ValidationFailedError(str(exc)) from exc
+    await session.commit()
+
+    rows = await profile_service.attributes_for(session, profile.id)
+    return {
+        "subject_id": subject.subject_id or profile_id,
+        "relation": subject.relation,
+        "age_band": subject.age_band,
+        "attributes": [profile_service.serialize_attribute(row) for row in rows],
+    }

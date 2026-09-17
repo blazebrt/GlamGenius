@@ -21,9 +21,13 @@ from app.domains.personal_lens.enums import (
     PersonalFactMissingReason,
     PersonalLensCategory,
     PersonalLensStatus,
-    PersonalLensSubjectScope,
 )
 from app.domains.profile import service as profile_service
+from app.domains.profile.identity import (
+    SubjectRef,
+    require_resolved_subject,
+    resolve_subject_profile_for_read,
+)
 
 SKIN_BODY_FACT_KEYS = (
     "care_skin_usual_feel",
@@ -171,18 +175,28 @@ def _project_facts(
 async def build_personal_lens_context(
     session: AsyncSession,
     *,
-    account_id: uuid.UUID,
     category: PersonalLensCategory,
+    subject: SubjectRef,
     safety: PersonalLensSafetyInput | None = None,
-    subject_scope: PersonalLensSubjectScope = PersonalLensSubjectScope.ACCOUNT_HOLDER,
 ) -> PersonalLensContext:
-    """Build live trusted context, stopping before all reads on hard handoff."""
+    """Build live trusted context, stopping before all reads on hard handoff.
+
+    Takes the checked subject itself rather than a coarse "is this the account
+    holder" flag. The flag could not tell one household member from another, so
+    every member would have shared an answer — which is the one thing a
+    household must never do.
+
+    ``account_id`` is deliberately not a separate parameter: it is already
+    authoritative on ``subject``, and two sources for one fact can disagree.
+    A raw household profile id never enters here; only ``resolve_subject()``
+    can produce the type this accepts, which is what keeps a forged id from
+    reaching a profile lookup.
+    """
     if not isinstance(category, PersonalLensCategory):
         raise ValueError("category must be a PersonalLensCategory")
     if safety is not None and not isinstance(safety, PersonalLensSafetyInput):
         raise ValueError("safety must be a PersonalLensSafetyInput")
-    if not isinstance(subject_scope, PersonalLensSubjectScope):
-        raise ValueError("subject_scope must be a PersonalLensSubjectScope")
+    require_resolved_subject(subject)
 
     safety_context = safety or PersonalLensSafetyInput()
     decision = hard_handoff.evaluate(
@@ -206,23 +220,15 @@ async def build_personal_lens_context(
             ),
         )
 
-    if subject_scope is PersonalLensSubjectScope.OTHER_HOUSEHOLD_MEMBER:
-        # The stored profile is the account holder's. Reading it here and
-        # calling it somebody else's would be the one failure a household must
-        # never have: two people quietly sharing one body. We hold nothing about
-        # this person yet, and that is what the answer says.
-        return PersonalLensContext(
-            category=category,
-            status=PersonalLensStatus.NOT_ENOUGH_PERSONAL_CONTEXT,
-            profile_id=None,
-            profile_version=None,
-            body_facts=(),
-            preference_facts=(),
-            missing_information=(),
-            handoff=None,
-        )
-
-    profile = await profile_service.get_profile(session, account_id)
+    # The subject's own profile, and nobody else's. For the account holder this
+    # delegates to the self resolver, so naming yourself and naming nobody reach
+    # the same row; for another member it finds only a profile bound to them. A
+    # member with no profile yet gets NOT_ENOUGH_PERSONAL_CONTEXT below, which
+    # is the truth rather than somebody else's skin.
+    #
+    # Read-only, on the decision path: it never creates a profile, never adopts
+    # a legacy one, and never opens a household.
+    profile = await resolve_subject_profile_for_read(session, subject)
     rows = await profile_service.attributes_for(session, profile.id) if profile is not None else []
     rows_by_key = {row.key: row for row in rows}
 

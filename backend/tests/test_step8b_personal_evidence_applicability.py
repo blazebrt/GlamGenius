@@ -25,6 +25,7 @@ from app.domains.evidence.enums import (
     SourceType,
 )
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource
+from app.domains.family.subject import account_holder_subject
 from app.domains.formulas.parser import ParseStatus
 from app.domains.formulas.service import FormulaIngredientResolution, FormulaResolution
 from app.domains.identity import service as identity_service
@@ -46,7 +47,6 @@ from app.domains.personal_applicability.service import (
 from app.domains.personal_lens.enums import (
     PersonalLensCategory,
     PersonalLensStatus,
-    PersonalLensSubjectScope,
 )
 from app.domains.personal_lens.service import (
     PersonalLensContext,
@@ -771,10 +771,10 @@ class TestStep8AOrchestration:
                 ))
             await session.commit()
             trusted = await build_personal_lens_context(
-                session, account_id=owners[0], category=PersonalLensCategory.SKIN_CARE,
+                session, subject=account_holder_subject(owners[0]), category=PersonalLensCategory.SKIN_CARE,
             )
             untrusted = await build_personal_lens_context(
-                session, account_id=owners[1], category=PersonalLensCategory.SKIN_CARE,
+                session, subject=account_holder_subject(owners[1]), category=PersonalLensCategory.SKIN_CARE,
             )
             await _add_claim(session)
             await session.commit()
@@ -807,7 +807,7 @@ class TestStep8AOrchestration:
                 result = await interpret_label_snapshot_for_account(
                     session,
                     object(),
-                    account_id=uuid.uuid4(),
+                    subject=account_holder_subject(uuid.uuid4()),
                     category=PersonalApplicabilityCategory.SKIN_CARE,
                     safety=PersonalLensSafetyInput(text=private_text),
                 )
@@ -840,7 +840,7 @@ class TestStep8AOrchestration:
             result = await interpret_label_snapshot_for_account(
                 session,
                 snapshot,
-                account_id=owner,
+                subject=account_holder_subject(owner),
                 category=PersonalApplicabilityCategory.PACKAGED_FOOD,
             )
         assert result.context_status is PersonalLensStatus.NOT_ENOUGH_PERSONAL_CONTEXT
@@ -854,13 +854,16 @@ class TestStep8AOrchestration:
         context = _context()
         interpretation = _interpretation()
 
-        async def lens(session, *, account_id, category, safety, subject_scope):
+        async def lens(session, *, category, safety, subject):
             calls.append(("8a", category))
             # Step 11A. A caller that names nobody is asking about the signed-in
             # person, and must reach the lens as such. Arriving here as "somebody
             # else" would withhold the account holder's own facts from their own
             # decision, which looks like a missing profile rather than a bug.
-            assert subject_scope is PersonalLensSubjectScope.ACCOUNT_HOLDER
+            # Step 11B: the lens is handed the checked subject itself. A caller
+            # naming nobody must still arrive as the account holder, or the
+            # signed-in person would be withheld their own facts.
+            assert subject.is_account_holder
             return context
 
         async def step7c(session, snapshot, *, category):
@@ -880,7 +883,7 @@ class TestStep8AOrchestration:
         result = await interpret_label_snapshot_for_account(
             object(),
             snapshot,
-            account_id=uuid.uuid4(),
+            subject=account_holder_subject(uuid.uuid4()),
             category=PersonalApplicabilityCategory.SKIN_CARE,
         )
         assert [call[0] for call in calls] == ["8a", "7c", "8b"]

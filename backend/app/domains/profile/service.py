@@ -37,26 +37,22 @@ LIFESTYLE_KEYS = {
 }
 
 
-async def get_or_create_profile(session: AsyncSession, account_id: uuid.UUID) -> AppearanceProfile:
-    row = await get_profile(session, account_id)
-    if row is None:
-        row = AppearanceProfile(account_id=account_id)
-        session.add(row)
-        await session.flush()
-    return row
-
-
-async def get_profile(
-    session: AsyncSession, account_id: uuid.UUID
-) -> AppearanceProfile | None:
-    """Read an account's profile without creating or mutating anything."""
-    return (
-        await session.execute(
-            select(AppearanceProfile).where(
-                AppearanceProfile.account_id == account_id
-            )
-        )
-    ).scalar_one_or_none()
+# ``get_profile(session, account_id)`` and ``get_or_create_profile`` used to
+# live here. They are gone rather than redefined.
+#
+# Both asked "the profile for this account", which had exactly one answer while
+# ``UNIQUE(account_id)`` held and has no single answer once a household exists.
+# Redefining them to mean "the account holder's" would have left every existing
+# call site reading correctly by luck and any new one reading wrongly by
+# default. Worse, both used ``scalar_one_or_none()``, which raises on a second
+# row — so the first account to record a second person would not have got a
+# subtly wrong answer, it would have got a 500.
+#
+# Callers now say which human they mean and whether they may write, via
+# :mod:`app.domains.profile.identity`:
+#
+#     resolve_self_profile_for_read / _for_write
+#     resolve_subject_profile_for_read / _for_write
 
 
 async def attributes_for(session: AsyncSession, profile_id: uuid.UUID) -> list[ProfileAttribute]:

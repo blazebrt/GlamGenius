@@ -65,7 +65,7 @@ from app.domains.personal_decision_release.runtime import (
 from app.domains.personal_decision_release.validation import (
     PersonalDecisionReleaseInvariantError,
 )
-from app.domains.personal_lens.enums import PersonalLensStatus, PersonalLensSubjectScope
+from app.domains.personal_lens.enums import PersonalLensStatus
 from app.domains.personal_lens.service import PersonalLensSafetyInput
 from app.domains.product import care_capture, pack_context
 from app.domains.product.models import LabelSnapshot, ScanDevice
@@ -573,14 +573,9 @@ async def read_skin_care_for_you(
         personal = await interpret_label_snapshot_for_account(
             session,
             snapshot,
-            account_id=current.account_id,
             category=category,
             safety=personal_lens_safety_input(body.safety, subject),
-            subject_scope=(
-                PersonalLensSubjectScope.ACCOUNT_HOLDER
-                if subject.is_account_holder
-                else PersonalLensSubjectScope.OTHER_HOUSEHOLD_MEMBER
-            ),
+            subject=subject,
         )
 
         if personal.context_status is PersonalLensStatus.HANDOFF_REQUIRED:

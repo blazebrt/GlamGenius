@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.family.models import FamilyCircle, FamilyProfile
 from app.domains.family.subject import AGE_BAND_NOT_STATED, AGE_BANDS, RELATION_SELF
+from app.domains.profile.identity import lock_account
 
 MAX_PROFILES = 8
 
@@ -61,6 +62,20 @@ async def circle_for(session: AsyncSession, account_id: uuid.UUID, *, create: bo
         select(FamilyCircle).where(FamilyCircle.account_id == account_id)
     )
     if circle is not None or not create:
+        return circle
+
+    # First in the documented lock order — Account -> FamilyCircle /
+    # FamilyProfile -> AppearanceProfile — and taken before this path decides
+    # what exists. Opening a household and adopting the account holder's
+    # profile are two halves of one identity transition: if they do not
+    # serialise on the same row, one transaction can decide "no household, use
+    # the legacy profile" while another is committing the household that would
+    # have changed its mind, and the account ends up with two self identities.
+    await lock_account(session, account_id)
+    circle = await session.scalar(
+        select(FamilyCircle).where(FamilyCircle.account_id == account_id)
+    )
+    if circle is not None:
         return circle
     try:
         async with session.begin_nested():

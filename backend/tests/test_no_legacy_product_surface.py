@@ -101,7 +101,9 @@ def test_profile_active_allowlist_forbids_legacy_keys(monkeypatch: pytest.Monkey
     
     import app.domains.profile.service as profile_service
     
-    monkeypatch.setattr(profile_service, "get_or_create_profile", AsyncMock())
+    monkeypatch.setattr(
+        "app.api.v2.profile.resolve_self_profile_for_write", AsyncMock()
+    )
     apply_attributes_mock = AsyncMock()
     monkeypatch.setattr(profile_service, "apply_attributes", apply_attributes_mock)
     monkeypatch.setattr(profile_service, "serialize_profile", AsyncMock(return_value={

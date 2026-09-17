@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.profile import service
+from app.domains.profile.identity import resolve_self_profile_for_write
 from app.domains.profile.registry import ATTRIBUTE_REGISTRY
 from app.domains.profile.schemas import ProfilePatch
 from app.shared.database.sql import get_session
@@ -16,7 +17,7 @@ router = APIRouter(dependencies=[Depends(require_flag("v2_profile"))])
 ALLOWED_KEYS = {"care_skin_usual_feel", "care_skin_sensitivity"}
 
 async def _profile(session: AsyncSession, current: CurrentAccount):
-    return await service.get_or_create_profile(session, current.account_id)
+    return await resolve_self_profile_for_write(session, current.account_id)
 
 def _filter_profile(body: dict) -> dict:
     """Filter legacy appearance attributes out of the active customer payload."""

@@ -43,7 +43,7 @@ from app.domains.personal_lens import (
     PersonalLensHandoff,
     PersonalLensSafetyInput,
     PersonalLensStatus,
-    PersonalLensSubjectScope,
+    SubjectRef,
     build_personal_lens_context,
 )
 from app.domains.product.formula_projection import FormulaProjectionProvenance
@@ -358,10 +358,9 @@ async def interpret_label_snapshot_for_account(
     session: AsyncSession,
     snapshot: LabelSnapshot,
     *,
-    account_id: uuid.UUID,
     category: PersonalApplicabilityCategory,
+    subject: SubjectRef,
     safety: PersonalLensSafetyInput | None = None,
-    subject_scope: PersonalLensSubjectScope = PersonalLensSubjectScope.ACCOUNT_HOLDER,
 ) -> LabelSnapshotPersonalApplicability:
     """Orchestrate Step 8A first, then exact Step 7C, then Step 8B."""
     if not isinstance(category, PersonalApplicabilityCategory):
@@ -369,10 +368,9 @@ async def interpret_label_snapshot_for_account(
 
     context = await build_personal_lens_context(
         session,
-        account_id=account_id,
         category=_lens_category(category),
+        subject=subject,
         safety=safety,
-        subject_scope=subject_scope,
     )
     if context.status is PersonalLensStatus.HANDOFF_REQUIRED:
         return LabelSnapshotPersonalApplicability(

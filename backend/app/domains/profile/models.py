@@ -5,7 +5,19 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,12 +25,78 @@ from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey
 
 
 class AppearanceProfile(UUIDPrimaryKey, TimestampMixin, Base):
+    """One person's appearance facts.
+
+    Until Step 11B this was one row per account, and ``account_id`` carried a
+    ``UNIQUE`` constraint saying so. A household breaks that: the account holder
+    and each named member are different humans with different skin, and a single
+    row cannot describe both.
+
+    Two shapes are legal now, and exactly one of them applies to any given row:
+
+    * ``household_subject_id IS NULL`` — the account holder's profile, recorded
+      before this account had a household. It keeps meaning exactly what it
+      meant, and there is at most one per account.
+    * ``household_subject_id IS NOT NULL`` — a profile belonging to one named
+      household subject, and there is at most one per subject.
+
+    Both are enforced by *partial* unique indexes rather than one plain
+    ``UNIQUE``. A plain ``UNIQUE(account_id, household_subject_id)`` would not
+    do it: PostgreSQL treats NULLs as distinct, so it would happily accept two
+    NULL-subject rows for the same account — two account holders in one
+    household.
+    """
+
     __tablename__ = "appearance_profiles"
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    #: Which human this profile describes, once the account has a household.
+    #:
+    #: ``ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED``, deliberately, and
+    #: not ``CASCADE`` or ``RESTRICT``:
+    #:
+    #: * ``CASCADE`` would let a future "remove this member" feature delete the
+    #:   account holder's own long-lived profile and all nine of its child
+    #:   tables, through the ``self`` row it is attached to.
+    #: * ``RESTRICT`` is checked row by row as each referenced row goes. It
+    #:   happens to survive account deletion today, because the cascades from
+    #:   ``accounts`` drain before the household rows are reached — but that is
+    #:   an ordering property of the trigger queue, not a guarantee. If it ever
+    #:   inverted, account deletion would start failing, and account deletion is
+    #:   an obligation we do not get to fail.
+    #:
+    #: Deferring the check to commit removes that failure mode by construction:
+    #: deleting a member while a profile still points at them aborts, while
+    #: deleting the whole account succeeds because both sides are gone before
+    #: anyone checks. The service raises a clear domain error before attempting
+    #: a member delete, so this constraint is the backstop and not the
+    #: explanation.
+    household_subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(
+            "family_profiles.id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=True,
+    )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     baseline_status: Mapped[str] = mapped_column(String(24), nullable=False, default="not_started", server_default="not_started")
     baseline_ai_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True)
     last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        Index(
+            "uq_appearance_profile_account_legacy",
+            "account_id",
+            unique=True,
+            postgresql_where=text("household_subject_id IS NULL"),
+        ),
+        Index(
+            "uq_appearance_profile_household_subject",
+            "household_subject_id",
+            unique=True,
+            postgresql_where=text("household_subject_id IS NOT NULL"),
+        ),
+    )
 
 
 class ProfileAttribute(UUIDPrimaryKey, TimestampMixin, Base):

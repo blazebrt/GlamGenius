@@ -113,7 +113,7 @@ async def test_no_event_is_valid_context(monkeypatch):
     async def get_profile(*args, **kwargs):
         return None
 
-    monkeypatch.setattr("app.domains.care.service.profile_service.get_profile", get_profile)
+    monkeypatch.setattr("app.domains.care.service.resolve_self_profile_for_read", get_profile)
     monkeypatch.setattr("app.domains.care.service.shelf.gather", gather)
     monkeypatch.setattr("app.domains.care.service.shelf.build", lambda *_: [])
     context = await build_care_context(object(), owner, day_context=day)

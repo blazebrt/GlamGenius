@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryItem
 from app.domains.profile import service as profile_service
-from app.domains.profile.models import AppearanceProfile
+from app.domains.profile.identity import resolve_self_profile_for_read
 from app.domains.recommendation.context import OwnedItem
 from app.domains.routines import parser
 from app.domains.routines import rules as rules_engine
@@ -81,9 +81,11 @@ async def shelf_attributes(session: AsyncSession, account_id: uuid.UUID) -> dict
     An unconfirmed observation must never silently decide that a product is
     left out of somebody's routine.
     """
-    profile = (await session.execute(
-        select(AppearanceProfile).where(AppearanceProfile.account_id == account_id)
-    )).scalar_one_or_none()
+    # Account-holder semantics, stated rather than assumed. This used to be a
+    # bare account lookup with ``scalar_one_or_none()``, which would have raised
+    # the moment a household recorded a second person — a 500 on the shelf, not
+    # a wrong answer.
+    profile = await resolve_self_profile_for_read(session, account_id)
     if profile is None:
         return {}
     rows = await profile_service.attributes_for(session, profile.id)

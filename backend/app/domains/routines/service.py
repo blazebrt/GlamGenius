@@ -36,6 +36,7 @@ from app.domains.inventory.models import InventoryAttribute, InventoryItem
 from app.domains.planning import clock
 from app.domains.planning import context as planning_context
 from app.domains.profile import service as profile_service
+from app.domains.profile.identity import resolve_self_profile_for_write
 from app.domains.routines import adherence, compiler, explanation, manager, parser, perfume, selection, shelf
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import (
@@ -636,7 +637,7 @@ async def simplify_care_routine(
     if decision.target_effort is None:
         return _simplification_response(decision=decision, before=before, after=None)
 
-    profile = await profile_service.get_or_create_profile(session, account_id)
+    profile = await resolve_self_profile_for_write(session, account_id)
     await profile_service.apply_attributes(
         session,
         profile,

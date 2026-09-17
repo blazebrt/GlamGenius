@@ -15,6 +15,7 @@ from app.bootstrap import run as run_reference_seed
 from app.domains.evidence import authoring as evidence_authoring
 from app.domains.evidence.enums import EvidenceStrength, SourceStatus, SourceType
 from app.domains.evidence.models import EvidenceClaim, EvidenceSource
+from app.domains.family.subject import account_holder_subject
 from app.domains.identity import service as identity_service
 from app.domains.personal_applicability import authoring as applicability_authoring
 from app.domains.personal_applicability.enums import PersonalApplicabilityCategory
@@ -576,7 +577,7 @@ async def _evaluate(
     applicability = await interpret_label_snapshot_for_account(
         session,
         _snapshot(ingredients),
-        account_id=account_id,
+        subject=account_holder_subject(account_id),
         category=category,
         safety=safety,
     )

@@ -45,7 +45,11 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-EXPORT_SCHEMA_VERSION = "1.0"
+# 1.1 — Step 11B. The appearance domain is now grouped by the human each
+# profile describes rather than returned flat, and the five profile tables the
+# registry had promised but nothing exported (change events, style, fit,
+# lifestyle, constraints) are included. The shape changed, so the version does.
+EXPORT_SCHEMA_VERSION = "1.1"
 
 
 class Classification(StrEnum):

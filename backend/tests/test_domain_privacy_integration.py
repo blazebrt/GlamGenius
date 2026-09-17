@@ -145,7 +145,24 @@ async def test_export_carries_a_record_from_every_active_domain(
     # Each of these domains was actually written to by the journey, so an empty
     # payload here means the export is not reading what the product wrote.
     assert domains["identity"]["id"] == str(account_id)
-    assert domains["profile"]["attributes"]
+    # Step 11B: the appearance domain is grouped by the human each profile
+    # describes. For an account with no household that is one entry, the
+    # account holder, under a null subject id — and their attributes still have
+    # to be there.
+    subjects = domains["profile"]["subjects"]
+    assert subjects, domains["profile"]
+    holder = next(s for s in subjects if s["is_account_holder"])
+    assert holder["household_subject_id"] is None
+    assert holder["attributes"]
+    assert domains["profile"]["invariant_errors"] == []
+    # Every profile child table the registry classifies INCLUDED is a key here,
+    # including the five that were missing before this slice.
+    for table in (
+        "attributes", "change_events", "observations", "style_preferences",
+        "fit_preferences", "lifestyle_context", "user_constraints", "goals",
+        "onboarding_sessions",
+    ):
+        assert table in holder, table
     assert domains["consent"]["entries"]
     assert domains["inventory"]["items"]
     assert domains["media"]["assets"]
