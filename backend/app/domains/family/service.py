@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.family.models import FamilyCircle, FamilyProfile
-from app.domains.family.subject import AGE_BAND_NOT_STATED, AGE_BANDS
+from app.domains.family.subject import AGE_BAND_NOT_STATED, AGE_BANDS, RELATION_SELF
 
 MAX_PROFILES = 8
 
@@ -35,7 +35,7 @@ class FamilyProfileError(ValueError):
 
 
 def profile_label(profile: FamilyProfile) -> str:
-    if profile.relation == "self":
+    if profile.relation == RELATION_SELF:
         return "You"
     return f"{profile.relation.capitalize()} profile {profile.position}"
 
@@ -67,7 +67,7 @@ async def circle_for(session: AsyncSession, account_id: uuid.UUID, *, create: bo
             circle = FamilyCircle(account_id=account_id)
             session.add(circle)
             await session.flush()
-            session.add(FamilyProfile(circle_id=circle.id, position=1, relation="self"))
+            session.add(FamilyProfile(circle_id=circle.id, position=1, relation=RELATION_SELF))
             await session.flush()
     except IntegrityError:
         circle = await session.scalar(
@@ -180,7 +180,7 @@ async def update_profile(
         raise FamilyProfileError("family_profile_not_found")
 
     if not isinstance(active, _Unchanged):
-        if profile.relation == "self":
+        if profile.relation == RELATION_SELF:
             raise FamilyProfileError("self_profile_cannot_be_changed")
         profile.active = active
 

@@ -49,6 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v2.product import current_device
 from app.content import for_you_copy
 from app.domains.family.subject import (
+    HouseholdInvariantError,
     ResolvedSubject,
     SubjectNotFound,
     resolve_subject,
@@ -500,6 +501,19 @@ async def read_skin_care_for_you(
                 status_code=404,
                 code=ErrorCode.NOT_FOUND,
                 extra={"reason": "subject_not_found"},
+            ) from None
+        except HouseholdInvariantError:
+            # A household with no account holder in it. Not a customer state
+            # and not reachable through any route, so it fails closed the same
+            # way a broken label snapshot does rather than answering with
+            # weaker authority than this household may have recorded. A fixed
+            # event name and nothing else: the request id is how an operator
+            # finds this line.
+            logger.error("for_you_household_self_profile_missing")
+            raise AppError(
+                "This result is not available right now.",
+                status_code=503,
+                code=ErrorCode.FEATURE_UNAVAILABLE,
             ) from None
 
         pack = await pack_context.current_pack(

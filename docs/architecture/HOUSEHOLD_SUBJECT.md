@@ -65,13 +65,48 @@ export gap.
 resolve_subject(session, *, account_id, subject_id) -> ResolvedSubject
 ```
 
-* `subject_id is None` → `account_holder_subject(account_id)`, synthesised, not
-  stored. Reading a decision must never create a household as a side effect.
+* `subject_id is None` → the account's own stored `self` row, when there is one.
+  Omitting the field is the request shape every client used before households
+  existed, and it means "me". Once a household exists, what the server knows
+  about "me" lives in that row — including an age band the household
+  deliberately recorded. Synthesising `not_stated` here instead would make the
+  *optional* Step 11 field the thing that decides whether stored authority
+  applies: an account could record its holder as under twelve, watch the
+  hand-over fire when the row was named explicitly, and get an ordinary answer
+  back by simply not sending the field. **An authority a client can skip by
+  omission is not an authority.**
+  With no circle at all, the subject is synthesised, `not_stated` is correct,
+  and nothing is written — asking a question is not opening a household.
 * Otherwise the profile is reached **through a join to `family_circles`
   filtered by `account_id`**, and only while `active`. That join *is* the
   authorisation; there is no separate permission check to forget.
 * Anything else raises `SubjectNotFound`, which the API answers as a 404 that
   does not echo the identifier.
+
+### One human, one subject
+
+Naming the canonical `self` row and naming nobody resolve to the *identical*
+`ResolvedSubject` — same `kind`, same `subject_id`, same `relation`, same
+`age_band`. `kind` is derived from the relation in one place (`_subject_from`),
+so the two spellings cannot drift apart. That matters beyond tidiness: a later
+slice will hang Decision Memory, shelf ownership and Manager state off this
+subject, and two spellings that produced two subjects would be a seam for that
+state to split along.
+
+`is_account_holder` reads `kind` alone. It used to also accept
+`relation == "self"`, which meant a resolver that classified the `self` row
+wrongly would still read correctly and no test could see the mistake.
+
+### When the household is structurally broken
+
+A circle with no active `self` row, or with more than one, is unreachable
+through any route: the circle and its `self` row are created in one
+transaction, no route deletes a profile, the account holder cannot be
+deactivated, and no route creates a second one. If it happens anyway, resolution
+raises `HouseholdInvariantError` and the route answers the same governed 503 a
+broken label snapshot gets. Falling back to the synthesised subject would answer
+with *weaker* authority than the household recorded, and picking one of two
+rows would decide whose body a decision is about by insertion order.
 
 ### Why a foreign subject is 404 and not 403
 
