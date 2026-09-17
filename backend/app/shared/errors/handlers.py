@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.shared.errors.codes import ErrorCode
-from app.shared.errors.exceptions import AppError
+from app.shared.errors.exceptions import AppError, IdentityInvariantError
 from app.shared.observability.request_id import get_request_id
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,28 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
         "handled_error code=%s status=%s path=%s request_id=%s",
         exc.code.value,
         exc.status_code,
+        request.url.path,
+        detail["request_id"],
+    )
+    return JSONResponse(status_code=exc.status_code, content={"detail": detail})
+
+
+async def identity_invariant_handler(
+    request: Request, exc: IdentityInvariantError,
+) -> JSONResponse:
+    """Same governed body as any ``AppError``, but logged as an incident.
+
+    ``app_error_handler`` logs at INFO because an expected failure is
+    information. Stored identity that no route can produce is not expected and
+    not information: somebody has to go and look. The reason code and the
+    request id go to the log; the response carries neither, nor any account,
+    profile or subject id.
+    """
+    detail = exc.to_detail()
+    detail["request_id"] = get_request_id()
+    logger.error(
+        "identity_invariant reason=%s path=%s request_id=%s",
+        exc.reason,
         request.url.path,
         detail["request_id"],
     )
@@ -60,4 +82,7 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, app_error_handler)
+    # More specific than ``AppError``; Starlette walks the exception's MRO and
+    # takes the closest registered match, so this wins for identity failures.
+    app.add_exception_handler(IdentityInvariantError, identity_invariant_handler)
     app.add_exception_handler(Exception, unhandled_error_handler)

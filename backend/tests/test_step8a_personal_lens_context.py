@@ -10,6 +10,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 import pytest
+from app.domains.family.subject import account_holder_subject
 from app.domains.identity import service as identity_service
 from app.domains.personal_lens import service
 from app.domains.personal_lens.enums import (
@@ -25,6 +26,10 @@ from app.domains.personal_lens.service import (
     build_personal_lens_context,
 )
 from app.domains.profile import service as profile_service
+from app.domains.profile.identity import (
+    resolve_self_profile_for_read,
+    resolve_self_profile_for_write,
+)
 from app.domains.profile.models import AppearanceProfile, ProfileAttribute, ProfileChangeEvent
 from app.domains.routines.hard_handoff import HandoffDecision, HandoffReason
 from app.shared.database import sql
@@ -132,9 +137,13 @@ async def test_category_is_validated_before_the_handoff_gate(monkeypatch):
         raise AssertionError("handoff gate ran before category validation")
 
     monkeypatch.setattr(service.hard_handoff, "evaluate", must_not_run)
+    stranger = uuid.uuid4()
     with pytest.raises(ValueError, match="PersonalLensCategory"):
         await build_personal_lens_context(
-            object(), account_id=uuid.uuid4(), category="skin_care",
+            object(),
+            principal_account_id=stranger,
+            subject=account_holder_subject(stranger),
+            category="skin_care",
         )
 
 
@@ -146,15 +155,24 @@ async def test_builder_calls_the_exact_handoff_authority(monkeypatch):
         calls.append((text, stated_age, subject_is_child))
         return HandoffDecision(handoff=False)
 
-    async def no_profile(session, account_id):
+    async def no_profile(session, subject, *, principal_account_id):
         return None
 
     monkeypatch.setattr(service.hard_handoff, "evaluate", evaluate)
-    monkeypatch.setattr(service.profile_service, "get_profile", no_profile)
+    monkeypatch.setattr(service, "resolve_subject_profile_for_read", no_profile)
     safety = PersonalLensSafetyInput(text="ordinary context", stated_age=25, subject_is_child=False)
-    await build_personal_lens_context(
-        object(), account_id=uuid.uuid4(), category=PersonalLensCategory.SKIN_CARE, safety=safety,
-    )
+    # A real session: the lens re-reads the subject from the database before it
+    # touches the gate, so a stand-in object would prove the gate is called with
+    # values nothing checked. This account has no household, so what comes back
+    # is the synthesised account holder and the disclosed age stands.
+    async with get_sessionmaker()() as session:
+        await build_personal_lens_context(
+            session,
+            principal_account_id=(stranger := uuid.uuid4()),
+            subject=account_holder_subject(stranger),
+            category=PersonalLensCategory.SKIN_CARE,
+            safety=safety,
+        )
     assert calls == [("ordinary context", 25, False)]
 
 
@@ -175,10 +193,15 @@ async def test_every_safety_boundary_hands_off_before_profile_reads(monkeypatch,
     async def must_not_read(*args, **kwargs):
         raise AssertionError("profile read occurred after handoff")
 
-    monkeypatch.setattr(service.profile_service, "get_profile", must_not_read)
-    context = await build_personal_lens_context(
-        object(), account_id=uuid.uuid4(), category=PersonalLensCategory.SKIN_CARE, safety=safety,
-    )
+    monkeypatch.setattr(service, "resolve_subject_profile_for_read", must_not_read)
+    async with get_sessionmaker()() as session:
+        context = await build_personal_lens_context(
+            session,
+            principal_account_id=(stranger := uuid.uuid4()),
+            subject=account_holder_subject(stranger),
+            category=PersonalLensCategory.SKIN_CARE,
+            safety=safety,
+        )
     assert context.status is PersonalLensStatus.HANDOFF_REQUIRED
     assert context.handoff is not None
     assert context.handoff.reason == reason.value
@@ -194,18 +217,24 @@ async def test_every_safety_boundary_hands_off_before_profile_reads(monkeypatch,
 async def test_ordinary_non_medical_context_continues_to_profile_read(monkeypatch):
     calls: list[uuid.UUID] = []
 
-    async def no_profile(session, account_id):
-        calls.append(account_id)
+    async def no_profile(session, subject, *, principal_account_id):
+        # The lens hands the resolver a checked subject and, separately, the
+        # authenticated principal — that is the whole point of the change. What
+        # this test cares about is that it reaches the profile read at all, and
+        # under whose authority.
+        assert principal_account_id == subject.account_id
+        calls.append(principal_account_id)
         return None
 
-    monkeypatch.setattr(service.profile_service, "get_profile", no_profile)
+    monkeypatch.setattr(service, "resolve_subject_profile_for_read", no_profile)
     owner = uuid.uuid4()
-    context = await build_personal_lens_context(
-        object(),
-        account_id=owner,
-        category=PersonalLensCategory.SKIN_CARE,
-        safety=PersonalLensSafetyInput(text="My skin usually feels comfortable"),
-    )
+    async with get_sessionmaker()() as session:
+        context = await build_personal_lens_context(
+            session,
+            principal_account_id=owner, subject=account_holder_subject(owner),
+            category=PersonalLensCategory.SKIN_CARE,
+            safety=PersonalLensSafetyInput(text="My skin usually feels comfortable"),
+        )
     assert context.status is PersonalLensStatus.NOT_ENOUGH_PERSONAL_CONTEXT
     assert calls == [owner]
 
@@ -237,7 +266,7 @@ async def test_only_confirmed_user_declarations_are_trusted(
             confidence=0.999,
         )
         context = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.SKIN_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.SKIN_CARE,
         )
     assert context.body_facts == ()
     assert _missing(context, "care_skin_usual_feel").reason is reason
@@ -254,7 +283,7 @@ async def test_confirmed_user_declaration_is_included_with_provenance(db_clean):
             confidence=0.01,
         )
         context = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.SKIN_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.SKIN_CARE,
         )
     fact = context.body_facts[0]
     assert fact.key == "care_skin_sensitivity"
@@ -272,7 +301,7 @@ async def test_categories_are_closed_and_never_leak_cross_category_facts(db_clea
     async with factory() as session:
         owner, _ = await _create_profile(session, values)
         contexts = {
-            category: await build_personal_lens_context(session, account_id=owner, category=category)
+            category: await build_personal_lens_context(session, principal_account_id=owner, subject=account_holder_subject(owner), category=category)
             for category in PersonalLensCategory
         }
 
@@ -303,14 +332,14 @@ async def test_preferences_are_separate_and_do_not_control_body_readiness(db_cle
     async with factory() as session:
         owner, _ = await _create_profile(session, SKIN_VALUES)
         without_preferences = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.SKIN_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.SKIN_CARE,
         )
     assert without_preferences.status is PersonalLensStatus.CONTEXT_AVAILABLE
     assert without_preferences.preference_facts == ()
     assert all(row.kind is PersonalFactKind.PREFERENCE for row in without_preferences.missing_information)
 
     async with factory() as session:
-        profile = await profile_service.get_profile(session, owner)
+        profile = await resolve_self_profile_for_read(session, owner)
         assert profile is not None
         await profile_service.apply_attributes(
             session,
@@ -319,7 +348,7 @@ async def test_preferences_are_separate_and_do_not_control_body_readiness(db_cle
         )
         await session.commit()
         with_preferences = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.SKIN_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.SKIN_CARE,
         )
     assert with_preferences.status is PersonalLensStatus.CONTEXT_AVAILABLE
     assert tuple(fact.key for fact in with_preferences.preference_facts) == PREFERENCE_FACT_KEYS
@@ -333,10 +362,10 @@ async def test_appearance_wellness_and_allergy_data_are_never_projected(db_clean
     async with factory() as session:
         owner, _ = await _create_profile(session, values)
         skin = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.SKIN_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.SKIN_CARE,
         )
         food = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.PACKAGED_FOOD,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.PACKAGED_FOOD,
         )
     assert {fact.key for fact in (*skin.body_facts, *skin.preference_facts)} == set(SKIN_VALUES)
     assert food.body_facts == ()
@@ -357,7 +386,7 @@ async def test_explicit_unknown_is_preserved_but_not_counted_as_usable(db_clean)
             "care_skin_sensitivity": "not_sure",
         })
         context = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.SKIN_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.SKIN_CARE,
         )
     unknown = next(fact for fact in context.body_facts if fact.key == "care_skin_sensitivity")
     assert unknown.value == "not_sure"
@@ -374,7 +403,7 @@ async def test_only_explicit_unknown_body_fact_is_not_enough_context(db_clean):
     async with factory() as session:
         owner, _ = await _create_profile(session, {"care_skin_sensitivity": "not_sure"})
         context = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.SKIN_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.SKIN_CARE,
         )
     assert context.status is PersonalLensStatus.NOT_ENOUGH_PERSONAL_CONTEXT
 
@@ -387,7 +416,7 @@ async def test_missing_profile_is_normal_and_does_not_create_rows(db_clean):
         await identity_service.register_account(session, owner)
         await session.commit()
         context = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.SKIN_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.SKIN_CARE,
         )
         counts = (
             await session.scalar(select(func.count()).select_from(AppearanceProfile)),
@@ -408,7 +437,7 @@ async def test_partial_and_complete_skin_context_are_deterministic(db_clean):
             session, {"care_skin_sensitivity": "rarely_reactive"},
         )
         partial = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.SKIN_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.SKIN_CARE,
         )
         assert partial.status is PersonalLensStatus.PARTIAL_CONTEXT
         assert [(row.key, row.reason) for row in partial.missing_information if row.kind is PersonalFactKind.BODY] == [
@@ -420,7 +449,7 @@ async def test_partial_and_complete_skin_context_are_deterministic(db_clean):
         )
         await session.commit()
         complete = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.SKIN_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.SKIN_CARE,
         )
     assert complete.status is PersonalLensStatus.CONTEXT_AVAILABLE
     assert tuple(fact.key for fact in complete.body_facts) == BODY_FACT_KEYS_BY_CATEGORY[PersonalLensCategory.SKIN_CARE]
@@ -432,7 +461,7 @@ async def test_profile_version_is_live_provenance_without_personal_lens_persiste
     owner = uuid.uuid4()
     async with factory() as session:
         await identity_service.register_account(session, owner)
-        profile = await profile_service.get_or_create_profile(session, owner)
+        profile = await resolve_self_profile_for_write(session, owner)
         await profile_service.apply_attributes(
             session,
             profile,
@@ -440,7 +469,7 @@ async def test_profile_version_is_live_provenance_without_personal_lens_persiste
         )
         await session.commit()
         first = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.SKIN_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.SKIN_CARE,
         )
         first_version = first.profile_version
 
@@ -451,7 +480,7 @@ async def test_profile_version_is_live_provenance_without_personal_lens_persiste
         )
         await session.commit()
         second = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.SKIN_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.SKIN_CARE,
         )
     assert first.profile_id == second.profile_id == profile.id
     assert first_version is not None
@@ -471,10 +500,20 @@ async def test_query_budget_and_runtime_no_write_contract(db_clean):
         await session.commit()
 
     engine = sql.get_engine().sync_engine
+    # Each budget gained one SELECT in Step 11B, including the handoff case that
+    # used to read nothing at all. That one is the point: the lens now re-reads
+    # the subject *before* the gate, because a caller-supplied age band is a
+    # disclosure and never an authority, and a request must not be able to reach
+    # an ordinary answer about a child by describing them as an adult. None of
+    # these accounts has a household, so the extra read is the single indexed
+    # ``family_circles`` lookup that establishes exactly that.
+    #
+    # The contract this test exists for is unchanged and asserted below: bounded
+    # reads, and never a write.
     cases = (
-        (uuid.uuid4(), PersonalLensSafetyInput(text="I take metformin"), 0),
-        (no_profile_owner, None, 1),
-        (existing_owner, None, 2),
+        (uuid.uuid4(), PersonalLensSafetyInput(text="I take metformin"), 1),
+        (no_profile_owner, None, 3),
+        (existing_owner, None, 4),
     )
     for owner, safety, expected_selects in cases:
         statements, record = _record_statements()
@@ -483,7 +522,7 @@ async def test_query_budget_and_runtime_no_write_contract(db_clean):
             try:
                 await build_personal_lens_context(
                     session,
-                    account_id=owner,
+                    principal_account_id=owner, subject=account_holder_subject(owner),
                     category=PersonalLensCategory.SKIN_CARE,
                     safety=safety,
                 )
@@ -506,7 +545,8 @@ async def test_safety_input_is_never_returned_or_persisted(db_clean):
     async with factory() as session:
         context = await build_personal_lens_context(
             session,
-            account_id=uuid.uuid4(),
+            principal_account_id=(stranger := uuid.uuid4()),
+            subject=account_holder_subject(stranger),
             category=PersonalLensCategory.HAIR_CARE,
             safety=PersonalLensSafetyInput(text=private_text),
         )
@@ -527,7 +567,7 @@ async def test_projected_values_and_context_contract_are_immutable(db_clean):
     async with factory() as session:
         owner, _ = await _create_profile(session, HAIR_VALUES)
         context = await build_personal_lens_context(
-            session, account_id=owner, category=PersonalLensCategory.HAIR_CARE,
+            session, principal_account_id=owner, subject=account_holder_subject(owner), category=PersonalLensCategory.HAIR_CARE,
         )
     processing = next(fact for fact in context.body_facts if fact.key == "care_hair_processing")
     assert processing.value == ("coloured",)

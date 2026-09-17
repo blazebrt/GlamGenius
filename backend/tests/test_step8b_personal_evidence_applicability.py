@@ -25,6 +25,7 @@ from app.domains.evidence.enums import (
     SourceType,
 )
 from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource
+from app.domains.family.subject import account_holder_subject
 from app.domains.formulas.parser import ParseStatus
 from app.domains.formulas.service import FormulaIngredientResolution, FormulaResolution
 from app.domains.identity import service as identity_service
@@ -46,7 +47,6 @@ from app.domains.personal_applicability.service import (
 from app.domains.personal_lens.enums import (
     PersonalLensCategory,
     PersonalLensStatus,
-    PersonalLensSubjectScope,
 )
 from app.domains.personal_lens.service import (
     PersonalLensContext,
@@ -771,10 +771,10 @@ class TestStep8AOrchestration:
                 ))
             await session.commit()
             trusted = await build_personal_lens_context(
-                session, account_id=owners[0], category=PersonalLensCategory.SKIN_CARE,
+                session, principal_account_id=owners[0], subject=account_holder_subject(owners[0]), category=PersonalLensCategory.SKIN_CARE,
             )
             untrusted = await build_personal_lens_context(
-                session, account_id=owners[1], category=PersonalLensCategory.SKIN_CARE,
+                session, principal_account_id=owners[1], subject=account_holder_subject(owners[1]), category=PersonalLensCategory.SKIN_CARE,
             )
             await _add_claim(session)
             await session.commit()
@@ -795,9 +795,11 @@ class TestStep8AOrchestration:
         monkeypatch.setattr(service, "interpret_label_snapshot", forbidden)
         private_text = "I take novaformin-private-step8b"
         statements: list[str] = []
+        bound: list[object] = []
 
         def record(conn, cursor, statement, parameters, context, executemany):
             statements.append(statement)
+            bound.append(parameters)
 
         factory = get_sessionmaker()
         engine = sql.get_engine().sync_engine
@@ -807,7 +809,8 @@ class TestStep8AOrchestration:
                 result = await interpret_label_snapshot_for_account(
                     session,
                     object(),
-                    account_id=uuid.uuid4(),
+                    principal_account_id=(stranger := uuid.uuid4()),
+                    subject=account_holder_subject(stranger),
                     category=PersonalApplicabilityCategory.SKIN_CARE,
                     safety=PersonalLensSafetyInput(text=private_text),
                 )
@@ -818,7 +821,21 @@ class TestStep8AOrchestration:
         assert result.ingredients == ()
         assert private_text not in repr(result)
         assert "novaformin" not in repr(result)
-        assert statements == []
+
+        # One statement, and only one: the subject is re-read from the database
+        # before the gate, because a caller-supplied age band is a disclosure
+        # and never an authority. Nothing else runs — no profile read, no
+        # product work, no evidence work.
+        assert len(statements) == 1, statements
+        assert "family_circles" in statements[0]
+        # And the safety text reaches the database in no form at all, neither
+        # in a statement nor as a bound parameter. That is the contract this
+        # test has always been for.
+        for statement, parameters in zip(statements, bound, strict=True):
+            assert private_text not in statement
+            assert "novaformin" not in statement
+            assert private_text not in repr(parameters)
+            assert "novaformin" not in repr(parameters)
 
     async def test_no_body_context_and_packaged_food_skip_step7c(self, db_clean, monkeypatch):
         async def forbidden(*args, **kwargs):
@@ -840,7 +857,7 @@ class TestStep8AOrchestration:
             result = await interpret_label_snapshot_for_account(
                 session,
                 snapshot,
-                account_id=owner,
+                principal_account_id=owner, subject=account_holder_subject(owner),
                 category=PersonalApplicabilityCategory.PACKAGED_FOOD,
             )
         assert result.context_status is PersonalLensStatus.NOT_ENOUGH_PERSONAL_CONTEXT
@@ -854,13 +871,18 @@ class TestStep8AOrchestration:
         context = _context()
         interpretation = _interpretation()
 
-        async def lens(session, *, account_id, category, safety, subject_scope):
+        async def lens(session, *, category, safety, subject, principal_account_id):
             calls.append(("8a", category))
             # Step 11A. A caller that names nobody is asking about the signed-in
             # person, and must reach the lens as such. Arriving here as "somebody
             # else" would withhold the account holder's own facts from their own
             # decision, which looks like a missing profile rather than a bug.
-            assert subject_scope is PersonalLensSubjectScope.ACCOUNT_HOLDER
+            # Step 11B: the lens is handed the checked subject itself. A caller
+            # naming nobody must still arrive as the account holder, or the
+            # signed-in person would be withheld their own facts.
+            assert subject.is_account_holder
+            # The principal arrives separately from the claim it authorises.
+            assert principal_account_id == subject.account_id
             return context
 
         async def step7c(session, snapshot, *, category):
@@ -880,7 +902,8 @@ class TestStep8AOrchestration:
         result = await interpret_label_snapshot_for_account(
             object(),
             snapshot,
-            account_id=uuid.uuid4(),
+            principal_account_id=(stranger := uuid.uuid4()),
+            subject=account_holder_subject(stranger),
             category=PersonalApplicabilityCategory.SKIN_CARE,
         )
         assert [call[0] for call in calls] == ["8a", "7c", "8b"]

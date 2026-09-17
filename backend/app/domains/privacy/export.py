@@ -41,6 +41,7 @@ from app.domains.beta_access.models import (
 from app.domains.community.models import CommunityObservationReport
 from app.domains.consent.models import Consent
 from app.domains.family.models import FamilyCircle, FamilyProfile
+from app.domains.family.subject import RELATION_SELF
 from app.domains.identity.models import Account
 from app.domains.inventory.models import (
     InventoryAttribute,
@@ -70,8 +71,13 @@ from app.domains.profile.models import (
     AppearanceGoal,
     AppearanceProfile,
     AttributeObservation,
+    FitPreference,
+    LifestyleContext,
     OnboardingSession,
     ProfileAttribute,
+    ProfileChangeEvent,
+    StylePreference,
+    UserConstraint,
 )
 from app.domains.progress.models import (
     MetricEvent,
@@ -190,34 +196,197 @@ async def _identity(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
     }
 
 
+#: Every child table that hangs off ``appearance_profiles.id``.
+#:
+#: Five of these — change events, style, fit, lifestyle and constraints — were
+#: classified INCLUDED in the registry and exported by nothing. The registry is
+#: a promise that the account holder can read their own data back, and for
+#: those five it had been making that promise to nobody. Step 11B keeps it.
+_PROFILE_CHILD_TABLES: tuple[tuple[str, Any], ...] = (
+    ("attributes", ProfileAttribute),
+    ("change_events", ProfileChangeEvent),
+    ("observations", AttributeObservation),
+    ("style_preferences", StylePreference),
+    ("fit_preferences", FitPreference),
+    ("lifestyle_context", LifestyleContext),
+    ("user_constraints", UserConstraint),
+    ("goals", AppearanceGoal),
+    ("onboarding_sessions", OnboardingSession),
+)
+
+
+async def _profile_payload(session: AsyncSession, profile: AppearanceProfile) -> dict[str, Any]:
+    """One profile and everything attached to it, by ``profile_id``."""
+    payload: dict[str, Any] = {
+        "profile": _row_dict(profile, [c.name for c in AppearanceProfile.__table__.columns]),
+    }
+    for label, model in _PROFILE_CHILD_TABLES:
+        rows = await _fetch(session, select(model).where(model.profile_id == profile.id))
+        payload[label] = [_row_dict(r, [c.name for c in model.__table__.columns]) for r in rows]
+    return payload
+
+
+def _empty_profile_payload() -> dict[str, Any]:
+    return {"profile": None, **{label: [] for label, _ in _PROFILE_CHILD_TABLES}}
+
+
 async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
+    """The appearance domain, grouped by the human each profile describes.
+
+    A flat list would hand somebody one undifferentiated pile of several
+    people's bodies, which is exactly the confusion a household introduces and
+    the export has to answer.
+
+    This is a **pure read**. A household whose account holder has not yet been
+    adopted is *labelled* as the account holder without the row being touched:
+    an export that adopted as a side effect would mean downloading your data
+    changed it. That holds for malformed identity too — nothing here repairs,
+    adopts, merges or deletes, whatever it finds.
+
+    Where the rest of the product refuses to answer on malformed identity, this
+    records it and carries on. An export is the one surface where stopping is
+    the wrong answer: somebody exercising a data right must still receive their
+    data, and a household whose ``self`` row is missing has not stopped owning
+    the rows underneath it. So identity is left unstated, the problem goes in
+    ``invariant_errors``, and every row this account owns is still in the file.
+    """
     profiles = await _fetch(
         session,
         select(AppearanceProfile).where(AppearanceProfile.account_id == account_id),
     )
-    profile_ids = [p.id for p in profiles]
-    attributes = await _fetch(
+    # Whether a household exists is a fact about the circle, not about how many
+    # members happen to be in it. Inferring it from ``members`` would read a
+    # corrupt circle with no rows at all as "this account never opened a
+    # household" — the most alarming state there is, silently reported as the
+    # most ordinary one.
+    circle_id = await session.scalar(
+        select(FamilyCircle.id).where(FamilyCircle.account_id == account_id)
+    )
+    members = (await _fetch(
         session,
-        select(ProfileAttribute).where(ProfileAttribute.profile_id.in_(profile_ids)),
-    ) if profile_ids else []
-    goals = await _fetch(
-        session,
-        select(AppearanceGoal).where(AppearanceGoal.profile_id.in_(profile_ids)),
-    ) if profile_ids else []
-    observations = await _fetch(
-        session,
-        select(AttributeObservation).where(AttributeObservation.profile_id.in_(profile_ids)),
-    ) if profile_ids else []
-    onboarding = await _fetch(
-        session,
-        select(OnboardingSession).where(OnboardingSession.profile_id.in_(profile_ids)),
-    ) if profile_ids else []
+        select(FamilyProfile)
+        .join(FamilyCircle, FamilyCircle.id == FamilyProfile.circle_id)
+        .where(FamilyCircle.account_id == account_id)
+        .order_by(FamilyProfile.position),
+    )) if circle_id is not None else []
+
+    # Exactly one active account holder, or none named at all. Taking the first
+    # of two would label one human as the account holder by insertion order,
+    # and the profile underneath a ``self`` label is the one the legacy row is
+    # attributed to — so getting it wrong would attach the signed-in person's
+    # history to somebody else in their household, inside the file they asked
+    # for precisely to see who has what.
+    self_rows = [m for m in members if m.relation == RELATION_SELF and m.active]
+    invariant_errors: list[dict[str, str]] = []
+    if len(self_rows) == 1:
+        self_row = self_rows[0]
+    else:
+        self_row = None
+        if circle_id is not None:
+            invariant_errors.append({
+                "error": (
+                    "household_self_profile_missing" if not self_rows
+                    else "household_has_multiple_self_profiles"
+                ),
+            })
+
+    by_subject = {p.household_subject_id: p for p in profiles if p.household_subject_id}
+    legacy = next((p for p in profiles if p.household_subject_id is None), None)
+
+    subjects: list[dict[str, Any]] = []
+    claimed: set[uuid.UUID] = set()
+
+    for member in members:
+        profile = by_subject.get(member.id)
+        is_self = self_row is not None and member.id == self_row.id
+        # The unadopted case: no profile is bound to the self row yet, but the
+        # legacy row is that person's. Named here, not rewritten.
+        if profile is None and is_self and legacy is not None:
+            profile = legacy
+        if profile is not None:
+            claimed.add(profile.id)
+        entry: dict[str, Any] = {
+            "household_subject_id": str(member.id),
+            "relation": member.relation,
+            "age_band": member.age_band,
+            "active": member.active,
+            "is_account_holder": is_self,
+            "adopted": profile is not None and profile.household_subject_id is not None,
+        }
+        entry.update(
+            await _profile_payload(session, profile) if profile is not None
+            else _empty_profile_payload()
+        )
+        subjects.append(entry)
+
+    # An account with no household still has an account holder, and their
+    # profile is the legacy row. It appears under a null subject because there
+    # is no household row to name — not because it belongs to nobody.
+    #
+    # When the household exists but its account holder could not be identified,
+    # the same row is still exported — it is the customer's data and they asked
+    # for it — but it is not labelled as anybody's, because the one thing worse
+    # than an unlabelled profile is a confidently mislabelled one.
+    if legacy is not None and legacy.id not in claimed:
+        unattributed = circle_id is not None and self_row is None
+        subjects.append({
+            "household_subject_id": None,
+            "relation": None if unattributed else RELATION_SELF,
+            "age_band": None,
+            "active": True,
+            "is_account_holder": not unattributed,
+            "adopted": False,
+            **await _profile_payload(session, legacy),
+        })
+
+    # A profile bound to a subject this account does not own is a broken
+    # invariant, and the two halves of the answer pull in opposite directions.
+    #
+    # The subject id names somebody in *another* household, so it must not
+    # appear here at all: this file is handed to a customer, and a stranger's
+    # member id is a stranger's identity. But the profile row and every child
+    # row under it belong to *this* account by ``account_id``, and those are
+    # the customer's own body facts. Dropping them to avoid the leak would
+    # answer a data-rights request by quietly withholding data.
+    #
+    # So they are exported in full, with the identity stripped rather than
+    # invented: no subject id, no relation, no claim about who this describes.
+    # Nothing is repaired, adopted, merged or deleted — an export is not the
+    # place to decide whose body facts these were.
+    known_member_ids = {m.id for m in members}
+    orphaned = [
+        p for p in profiles
+        if p.household_subject_id is not None
+        and p.household_subject_id not in known_member_ids
+    ]
+
+    unattributed_profiles: list[dict[str, Any]] = []
+    for profile in orphaned:
+        invariant_errors.append(
+            {"profile_id": str(profile.id), "error": "profile_subject_ownership_invalid"}
+        )
+        payload = await _profile_payload(session, profile)
+        # The corrupt link is the one field that names somebody outside this
+        # account. It is replaced rather than echoed.
+        payload["profile"]["household_subject_id"] = None
+        unattributed_profiles.append({
+            "household_subject_id": None,
+            "relation": None,
+            "age_band": None,
+            "active": True,
+            "is_account_holder": False,
+            "adopted": False,
+            **payload,
+        })
+
     return {
-        "profiles": [_row_dict(p, [c.name for c in AppearanceProfile.__table__.columns]) for p in profiles],
-        "attributes": [_row_dict(a, [c.name for c in ProfileAttribute.__table__.columns]) for a in attributes],
-        "goals": [_row_dict(g, [c.name for c in AppearanceGoal.__table__.columns]) for g in goals],
-        "observations": [_row_dict(o, [c.name for c in AttributeObservation.__table__.columns]) for o in observations],
-        "onboarding_sessions": [_row_dict(o, [c.name for c in OnboardingSession.__table__.columns]) for o in onboarding],
+        "subjects": subjects,
+        # Profiles this account owns that no subject of this account explains.
+        # Separate from ``subjects`` on purpose: everything in that list is
+        # attributed to a named human, and these are precisely the rows that
+        # cannot be.
+        "unattributed_profiles": unattributed_profiles,
+        "invariant_errors": invariant_errors,
     }
 
 

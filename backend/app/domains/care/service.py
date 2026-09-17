@@ -26,6 +26,7 @@ from app.domains.care.schemas import (
 from app.domains.inventory.models import InventoryAttribute
 from app.domains.planning.context import DayContext
 from app.domains.profile import service as profile_service
+from app.domains.profile.identity import resolve_self_profile_for_read
 from app.domains.profile.models import ProfileAttribute
 from app.domains.routines import shelf
 
@@ -162,7 +163,7 @@ async def build_care_context(
     if day_context.account_id != account_id:
         raise ValueError("DayContext account does not match Care account")
 
-    profile = await profile_service.get_profile(session, account_id)
+    profile = await resolve_self_profile_for_read(session, account_id)
     rows = (
         {row.key: row for row in await profile_service.attributes_for(session, profile.id)}
         if profile is not None

@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryItem
 from app.domains.profile import service as profile_service
-from app.domains.profile.models import AppearanceProfile
+from app.domains.profile.identity import resolve_self_profile_for_read
 from app.domains.recommendation.models import Look, LookFeedback, LookItem, OccasionRecord
 from app.domains.recommendation.occasions import Occasion, dress_code_formality, get_occasion
 
@@ -99,7 +99,9 @@ class StyleContext:
 
 
 async def confirmed_attributes(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
-    profile = (await session.execute(select(AppearanceProfile).where(AppearanceProfile.account_id == account_id))).scalar_one_or_none()
+    # Account-holder semantics. Same reason as the shelf: the old bare lookup
+    # raised rather than guessed once a second profile existed.
+    profile = await resolve_self_profile_for_read(session, account_id)
     if profile is None:
         return {}
     rows = await profile_service.attributes_for(session, profile.id)

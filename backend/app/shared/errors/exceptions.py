@@ -137,6 +137,42 @@ class ConsentRequiredError(AppError):
         )
 
 
+class IdentityInvariantError(AppError):
+    """Stored identity is in a state no route can produce.
+
+    A household with no account holder in it, or with two. One human holding
+    two profiles. A profile bound to a subject belonging to a different
+    account. None of these is a customer state and none is reachable through
+    any route, so the answer is to stop rather than to guess which human a
+    decision is about — guessing is how one person's body facts end up
+    answering for another's.
+
+    It is an ``AppError`` so that it stops at the same governed boundary as
+    every other deliberate failure instead of escaping as a bare 500 from
+    whichever route happened to touch identity. The customer sentence is fixed
+    and says nothing: no account id, no profile id, no subject id, no reason
+    code and no conflicting value. ``reason`` exists for the log, where the
+    request id is how an operator finds the rest.
+
+    Not retryable. Trying again will reach the same rows.
+    """
+
+    status_code = 503
+    code = ErrorCode.FEATURE_UNAVAILABLE
+    retryable = False
+
+    #: Deliberately the same sentence the FOR YOU route already returns for an
+    #: unavailable result. A customer cannot act on the difference, and telling
+    #: them their data is inconsistent would alarm without informing.
+    MESSAGE = "This result is not available right now."
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(self.MESSAGE)
+        #: Log-only. Never serialised — ``to_detail`` reads ``extra``, and this
+        #: is deliberately not in it.
+        self.reason = reason
+
+
 class NotFoundError(AppError):
     status_code = 404
     code = ErrorCode.NOT_FOUND

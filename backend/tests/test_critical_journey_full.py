@@ -205,9 +205,9 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
         assert acc is not None and acc.status == "active"
 
     async with factory() as session:
-        from app.domains.profile import service as profile_service
+        from app.domains.profile.identity import resolve_self_profile_for_write
 
-        profile = await profile_service.get_or_create_profile(session, account_id)
+        profile = await resolve_self_profile_for_write(session, account_id)
         profile_id = profile.id
         # Add a couple of attributes so the profile has content to export later.
         session.add(ProfileAttribute(

@@ -113,7 +113,15 @@ async def test_care_attribute_export_and_account_deletion_cascade(
     factory = get_sessionmaker()
     async with factory() as session:
         exported = await export_service.build_export(session, account_id)
-        rows = exported["domains"]["profile"]["attributes"]
+        # Step 11B groups the appearance domain by the human each profile
+        # describes. This account has no household, so there is one entry: the
+        # account holder, under a null subject id.
+        holder = next(
+            entry for entry in exported["domains"]["profile"]["subjects"]
+            if entry["is_account_holder"]
+        )
+        assert holder["household_subject_id"] is None
+        rows = holder["attributes"]
         care = next(row for row in rows if row["key"] == "care_hair_pattern")
         assert care["value"] == "curly"
         assert care["source"] == "user_declared"

@@ -1,7 +1,7 @@
 """Regression coverage for the appearance-profile domain.
 
 Covers:
-    * ``get_or_create_profile`` is idempotent.
+    * ``resolve_self_profile_for_write`` is idempotent.
     * Attribute observations and appearance goals persist and can be listed.
     * Attribute application overwrites the same key rather than duplicating.
     * Onboarding sessions can progress from ``in_progress`` to ``complete``.
@@ -14,6 +14,7 @@ import uuid
 import pytest
 from app.domains.identity import service as identity
 from app.domains.profile import service as profile_service
+from app.domains.profile.identity import resolve_self_profile_for_write
 from app.domains.profile.models import (
     AppearanceGoal,
     AttributeObservation,
@@ -36,16 +37,16 @@ async def _account():
     return account_id
 
 
-async def test_get_or_create_profile_is_idempotent(db_clean):
+async def test_resolve_self_profile_for_write_is_idempotent(db_clean):
     factory = get_sessionmaker()
     account_id = await _account()
 
     async with factory() as session:
-        first = await profile_service.get_or_create_profile(session, account_id)
+        first = await resolve_self_profile_for_write(session, account_id)
         await session.commit()
         first_id = first.id
     async with factory() as session:
-        second = await profile_service.get_or_create_profile(session, account_id)
+        second = await resolve_self_profile_for_write(session, account_id)
     assert first_id == second.id
 
 
@@ -54,7 +55,7 @@ async def test_attribute_apply_overwrites_same_key(db_clean):
     account_id = await _account()
 
     async with factory() as session:
-        profile = await profile_service.get_or_create_profile(session, account_id)
+        profile = await resolve_self_profile_for_write(session, account_id)
         await profile_service.apply_attributes(
             session,
             profile,
@@ -64,7 +65,7 @@ async def test_attribute_apply_overwrites_same_key(db_clean):
         await session.commit()
 
     async with factory() as session:
-        profile = await profile_service.get_or_create_profile(session, account_id)
+        profile = await resolve_self_profile_for_write(session, account_id)
         await profile_service.apply_attributes(
             session,
             profile,
@@ -89,7 +90,7 @@ async def test_onboarding_session_lifecycle(db_clean):
     account_id = await _account()
 
     async with factory() as session:
-        profile = await profile_service.get_or_create_profile(session, account_id)
+        profile = await resolve_self_profile_for_write(session, account_id)
         session.add(OnboardingSession(
             profile_id=profile.id, status="in_progress",
             answers={"step_1": "done"},
@@ -121,7 +122,7 @@ async def test_attribute_observation_is_written(db_clean):
     account_id = await _account()
 
     async with factory() as session:
-        profile = await profile_service.get_or_create_profile(session, account_id)
+        profile = await resolve_self_profile_for_write(session, account_id)
         session.add(AttributeObservation(
             profile_id=profile.id,
             key="skin_tone",
@@ -146,7 +147,7 @@ async def test_appearance_goals_scoped_to_profile(db_clean):
     account_id = await _account()
 
     async with factory() as session:
-        profile = await profile_service.get_or_create_profile(session, account_id)
+        profile = await resolve_self_profile_for_write(session, account_id)
         session.add(AppearanceGoal(
             profile_id=profile.id,
             goal="Feel less shiny by evening",
@@ -173,7 +174,7 @@ async def test_projection_row_created_via_sync(db_clean):
     account_id = await _account()
 
     async with factory() as session:
-        profile = await profile_service.get_or_create_profile(session, account_id)
+        profile = await resolve_self_profile_for_write(session, account_id)
         await profile_service.sync_projections(
             session, profile.id,
             {"usual_top_size": "M"},

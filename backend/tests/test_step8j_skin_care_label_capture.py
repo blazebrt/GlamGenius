@@ -34,6 +34,7 @@ from app.domains.ai_gateway.models import (
     AIRunOutput,
 )
 from app.domains.evidence.models import EvidenceClaim
+from app.domains.family.subject import account_holder_subject
 from app.domains.personal_applicability.enums import PersonalApplicabilityCategory
 from app.domains.personal_applicability.service import interpret_label_snapshot_for_account
 from app.domains.personal_decision_explanation.rules import PERSONAL_DECISION_EXPLANATION_RULES
@@ -1038,7 +1039,7 @@ class TestStep8BReadiness:
             assert category is PersonalApplicabilityCategory.SKIN_CARE
 
             result = await interpret_label_snapshot_for_account(
-                session, snapshot, account_id=account_id, category=category,
+                session, snapshot, principal_account_id=account_id, subject=account_holder_subject(account_id), category=category,
             )
 
         assert result.category is PersonalApplicabilityCategory.SKIN_CARE
