@@ -112,6 +112,69 @@ The gate itself is unchanged: `routines/hard_handoff.evaluate()`, called with
 structured `stated_age` and `subject_is_child`. Nothing here substitutes a
 generic safety-copy function for it.
 
+### Correcting the band
+
+An authority nobody can correct is not an authority, it is a trap. Because
+`safety_for()` is deliberately built so that no request can argue a stored band
+downwards, a band that can only be written once becomes permanent — and so does
+the hand-over it causes. A child turns twelve and the product still refuses to
+answer about them. A parent taps the wrong band on the way in and there is no
+way back.
+
+So `PATCH /api/v2/family-circle/profiles/{id}` accepts `age_band` as well as
+`active`, as a partial update:
+
+* only the fields actually named are written (`model_dump(exclude_unset=True)`,
+  the same convention the rest of the application's patch routes use), so a
+  client that only knows how to send `active` still works and does not overwrite
+  a band it never mentioned;
+* a body that names nothing is refused — an empty body was refused before this
+  route had a second field, and a 200 for a request that did nothing reads as
+  confirmation that something was recorded;
+* neither field accepts `null`. Elsewhere a null in a patch means "leave it
+  alone"; for a field that decides whether the product hands somebody to a
+  clinician, quietly ignoring what the caller wrote is the wrong way to fail.
+  Clearing a stored age is spelled `not_stated`, which is a value in the
+  vocabulary rather than an absence;
+* unknown fields are refused, because `{"age_bands": "adult_18_plus"}` is a typo
+  that must not look like a successful correction.
+
+The vocabulary stays closed and the precision stays coarse. No date of birth, no
+exact age, no free text.
+
+**Identity is stable.** The correction updates the row in place. Deleting the
+member and creating them again would work today and would be a disaster later,
+when Decision Memory, shelf ownership and Manager state hang off that id.
+
+**Two corrections at once** settle as last-write-wins, which is what every other
+partial update here does. There is no unique constraint on a band and no
+read-modify-write to lose: the ORM issues an `UPDATE` for the named columns
+only, so a request changing `active` and one changing `age_band` at the same
+moment do not overwrite each other. A version column would be machinery this
+does not need.
+
+### The self row
+
+The circle is created with a `relation="self"` row, and the original rule
+forbade changing it at all. That rule was protecting something real — the
+household's owner must not be able to remove themselves from it — but it was
+drawn too wide, which made the account holder's own age band permanently
+`not_stated`.
+
+The two are now separated:
+
+* the **shape** of the household is fixed: the `self` row cannot be deactivated,
+  and `relation` is not a field this route accepts on any row;
+* the **facts** about that person are not: `age_band` can be corrected like
+  anybody else's, and reaches the hard-handoff gate the same way.
+
+A patch that mixes an allowed change with a forbidden one is refused whole;
+applying half of it would leave the caller with an error and a changed row.
+
+A refusal here returns the same 404 this route has always returned, for the self
+case and the foreign case alike — a refusal does not confirm whether the
+identifier names anybody.
+
 ## What a non-self subject is told today
 
 `PersonalLensSubjectScope.OTHER_HOUSEHOLD_MEMBER` stops the lens **before** it
@@ -193,3 +256,6 @@ Both were pre-existing 500s on a double tap.
   protection equivalent to the exact-identity protection established in
   Step 10A.
 * No invitations, no second account, no sharing between households.
+* No audit trail of who corrected a band and when. The row holds the current
+  fact; the history of corrections is not kept, because nothing in this slice
+  reads it.

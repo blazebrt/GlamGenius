@@ -46,11 +46,17 @@ CIRCLE_URL = "/api/v2/family-circle"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-async def _member(client, token, *, relation, age_band) -> str:
-    response = await client.post(
-        PROFILES_URL, headers=auth(token),
-        json={"relation": relation, "age_band": age_band},
-    )
+async def _member(client, token, *, relation, age_band=None) -> str:
+    """Add one household member, optionally stating how old they are.
+
+    Omitting ``age_band`` sends no band at all rather than sending
+    ``not_stated``, so the caller exercises the route's own default — which is
+    what a client that has not been updated will do.
+    """
+    payload: dict[str, Any] = {"relation": relation}
+    if age_band is not None:
+        payload["age_band"] = age_band
+    response = await client.post(PROFILES_URL, headers=auth(token), json=payload)
     assert response.status_code == 201, response.text
     return response.json()["id"]
 
