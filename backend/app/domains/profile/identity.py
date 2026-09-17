@@ -66,29 +66,62 @@ Lock order, obeyed by every write path here and in :mod:`app.domains.family.serv
 
 The account row is the serialisation point because it always exists — its id is
 the Supabase user id, written at registration — so it can be locked without
-first creating anything. Household creation and self profile adoption both take
-it before they look at what exists, which is what makes them agree about a
-household that is being created at the same moment.
+first creating anything.
 
-Concretely, and these are the only locks any write path here takes:
+The *mode* matters as much as the order, so each path is spelled out. And a
+path never takes only the locks its code asks for: PostgreSQL's referential
+integrity takes its own, and leaving those out of the account is how an order
+that reads correctly deadlocks in production.
 
-* **Writing for the account holder** — ``resolve_self_profile_for_write`` takes
-  the ``accounts`` row ``FOR UPDATE``, and nothing else. It never takes a
-  ``family_profiles`` lock, because the ``self`` row cannot be deactivated and
-  taking it *after* the account row is the only order that would not invert the
-  one above.
-* **Writing for a named member** — ``canonical_subject_for_write`` takes that
-  member's ``family_profiles`` row ``FOR UPDATE``, and nothing else. No
-  account-wide lock, because a write about one person has no business
-  serialising a household against itself for everybody else in it.
-* **Opening a household** — ``circle_for(create=True)`` takes the ``accounts``
-  row, then inserts the circle and its ``self`` row.
+**Account-holder write** — ``resolve_self_profile_for_write``::
 
-Nothing takes the member lock and then the account lock, so the order holds and
-there is no cycle to deadlock on. The member lock is what keeps a concurrent
-deactivation from landing between "this member is active" and the facts being
-written about them: the two contend on one row, and the pair settles into a
-single order rather than both believing they won.
+    Account FOR UPDATE
+    -> AppearanceProfile (insert or update)
+
+It takes no ``family_profiles`` lock. The ``self`` row cannot be deactivated —
+``update_profile`` refuses it — so there is nothing to hold still, and taking
+it after the account row is the only order that would not invert the one above.
+
+**Non-self member write** — ``canonical_subject_for_write``::
+
+    Account FOR KEY SHARE
+    -> FamilyProfile FOR UPDATE
+    -> AppearanceProfile (insert or update)
+    -> ProfileAttribute and other child rows
+
+The account lock here is the subtle one, and it exists for a reason that is
+invisible in the application code. ``appearance_profiles.account_id`` is an
+immediate ``ON DELETE CASCADE`` foreign key, so the *first* insert for a member
+makes PostgreSQL check the parent with its own ``SELECT 1 FROM accounts WHERE
+id = ... FOR KEY SHARE``. Without the explicit lock, the real order would be
+``FamilyProfile -> Account``: the reverse of what account deletion does, and a
+textbook deadlock cycle. A Care write would hold the member row and wait for
+the account; a concurrent deletion would hold the account and wait, through its
+cascade, for that same member row. Taking the account first, explicitly, puts
+the database's implicit lock in the same order as the application's authority.
+
+``FOR KEY SHARE`` and not ``FOR UPDATE``, deliberately. It is the weakest mode
+that still blocks a ``DELETE`` of the parent, and two of them are compatible
+with each other — so two people in one household can be written at the same
+moment, each holding only their own member row. ``FOR UPDATE`` here would
+serialise every member write in a household against every other for no gain.
+
+**Opening a household** — ``circle_for(create=True)``::
+
+    Account FOR UPDATE
+    -> FamilyCircle / FamilyProfile (insert)
+
+**Account deletion** — the deletion worker::
+
+    DELETE accounts (exclusive row lock)
+    -> ON DELETE CASCADE into family_circles / family_profiles /
+       appearance_profiles and everything below them
+
+Every path therefore takes the account row first, and no path takes a member
+row and then reaches back for the account. Nothing upgrades an account lock
+either: the non-self path never asks for ``FOR UPDATE`` after holding
+``FOR KEY SHARE``, because two writers doing that could deadlock on the
+upgrade itself.
 """
 from __future__ import annotations
 
@@ -125,6 +158,7 @@ __all__ = [
     "canonical_subject",
     "canonical_subject_for_write",
     "lock_account",
+    "protect_account_from_delete",
     "resolve_self_profile_for_read",
     "resolve_self_profile_for_write",
     "resolve_subject_profile_for_read",
@@ -210,21 +244,64 @@ async def canonical_subject_for_write(
     concurrent deactivation cannot land between "this member is active" and the
     facts being written about them.
 
-    The account holder is deliberately not locked here. Their row cannot be
-    deactivated — ``update_profile`` refuses it — and their write path takes the
-    account row lock, which is *above* ``FamilyProfile`` in the documented
-    order. Taking the member lock first and the account lock second would
-    invert that order and invite a deadlock against household creation, so this
-    path takes neither and leaves the serialisation to the one that does.
+    Two locks, in this order, and only for a named member:
+
+        Account FOR KEY SHARE -> FamilyProfile FOR UPDATE
+
+    The account comes first so that the implicit foreign-key lock the coming
+    ``appearance_profiles`` insert will take lands in the same order as this
+    code's own authority rather than after the member row is already held. See
+    the module docstring for why the reverse deadlocks against account deletion.
+
+    The account holder takes neither. Their row cannot be deactivated, so there
+    is nothing to hold still, and their write path takes the account row
+    ``FOR UPDATE`` on its own. Deciding self from non-self happens *before* any
+    lock is taken, so the self path never holds ``FOR KEY SHARE`` and then asks
+    to upgrade — two writers doing that would deadlock on the upgrade.
     """
     subject = await canonical_subject(
         session, principal_account_id=principal_account_id, subject=subject,
     )
     if subject.is_account_holder or subject.subject_id is None:
         return subject
+
+    await protect_account_from_delete(session, principal_account_id)
     return await resolve_subject_for_write(
         session, account_id=principal_account_id, subject_id=subject.subject_id,
     )
+
+
+async def protect_account_from_delete(
+    session: AsyncSession, account_id: uuid.UUID,
+) -> None:
+    """Hold the account against deletion, without holding it against anybody else.
+
+    ``FOR KEY SHARE`` is the weakest row lock PostgreSQL offers that still
+    conflicts with ``DELETE``. That is exactly the guarantee this path needs and
+    no more: while a member's facts are being written, the account they hang off
+    must not disappear — but another member of the same household is welcome to
+    be written at the same moment, and two ``FOR KEY SHARE`` holders do not
+    block each other.
+
+    It is taken *before* the member row so that the application's order matches
+    the one PostgreSQL will take anyway. Inserting the first
+    ``appearance_profiles`` row runs an immediate foreign-key check against
+    ``accounts``, and that check takes this same lock. Without the explicit call
+    it would be taken second — after ``family_profiles`` — which is the reverse
+    of account deletion's order and deadlocks against it.
+
+    Refuses cleanly, as an unknown subject, when the account row has already
+    gone: the cascades have taken the household and every profile with it, so
+    there is genuinely no such member any more, and that is the same answer a
+    foreign or invented id gets. Nothing is created.
+    """
+    row = await session.scalar(
+        select(Account.id)
+        .where(Account.id == account_id)
+        .with_for_update(read=True, key_share=True)
+    )
+    if row is None:
+        raise SubjectNotFound("subject_not_found")
 
 
 async def lock_account(session: AsyncSession, account_id: uuid.UUID) -> None:
