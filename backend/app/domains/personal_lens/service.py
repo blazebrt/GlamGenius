@@ -21,6 +21,7 @@ from app.domains.personal_lens.enums import (
     PersonalFactMissingReason,
     PersonalLensCategory,
     PersonalLensStatus,
+    PersonalLensSubjectScope,
 )
 from app.domains.profile import service as profile_service
 
@@ -173,12 +174,15 @@ async def build_personal_lens_context(
     account_id: uuid.UUID,
     category: PersonalLensCategory,
     safety: PersonalLensSafetyInput | None = None,
+    subject_scope: PersonalLensSubjectScope = PersonalLensSubjectScope.ACCOUNT_HOLDER,
 ) -> PersonalLensContext:
     """Build live trusted context, stopping before all reads on hard handoff."""
     if not isinstance(category, PersonalLensCategory):
         raise ValueError("category must be a PersonalLensCategory")
     if safety is not None and not isinstance(safety, PersonalLensSafetyInput):
         raise ValueError("safety must be a PersonalLensSafetyInput")
+    if not isinstance(subject_scope, PersonalLensSubjectScope):
+        raise ValueError("subject_scope must be a PersonalLensSubjectScope")
 
     safety_context = safety or PersonalLensSafetyInput()
     decision = hard_handoff.evaluate(
@@ -200,6 +204,22 @@ async def build_personal_lens_context(
                 reason=decision.reason.value,
                 message=decision.message,
             ),
+        )
+
+    if subject_scope is PersonalLensSubjectScope.OTHER_HOUSEHOLD_MEMBER:
+        # The stored profile is the account holder's. Reading it here and
+        # calling it somebody else's would be the one failure a household must
+        # never have: two people quietly sharing one body. We hold nothing about
+        # this person yet, and that is what the answer says.
+        return PersonalLensContext(
+            category=category,
+            status=PersonalLensStatus.NOT_ENOUGH_PERSONAL_CONTEXT,
+            profile_id=None,
+            profile_version=None,
+            body_facts=(),
+            preference_facts=(),
+            missing_information=(),
+            handoff=None,
         )
 
     profile = await profile_service.get_profile(session, account_id)

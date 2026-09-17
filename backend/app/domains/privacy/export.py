@@ -40,6 +40,7 @@ from app.domains.beta_access.models import (
 )
 from app.domains.community.models import CommunityObservationReport
 from app.domains.consent.models import Consent
+from app.domains.family.models import FamilyCircle, FamilyProfile
 from app.domains.identity.models import Account
 from app.domains.inventory.models import (
     InventoryAttribute,
@@ -226,6 +227,40 @@ async def _consent(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
         select(Consent).where(Consent.account_id == account_id).order_by(Consent.recorded_at.desc()),
     )
     return {"entries": [_row_dict(r, [c.name for c in Consent.__table__.columns]) for r in rows]}
+
+
+async def _household(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
+    """The household this account opened, and the people it named.
+
+    Both tables are classified ``INCLUDED`` in the registry, which is a promise
+    that the account can read them back. Profiles carry no ``account_id`` of
+    their own, so they are reached through the circle that does — the same
+    parent-join rule the rest of this file uses — and never through the profile
+    id alone.
+    """
+    circles = await _fetch(
+        session,
+        select(FamilyCircle)
+        .where(FamilyCircle.account_id == account_id)
+        .order_by(FamilyCircle.created_at),
+    )
+    profiles = await _fetch(
+        session,
+        select(FamilyProfile)
+        .join(FamilyCircle, FamilyCircle.id == FamilyProfile.circle_id)
+        .where(FamilyCircle.account_id == account_id)
+        .order_by(FamilyProfile.position),
+    )
+    return {
+        "circles": [
+            _row_dict(c, [col.name for col in FamilyCircle.__table__.columns])
+            for c in circles
+        ],
+        "profiles": [
+            _row_dict(p, [col.name for col in FamilyProfile.__table__.columns])
+            for p in profiles
+        ],
+    }
 
 
 async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
@@ -680,6 +715,7 @@ DOMAIN_HANDLERS: dict[str, DomainHandler] = {
     "identity": _identity,
     "profile": _profile,
     "consent": _consent,
+    "household": _household,
     "inventory": _inventory,
     "media": _media,
     "scans": _scans,

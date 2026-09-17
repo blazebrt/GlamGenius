@@ -43,7 +43,11 @@ from app.domains.personal_applicability.service import (
     apply_personal_evidence,
     interpret_label_snapshot_for_account,
 )
-from app.domains.personal_lens.enums import PersonalLensCategory, PersonalLensStatus
+from app.domains.personal_lens.enums import (
+    PersonalLensCategory,
+    PersonalLensStatus,
+    PersonalLensSubjectScope,
+)
 from app.domains.personal_lens.service import (
     PersonalLensContext,
     PersonalLensFact,
@@ -850,8 +854,13 @@ class TestStep8AOrchestration:
         context = _context()
         interpretation = _interpretation()
 
-        async def lens(session, *, account_id, category, safety):
+        async def lens(session, *, account_id, category, safety, subject_scope):
             calls.append(("8a", category))
+            # Step 11A. A caller that names nobody is asking about the signed-in
+            # person, and must reach the lens as such. Arriving here as "somebody
+            # else" would withhold the account holder's own facts from their own
+            # decision, which looks like a missing profile rather than a bug.
+            assert subject_scope is PersonalLensSubjectScope.ACCOUNT_HOLDER
             return context
 
         async def step7c(session, snapshot, *, category):

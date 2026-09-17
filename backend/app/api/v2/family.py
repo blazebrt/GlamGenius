@@ -34,7 +34,9 @@ async def create_family_profile(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     try:
-        profile = await service.add_profile(session, current.account_id, relation=body.relation)
+        profile = await service.add_profile(
+            session, current.account_id, relation=body.relation, age_band=body.age_band,
+        )
     except service.FamilyProfileError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": str(exc)}) from exc
     await session.commit()
@@ -48,9 +50,22 @@ async def update_family_profile(
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
+    # Only the fields the caller actually named. ``exclude_unset`` is what the
+    # rest of this application's patch routes use, and it is what keeps
+    # "set active to false" apart from "say nothing about active".
+    changes = body.model_dump(exclude_unset=True)
     try:
-        profile = await service.set_profile_active(session, current.account_id, profile_id, active=body.active)
+        profile = await service.update_profile(
+            session,
+            current.account_id,
+            profile_id,
+            active=changes.get("active", service.UNCHANGED),
+            age_band=changes.get("age_band", service.UNCHANGED),
+        )
     except service.FamilyProfileError as exc:
+        # Unchanged from before this route learned about age bands, including
+        # for the self row: a refusal here does not confirm whether the
+        # identifier names anybody.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": str(exc)}) from exc
     await session.commit()
     return service.serialise_profile(profile)

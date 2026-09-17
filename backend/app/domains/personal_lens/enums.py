@@ -21,6 +21,21 @@ class PersonalLensStatus(StrEnum):
     HANDOFF_REQUIRED = "handoff_required"
 
 
+class PersonalLensSubjectScope(StrEnum):
+    """Whose body the stored profile facts actually describe.
+
+    The profile this application stores belongs to the account holder. Once a
+    household exists, a request can be about somebody else in it, and those
+    facts are not theirs. Reading a decision for another member must not quietly
+    present the account holder's skin and hair as that person's — so the scope
+    is stated rather than assumed, and a subject with no facts of their own is
+    answered with "not enough", which is the truth.
+    """
+
+    ACCOUNT_HOLDER = "account_holder"
+    OTHER_HOUSEHOLD_MEMBER = "other_household_member"
+
+
 class PersonalFactKind(StrEnum):
     """Keep preferences structurally separate from body facts."""
 

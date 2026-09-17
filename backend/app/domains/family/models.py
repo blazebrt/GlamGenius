@@ -39,10 +39,26 @@ class FamilyProfile(UUIDPrimaryKey, TimestampMixin, Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     # A controlled relation, not free-text identity data.
     relation: Mapped[str] = mapped_column(String(16), nullable=False)
+    # How old this person is, to the only precision the product needs.
+    #
+    # The constitution draws one line — under 12 hands off to a clinician and
+    # never advises — so this stores the band and not a birth date. A date of
+    # birth would be a more precise fact about a named human being than any
+    # question here requires, and precision we do not need is a liability we
+    # would then have to protect. ``not_stated`` is the honest default and is
+    # what every row created before this column existed means: nobody was
+    # asked, so nothing is claimed.
+    age_band: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="not_stated", server_default="not_stated",
+    )
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     __table_args__ = (
         UniqueConstraint("circle_id", "position", name="uq_family_profile_position"),
         CheckConstraint("position >= 1 AND position <= 8", name="ck_family_profile_position"),
         CheckConstraint("relation IN ('self', 'adult', 'child', 'other')", name="ck_family_profile_relation"),
+        CheckConstraint(
+            "age_band IN ('under_12', 'teen_12_17', 'adult_18_plus', 'not_stated')",
+            name="ck_family_profile_age_band",
+        ),
         Index("ix_family_profiles_circle_active", "circle_id", "active"),
     )

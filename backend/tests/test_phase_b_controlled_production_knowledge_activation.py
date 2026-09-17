@@ -1660,10 +1660,21 @@ class TestHappyPathIntegration:
 
         # 17. The client sent a barcode and nothing else: the request model
         # has no field that could carry an action, a reason, a release, a
-        # citation or a category.
+        # citation or a category. Step 11A added ``subject_id``, which names
+        # *who* the question is about and is resolved against this account on
+        # the server; it is still not a field that can choose an answer.
         from app.api.v2.skin_care_personal_decision import SkinCareForYouBody
 
-        assert set(SkinCareForYouBody.model_fields) == {"barcode", "safety"}
+        assert set(SkinCareForYouBody.model_fields) == {
+            "barcode", "safety", "subject_id",
+        }
+        for forbidden in (
+            "action", "verdict", "reason", "release", "citation", "category",
+            "decision", "snapshot", "ingredient",
+        ):
+            assert not [
+                name for name in SkinCareForYouBody.model_fields if forbidden in name
+            ], forbidden
 
         # 18-20. Emergency stop, and the decision is gone.
         async with factory() as session:
