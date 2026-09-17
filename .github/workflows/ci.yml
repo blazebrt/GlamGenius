@@ -110,9 +110,21 @@ jobs:
     needs: scope
     if: needs.scope.outputs.backend == 'true' || needs.scope.outputs.schema == 'true' || (github.event_name == 'pull_request' && needs.scope.outputs.python_deps == 'true')
     runs-on: ubuntu-latest
-    # CI #659 reached approximately 98% before the 35-minute ceiling. Forty-five
-    # minutes provides runner-variance headroom for the unchanged canonical
-    # suite and its invite-reservation follow-up.
+    # This ceiling has been raised twice — 35 minutes, then 45 — and each time
+    # the suite grew back into it. CI #742 was killed at 45 minutes having
+    # reached 53%, with zero test failures, on a tree that had passed in 26
+    # minutes on a faster runner an hour earlier. Buying more minutes does not
+    # fix that; it postpones it by one milestone.
+    #
+    # The cost is not the tests. ``db_clean`` truncates every table in the
+    # schema before each test that uses it, and on a default-durability
+    # PostgreSQL each of those truncations fsyncs the data files it rewrites.
+    # The database below is created fresh for this job and thrown away with it,
+    # so durability across a crash buys nothing: there is nothing to recover to.
+    # Putting its data directory on a tmpfs removes the fsync entirely and
+    # leaves every test running unchanged, with the same assertions, against the
+    # same real PostgreSQL 16. Measured locally on the same suite, disabling
+    # that durability work took it from over 40 minutes to roughly 13.
     timeout-minutes: 45
     services:
       postgres:
@@ -123,6 +135,7 @@ jobs:
           POSTGRES_DB: glamgenius_test
         ports: ["5432:5432"]
         options: >-
+          --mount type=tmpfs,destination=/var/lib/postgresql/data
           --health-cmd "pg_isready -U glamgenius -d glamgenius_test"
           --health-interval 5s
           --health-timeout 5s
