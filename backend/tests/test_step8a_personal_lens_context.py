@@ -157,9 +157,17 @@ async def test_builder_calls_the_exact_handoff_authority(monkeypatch):
     monkeypatch.setattr(service.hard_handoff, "evaluate", evaluate)
     monkeypatch.setattr(service, "resolve_subject_profile_for_read", no_profile)
     safety = PersonalLensSafetyInput(text="ordinary context", stated_age=25, subject_is_child=False)
-    await build_personal_lens_context(
-        object(), subject=account_holder_subject(uuid.uuid4()), category=PersonalLensCategory.SKIN_CARE, safety=safety,
-    )
+    # A real session: the lens re-reads the subject from the database before it
+    # touches the gate, so a stand-in object would prove the gate is called with
+    # values nothing checked. This account has no household, so what comes back
+    # is the synthesised account holder and the disclosed age stands.
+    async with get_sessionmaker()() as session:
+        await build_personal_lens_context(
+            session,
+            subject=account_holder_subject(uuid.uuid4()),
+            category=PersonalLensCategory.SKIN_CARE,
+            safety=safety,
+        )
     assert calls == [("ordinary context", 25, False)]
 
 
@@ -181,9 +189,13 @@ async def test_every_safety_boundary_hands_off_before_profile_reads(monkeypatch,
         raise AssertionError("profile read occurred after handoff")
 
     monkeypatch.setattr(service, "resolve_subject_profile_for_read", must_not_read)
-    context = await build_personal_lens_context(
-        object(), subject=account_holder_subject(uuid.uuid4()), category=PersonalLensCategory.SKIN_CARE, safety=safety,
-    )
+    async with get_sessionmaker()() as session:
+        context = await build_personal_lens_context(
+            session,
+            subject=account_holder_subject(uuid.uuid4()),
+            category=PersonalLensCategory.SKIN_CARE,
+            safety=safety,
+        )
     assert context.status is PersonalLensStatus.HANDOFF_REQUIRED
     assert context.handoff is not None
     assert context.handoff.reason == reason.value
@@ -208,12 +220,13 @@ async def test_ordinary_non_medical_context_continues_to_profile_read(monkeypatc
 
     monkeypatch.setattr(service, "resolve_subject_profile_for_read", no_profile)
     owner = uuid.uuid4()
-    context = await build_personal_lens_context(
-        object(),
-        subject=account_holder_subject(owner),
-        category=PersonalLensCategory.SKIN_CARE,
-        safety=PersonalLensSafetyInput(text="My skin usually feels comfortable"),
-    )
+    async with get_sessionmaker()() as session:
+        context = await build_personal_lens_context(
+            session,
+            subject=account_holder_subject(owner),
+            category=PersonalLensCategory.SKIN_CARE,
+            safety=PersonalLensSafetyInput(text="My skin usually feels comfortable"),
+        )
     assert context.status is PersonalLensStatus.NOT_ENOUGH_PERSONAL_CONTEXT
     assert calls == [owner]
 
@@ -479,10 +492,20 @@ async def test_query_budget_and_runtime_no_write_contract(db_clean):
         await session.commit()
 
     engine = sql.get_engine().sync_engine
+    # Each budget gained one SELECT in Step 11B, including the handoff case that
+    # used to read nothing at all. That one is the point: the lens now re-reads
+    # the subject *before* the gate, because a caller-supplied age band is a
+    # disclosure and never an authority, and a request must not be able to reach
+    # an ordinary answer about a child by describing them as an adult. None of
+    # these accounts has a household, so the extra read is the single indexed
+    # ``family_circles`` lookup that establishes exactly that.
+    #
+    # The contract this test exists for is unchanged and asserted below: bounded
+    # reads, and never a write.
     cases = (
-        (uuid.uuid4(), PersonalLensSafetyInput(text="I take metformin"), 0),
-        (no_profile_owner, None, 1),
-        (existing_owner, None, 2),
+        (uuid.uuid4(), PersonalLensSafetyInput(text="I take metformin"), 1),
+        (no_profile_owner, None, 3),
+        (existing_owner, None, 4),
     )
     for owner, safety, expected_selects in cases:
         statements, record = _record_statements()

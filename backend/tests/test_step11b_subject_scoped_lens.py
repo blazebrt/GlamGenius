@@ -26,20 +26,40 @@ from app.domains.family.models import FamilyCircle, FamilyProfile
 from app.domains.family.schemas import SUBJECT_CARE_ATTRIBUTE_KEYS
 from app.domains.family.subject import (
     AGE_BAND_ADULT,
+    AGE_BAND_UNDER_12,
+    RELATION_SELF,
+    SUBJECT_ACCOUNT_HOLDER,
+    SUBJECT_HOUSEHOLD_MEMBER,
+    HouseholdInvariantError,
+    ResolvedSubject,
+    SubjectNotFound,
     account_holder_subject,
     resolve_subject,
 )
-from app.domains.identity import service as identity_service
-from app.domains.personal_lens.enums import PersonalLensCategory
+from app.domains.personal_lens.enums import PersonalLensCategory, PersonalLensStatus
 from app.domains.personal_lens.service import build_personal_lens_context
 from app.domains.privacy import export as export_service
+from app.domains.profile import service as profile_service
 from app.domains.profile.identity import (
     ProfileIdentityError,
+    canonical_subject,
     resolve_self_profile_for_read,
     resolve_self_profile_for_write,
     resolve_subject_profile_for_read,
+    resolve_subject_profile_for_write,
 )
-from app.domains.profile.models import AppearanceProfile, ProfileAttribute
+from app.domains.profile.models import (
+    AppearanceGoal,
+    AppearanceProfile,
+    AttributeObservation,
+    FitPreference,
+    LifestyleContext,
+    OnboardingSession,
+    ProfileAttribute,
+    ProfileChangeEvent,
+    StylePreference,
+    UserConstraint,
+)
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select
 
@@ -85,19 +105,83 @@ async def _counts() -> tuple[int, int, int]:
         )
 
 
-async def _legacy_account(account_id) -> AppearanceProfile:
-    """An account holder with a profile written before Family existed."""
-    async with get_sessionmaker()() as s:
-        await identity_service.register_account(s, account_id)
-        profile = AppearanceProfile(account_id=account_id)
-        s.add(profile)
-        await s.flush()
-        s.add(ProfileAttribute(
-            profile_id=profile.id, key=SKIN, value="often_dry_or_tight",
+#: Every table that hangs off ``appearance_profiles.id``. Adoption must move
+#: none of them, and account deletion must take all of them.
+#:
+#: Some of these belong to the withdrawn Style and Wardrobe surfaces. They are
+#: used here only as persistence fixtures — proving that a row pointing at a
+#: profile survives the profile being named — and this file restores no customer
+#: surface for any of them.
+PROFILE_CHILD_MODELS = (
+    ProfileAttribute, ProfileChangeEvent, AttributeObservation, StylePreference,
+    FitPreference, LifestyleContext, UserConstraint, AppearanceGoal, OnboardingSession,
+)
+
+
+async def _seed_every_child_table(
+    session, profile_id, *, attribute_key: str = SKIN,
+) -> dict[str, uuid.UUID]:
+    """One recognisable row in each of the nine child tables.
+
+    ``attribute_key`` exists because ``profile_attributes`` is unique on
+    ``(profile_id, key)``: a profile that already carries a Care fact needs a
+    different one here rather than a second row for the same key.
+    """
+    rows = {
+        "ProfileAttribute": ProfileAttribute(
+            profile_id=profile_id, key=attribute_key, value="often_dry_or_tight",
             source="user_declared", confidence=1.0, verification_state="confirmed",
-        ))
-        await s.commit()
-        return profile
+        ),
+        "ProfileChangeEvent": ProfileChangeEvent(
+            profile_id=profile_id, profile_version=1, attribute_key=SKIN,
+            old_value=None, new_value="often_dry_or_tight",
+            source="user_declared", reason="recorded",
+        ),
+        "AttributeObservation": AttributeObservation(
+            profile_id=profile_id, key=SENS, proposed_value="rarely_reactive",
+            source="user_declared", confidence=0.9, why="told us",
+        ),
+        "StylePreference": StylePreference(profile_id=profile_id),
+        "FitPreference": FitPreference(profile_id=profile_id),
+        "LifestyleContext": LifestyleContext(profile_id=profile_id, city="Pune"),
+        "UserConstraint": UserConstraint(
+            profile_id=profile_id, kind="avoid", value="fragrance",
+        ),
+        "AppearanceGoal": AppearanceGoal(profile_id=profile_id, goal="comfort"),
+        "OnboardingSession": OnboardingSession(profile_id=profile_id),
+    }
+    for row in rows.values():
+        session.add(row)
+    await session.flush()
+    return {name: row.id for name, row in rows.items()}
+
+
+async def _child_rows(session) -> dict[str, list[tuple[uuid.UUID, uuid.UUID]]]:
+    """Every child row in the database, as ``(id, profile_id)`` per table."""
+    found: dict[str, list[tuple[uuid.UUID, uuid.UUID]]] = {}
+    for model in PROFILE_CHILD_MODELS:
+        rows = (await session.execute(select(model.id, model.profile_id))).all()
+        found[model.__name__] = [(row[0], row[1]) for row in rows]
+    return found
+
+
+async def _corrupt_profile_onto(session, *, account_id, subject_id, value) -> uuid.UUID:
+    """The impossible row: a profile of one account bound to another's subject.
+
+    No route can produce this. The foreign key proves the subject row exists and
+    says nothing about whose account owns it, and nothing spans the two stores
+    of identity, so the database will accept it. It is seeded directly for the
+    same reason a fire alarm is tested with smoke.
+    """
+    profile = AppearanceProfile(account_id=account_id, household_subject_id=subject_id)
+    session.add(profile)
+    await session.flush()
+    session.add(ProfileAttribute(
+        profile_id=profile.id, key=SKIN, value=value,
+        source="user_declared", confidence=1.0, verification_state="confirmed",
+    ))
+    await session.commit()
+    return profile.id
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +200,9 @@ class TestSelfIdentityConverges:
         The delegation is what stops it.
         """
         token, account_id = await registered_supabase_user()
-        legacy = await _legacy_account(uuid.uuid4()) and None  # noqa: F841 - readability
+        # The legacy state under test is *this* account's, and it is established
+        # by the write below: no household exists yet, so what it creates is a
+        # NULL-subject profile — exactly the row an account had before Family.
         async with get_sessionmaker()() as s:
             original = await resolve_self_profile_for_write(s, account_id)
             original_id = original.id
@@ -156,6 +242,49 @@ class TestSelfIdentityConverges:
             direct = await resolve_self_profile_for_read(s, account_id)
         assert implicit.id == explicit.id == direct.id
 
+    async def test_naming_yourself_reaches_a_profile_that_is_not_adopted_yet(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """Being named is not what makes the row yours.
+
+        A household exists and the account holder's profile has not been
+        adopted — nobody has written since the household was opened, and a read
+        must not adopt it. Looking for a profile *bound to* the ``self`` row
+        would find none and answer "we do not know enough about you" to
+        somebody whose facts are sitting right there. Opening a household would
+        silently empty the account holder's own Personal Lens until their next
+        write.
+        """
+        token, account_id = await registered_supabase_user()
+        async with get_sessionmaker()() as s:
+            profile = await resolve_self_profile_for_write(s, account_id)
+            profile_id = profile.id
+            s.add(ProfileAttribute(
+                profile_id=profile_id, key=SKIN, value="often_oily",
+                source="user_declared", confidence=1.0, verification_state="confirmed",
+            ))
+            await s.commit()
+
+        await _member(app_client, token, relation="adult")
+        self_id = uuid.UUID(await _self_id(app_client, token))
+
+        async with get_sessionmaker()() as s:
+            named = await resolve_subject(s, account_id=account_id, subject_id=self_id)
+            by_name = await resolve_subject_profile_for_read(s, named)
+            by_omission = await resolve_subject_profile_for_read(
+                s, account_holder_subject(account_id)
+            )
+            context = await build_personal_lens_context(
+                s, category=PersonalLensCategory.SKIN_CARE, subject=named,
+            )
+        assert by_name is not None and by_name.id == profile_id
+        assert by_omission is not None and by_omission.id == profile_id
+        assert {fact.key for fact in context.body_facts} == {SKIN}
+
+        # And reading it did not adopt it.
+        async with get_sessionmaker()() as s:
+            assert (await s.get(AppearanceProfile, profile_id)).household_subject_id is None
+
     async def test_a_dual_identity_fails_closed_rather_than_choosing(
         self, db_clean, app_client, registered_supabase_user,
     ):
@@ -181,33 +310,41 @@ class TestSelfIdentityConverges:
     ):
         """Adoption is one column, not a migration.
 
-        The profile keeps its primary key, so the attribute recorded years ago
-        is still the same row pointing at the same profile. A clone would have
-        left the history behind on an orphan.
+        Proving this with attributes alone would prove almost nothing: nine
+        tables hang off ``appearance_profiles.id``, and a clone-and-repoint
+        implementation would have passed an attributes-only check while quietly
+        stranding somebody's goals, observations and onboarding answers on an
+        orphaned row. So all nine are seeded, and all nine are checked by id.
         """
         token, account_id = await registered_supabase_user()
         async with get_sessionmaker()() as s:
             profile = await resolve_self_profile_for_write(s, account_id)
             profile_id = profile.id
-            s.add(ProfileAttribute(
-                profile_id=profile_id, key=SKIN, value="often_dry_or_tight",
-                source="user_declared", confidence=1.0, verification_state="confirmed",
-            ))
+            seeded = await _seed_every_child_table(s, profile_id)
             await s.commit()
+        assert len(seeded) == len(PROFILE_CHILD_MODELS)
 
         await _member(app_client, token, relation="adult")
         async with get_sessionmaker()() as s:
             adopted = await resolve_self_profile_for_write(s, account_id)
             await s.commit()
-        assert adopted.id == profile_id
 
+        # Same profile, now named.
+        assert adopted.id == profile_id
         async with get_sessionmaker()() as s:
-            attrs = (await s.execute(
-                select(ProfileAttribute).where(ProfileAttribute.profile_id == profile_id)
-            )).scalars().all()
-            total = await s.scalar(select(func.count(AppearanceProfile.id)))
-        assert [a.key for a in attrs] == [SKIN]
-        assert total == 1
+            row = await s.get(AppearanceProfile, profile_id)
+            assert row.household_subject_id is not None
+            assert await s.scalar(select(func.count(AppearanceProfile.id))) == 1
+
+            after = await _child_rows(s)
+        for model in PROFILE_CHILD_MODELS:
+            rows = after[model.__name__]
+            # Exactly one row, the one that was seeded, still pointing at the
+            # same profile. More than one would be a clone; a different id would
+            # be a rewrite; a different profile_id would be a re-parent.
+            assert len(rows) == 1, (model.__name__, rows)
+            assert rows[0][0] == seeded[model.__name__], model.__name__
+            assert rows[0][1] == profile_id, model.__name__
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +572,486 @@ class TestOwnership:
 
 
 # ---------------------------------------------------------------------------
-# 5. Races, against a real database
+# 4b. A ResolvedSubject is a claim, not a credential
 # ---------------------------------------------------------------------------
+class TestForgedSubjectsAreRefused:
+    """``ResolvedSubject`` is a public dataclass with a public constructor.
+
+    Nothing stops a caller — a future route, a worker, a domain service written
+    next quarter — from building one by hand with whatever fields it likes. So
+    the type cannot be the authorisation, and the tests below construct exactly
+    the objects a caller could construct and prove that the server re-reads
+    every field it acts on.
+    """
+
+    async def test_a_forged_subject_naming_another_household_is_refused(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        mine_token, mine = await registered_supabase_user()
+        theirs_token, _ = await registered_supabase_user()
+        theirs = await _member(app_client, theirs_token, relation="adult")
+        await _care_write(app_client, theirs_token, theirs, SKIN, "often_oily")
+
+        forged = ResolvedSubject(
+            kind=SUBJECT_HOUSEHOLD_MEMBER, account_id=mine,
+            subject_id=uuid.UUID(theirs), relation="adult", age_band=AGE_BAND_ADULT,
+        )
+        async with get_sessionmaker()() as s:
+            for call in (
+                resolve_subject_profile_for_read,
+                resolve_subject_profile_for_write,
+                canonical_subject,
+            ):
+                with pytest.raises(SubjectNotFound):
+                    await call(s, forged)
+            with pytest.raises(SubjectNotFound):
+                await build_personal_lens_context(
+                    s, category=PersonalLensCategory.SKIN_CARE, subject=forged,
+                )
+
+        # And nothing was created for the forger while trying.
+        async with get_sessionmaker()() as s:
+            mine_profiles = await s.scalar(
+                select(func.count(AppearanceProfile.id))
+                .where(AppearanceProfile.account_id == mine)
+            )
+        assert mine_profiles == 0
+
+    async def test_a_genuine_member_paired_with_another_account_is_refused(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """The id is real and the account is real. Together they are not.
+
+        This is the shape a copy-paste bug produces: one request's subject id
+        carried into another request's account. Neither half looks wrong on its
+        own, so only the join decides.
+        """
+        a_token, a_account = await registered_supabase_user()
+        b_token, b_account = await registered_supabase_user()
+        a_member = await _member(app_client, a_token, relation="adult")
+
+        forged = ResolvedSubject(
+            kind=SUBJECT_HOUSEHOLD_MEMBER, account_id=b_account,
+            subject_id=uuid.UUID(a_member), relation="adult", age_band=AGE_BAND_ADULT,
+        )
+        async with get_sessionmaker()() as s:
+            with pytest.raises(SubjectNotFound):
+                await canonical_subject(s, forged)
+            with pytest.raises(SubjectNotFound):
+                await resolve_subject_profile_for_write(s, forged)
+
+    async def test_a_stored_child_forged_as_an_adult_still_hands_off(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """The one the whole product turns on.
+
+        A household records a child under twelve. A caller names that real
+        member and describes them as an adult. If the gate believed the object
+        it was handed, the product would give personalised advice about a child
+        — the single thing the constitution forbids outright.
+        """
+        token, account_id = await registered_supabase_user()
+        child = await _member(app_client, token, relation="child", age_band=AGE_BAND_UNDER_12)
+        assert (await _care_write(app_client, token, child, SKIN, "comfortable")).status_code == 200
+
+        forged = ResolvedSubject(
+            kind=SUBJECT_HOUSEHOLD_MEMBER, account_id=account_id,
+            subject_id=uuid.UUID(child), relation="adult", age_band=AGE_BAND_ADULT,
+        )
+        async with get_sessionmaker()() as s:
+            # The forged band is discarded on the way in.
+            assert (await canonical_subject(s, forged)).age_band == AGE_BAND_UNDER_12
+            context = await build_personal_lens_context(
+                s, category=PersonalLensCategory.SKIN_CARE, subject=forged,
+            )
+        assert context.status is PersonalLensStatus.HANDOFF_REQUIRED
+        assert context.handoff is not None
+        # No body facts reach a caller who tried this, handoff or not.
+        assert context.body_facts == ()
+        assert context.profile_id is None
+
+    async def test_a_forged_account_holder_kind_cannot_force_self_delegation(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """``kind`` decides which resolver runs. It is not the caller's to set.
+
+        Believing it would let a request about an ordinary member reach the
+        account holder's own profile — the household's worst leak, inside one
+        account.
+        """
+        token, account_id = await registered_supabase_user()
+        member = await _member(app_client, token, relation="adult")
+        self_id = await _self_id(app_client, token)
+        await _care_write(app_client, token, self_id, SKIN, "often_oily")
+
+        forged = ResolvedSubject(
+            kind=SUBJECT_ACCOUNT_HOLDER, account_id=account_id,
+            subject_id=uuid.UUID(member), relation=RELATION_SELF, age_band=AGE_BAND_ADULT,
+        )
+        async with get_sessionmaker()() as s:
+            canonical = await canonical_subject(s, forged)
+            assert canonical.kind == SUBJECT_HOUSEHOLD_MEMBER
+            assert canonical.relation == "adult"
+            assert canonical.is_account_holder is False
+            # The member has no profile of their own yet, and that is the
+            # answer — not the account holder's row.
+            assert await resolve_subject_profile_for_read(s, forged) is None
+            context = await build_personal_lens_context(
+                s, category=PersonalLensCategory.SKIN_CARE, subject=forged,
+            )
+        assert context.status is PersonalLensStatus.NOT_ENOUGH_PERSONAL_CONTEXT
+        assert context.body_facts == ()
+
+    async def test_a_synthesised_account_holder_cannot_bypass_a_stored_self(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """Omitting the household is not a way of not having one.
+
+        ``account_holder_subject()`` is the shape every client used before
+        Family existed, and it carries ``not_stated``. Once a household exists,
+        what the server knows about the account holder lives in the stored
+        ``self`` row — including a band the household deliberately recorded.
+        """
+        token, account_id = await registered_supabase_user()
+        await _member(app_client, token, relation="adult")
+        self_id = await _self_id(app_client, token)
+
+        # Record the account holder as under twelve. Improbable, and the point:
+        # the stored row must beat the synthesised one.
+        async with get_sessionmaker()() as s:
+            row = await s.get(FamilyProfile, uuid.UUID(self_id))
+            row.age_band = AGE_BAND_UNDER_12
+            await s.commit()
+
+        synthesised = account_holder_subject(account_id)
+        assert synthesised.age_band != AGE_BAND_UNDER_12
+        async with get_sessionmaker()() as s:
+            canonical = await canonical_subject(s, synthesised)
+            assert canonical.subject_id == uuid.UUID(self_id)
+            assert canonical.age_band == AGE_BAND_UNDER_12
+            context = await build_personal_lens_context(
+                s, category=PersonalLensCategory.SKIN_CARE, subject=synthesised,
+            )
+        assert context.status is PersonalLensStatus.HANDOFF_REQUIRED
+
+    async def test_anything_that_is_not_a_subject_at_all_is_refused(
+        self, db_clean, registered_supabase_user,
+    ):
+        _, account_id = await registered_supabase_user()
+        async with get_sessionmaker()() as s:
+            for unchecked in (account_id, str(account_id), None, {"account_id": account_id}):
+                with pytest.raises(ValueError):
+                    await canonical_subject(s, unchecked)
+
+
+# ---------------------------------------------------------------------------
+# 4c. A household with no account holder, or two
+# ---------------------------------------------------------------------------
+class TestCanonicalSelfIsExactlyOne:
+    """Step 11A's rule, not a second opinion written here.
+
+    A first-row query would have answered both of these states happily — by
+    picking a human by insertion order in one case, and by treating a household
+    as if it had none in the other. Both are refusals.
+    """
+
+    async def _household(self, app_client, registered_supabase_user):
+        token, account_id = await registered_supabase_user()
+        await _member(app_client, token, relation="adult")
+        self_id = uuid.UUID(await _self_id(app_client, token))
+        return token, account_id, self_id
+
+    async def test_zero_active_self_rows_fails_closed_and_writes_nothing(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        token, account_id, self_id = await self._household(
+            app_client, registered_supabase_user,
+        )
+        async with get_sessionmaker()() as s:
+            (await s.get(FamilyProfile, self_id)).active = False
+            await s.commit()
+
+        async with get_sessionmaker()() as s:
+            for call in (resolve_self_profile_for_read, resolve_self_profile_for_write):
+                with pytest.raises(HouseholdInvariantError):
+                    await call(s, account_id)
+
+        # Not a legacy profile invented to paper over it, and not a second one.
+        async with get_sessionmaker()() as s:
+            assert await s.scalar(select(func.count(AppearanceProfile.id))) == 0
+
+    async def test_two_active_self_rows_fail_closed_rather_than_picking(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        token, account_id, self_id = await self._household(
+            app_client, registered_supabase_user,
+        )
+        async with get_sessionmaker()() as s:
+            circle_id = await s.scalar(
+                select(FamilyCircle.id).where(FamilyCircle.account_id == account_id)
+            )
+            s.add(FamilyProfile(circle_id=circle_id, position=3, relation=RELATION_SELF))
+            await s.commit()
+
+        async with get_sessionmaker()() as s:
+            for call in (resolve_self_profile_for_read, resolve_self_profile_for_write):
+                with pytest.raises(HouseholdInvariantError):
+                    await call(s, account_id)
+        async with get_sessionmaker()() as s:
+            assert await s.scalar(select(func.count(AppearanceProfile.id))) == 0
+
+    async def test_a_broken_household_never_adopts_an_existing_legacy_profile(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """The dangerous version: there *is* a profile to grab.
+
+        Falling back to the legacy row here would hand the account holder's
+        history to whatever the broken household turns out to have meant, and
+        adopting it would make that permanent.
+        """
+        token, account_id = await registered_supabase_user()
+        async with get_sessionmaker()() as s:
+            profile = await resolve_self_profile_for_write(s, account_id)
+            profile_id = profile.id
+            await s.commit()
+
+        await _member(app_client, token, relation="adult")
+        self_id = uuid.UUID(await _self_id(app_client, token))
+        async with get_sessionmaker()() as s:
+            (await s.get(FamilyProfile, self_id)).active = False
+            await s.commit()
+
+        async with get_sessionmaker()() as s:
+            with pytest.raises(HouseholdInvariantError):
+                await resolve_self_profile_for_write(s, account_id)
+            with pytest.raises(HouseholdInvariantError):
+                await resolve_self_profile_for_read(s, account_id)
+
+        async with get_sessionmaker()() as s:
+            assert await s.scalar(select(func.count(AppearanceProfile.id))) == 1
+            assert (await s.get(AppearanceProfile, profile_id)).household_subject_id is None
+
+
+# ---------------------------------------------------------------------------
+# 4d. One account's profile bound to another account's subject
+# ---------------------------------------------------------------------------
+class TestCrossAccountCorruption:
+    """Two columns say who a profile is for, and only one of them is a key.
+
+    ``household_subject_id`` has a foreign key, so the subject row certainly
+    exists. Nothing says it belongs to the same account, because that would
+    need a composite key the household tables do not carry. So the row below is
+    storable, and the only thing standing between it and one account reading —
+    then overwriting — another account's body facts is the predicate on
+    ``account_id``.
+    """
+
+    async def _corrupted(self, app_client, registered_supabase_user):
+        a_token, a_account = await registered_supabase_user()
+        b_token, b_account = await registered_supabase_user()
+        a_member = uuid.UUID(await _member(app_client, a_token, relation="adult"))
+        async with get_sessionmaker()() as s:
+            b_profile_id = await _corrupt_profile_onto(
+                s, account_id=b_account, subject_id=a_member, value="often_oily",
+            )
+        return a_token, a_account, b_account, a_member, b_profile_id
+
+    async def test_a_subject_read_never_returns_the_other_accounts_facts(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        a_token, a_account, _, a_member, _ = await self._corrupted(
+            app_client, registered_supabase_user,
+        )
+        async with get_sessionmaker()() as s:
+            subject = await resolve_subject(
+                s, account_id=a_account, subject_id=a_member,
+            )
+            with pytest.raises(ProfileIdentityError):
+                await resolve_subject_profile_for_read(s, subject)
+
+    async def test_the_lens_never_uses_the_other_accounts_facts(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        a_token, a_account, _, a_member, _ = await self._corrupted(
+            app_client, registered_supabase_user,
+        )
+        async with get_sessionmaker()() as s:
+            subject = await resolve_subject(
+                s, account_id=a_account, subject_id=a_member,
+            )
+            with pytest.raises(ProfileIdentityError):
+                await build_personal_lens_context(
+                    s, category=PersonalLensCategory.SKIN_CARE, subject=subject,
+                )
+
+    async def test_a_care_write_never_modifies_the_other_accounts_profile(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        a_token, _, _, a_member, b_profile_id = await self._corrupted(
+            app_client, registered_supabase_user,
+        )
+        async with get_sessionmaker()() as s:
+            before = await s.get(AppearanceProfile, b_profile_id)
+            snapshot = (
+                before.account_id, before.household_subject_id, before.version,
+                before.updated_at,
+            )
+            before_attributes = {
+                (row.key, str(row.value)) for row in
+                (await s.execute(
+                    select(ProfileAttribute)
+                    .where(ProfileAttribute.profile_id == b_profile_id)
+                )).scalars()
+            }
+
+        response = await _care_write(
+            app_client, a_token, a_member, SKIN, "often_dry_or_tight",
+        )
+        # Governed, not a 500, and it says nothing about the other account.
+        assert response.status_code == 503, response.text
+        body = response.json()["detail"]
+        assert body["code"] == "FEATURE_UNAVAILABLE"
+        for leak in (str(b_profile_id), str(a_member), "account", "profile_subject"):
+            assert leak not in response.text, leak
+
+        async with get_sessionmaker()() as s:
+            after = await s.get(AppearanceProfile, b_profile_id)
+            assert (
+                after.account_id, after.household_subject_id, after.version,
+                after.updated_at,
+            ) == snapshot
+            after_attributes = {
+                (row.key, str(row.value)) for row in
+                (await s.execute(
+                    select(ProfileAttribute)
+                    .where(ProfileAttribute.profile_id == b_profile_id)
+                )).scalars()
+            }
+        assert after_attributes == before_attributes
+        assert after_attributes == {(SKIN, "often_oily")}
+
+    async def test_the_corrupt_link_is_not_hidden_by_answering_no_profile(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """Pretending A simply has no profile would be the quiet failure.
+
+        It reads safely — A never sees B's facts — and then the next write
+        inserts a second profile for the same subject on top of a row nobody
+        ever looked at again. Fail closed instead.
+        """
+        a_token, _, _, a_member, _ = await self._corrupted(
+            app_client, registered_supabase_user,
+        )
+        before = await _counts()
+        response = await _care_write(app_client, a_token, a_member, SENS, "rarely_reactive")
+        assert response.status_code == 503
+        assert await _counts() == before
+
+    async def test_self_resolution_refuses_another_accounts_profile(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """The same corruption, aimed at the account holder's own row."""
+        a_token, a_account = await registered_supabase_user()
+        _, b_account = await registered_supabase_user()
+        await _member(app_client, a_token, relation="adult")
+        a_self = uuid.UUID(await _self_id(app_client, a_token))
+        async with get_sessionmaker()() as s:
+            b_profile_id = await _corrupt_profile_onto(
+                s, account_id=b_account, subject_id=a_self, value="often_oily",
+            )
+
+        async with get_sessionmaker()() as s:
+            with pytest.raises(ProfileIdentityError):
+                await resolve_self_profile_for_read(s, a_account)
+            with pytest.raises(ProfileIdentityError):
+                await resolve_self_profile_for_write(s, a_account)
+
+        # B's row is untouched, and A acquired nothing.
+        async with get_sessionmaker()() as s:
+            row = await s.get(AppearanceProfile, b_profile_id)
+            assert row.account_id == b_account
+            assert row.household_subject_id == a_self
+            assert await s.scalar(
+                select(func.count(AppearanceProfile.id))
+                .where(AppearanceProfile.account_id == a_account)
+            ) == 0
+
+
+# ---------------------------------------------------------------------------
+# 4e. Malformed identity reaches the customer as a governed answer
+# ---------------------------------------------------------------------------
+class TestGovernedIdentityFailure:
+    """Not a 500, and not a word about what is wrong.
+
+    ``ProfileIdentityError`` and ``HouseholdInvariantError`` are both
+    ``IdentityInvariantError``, so they stop at the shared error boundary
+    instead of escaping from whichever route happened to touch identity. The
+    customer gets one sentence; the reason code goes to the log.
+    """
+
+    FORBIDDEN = ("dual", "mismatch", "invariant", "self_profile", "household_has")
+
+    def _assert_governed(self, response, *, url, secrets=()):
+        assert response.status_code == 503, (url, response.status_code, response.text)
+        detail = response.json()["detail"]
+        assert detail["code"] == "FEATURE_UNAVAILABLE", url
+        assert detail["retryable"] is False, url
+        assert detail["message"] == "This result is not available right now.", url
+        # Nothing but the fixed shape and a request id an operator can follow.
+        assert set(detail) == {"code", "message", "retryable", "request_id"}, url
+        body = response.text
+        for token in (*self.FORBIDDEN, *(str(x) for x in secrets)):
+            assert token not in body, (url, token)
+
+    async def _dual_identity(self, app_client, registered_supabase_user):
+        token, account_id = await registered_supabase_user()
+        await _member(app_client, token, relation="adult")
+        self_id = uuid.UUID(await _self_id(app_client, token))
+        async with get_sessionmaker()() as s:
+            s.add(AppearanceProfile(account_id=account_id, household_subject_id=self_id))
+            s.add(AppearanceProfile(account_id=account_id))
+            await s.commit()
+        return token, account_id, self_id
+
+    @pytest.mark.parametrize(
+        "url",
+        ["/api/v2/profile", "/api/v2/profile/attributes", "/api/v2/onboarding/status"],
+    )
+    async def test_dual_identity_is_governed_on_every_legacy_surface(
+        self, db_clean, app_client, registered_supabase_user, url,
+    ):
+        token, account_id, self_id = await self._dual_identity(
+            app_client, registered_supabase_user,
+        )
+        response = await app_client.get(url, headers=auth(token))
+        self._assert_governed(response, url=url, secrets=(account_id, self_id))
+
+    async def test_a_broken_household_is_governed_on_every_legacy_surface(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        token, account_id = await registered_supabase_user()
+        await _member(app_client, token, relation="adult")
+        self_id = uuid.UUID(await _self_id(app_client, token))
+        async with get_sessionmaker()() as s:
+            (await s.get(FamilyProfile, self_id)).active = False
+            await s.commit()
+
+        for url in ("/api/v2/profile", "/api/v2/profile/attributes", "/api/v2/onboarding/status"):
+            response = await app_client.get(url, headers=auth(token))
+            self._assert_governed(response, url=url, secrets=(account_id, self_id))
+
+    async def test_the_care_seam_is_governed_too(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        token, account_id, self_id = await self._dual_identity(
+            app_client, registered_supabase_user,
+        )
+        response = await _care_write(app_client, token, self_id, SKIN, "comfortable")
+        self._assert_governed(
+            response, url="care-profile", secrets=(account_id, self_id),
+        )
+
+
 class TestConcurrency:
     async def test_two_first_writes_for_one_member_make_one_profile(
         self, db_clean, app_client, registered_supabase_user,
@@ -525,6 +1140,133 @@ class TestConcurrency:
         assert first == second
         async with get_sessionmaker()() as s:
             assert await s.scalar(select(func.count(AppearanceProfile.id))) == 1
+
+    async def test_a_true_simultaneous_first_write_makes_exactly_one_profile(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """``gather`` is not a race. A barrier is.
+
+        Two coroutines started together may still run one after the other —
+        whichever awaits first can finish its whole transaction before the
+        other begins, and then the conflicting state this test exists for never
+        happens. So both sides are held at the moment *after* they have looked
+        and found nothing, and released together.
+
+        No sleeps: a sleep would be a guess about scheduling, and a guess that
+        is usually right is exactly the test that stops catching the bug.
+        """
+        token, account_id = await registered_supabase_user()
+        member = uuid.UUID(await _member(app_client, token, relation="adult"))
+
+        barrier = asyncio.Barrier(2)
+
+        async def write(value: str) -> uuid.UUID:
+            async with get_sessionmaker()() as s:
+                subject = await resolve_subject(
+                    s, account_id=account_id, subject_id=member,
+                )
+                # Both transactions have now read, and neither has inserted.
+                await barrier.wait()
+                profile = await resolve_subject_profile_for_write(s, subject)
+                await profile_service.apply_attributes(
+                    s, profile, [{"key": SKIN, "value": value}],
+                )
+                await s.commit()
+                return profile.id
+
+        first, second = await asyncio.gather(
+            write("comfortable"), write("often_dry_or_tight"),
+        )
+
+        # Both callers got the same authoritative row, and there is one of it.
+        assert first == second
+        async with get_sessionmaker()() as s:
+            assert await s.scalar(select(func.count(AppearanceProfile.id))) == 1
+            bound = await s.scalar(
+                select(AppearanceProfile.household_subject_id)
+                .where(AppearanceProfile.id == first)
+            )
+            values = (await s.execute(
+                select(ProfileAttribute.value)
+                .where(ProfileAttribute.profile_id == first, ProfileAttribute.key == SKIN)
+            )).scalars().all()
+        assert bound == member
+        # One key, one row: the existing concurrent-update contract is
+        # last-writer-wins on the attribute, not two rows for one key.
+        assert len(values) == 1
+        assert values[0] in ("comfortable", "often_dry_or_tight")
+
+    async def test_a_true_simultaneous_first_write_for_two_members_makes_two(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """The same barrier, and the answer must be the opposite.
+
+        A partial index that was too wide — on ``account_id``, say — would pass
+        the test above and collapse these two people into one profile.
+        """
+        token, account_id = await registered_supabase_user()
+        one = uuid.UUID(await _member(app_client, token, relation="adult"))
+        two = uuid.UUID(await _member(app_client, token, relation="other"))
+
+        barrier = asyncio.Barrier(2)
+
+        async def write(member: uuid.UUID) -> uuid.UUID:
+            async with get_sessionmaker()() as s:
+                subject = await resolve_subject(
+                    s, account_id=account_id, subject_id=member,
+                )
+                await barrier.wait()
+                profile = await resolve_subject_profile_for_write(s, subject)
+                await s.commit()
+                return profile.id
+
+        first, second = await asyncio.gather(write(one), write(two))
+        assert first != second
+        async with get_sessionmaker()() as s:
+            bound = (await s.execute(
+                select(AppearanceProfile.household_subject_id)
+                .where(AppearanceProfile.household_subject_id.is_not(None))
+            )).scalars().all()
+        assert sorted(map(str, bound)) == sorted(map(str, (one, two)))
+
+    async def test_a_true_simultaneous_household_and_self_write(
+        self, db_clean, registered_supabase_user,
+    ):
+        """The race the account lock exists for, held open on purpose.
+
+        One transaction opens the household; the other decides whether the
+        account holder already has a profile. Both are released at the moment
+        before either has decided anything, so the lock is what orders them
+        rather than whichever coroutine happened to await first.
+        """
+        _, account_id = await registered_supabase_user()
+        barrier = asyncio.Barrier(2)
+
+        async def open_household():
+            async with get_sessionmaker()() as s:
+                await barrier.wait()
+                await family_service.add_profile(s, account_id, relation="adult")
+                await s.commit()
+
+        async def self_write():
+            async with get_sessionmaker()() as s:
+                await barrier.wait()
+                await resolve_self_profile_for_write(s, account_id)
+                await s.commit()
+
+        await asyncio.gather(open_household(), self_write())
+
+        async with get_sessionmaker()() as s:
+            profiles = (await s.execute(
+                select(AppearanceProfile).where(AppearanceProfile.account_id == account_id)
+            )).scalars().all()
+        assert len(profiles) == 1, profiles
+
+        # Whichever way it went, the account is readable: never the forbidden
+        # state of a legacy row beside an adopted one.
+        async with get_sessionmaker()() as s:
+            await resolve_self_profile_for_read(s, account_id)
+            assert await s.scalar(select(func.count(FamilyCircle.id))) == 1
 
     async def test_household_creation_takes_the_account_lock_before_it_decides(self):
         """Lock order, checked at the source rather than through the database.
@@ -670,6 +1412,100 @@ class TestExportGrouping:
         async with get_sessionmaker()() as s:
             assert (await s.get(AppearanceProfile, profile_id)).household_subject_id is None
 
+    async def test_a_household_missing_its_account_holder_is_stated_not_guessed(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """The export is the one surface that must not stop.
+
+        Somebody exercising a data right still gets their data. What it must
+        not do is decide, from a broken household, which human the legacy
+        profile belonged to — the file exists precisely so they can see who has
+        what, and a confident wrong label there is worse than no label.
+        """
+        token, account_id = await registered_supabase_user()
+        async with get_sessionmaker()() as s:
+            profile = await resolve_self_profile_for_write(s, account_id)
+            profile_id = profile.id
+            await _seed_every_child_table(s, profile_id)
+            await s.commit()
+        member = await _member(app_client, token, relation="adult")
+        self_id = uuid.UUID(await _self_id(app_client, token))
+        async with get_sessionmaker()() as s:
+            (await s.get(FamilyProfile, self_id)).active = False
+            await s.commit()
+
+        async with get_sessionmaker()() as s:
+            payload = await export_service.build_export(s, account_id)
+        profile_domain = payload["domains"]["profile"]
+
+        # Stated, not guessed.
+        assert {e["error"] for e in profile_domain["invariant_errors"]} == {
+            "household_self_profile_missing"
+        }
+        # Nobody is labelled the account holder, including the other member.
+        assert all(x["is_account_holder"] is False for x in profile_domain["subjects"])
+        assert any(x["household_subject_id"] == member for x in profile_domain["subjects"])
+        # The data is still all there, under an unattributed entry.
+        unattributed = next(
+            x for x in profile_domain["subjects"] if x["household_subject_id"] is None
+        )
+        assert unattributed["relation"] is None
+        assert len(unattributed["attributes"]) == 0 or unattributed["attributes"]
+        for table in ("goals", "observations", "onboarding_sessions", "user_constraints"):
+            assert len(unattributed[table]) == 1, table
+
+        # And nothing was repaired, adopted or deleted on the way past.
+        async with get_sessionmaker()() as s:
+            assert (await s.get(AppearanceProfile, profile_id)).household_subject_id is None
+            assert (await s.get(FamilyProfile, self_id)).active is False
+            assert await s.scalar(select(func.count(AppearanceProfile.id))) == 1
+
+    async def test_two_account_holders_are_reported_not_chosen_between(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        token, account_id = await registered_supabase_user()
+        await _member(app_client, token, relation="adult")
+        async with get_sessionmaker()() as s:
+            circle_id = await s.scalar(
+                select(FamilyCircle.id).where(FamilyCircle.account_id == account_id)
+            )
+            s.add(FamilyProfile(circle_id=circle_id, position=3, relation=RELATION_SELF))
+            await s.commit()
+
+        async with get_sessionmaker()() as s:
+            payload = await export_service.build_export(s, account_id)
+        profile_domain = payload["domains"]["profile"]
+        assert {e["error"] for e in profile_domain["invariant_errors"]} == {
+            "household_has_multiple_self_profiles"
+        }
+        assert all(x["is_account_holder"] is False for x in profile_domain["subjects"])
+        async with get_sessionmaker()() as s:
+            assert await s.scalar(select(func.count(FamilyProfile.id))) == 3
+
+    async def test_a_cross_account_profile_is_reported_and_never_relabelled(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """The corrupt link, seen from the other account's export."""
+        a_token, a_account = await registered_supabase_user()
+        _, b_account = await registered_supabase_user()
+        a_member = uuid.UUID(await _member(app_client, a_token, relation="adult"))
+        async with get_sessionmaker()() as s:
+            b_profile_id = await _corrupt_profile_onto(
+                s, account_id=b_account, subject_id=a_member, value="often_oily",
+            )
+
+        async with get_sessionmaker()() as s:
+            payload = await export_service.build_export(s, b_account)
+        profile_domain = payload["domains"]["profile"]
+        assert profile_domain["invariant_errors"] == [
+            {"profile_id": str(b_profile_id), "error": "profile_subject_ownership_invalid"}
+        ]
+        # B's export never presents A's member as one of B's people.
+        assert all(
+            x["household_subject_id"] != str(a_member)
+            for x in profile_domain["subjects"]
+        )
+
     async def test_an_inactive_member_keeps_their_data_in_the_export(
         self, db_clean, app_client, registered_supabase_user,
     ):
@@ -700,16 +1536,97 @@ class TestExportGrouping:
 # 8. Deletion
 # ---------------------------------------------------------------------------
 class TestDeletion:
-    async def test_account_deletion_removes_every_profile_and_family_row(
-        self, db_clean, app_client, registered_supabase_user,
+    @pytest.fixture
+    def fake_supabase_admin(self, monkeypatch):
+        """Erasure asks Supabase Auth to delete the identity too.
+
+        That is a live call, and this suite never makes one. Stubbed exactly as
+        the account-deletion state machine's own tests stub it, so the job can
+        reach ``completed`` and the tombstone can be checked.
+        """
+        class _Admin:
+            def __init__(self):
+                self.deleted: list[str] = []
+
+            @property
+            def auth(self):
+                return self
+
+            @property
+            def admin(self):
+                return self
+
+            def delete_user(self, user_id: str) -> None:
+                self.deleted.append(user_id)
+
+        admin = _Admin()
+        monkeypatch.setattr(
+            "app.domains.privacy.deletion_service.get_supabase_admin", lambda: admin,
+        )
+        return admin
+
+    async def test_account_deletion_removes_all_ten_profile_tables(
+        self, db_clean, app_client, registered_supabase_user, fake_supabase_admin,
     ):
+        """Erasure means all ten, for every human on the account.
+
+        Nine tables hang off ``appearance_profiles.id`` and the profile itself
+        is the tenth. Checking attributes alone would have let eight tables of
+        somebody's body facts survive a deletion they asked for — and now that
+        an account holds several people's profiles, it would leave more behind
+        than it used to.
+        """
         from app.domains.privacy import deletion_service
+        from app.domains.privacy.models import AccountDeletionJob
+        from app.domains.product.models import (
+            LabelSnapshot,
+            ProductRecord,
+            ScanDevice,
+            ScanEvent,
+        )
 
         token, account_id = await registered_supabase_user()
         member = await _member(app_client, token, relation="adult", age_band=AGE_BAND_ADULT)
         self_id = await _self_id(app_client, token)
         await _care_write(app_client, token, self_id, SKIN, "comfortable")
         await _care_write(app_client, token, member, SKIN, "often_dry_or_tight")
+
+        # Global Product Truth: shared with every other shopper, and nothing to
+        # do with this account. Erasing one person must not take it.
+        barcode = "8901234567894"
+        snapshot_id = uuid.uuid4()
+        async with get_sessionmaker()() as s:
+            stranger_device = ScanDevice(device_key="stranger", token_hash="x" * 64)
+            s.add(stranger_device)
+            await s.flush()
+            stranger_event = ScanEvent(
+                device_id=stranger_device.id, account_id=None, barcode=barcode,
+                outcome="known", client_scan_id=str(uuid.uuid4()),
+            )
+            s.add(stranger_event)
+            await s.flush()
+            s.add(ProductRecord(barcode=barcode, confidence="verified", origin="community"))
+            s.add(LabelSnapshot(
+                id=snapshot_id, barcode=barcode, scan_event_id=stranger_event.id,
+                facts={"ingredients_text": "Petrolatum"}, confidence="verified",
+                content_fingerprint="7" * 64, version_number=1, changed_fields=[],
+                completeness="complete_for_grading",
+            ))
+            await s.commit()
+
+        # Both people's profiles, fully populated across all nine child tables.
+        async with get_sessionmaker()() as s:
+            profile_ids = (await s.execute(select(AppearanceProfile.id))).scalars().all()
+            assert len(profile_ids) == 2
+            for profile_id in profile_ids:
+                # Both profiles already carry a Care fact under ``SKIN``.
+                await _seed_every_child_table(s, profile_id, attribute_key=SENS)
+            await s.commit()
+
+        async with get_sessionmaker()() as s:
+            before = await _child_rows(s)
+        for model in PROFILE_CHILD_MODELS:
+            assert before[model.__name__], model.__name__
 
         async with get_sessionmaker()() as s:
             await deletion_service.request_deletion(s, account_id)
@@ -719,10 +1636,35 @@ class TestDeletion:
             await s.commit()
 
         async with get_sessionmaker()() as s:
+            # The tenth table, and the nine.
             assert await s.scalar(select(func.count(AppearanceProfile.id))) == 0
-            assert await s.scalar(select(func.count(ProfileAttribute.id))) == 0
+            after = await _child_rows(s)
+            for model in PROFILE_CHILD_MODELS:
+                assert after[model.__name__] == [], model.__name__
+
+            # The household itself.
             assert await s.scalar(select(func.count(FamilyCircle.id))) == 0
             assert await s.scalar(select(func.count(FamilyProfile.id))) == 0
+
+            # The tombstone stays: it is classified LEGALLY_RETAINED precisely
+            # so the audit trail does not have to hold the identity itself.
+            job = (await s.execute(
+                select(AccountDeletionJob)
+                .where(AccountDeletionJob.account_id == account_id)
+            )).scalar_one()
+            assert job.state == "complete"
+            assert job.completed_at is not None
+
+            # And Product Truth is exactly as it was.
+            record = (await s.execute(
+                select(ProductRecord).where(ProductRecord.barcode == barcode)
+            )).scalar_one()
+            assert record.confidence == "verified"
+            snapshot = await s.get(LabelSnapshot, snapshot_id)
+            assert snapshot is not None
+            assert snapshot.facts == {"ingredients_text": "Petrolatum"}
+
+        assert fake_supabase_admin.deleted == [str(account_id)]
 
     async def test_deleting_a_member_with_a_lens_is_refused(
         self, db_clean, app_client, registered_supabase_user,

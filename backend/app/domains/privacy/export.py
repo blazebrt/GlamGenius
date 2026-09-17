@@ -41,6 +41,7 @@ from app.domains.beta_access.models import (
 from app.domains.community.models import CommunityObservationReport
 from app.domains.consent.models import Consent
 from app.domains.family.models import FamilyCircle, FamilyProfile
+from app.domains.family.subject import RELATION_SELF
 from app.domains.identity.models import Account
 from app.domains.inventory.models import (
     InventoryAttribute,
@@ -239,7 +240,15 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
     This is a **pure read**. A household whose account holder has not yet been
     adopted is *labelled* as the account holder without the row being touched:
     an export that adopted as a side effect would mean downloading your data
-    changed it.
+    changed it. That holds for malformed identity too — nothing here repairs,
+    adopts, merges or deletes, whatever it finds.
+
+    Where the rest of the product refuses to answer on malformed identity, this
+    records it and carries on. An export is the one surface where stopping is
+    the wrong answer: somebody exercising a data right must still receive their
+    data, and a household whose ``self`` row is missing has not stopped owning
+    the rows underneath it. So the account holder is simply left unnamed and
+    the problem is stated in ``invariant_errors``.
     """
     profiles = await _fetch(
         session,
@@ -252,7 +261,27 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
         .where(FamilyCircle.account_id == account_id)
         .order_by(FamilyProfile.position),
     ))
-    self_row = next((m for m in members if m.relation == "self" and m.active), None)
+
+    # Exactly one active account holder, or none named at all. Taking the first
+    # of two would label one human as the account holder by insertion order,
+    # and the profile underneath a ``self`` label is the one the legacy row is
+    # attributed to — so getting it wrong would attach the signed-in person's
+    # history to somebody else in their household, inside the file they asked
+    # for precisely to see who has what.
+    self_rows = [m for m in members if m.relation == RELATION_SELF and m.active]
+    invariant_errors: list[dict[str, str]] = []
+    if len(self_rows) == 1:
+        self_row = self_rows[0]
+    else:
+        self_row = None
+        if members:
+            invariant_errors.append({
+                "error": (
+                    "household_self_profile_missing" if not self_rows
+                    else "household_has_multiple_self_profiles"
+                ),
+            })
+
     by_subject = {p.household_subject_id: p for p in profiles if p.household_subject_id}
     legacy = next((p for p in profiles if p.household_subject_id is None), None)
 
@@ -285,13 +314,19 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
     # An account with no household still has an account holder, and their
     # profile is the legacy row. It appears under a null subject because there
     # is no household row to name — not because it belongs to nobody.
+    #
+    # When the household exists but its account holder could not be identified,
+    # the same row is still exported — it is the customer's data and they asked
+    # for it — but it is not labelled as anybody's, because the one thing worse
+    # than an unlabelled profile is a confidently mislabelled one.
     if legacy is not None and legacy.id not in claimed:
+        unattributed = bool(members) and self_row is None
         subjects.append({
             "household_subject_id": None,
-            "relation": "self",
+            "relation": None if unattributed else RELATION_SELF,
             "age_band": None,
             "active": True,
-            "is_account_holder": True,
+            "is_account_holder": not unattributed,
             "adopted": False,
             **await _profile_payload(session, legacy),
         })
@@ -306,13 +341,12 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
         and p.household_subject_id not in {m.id for m in members}
     ]
 
-    return {
-        "subjects": subjects,
-        "invariant_errors": (
-            [{"profile_id": str(p.id), "error": "profile_subject_ownership_invalid"} for p in orphaned]
-            if orphaned else []
-        ),
-    }
+    invariant_errors.extend(
+        {"profile_id": str(p.id), "error": "profile_subject_ownership_invalid"}
+        for p in orphaned
+    )
+
+    return {"subjects": subjects, "invariant_errors": invariant_errors}
 
 
 async def _consent(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:

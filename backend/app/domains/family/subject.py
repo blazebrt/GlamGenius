@@ -52,6 +52,7 @@ from sqlalchemy.exc import MultipleResultsFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.family.models import FamilyCircle, FamilyProfile
+from app.shared.errors.exceptions import IdentityInvariantError
 
 # --- Age, to the only precision the product needs ----------------------------
 
@@ -93,7 +94,7 @@ class SubjectNotFound(LookupError):
     """The named subject is not one this account may ask about."""
 
 
-class HouseholdInvariantError(RuntimeError):
+class HouseholdInvariantError(IdentityInvariantError):
     """A household exists but its account holder's row does not.
 
     Also raised when a circle somehow holds more than one active account
@@ -104,6 +105,12 @@ class HouseholdInvariantError(RuntimeError):
     synthesising a subject here would silently hand back ``not_stated`` for
     somebody the household may have recorded as a child, and picking one of two
     rows would decide whose body a decision is about by insertion order.
+
+    It is an :class:`~app.shared.errors.exceptions.IdentityInvariantError` so
+    that every route reaching it answers the same governed 503 rather than a
+    bare 500 from whichever one happened to touch identity first. Step 11B
+    added many such routes — Care, the shelf, ``/profile``, onboarding — and a
+    per-route mapping would have been one more place to forget.
     """
 
 

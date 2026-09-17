@@ -795,9 +795,11 @@ class TestStep8AOrchestration:
         monkeypatch.setattr(service, "interpret_label_snapshot", forbidden)
         private_text = "I take novaformin-private-step8b"
         statements: list[str] = []
+        bound: list[object] = []
 
         def record(conn, cursor, statement, parameters, context, executemany):
             statements.append(statement)
+            bound.append(parameters)
 
         factory = get_sessionmaker()
         engine = sql.get_engine().sync_engine
@@ -818,7 +820,21 @@ class TestStep8AOrchestration:
         assert result.ingredients == ()
         assert private_text not in repr(result)
         assert "novaformin" not in repr(result)
-        assert statements == []
+
+        # One statement, and only one: the subject is re-read from the database
+        # before the gate, because a caller-supplied age band is a disclosure
+        # and never an authority. Nothing else runs — no profile read, no
+        # product work, no evidence work.
+        assert len(statements) == 1, statements
+        assert "family_circles" in statements[0]
+        # And the safety text reaches the database in no form at all, neither
+        # in a statement nor as a bound parameter. That is the contract this
+        # test has always been for.
+        for statement, parameters in zip(statements, bound, strict=True):
+            assert private_text not in statement
+            assert "novaformin" not in statement
+            assert private_text not in repr(parameters)
+            assert "novaformin" not in repr(parameters)
 
     async def test_no_body_context_and_packaged_food_skip_step7c(self, db_clean, monkeypatch):
         async def forbidden(*args, **kwargs):

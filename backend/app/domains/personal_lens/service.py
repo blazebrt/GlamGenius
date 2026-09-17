@@ -25,8 +25,9 @@ from app.domains.personal_lens.enums import (
 from app.domains.profile import service as profile_service
 from app.domains.profile.identity import (
     SubjectRef,
-    require_resolved_subject,
+    canonical_subject,
     resolve_subject_profile_for_read,
+    safety_for,
 )
 
 SKIN_BODY_FACT_KEYS = (
@@ -188,21 +189,34 @@ async def build_personal_lens_context(
 
     ``account_id`` is deliberately not a separate parameter: it is already
     authoritative on ``subject``, and two sources for one fact can disagree.
-    A raw household profile id never enters here; only ``resolve_subject()``
-    can produce the type this accepts, which is what keeps a forged id from
-    reaching a profile lookup.
+
+    The subject is re-read from the database before anything is decided with
+    it. ``ResolvedSubject`` is a public dataclass, so being handed one proves
+    only that the shape is right — a caller can construct one naming another
+    household's member, or naming a real under-twelve member of its own
+    household as an adult. Both are answered by the read, not by the type.
     """
     if not isinstance(category, PersonalLensCategory):
         raise ValueError("category must be a PersonalLensCategory")
     if safety is not None and not isinstance(safety, PersonalLensSafetyInput):
         raise ValueError("safety must be a PersonalLensSafetyInput")
-    require_resolved_subject(subject)
 
+    # Before the gate, not after. The hard handoff is the product's hardest
+    # rule, and evaluating it against a caller-supplied age band would let a
+    # request reach an ordinary answer about a child by simply describing them
+    # as an adult. ``safety_for`` only ever adds: a request may tell the gate
+    # more than the household recorded, never less.
+    subject = await canonical_subject(session, subject)
     safety_context = safety or PersonalLensSafetyInput()
-    decision = hard_handoff.evaluate(
-        safety_context.text,
+    stated_age, subject_is_child = safety_for(
+        subject,
         stated_age=safety_context.stated_age,
         subject_is_child=safety_context.subject_is_child,
+    )
+    decision = hard_handoff.evaluate(
+        safety_context.text,
+        stated_age=stated_age,
+        subject_is_child=subject_is_child,
     )
     if decision.handoff:
         assert decision.reason is not None

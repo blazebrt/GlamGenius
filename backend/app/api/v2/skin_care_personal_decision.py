@@ -49,7 +49,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v2.product import current_device
 from app.content import for_you_copy
 from app.domains.family.subject import (
-    HouseholdInvariantError,
     ResolvedSubject,
     SubjectNotFound,
     resolve_subject,
@@ -156,6 +155,23 @@ class SkinCareForYouBody(BaseModel):
     # Omitted means the signed-in person, which is what every request meant
     # before households existed.
     subject_id: uuid.UUID | None = None
+
+
+def _subject_not_found() -> AppError:
+    """One answer for three different situations.
+
+    No such profile, a profile that was deactivated, and a profile that belongs
+    to somebody else's household. Answering "forbidden" for the last one would
+    confirm that the id names a real person in a household this caller cannot
+    see, which is itself the leak. So all three are the same 404, and the id is
+    not echoed back.
+    """
+    return AppError(
+        "That person is not on this account.",
+        status_code=404,
+        code=ErrorCode.NOT_FOUND,
+        extra={"reason": "subject_not_found"},
+    )
 
 
 def personal_lens_safety_input(
@@ -490,31 +506,12 @@ async def read_skin_care_for_you(
                 subject_id=body.subject_id,
             )
         except SubjectNotFound:
-            # One answer for three different situations: no such profile, a
-            # profile that was deactivated, and a profile that belongs to
-            # somebody else's household. Answering "forbidden" for the last one
-            # would confirm that the id names a real person in a household this
-            # caller cannot see, which is itself the leak. So all three are the
-            # same 404, and the id is not echoed back.
-            raise AppError(
-                "That person is not on this account.",
-                status_code=404,
-                code=ErrorCode.NOT_FOUND,
-                extra={"reason": "subject_not_found"},
-            ) from None
-        except HouseholdInvariantError:
-            # A household with no account holder in it. Not a customer state
-            # and not reachable through any route, so it fails closed the same
-            # way a broken label snapshot does rather than answering with
-            # weaker authority than this household may have recorded. A fixed
-            # event name and nothing else: the request id is how an operator
-            # finds this line.
-            logger.error("for_you_household_self_profile_missing")
-            raise AppError(
-                "This result is not available right now.",
-                status_code=503,
-                code=ErrorCode.FEATURE_UNAVAILABLE,
-            ) from None
+            raise _subject_not_found() from None
+        # ``HouseholdInvariantError`` is deliberately not caught here. It is an
+        # ``IdentityInvariantError`` and stops at the shared error boundary,
+        # which answers the same governed 503 and logs it as the incident it is.
+        # Catching it in one route and not the others is how the answers drift
+        # apart, and Step 11B added several more routes that can reach it.
 
         pack = await pack_context.current_pack(
             session, barcode=body.barcode, device_id=device.id,
@@ -570,13 +567,21 @@ async def read_skin_care_for_you(
                 product_category=None, released=None,
             )
 
-        personal = await interpret_label_snapshot_for_account(
-            session,
-            snapshot,
-            category=category,
-            safety=personal_lens_safety_input(body.safety, subject),
-            subject=subject,
-        )
+        try:
+            # The lens re-resolves the subject for itself rather than trusting
+            # the object it is handed. Normally it reaches the same row this
+            # route just read; it will not if the member was deactivated in
+            # between, and that narrow race must answer like any other unknown
+            # subject rather than as a server fault.
+            personal = await interpret_label_snapshot_for_account(
+                session,
+                snapshot,
+                category=category,
+                safety=personal_lens_safety_input(body.safety, subject),
+                subject=subject,
+            )
+        except SubjectNotFound:
+            raise _subject_not_found() from None
 
         if personal.context_status is PersonalLensStatus.HANDOFF_REQUIRED:
             # The handoff is answered before any release is read. A corrupt or
