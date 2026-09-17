@@ -5,6 +5,7 @@ from app.domains.personal_lens.enums import (
     PersonalFactMissingReason,
     PersonalLensCategory,
     PersonalLensStatus,
+    PersonalLensSubjectScope,
 )
 from app.domains.personal_lens.service import (
     MissingPersonalLensFact,
@@ -25,5 +26,6 @@ __all__ = [
     "PersonalLensHandoff",
     "PersonalLensSafetyInput",
     "PersonalLensStatus",
+    "PersonalLensSubjectScope",
     "build_personal_lens_context",
 ]

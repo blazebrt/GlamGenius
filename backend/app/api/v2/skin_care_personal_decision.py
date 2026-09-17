@@ -39,6 +39,7 @@ length.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -47,6 +48,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v2.product import current_device
 from app.content import for_you_copy
+from app.domains.family.subject import (
+    ResolvedSubject,
+    SubjectNotFound,
+    resolve_subject,
+    safety_for,
+)
 from app.domains.personal_applicability.service import interpret_label_snapshot_for_account
 from app.domains.personal_decision_explanation import PersonalDecisionPresentationStatus
 from app.domains.personal_decision_release.runtime import (
@@ -57,7 +64,7 @@ from app.domains.personal_decision_release.runtime import (
 from app.domains.personal_decision_release.validation import (
     PersonalDecisionReleaseInvariantError,
 )
-from app.domains.personal_lens.enums import PersonalLensStatus
+from app.domains.personal_lens.enums import PersonalLensStatus, PersonalLensSubjectScope
 from app.domains.personal_lens.service import PersonalLensSafetyInput
 from app.domains.product import care_capture, pack_context
 from app.domains.product.models import LabelSnapshot, ScanDevice
@@ -142,10 +149,17 @@ class SkinCareForYouBody(BaseModel):
 
     barcode: str = Field(min_length=6, max_length=64)
     safety: StructuredSafetyContext | None = None
+    # Which member of this household the question is about. An identifier only:
+    # nothing about that person travels in the request, because everything the
+    # server needs to know about them it already holds and checks for itself.
+    # Omitted means the signed-in person, which is what every request meant
+    # before households existed.
+    subject_id: uuid.UUID | None = None
 
 
 def personal_lens_safety_input(
     safety: StructuredSafetyContext | None,
+    subject: ResolvedSubject | None = None,
 ) -> PersonalLensSafetyInput | None:
     """Structured flags in, the existing authority's input out.
 
@@ -153,16 +167,34 @@ def personal_lens_safety_input(
     stated", and inventing a negative assertion from an unanswered question
     would be worse than silence. ``stated_age`` and ``subject_is_child`` pass
     through as the structured fields that authority already trusts over text.
+
+    When the request names a household member, what the server already knows
+    about that person is folded in through
+    :func:`~app.domains.family.subject.safety_for`, which only ever adds. A
+    request cannot describe a stored under-12 member as anything else, and it
+    cannot reach the gate by simply omitting the safety block — which is why a
+    subject with a stored band still produces an input when ``safety`` is
+    ``None``.
     """
-    if safety is None:
-        return None
     tokens = [
-        token for field, token in _SAFETY_TOKENS if getattr(safety, field) is True
+        token for field, token in _SAFETY_TOKENS
+        if safety is not None and getattr(safety, field) is True
     ]
+    stated_age = safety.stated_age if safety is not None else None
+    subject_is_child = (safety.subject_is_child is True) if safety is not None else False
+    if subject is not None:
+        stated_age, subject_is_child = safety_for(
+            subject, stated_age=stated_age, subject_is_child=subject_is_child,
+        )
+    if safety is None and stated_age is None and not subject_is_child:
+        # Nothing was disclosed and nothing is stored about this person, so
+        # there is no safety input at all -- the same silence every request
+        # produced before households existed.
+        return None
     return PersonalLensSafetyInput(
         text=". ".join(tokens) if tokens else None,
-        stated_age=safety.stated_age,
-        subject_is_child=safety.subject_is_child is True,
+        stated_age=stated_age,
+        subject_is_child=subject_is_child,
     )
 
 
@@ -450,6 +482,26 @@ async def read_skin_care_for_you(
     async with operational_events.observe_for_you():
         care_capture.require_owned_device(device, account_id=current.account_id)
 
+        try:
+            subject = await resolve_subject(
+                session,
+                account_id=current.account_id,
+                subject_id=body.subject_id,
+            )
+        except SubjectNotFound:
+            # One answer for three different situations: no such profile, a
+            # profile that was deactivated, and a profile that belongs to
+            # somebody else's household. Answering "forbidden" for the last one
+            # would confirm that the id names a real person in a household this
+            # caller cannot see, which is itself the leak. So all three are the
+            # same 404, and the id is not echoed back.
+            raise AppError(
+                "That person is not on this account.",
+                status_code=404,
+                code=ErrorCode.NOT_FOUND,
+                extra={"reason": "subject_not_found"},
+            ) from None
+
         pack = await pack_context.current_pack(
             session, barcode=body.barcode, device_id=device.id,
         )
@@ -509,7 +561,12 @@ async def read_skin_care_for_you(
             snapshot,
             account_id=current.account_id,
             category=category,
-            safety=personal_lens_safety_input(body.safety),
+            safety=personal_lens_safety_input(body.safety, subject),
+            subject_scope=(
+                PersonalLensSubjectScope.ACCOUNT_HOLDER
+                if subject.is_account_holder
+                else PersonalLensSubjectScope.OTHER_HOUSEHOLD_MEMBER
+            ),
         )
 
         if personal.context_status is PersonalLensStatus.HANDOFF_REQUIRED:

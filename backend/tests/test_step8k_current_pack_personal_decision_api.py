@@ -1487,11 +1487,22 @@ class TestStaticBoundaries:
             "version_number", "content_fingerprint", "release_id", "release_version",
             "release_hash", "manifest", "action", "verdict", "verdict_key",
             "reason_key", "source_key", "ingredients_text",
+            # Step 11A. ``subject_id`` says *who* the question is about, and
+            # that is all it may say. Nothing describing that person travels in
+            # the request: their age, their band, their relation, their name and
+            # which household they are in are all facts the server already holds
+            # and checks for itself, and a request that could state them could
+            # also misstate them.
+            "age", "age_band", "date_of_birth", "birth_date", "relation",
+            "subject_name", "member_name", "subject_age", "subject_relation",
+            "household_id", "circle_id", "account_id", "family_profile_id",
         }
         for name in ("SkinCareForYouBody", "StructuredSafetyContext"):
             declared = set(getattr(api, name).model_fields)
             assert not (declared & banned), (name, declared & banned)
-        assert set(api.SkinCareForYouBody.model_fields) == {"barcode", "safety"}
+        assert set(api.SkinCareForYouBody.model_fields) == {
+            "barcode", "safety", "subject_id",
+        }
 
     def test_the_safety_schema_collects_no_free_text(self):
         banned = {

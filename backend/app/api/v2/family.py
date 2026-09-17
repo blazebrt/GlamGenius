@@ -34,7 +34,9 @@ async def create_family_profile(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     try:
-        profile = await service.add_profile(session, current.account_id, relation=body.relation)
+        profile = await service.add_profile(
+            session, current.account_id, relation=body.relation, age_band=body.age_band,
+        )
     except service.FamilyProfileError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": str(exc)}) from exc
     await session.commit()
