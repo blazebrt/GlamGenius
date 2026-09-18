@@ -447,7 +447,7 @@ class TestEventAppendInvariants:
         async with get_sessionmaker()() as session:
             row = await session.get(PurchaseDecision, decision)
             event = await decision_memory.record_decision_event_for_account(
-                session, principal_account_id=account_id, row=row,
+                session, principal_account_id=account_id, decision_id=row.id,
             )
             await session.commit()
         assert event is not None
@@ -456,18 +456,30 @@ class TestEventAppendInvariants:
     async def test_the_public_authority_refuses_a_foreign_principal(
         self, db_clean, app_client, registered_supabase_user,
     ):
+        """Somebody else's decision id is simply not found.
+
+        Not an invariant error, which would say "this exists and is wrong";
+        the same ``NotFoundError`` an invented id gets, because the difference
+        between "no such decision" and "not yours" is what confirms that an id
+        names a real decision another customer made.
+        """
         _, a_account = await registered_supabase_user()
         _, b_account = await registered_supabase_user()
         a_candidate = await _candidate(a_account)
         a_decision = await _decision_for(a_account, a_candidate)
 
         async with get_sessionmaker()() as session:
-            row = await session.get(PurchaseDecision, a_decision)
-            with pytest.raises(IdentityInvariantError):
+            with pytest.raises(NotFoundError) as foreign:
                 await decision_memory.record_decision_event_for_account(
-                    session, principal_account_id=b_account, row=row,
+                    session, principal_account_id=b_account, decision_id=a_decision,
+                )
+            with pytest.raises(NotFoundError) as invented:
+                await decision_memory.record_decision_event_for_account(
+                    session, principal_account_id=b_account, decision_id=uuid.uuid4(),
                 )
             await session.commit()
+        assert str(foreign.value) == str(invented.value)
+        assert str(a_decision) not in str(foreign.value)
 
         async with get_sessionmaker()() as session:
             assert await session.scalar(select(func.count(PurchaseDecisionEvent.id))) == 0

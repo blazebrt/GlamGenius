@@ -30,6 +30,7 @@ from app.domains.family.decision_subject import (
     serialize_decision_subject,
     subject_row_filter,
 )
+from app.domains.family.subject import subject_belongs_to_account
 from app.domains.purchase.contract import (
     CARE_PURCHASE_VERDICT_VERSION,
     FRAGRANCE_PURCHASE_VERDICT_VERSION,
@@ -314,26 +315,58 @@ async def record_decision_event_for_account(
     session: AsyncSession,
     *,
     principal_account_id: uuid.UUID,
-    row: PurchaseDecision,
-) -> PurchaseDecisionEvent | None:
-    """Append this decision's event, having first proved whose candidate it is.
+    decision_id: uuid.UUID,
+) -> PurchaseDecisionEvent:
+    """Append a decision's event, deriving every field from the database.
 
-    The one public way into the ledger. It takes a principal and a decision row
-    rather than a candidate, because a ``ShoppingCandidate`` handed in by a
-    caller is exactly the kind of state this step stopped trusting: an ORM
-    object is something the caller constructed or fetched, and a primary-key
-    lookup finds another account's product just as readily as this one's.
+    The one public way into the ledger, and it takes two identifiers rather
+    than an object. That is the whole correction: a ``PurchaseDecision`` handed
+    in by a caller is a claim in exactly the way a ``DecisionSubject`` and a
+    ``ShoppingCandidate`` are. Checking ``row.account_id`` against the principal
+    reads a field off the same object the caller supplied, so a detached row
+    could satisfy it while carrying somebody else's subject, a different
+    candidate, or a decision value nobody made — and the event appended from it
+    would be an immutable record of something that never happened.
 
-    So the candidate is loaded here, by the decision's own ``candidate_id``
-    *and* the authenticated account, and only that row reaches the append.
+    So nothing about the decision crosses this boundary except its id. The row
+    is loaded here, by that id *and* the authenticated account, and locked:
+    every field the event copies is mutable current state, and it must not
+    change between being read and being written down.
 
-    ``None`` when no such candidate exists for this account — which is what a
-    deleted candidate has always meant on this path, and is now also the answer
-    for one that belongs to somebody else. The decision row itself is
-    unaffected; only its event is skipped, exactly as before.
+    A decision id belonging to another account and one that never existed are
+    the same :class:`NotFoundError`, because saying which would confirm the id
+    names a real decision somebody else made.
+
+    It always returns an event or raises. The old ``None`` meant "the candidate
+    was deleted", which the schema does not actually allow: ``candidate_id`` is
+    NOT NULL with ``ON DELETE CASCADE``, so a deleted product takes its
+    decisions with it and a canonical decision always has a candidate row.
     """
-    if row.account_id != principal_account_id:
-        raise IdentityInvariantError("purchase_decision_candidate_identity_mismatch")
+    row = (await session.execute(
+        select(PurchaseDecision)
+        .where(
+            PurchaseDecision.id == decision_id,
+            PurchaseDecision.account_id == principal_account_id,
+        )
+        .with_for_update()
+    )).scalar_one_or_none()
+    if row is None:
+        raise NotFoundError("We could not find that decision.")
+
+    # The stored row can itself be impossible, and an append-only ledger is the
+    # worst place to discover that later. The foreign key proves the profile
+    # exists; it does not prove whose household it is in, and those are
+    # different facts. A decision saying account A decided for account B's
+    # member fails closed here rather than being carried forward into a record
+    # nothing rewrites. It is not repaired: deciding what that row should have
+    # said is a separate, deliberate act.
+    if row.household_subject_id is not None and not await subject_belongs_to_account(
+        session,
+        account_id=principal_account_id,
+        subject_id=row.household_subject_id,
+    ):
+        raise IdentityInvariantError("purchase_decision_subject_ownership_invalid")
+
     candidate = (await session.execute(
         select(ShoppingCandidate).where(
             ShoppingCandidate.id == row.candidate_id,
@@ -341,7 +374,15 @@ async def record_decision_event_for_account(
         )
     )).scalar_one_or_none()
     if candidate is None:
-        return None
+        # Not "the product was deleted". ``candidate_id`` is NOT NULL with
+        # ``ON DELETE CASCADE``, so deleting a product deletes its decisions
+        # with it, and the row is locked — a canonical decision always has a
+        # candidate row. A miss here can therefore only mean that row belongs
+        # to another account, which is the same class of stored corruption as a
+        # foreign subject and gets the same treatment. Named at the boundary
+        # rather than left for the inner append to notice, so the error says
+        # what was found. Not repaired.
+        raise IdentityInvariantError("purchase_decision_candidate_ownership_invalid")
     return await _record_decision_event(session, row=row, candidate=candidate)
 
 

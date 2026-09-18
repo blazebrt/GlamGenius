@@ -346,7 +346,7 @@ async def test_recommendation_transition_appends_without_rewriting_first_event(
         # loads the canonical candidate under the principal itself, which is
         # what a caller outside this module is now expected to do.
         await decision_memory.record_decision_event_for_account(
-            session, principal_account_id=account_id, row=row,
+            session, principal_account_id=account_id, decision_id=row.id,
         )
         await session.commit()
 
