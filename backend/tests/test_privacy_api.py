@@ -19,7 +19,7 @@ async def test_privacy_export_returns_versioned_snapshot(
     body = resp.json()
     # 1.1 since Step 11B: the appearance domain is grouped by subject and the
     # five profile tables the registry promised but nothing exported are in it.
-    assert body["schema_version"] == "1.1"
+    assert body["schema_version"] == "1.2"
     assert "domains" in body
     assert "identity" in body["domains"]
     # No storage-key leak

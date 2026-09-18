@@ -42,7 +42,18 @@ async def test_export_scan_decision_memory_isolation(db_clean, registered_supaba
     async with factory() as session:
         exported = await build_export(session, user_a)
         
-    decisions = exported["domains"]["product_scans"]["scan_decision_events"]
+    # Step 11C groups scan decision memory by the human who made it. Neither
+    # account has a household, so each one's own history is its single
+    # unattributed self entry — isolation between accounts is unchanged, which
+    # is what this test is for.
+    product_scans = exported["domains"]["product_scans"]
+    decisions = [
+        event
+        for subject in product_scans["subjects"]
+        for event in subject["scan_decision_events"]
+    ]
+    assert product_scans["unattributed_scan_decision_events"] == []
+    assert product_scans["invariant_errors"] == []
     assert len(decisions) == 1
     assert decisions[0]["decision"] == "BUY"
     assert decisions[0]["note"] == "a-note"

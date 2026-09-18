@@ -23,6 +23,10 @@ from sqlalchemy import text
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 STEP_11B_REVISION = "f4g5h6i7j8"
 PREVIOUS_REVISION = "e3f4g5h6i7"
+#: Step 11C sits on top of 11B, so reaching 11B's downgrade means stepping past
+#: it first. Named rather than counted: ``downgrade -2`` would silently follow
+#: the chain wherever it grows next.
+STEP_11C_REVISION = "g5h6i7j8k9"
 
 pytestmark = pytest.mark.asyncio
 
@@ -115,6 +119,11 @@ async def test_downgrade_refuses_while_two_people_share_an_account(db_clean):
     await sql.dispose_engine()
     restored = False
     try:
+        # Step past Step 11C first. It has no attributed decision memory here,
+        # so its own refusal does not fire and this is an ordinary downgrade.
+        step_down, step_output = await _alembic("downgrade", STEP_11B_REVISION)
+        assert step_down == 0, step_output
+
         returncode, output = await _alembic("downgrade", "-1")
 
         # It refused, and said why in terms an operator can act on.
@@ -129,7 +138,8 @@ async def test_downgrade_refuses_while_two_people_share_an_account(db_clean):
         # Nothing was deleted, merged, or picked between.
         assert await _snapshot() == before
         # And the database did not land halfway through: the schema this
-        # migration owns is still in place, and so is its version row.
+        # migration owns is still in place, and so is its version row. Step 11C
+        # was stepped past on the way in, so 11B is where the refusal left it.
         assert await _current_revision() == STEP_11B_REVISION
         async with sql.get_engine().connect() as connection:
             indexes = (await connection.execute(text(
@@ -160,6 +170,8 @@ async def test_downgrade_and_re_upgrade_succeed_once_the_data_allows_it(db_clean
         )
     await sql.dispose_engine()
     try:
+        step_down, step_output = await _alembic("downgrade", STEP_11B_REVISION)
+        assert step_down == 0, step_output
         returncode, output = await _alembic("downgrade", "-1")
         assert returncode == 0, output
         assert await _current_revision() == PREVIOUS_REVISION
@@ -174,4 +186,4 @@ async def test_downgrade_and_re_upgrade_succeed_once_the_data_allows_it(db_clean
     finally:
         returncode, output = await _alembic("upgrade", "head")
         assert returncode == 0, output
-    assert await _current_revision() == STEP_11B_REVISION
+    assert await _current_revision() == STEP_11C_REVISION

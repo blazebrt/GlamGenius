@@ -87,7 +87,9 @@ async def test_composed_check_reuses_one_assessment_and_aligns_fingerprints(monk
     monkeypatch.setattr(check_service, "resolve_care_purchase_evidence", lambda *args, **kwargs: _async(evidence))
     monkeypatch.setattr(check_service, "resolve_care_purchase_value", lambda *args, **kwargs: _async(value))
     monkeypatch.setattr(check_service, "resolve_care_purchase_verdict", lambda *args, **kwargs: _async(verdict))
-    monkeypatch.setattr(check_service, "current_purchase_decision", lambda *args, **kwargs: _async(None))
+    # Step 11C: the embedded decision is resolved per subject, so the stub sits
+    # on the helper that does it rather than on the retired account-only lookup.
+    monkeypatch.setattr(check_service, "_embedded_decision", lambda *args, **kwargs: _async(None))
 
     result = await check_service.resolve_care_purchase_check(
         object(), account_id=account_id, account_id_str=str(account_id), candidate_id=candidate_id, plan_date=date(2026, 8, 20)

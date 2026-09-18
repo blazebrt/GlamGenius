@@ -1,4 +1,18 @@
-"""Shared, strategy-neutral purchase decision memory."""
+"""Shared, strategy-neutral purchase decision memory — for one human at a time.
+
+Until Step 11C a decision belonged to an account, which was a complete answer
+while an account meant one person. It no longer does. Everything here now asks
+two questions rather than one: who is allowed to see this (the authenticated
+account) and whose decision is it (the subject).
+
+The hard part is not the new rows. It is the old ones. A decision written
+before the account had a household is unambiguously the account holder's; one
+written after could have been about anybody in it and stored nothing that says
+which. :mod:`app.domains.family.decision_subject` holds that boundary, and this
+module's job is to never quietly cross it — not in a history page, not in a
+Purchase Guard count, and not by adopting a row that cannot honestly be
+claimed.
+"""
 from __future__ import annotations
 
 import uuid
@@ -8,9 +22,16 @@ from sqlalchemy import and_, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.domains.family.decision_subject import (
+    DecisionSubject,
+    ambiguous_legacy_filter,
+    serialize_decision_subject,
+    subject_row_filter,
+)
 from app.domains.purchase.contract import (
     CARE_PURCHASE_VERDICT_VERSION,
     FRAGRANCE_PURCHASE_VERDICT_VERSION,
+    PURCHASE_DECISION_EVENT_VERSION,
     PURCHASE_DECISION_MEMORY_VERSION,
     PURCHASE_GUARD_VERSION,
     is_active_care_category,
@@ -24,7 +45,11 @@ from app.domains.recommendation.models import (
     PurchaseEvaluation,
     ShoppingCandidate,
 )
-from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
+from app.shared.errors.exceptions import (
+    IdentityInvariantError,
+    NotFoundError,
+    ValidationFailedError,
+)
 
 
 def serialize_purchase_decision(row: PurchaseDecision) -> dict[str, Any]:
@@ -33,6 +58,12 @@ def serialize_purchase_decision(row: PurchaseDecision) -> dict[str, Any]:
         "purchase_decision_memory_version": PURCHASE_DECISION_MEMORY_VERSION,
         "id": str(row.id),
         "candidate_id": str(row.candidate_id),
+        # Whose decision this row is. NULL is truthful rather than evasive: it
+        # means nobody was named when it was written, which is a different fact
+        # from "the account holder".
+        "household_subject_id": (
+            str(row.household_subject_id) if row.household_subject_id else None
+        ),
         "strategy": row.strategy_key,
         "evaluation_id": str(row.evaluation_id) if row.evaluation_id else None,
         "recommendation_at_decision": {
@@ -48,24 +79,133 @@ def serialize_purchase_decision(row: PurchaseDecision) -> dict[str, Any]:
     }
 
 
-async def current_purchase_decision(
+async def _account_rows(
     session: AsyncSession,
     *,
     account_id: uuid.UUID,
     candidate_id: uuid.UUID,
-    strategy_key: str | None = None,
-) -> PurchaseDecision | None:
+    strategy_key: str | None,
+) -> list[PurchaseDecision]:
+    """Every current row this account holds for one candidate.
+
+    Account-scoped, always. A subject-bound row could be found by its subject
+    alone, and the foreign key would even prove the member exists — but not that
+    this account owns them. Reading by subject and then trusting the answer is
+    how one account reads another's memory.
+    """
     statement = select(PurchaseDecision).where(
         PurchaseDecision.account_id == account_id,
         PurchaseDecision.candidate_id == candidate_id,
+        PurchaseDecision.evaluation_id.is_(None),
     )
     if strategy_key is not None:
         statement = statement.where(PurchaseDecision.strategy_key == strategy_key)
-    return (
-        await session.execute(
-            statement.order_by(PurchaseDecision.updated_at.desc(), PurchaseDecision.created_at.desc()).limit(1)
-        )
-    ).scalar_one_or_none()
+    return list((await session.execute(statement)).scalars().all())
+
+
+def _partition_current(
+    rows: list[PurchaseDecision], decision_subject: DecisionSubject,
+) -> tuple[PurchaseDecision | None, PurchaseDecision | None, PurchaseDecision | None]:
+    """Split this account's rows into the three things they can be to a subject.
+
+    ``explicit`` is a row stored against this subject by name. ``safe_legacy``
+    is a subject-less row old enough to be honestly theirs. ``ambiguous`` is a
+    subject-less row from after the household existed, which is nobody's that
+    we can prove — it is returned only so callers can say the history is
+    incomplete.
+    """
+    explicit = safe_legacy = ambiguous = None
+    for row in rows:
+        if row.household_subject_id is not None:
+            if (
+                decision_subject.subject_id is not None
+                and row.household_subject_id == decision_subject.subject_id
+            ):
+                explicit = row
+            continue
+        if decision_subject.legacy_row_is_mine(row.updated_at):
+            safe_legacy = row
+        elif decision_subject.is_account_holder:
+            ambiguous = row
+    return explicit, safe_legacy, ambiguous
+
+
+def _refuse_dual_self(
+    explicit: PurchaseDecision | None, safe_legacy: PurchaseDecision | None,
+) -> None:
+    """One human cannot have two current answers to the same question.
+
+    A safely attributable legacy row *and* a subject-bound row for the same
+    person and candidate means adoption did not happen when it should have.
+    Choosing between them would pick which of the customer's own decisions
+    counts, and merging them would invent one, so it stops.
+    """
+    if explicit is not None and safe_legacy is not None:
+        raise IdentityInvariantError("account_has_dual_current_purchase_decision")
+
+
+async def current_purchase_decision_for_subject(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+    candidate_id: uuid.UUID,
+    strategy_key: str | None = None,
+) -> PurchaseDecision | None:
+    """This subject's current decision, or nothing. Never anybody else's.
+
+    A pure read: it never adopts, never creates and never writes. An ambiguous
+    legacy row is not returned as this subject's — it is not theirs, and
+    showing it would be a confident answer to a question the data cannot settle.
+    """
+    rows = await _account_rows(
+        session,
+        account_id=principal_account_id,
+        candidate_id=candidate_id,
+        strategy_key=strategy_key,
+    )
+    explicit, safe_legacy, _ = _partition_current(rows, decision_subject)
+    _refuse_dual_self(explicit, safe_legacy)
+    return explicit or safe_legacy
+
+
+async def resolve_current_decision_for_write(
+    session: AsyncSession,
+    *,
+    decision_subject: DecisionSubject,
+    candidate_id: uuid.UUID,
+    strategy_key: str,
+) -> PurchaseDecision | None:
+    """The row this subject's next decision should update, adopting once if it may.
+
+    Called only after the write authority and the candidate lock are held, so
+    what it sees cannot change underneath it.
+
+    Adoption is one column on the row that already exists: same id, same
+    candidate, same strategy, same events hanging off it, same recommendation
+    snapshot. It happens at most once, only for the account holder, and only
+    from the safe side of the household boundary. An ambiguous legacy row is
+    left exactly where it is and a new subject-bound row is created beside it —
+    the two coexisting is the honest outcome, not a conflict.
+    """
+    rows = await _account_rows(
+        session,
+        account_id=decision_subject.account_id,
+        candidate_id=candidate_id,
+        strategy_key=strategy_key,
+    )
+    explicit, safe_legacy, _ = _partition_current(rows, decision_subject)
+    _refuse_dual_self(explicit, safe_legacy)
+    if explicit is not None:
+        return explicit
+    if safe_legacy is None:
+        return None
+    if decision_subject.subject_id is not None:
+        # First qualifying write since the household opened. The row does not
+        # become a different decision; it becomes the same decision with a name.
+        safe_legacy.household_subject_id = decision_subject.subject_id
+        await session.flush()
+    return safe_legacy
 
 
 def style_recommendation_snapshot(evaluation: PurchaseEvaluation) -> dict[str, Any]:
@@ -83,8 +223,16 @@ async def record_decision_event(
 ) -> PurchaseDecisionEvent:
     """Append only a meaningful current-state transition in this transaction."""
     identity = identity_for_candidate(candidate)
+    # Scoped to this decision row, which is now per subject — so the "nothing
+    # meaningful changed" test can only ever compare a subject against their own
+    # last event. Comparing across subjects would let one member's identical
+    # decision silently suppress another's, and the ledger would then be missing
+    # a decision somebody actually made.
     previous = (await session.execute(
-        select(PurchaseDecisionEvent).where(PurchaseDecisionEvent.decision_id == row.id).order_by(
+        select(PurchaseDecisionEvent).where(
+            PurchaseDecisionEvent.decision_id == row.id,
+            PurchaseDecisionEvent.account_id == row.account_id,
+        ).order_by(
             PurchaseDecisionEvent.created_at.desc(), PurchaseDecisionEvent.id.desc()).limit(1)
     )).scalar_one_or_none()
     if previous is not None and all((
@@ -102,7 +250,12 @@ async def record_decision_event(
     )):
         return previous
     event = PurchaseDecisionEvent(
-        account_id=row.account_id, candidate_id=candidate.id, decision_id=row.id,
+        account_id=row.account_id,
+        # Taken from the authoritative current row rather than inferred from the
+        # account: the row is what the write authority already resolved, and
+        # deriving it twice is how the two disagree.
+        household_subject_id=row.household_subject_id,
+        candidate_id=candidate.id, decision_id=row.id,
         category=candidate.category, strategy_key=row.strategy_key,
         candidate_display_name=candidate.display_name,
         identity_version=identity["version"], identity_state=identity["state"],
@@ -121,6 +274,9 @@ async def record_decision_event(
 def serialize_decision_event(row: PurchaseDecisionEvent) -> dict[str, Any]:
     return {
         "id": str(row.id), "candidate_id": str(row.candidate_id), "category": row.category,
+        "household_subject_id": (
+            str(row.household_subject_id) if row.household_subject_id else None
+        ),
         "strategy": row.strategy_key, "candidate_display_name": row.candidate_display_name,
         "identity": {"version": row.identity_version, "state": row.identity_state,
                      "fingerprint": row.identity_fingerprint},
@@ -131,11 +287,31 @@ def serialize_decision_event(row: PurchaseDecisionEvent) -> dict[str, Any]:
     }
 
 
-async def decision_history(session: AsyncSession, *, account_id: uuid.UUID, limit: int, before: uuid.UUID | None = None) -> list[PurchaseDecisionEvent]:
-    statement = select(PurchaseDecisionEvent).where(PurchaseDecisionEvent.account_id == account_id)
+async def decision_history(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+    limit: int,
+    before: uuid.UUID | None = None,
+) -> list[PurchaseDecisionEvent]:
+    """One human's history, newest first. Nobody else's, in either direction.
+
+    The cursor is checked against the same filter as the page, not merely
+    against the account. A cursor belonging to another member — or to
+    unattributed legacy history — has to be answered exactly like an invented
+    one, because "that cursor exists but is not yours" would confirm that
+    somebody else in the household has a decision event.
+    """
+    mine = subject_row_filter(PurchaseDecisionEvent, decision_subject)
+    statement = select(PurchaseDecisionEvent).where(
+        PurchaseDecisionEvent.account_id == principal_account_id, mine,
+    )
     if before is not None:
         cursor = await session.scalar(select(PurchaseDecisionEvent).where(
-            PurchaseDecisionEvent.id == before, PurchaseDecisionEvent.account_id == account_id,
+            PurchaseDecisionEvent.id == before,
+            PurchaseDecisionEvent.account_id == principal_account_id,
+            mine,
         ))
         if cursor is None:
             raise NotFoundError("We could not find that decision history cursor.")
@@ -143,29 +319,127 @@ async def decision_history(session: AsyncSession, *, account_id: uuid.UUID, limi
             PurchaseDecisionEvent.created_at < cursor.created_at,
             and_(PurchaseDecisionEvent.created_at == cursor.created_at, PurchaseDecisionEvent.id < cursor.id),
         ))
-    return (await session.execute(statement.order_by(
-        PurchaseDecisionEvent.created_at.desc(), PurchaseDecisionEvent.id.desc()).limit(limit))).scalars().all()
+    return list((await session.execute(statement.order_by(
+        PurchaseDecisionEvent.created_at.desc(), PurchaseDecisionEvent.id.desc()).limit(limit))).scalars().all())
 
 
-async def purchase_guard(session: AsyncSession, *, account_id: uuid.UUID, candidate: ShoppingCandidate) -> dict[str, Any]:
-    """Project exact prior facts without recalculating a purchase verdict."""
+async def _unattributed_events_exist(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+    extra: Any = None,
+) -> bool:
+    """Is there history here that belongs to nobody we can name?
+
+    Only the account holder can be shown an incomplete answer about their own
+    past: a named member's history begins when they were named, so there is
+    nothing older that could have been theirs.
+    """
+    if not decision_subject.is_account_holder or not decision_subject.has_household:
+        return False
+    where = [
+        PurchaseDecisionEvent.account_id == principal_account_id,
+        ambiguous_legacy_filter(PurchaseDecisionEvent, decision_subject),
+    ]
+    if extra is not None:
+        where.extend(extra)
+    return (await session.scalar(
+        select(PurchaseDecisionEvent.id).where(*where).limit(1)
+    )) is not None
+
+
+async def history_coverage(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+) -> dict[str, Any]:
+    """What this history does and does not contain, said plainly.
+
+    A page that quietly omitted the decisions it could not attribute would look
+    exactly like a complete one. Saying so is the difference between "you have
+    no earlier decisions" and "we cannot tell whose some of the earlier
+    decisions were".
+    """
+    unattributed = await _unattributed_events_exist(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
+    return {
+        "state": "step_11c_subject_scoped",
+        "legacy_current_decisions_included": False,
+        "legacy_self_events_included": (
+            decision_subject.is_account_holder and decision_subject.has_household
+        ),
+        "unattributed_legacy_events_present": unattributed,
+        "complete_for_subject": not unattributed,
+    }
+
+
+async def purchase_guard(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+    candidate: ShoppingCandidate,
+) -> dict[str, Any]:
+    """Project exact prior facts, for one human, without recalculating a verdict.
+
+    This is the read Step 11C changes most. Before it, a household shared one
+    guard: if anybody had already skipped a product, everybody was told they had
+    considered it. "You looked at this before and skipped it" is a sentence
+    about a person, and saying it to the wrong one is both wrong and a leak —
+    it discloses what somebody else in the household decided.
+
+    So every count, the most recent event and the state come from this subject's
+    attributable history alone. Another member's identical product, identical
+    fingerprint and identical strategy contribute nothing.
+    """
     identity = identity_for_candidate(candidate)
     base = {"purchase_guard_version": PURCHASE_GUARD_VERSION, "candidate_id": str(candidate.id), "identity": identity,
-            "history_coverage": {"state": "step_9a_events_only", "legacy_current_decisions_included": False},
+            "subject": serialize_decision_subject(decision_subject),
+            "history_coverage": {"state": "step_11c_subject_scoped",
+                                 "legacy_current_decisions_included": False,
+                                 "unattributed_legacy_events_present": False,
+                                 "complete_for_subject": True},
             "prior_consideration_count": 0, "most_recent": None, "guard_state": "no_step9a_prior_event",
             "owned_redundancy": None}
     if identity["state"] != "exact":
         base["guard_state"] = "identity_insufficient"
         return base
-    legacy_incomplete = await has_incomplete_legacy_context(
-        session, account_id=account_id, candidate_id=candidate.id,
+    strategy_key = resolve_purchase_strategy(candidate.category).key
+    identity_match = (
+        PurchaseDecisionEvent.category == candidate.category,
+        PurchaseDecisionEvent.strategy_key == strategy_key,
+        PurchaseDecisionEvent.identity_version == identity["version"],
+        PurchaseDecisionEvent.identity_fingerprint == identity["fingerprint"],
+        PurchaseDecisionEvent.identity_state == "exact",
     )
-    where = (PurchaseDecisionEvent.account_id == account_id,
-             PurchaseDecisionEvent.category == candidate.category,
-             PurchaseDecisionEvent.strategy_key == resolve_purchase_strategy(candidate.category).key,
-             PurchaseDecisionEvent.identity_version == identity["version"],
-             PurchaseDecisionEvent.identity_fingerprint == identity["fingerprint"],
-             PurchaseDecisionEvent.identity_state == "exact")
+    # Two different kinds of "we might not know everything". A current row with
+    # no event behind it is this subject's own pre-Step-9 gap; an unattributed
+    # legacy event is a decision somebody made about this exact product that
+    # cannot be assigned to anybody. Either makes the coverage incomplete, and
+    # neither is ever counted as this subject's.
+    legacy_incomplete = await has_incomplete_legacy_context(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+        candidate_id=candidate.id,
+    )
+    unattributed = await _unattributed_events_exist(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+        extra=identity_match,
+    )
+    if legacy_incomplete or unattributed:
+        base["history_coverage"]["unattributed_legacy_events_present"] = unattributed
+        base["history_coverage"]["complete_for_subject"] = False
+    where = (PurchaseDecisionEvent.account_id == principal_account_id,
+             subject_row_filter(PurchaseDecisionEvent, decision_subject),
+             *identity_match)
     # One statement gives READ COMMITTED one database snapshot for both the
     # distinct-candidate count and newest event.  Separate statements could
     # otherwise observe a just-committed event only on the second read.
@@ -182,9 +456,11 @@ async def purchase_guard(session: AsyncSession, *, account_id: uuid.UUID, candid
         .select_from(count.outerjoin(latest, true()))
     )
     count_value, event = result.one()
+    # Ambiguous rows are never counted. A number that quietly included
+    # decisions nobody can attribute would be the most confident lie here.
     base["prior_consideration_count"] = int(count_value or 0)
     if event is None:
-        if legacy_incomplete:
+        if legacy_incomplete or unattributed:
             base["guard_state"] = "historical_context_incomplete"
         return base
     base["most_recent"] = serialize_decision_event(event)
@@ -197,28 +473,54 @@ async def purchase_guard(session: AsyncSession, *, account_id: uuid.UUID, candid
 
 
 async def has_incomplete_legacy_context(
-    session: AsyncSession, *, account_id: uuid.UUID, candidate_id: uuid.UUID,
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+    candidate_id: uuid.UUID,
 ) -> bool:
-    """A pre-Step-9 current row is not evidence that no history exists."""
-    decision = await session.scalar(select(PurchaseDecision.id).where(
-        PurchaseDecision.account_id == account_id, PurchaseDecision.candidate_id == candidate_id,
-    ).limit(1))
-    if decision is None:
+    """A pre-Step-9 current row is not evidence that no history exists.
+
+    Subject-aware now, and that is the correction: this used to ask whether the
+    *account* had a current row without an event, so one member's untracked row
+    made every other member's guard say their history was incomplete. A
+    household would have been permanently unsure about itself.
+
+    Only rows this subject could honestly claim count — their own subject-bound
+    row, or a safely attributable legacy one.
+    """
+    rows = await _account_rows(
+        session,
+        account_id=principal_account_id,
+        candidate_id=candidate_id,
+        strategy_key=None,
+    )
+    explicit, safe_legacy, _ = _partition_current(rows, decision_subject)
+    mine = explicit or safe_legacy
+    if mine is None:
         return False
-    event = await session.scalar(select(PurchaseDecisionEvent.id).where(PurchaseDecisionEvent.decision_id == decision))
+    event = await session.scalar(select(PurchaseDecisionEvent.id).where(
+        PurchaseDecisionEvent.decision_id == mine.id,
+        PurchaseDecisionEvent.account_id == principal_account_id,
+    ))
     return event is None
 
 
-async def save_care_decision(
-    session: AsyncSession,
-    *,
-    account_id: uuid.UUID,
-    candidate_id: uuid.UUID,
-    check: dict[str, Any],
-    decision: str,
-    note: str | None,
-) -> PurchaseDecision:
-    """Upsert one current Care memory row from one canonical check."""
+async def _locked_candidate(
+    session: AsyncSession, *, account_id: uuid.UUID, candidate_id: uuid.UUID,
+) -> ShoppingCandidate:
+    """Freeze the candidate's facts — after the subject authority, never before.
+
+    The candidate is account-owned and stays that way: several people in one
+    household consider the same one, and it is not cloned per subject. Locking
+    it is about freezing what it says, so a concurrent confirmation cannot pair
+    an old recommendation snapshot with a new identity fingerprint.
+
+    The order matters as much as the lock. The account and, for a member, their
+    ``family_profiles`` row are already held by the time this runs. Taking the
+    candidate first and reaching back for them afterwards is the inversion that
+    deadlocks against account deletion.
+    """
     candidate = (await session.execute(
         select(ShoppingCandidate)
         .where(
@@ -229,6 +531,24 @@ async def save_care_decision(
     )).scalar_one_or_none()
     if candidate is None:
         raise NotFoundError("We could not find that shopping item.")
+    return candidate
+
+
+async def save_care_decision(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+    candidate_id: uuid.UUID,
+    check: dict[str, Any],
+    decision: str,
+    note: str | None,
+) -> PurchaseDecision:
+    """Upsert one subject's current Care memory row from one canonical check."""
+    account_id = principal_account_id
+    candidate = await _locked_candidate(
+        session, account_id=account_id, candidate_id=candidate_id,
+    )
     if not is_active_care_category(candidate.category):
         raise ValidationFailedError(
             "This candidate is not eligible for the active Care purchase strategy.",
@@ -236,9 +556,9 @@ async def save_care_decision(
         )
     verdict = check["verdict"]
     verdict_key = verdict["verdict"]
-    row = await current_purchase_decision(
+    row = await resolve_current_decision_for_write(
         session,
-        account_id=account_id,
+        decision_subject=decision_subject,
         candidate_id=candidate_id,
         strategy_key="care_purchase",
     )
@@ -262,6 +582,7 @@ async def save_care_decision(
         row = PurchaseDecision(
             evaluation_id=None,
             account_id=account_id,
+            household_subject_id=decision_subject.subject_id,
             candidate_id=candidate_id,
             strategy_key="care_purchase",
             recommendation_verdict=verdict_key,
@@ -289,23 +610,23 @@ async def save_care_decision(
 
 async def save_fragrance_decision(
     session: AsyncSession,
-    *, account_id: uuid.UUID, candidate_id: uuid.UUID,
+    *, principal_account_id: uuid.UUID, decision_subject: DecisionSubject,
+    candidate_id: uuid.UUID,
     check: dict[str, Any], decision: str, note: str | None,
 ) -> PurchaseDecision:
-    """Upsert the shared candidate-backed memory for a Fragrance check."""
-    candidate = (await session.execute(
-        select(ShoppingCandidate).where(
-            ShoppingCandidate.id == candidate_id,
-            ShoppingCandidate.account_id == account_id,
-        ).with_for_update()
-    )).scalar_one_or_none()
-    if candidate is None:
-        raise NotFoundError("We could not find that shopping item.")
+    """Upsert one subject's candidate-backed memory for a Fragrance check."""
+    account_id = principal_account_id
+    candidate = await _locked_candidate(
+        session, account_id=account_id, candidate_id=candidate_id,
+    )
     if not is_active_fragrance_category(candidate.category):
         raise ValidationFailedError("This candidate is not eligible for the active Fragrance purchase strategy.", field="category")
     verdict = check["verdict"]
     verdict_key = verdict["verdict"]
-    row = await current_purchase_decision(session, account_id=account_id, candidate_id=candidate_id, strategy_key="fragrance_purchase")
+    row = await resolve_current_decision_for_write(
+        session, decision_subject=decision_subject,
+        candidate_id=candidate_id, strategy_key="fragrance_purchase",
+    )
     followed = {"buy": "bought", "wait": "waiting", "skip": "skipped"}.get(verdict_key) == decision
     snapshot = {
         "strategy": "fragrance_purchase",
@@ -323,7 +644,9 @@ async def save_fragrance_decision(
     }
     if row is None:
         row = PurchaseDecision(
-            evaluation_id=None, account_id=account_id, candidate_id=candidate_id,
+            evaluation_id=None, account_id=account_id,
+            household_subject_id=decision_subject.subject_id,
+            candidate_id=candidate_id,
             strategy_key="fragrance_purchase", recommendation_verdict=verdict_key,
             recommendation_version=FRAGRANCE_PURCHASE_VERDICT_VERSION,
             recommendation_fingerprint=verdict.get("decision_fingerprint"),
@@ -346,10 +669,13 @@ async def save_fragrance_decision(
 
 
 __all__ = [
-    "current_purchase_decision",
+    "PURCHASE_DECISION_EVENT_VERSION",
+    "current_purchase_decision_for_subject",
     "has_incomplete_legacy_context",
+    "history_coverage",
     "decision_history",
     "purchase_guard",
+    "resolve_current_decision_for_write",
     "record_decision_event",
     "serialize_decision_event",
     "save_care_decision",

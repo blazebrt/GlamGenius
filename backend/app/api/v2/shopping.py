@@ -12,6 +12,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.family.decision_subject import serialize_decision_subject
 from app.domains.purchase import decision_memory
 from app.domains.purchase import service as purchase_service
 from app.domains.purchase.contract import (
@@ -28,10 +29,51 @@ from app.domains.purchase.schemas import (
 from app.domains.recommendation.occasions import OCCASION_KEYS, OCCASIONS
 from app.domains.recommendation.schemas import PurchaseDecisionCreate
 from app.shared.database.sql import get_session
-from app.shared.errors.exceptions import ValidationFailedError
+from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_shopping_decisions"))])
+
+
+#: How a route turns an optional query parameter into a checked subject.
+#:
+#: Omitting it means "me", which is what every client sent before households
+#: existed and must keep meaning. A named subject is a *claim*: it goes through
+#: the Step 11A resolver under the authenticated account, so a member of another
+#: household, a deactivated member and an invented id are refused identically
+#: and without echoing the id — telling them apart would confirm that the id
+#: names a real person in a household this caller cannot see.
+async def _decision_subject(
+    session: AsyncSession,
+    current: CurrentAccount,
+    subject_id: uuid.UUID | None,
+    *,
+    for_write: bool = False,
+):
+    from app.domains.family.decision_subject import (
+        canonical_decision_subject,
+        decision_subject_for_write,
+    )
+    from app.domains.family.subject import (
+        SubjectNotFound,
+        account_holder_subject,
+        resolve_subject,
+    )
+
+    try:
+        claim = (
+            account_holder_subject(current.account_id)
+            if subject_id is None
+            else await resolve_subject(
+                session, account_id=current.account_id, subject_id=subject_id,
+            )
+        )
+        resolve = decision_subject_for_write if for_write else canonical_decision_subject
+        return await resolve(
+            session, principal_account_id=current.account_id, subject=claim,
+        )
+    except SubjectNotFound as exc:
+        raise NotFoundError("That person is not on this account.") from exc
 
 
 @router.get("/shopping/strategies")
@@ -211,10 +253,21 @@ async def record_candidate_decision(
     candidate_id: uuid.UUID,
     body: PurchaseDecisionCreate,
     on: date | None = Query(None, description="Decision date; defaults to the account's local day"),
+    subject_id: uuid.UUID | None = Query(None, description="Which household member this decision is for; omit for yourself"),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Persist a customer Care or Fragrance outcome from its canonical check."""
+    """Persist one human's Care or Fragrance outcome from its canonical check.
+
+    Order matters here, and it changed in Step 11C. The subject authority is
+    taken *first* — the account row, and for a named member their household row
+    — and only then is the candidate frozen. Locking the candidate first and
+    reaching back for the account afterwards is the inversion that deadlocks
+    against account deletion.
+    """
+    decision_subject = await _decision_subject(
+        session, current, subject_id, for_write=True,
+    )
     candidate = await purchase_service.owned_purchase_candidate(session, current.account_id, candidate_id)
     # Freeze the trusted candidate facts before composing the canonical check.
     # Otherwise a concurrent confirmation could pair an old recommendation
@@ -225,15 +278,31 @@ async def record_candidate_decision(
         raise ValidationFailedError("This candidate is not eligible for an active purchase strategy.", field="category")
     if strategy.key == "care_purchase":
         from app.domains.purchase.check_service import resolve_care_purchase_check
-        check = await resolve_care_purchase_check(session, account_id=current.account_id, account_id_str=current.account_id_str, candidate_id=candidate_id, plan_date=on)
-        row = await decision_memory.save_care_decision(session, account_id=current.account_id, candidate_id=candidate_id, check=check, decision=body.decision, note=body.note)
+        check = await resolve_care_purchase_check(
+            session, account_id=current.account_id,
+            account_id_str=current.account_id_str, candidate_id=candidate_id,
+            plan_date=on, decision_subject=decision_subject,
+        )
+        row = await decision_memory.save_care_decision(
+            session, principal_account_id=current.account_id,
+            decision_subject=decision_subject, candidate_id=candidate_id,
+            check=check, decision=body.decision, note=body.note,
+        )
     elif strategy.key == "fragrance_purchase":
         from app.domains.purchase.check_service import resolve_fragrance_check
-        check = await resolve_fragrance_check(session, account_id=current.account_id, candidate_id=candidate_id)
-        row = await decision_memory.save_fragrance_decision(session, account_id=current.account_id, candidate_id=candidate_id, check=check, decision=body.decision, note=body.note)
+        check = await resolve_fragrance_check(
+            session, account_id=current.account_id, candidate_id=candidate_id,
+            decision_subject=decision_subject,
+        )
+        row = await decision_memory.save_fragrance_decision(
+            session, principal_account_id=current.account_id,
+            decision_subject=decision_subject, candidate_id=candidate_id,
+            check=check, decision=body.decision, note=body.note,
+        )
     else:
         raise ValidationFailedError("This purchase strategy is not supported by this endpoint.", field="category")
     payload = decision_memory.serialize_purchase_decision(row)
+    payload["subject"] = serialize_decision_subject(decision_subject)
     await session.commit()
     return payload
 
@@ -241,18 +310,27 @@ async def record_candidate_decision(
 @router.get("/shopping/candidates/{candidate_id}/decision")
 async def get_purchase_decision_memory(
     candidate_id: uuid.UUID,
+    subject_id: uuid.UUID | None = Query(None, description="Which household member to read; omit for yourself"),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Read the latest shared decision memory without choosing a strategy."""
+    """Read one human's latest decision memory without choosing a strategy.
+
+    A pure read. It never adopts a legacy row and never creates one — the same
+    candidate may be waiting for one member and bought by another, and asking
+    the question must not change any of those answers.
+    """
     await purchase_service.owned_purchase_candidate(session, current.account_id, candidate_id)
-    row = await decision_memory.current_purchase_decision(
+    decision_subject = await _decision_subject(session, current, subject_id)
+    row = await decision_memory.current_purchase_decision_for_subject(
         session,
-        account_id=current.account_id,
+        principal_account_id=current.account_id,
+        decision_subject=decision_subject,
         candidate_id=candidate_id,
     )
     return {
         "purchase_decision_memory_version": decision_memory.PURCHASE_DECISION_MEMORY_VERSION,
+        "subject": serialize_decision_subject(decision_subject),
         "decision": decision_memory.serialize_purchase_decision(row) if row else None,
     }
 
@@ -261,16 +339,32 @@ async def get_purchase_decision_memory(
 async def get_purchase_decision_history(
     limit: int = Query(20, ge=1, le=50),
     before: uuid.UUID | None = None,
+    subject_id: uuid.UUID | None = Query(None, description="Whose history to read; omit for yourself"),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Bounded newest-first longitudinal purchase history for this account."""
+    """Bounded newest-first history for one human on this account.
+
+    The coverage block is not decoration. Where decisions exist that cannot be
+    attributed to anybody, this page says so rather than presenting a confident
+    subset as the whole story.
+    """
+    decision_subject = await _decision_subject(session, current, subject_id)
     rows = await decision_memory.decision_history(
-        session, account_id=current.account_id, limit=limit, before=before,
+        session,
+        principal_account_id=current.account_id,
+        decision_subject=decision_subject,
+        limit=limit,
+        before=before,
     )
     return {
-        "purchase_decision_event_version": "step-9a-v1",
-        "history_coverage": {"state": "step_9a_events_only", "legacy_current_decisions_included": False},
+        "purchase_decision_event_version": decision_memory.PURCHASE_DECISION_EVENT_VERSION,
+        "subject": serialize_decision_subject(decision_subject),
+        "history_coverage": await decision_memory.history_coverage(
+            session,
+            principal_account_id=current.account_id,
+            decision_subject=decision_subject,
+        ),
         "items": [decision_memory.serialize_decision_event(row) for row in rows],
         "next_before": str(rows[-1].id) if len(rows) == limit else None,
     }
@@ -279,12 +373,24 @@ async def get_purchase_decision_history(
 @router.get("/shopping/candidates/{candidate_id}/purchase-guard")
 async def get_purchase_guard(
     candidate_id: uuid.UUID,
+    subject_id: uuid.UUID | None = Query(None, description="Whose prior consideration to project; omit for yourself"),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Exact historical/owned context only; the active strategy remains decisive."""
+    """One human's exact prior context; the active strategy remains decisive.
+
+    "You considered this before" is a sentence about a person. Saying it to the
+    wrong member of a household is both wrong and a disclosure of what somebody
+    else decided, so the guard sees only this subject's own history.
+    """
     candidate = await purchase_service.owned_purchase_candidate(session, current.account_id, candidate_id)
     strategy = resolve_purchase_strategy(candidate.category)
     if strategy is None or strategy.state != "active":
         raise ValidationFailedError("This candidate is not eligible for a purchase guard.", field="category")
-    return await decision_memory.purchase_guard(session, account_id=current.account_id, candidate=candidate)
+    decision_subject = await _decision_subject(session, current, subject_id)
+    return await decision_memory.purchase_guard(
+        session,
+        principal_account_id=current.account_id,
+        decision_subject=decision_subject,
+        candidate=candidate,
+    )

@@ -19,6 +19,7 @@ from fastapi import (
     Header,
     HTTPException,
     Path,
+    Query,
     Request,
     UploadFile,
     status,
@@ -585,25 +586,76 @@ class ScanDecisionInput(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=64)
     note: str | None = Field(default=None, max_length=500)
 
+
+async def _scan_decision_subject(
+    session: AsyncSession,
+    current: CurrentAccount,
+    subject_id: uuid.UUID | None,
+    *,
+    for_write: bool = False,
+):
+    """Turn the optional query parameter into a checked subject, or refuse.
+
+    Omitting it means "me" — the shape every client used before households
+    existed. A named subject is a claim, checked against the authenticated
+    account: another household's member, a deactivated member and an invented id
+    are all the same 404, because telling them apart would confirm that the id
+    names somebody real.
+    """
+    from app.domains.family.decision_subject import (
+        canonical_decision_subject,
+        decision_subject_for_write,
+    )
+    from app.domains.family.subject import (
+        SubjectNotFound,
+        account_holder_subject,
+        resolve_subject,
+    )
+    from app.shared.errors.exceptions import NotFoundError
+
+    try:
+        claim = (
+            account_holder_subject(current.account_id)
+            if subject_id is None
+            else await resolve_subject(
+                session, account_id=current.account_id, subject_id=subject_id,
+            )
+        )
+        resolve = decision_subject_for_write if for_write else canonical_decision_subject
+        return await resolve(
+            session, principal_account_id=current.account_id, subject=claim,
+        )
+    except SubjectNotFound as exc:
+        raise NotFoundError("That person is not on this account.") from exc
+
+
 @router.get("/scan/verdict/{barcode}/memory")
 async def get_scan_decision_memory(
     barcode: str = BARCODE_PATH,
+    subject_id: uuid.UUID | None = Query(None, description="Whose memory to read; omit for yourself"),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Read memory for the exact current scanned product version."""
+    """Read one human's memory for the exact current scanned product version.
+
+    The same label snapshot can carry different answers for different people —
+    the account holder waiting, one member buying, another skipping — and this
+    returns only the one asked for.
+    """
     from fastapi import HTTPException
 
     from app.domains.product import scan_memory
-    
+
     snapshot = await service.latest_label_snapshot(session, barcode)
     if not snapshot:
         # Fail closed
         raise HTTPException(status_code=409, detail="conflict")
-        
+
+    decision_subject = await _scan_decision_subject(session, current, subject_id)
     envelope = await scan_memory.read_scan_memory(
         session,
-        account_id=current.account_id,
+        principal_account_id=current.account_id,
+        decision_subject=decision_subject,
         barcode=barcode,
         label_snapshot_id=snapshot.id,
         label_version=snapshot.version_number,
@@ -615,25 +667,36 @@ async def get_scan_decision_memory(
 async def record_scan_decision_event(
     body: ScanDecisionInput,
     barcode: str = BARCODE_PATH,
+    subject_id: uuid.UUID | None = Query(None, description="Whose decision this is; omit for yourself"),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Save BUY/WAIT/SKIP for the exact current scanned product version."""
+    """Save one human's BUY/WAIT/SKIP for the exact current scanned version.
+
+    Recording that somebody decided to buy something is not recording that they
+    own it. Nothing here touches the shelf, for any subject.
+    """
     from fastapi import HTTPException
 
     from app.domains.product import scan_memory
-    
+
     snapshot = await service.latest_label_snapshot(session, barcode)
     if not snapshot:
         raise HTTPException(status_code=409, detail="conflict")
-        
+
     if snapshot.id != body.label_snapshot_id or snapshot.version_number != body.label_version or snapshot.content_fingerprint != body.content_fingerprint:
         raise HTTPException(status_code=409, detail="conflict")
-        
+
+    # The subject authority first, in the documented lock order, before
+    # anything is written.
+    decision_subject = await _scan_decision_subject(
+        session, current, subject_id, for_write=True,
+    )
     try:
         event = await scan_memory.record_scan_decision(
             session,
-            account_id=current.account_id,
+            principal_account_id=current.account_id,
+            decision_subject=decision_subject,
             barcode=barcode,
             label_snapshot_id=snapshot.id,
             label_version=snapshot.version_number,
@@ -643,7 +706,9 @@ async def record_scan_decision_event(
             note=body.note,
         )
         await session.commit()
-    except ValueError:
-        raise HTTPException(status_code=409, detail="idempotency_conflict")
-    
+    except scan_memory.ScanDecisionConflict:
+        # Deliberately says nothing about which subject used the key, or
+        # whether that subject exists.
+        raise HTTPException(status_code=409, detail="idempotency_conflict") from None
+
     return scan_memory.serialize_scan_decision(event)
