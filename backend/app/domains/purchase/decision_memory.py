@@ -31,6 +31,7 @@ from app.domains.family.decision_subject import (
     subject_row_filter,
 )
 from app.domains.family.subject import subject_belongs_to_account
+from app.domains.identity.service import lock_account_against_delete
 from app.domains.purchase.contract import (
     CARE_PURCHASE_VERDICT_VERSION,
     FRAGRANCE_PURCHASE_VERDICT_VERSION,
@@ -341,7 +342,51 @@ async def record_decision_event_for_account(
     was deleted", which the schema does not actually allow: ``candidate_id`` is
     NOT NULL with ``ON DELETE CASCADE``, so a deleted product takes its
     decisions with it and a canonical decision always has a candidate row.
+
+    Lock order, and why the account comes first
+    -------------------------------------------
+    ::
+
+        Account FOR KEY SHARE
+        -> PurchaseDecision FOR UPDATE
+        -> stored subject ownership
+        -> canonical ShoppingCandidate
+        -> PurchaseDecisionEvent
+
+    The account lock is not here merely to stop the account disappearing, and
+    saying so would miss the point. ``purchase_decision_events.account_id`` is
+    an immediate foreign key, so the insert at the end of this function makes
+    PostgreSQL check the parent and take ``FOR KEY SHARE`` on that same account
+    row *by itself*. This function's real order therefore always included the
+    account — the only question was whether it came before or after the
+    decision row.
+
+    After is the reverse of account deletion, which takes the account and then
+    cascades down into ``purchase_decisions``. Two transactions going opposite
+    ways round the same pair deadlock: one holds the decision and waits for the
+    account, the other holds the account and waits for the decision. Taking it
+    explicitly, first, puts the application's order where the database was going
+    to go anyway.
+
+    ``FOR KEY SHARE`` and not ``FOR UPDATE``: this appends immutable history to
+    a decision that already exists. It creates no household, adopts no legacy
+    identity, and changes no membership — so it has no reason to serialise
+    against every other write on the same account, and two holders of this lock
+    do not block each other.
+
+    Re-taking it is free. A transaction does not conflict with a row lock it
+    already holds, so a caller that established the same protection earlier
+    pays nothing here, and no caller is asked to declare which locks it is
+    holding — a claim of that kind would be exactly the sort of caller
+    assertion this module spent three corrections removing.
     """
+    if await lock_account_against_delete(session, principal_account_id) is None:
+        # Already gone, and nothing below would be meaningful: the cascades have
+        # taken this account's decisions with it. Answered as a missing decision
+        # rather than a missing account, which is the same sentence a foreign or
+        # invented decision id gets and says nothing about what exists.
+        raise NotFoundError("We could not find that decision.")
+
     row = (await session.execute(
         select(PurchaseDecision)
         .where(

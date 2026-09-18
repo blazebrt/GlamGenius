@@ -530,12 +530,38 @@ async def save_decision(
 
     An evaluation id belonging to another account and one that never existed
     are the same refusal, with nothing echoed back.
+
+    Lock order::
+
+        Account FOR KEY SHARE
+        -> PurchaseEvaluation FOR UPDATE
+        -> canonical candidate ownership
+        -> PurchaseDecision FOR UPDATE / create
+        -> canonical event append
+
+    ``purchase_evaluations.account_id`` is an ``ON DELETE CASCADE`` foreign key,
+    and so is ``purchase_decisions.account_id``, so writing either makes
+    PostgreSQL take the account row itself. Account deletion goes the other way
+    — the account first, then the cascade down — so locking the evaluation
+    before the account is the inversion that deadlocks. Taken first, the order
+    matches. The event authority below re-takes the same lock, which costs
+    nothing because a transaction does not conflict with itself.
     """
+    from app.domains.identity.service import lock_account_against_delete
     from app.domains.purchase.decision_memory import (
         record_decision_event_for_account,
         style_recommendation_snapshot,
     )
     from app.shared.errors.exceptions import IdentityInvariantError, NotFoundError
+
+    if await lock_account_against_delete(session, principal_account_id) is None:
+        # Gone, and the cascades have taken this account's evaluations with it,
+        # so the lookup below would refuse anyway with this same sentence. Kept
+        # as defence in depth rather than for its outcome: it fails at the layer
+        # that noticed, and it does not depend on the cascade staying exactly as
+        # it is. Removing it changes nothing observable today, which is recorded
+        # as an equivalent mutation rather than counted as a guard.
+        raise NotFoundError("We could not find that evaluation.")
 
     # Canonical, and locked: this is both the authorisation and the
     # serialisation the append-only history needs. A process-local lock would
