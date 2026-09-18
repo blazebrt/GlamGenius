@@ -186,7 +186,8 @@ async def test_guard_reports_truthful_legacy_and_new_coverage(app_client, db_cle
     fresh = await app_client.get(f"/api/v2/shopping/candidates/{new_id}/purchase-guard", headers=auth(token))
     assert legacy.json()["guard_state"] == "historical_context_incomplete"
     assert fresh.json()["guard_state"] == "no_step9a_prior_event"
-    assert fresh.json()["history_coverage"]["state"] == "step_9a_events_only"
+    # Step 11C: coverage is now stated per subject, and says so.
+    assert fresh.json()["history_coverage"]["state"] == "step_11c_subject_scoped"
 
 
 @pytest.mark.asyncio
@@ -197,8 +198,18 @@ async def test_purchase_events_export_and_delete_through_real_state_machine(app_
     from app.shared.database.sql import get_sessionmaker
     async with get_sessionmaker()() as session:
         bundle = await privacy_export.build_export(session, account_id)
-        events = bundle["domains"]["shopping"]["decision_events"]
+        # Step 11C groups decision memory by the human who made it. This
+        # account has no household, so its own history is the one unattributed
+        # self entry — still exported in full, still account-owned.
+        shopping = bundle["domains"]["shopping"]
+        events = [
+            event
+            for subject in shopping["subjects"]
+            for event in subject["decision_events"]
+        ]
         assert len(events) == 1 and events[0]["account_id"] == str(account_id)
+        assert shopping["unattributed_decision_events"] == []
+        assert shopping["invariant_errors"] == []
 
     async def no_external(*_args, **_kwargs):
         return None
@@ -332,7 +343,12 @@ async def test_event_write_failure_rolls_back_mutable_decision(
     async def fail_event(*_args, **_kwargs):
         raise RuntimeError("forced Step 9A event failure")
 
-    monkeypatch.setattr(decision_memory, "record_decision_event", fail_event)
+    # The private name: Step 11C took the event writer out of ``__all__``
+    # because it writes to an append-only ledger and takes no principal, so it
+    # cannot prove the two objects it is handed belong together. This test
+    # still wants to make that write fail, which it does by patching the one
+    # place it now lives.
+    monkeypatch.setattr(decision_memory, "_record_decision_event", fail_event)
     with pytest.raises(RuntimeError, match="forced Step 9A event failure"):
         await app_client.post(
             f"/api/v2/shopping/candidates/{candidate_id}/decision?on=2026-08-20",

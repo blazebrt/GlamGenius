@@ -788,7 +788,16 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
     assert len(payload["domains"]["quiz_and_styling"]["quiz_submissions"]) == 1
     assert len(payload["domains"]["quiz_and_styling"]["occasions"]) == 1
     assert len(payload["domains"]["quiz_and_styling"]["looks"]) == 1
-    assert len(payload["domains"]["shopping"]["decisions"]) == 1
+    # Step 11C groups decision memory by the human who made it. This account
+    # has no household, so its own decision is the single unattributed self
+    # entry, and nothing is left unattributed.
+    assert len([
+        decision
+        for subject in payload["domains"]["shopping"]["subjects"]
+        for decision in subject["decisions"]
+    ]) == 1
+    assert payload["domains"]["shopping"]["unattributed_decisions"] == []
+    assert payload["domains"]["shopping"]["invariant_errors"] == []
     # Planning present.
     assert len(payload["domains"]["planning"]["daily_plans"]) == 1
     assert len(payload["domains"]["planning"]["weekly_plans"]) == 1

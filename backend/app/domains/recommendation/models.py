@@ -327,6 +327,23 @@ class PurchaseDecision(UUIDPrimaryKey, TimestampMixin, Base):
 
     evaluation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("purchase_evaluations.id", ondelete="CASCADE"), nullable=True)
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    #: Which human this decision is for. NULL means it was written before that
+    #: was recorded — not "shared", and not automatically the account holder.
+    #: :mod:`app.domains.family.decision_subject` decides when a NULL row can
+    #: honestly be read as theirs, from that account's own household timing.
+    #:
+    #: ``ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED``: removing a member
+    #: must be an explicit decision about their decision history, never a
+    #: cascade that erases it or a ``SET NULL`` that relabels it as legacy.
+    household_subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(
+            "family_profiles.id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=True,
+    )
     candidate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shopping_candidates.id", ondelete="CASCADE"), nullable=False)
     strategy_key: Mapped[str] = mapped_column(String(32), nullable=False)
     recommendation_verdict: Mapped[str] = mapped_column(String(8), nullable=False)
@@ -341,13 +358,45 @@ class PurchaseDecision(UUIDPrimaryKey, TimestampMixin, Base):
         UniqueConstraint("evaluation_id", "account_id", name="uq_purchase_decision_once"),
         Index("ix_purchase_decisions_account", "account_id", "created_at"),
         Index("ix_purchase_decisions_account_candidate_updated", "account_id", "candidate_id", "updated_at"),
+        # One candidate, one strategy, one *person* — which needs two
+        # authorities rather than one, because PostgreSQL treats NULLs as
+        # distinct and a single index spanning the subject column would let an
+        # account keep any number of subject-less rows for one candidate.
+        #
+        # The legacy row: at most one per account, exactly as before this slice.
+        # It is the row written when the account was one person, and it stays
+        # unique so that adoption has one thing to adopt.
         Index(
             "uq_purchase_decision_candidate_strategy",
             "account_id",
             "candidate_id",
             "strategy_key",
             unique=True,
-            postgresql_where=text("evaluation_id IS NULL"),
+            postgresql_where=text(
+                "evaluation_id IS NULL AND household_subject_id IS NULL"
+            ),
+        ),
+        # The subject-bound row: at most one per named human. Account-scoped as
+        # well as subject-scoped, deliberately — the foreign key proves the
+        # member exists, never that this account owns them.
+        Index(
+            "uq_purchase_decision_subject_candidate_strategy",
+            "account_id",
+            "household_subject_id",
+            "candidate_id",
+            "strategy_key",
+            unique=True,
+            postgresql_where=text(
+                "evaluation_id IS NULL AND household_subject_id IS NOT NULL"
+            ),
+        ),
+        # Reading one subject's current decision for one candidate. The unique
+        # index above cannot serve it: its leading columns are the same, but it
+        # covers only subject-bound rows, and this read also has to find the
+        # legacy row an account holder may still be carrying.
+        Index(
+            "ix_purchase_decisions_subject_candidate_updated",
+            "account_id", "household_subject_id", "candidate_id", "updated_at",
         ),
     )
 
@@ -358,6 +407,23 @@ class PurchaseDecisionEvent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "purchase_decision_events"
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    #: Which human this decision is for. NULL means it was written before that
+    #: was recorded — not "shared", and not automatically the account holder.
+    #: :mod:`app.domains.family.decision_subject` decides when a NULL row can
+    #: honestly be read as theirs, from that account's own household timing.
+    #:
+    #: ``ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED``: removing a member
+    #: must be an explicit decision about their decision history, never a
+    #: cascade that erases it or a ``SET NULL`` that relabels it as legacy.
+    household_subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(
+            "family_profiles.id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=True,
+    )
     candidate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shopping_candidates.id", ondelete="CASCADE"), nullable=False)
     decision_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("purchase_decisions.id", ondelete="SET NULL"))
     category: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -378,6 +444,17 @@ class PurchaseDecisionEvent(UUIDPrimaryKey, TimestampMixin, Base):
         Index("ix_purchase_decision_events_account_identity_created", "account_id", "identity_fingerprint", "created_at"),
         Index("ix_purchase_decision_events_candidate", "candidate_id", "created_at"),
         Index("ix_purchase_decision_events_decision_created", "decision_id", "created_at"),
+        # One subject's history, newest first: the decision-history page.
+        Index(
+            "ix_purchase_decision_events_subject_created",
+            "account_id", "household_subject_id", "created_at",
+        ),
+        # One subject's history for one exact product identity: the Purchase
+        # Guard, which is the read this slice changes most.
+        Index(
+            "ix_purchase_decision_events_subject_identity_created",
+            "account_id", "household_subject_id", "identity_fingerprint", "created_at",
+        ),
     )
 
 

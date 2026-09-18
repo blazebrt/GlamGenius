@@ -48,8 +48,15 @@ from enum import StrEnum
 # 1.1 — Step 11B. The appearance domain is now grouped by the human each
 # profile describes rather than returned flat, and the five profile tables the
 # registry had promised but nothing exported (change events, style, fit,
-# lifestyle, constraints) are included. The shape changed, so the version does.
-EXPORT_SCHEMA_VERSION = "1.1"
+# lifestyle, constraints) are included.
+#
+# 1.2 — Step 11C. Decision memory follows: purchase decisions, purchase decision
+# events and scan decision events are grouped by the human who made them, with
+# the ones nobody can be shown to have made kept separately rather than
+# attributed to the account holder. Shopping candidates and evaluations stay
+# account-wide, because they are things the account is considering rather than
+# decisions a person took.
+EXPORT_SCHEMA_VERSION = "1.2"
 
 
 class Classification(StrEnum):

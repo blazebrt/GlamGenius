@@ -19,6 +19,18 @@ from tests.conftest import auth
 from tests.test_step9a_purchase_memory_guard import _make_candidate_exact
 
 
+async def _self_subject(session, account_id):
+    """The account holder, resolved the way every unscoped caller resolves it."""
+    from app.domains.family.decision_subject import canonical_decision_subject
+    from app.domains.family.subject import account_holder_subject
+
+    return await canonical_decision_subject(
+        session,
+        principal_account_id=account_id,
+        subject=account_holder_subject(account_id),
+    )
+
+
 @pytest.mark.asyncio
 async def test_guard_snapshot_is_consistent_during_separate_session_event_commit(
     db_clean, registered_supabase_user,
@@ -58,14 +70,20 @@ async def test_guard_snapshot_is_consistent_during_separate_session_event_commit
     async with factory() as reader:
         candidate = await reader.get(ShoppingCandidate, candidate_id)
         before_commit = await decision_memory.purchase_guard(
-            reader, account_id=account_id, candidate=candidate,
+            reader,
+            principal_account_id=account_id,
+            decision_subject=await _self_subject(reader, account_id),
+            candidate=candidate,
         )
     release_writer.set()
     await write_task
     async with factory() as reader:
         candidate = await reader.get(ShoppingCandidate, candidate_id)
         after_commit = await decision_memory.purchase_guard(
-            reader, account_id=account_id, candidate=candidate,
+            reader,
+            principal_account_id=account_id,
+            decision_subject=await _self_subject(reader, account_id),
+            candidate=candidate,
         )
     for result in (before_commit, after_commit):
         if result["most_recent"] is not None:
@@ -263,6 +281,11 @@ async def test_public_history_payload_omits_internal_and_mutable_fields(
     assert set(item) == {
         "id",
         "candidate_id",
+        # Step 11C: whose decision this was. It is this account's own household
+        # member id — the only id in the payload, and one the caller supplied or
+        # can already read from their own circle. The forbidden list below still
+        # keeps every internal and cross-account identifier out.
+        "household_subject_id",
         "category",
         "strategy",
         "candidate_display_name",
@@ -319,7 +342,12 @@ async def test_recommendation_transition_appends_without_rewriting_first_event(
         row.recommendation_fingerprint = "transition-test-fingerprint"
         row.recommendation_snapshot = {"strategy": "care_purchase", "verdict": new_verdict}
         await session.flush()
-        await decision_memory.record_decision_event(session, row=row, candidate=candidate)
+        # Through the account-owning authority rather than the raw helper: it
+        # loads the canonical candidate under the principal itself, which is
+        # what a caller outside this module is now expected to do.
+        await decision_memory.record_decision_event_for_account(
+            session, principal_account_id=account_id, decision_id=row.id,
+        )
         await session.commit()
 
     async with get_sessionmaker()() as session:

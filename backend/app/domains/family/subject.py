@@ -278,6 +278,33 @@ async def resolve_subject(
     return _subject_from(profile, account_id)
 
 
+async def subject_belongs_to_account(
+    session: AsyncSession, *, account_id: uuid.UUID, subject_id: uuid.UUID,
+) -> bool:
+    """Does this stored subject belong to this account? Nothing more.
+
+    A narrower question than :func:`resolve_subject`, and deliberately so. That
+    one answers "may this caller select this person right now", which is why it
+    refuses an inactive member. This one answers "is this person's household
+    this account's", which stays true after somebody is switched off — and has
+    to, because deactivation is not deletion: an inactive member keeps their
+    decision history, and a record already bound to them must still be readable
+    and completable.
+
+    Used where a *stored* subject id has to be checked rather than a claimed
+    one. The foreign key to ``family_profiles`` proves only that the profile
+    exists somewhere; the join to ``family_circles`` is what proves whose it is,
+    and those are different facts. A row saying account A made a decision for
+    account B's member satisfies the foreign key and is still impossible.
+    """
+    owner = await session.scalar(
+        select(FamilyCircle.account_id)
+        .join(FamilyProfile, FamilyProfile.circle_id == FamilyCircle.id)
+        .where(FamilyProfile.id == subject_id)
+    )
+    return owner == account_id
+
+
 async def resolve_subject_for_write(
     session: AsyncSession, *, account_id: uuid.UUID, subject_id: uuid.UUID,
 ) -> ResolvedSubject:
@@ -340,6 +367,7 @@ def safety_for(
 
 
 __all__ = [
+    "subject_belongs_to_account",
     "AGE_BANDS",
     "AGE_BAND_ADULT",
     "AGE_BAND_NOT_STATED",

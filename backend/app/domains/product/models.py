@@ -240,6 +240,28 @@ class ScanDecisionEvent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "scan_decision_events"
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    #: Which human in the household this decision was for, once that became a
+    #: question worth storing.
+    #:
+    #: NULL means "written before this was recorded", not "shared" and not
+    #: "the account holder". Whether a NULL row can honestly be read as the
+    #: account holder's depends on whether it predates that account's
+    #: ``FamilyCircle`` — see :mod:`app.domains.family.decision_subject`.
+    #:
+    #: ``ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED``, matching the
+    #: appearance profile: removing a member must be an explicit decision about
+    #: their decision history, never a silent cascade that erases it or a
+    #: ``SET NULL`` that quietly relabels it as somebody's legacy. Account
+    #: deletion still takes these rows, through ``account_id``.
+    household_subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(
+            "family_profiles.id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=True,
+    )
     barcode: Mapped[str] = mapped_column(String(64), nullable=False)
     label_snapshot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("product_label_snapshots.id", ondelete="RESTRICT"), nullable=False)
     label_version: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -250,6 +272,15 @@ class ScanDecisionEvent(UUIDPrimaryKey, TimestampMixin, Base):
 
     __table_args__ = (
         Index("ix_scan_decision_events_account_barcode_created", "account_id", "barcode", "created_at"),
+        # One subject's memory for one product, newest first: the exact shape of
+        # every subject-scoped read below.
+        Index(
+            "ix_scan_decision_events_subject_barcode_created",
+            "account_id", "household_subject_id", "barcode", "created_at",
+        ),
+        # Account-global on purpose. A client mutation key means one operation,
+        # and reusing it for a different human is a mistake worth refusing
+        # rather than a second decision worth recording.
         UniqueConstraint("account_id", "idempotency_key", name="uq_scan_decision_event_idempotency"),
         CheckConstraint("decision IN ('BUY', 'WAIT', 'SKIP')", name="ck_scan_decision_event_decision"),
     )

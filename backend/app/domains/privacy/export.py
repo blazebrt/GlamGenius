@@ -230,6 +230,87 @@ def _empty_profile_payload() -> dict[str, Any]:
     return {"profile": None, **{label: [] for label, _ in _PROFILE_CHILD_TABLES}}
 
 
+async def _household_members(
+    session: AsyncSession, account_id: uuid.UUID,
+) -> tuple[uuid.UUID | None, list[FamilyProfile]]:
+    """This account's circle and its members, in household order."""
+    circle_id = await session.scalar(
+        select(FamilyCircle.id).where(FamilyCircle.account_id == account_id)
+    )
+    if circle_id is None:
+        return None, []
+    members = await _fetch(
+        session,
+        select(FamilyProfile)
+        .where(FamilyProfile.circle_id == circle_id)
+        .order_by(FamilyProfile.position),
+    )
+    return circle_id, list(members)
+
+
+def _group_decision_rows(
+    rows: list[Any], members: list[FamilyProfile],
+) -> tuple[dict[uuid.UUID, list[Any]], list[Any], list[Any]]:
+    """Split one account's decision rows into per-member, legacy and orphaned.
+
+    Three outcomes, and the middle one is the point of this whole slice.
+
+    A row naming a member of this household goes to that member. A row naming a
+    subject this account does not own is **orphaned** — the foreign key proves
+    the member exists somewhere, never that it is this account's, and putting a
+    stranger's id in a customer's file would leak it. And a subject-less row is
+    legacy: only safely attributable to the account holder if it predates the
+    household, because after that it could have been about anybody in it.
+
+    Nothing is decided by guessing. Where the answer is unknown the row still
+    goes in the file — it is the customer's data — just without a name on it.
+    """
+    known = {member.id: member for member in members}
+    by_member: dict[uuid.UUID, list[Any]] = {member.id: [] for member in members}
+    legacy: list[Any] = []
+    orphaned: list[Any] = []
+    for row in rows:
+        subject_id = row.household_subject_id
+        if subject_id is None:
+            legacy.append(row)
+        elif subject_id in known:
+            by_member[subject_id].append(row)
+        else:
+            orphaned.append(row)
+    return by_member, legacy, orphaned
+
+
+def _safe_legacy_split(
+    rows: list[Any], *, circle_created_at: datetime | None, timestamp: str,
+) -> tuple[list[Any], list[Any]]:
+    """Legacy rows the account holder can honestly claim, and the rest.
+
+    Strictly ``<``: a row written in the same instant the household was created
+    is ambiguous, and ambiguity is never resolved in favour of the account
+    holder. One row, one account — getting it wrong shows one person another
+    person's purchase history.
+    """
+    if circle_created_at is None:
+        return list(rows), []
+    safe, ambiguous = [], []
+    for row in rows:
+        when = getattr(row, timestamp, None)
+        (safe if when is not None and when < circle_created_at else ambiguous).append(row)
+    return safe, ambiguous
+
+
+def _unattributed_row(row: Any, fields: list[str]) -> dict[str, Any]:
+    """An owned row with the identity it claims stripped out.
+
+    Used for a row pointing at another account's member. The data is this
+    customer's and belongs in their file; the foreign id is somebody else's and
+    does not.
+    """
+    payload = _row_dict(row, fields)
+    payload["household_subject_id"] = None
+    return payload
+
+
 async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     """The appearance domain, grouped by the human each profile describes.
 
@@ -530,18 +611,77 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
         .order_by(LabelErrorReport.created_at.desc()),
     )
     report_fields = [c.name for c in LabelErrorReport.__table__.columns]
-    memory_rows = await _fetch(
+    memory_rows = list(await _fetch(
         session,
         select(ScanDecisionEvent)
         .where(ScanDecisionEvent.account_id == account_id)
         .order_by(ScanDecisionEvent.created_at.desc()),
-    )
+    ))
     memory_fields = [c.name for c in ScanDecisionEvent.__table__.columns]
-    
+
+    # The scan itself stays account-level: it records that this account looked
+    # at a barcode, which is true regardless of who the answer was for. What
+    # somebody *decided* is about a person, so only that is grouped.
+    circle_id, members = await _household_members(session, account_id)
+    circle_created_at = await session.scalar(
+        select(FamilyCircle.created_at).where(FamilyCircle.account_id == account_id)
+    )
+    self_rows = [m for m in members if m.relation == RELATION_SELF and m.active]
+    self_row = self_rows[0] if len(self_rows) == 1 else None
+
+    by_member, legacy, orphaned = _group_decision_rows(
+        memory_rows, members,
+    )
+    safe, ambiguous = _safe_legacy_split(
+        legacy, circle_created_at=circle_created_at, timestamp="created_at",
+    )
+    if self_row is None and circle_id is not None:
+        ambiguous, safe = legacy, []
+
+    invariant_errors: list[dict[str, str]] = []
+    if circle_id is not None and self_row is None:
+        invariant_errors.append({
+            "error": (
+                "household_self_profile_missing" if not self_rows
+                else "household_has_multiple_self_profiles"
+            ),
+        })
+    invariant_errors.extend(
+        {"scan_decision_event_id": str(r.id), "error": "decision_subject_ownership_invalid"}
+        for r in orphaned
+    )
+
+    subjects: list[dict[str, Any]] = []
+    for member in members:
+        is_self = self_row is not None and member.id == self_row.id
+        own = list(by_member.get(member.id, [])) + (safe if is_self else [])
+        subjects.append({
+            "household_subject_id": str(member.id),
+            "relation": member.relation,
+            "age_band": member.age_band,
+            "active": member.active,
+            "is_account_holder": is_self,
+            "scan_decision_events": [_row_dict(r, memory_fields) for r in own],
+        })
+    if circle_id is None:
+        subjects.append({
+            "household_subject_id": None,
+            "relation": RELATION_SELF,
+            "age_band": None,
+            "active": True,
+            "is_account_holder": True,
+            "scan_decision_events": [_row_dict(r, memory_fields) for r in safe],
+        })
+
     return {
         "scans": [_row_dict(r, fields) for r in rows],
         "label_error_reports": [_row_dict(r, report_fields) for r in reports],
-        "scan_decision_events": [_row_dict(r, memory_fields) for r in memory_rows],
+        "subjects": subjects,
+        "unattributed_scan_decision_events": (
+            [_row_dict(r, memory_fields) for r in ambiguous]
+            + [_unattributed_row(r, memory_fields) for r in orphaned]
+        ),
+        "invariant_errors": invariant_errors,
     }
 
 
@@ -604,15 +744,123 @@ async def _quiz_and_styling(session: AsyncSession, account_id: uuid.UUID) -> dic
 
 
 async def _shopping(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
+    """Candidates stay account-wide; what people decided about them does not.
+
+    A shopping candidate is one thing the account is considering, and several
+    people in a household may consider it independently — so it is not cloned
+    per subject and not grouped by one. Decision memory is the opposite: it is
+    always about one human, and a file that mixed several people's decisions
+    together would answer a data-rights request with a pile the customer cannot
+    read.
+
+    This is a **pure read**. Nothing here adopts a legacy row, repairs a
+    malformed one, or writes anything at all: downloading your data must not
+    change it.
+    """
     candidates = await _fetch(session, select(ShoppingCandidate).where(ShoppingCandidate.account_id == account_id))
     evaluations = await _fetch(session, select(PurchaseEvaluation).where(PurchaseEvaluation.account_id == account_id))
-    decisions = await _fetch(session, select(PurchaseDecision).where(PurchaseDecision.account_id == account_id))
-    decision_events = await _fetch(session, select(PurchaseDecisionEvent).where(PurchaseDecisionEvent.account_id == account_id))
+    decisions = list(await _fetch(session, select(PurchaseDecision).where(PurchaseDecision.account_id == account_id)))
+    decision_events = list(await _fetch(session, select(PurchaseDecisionEvent).where(PurchaseDecisionEvent.account_id == account_id)))
+
+    circle_id, members = await _household_members(session, account_id)
+    circle_created_at = await session.scalar(
+        select(FamilyCircle.created_at).where(FamilyCircle.account_id == account_id)
+    )
+    self_rows = [m for m in members if m.relation == RELATION_SELF and m.active]
+    self_row = self_rows[0] if len(self_rows) == 1 else None
+    invariant_errors: list[dict[str, str]] = []
+    if circle_id is not None and self_row is None:
+        # Reuses the household posture from Step 11B: with no single account
+        # holder, nothing subject-less is confidently assigned to anybody.
+        invariant_errors.append({
+            "error": (
+                "household_self_profile_missing" if not self_rows
+                else "household_has_multiple_self_profiles"
+            ),
+        })
+
+    decision_fields = [c.name for c in PurchaseDecision.__table__.columns]
+    event_fields = [c.name for c in PurchaseDecisionEvent.__table__.columns]
+
+    decisions_by_member, legacy_decisions, orphan_decisions = _group_decision_rows(
+        decisions, members,
+    )
+    events_by_member, legacy_events, orphan_events = _group_decision_rows(
+        decision_events, members,
+    )
+    # A mutable current decision is judged on when it last said something; an
+    # immutable event on when it was written.
+    safe_decisions, ambiguous_decisions = _safe_legacy_split(
+        legacy_decisions, circle_created_at=circle_created_at, timestamp="updated_at",
+    )
+    safe_events, ambiguous_events = _safe_legacy_split(
+        legacy_events, circle_created_at=circle_created_at, timestamp="created_at",
+    )
+    if self_row is None and circle_id is not None:
+        # Nobody to attribute them to, so nobody gets them.
+        ambiguous_decisions = legacy_decisions
+        ambiguous_events = legacy_events
+        safe_decisions = safe_events = []
+
+    subjects: list[dict[str, Any]] = []
+    for member in members:
+        is_self = self_row is not None and member.id == self_row.id
+        own_decisions = list(decisions_by_member.get(member.id, []))
+        own_events = list(events_by_member.get(member.id, []))
+        if is_self:
+            # The account holder's own history reaches back past the household,
+            # but only as far as the boundary honestly allows.
+            own_decisions = own_decisions + safe_decisions
+            own_events = own_events + safe_events
+        subjects.append({
+            "household_subject_id": str(member.id),
+            "relation": member.relation,
+            "age_band": member.age_band,
+            "active": member.active,
+            "is_account_holder": is_self,
+            "decisions": [_row_dict(r, decision_fields) for r in own_decisions],
+            "decision_events": [_row_dict(r, event_fields) for r in own_events],
+        })
+
+    if circle_id is None:
+        # No household ever existed, so subject-less is simply how this
+        # account's own decisions have always been written.
+        subjects.append({
+            "household_subject_id": None,
+            "relation": RELATION_SELF,
+            "age_band": None,
+            "active": True,
+            "is_account_holder": True,
+            "decisions": [_row_dict(r, decision_fields) for r in safe_decisions],
+            "decision_events": [_row_dict(r, event_fields) for r in safe_events],
+        })
+
+    invariant_errors.extend(
+        {"purchase_decision_id": str(r.id), "error": "decision_subject_ownership_invalid"}
+        for r in orphan_decisions
+    )
+    invariant_errors.extend(
+        {"purchase_decision_event_id": str(r.id), "error": "decision_subject_ownership_invalid"}
+        for r in orphan_events
+    )
+
     return {
         "candidates": [_row_dict(r, [c.name for c in ShoppingCandidate.__table__.columns]) for r in candidates],
         "evaluations": [_row_dict(r, [c.name for c in PurchaseEvaluation.__table__.columns]) for r in evaluations],
-        "decisions": [_row_dict(r, [c.name for c in PurchaseDecision.__table__.columns]) for r in decisions],
-        "decision_events": [_row_dict(r, [c.name for c in PurchaseDecisionEvent.__table__.columns]) for r in decision_events],
+        "subjects": subjects,
+        # Owned rows that no subject of this account explains: decisions made
+        # before anybody was named, and rows pointing at somebody else's
+        # household with that id stripped out. Exported in full, attributed to
+        # nobody.
+        "unattributed_decisions": (
+            [_row_dict(r, decision_fields) for r in ambiguous_decisions]
+            + [_unattributed_row(r, decision_fields) for r in orphan_decisions]
+        ),
+        "unattributed_decision_events": (
+            [_row_dict(r, event_fields) for r in ambiguous_events]
+            + [_unattributed_row(r, event_fields) for r in orphan_events]
+        ),
+        "invariant_errors": invariant_errors,
     }
 
 

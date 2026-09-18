@@ -23,9 +23,15 @@ CARE_PURCHASE_VALUE_SCHEMA_VERSION = "v3-05.4"
 CARE_PURCHASE_VERDICT_VERSION = "v3-05.5"
 CARE_PURCHASE_VERDICT_SCHEMA_VERSION = "v3-05.5"
 CARE_PURCHASE_CHECK_VERSION = "v3-05.7"
-PURCHASE_DECISION_MEMORY_VERSION = "v3-05.8"
-PURCHASE_DECISION_EVENT_VERSION = "step-9a-v1"
-PURCHASE_GUARD_VERSION = "step-9a-v2"
+# Step 11C. All three changed meaning rather than shape: a decision, an event
+# and a guard are now about one named human rather than about an account, and a
+# caller that cannot tell the difference would read one person's history as
+# everybody's. The Care and Fragrance verdict versions below are deliberately
+# untouched — the recommendation itself is unchanged, and bumping it would
+# claim a personalisation this slice does not do.
+PURCHASE_DECISION_MEMORY_VERSION = "step-11c-v1"
+PURCHASE_DECISION_EVENT_VERSION = "step-11c-v1"
+PURCHASE_GUARD_VERSION = "step-11c-v1"
 FRAGRANCE_PURCHASE_CANDIDATE_SCHEMA_VERSION = "v3-05.9"
 FRAGRANCE_PURCHASE_VERDICT_VERSION = "v3-05.9"
 FRAGRANCE_PURCHASE_CHECK_VERSION = "v3-05.9"

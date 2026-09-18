@@ -34,7 +34,10 @@ from tests.test_v3_05_7_care_purchase_experience import (
 
 
 def test_v3_05_8_adds_memory_without_bumping_prior_authorities():
-    assert PURCHASE_DECISION_MEMORY_VERSION == "v3-05.8"
+    # Step 11C: the memory answers "what did *this person* decide", which is a
+    # different question from the one v3-05.8 answered. A client that could not
+    # tell the versions apart would read one human's history as everybody's.
+    assert PURCHASE_DECISION_MEMORY_VERSION == "step-11c-v1"
     assert PURCHASE_INTELLIGENCE_FOUNDATION_VERSION == "v3-05.0"
     assert PRODUCT_QUALITY_CONTRACT_VERSION == "v3-05.0"
     assert PURCHASE_CANDIDATE_TRUTH_VERSION == "v3-05.1"
@@ -81,7 +84,7 @@ async def test_care_decision_memory_is_candidate_backed_reversible_and_readable(
         saved = await _decision(app_client, token, candidate_id, choice, note="my considered choice")
         assert saved.status_code == 200, saved.text
         memory = saved.json()
-        assert memory["purchase_decision_memory_version"] == "v3-05.8"
+        assert memory["purchase_decision_memory_version"] == "step-11c-v1"
         assert memory["candidate_id"] == str(candidate_id)
         assert memory["strategy"] == "care_purchase"
         assert memory["evaluation_id"] is None

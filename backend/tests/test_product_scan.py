@@ -840,9 +840,18 @@ async def test_a_scan_nobody_claimed_is_in_nobodys_export(
     factory = get_sessionmaker()
     async with factory() as session:
         payload = await export_service.build_export(session, account_id)
-    assert payload["domains"]["product_scans"] == {
-        "scans": [], "label_error_reports": [], "scan_decision_events": [],
-    }
+    product_scans = payload["domains"]["product_scans"]
+    assert product_scans["scans"] == []
+    assert product_scans["label_error_reports"] == []
+    # Step 11C groups decision memory by human. This account has no household
+    # and made no decisions, so the one self entry is empty and nothing is
+    # unattributed.
+    assert product_scans["unattributed_scan_decision_events"] == []
+    assert product_scans["invariant_errors"] == []
+    assert all(
+        subject["scan_decision_events"] == []
+        for subject in product_scans["subjects"]
+    )
 
 
 @pytest.mark.asyncio

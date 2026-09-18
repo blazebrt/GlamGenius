@@ -14,7 +14,10 @@ from app.domains.purchase.candidate_truth import (
     serialize_care_candidate_truth,
 )
 from app.domains.purchase.contract import CARE_PURCHASE_CHECK_VERSION
-from app.domains.purchase.decision_memory import current_purchase_decision, serialize_purchase_decision
+from app.domains.purchase.decision_memory import (
+    current_purchase_decision_for_subject,
+    serialize_purchase_decision,
+)
 from app.domains.purchase.evidence_service import resolve_care_purchase_evidence
 from app.domains.purchase.fragrance_check import resolve_fragrance_purchase_check as _resolve_fragrance_purchase_check
 from app.domains.purchase.value_service import resolve_care_purchase_value
@@ -50,6 +53,37 @@ def _assert_projection_identity(
         raise RuntimeError(f"{label} fingerprint diverged from the Care assessment.")
 
 
+async def _embedded_decision(
+    session, *, account_id, decision_subject, candidate_id, strategy_key,
+):
+    """The decision this check should show alongside its verdict.
+
+    The check itself is not subject-scoped and does not become so here: it is a
+    projection of one candidate under one strategy, and Step 11C deliberately
+    leaves it that way. What *is* per person is the decision embedded in it, so
+    when no subject is supplied this resolves the account holder — the same
+    person every caller meant before households existed.
+
+    A pure read: it never adopts a legacy row and never creates one. Looking at
+    a verdict must not change whose memory it is.
+    """
+    from app.domains.family.decision_subject import canonical_decision_subject
+    from app.domains.family.subject import account_holder_subject
+
+    if decision_subject is None:
+        decision_subject = await canonical_decision_subject(
+            session,
+            principal_account_id=account_id,
+            subject=account_holder_subject(account_id),
+        )
+    return await current_purchase_decision_for_subject(
+        session,
+        principal_account_id=account_id,
+        decision_subject=decision_subject,
+        candidate_id=candidate_id,
+        strategy_key=strategy_key,
+    )
+
 async def resolve_care_purchase_check(
     session: AsyncSession,
     *,
@@ -57,6 +91,10 @@ async def resolve_care_purchase_check(
     account_id_str: str,
     candidate_id: uuid.UUID,
     plan_date: date | None,
+    #: Whose decision to embed. ``None`` means the account holder, which is what
+    #: every caller meant before households existed and what the unscoped check
+    #: endpoints still mean.
+    decision_subject: Any = None,
 ) -> dict[str, Any]:
     """Compose existing Care authorities without creating or mutating rows."""
     candidate = await purchase_service.owned_purchase_candidate(
@@ -136,9 +174,10 @@ async def resolve_care_purchase_check(
     if verdict.get("value_fingerprint") != value.get("value_fingerprint"):
         raise RuntimeError("Care verdict Value fingerprint diverged from the Value projection.")
 
-    decision = await current_purchase_decision(
+    decision = await _embedded_decision(
         session,
         account_id=account_id,
+        decision_subject=decision_subject,
         candidate_id=candidate.id,
         strategy_key="care_purchase",
     )
@@ -159,13 +198,17 @@ async def resolve_fragrance_check(
     session: AsyncSession,
     *, account_id: uuid.UUID,
     candidate_id: uuid.UUID,
+    decision_subject: Any = None,
 ) -> dict[str, Any]:
     """Compose the read-only Fragrance candidate/collection/verdict model."""
     check = await _resolve_fragrance_purchase_check(
         session, account_id=account_id, candidate_id=candidate_id
     )
-    decision = await current_purchase_decision(
-        session, account_id=account_id, candidate_id=candidate_id,
+    decision = await _embedded_decision(
+        session,
+        account_id=account_id,
+        decision_subject=decision_subject,
+        candidate_id=candidate_id,
         strategy_key="fragrance_purchase",
     )
     check["decision"] = serialize_purchase_decision(decision) if decision else None

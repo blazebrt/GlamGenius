@@ -506,42 +506,126 @@ async def serialize_evaluation(session: AsyncSession, evaluation: PurchaseEvalua
 VERDICT_TO_DECISION = {"buy": "bought", "wait": "waiting", "skip": "skipped"}
 
 
-async def save_decision(session: AsyncSession, evaluation: PurchaseEvaluation, decision: str, note: str | None) -> PurchaseDecision:
-    from app.domains.purchase.decision_memory import record_decision_event, style_recommendation_snapshot
+async def save_decision(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    evaluation: PurchaseEvaluation,
+    decision: str,
+    note: str | None,
+) -> PurchaseDecision:
+    """Persist a Style purchase outcome from an evaluation.
 
-    # Serialize an evaluation's current state and its append-only history.
-    # A process-local lock would not protect another API worker.
-    await session.execute(select(PurchaseEvaluation.id).where(PurchaseEvaluation.id == evaluation.id).with_for_update())
-    row = (await session.execute(
-        select(PurchaseDecision).where(PurchaseDecision.evaluation_id == evaluation.id, PurchaseDecision.account_id == evaluation.account_id).with_for_update()
+    The ``style_purchase`` strategy is no longer in the purchase registry and
+    nothing in the application reaches this today, but a write path that would
+    be wrong if it were called is worth keeping honest rather than leaving as a
+    trap for whoever revives it.
+
+    ``evaluation`` contributes exactly one thing: its id. Everything else about
+    it is re-read from the database under ``principal_account_id``, because an
+    ORM object is a claim — fetching one by primary key finds another account's
+    just as readily as this one's, and a caller holding a detached instance can
+    change any field on it. Verdict, ROI version, candidate and account all
+    decide what gets written down, so all of them come from PostgreSQL.
+
+    An evaluation id belonging to another account and one that never existed
+    are the same refusal, with nothing echoed back.
+
+    Lock order::
+
+        Account FOR KEY SHARE
+        -> PurchaseEvaluation FOR UPDATE
+        -> canonical candidate ownership
+        -> PurchaseDecision FOR UPDATE / create
+        -> canonical event append
+
+    ``purchase_evaluations.account_id`` is an ``ON DELETE CASCADE`` foreign key,
+    and so is ``purchase_decisions.account_id``, so writing either makes
+    PostgreSQL take the account row itself. Account deletion goes the other way
+    — the account first, then the cascade down — so locking the evaluation
+    before the account is the inversion that deadlocks. Taken first, the order
+    matches. The event authority below re-takes the same lock, which costs
+    nothing because a transaction does not conflict with itself.
+    """
+    from app.domains.identity.service import lock_account_against_delete
+    from app.domains.purchase.decision_memory import (
+        record_decision_event_for_account,
+        style_recommendation_snapshot,
+    )
+    from app.shared.errors.exceptions import IdentityInvariantError, NotFoundError
+
+    if await lock_account_against_delete(session, principal_account_id) is None:
+        # Gone, and the cascades have taken this account's evaluations with it,
+        # so the lookup below would refuse anyway with this same sentence. Kept
+        # as defence in depth rather than for its outcome: it fails at the layer
+        # that noticed, and it does not depend on the cascade staying exactly as
+        # it is. Removing it changes nothing observable today, which is recorded
+        # as an equivalent mutation rather than counted as a guard.
+        raise NotFoundError("We could not find that evaluation.")
+
+    # Canonical, and locked: this is both the authorisation and the
+    # serialisation the append-only history needs. A process-local lock would
+    # not protect another API worker.
+    canonical = (await session.execute(
+        select(PurchaseEvaluation)
+        .where(
+            PurchaseEvaluation.id == evaluation.id,
+            PurchaseEvaluation.account_id == principal_account_id,
+        )
+        .with_for_update()
     )).scalar_one_or_none()
-    followed = VERDICT_TO_DECISION.get(evaluation.verdict) == decision
+    if canonical is None:
+        raise NotFoundError("We could not find that evaluation.")
+
+    # Stored data can be impossible on its own. An evaluation owned by this
+    # account whose candidate is owned by another would otherwise create an
+    # account-owned decision pointing across accounts — so it stops here rather
+    # than being written down. Not repaired: deciding what that row should have
+    # said is a separate, deliberate act.
+    owns_candidate = await session.scalar(
+        select(ShoppingCandidate.id).where(
+            ShoppingCandidate.id == canonical.candidate_id,
+            ShoppingCandidate.account_id == principal_account_id,
+        )
+    )
+    if owns_candidate is None:
+        raise IdentityInvariantError("purchase_decision_candidate_identity_mismatch")
+
+    row = (await session.execute(
+        select(PurchaseDecision).where(
+            PurchaseDecision.evaluation_id == canonical.id,
+            PurchaseDecision.account_id == principal_account_id,
+        ).with_for_update()
+    )).scalar_one_or_none()
+    followed = VERDICT_TO_DECISION.get(canonical.verdict) == decision
     if row is None:
         row = PurchaseDecision(
-            evaluation_id=evaluation.id,
-            account_id=evaluation.account_id,
-            candidate_id=evaluation.candidate_id,
+            evaluation_id=canonical.id,
+            account_id=principal_account_id,
+            candidate_id=canonical.candidate_id,
             strategy_key="style_purchase",
-            recommendation_verdict=evaluation.verdict,
-            recommendation_version=evaluation.roi_version,
+            recommendation_verdict=canonical.verdict,
+            recommendation_version=canonical.roi_version,
             recommendation_fingerprint=None,
-            recommendation_snapshot=style_recommendation_snapshot(evaluation),
+            recommendation_snapshot=style_recommendation_snapshot(canonical),
             decision=decision,
             note=note,
             followed_recommendation=followed,
         )
         session.add(row)
     else:
-        row.candidate_id = evaluation.candidate_id
+        row.candidate_id = canonical.candidate_id
         row.strategy_key = "style_purchase"
-        row.recommendation_verdict = evaluation.verdict
-        row.recommendation_version = evaluation.roi_version
-        row.recommendation_snapshot = style_recommendation_snapshot(evaluation)
+        row.recommendation_verdict = canonical.verdict
+        row.recommendation_version = canonical.roi_version
+        row.recommendation_snapshot = style_recommendation_snapshot(canonical)
         row.decision, row.note, row.followed_recommendation = decision, note, followed
     await session.flush()
-    candidate = await session.get(ShoppingCandidate, evaluation.candidate_id)
-    if candidate is not None:
-        await record_decision_event(session, row=row, candidate=candidate)
+    # By id, so the event authority re-reads and locks the decision itself
+    # rather than trusting the instance this function happens to be holding.
+    await record_decision_event_for_account(
+        session, principal_account_id=principal_account_id, decision_id=row.id,
+    )
     return row
 
 

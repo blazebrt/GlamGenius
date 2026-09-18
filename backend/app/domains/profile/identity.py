@@ -294,13 +294,15 @@ async def protect_account_from_delete(
     gone: the cascades have taken the household and every profile with it, so
     there is genuinely no such member any more, and that is the same answer a
     foreign or invented id gets. Nothing is created.
+
+    The lock itself lives in the domain that owns ``accounts``. This function is
+    the identity boundary's sentence for the same fact, not a second lock — two
+    places emitting almost the same SQL is how an ordering quietly stops being
+    one.
     """
-    row = await session.scalar(
-        select(Account.id)
-        .where(Account.id == account_id)
-        .with_for_update(read=True, key_share=True)
-    )
-    if row is None:
+    from app.domains.identity.service import lock_account_against_delete
+
+    if await lock_account_against_delete(session, account_id) is None:
         raise SubjectNotFound("subject_not_found")
 
 
