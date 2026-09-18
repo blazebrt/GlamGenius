@@ -47,12 +47,14 @@ from sqlalchemy import ColumnElement, and_, false, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.family.models import FamilyCircle
-from app.domains.family.subject import ResolvedSubject
+from app.domains.family.subject import ResolvedSubject, account_holder_subject
 
 __all__ = [
     "DecisionSubject",
     "ambiguous_legacy_filter",
     "canonical_decision_subject",
+    "canonicalize_decision_subject",
+    "canonicalize_decision_subject_for_write",
     "decision_subject_for_write",
     "serialize_decision_subject",
     "subject_row_filter",
@@ -182,6 +184,102 @@ async def decision_subject_for_write(
     return DecisionSubject(
         subject=checked,
         circle_created_at=await _circle_created_at(session, principal_account_id),
+    )
+
+
+def _claimed_subject(decision_subject: Any) -> ResolvedSubject | None:
+    """The only part of a ``DecisionSubject`` that survives revalidation.
+
+    Everything else on the object is a claim the caller wrote: the account id,
+    the household boundary, whether this is the account holder, the relation and
+    the age band. None of it is evidence, so none of it is read here. What comes
+    out is the *named subject* — an id to go and look up — and nothing more.
+
+    ``None`` means "me", which is what a caller that never mentioned a subject
+    has always meant. It is resolved canonically like any other claim rather
+    than assumed.
+    """
+    if decision_subject is None:
+        return None
+    if not isinstance(decision_subject, DecisionSubject):
+        raise ValueError("decision_subject must be a DecisionSubject")
+    return decision_subject.subject
+
+
+def _subject_claim_or_me(
+    decision_subject: Any, principal_account_id: uuid.UUID,
+) -> ResolvedSubject:
+    """The claim to re-resolve: the one named, or the principal themselves.
+
+    Substituting the account holder for ``None`` is safe in a way that reading
+    any other field would not be, because the account holder is derived from
+    the authenticated principal rather than from anything the caller wrote.
+    """
+    claimed = _claimed_subject(decision_subject)
+    if claimed is None:
+        return account_holder_subject(principal_account_id)
+    return claimed
+
+
+async def canonicalize_decision_subject(
+    session: AsyncSession, *, principal_account_id: uuid.UUID, decision_subject: Any,
+) -> DecisionSubject:
+    """Re-derive a ``DecisionSubject`` under the authenticated principal. Read-only.
+
+    This exists because a dataclass is a claim, not proof. ``DecisionSubject``
+    is an ordinary public object that any caller can construct, and a service
+    that reads its fields is trusting whoever called it. The HTTP routes build
+    theirs correctly; a worker, a background job, another API or a future
+    orchestration would have to remember to, and "the route already checked it"
+    is not a property the domain can rely on.
+
+    So every public Decision Memory boundary re-derives instead of reading:
+
+    * ``account_id`` is ignored — a subject naming another account refuses,
+      even when its own fields agree with each other;
+    * ``subject_id`` is treated as a claim and looked up under *this* principal,
+      so another household's member is not found;
+    * ``is_account_holder``, ``kind``, ``relation`` and ``age_band`` are
+      recomputed from the stored row;
+    * ``circle_created_at`` is re-read from the database, so a forged boundary
+      cannot move the line that decides which legacy rows are claimable.
+
+    A forged subject belonging entirely to another account raises the same
+    :class:`~app.domains.family.subject.SubjectNotFound` as any other foreign
+    claim, with no detail — saying "that member exists but is not yours" apart
+    from "no such member" would confirm which people are real.
+
+    It is idempotent: canonicalising an already-canonical subject costs two
+    reads and returns the same answer, so a route and the service beneath it
+    can both hold the authority without disagreeing about it.
+    """
+    return await canonical_decision_subject(
+        session,
+        principal_account_id=principal_account_id,
+        subject=_subject_claim_or_me(decision_subject, principal_account_id),
+    )
+
+
+async def canonicalize_decision_subject_for_write(
+    session: AsyncSession, *, principal_account_id: uuid.UUID, decision_subject: Any,
+) -> DecisionSubject:
+    """The same revalidation, in the documented write lock order.
+
+    A write service must not be satisfied by a check somebody else made earlier.
+    This is what each of them calls first — before the candidate is locked and
+    before any memory row is selected — so a forged subject handed straight to
+    ``save_care_decision`` or ``record_scan_decision`` fails before anything is
+    read or written, rather than after the row is chosen.
+
+    The locks are the ones :func:`decision_subject_for_write` documents, and
+    re-taking a row lock this transaction already holds is a no-op, so a route
+    that established the same authority before locking the candidate does not
+    pay for it twice or risk a different answer.
+    """
+    return await decision_subject_for_write(
+        session,
+        principal_account_id=principal_account_id,
+        subject=_subject_claim_or_me(decision_subject, principal_account_id),
     )
 
 

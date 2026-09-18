@@ -34,7 +34,11 @@ from app.domains.family.subject import (
     account_holder_subject,
 )
 from app.domains.product.models import ScanDecisionEvent
-from app.domains.recommendation.models import PurchaseDecision, PurchaseDecisionEvent
+from app.domains.recommendation.models import (
+    PurchaseDecision,
+    PurchaseDecisionEvent,
+    ShoppingCandidate,
+)
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select, text
 
@@ -46,6 +50,7 @@ from tests.test_step11b_lock_order import (
     _bounded,
     _until_blocked,
 )
+from tests.test_step11c_subject_scoped_decision_memory import _snapshot
 from tests.test_v3_05_7_care_purchase_experience import _seed_db_candidate
 
 pytestmark = pytest.mark.asyncio
@@ -93,6 +98,43 @@ def _member_subject(account_id: uuid.UUID, member_id: uuid.UUID) -> ResolvedSubj
         relation="adult",
         age_band=AGE_BAND_ADULT,
     )
+
+
+def _decision_subject_for(account_id: uuid.UUID, member_id: uuid.UUID):
+    """A member claim for a direct domain call, revalidated by the service."""
+    from app.domains.family.decision_subject import DecisionSubject
+
+    return DecisionSubject(
+        subject=_member_subject(account_id, member_id), circle_created_at=None,
+    )
+
+
+async def _until_waiting_on_a_lock(pid: int) -> None:
+    """Block until this backend is genuinely waiting on a lock.
+
+    ``_blocked_on`` answers "waiting on which relation", which is the right
+    question for a row lock and the wrong one for a unique-index conflict: the
+    waiter there is parked on the *inserter's transaction id*, a lock whose
+    relation is NULL, so a relation-shaped answer comes back empty and reads as
+    "not blocked". ``pg_stat_activity`` says only that it is waiting, which is
+    all this needs to know before letting the other side commit.
+
+    Polling rather than sleeping on a guess, with a bound so a broken build
+    fails instead of hanging.
+    """
+    for _ in range(600):
+        async with get_sessionmaker()() as watcher:
+            waiting = await watcher.scalar(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE pid = :pid AND wait_event_type = 'Lock'"
+                ),
+                {"pid": pid},
+            )
+        if waiting:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"backend {pid} never waited on a lock")
 
 
 async def _deactivate_in_own_session(
@@ -272,6 +314,353 @@ class TestDeactivationRace:
         )
         assert holder.status_code == 200, holder.text
         assert holder.json()["items"] == []
+
+
+# ---------------------------------------------------------------------------
+# 1a. The savepoint recovery, exercised on purpose rather than hoped for
+# ---------------------------------------------------------------------------
+class TestConcurrentScanRetries:
+    """What two colliding writers actually do, checked against the database.
+
+    It is worth being exact about which mechanism delivers which guarantee here,
+    because the obvious story is wrong.
+
+    Two identical writers for the **same** subject never race on the index at
+    all. Both take the write authority first, and for the account holder that is
+    ``Account FOR UPDATE`` — so the second one waits on the account row, and by
+    the time it looks for an existing event the first has committed one. It
+    finds it, matches on every field, and returns it. The exact-retry guarantee
+    comes from serialisation plus the lookup; the savepoint is never reached.
+    (Confirmed by watching what the blocked backend is waiting on: the account
+    row, not the unique index.)
+
+    The savepoint is still necessary, and this is the case it is for. Two
+    **different** members share one account-global idempotency key: they hold
+    different ``family_profiles`` rows, ``FOR KEY SHARE`` on the account does not
+    put them in a queue, so both miss the lookup and both insert. One loses on
+    the unique index. Without the savepoint that ``IntegrityError`` would poison
+    the whole transaction; with it, the loser rolls back one statement, re-reads,
+    sees the event belongs to somebody else, and refuses cleanly.
+
+    Both interleavings are forced rather than raced, so each test proves the
+    thing it is named after every time.
+    """
+
+    async def test_two_identical_writers_serialise_and_agree(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        from app.domains.product import scan_memory
+
+        _, account_id = await registered_supabase_user()
+        snapshot = await _snapshot()
+        payload = dict(
+            barcode=snapshot.barcode,
+            label_snapshot_id=snapshot.id,
+            label_version=snapshot.version_number,
+            content_fingerprint=snapshot.content_fingerprint,
+            decision="BUY",
+            idempotency_key="savepoint-race",
+            note="one tap, sent twice",
+        )
+        inserted = asyncio.Event()
+        announce: asyncio.Queue = asyncio.Queue()
+        blocked = asyncio.Event()
+
+        async def winner() -> uuid.UUID:
+            async with get_sessionmaker()() as session:
+                await _bounded(session, PATIENT_TIMEOUT_MS)
+                event = await scan_memory.record_scan_decision(
+                    session, principal_account_id=account_id,
+                    decision_subject=None, **payload,
+                )
+                # Inserted and flushed, not committed: invisible to the other
+                # writer's lookup, and already holding the index entry.
+                inserted.set()
+                # Held until the other writer is provably stuck on that entry,
+                # so the recovery path is entered rather than hoped for.
+                await blocked.wait()
+                await session.commit()
+                return event.id
+
+        async def loser() -> uuid.UUID:
+            await inserted.wait()
+            async with get_sessionmaker()() as session:
+                await _bounded(session, PATIENT_TIMEOUT_MS)
+                await announce.put(await _backend_pid(session))
+                event = await scan_memory.record_scan_decision(
+                    session, principal_account_id=account_id,
+                    decision_subject=None, **payload,
+                )
+                await session.commit()
+                return event.id
+
+        async def release_once_stuck() -> None:
+            await _until_waiting_on_a_lock(await announce.get())
+            blocked.set()
+
+        won, lost, _ = await asyncio.gather(winner(), loser(), release_once_stuck())
+        # Not a conflict, and not a second event: the same decision.
+        assert won == lost
+
+        async with get_sessionmaker()() as session:
+            assert await session.scalar(select(func.count(ScanDecisionEvent.id))) == 1
+            stored = (await session.execute(select(ScanDecisionEvent))).scalar_one()
+        assert stored.id == won
+        assert stored.note == "one tap, sent twice"
+
+    async def test_a_lost_insert_race_between_two_members_refuses_cleanly(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """The savepoint's actual job: a governed refusal, not a poisoned request.
+
+        Two members, one idempotency key, and no lock between them — this is the
+        only way two writers both reach the insert. The loser must come back
+        with ``ScanDecisionConflict`` and a transaction that still works, not
+        with a dead session and a 500.
+        """
+        from app.domains.product import scan_memory
+
+        token, account_id = await registered_supabase_user()
+        member_a = await _member(app_client, token, relation="adult")
+        member_b = await _member(app_client, token, relation="other")
+        snapshot = await _snapshot()
+        base = dict(
+            barcode=snapshot.barcode,
+            label_snapshot_id=snapshot.id,
+            label_version=snapshot.version_number,
+            content_fingerprint=snapshot.content_fingerprint,
+            decision="BUY",
+            idempotency_key="shared-across-members",
+        )
+        inserted = asyncio.Event()
+        announce: asyncio.Queue = asyncio.Queue()
+        blocked = asyncio.Event()
+
+        async def winner() -> None:
+            async with get_sessionmaker()() as session:
+                await _bounded(session, PATIENT_TIMEOUT_MS)
+                await scan_memory.record_scan_decision(
+                    session, principal_account_id=account_id,
+                    decision_subject=_decision_subject_for(account_id, member_a),
+                    **base,
+                )
+                inserted.set()
+                await blocked.wait()
+                await session.commit()
+
+        async def loser() -> None:
+            await inserted.wait()
+            async with get_sessionmaker()() as session:
+                await _bounded(session, PATIENT_TIMEOUT_MS)
+                await announce.put(await _backend_pid(session))
+                with pytest.raises(scan_memory.ScanDecisionConflict):
+                    await scan_memory.record_scan_decision(
+                        session, principal_account_id=account_id,
+                        decision_subject=_decision_subject_for(account_id, member_b),
+                        **base,
+                    )
+                # The savepoint is what makes this possible: one statement was
+                # rolled back, not the transaction, so the session is still
+                # usable and the request can return a clean 409 rather than
+                # dying on a failed transaction.
+                assert await session.scalar(
+                    select(func.count(ScanDecisionEvent.id))
+                ) == 1
+                await session.rollback()
+
+        async def release_once_stuck() -> None:
+            await _until_waiting_on_a_lock(await announce.get())
+            blocked.set()
+
+        await asyncio.gather(winner(), loser(), release_once_stuck())
+
+        async with get_sessionmaker()() as session:
+            rows = (await session.execute(
+                select(ScanDecisionEvent.household_subject_id)
+            )).scalars().all()
+        assert rows == [member_a], "the loser's decision was recorded anyway"
+
+
+# ---------------------------------------------------------------------------
+# 1b. A subject that was true when it was resolved, and is not any more
+# ---------------------------------------------------------------------------
+class TestStaleSubjectRevalidation:
+    """The reason the write service owns its authority rather than inheriting it.
+
+    A ``DecisionSubject`` is a fact about a moment. Resolve one for an active
+    member, and it is correct; hold it while that member is switched off, and it
+    is a correct-looking object describing a person who can no longer be
+    written for. Nothing about the object changes when the household does.
+
+    A service that trusted the object would write for them anyway. These tests
+    hand each boundary a subject that was legitimately resolved and is now
+    stale, and require the refusal to come from the service's own re-derivation.
+
+    Forced rather than raced: the resolution, the deactivation and the call
+    happen in that order every time, so a service that revalidates fails every
+    time and one that does not passes every time.
+    """
+
+    async def _stale_member_subject(self, account_id, member_id):
+        """A genuine DecisionSubject, resolved before the member is switched off.
+
+        Deliberately the *read* authority, which takes no lock — that is what a
+        worker, a background job or any caller that resolved a subject earlier
+        in its own transaction would hold.
+        """
+        from app.domains.family.decision_subject import canonical_decision_subject
+
+        async with get_sessionmaker()() as session:
+            subject = await canonical_decision_subject(
+                session,
+                principal_account_id=account_id,
+                subject=_member_subject(account_id, member_id),
+            )
+        assert subject.subject_id == member_id
+        assert subject.is_account_holder is False
+
+        announce: asyncio.Queue = asyncio.Queue()
+        assert await _deactivate_in_own_session(member_id, announce) == ""
+        return subject
+
+    async def test_a_stale_subject_cannot_write_a_scan_decision(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        from app.domains.family.subject import SubjectNotFound
+        from app.domains.product import scan_memory
+
+        token, account_id = await registered_supabase_user()
+        member_id = await _member(app_client, token)
+        snapshot = await _snapshot()
+        stale = await self._stale_member_subject(account_id, member_id)
+
+        async with get_sessionmaker()() as session:
+            with pytest.raises(SubjectNotFound):
+                await scan_memory.record_scan_decision(
+                    session,
+                    principal_account_id=account_id,
+                    decision_subject=stale,
+                    barcode=snapshot.barcode,
+                    label_snapshot_id=snapshot.id,
+                    label_version=snapshot.version_number,
+                    content_fingerprint=snapshot.content_fingerprint,
+                    decision="BUY",
+                    idempotency_key="stale-write",
+                )
+            await session.commit()
+
+        async with get_sessionmaker()() as session:
+            assert await session.scalar(select(func.count(ScanDecisionEvent.id))) == 0
+
+    async def test_a_stale_subject_cannot_write_a_care_decision(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        from app.domains.family.subject import SubjectNotFound
+        from app.domains.purchase import decision_memory
+        from app.domains.purchase.check_service import resolve_care_purchase_check
+
+        token, account_id = await registered_supabase_user()
+        member_id = await _member(app_client, token)
+        candidate_id = await _candidate(account_id)
+        stale = await self._stale_member_subject(account_id, member_id)
+
+        async with get_sessionmaker()() as session:
+            check = await resolve_care_purchase_check(
+                session, account_id=account_id, account_id_str=str(account_id),
+                candidate_id=candidate_id, plan_date=None,
+            )
+            with pytest.raises(SubjectNotFound):
+                await decision_memory.save_care_decision(
+                    session,
+                    principal_account_id=account_id,
+                    decision_subject=stale,
+                    candidate_id=candidate_id,
+                    check=check, decision="bought", note=None,
+                )
+            await session.commit()
+
+        async with get_sessionmaker()() as session:
+            assert await session.scalar(select(func.count(PurchaseDecision.id))) == 0
+            assert await session.scalar(select(func.count(PurchaseDecisionEvent.id))) == 0
+
+    async def test_a_stale_subject_cannot_read_either(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """Deactivation hides the person from every surface, not only writes.
+
+        Their stored history is kept — deactivation is not deletion, and the
+        privacy export still carries it — but nobody can select them any more,
+        including a caller holding a subject from before they were switched off.
+        """
+        from app.domains.family.subject import SubjectNotFound
+        from app.domains.product import scan_memory
+        from app.domains.purchase import decision_memory
+
+        token, account_id = await registered_supabase_user()
+        member_id = await _member(app_client, token)
+        candidate_id = await _candidate(account_id)
+        snapshot = await _snapshot()
+        stale = await self._stale_member_subject(account_id, member_id)
+
+        async with get_sessionmaker()() as session:
+            candidate = await session.get(ShoppingCandidate, candidate_id)
+            with pytest.raises(SubjectNotFound):
+                await decision_memory.decision_history(
+                    session, principal_account_id=account_id,
+                    decision_subject=stale, limit=20,
+                )
+            with pytest.raises(SubjectNotFound):
+                await decision_memory.purchase_guard(
+                    session, principal_account_id=account_id,
+                    decision_subject=stale, candidate=candidate,
+                )
+            with pytest.raises(SubjectNotFound):
+                await decision_memory.current_purchase_decision_for_subject(
+                    session, principal_account_id=account_id,
+                    decision_subject=stale, candidate_id=candidate_id,
+                )
+            with pytest.raises(SubjectNotFound):
+                await scan_memory.read_scan_memory(
+                    session, principal_account_id=account_id,
+                    decision_subject=stale, barcode=snapshot.barcode,
+                    label_snapshot_id=snapshot.id,
+                    label_version=snapshot.version_number,
+                    content_fingerprint=snapshot.content_fingerprint,
+                )
+
+    async def test_the_same_thing_over_http_is_the_privacy_safe_404(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """End to end, and indistinguishable from a member who never existed."""
+        token, account_id = await registered_supabase_user()
+        member_id = await _member(app_client, token)
+        candidate_id = await _candidate(account_id)
+
+        announce: asyncio.Queue = asyncio.Queue()
+        assert await _deactivate_in_own_session(member_id, announce) == ""
+
+        refused = await _decide(
+            app_client, token, candidate_id, "bought", subject_id=member_id,
+        )
+        assert refused.status_code == 404, refused.text
+        assert str(member_id) not in refused.text
+
+        invented = await _decide(
+            app_client, token, candidate_id, "bought", subject_id=uuid.uuid4(),
+        )
+        assert invented.status_code == 404
+        # Identical but for the per-request id, which is diagnostic rather than
+        # informative: a deactivated member and an invented one must not be
+        # distinguishable, or the answer confirms which people are real.
+        def _telling(response):
+            return {
+                key: value for key, value in response.json()["detail"].items()
+                if key != "request_id"
+            }
+        assert _telling(refused) == _telling(invented)
+
+        async with get_sessionmaker()() as session:
+            assert await session.scalar(select(func.count(PurchaseDecision.id))) == 0
 
 
 # ---------------------------------------------------------------------------

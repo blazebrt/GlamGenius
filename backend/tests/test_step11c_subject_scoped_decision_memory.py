@@ -369,21 +369,96 @@ class TestLegacyAttribution:
     async def test_an_event_from_after_the_household_belongs_to_nobody(
         self, db_clean, app_client, registered_supabase_user,
     ):
+        """Nobody's to see, and nobody's to be told their history is complete.
+
+        This used to assert that a member's coverage was unaffected, on the
+        reasoning that their history begins when they were named. That is right
+        about rows from *before* the household and wrong about rows from after
+        it: a subject-less row written once several people shared the account
+        could have been about any of them. "We do not know whose this is" is not
+        evidence that it was not this member's.
+
+        So the row stays out of everybody's history — it is never shown, never
+        counted, never named — and everybody who asks is told their answer is
+        incomplete rather than handed a confident empty page.
+        """
         token, account_id = await registered_supabase_user()
         member = await _member(app_client, token, relation="adult")
+        other = await _member(app_client, token, relation="other")
         candidate_id = await _candidate(account_id)
         await self._legacy_event(account_id, candidate_id, offset=timedelta(seconds=60))
 
-        mine = (await _history(app_client, token)).json()
-        assert mine["items"] == []
-        # Said, not implied. "You have no earlier decisions" and "we cannot tell
-        # whose some of the earlier decisions were" are different sentences.
-        assert mine["history_coverage"]["unattributed_legacy_events_present"] is True
-        assert mine["history_coverage"]["complete_for_subject"] is False
+        for subject in (None, member, other):
+            page = (await _history(app_client, token, subject_id=subject)).json()
+            # Said, not implied. "You have no earlier decisions" and "we cannot
+            # tell whose some of the earlier decisions were" are different
+            # sentences, and only one of them is true here.
+            assert page["items"] == [], subject
+            coverage = page["history_coverage"]
+            assert coverage["unattributed_legacy_events_present"] is True, subject
+            assert coverage["complete_for_subject"] is False, subject
+
+        # Only the account holder is ever handed pre-household legacy events,
+        # so that flag stays theirs alone.
+        assert (await _history(app_client, token)).json()[
+            "history_coverage"]["legacy_self_events_included"] is True
+        assert (await _history(app_client, token, subject_id=member)).json()[
+            "history_coverage"]["legacy_self_events_included"] is False
+
+    async def test_a_pre_household_event_leaves_a_members_coverage_complete(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """The other side of the boundary, and the reason it is a boundary.
+
+        A subject-less row from before the household is not ambiguous at all —
+        there was one person then, and it was them. It is the account holder's
+        outright, and its existence says nothing about whether a member's own
+        history is complete. Treating every legacy row as doubt would tell every
+        member, forever, that their history might be missing something, which is
+        as unhelpful as the confident lie it replaced.
+        """
+        token, account_id = await registered_supabase_user()
+        member = await _member(app_client, token, relation="adult")
+        candidate_id = await _candidate(account_id)
+        await self._legacy_event(
+            account_id, candidate_id, offset=timedelta(seconds=-60),
+        )
 
         theirs = (await _history(app_client, token, subject_id=member)).json()
         assert theirs["items"] == []
         assert theirs["history_coverage"]["unattributed_legacy_events_present"] is False
+        assert theirs["history_coverage"]["complete_for_subject"] is True
+
+        mine = (await _history(app_client, token)).json()
+        assert len(mine["items"]) == 1
+        assert mine["history_coverage"]["complete_for_subject"] is True
+
+    async def test_with_no_household_a_subject_less_event_is_simply_mine(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """No household, no ambiguity. Nothing becomes unattributed by itself."""
+        token, account_id = await registered_supabase_user()
+        candidate_id = await _candidate(account_id)
+        async with get_sessionmaker()() as session:
+            event = PurchaseDecisionEvent(
+                account_id=account_id, household_subject_id=None,
+                candidate_id=candidate_id, decision_id=None,
+                category="beauty", strategy_key="care_purchase",
+                candidate_display_name="Gentle Cleanser",
+                identity_version="v1", identity_state="exact",
+                identity_fingerprint="legacy-fingerprint",
+                recommendation_verdict="wait", recommendation_version="v",
+                recommendation_snapshot={}, decision="waiting",
+                followed_recommendation=True,
+            )
+            session.add(event)
+            await session.commit()
+            event_id = event.id
+
+        mine = (await _history(app_client, token)).json()
+        assert [item["id"] for item in mine["items"]] == [str(event_id)]
+        assert mine["history_coverage"]["unattributed_legacy_events_present"] is False
+        assert mine["history_coverage"]["complete_for_subject"] is True
 
     async def test_the_equality_boundary_is_ambiguous(
         self, db_clean, app_client, registered_supabase_user,
@@ -505,6 +580,33 @@ class TestLegacyAttribution:
                 .where(ScanDecisionEvent.id == legacy_id)
             ) is None
 
+    async def test_with_no_household_nothing_is_ambiguous_by_construction(
+        self, db_clean, registered_supabase_user,
+    ):
+        """The guard behind the guard, asserted directly because nothing reaches it.
+
+        Callers check ``has_household`` before asking which rows are ambiguous,
+        so :func:`ambiguous_legacy_filter` is never reached with no boundary
+        today. It still has to be right: it is a pure function that builds an
+        SQL predicate, and one that matched every subject-less row when no
+        household existed would mark an ordinary single-person account's entire
+        history unattributable the moment a caller forgot the outer check.
+
+        Compiled rather than described, so the assertion is about the SQL that
+        would actually run.
+        """
+        from app.domains.family.decision_subject import ambiguous_legacy_filter
+
+        _, account_id = await registered_supabase_user()
+        async with get_sessionmaker()() as session:
+            lone = await _self_subject(session, account_id)
+        assert lone.circle_created_at is None
+
+        predicate = ambiguous_legacy_filter(PurchaseDecisionEvent, lone)
+        compiled = str(predicate.compile(compile_kwargs={"literal_binds": True}))
+        assert compiled.lower() == "false"
+        assert "household_subject_id" not in compiled
+
     async def test_a_row_with_no_timestamp_is_never_claimable(
         self, db_clean, app_client, registered_supabase_user,
     ):
@@ -534,17 +636,162 @@ class TestLegacyAttribution:
         assert lone.circle_created_at is None
         assert lone.legacy_row_is_mine(None) is True
 
+    async def _matching_legacy_event(self, account_id, candidate_id, *, offset):
+        """An ambiguous event the guard cannot dismiss on identity grounds.
+
+        The guard only looks at events for the same category, strategy and exact
+        identity fingerprint, so an ambiguous row with an unrelated fingerprint
+        proves nothing about coverage — it was never a candidate for this
+        answer. This one carries the real identity, which is the case §3B is
+        about.
+        """
+        from app.domains.purchase.contract import resolve_purchase_strategy
+        from app.domains.purchase.identity import identity_for_candidate
+        from app.domains.recommendation.models import ShoppingCandidate
+
+        circle_created = await _circle_created_at(account_id)
+        async with get_sessionmaker()() as session:
+            candidate = await session.get(ShoppingCandidate, candidate_id)
+            identity = identity_for_candidate(candidate)
+            assert identity["state"] == "exact", identity
+            event = PurchaseDecisionEvent(
+                account_id=account_id, household_subject_id=None,
+                candidate_id=candidate_id, decision_id=None,
+                category=candidate.category,
+                strategy_key=resolve_purchase_strategy(candidate.category).key,
+                candidate_display_name=candidate.display_name,
+                identity_version=identity["version"],
+                identity_state=identity["state"],
+                identity_fingerprint=identity["fingerprint"],
+                recommendation_verdict="wait", recommendation_version="v",
+                recommendation_snapshot={}, decision="waiting",
+                followed_recommendation=True,
+            )
+            session.add(event)
+            await session.flush()
+            event.created_at = circle_created + offset
+            await session.commit()
+            return event.id
+
     async def test_the_guard_never_counts_an_ambiguous_event(
         self, db_clean, app_client, registered_supabase_user,
     ):
-        token, account_id = await registered_supabase_user()
-        await _member(app_client, token, relation="adult")
-        candidate_id = await _candidate(account_id)
-        await self._legacy_event(account_id, candidate_id, offset=timedelta(seconds=30))
+        """Uncounted and unnamed for everybody, and admitted to everybody.
 
-        guard = (await _guard(app_client, token, candidate_id)).json()
-        assert guard["prior_consideration_count"] == 0
-        assert guard["most_recent"] is None
+        A guard that answered ``no_step9a_prior_event`` with complete coverage
+        would be telling this person, confidently, that nobody has considered
+        this product — while holding a decision about this exact product that
+        might have been theirs.
+        """
+        token, account_id = await registered_supabase_user()
+        member = await _member(app_client, token, relation="adult")
+        candidate_id = await _candidate(account_id)
+        await self._matching_legacy_event(
+            account_id, candidate_id, offset=timedelta(seconds=30),
+        )
+
+        for subject in (None, member):
+            guard = (await _guard(app_client, token, candidate_id, subject_id=subject)).json()
+            assert guard["prior_consideration_count"] == 0, subject
+            assert guard["most_recent"] is None, subject
+            assert guard["guard_state"] == "historical_context_incomplete", subject
+            coverage = guard["history_coverage"]
+            assert coverage["unattributed_legacy_events_present"] is True, subject
+            assert coverage["complete_for_subject"] is False, subject
+
+    async def test_a_member_with_real_history_keeps_it_and_is_told_of_the_doubt(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """Known history is still returned exactly. Only the coverage changes.
+
+        The correction is about what the product admits it cannot answer, not
+        about hiding what it can. A member who has decided about this product
+        still gets their own exact state and their own count; the ambiguous row
+        contributes nothing to either, and is acknowledged only as doubt.
+        """
+        token, account_id = await registered_supabase_user()
+        member = await _member(app_client, token, relation="adult")
+        candidate_id = await _candidate(account_id)
+        assert (await _decide(
+            app_client, token, candidate_id, "bought", subject_id=member,
+        )).status_code == 200
+        await self._matching_legacy_event(
+            account_id, candidate_id, offset=timedelta(seconds=30),
+        )
+
+        guard = (await _guard(app_client, token, candidate_id, subject_id=member)).json()
+        assert guard["guard_state"] == "exact_prior_bought"
+        assert guard["prior_consideration_count"] == 1
+        assert guard["most_recent"]["decision"] == "bought"
+        assert guard["most_recent"]["household_subject_id"] == member
+        assert guard["history_coverage"]["unattributed_legacy_events_present"] is True
+        assert guard["history_coverage"]["complete_for_subject"] is False
+
+    async def test_a_members_scan_memory_admits_an_ambiguous_label_decision(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        """The same rule on the scan side, for the exact scanned version."""
+        token, account_id = await registered_supabase_user()
+        member = await _member(app_client, token, relation="adult")
+        other = await _member(app_client, token, relation="other")
+        snapshot = await _snapshot()
+        circle_created = await _circle_created_at(account_id)
+
+        async with get_sessionmaker()() as session:
+            event = ScanDecisionEvent(
+                account_id=account_id, household_subject_id=None,
+                barcode=snapshot.barcode, label_snapshot_id=snapshot.id,
+                label_version=snapshot.version_number,
+                content_fingerprint=snapshot.content_fingerprint,
+                decision="WAIT", idempotency_key="ambiguous-scan",
+            )
+            session.add(event)
+            await session.flush()
+            event.created_at = circle_created + timedelta(seconds=30)
+            await session.commit()
+
+        for subject in (None, member, other):
+            memory = (await _scan_memory(
+                app_client, token, snapshot, subject_id=subject,
+            )).json()
+            assert memory["decision"] is None, subject
+            assert memory["history"] == [], subject
+            coverage = memory["history_coverage"]
+            assert coverage["unattributed_legacy_events_present"] is True, subject
+            assert coverage["complete_for_subject"] is False, subject
+
+    async def test_a_pre_household_scan_decision_leaves_members_complete(
+        self, db_clean, app_client, registered_supabase_user,
+    ):
+        token, account_id = await registered_supabase_user()
+        member = await _member(app_client, token, relation="adult")
+        snapshot = await _snapshot()
+        circle_created = await _circle_created_at(account_id)
+
+        async with get_sessionmaker()() as session:
+            event = ScanDecisionEvent(
+                account_id=account_id, household_subject_id=None,
+                barcode=snapshot.barcode, label_snapshot_id=snapshot.id,
+                label_version=snapshot.version_number,
+                content_fingerprint=snapshot.content_fingerprint,
+                decision="WAIT", idempotency_key="safe-scan",
+            )
+            session.add(event)
+            await session.flush()
+            event.created_at = circle_created - timedelta(seconds=60)
+            await session.commit()
+
+        theirs = (await _scan_memory(
+            app_client, token, snapshot, subject_id=member,
+        )).json()
+        assert theirs["decision"] is None
+        assert theirs["history_coverage"]["unattributed_legacy_events_present"] is False
+        assert theirs["history_coverage"]["complete_for_subject"] is True
+
+        # And it is positively the account holder's, not merely nobody's.
+        mine = (await _scan_memory(app_client, token, snapshot)).json()
+        assert mine["decision"]["decision"] == "WAIT"
+        assert mine["history_coverage"]["complete_for_subject"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -895,17 +1142,96 @@ class TestScanIdempotency:
         noted = await _scan_decide(app_client, token, snapshot, "BUY", "k", note="new")
         assert noted.status_code == 409
 
-    async def test_a_concurrent_same_key_retry_creates_one_event(
+    async def test_an_exact_concurrent_retry_returns_the_same_event_to_both(
         self, db_clean, off_clean, app_client, registered_supabase_user,
     ):
+        """Both callers get 200 and the same event. Neither is told to try again.
+
+        Accepting "one of them got a 409" would be a weaker contract than the
+        implementation actually offers, and weaker than the customer needs. Two
+        identical requests are one tap that the network sent twice — the phone
+        retrying, the user double-pressing — and the second one is not a
+        conflict with anything. It is the same decision.
+
+        The savepoint and unique-violation recovery in ``record_scan_decision``
+        exist for exactly this: the loser of the insert race re-reads the
+        winner's row, finds it matches on every field including the subject, and
+        returns it. A 409 here would send a phone into a retry loop over a
+        decision that was already saved.
+        """
         token, _ = await registered_supabase_user()
         snapshot = await _snapshot()
         first, second = await asyncio.gather(
-            _scan_decide(app_client, token, snapshot, "BUY", "race-key"),
-            _scan_decide(app_client, token, snapshot, "BUY", "race-key"),
+            _scan_decide(app_client, token, snapshot, "BUY", "race-key", note="same"),
+            _scan_decide(app_client, token, snapshot, "BUY", "race-key", note="same"),
         )
-        assert {first.status_code, second.status_code} <= {200, 409}
-        assert 200 in (first.status_code, second.status_code)
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert first.json()["id"] == second.json()["id"]
+        async with get_sessionmaker()() as session:
+            assert await session.scalar(select(func.count(ScanDecisionEvent.id))) == 1
+
+    async def test_an_exact_concurrent_retry_for_one_member_behaves_the_same(
+        self, db_clean, off_clean, app_client, registered_supabase_user,
+    ):
+        """The same guarantee once a household exists and a subject is named."""
+        token, _ = await registered_supabase_user()
+        member = await _member(app_client, token, relation="adult")
+        snapshot = await _snapshot()
+        first, second = await asyncio.gather(
+            _scan_decide(app_client, token, snapshot, "WAIT", "member-race",
+                         subject_id=member),
+            _scan_decide(app_client, token, snapshot, "WAIT", "member-race",
+                         subject_id=member),
+        )
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert first.json()["id"] == second.json()["id"]
+        async with get_sessionmaker()() as session:
+            rows = (await session.execute(
+                select(ScanDecisionEvent.household_subject_id)
+            )).scalars().all()
+        assert rows == [uuid.UUID(member)]
+
+    async def test_a_concurrent_conflicting_retry_is_still_refused(
+        self, db_clean, off_clean, app_client, registered_supabase_user,
+    ):
+        """Exactness is the whole condition, so the near-miss must still conflict.
+
+        Same key, same product, different answer. One of these is not a retry of
+        the other, and returning the winner's row to both would tell somebody
+        their SKIP was recorded when a BUY was.
+        """
+        token, _ = await registered_supabase_user()
+        snapshot = await _snapshot()
+        first, second = await asyncio.gather(
+            _scan_decide(app_client, token, snapshot, "BUY", "clash-key"),
+            _scan_decide(app_client, token, snapshot, "SKIP", "clash-key"),
+        )
+        assert sorted([first.status_code, second.status_code]) == [200, 409]
+        async with get_sessionmaker()() as session:
+            assert await session.scalar(select(func.count(ScanDecisionEvent.id))) == 1
+
+    async def test_a_concurrent_same_key_retry_for_two_members_conflicts(
+        self, db_clean, off_clean, app_client, registered_supabase_user,
+    ):
+        """Account-global idempotency, kept. One key names one operation.
+
+        Two people deciding at once under the same client key is a client bug,
+        and the safe answer is to refuse the second rather than to quietly
+        record one person's decision against the other.
+        """
+        token, _ = await registered_supabase_user()
+        member_a = await _member(app_client, token, relation="adult")
+        member_b = await _member(app_client, token, relation="other")
+        snapshot = await _snapshot()
+        first, second = await asyncio.gather(
+            _scan_decide(app_client, token, snapshot, "BUY", "shared-key",
+                         subject_id=member_a),
+            _scan_decide(app_client, token, snapshot, "BUY", "shared-key",
+                         subject_id=member_b),
+        )
+        assert sorted([first.status_code, second.status_code]) == [200, 409]
         async with get_sessionmaker()() as session:
             assert await session.scalar(select(func.count(ScanDecisionEvent.id))) == 1
 

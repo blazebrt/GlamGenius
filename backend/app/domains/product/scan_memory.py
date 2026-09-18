@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.family.decision_subject import (
     DecisionSubject,
     ambiguous_legacy_filter,
+    canonicalize_decision_subject,
+    canonicalize_decision_subject_for_write,
     serialize_decision_subject,
     subject_row_filter,
 )
@@ -48,8 +50,15 @@ async def _unattributed_scan_events_exist(
     decision_subject: DecisionSubject,
     extra: tuple[Any, ...] = (),
 ) -> bool:
-    """Is there scan history here that belongs to nobody we can name?"""
-    if not decision_subject.is_account_holder or not decision_subject.has_household:
+    """Is there scan history here that belongs to nobody we can name?
+
+    Every household subject, not only the account holder — see
+    ``decision_memory._unattributed_events_exist`` for why a subject-less scan
+    decision written after the household existed cannot be ruled out as any one
+    member's, and so makes the answer incomplete for all of them without
+    becoming any of theirs.
+    """
+    if not decision_subject.has_household:
         return False
     return (await session.scalar(
         select(ScanDecisionEvent.id).where(
@@ -75,7 +84,16 @@ async def read_scan_memory(
     Account-scoped as well as subject-scoped, always. A subject-bound row could
     be found by its subject alone and the foreign key would even prove the
     member exists — but never that this account owns them.
+
+    Public boundary: the subject is re-derived under the authenticated principal
+    before any row is read, because a ``DecisionSubject`` is something a caller
+    constructs rather than something the server proved.
     """
+    decision_subject = await canonicalize_decision_subject(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
     identity = (
         ScanDecisionEvent.barcode == barcode,
         ScanDecisionEvent.label_snapshot_id == label_snapshot_id,
@@ -160,7 +178,18 @@ async def record_scan_decision(
 
     A retry therefore has to match on more than the payload now: same scan
     identity, same decision, same note, *and* the same logical subject.
+
+    Write authority is taken here, first, and this service owns it. A forged
+    subject handed straight to this function fails before the idempotency key is
+    even looked up — the route having checked earlier is not what makes this
+    correct.
     """
+    decision_subject = await canonicalize_decision_subject_for_write(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
+
     def _retry_or_conflict(existing: ScanDecisionEvent | None) -> ScanDecisionEvent:
         if (
             existing is not None
@@ -202,6 +231,25 @@ async def record_scan_decision(
             session.add(event)
             await session.flush()
     except IntegrityError:
+        # Re-read and judge, rather than assuming a conflict.
+        #
+        # Worth being precise about when this is reached, because it changed.
+        # Two writers for the *same* logical subject can no longer both get
+        # here: this service now takes write authority first, and that means
+        # ``Account FOR UPDATE`` for the account holder and ``FamilyProfile FOR
+        # UPDATE`` for a named member, so they queue and the second one finds
+        # the first one's committed event in the lookup above. What still
+        # arrives here is two *different* members sharing one account-global
+        # idempotency key — they hold different member rows and nothing puts
+        # them in a queue — and that is a refusal.
+        #
+        # So today this re-read always ends in a conflict, and raising one
+        # directly would behave identically. It is kept because it decides the
+        # question on the evidence rather than on an assumption about which
+        # locks the write path happens to take: weaken that lock later and the
+        # exact-retry case starts arriving here again, where this returns the
+        # winner's event instead of telling a phone to retry a decision that was
+        # already saved.
         return _retry_or_conflict(await session.scalar(
             select(ScanDecisionEvent).where(
                 ScanDecisionEvent.account_id == principal_account_id,
@@ -271,6 +319,15 @@ async def scan_decision_history(
     content_fingerprint: str,
     limit: int,
 ) -> list[dict[str, Any]]:
+    """One subject's scan history for an exact label version.
+
+    Public boundary: the subject is re-derived before the page is built.
+    """
+    decision_subject = await canonicalize_decision_subject(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
     statement = select(ScanDecisionEvent).where(
         ScanDecisionEvent.account_id == principal_account_id,
         subject_row_filter(ScanDecisionEvent, decision_subject),

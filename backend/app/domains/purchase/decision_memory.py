@@ -25,6 +25,8 @@ from sqlalchemy.orm import aliased
 from app.domains.family.decision_subject import (
     DecisionSubject,
     ambiguous_legacy_filter,
+    canonicalize_decision_subject,
+    canonicalize_decision_subject_for_write,
     serialize_decision_subject,
     subject_row_filter,
 )
@@ -157,7 +159,16 @@ async def current_purchase_decision_for_subject(
     A pure read: it never adopts, never creates and never writes. An ambiguous
     legacy row is not returned as this subject's — it is not theirs, and
     showing it would be a confident answer to a question the data cannot settle.
+
+    The subject is re-derived here rather than trusted. This is a public domain
+    boundary, and a caller that is not the HTTP route — a worker, a job, a test,
+    another service — can hand it any ``DecisionSubject`` it likes.
     """
+    decision_subject = await canonicalize_decision_subject(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
     rows = await _account_rows(
         session,
         account_id=principal_account_id,
@@ -169,7 +180,7 @@ async def current_purchase_decision_for_subject(
     return explicit or safe_legacy
 
 
-async def resolve_current_decision_for_write(
+async def _resolve_current_decision_for_write(
     session: AsyncSession,
     *,
     decision_subject: DecisionSubject,
@@ -177,6 +188,12 @@ async def resolve_current_decision_for_write(
     strategy_key: str,
 ) -> PurchaseDecision | None:
     """The row this subject's next decision should update, adopting once if it may.
+
+    Private, and no longer exported. It takes no principal, so it cannot check
+    the subject it is given — it can only be correct when its caller has already
+    established write authority. A helper that cannot police itself must not be
+    reachable from outside the module that guarantees the order; being in
+    ``__all__`` was an invitation to call it without one.
 
     Called only after the write authority and the candidate lock are held, so
     what it sees cannot change underneath it.
@@ -302,7 +319,14 @@ async def decision_history(
     unattributed legacy history — has to be answered exactly like an invented
     one, because "that cursor exists but is not yours" would confirm that
     somebody else in the household has a decision event.
+
+    Public boundary: the subject is re-derived before the page is built.
     """
+    decision_subject = await canonicalize_decision_subject(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
     mine = subject_row_filter(PurchaseDecisionEvent, decision_subject)
     statement = select(PurchaseDecisionEvent).where(
         PurchaseDecisionEvent.account_id == principal_account_id, mine,
@@ -332,11 +356,24 @@ async def _unattributed_events_exist(
 ) -> bool:
     """Is there history here that belongs to nobody we can name?
 
-    Only the account holder can be shown an incomplete answer about their own
-    past: a named member's history begins when they were named, so there is
-    nothing older that could have been theirs.
+    Asked for *every* household subject, and that is the correction. This used
+    to answer only for the account holder, on the reasoning that a member's
+    history begins when they were named so nothing older could be theirs. True
+    of rows from before the household — those are positively the account
+    holder's. Not true of rows from after it.
+
+    A subject-less row written once a household existed could have been about
+    anybody in it. "We do not know whose this is" is not evidence that it was
+    not this member's, and telling a member their history is complete while
+    holding a decision that might be theirs is a confident answer to a question
+    the data cannot settle. So its existence makes the answer incomplete for
+    whoever is asking, without ever being shown to them or counted as theirs.
+
+    With no household at all there is nothing to be ambiguous against: a
+    subject-less row is simply how this account's own history has always been
+    written, and nothing here is unattributed.
     """
-    if not decision_subject.is_account_holder or not decision_subject.has_household:
+    if not decision_subject.has_household:
         return False
     where = [
         PurchaseDecisionEvent.account_id == principal_account_id,
@@ -361,7 +398,14 @@ async def history_coverage(
     exactly like a complete one. Saying so is the difference between "you have
     no earlier decisions" and "we cannot tell whose some of the earlier
     decisions were".
+
+    Public boundary: the subject is re-derived before the answer is composed.
     """
+    decision_subject = await canonicalize_decision_subject(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
     unattributed = await _unattributed_events_exist(
         session,
         principal_account_id=principal_account_id,
@@ -396,7 +440,14 @@ async def purchase_guard(
     So every count, the most recent event and the state come from this subject's
     attributable history alone. Another member's identical product, identical
     fingerprint and identical strategy contribute nothing.
+
+    Public boundary: the subject is re-derived before any event is counted.
     """
+    decision_subject = await canonicalize_decision_subject(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
     identity = identity_for_candidate(candidate)
     base = {"purchase_guard_version": PURCHASE_GUARD_VERSION, "candidate_id": str(candidate.id), "identity": identity,
             "subject": serialize_decision_subject(decision_subject),
@@ -422,7 +473,7 @@ async def purchase_guard(
     # legacy event is a decision somebody made about this exact product that
     # cannot be assigned to anybody. Either makes the coverage incomplete, and
     # neither is ever counted as this subject's.
-    legacy_incomplete = await has_incomplete_legacy_context(
+    legacy_incomplete = await _has_incomplete_legacy_context(
         session,
         principal_account_id=principal_account_id,
         decision_subject=decision_subject,
@@ -488,7 +539,29 @@ async def has_incomplete_legacy_context(
 
     Only rows this subject could honestly claim count — their own subject-bound
     row, or a safely attributable legacy one.
+
+    Public boundary: the subject is re-derived before anything is read.
     """
+    return await _has_incomplete_legacy_context(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=await canonicalize_decision_subject(
+            session,
+            principal_account_id=principal_account_id,
+            decision_subject=decision_subject,
+        ),
+        candidate_id=candidate_id,
+    )
+
+
+async def _has_incomplete_legacy_context(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+    candidate_id: uuid.UUID,
+) -> bool:
+    """The same question, for a subject an inner caller has already canonicalised."""
     rows = await _account_rows(
         session,
         account_id=principal_account_id,
@@ -544,8 +617,22 @@ async def save_care_decision(
     decision: str,
     note: str | None,
 ) -> PurchaseDecision:
-    """Upsert one subject's current Care memory row from one canonical check."""
+    """Upsert one subject's current Care memory row from one canonical check.
+
+    Write authority is taken here, first, and this service owns it. A route
+    having resolved the same subject a moment ago is not the property this
+    depends on: a forged ``DecisionSubject`` handed straight to this function
+    must fail before the candidate is locked and before any memory row is
+    chosen, not after. Re-taking a row lock this transaction already holds
+    costs nothing, so a route that established the same authority before
+    locking the candidate is not paying for it twice.
+    """
     account_id = principal_account_id
+    decision_subject = await canonicalize_decision_subject_for_write(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
     candidate = await _locked_candidate(
         session, account_id=account_id, candidate_id=candidate_id,
     )
@@ -556,7 +643,7 @@ async def save_care_decision(
         )
     verdict = check["verdict"]
     verdict_key = verdict["verdict"]
-    row = await resolve_current_decision_for_write(
+    row = await _resolve_current_decision_for_write(
         session,
         decision_subject=decision_subject,
         candidate_id=candidate_id,
@@ -614,8 +701,17 @@ async def save_fragrance_decision(
     candidate_id: uuid.UUID,
     check: dict[str, Any], decision: str, note: str | None,
 ) -> PurchaseDecision:
-    """Upsert one subject's candidate-backed memory for a Fragrance check."""
+    """Upsert one subject's candidate-backed memory for a Fragrance check.
+
+    Write authority first, owned here, for the reason ``save_care_decision``
+    gives: the service cannot depend on its caller having checked.
+    """
     account_id = principal_account_id
+    decision_subject = await canonicalize_decision_subject_for_write(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
     candidate = await _locked_candidate(
         session, account_id=account_id, candidate_id=candidate_id,
     )
@@ -623,7 +719,7 @@ async def save_fragrance_decision(
         raise ValidationFailedError("This candidate is not eligible for the active Fragrance purchase strategy.", field="category")
     verdict = check["verdict"]
     verdict_key = verdict["verdict"]
-    row = await resolve_current_decision_for_write(
+    row = await _resolve_current_decision_for_write(
         session, decision_subject=decision_subject,
         candidate_id=candidate_id, strategy_key="fragrance_purchase",
     )
@@ -675,7 +771,6 @@ __all__ = [
     "history_coverage",
     "decision_history",
     "purchase_guard",
-    "resolve_current_decision_for_write",
     "record_decision_event",
     "serialize_decision_event",
     "save_care_decision",
