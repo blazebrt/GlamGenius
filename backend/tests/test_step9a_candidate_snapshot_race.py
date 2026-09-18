@@ -342,7 +342,12 @@ async def test_recommendation_transition_appends_without_rewriting_first_event(
         row.recommendation_fingerprint = "transition-test-fingerprint"
         row.recommendation_snapshot = {"strategy": "care_purchase", "verdict": new_verdict}
         await session.flush()
-        await decision_memory.record_decision_event(session, row=row, candidate=candidate)
+        # Through the account-owning authority rather than the raw helper: it
+        # loads the canonical candidate under the principal itself, which is
+        # what a caller outside this module is now expected to do.
+        await decision_memory.record_decision_event_for_account(
+            session, principal_account_id=account_id, row=row,
+        )
         await session.commit()
 
     async with get_sessionmaker()() as session:

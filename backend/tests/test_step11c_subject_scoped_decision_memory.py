@@ -1153,11 +1153,24 @@ class TestScanIdempotency:
         retrying, the user double-pressing — and the second one is not a
         conflict with anything. It is the same decision.
 
-        The savepoint and unique-violation recovery in ``record_scan_decision``
-        exist for exactly this: the loser of the insert race re-reads the
-        winner's row, finds it matches on every field including the subject, and
-        returns it. A 409 here would send a phone into a retry loop over a
-        decision that was already saved.
+        What delivers that is worth naming exactly, because the obvious answer
+        is no longer the right one. These two never race on the unique index at
+        all: ``record_scan_decision`` takes write authority first, and for the
+        account holder that means ``Account FOR UPDATE`` — so the second request
+        waits on the account row, and by the time it looks for an existing event
+        the first has committed one. It finds it, matches on every field
+        including the subject, and returns it. The same holds for a named
+        member, serialised on their ``family_profiles`` row instead.
+
+        So this is a proof about serialisation plus the pre-insert lookup. The
+        savepoint and unique-violation recovery are still necessary and still
+        exercised, by two *different* members sharing one account-global
+        idempotency key — see
+        ``test_step11c_decision_memory_races.TestConcurrentScanRetries``, where
+        that collision is forced deterministically.
+
+        A 409 here would send a phone into a retry loop over a decision that was
+        already saved.
         """
         token, _ = await registered_supabase_user()
         snapshot = await _snapshot()

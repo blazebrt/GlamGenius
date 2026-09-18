@@ -235,10 +235,32 @@ def style_recommendation_snapshot(evaluation: PurchaseEvaluation) -> dict[str, A
     }
 
 
-async def record_decision_event(
+async def _record_decision_event(
     session: AsyncSession, *, row: PurchaseDecision, candidate: ShoppingCandidate,
 ) -> PurchaseDecisionEvent:
-    """Append only a meaningful current-state transition in this transaction."""
+    """Append only a meaningful current-state transition in this transaction.
+
+    Private, and no longer exported. It writes to an append-only ledger and
+    takes no authenticated principal, so it cannot prove that the two objects
+    it is handed belong together or to the caller. A helper that cannot police
+    itself must not be reachable from outside the module that guarantees the
+    order; being in ``__all__`` was an invitation to call it without one.
+    Callers come through :func:`record_decision_event_for_account`, which loads
+    the canonical candidate under a principal first.
+
+    It still refuses an impossible pairing rather than trusting its caller.
+    Being private makes a mistake less likely, not impossible, and the cost of
+    getting this wrong is an immutable row claiming a decision came from a
+    product it did not — the kind of record that is believed later precisely
+    because events are never rewritten.
+    """
+    if row.account_id != candidate.account_id or row.candidate_id != candidate.id:
+        # One generic reason for both, because the difference is not the
+        # caller's to learn: a cross-account pairing and a same-account
+        # wrong-candidate pairing are equally impossible through any route.
+        # Neither the accounts nor the candidates are named here — the request
+        # id in the log is how an operator finds the rows.
+        raise IdentityInvariantError("purchase_decision_candidate_identity_mismatch")
     identity = identity_for_candidate(candidate)
     # Scoped to this decision row, which is now per subject — so the "nothing
     # meaningful changed" test can only ever compare a subject against their own
@@ -286,6 +308,41 @@ async def record_decision_event(
     session.add(event)
     await session.flush()
     return event
+
+
+async def record_decision_event_for_account(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    row: PurchaseDecision,
+) -> PurchaseDecisionEvent | None:
+    """Append this decision's event, having first proved whose candidate it is.
+
+    The one public way into the ledger. It takes a principal and a decision row
+    rather than a candidate, because a ``ShoppingCandidate`` handed in by a
+    caller is exactly the kind of state this step stopped trusting: an ORM
+    object is something the caller constructed or fetched, and a primary-key
+    lookup finds another account's product just as readily as this one's.
+
+    So the candidate is loaded here, by the decision's own ``candidate_id``
+    *and* the authenticated account, and only that row reaches the append.
+
+    ``None`` when no such candidate exists for this account — which is what a
+    deleted candidate has always meant on this path, and is now also the answer
+    for one that belongs to somebody else. The decision row itself is
+    unaffected; only its event is skipped, exactly as before.
+    """
+    if row.account_id != principal_account_id:
+        raise IdentityInvariantError("purchase_decision_candidate_identity_mismatch")
+    candidate = (await session.execute(
+        select(ShoppingCandidate).where(
+            ShoppingCandidate.id == row.candidate_id,
+            ShoppingCandidate.account_id == principal_account_id,
+        )
+    )).scalar_one_or_none()
+    if candidate is None:
+        return None
+    return await _record_decision_event(session, row=row, candidate=candidate)
 
 
 def serialize_decision_event(row: PurchaseDecisionEvent) -> dict[str, Any]:
@@ -441,13 +498,37 @@ async def purchase_guard(
     attributable history alone. Another member's identical product, identical
     fingerprint and identical strategy contribute nothing.
 
-    Public boundary: the subject is re-derived before any event is counted.
+    Public boundary, and *both* halves of it are re-derived rather than read.
+
+    The subject was the obvious one. The candidate is the same problem one
+    parameter over: a ``ShoppingCandidate`` is an ORM object the caller fetched,
+    and fetching one by primary key finds another account's product just as
+    readily as this account's. A caller that passed principal A beside account
+    B's candidate would have had this guard derive identity from B's product,
+    answer with B's candidate id, and query A's history using B's fingerprint.
+    The route prevented that; the domain boundary has to prevent it too.
+
+    So only the supplied id is used, and the row behind it is loaded here under
+    the authenticated account. ``candidate.account_id`` is not consulted: it is
+    a field on the same caller-supplied object, so trusting it would be
+    checking the claim against itself.
     """
     decision_subject = await canonicalize_decision_subject(
         session,
         principal_account_id=principal_account_id,
         decision_subject=decision_subject,
     )
+    candidate = await _owned_candidate(
+        session, account_id=principal_account_id, candidate_id=candidate.id,
+    )
+    strategy = resolve_purchase_strategy(candidate.category)
+    if strategy is None or strategy.state != "active":
+        # The route already refuses this before calling; said again here so a
+        # direct caller gets the same governed answer rather than an
+        # AttributeError on the strategy lookup below.
+        raise ValidationFailedError(
+            "This candidate is not eligible for a purchase guard.", field="category",
+        )
     identity = identity_for_candidate(candidate)
     base = {"purchase_guard_version": PURCHASE_GUARD_VERSION, "candidate_id": str(candidate.id), "identity": identity,
             "subject": serialize_decision_subject(decision_subject),
@@ -460,7 +541,7 @@ async def purchase_guard(
     if identity["state"] != "exact":
         base["guard_state"] = "identity_insufficient"
         return base
-    strategy_key = resolve_purchase_strategy(candidate.category).key
+    strategy_key = strategy.key
     identity_match = (
         PurchaseDecisionEvent.category == candidate.category,
         PurchaseDecisionEvent.strategy_key == strategy_key,
@@ -579,6 +660,31 @@ async def _has_incomplete_legacy_context(
     return event is None
 
 
+async def _owned_candidate(
+    session: AsyncSession, *, account_id: uuid.UUID, candidate_id: uuid.UUID,
+) -> ShoppingCandidate:
+    """The canonical candidate row, or the same not-found as an invented id.
+
+    Read-only: the reading boundaries need the account's own product facts, not
+    a lock on them. ``ShoppingCandidate`` stays account-owned — several people
+    in one household consider the same one — so the predicate is the account,
+    never a subject.
+
+    A candidate belonging to another account and a candidate that never existed
+    are the same answer, because saying which would confirm that the id names a
+    real product somebody else is considering.
+    """
+    candidate = (await session.execute(
+        select(ShoppingCandidate).where(
+            ShoppingCandidate.id == candidate_id,
+            ShoppingCandidate.account_id == account_id,
+        )
+    )).scalar_one_or_none()
+    if candidate is None:
+        raise NotFoundError("We could not find that shopping item.")
+    return candidate
+
+
 async def _locked_candidate(
     session: AsyncSession, *, account_id: uuid.UUID, candidate_id: uuid.UUID,
 ) -> ShoppingCandidate:
@@ -691,7 +797,7 @@ async def save_care_decision(
         row.followed_recommendation = followed
     await session.flush()
     await session.refresh(row)
-    await record_decision_event(session, row=row, candidate=candidate)
+    await _record_decision_event(session, row=row, candidate=candidate)
     return row
 
 
@@ -760,7 +866,7 @@ async def save_fragrance_decision(
         row.followed_recommendation = followed
     await session.flush()
     await session.refresh(row)
-    await record_decision_event(session, row=row, candidate=candidate)
+    await _record_decision_event(session, row=row, candidate=candidate)
     return row
 
 
@@ -771,7 +877,7 @@ __all__ = [
     "history_coverage",
     "decision_history",
     "purchase_guard",
-    "record_decision_event",
+    "record_decision_event_for_account",
     "serialize_decision_event",
     "save_care_decision",
     "save_fragrance_decision",

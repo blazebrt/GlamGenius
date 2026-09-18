@@ -343,7 +343,12 @@ async def test_event_write_failure_rolls_back_mutable_decision(
     async def fail_event(*_args, **_kwargs):
         raise RuntimeError("forced Step 9A event failure")
 
-    monkeypatch.setattr(decision_memory, "record_decision_event", fail_event)
+    # The private name: Step 11C took the event writer out of ``__all__``
+    # because it writes to an append-only ledger and takes no principal, so it
+    # cannot prove the two objects it is handed belong together. This test
+    # still wants to make that write fail, which it does by patching the one
+    # place it now lives.
+    monkeypatch.setattr(decision_memory, "_record_decision_event", fail_event)
     with pytest.raises(RuntimeError, match="forced Step 9A event failure"):
         await app_client.post(
             f"/api/v2/shopping/candidates/{candidate_id}/decision?on=2026-08-20",

@@ -506,8 +506,36 @@ async def serialize_evaluation(session: AsyncSession, evaluation: PurchaseEvalua
 VERDICT_TO_DECISION = {"buy": "bought", "wait": "waiting", "skip": "skipped"}
 
 
-async def save_decision(session: AsyncSession, evaluation: PurchaseEvaluation, decision: str, note: str | None) -> PurchaseDecision:
-    from app.domains.purchase.decision_memory import record_decision_event, style_recommendation_snapshot
+async def save_decision(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    evaluation: PurchaseEvaluation,
+    decision: str,
+    note: str | None,
+) -> PurchaseDecision:
+    """Persist a Style purchase outcome from an evaluation.
+
+    The ``style_purchase`` strategy is no longer in the purchase registry and
+    nothing in the application reaches this today, but a write path that would
+    be wrong if it were called is worth keeping honest rather than leaving as a
+    trap for whoever revives it.
+
+    ``principal_account_id`` is required and is not read back out of the
+    evaluation. An evaluation is an ORM object a caller fetched, and fetching
+    one by primary key finds another account's just as readily as this one's —
+    the same reason a ``DecisionSubject`` and a ``ShoppingCandidate`` stopped
+    being taken at face value. The event append goes through the authority that
+    loads the canonical candidate under this principal.
+    """
+    from app.domains.purchase.decision_memory import (
+        record_decision_event_for_account,
+        style_recommendation_snapshot,
+    )
+    from app.shared.errors.exceptions import IdentityInvariantError
+
+    if evaluation.account_id != principal_account_id:
+        raise IdentityInvariantError("purchase_decision_candidate_identity_mismatch")
 
     # Serialize an evaluation's current state and its append-only history.
     # A process-local lock would not protect another API worker.
@@ -539,9 +567,12 @@ async def save_decision(session: AsyncSession, evaluation: PurchaseEvaluation, d
         row.recommendation_snapshot = style_recommendation_snapshot(evaluation)
         row.decision, row.note, row.followed_recommendation = decision, note, followed
     await session.flush()
-    candidate = await session.get(ShoppingCandidate, evaluation.candidate_id)
-    if candidate is not None:
-        await record_decision_event(session, row=row, candidate=candidate)
+    # The candidate is not fetched here and handed over. The authority loads it
+    # by this decision's own candidate id *and* the principal, so an id that
+    # names another account's product is not found rather than believed.
+    await record_decision_event_for_account(
+        session, principal_account_id=principal_account_id, row=row,
+    )
     return row
 
 
