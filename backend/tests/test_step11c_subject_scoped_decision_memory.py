@@ -1443,7 +1443,7 @@ class TestExportAndDeletion:
 
         async with get_sessionmaker()() as session:
             payload = await privacy_export.build_export(session, account_id)
-        assert payload["schema_version"] == "1.2"
+        assert payload["schema_version"] == "1.3"
 
         shopping = {s["household_subject_id"]: s for s in payload["domains"]["shopping"]["subjects"]}
         assert [d["decision"] for d in shopping[self_id]["decisions"]] == ["waiting"]

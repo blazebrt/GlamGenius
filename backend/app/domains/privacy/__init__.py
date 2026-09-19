@@ -56,7 +56,8 @@ from enum import StrEnum
 # attributed to the account holder. Shopping candidates and evaluations stay
 # account-wide, because they are things the account is considering rather than
 # decisions a person took.
-EXPORT_SCHEMA_VERSION = "1.2"
+# 1.3 — Step 11D. Care preference and Shelf Manager identity are subject-aware.
+EXPORT_SCHEMA_VERSION = "1.3"
 
 
 class Classification(StrEnum):
@@ -101,6 +102,7 @@ REGISTRY: dict[str, Classification] = {
     "inventory_product_links": Classification.INCLUDED,
     "inventory_attributes": Classification.INCLUDED,  # via inventory_items
     "inventory_events": Classification.INCLUDED,
+    "care_product_preferences": Classification.INCLUDED,
     "inventory_item_images": Classification.INCLUDED,  # via inventory_items
     "inventory_import_jobs": Classification.INCLUDED,
     # What a shelf photo appeared to show, and what the person did about

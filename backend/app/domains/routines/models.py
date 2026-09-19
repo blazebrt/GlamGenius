@@ -498,6 +498,9 @@ class ShelfManagerDecisionEvent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "shelf_manager_decision_events"
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    household_subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("family_profiles.id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED")
+    )
     decision_key: Mapped[str] = mapped_column(String(200), nullable=False)
     decision_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     choice: Mapped[str] = mapped_column(String(24), nullable=False)

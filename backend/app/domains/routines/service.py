@@ -31,6 +31,7 @@ from app.domains.care import routine_plan as care_routine_plan
 from app.domains.care import service as care_service
 from app.domains.care import simplification as care_simplification
 from app.domains.care import snapshot as care_snapshot
+from app.domains.family.decision_subject import DecisionSubject
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryAttribute, InventoryItem
 from app.domains.planning import clock
@@ -76,7 +77,8 @@ ROUTINE_ENGINE_VERSION = "care-v3-03.5"
 
 
 async def _current_care_decisions(
-    session: AsyncSession, account_id: uuid.UUID, plan_date: date | None
+    session: AsyncSession, account_id: uuid.UUID, plan_date: date | None,
+    decision_subject: DecisionSubject | None = None,
 ):
     """Assemble the single account-scoped Care safety truth for a day."""
     day_context = await planning_context.gather(
@@ -84,6 +86,7 @@ async def _current_care_decisions(
     )
     care_context = await care_service.build_care_context(
         session, account_id, day_context=day_context,
+        decision_subject=decision_subject,
     )
     decisions = care_decisions.evaluate_care_context(care_context)
     return day_context, care_context, decisions
@@ -296,11 +299,13 @@ async def _store_expiry_events(
 
 
 async def analyse_shelf(
-    session: AsyncSession, *, account_id: uuid.UUID, body: ShelfAnalyseRequest
+    session: AsyncSession, *, account_id: uuid.UUID, body: ShelfAnalyseRequest,
+    decision_subject: DecisionSubject | None = None,
 ) -> dict[str, Any]:
     """Re-read the shelf, store what the engine concluded, return the summary."""
     context = await shelf.gather(
         session, account_id=account_id, climate=body.climate, today=body.as_of,
+        decision_subject=decision_subject,
     )
 
     parsed = 0
@@ -312,20 +317,34 @@ async def analyse_shelf(
     await session.flush()
     refreshed = await shelf.gather(
         session, account_id=account_id, climate=body.climate, today=body.as_of,
+        decision_subject=decision_subject,
     )
     result = shelf.summary(refreshed)
     result["analysed_at"] = utcnow().isoformat()
     result["ingredient_rows_written"] = parsed
     result["knowledge_version"] = ONTOLOGY_VERSION
+    if decision_subject is not None:
+        from app.domains.family.decision_subject import canonicalize_decision_subject, serialize_decision_subject
+        checked = await canonicalize_decision_subject(session, principal_account_id=account_id, decision_subject=decision_subject)
+        result["subject"] = serialize_decision_subject(checked)
     return result
 
 
 async def shelf_summary(
-    session: AsyncSession, *, account_id: uuid.UUID, climate: str | None = None
+    session: AsyncSession, *, account_id: uuid.UUID, climate: str | None = None,
+    decision_subject: DecisionSubject | None = None,
 ) -> dict[str, Any]:
-    context = await shelf.gather(session, account_id=account_id, climate=climate)
+    context = await shelf.gather(session, account_id=account_id, climate=climate, decision_subject=decision_subject)
     result = shelf.summary(context)
     result["knowledge_version"] = ONTOLOGY_VERSION
+    if decision_subject is not None:
+        from app.domains.family.decision_subject import canonicalize_decision_subject, serialize_decision_subject
+        checked = await canonicalize_decision_subject(session, principal_account_id=account_id, decision_subject=decision_subject)
+        result["subject"] = serialize_decision_subject(checked)
+        from app.domains.care.subject_preferences import read_preference_state
+        item_ids = tuple(item.id for item in context.owned)
+        _, _, coverage = await read_preference_state(session, principal_account_id=account_id, decision_subject=checked, item_ids=item_ids)
+        result["preference_coverage"] = coverage.as_dict()
     return result
 
 
@@ -704,6 +723,38 @@ async def _care_product_preference(
     pause: bool,
 ) -> dict[str, Any]:
     """Apply one explicit Care product pause/resume in the current transaction."""
+    from app.domains.care.subject_preferences import set_preference
+    from app.domains.family.decision_subject import account_holder_subject, canonicalize_decision_subject_for_write
+    checked_subject = await canonicalize_decision_subject_for_write(
+        session, principal_account_id=account_id,
+        decision_subject=account_holder_subject(account_id),
+    )
+    if checked_subject.subject_id is not None:
+        item = await inventory_service.owned_item(session, account_id, item_id)
+        if item.category not in ("beauty", "hair"):
+            raise ValidationFailedError(
+                "Only Skin Care and Hair Care products can be paused from Care routines.", field="item_id",
+            )
+        if item.status != "active" or item.verification_state != "confirmed":
+            raise ValidationFailedError(
+                "Please confirm this product before changing its Care routine preference.", field="item_id",
+            )
+        await set_preference(
+            session, principal_account_id=account_id, decision_subject=checked_subject,
+            item_id=item_id, kind="paused", active=pause, authority_source="direct_user",
+        )
+        await inventory_service.record_event(
+            session, item, "care_routine_paused" if pause else "care_routine_resumed",
+            {"from_state": "active" if pause else "paused", "to_state": "paused" if pause else "active"},
+            household_subject_id=checked_subject.subject_id,
+        )
+        return {
+            "product_preference_version": product_preferences.CARE_PRODUCT_PREFERENCE_VERSION,
+            "changed": True, "status": "paused" if pause else "active",
+            "inventory_item_id": str(item.id), "display_name": item.display_name,
+            "category": _customer_category(item.category), "affected_slots": [],
+            "message": "Paused from your Care routine. It stays in your inventory." if pause else "Available to your Care routine again.",
+        }
     item = await inventory_service.owned_item(session, account_id, item_id)
     if item.category not in ("beauty", "hair"):
         raise ValidationFailedError(
@@ -851,6 +902,35 @@ async def _selection_preference(
     prefer: bool,
 ) -> dict[str, Any]:
     """Apply an explicit product selection preference atomically."""
+    from app.domains.care.subject_preferences import set_preference
+    from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
+    from app.domains.family.subject import account_holder_subject
+    checked_subject = await canonicalize_decision_subject_for_write(
+        session, principal_account_id=account_id,
+        decision_subject=account_holder_subject(account_id),
+    )
+    if checked_subject.subject_id is not None:
+        item = await inventory_service.owned_item(session, account_id, item_id)
+        if item.category not in ("beauty", "hair"):
+            raise ValidationFailedError(
+                "Only Skin Care and Hair Care products can be made preferred.", field="item_id",
+            )
+        await set_preference(
+            session, principal_account_id=account_id, decision_subject=checked_subject,
+            item_id=item_id, kind="preferred", active=prefer, authority_source="direct_user",
+        )
+        await inventory_service.record_event(
+            session, item, "care_routine_preferred" if prefer else "care_routine_preference_cleared",
+            {"preferred": prefer}, household_subject_id=checked_subject.subject_id,
+        )
+        return {
+            "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
+            "changed": True, "status": "preferred" if prefer else "standard",
+            "inventory_item_id": str(item.id), "display_name": item.display_name,
+            "category": _customer_category(item.category), "slot": None,
+            "cleared_preferred_item_ids": [], "selection_applied": prefer,
+            "message": "This product is preferred for your Care routine." if prefer else "Preference removed from your Care routine.",
+        }
     item = await inventory_service.owned_item(session, account_id, item_id)
     if item.category not in ("beauty", "hair"):
         raise ValidationFailedError(
@@ -1755,9 +1835,37 @@ def _manager_response(
     return payload
 
 
-async def shelf_manager(session: AsyncSession, *, account_id: uuid.UUID) -> dict[str, Any]:
+async def _build_manager_queue(session: AsyncSession, *, account_id: uuid.UUID, decision_subject: DecisionSubject | None = None) -> manager.ManagerQueue:
+    # The account-holder path predates subject-aware queue builders.  Keep its
+    # call shape stable for integrations that replace the legacy builder, while
+    # still passing an explicit household subject when one is selected.
+    if decision_subject is None or decision_subject.is_account_holder:
+        return await manager.build_queue(session, account_id=account_id)
+    return await manager.build_queue(session, account_id=account_id, decision_subject=decision_subject)
+
+
+async def shelf_manager(session: AsyncSession, *, account_id: uuid.UUID, decision_subject: DecisionSubject | None = None) -> dict[str, Any]:
     """The one thing your manager has decided, and how much is behind it."""
-    return _manager_payload(await manager.build_queue(session, account_id=account_id))
+    payload = _manager_payload(await _build_manager_queue(session, account_id=account_id, decision_subject=decision_subject))
+    if decision_subject is not None:
+        from app.domains.family.decision_subject import canonicalize_decision_subject, serialize_decision_subject
+        checked = await canonicalize_decision_subject(session, principal_account_id=account_id, decision_subject=decision_subject)
+        payload["subject"] = serialize_decision_subject(checked)
+        from app.domains.family.models import FamilyCircle
+        ambiguous = await session.scalar(
+            select(ShelfManagerDecisionEvent.id)
+            .join(FamilyCircle, FamilyCircle.account_id == ShelfManagerDecisionEvent.account_id)
+            .where(
+                ShelfManagerDecisionEvent.account_id == account_id,
+                ShelfManagerDecisionEvent.household_subject_id.is_(None),
+                ShelfManagerDecisionEvent.created_at >= FamilyCircle.created_at,
+            ).limit(1)
+        )
+        payload["manager_history_coverage"] = {
+            "unattributed_legacy_events_present": ambiguous is not None,
+            "complete_for_subject": ambiguous is None,
+        }
+    return payload
 
 
 async def _manager_event_for_key(
@@ -1769,12 +1877,23 @@ async def _manager_event_for_key(
     ))).scalar_one_or_none()
 
 
+def _manager_event_matches_subject(event: ShelfManagerDecisionEvent, decision_subject: DecisionSubject) -> bool:
+    if event.household_subject_id == decision_subject.subject_id:
+        return True
+    return (
+        event.household_subject_id is None
+        and decision_subject.is_account_holder
+        and decision_subject.legacy_row_is_mine(event.created_at)
+    )
+
+
 async def _manager_replay(
     session: AsyncSession,
     *,
     account_id: uuid.UUID,
     existing: ShelfManagerDecisionEvent,
     body: ShelfManagerRespondRequest,
+    decision_subject: DecisionSubject | None = None,
 ) -> dict[str, Any]:
     """Answer a retry without applying anything a second time.
 
@@ -1793,14 +1912,18 @@ async def _manager_replay(
             "This submission key has already been used for a different answer.",
             field="client_mutation_id",
         )
-    queue = await manager.build_queue(session, account_id=account_id)
-    return _manager_response(
+    queue = await _build_manager_queue(session, account_id=account_id, decision_subject=decision_subject)
+    response = _manager_response(
         queue,
         choice=existing.choice,
         action_kind=existing.action_kind,
         action_applied=False,
         replayed=True,
     )
+    if decision_subject is not None:
+        from app.domains.family.decision_subject import serialize_decision_subject
+        response["subject"] = serialize_decision_subject(decision_subject)
+    return response
 
 
 def _authorised_primary(
@@ -1854,6 +1977,7 @@ async def shelf_manager_respond(
     account_id: uuid.UUID,
     account_id_str: str,
     body: ShelfManagerRespondRequest,
+    decision_subject: DecisionSubject | None = None,
 ) -> dict[str, Any]:
     """Answer the decision at the front of the queue.
 
@@ -1879,12 +2003,40 @@ async def shelf_manager_respond(
     Steps 4 and 5 commit together or not at all. An answer is never recorded
     for a change that did not happen.
     """
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject,
+        canonicalize_decision_subject_for_write,
+    )
+    # The legacy subject-less endpoint historically compiled the account-holder
+    # queue without an account-row lock. Keep that compatibility path so two
+    # concurrent legacy requests can reach the existing item-lock race gate;
+    # explicit household subjects still take the full write-authority lock.
+    checked_subject = await (
+        canonicalize_decision_subject_for_write(
+            session, principal_account_id=account_id, decision_subject=decision_subject,
+        )
+        if decision_subject is not None
+        else canonicalize_decision_subject(
+            session, principal_account_id=account_id, decision_subject=None,
+        )
+    )
     existing = await _manager_event_for_key(session, account_id, body.client_mutation_id)
     if existing is not None:
-        return await _manager_replay(session, account_id=account_id, existing=existing, body=body)
+        # The event's subject is intentionally compared before replay details
+        # are returned; a key reused for another household member is generic
+        # conflict, never an identity oracle.
+        if not _manager_event_matches_subject(existing, checked_subject):
+            raise ValidationFailedError(
+                "This submission key has already been used for a different answer.",
+                field="client_mutation_id",
+            )
+        return await _manager_replay(
+            session, account_id=account_id, existing=existing, body=body,
+            decision_subject=checked_subject,
+        )
 
     decision = _authorised_primary(
-        await manager.build_queue(session, account_id=account_id), body,
+        await _build_manager_queue(session, account_id=account_id, decision_subject=checked_subject), body,
     )
     target_id = (
         uuid.UUID(decision.action.inventory_item_id)
@@ -1902,14 +2054,20 @@ async def shelf_manager_respond(
         # the race must still be free, and it is the same answer either way.
         settled = await _manager_event_for_key(session, account_id, body.client_mutation_id)
         if settled is not None:
+            if not _manager_event_matches_subject(settled, checked_subject):
+                raise ValidationFailedError(
+                    "This submission key has already been used for a different answer.",
+                    field="client_mutation_id",
+                )
             return await _manager_replay(
                 session, account_id=account_id, existing=settled, body=body,
+                decision_subject=checked_subject,
             )
         # Then the queue, which may have moved while we waited: a different
         # submission key answering a decision somebody else has already applied
         # is not a retry, and is told so rather than applied twice.
         decision = _authorised_primary(
-            await manager.build_queue(session, account_id=account_id), body,
+            await _build_manager_queue(session, account_id=account_id, decision_subject=checked_subject), body,
         )
 
     choice = manager.stored_choice_for(decision.kind, body.choice)
@@ -1918,6 +2076,7 @@ async def shelf_manager_respond(
     inserted = (await session.execute(
         pg_insert(ShelfManagerDecisionEvent).values(
             account_id=account_id,
+            household_subject_id=checked_subject.subject_id,
             decision_key=decision.decision_key,
             decision_fingerprint=decision.fingerprint,
             choice=choice,
@@ -1934,20 +2093,52 @@ async def shelf_manager_respond(
             raise ValidationFailedError(
                 "We could not record that answer. Please try again.", field="client_mutation_id",
             )
-        return await _manager_replay(session, account_id=account_id, existing=replayed, body=body)
+        if not _manager_event_matches_subject(replayed, checked_subject):
+            raise ValidationFailedError(
+                "This submission key has already been used for a different answer.",
+                field="client_mutation_id",
+            )
+        return await _manager_replay(
+            session, account_id=account_id, existing=replayed, body=body,
+            decision_subject=checked_subject,
+        )
 
     applied = False
     if will_mutate and mutate is not None and target_id is not None:
-        await mutate(
-            session, account_id=account_id, account_id_str=account_id_str, item_id=target_id,
-        )
+        if checked_subject.is_account_holder:
+            await mutate(
+                session, account_id=account_id, account_id_str=account_id_str, item_id=target_id,
+            )
+        else:
+            from app.domains.care.subject_preferences import set_preference
+            kind = {
+                manager.ACTION_PAUSE_PRODUCT: "paused",
+                manager.ACTION_RESUME_PRODUCT: "paused",
+                manager.ACTION_PREFER_PRODUCT: "preferred",
+                manager.ACTION_UNPREFER_PRODUCT: "preferred",
+            }[decision.action.kind]
+            active = decision.action.kind in {
+                manager.ACTION_PAUSE_PRODUCT, manager.ACTION_PREFER_PRODUCT,
+            }
+            await set_preference(
+                session, principal_account_id=account_id,
+                decision_subject=checked_subject, item_id=target_id,
+                kind=kind, active=active, authority_source="shelf_manager",
+            )
         applied = True
 
     await session.flush()
-    return _manager_response(
-        await manager.build_queue(session, account_id=account_id),
+    response = _manager_response(
+        await _build_manager_queue(session, account_id=account_id, decision_subject=checked_subject),
         choice=choice,
         action_kind=decision.action.kind,
         action_applied=applied,
         replayed=False,
     )
+    from app.domains.family.decision_subject import serialize_decision_subject
+    response["subject"] = serialize_decision_subject(checked_subject)
+    response["manager_history_coverage"] = {
+        "unattributed_legacy_events_present": False,
+        "complete_for_subject": True,
+    }
+    return response

@@ -1479,7 +1479,7 @@ async def test_the_log_holds_identifiers_and_state_and_nothing_written(
     assert columns == {
         "id", "created_at", "updated_at", "account_id", "decision_key",
         "decision_fingerprint", "choice", "action_kind",
-        "target_inventory_item_id", "client_mutation_id",
+        "target_inventory_item_id", "client_mutation_id", "household_subject_id",
     }
     # No note, no payload, no reason, nothing a person or a label wrote.
     assert not columns & {"note", "payload", "reason", "detail", "text", "headline"}

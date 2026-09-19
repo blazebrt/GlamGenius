@@ -6,9 +6,17 @@ so there is nothing to tamper with.
 """
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.family.subject import (
+    AGE_BAND_NOT_STATED,
+    SUBJECT_HOUSEHOLD_MEMBER,
+    ResolvedSubject,
+    account_holder_subject,
+)
 from app.domains.routines import service
 from app.domains.routines.schemas import ShelfAnalyseRequest, ShelfManagerRespondRequest
 from app.shared.database.sql import get_session
@@ -17,14 +25,27 @@ from app.shared.security.deps import CurrentAccount, get_current_account, requir
 router = APIRouter(dependencies=[Depends(require_flag("v2_routines"))])
 
 
+def _subject_claim(subject_id: uuid.UUID | None, account_id: uuid.UUID) -> ResolvedSubject:
+    if subject_id is None:
+        return account_holder_subject(account_id)
+    return ResolvedSubject(
+        kind=SUBJECT_HOUSEHOLD_MEMBER, account_id=account_id, subject_id=subject_id,
+        relation="other", age_band=AGE_BAND_NOT_STATED,
+    )
+
+
 @router.post("/shelf/analyse")
 async def analyse_shelf(
     body: ShelfAnalyseRequest,
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
     """Re-read your beauty and hair products and store what we worked out."""
-    result = await service.analyse_shelf(session, account_id=current.account_id, body=body)
+    result = await service.analyse_shelf(
+        session, account_id=current.account_id, body=body,
+        decision_subject=_subject_claim(subject_id, current.account_id),
+    )
     await session.commit()
     return result
 
@@ -32,11 +53,15 @@ async def analyse_shelf(
 @router.get("/shelf/summary")
 async def shelf_summary(
     climate: str | None = Query(None, max_length=24),
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
     """Your whole shelf at a glance. Counted, never scored."""
-    return await service.shelf_summary(session, account_id=current.account_id, climate=climate)
+    return await service.shelf_summary(
+        session, account_id=current.account_id, climate=climate,
+        decision_subject=_subject_claim(subject_id, current.account_id),
+    )
 
 
 @router.get("/shelf/expiring")
@@ -69,6 +94,7 @@ async def shelf_value_to_recover(
 
 @router.get("/shelf/manager")
 async def shelf_manager(
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
@@ -77,12 +103,16 @@ async def shelf_manager(
     Read-only, and it never runs out of an honest answer: an empty shelf and a
     shelf with nothing to decide both return a real message rather than filler.
     """
-    return await service.shelf_manager(session, account_id=current.account_id)
+    return await service.shelf_manager(
+        session, account_id=current.account_id,
+        decision_subject=_subject_claim(subject_id, current.account_id),
+    )
 
 
 @router.post("/shelf/manager/respond")
 async def shelf_manager_respond(
     body: ShelfManagerRespondRequest,
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
@@ -97,6 +127,13 @@ async def shelf_manager_respond(
         account_id=current.account_id,
         account_id_str=current.account_id_str,
         body=body,
+        # Preserve the legacy subject-less write path when no household member
+        # was selected. The service canonicalizes the account holder read-only
+        # before the existing item lock; named household writes use the full
+        # subject write authority.
+        decision_subject=(
+            _subject_claim(subject_id, current.account_id) if subject_id is not None else None
+        ),
     )
     await session.commit()
     return result

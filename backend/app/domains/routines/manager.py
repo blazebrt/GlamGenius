@@ -57,6 +57,8 @@ from app.domains.care.product_preferences import (
     is_effective_user_pause,
     is_effective_user_preference,
 )
+from app.domains.care.subject_preferences import read_preference_state
+from app.domains.family.decision_subject import DecisionSubject, canonicalize_decision_subject
 from app.domains.inventory.models import InventoryAttribute, InventoryEvent
 from app.domains.routines import rules as rules_engine
 from app.domains.routines import shelf
@@ -757,11 +759,19 @@ def compile_queue(
 
 
 async def care_preference_state(
-    session: AsyncSession, item_ids: Sequence[uuid.UUID]
+    session: AsyncSession, item_ids: Sequence[uuid.UUID], *,
+    account_id: uuid.UUID | None = None,
+    decision_subject: DecisionSubject | None = None,
 ) -> tuple[frozenset[uuid.UUID], frozenset[uuid.UUID]]:
     """Current paused and preferred products, read the one canonical way."""
     if not item_ids:
         return frozenset(), frozenset()
+    if account_id is not None:
+        paused, preferred, _ = await read_preference_state(
+            session, principal_account_id=account_id, decision_subject=decision_subject,
+            item_ids=tuple(item_ids),
+        )
+        return paused, preferred
     rows = (await session.execute(
         select(InventoryAttribute).where(
             InventoryAttribute.item_id.in_(tuple(item_ids)),
@@ -785,15 +795,21 @@ async def care_preference_state(
     return paused, preferred
 
 
-async def declined_fingerprints(session: AsyncSession, account_id: uuid.UUID) -> dict[str, str]:
+async def declined_fingerprints(
+    session: AsyncSession, account_id: uuid.UUID, *, decision_subject: DecisionSubject | None = None,
+) -> dict[str, str]:
     """The last answer for every decision key this account has responded to.
 
     Only the latest answer counts, and only a "no" quietens anything. Saying no
     once and then yes later must not leave the decision silenced.
     """
+    checked = await canonicalize_decision_subject(
+        session, principal_account_id=account_id, decision_subject=decision_subject,
+    )
+    from app.domains.family.decision_subject import subject_row_filter
     rows = (await session.execute(
         select(ShelfManagerDecisionEvent)
-        .where(ShelfManagerDecisionEvent.account_id == account_id)
+        .where(ShelfManagerDecisionEvent.account_id == account_id, subject_row_filter(ShelfManagerDecisionEvent, checked))
         .order_by(ShelfManagerDecisionEvent.created_at, ShelfManagerDecisionEvent.id)
     )).scalars().all()
     latest: dict[str, ShelfManagerDecisionEvent] = {row.decision_key: row for row in rows}
@@ -824,6 +840,7 @@ async def give_back_candidates(
     account_id: uuid.UUID,
     products: dict[str, ShelfProduct],
     paused_item_ids: frozenset[uuid.UUID],
+    decision_subject: DecisionSubject | None = None,
 ) -> list[GiveBackCandidate]:
     """Products this manager paused that the person could have back.
 
@@ -836,10 +853,15 @@ async def give_back_candidates(
       they paused it themselves afterwards. Offering to undo that would be the
       manager overruling them.
     """
+    checked = await canonicalize_decision_subject(
+        session, principal_account_id=account_id, decision_subject=decision_subject,
+    )
+    from app.domains.family.decision_subject import subject_row_filter
     rows = (await session.execute(
         select(ShelfManagerDecisionEvent)
         .where(
             ShelfManagerDecisionEvent.account_id == account_id,
+            subject_row_filter(ShelfManagerDecisionEvent, checked),
             ShelfManagerDecisionEvent.choice == CHOICE_ACCEPTED,
             ShelfManagerDecisionEvent.action_kind == ACTION_PAUSE_PRODUCT,
             ShelfManagerDecisionEvent.target_inventory_item_id.is_not(None),
@@ -856,6 +878,7 @@ async def give_back_candidates(
     pause_events = (await session.execute(
         select(InventoryEvent).where(
             InventoryEvent.account_id == account_id,
+            subject_row_filter(InventoryEvent, checked, timestamp=InventoryEvent.created_at),
             InventoryEvent.item_id.in_(tuple(accepted)),
             InventoryEvent.event_type == "care_routine_paused",
         ).order_by(InventoryEvent.created_at, InventoryEvent.id)
@@ -886,26 +909,33 @@ async def give_back_candidates(
 
 
 async def build_queue(
-    session: AsyncSession, *, account_id: uuid.UUID, today: date | None = None
+    session: AsyncSession, *, account_id: uuid.UUID, today: date | None = None,
+    decision_subject: DecisionSubject | None = None,
 ) -> ManagerQueue:
     """Read everything the manager is allowed to see, then compile."""
-    context = await shelf.gather(session, account_id=account_id, today=today)
+    checked = await canonicalize_decision_subject(
+        session, principal_account_id=account_id, decision_subject=decision_subject,
+    )
+    context = await shelf.gather(session, account_id=account_id, today=today, decision_subject=checked)
     products: dict[str, ShelfProduct] = {}
     for category in MANAGER_CATEGORIES:
         for product in shelf.build(context, category):
             products[product.id] = product
 
     item_ids = [product.item.id for product in products.values()]
-    paused, preferred = await care_preference_state(session, item_ids)
+    paused, preferred = await care_preference_state(
+        session, item_ids, account_id=account_id, decision_subject=checked,
+    )
     candidates = await give_back_candidates(
         session, account_id=account_id, products=products, paused_item_ids=paused,
+        decision_subject=checked,
     )
     return compile_queue(
         context,
         paused_item_ids=paused,
         preferred_item_ids=preferred,
         give_back_candidates=candidates,
-        declined=await declined_fingerprints(session, account_id),
+        declined=await declined_fingerprints(session, account_id, decision_subject=checked),
     )
 
 

@@ -27,6 +27,7 @@ PREVIOUS_REVISION = "e3f4g5h6i7"
 #: it first. Named rather than counted: ``downgrade -2`` would silently follow
 #: the chain wherever it grows next.
 STEP_11C_REVISION = "g5h6i7j8k9"
+CURRENT_HEAD_REVISION = "h6i7j8k9l0"
 
 pytestmark = pytest.mark.asyncio
 
@@ -117,7 +118,6 @@ async def test_downgrade_refuses_while_two_people_share_an_account(db_clean):
     # The engine holds pooled connections; alembic runs in its own process and
     # must not be racing this one for the same rows.
     await sql.dispose_engine()
-    restored = False
     try:
         # Step past Step 11C first. It has no attributed decision memory here,
         # so its own refusal does not fire and this is an ordinary downgrade.
@@ -153,11 +153,10 @@ async def test_downgrade_refuses_while_two_people_share_an_account(db_clean):
         assert "uq_appearance_profile_household_subject" in indexes
         assert "uq_appearance_profile_account_legacy" in indexes
         assert column == 1
-        restored = True
     finally:
         await sql.dispose_engine()
-        if not restored:
-            await _alembic("upgrade", "head")
+        returncode, output = await _alembic("upgrade", "head")
+        assert returncode == 0, output
 
 
 async def test_downgrade_and_re_upgrade_succeed_once_the_data_allows_it(db_clean):
@@ -186,4 +185,4 @@ async def test_downgrade_and_re_upgrade_succeed_once_the_data_allows_it(db_clean
     finally:
         returncode, output = await _alembic("upgrade", "head")
         assert returncode == 0, output
-    assert await _current_revision() == STEP_11C_REVISION
+    assert await _current_revision() == CURRENT_HEAD_REVISION
