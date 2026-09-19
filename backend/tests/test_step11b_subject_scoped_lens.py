@@ -1793,7 +1793,7 @@ class TestExportGrouping:
             "onboarding_sessions",
         ):
             assert table in holder, table
-        assert payload["schema_version"] == "1.2"
+        assert payload["schema_version"] == "1.3"
 
     async def test_two_subjects_are_grouped_without_leaking(
         self, db_clean, app_client, registered_supabase_user,

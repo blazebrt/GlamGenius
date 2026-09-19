@@ -346,12 +346,18 @@ async def test_preference_privacy_export_and_no_usage_side_effects(
     preferred = await app_client.post(f"/api/v2/routines/products/{item_id}/prefer", headers=auth(token))
     assert preferred.status_code == 200, preferred.text
     export = (await app_client.get("/api/v2/privacy/export", headers=auth(token))).json()
-    assert any(row["key"] == CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY for row in export["domains"]["inventory"]["attributes"])
+    assert any(
+        row["key"] == CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY
+        for row in export["domains"]["inventory"]["care_preference_history"]["account_holder_legacy"]
+    )
     assert any(row["event_type"] == "care_routine_preferred" for row in export["domains"]["inventory"]["events"])
     assert any(run["inputs"].get("care_adjustment", {}).get("kind") == "explicit_product_preference" for run in export["domains"]["routines"]["recommendation_runs"])
     await app_client.post(f"/api/v2/routines/products/{item_id}/unprefer", headers=auth(token))
     export = (await app_client.get("/api/v2/privacy/export", headers=auth(token))).json()
-    assert not any(row["key"] == CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY for row in export["domains"]["inventory"]["attributes"])
+    assert not any(
+        row["key"] == CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY
+        for row in export["domains"]["inventory"]["care_preference_history"]["account_holder_legacy"]
+    )
     assert {row["event_type"] for row in export["domains"]["inventory"]["events"]} >= {"care_routine_preferred", "care_routine_preference_cleared"}
     async with factory() as session:
         item = await session.get(InventoryItem, uuid.UUID(item_id))

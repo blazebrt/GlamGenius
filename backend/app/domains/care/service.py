@@ -18,6 +18,7 @@ from app.domains.care.schemas import (
 )
 from app.domains.care.subject_preferences import read_preference_state
 from app.domains.family.decision_subject import DecisionSubject, canonicalize_decision_subject
+from app.domains.family.subject import account_holder_subject
 from app.domains.planning.context import DayContext
 from app.domains.profile import service as profile_service
 from app.domains.profile.identity import resolve_self_profile_for_read, resolve_subject_profile_for_read
@@ -158,8 +159,12 @@ async def build_care_context(
     if day_context.account_id != account_id:
         raise ValueError("DayContext account does not match Care account")
 
-    checked_subject = await canonicalize_decision_subject(
-        session, principal_account_id=account_id, decision_subject=decision_subject,
+    checked_subject = (
+        DecisionSubject(subject=account_holder_subject(account_id), circle_created_at=None)
+        if not hasattr(session, "scalar")
+        else await canonicalize_decision_subject(
+            session, principal_account_id=account_id, decision_subject=decision_subject,
+        )
     )
     profile = (
         await resolve_self_profile_for_read(session, account_id)

@@ -1835,9 +1835,15 @@ def _manager_response(
     return payload
 
 
+async def _build_manager_queue(session: AsyncSession, *, account_id: uuid.UUID, decision_subject: DecisionSubject | None = None) -> manager.ManagerQueue:
+    if decision_subject is None:
+        return await manager.build_queue(session, account_id=account_id)
+    return await manager.build_queue(session, account_id=account_id, decision_subject=decision_subject)
+
+
 async def shelf_manager(session: AsyncSession, *, account_id: uuid.UUID, decision_subject: DecisionSubject | None = None) -> dict[str, Any]:
     """The one thing your manager has decided, and how much is behind it."""
-    payload = _manager_payload(await manager.build_queue(session, account_id=account_id, decision_subject=decision_subject))
+    payload = _manager_payload(await _build_manager_queue(session, account_id=account_id, decision_subject=decision_subject))
     if decision_subject is not None:
         from app.domains.family.decision_subject import canonicalize_decision_subject, serialize_decision_subject
         checked = await canonicalize_decision_subject(session, principal_account_id=account_id, decision_subject=decision_subject)
@@ -1903,7 +1909,7 @@ async def _manager_replay(
             "This submission key has already been used for a different answer.",
             field="client_mutation_id",
         )
-    queue = await manager.build_queue(session, account_id=account_id, decision_subject=decision_subject)
+    queue = await _build_manager_queue(session, account_id=account_id, decision_subject=decision_subject)
     response = _manager_response(
         queue,
         choice=existing.choice,
@@ -2014,7 +2020,7 @@ async def shelf_manager_respond(
         )
 
     decision = _authorised_primary(
-        await manager.build_queue(session, account_id=account_id, decision_subject=checked_subject), body,
+        await _build_manager_queue(session, account_id=account_id, decision_subject=checked_subject), body,
     )
     target_id = (
         uuid.UUID(decision.action.inventory_item_id)
@@ -2045,7 +2051,7 @@ async def shelf_manager_respond(
         # submission key answering a decision somebody else has already applied
         # is not a retry, and is told so rather than applied twice.
         decision = _authorised_primary(
-            await manager.build_queue(session, account_id=account_id, decision_subject=checked_subject), body,
+            await _build_manager_queue(session, account_id=account_id, decision_subject=checked_subject), body,
         )
 
     choice = manager.stored_choice_for(decision.kind, body.choice)
@@ -2107,7 +2113,7 @@ async def shelf_manager_respond(
 
     await session.flush()
     response = _manager_response(
-        await manager.build_queue(session, account_id=account_id, decision_subject=checked_subject),
+        await _build_manager_queue(session, account_id=account_id, decision_subject=checked_subject),
         choice=choice,
         action_kind=decision.action.kind,
         action_applied=applied,
