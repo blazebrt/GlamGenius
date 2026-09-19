@@ -232,6 +232,112 @@ async def test_shelf_manager_read_canonicalizes_a_member_forged_as_self_and_refu
     assert member_b not in str(raised.value)
 
 
+async def test_real_deletion_worker_erases_subject_scoped_shelf_state_and_retains_tombstone(
+    app_client, db_clean, registered_supabase_user, monkeypatch,
+):
+    """The production worker, rather than a direct delete, is the erasure proof.
+
+    The storage and Supabase boundaries are the normal test doubles; the
+    account/circle cascade and the worker's state machine are deliberately
+    real.  This remains separate from the migration's direct-FK cascade test:
+    a cascade alone cannot prove that the retained deletion tombstone reached
+    ``complete`` after the external stages.
+    """
+    from app.domains.care.models import CareProductPreference
+    from app.domains.family.models import FamilyProfile
+    from app.domains.identity.models import Account
+    from app.domains.inventory.models import InventoryItem
+    from app.domains.media.storage import factory as storage_factory
+    from app.domains.privacy import deletion_service
+    from app.domains.privacy.models import STATE_COMPLETE, AccountDeletionJob
+    from app.domains.routines.models import ShelfManagerDecisionEvent
+
+    from tests.test_account_deletion_state_machine import _FakeStorage, _FakeSupabaseAdmin
+
+    # These are external systems, so the worker can run end-to-end locally
+    # without a real object store or Supabase project.
+    storage = _FakeStorage()
+    admin = _FakeSupabaseAdmin()
+    storage_factory.set_storage(storage)
+    monkeypatch.setattr(deletion_service, "get_supabase_admin", lambda: admin)
+
+    try:
+        token, account_id = await registered_supabase_user()
+        await _seed(app_client)
+        item_id = await _expired_shelf(app_client, token)
+        member_id = await _member(app_client, token)
+        self_id = await _self_subject_id(account_id)
+
+        async with get_sessionmaker()() as session:
+            item = await session.get(InventoryItem, uuid.UUID(item_id))
+            assert item is not None
+            session.add_all((
+                CareProductPreference(
+                    account_id=account_id, household_subject_id=self_id,
+                    inventory_item_id=item.id, preference_kind="paused",
+                    authority_source="user_direct",
+                ),
+                CareProductPreference(
+                    account_id=account_id, household_subject_id=uuid.UUID(member_id),
+                    inventory_item_id=item.id, preference_kind="preferred",
+                    authority_source="shelf_manager",
+                ),
+                ShelfManagerDecisionEvent(
+                    account_id=account_id, household_subject_id=self_id,
+                    decision_key="step11d-erasure-self", decision_fingerprint="a" * 64,
+                    choice="accepted", action_kind="pause_product",
+                    target_inventory_item_id=item.id, client_mutation_id="step11d-erasure-self",
+                ),
+                ShelfManagerDecisionEvent(
+                    account_id=account_id, household_subject_id=uuid.UUID(member_id),
+                    decision_key="step11d-erasure-member", decision_fingerprint="b" * 64,
+                    choice="accepted", action_kind="prefer_product",
+                    target_inventory_item_id=item.id, client_mutation_id="step11d-erasure-member",
+                ),
+            ))
+            from app.domains.inventory import service as inventory_service
+            await inventory_service.record_event(
+                session, item, "care_routine_paused",
+                {"authority_source": "shelf_manager"},
+                household_subject_id=self_id,
+            )
+            await session.commit()
+
+        async with get_sessionmaker()() as session:
+            await deletion_service.request_deletion(session, account_id)
+            await session.commit()
+        async with get_sessionmaker()() as session:
+            assert await deletion_service.drain_all(session) >= 1
+            await session.commit()
+
+        async with get_sessionmaker()() as session:
+            assert await session.get(Account, account_id) is None
+            assert await session.get(InventoryItem, uuid.UUID(item_id)) is None
+            assert (await session.execute(select(CareProductPreference).where(
+                CareProductPreference.account_id == account_id,
+            ))).scalars().all() == []
+            assert (await session.execute(select(ShelfManagerDecisionEvent).where(
+                ShelfManagerDecisionEvent.account_id == account_id,
+            ))).scalars().all() == []
+            assert (await session.execute(select(InventoryEvent).where(
+                InventoryEvent.account_id == account_id,
+            ))).scalars().all() == []
+            assert (await session.execute(select(FamilyCircle).where(
+                FamilyCircle.account_id == account_id,
+            ))).scalars().all() == []
+            assert (await session.execute(select(FamilyProfile).where(
+                FamilyProfile.id.in_((self_id, uuid.UUID(member_id))),
+            ))).scalars().all() == []
+            job = (await session.execute(select(AccountDeletionJob).where(
+                AccountDeletionJob.account_id == account_id,
+            ))).scalar_one()
+            assert job.state == STATE_COMPLETE
+            assert job.completed_at is not None
+        assert admin.deleted_users == [str(account_id)]
+    finally:
+        storage_factory.set_storage(None)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
