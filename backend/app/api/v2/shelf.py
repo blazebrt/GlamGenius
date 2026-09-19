@@ -127,7 +127,13 @@ async def shelf_manager_respond(
         account_id=current.account_id,
         account_id_str=current.account_id_str,
         body=body,
-        decision_subject=_subject_claim(subject_id, current.account_id),
+        # Preserve the legacy subject-less write path when no household member
+        # was selected. The service canonicalizes the account holder read-only
+        # before the existing item lock; named household writes use the full
+        # subject write authority.
+        decision_subject=(
+            _subject_claim(subject_id, current.account_id) if subject_id is not None else None
+        ),
     )
     await session.commit()
     return result
