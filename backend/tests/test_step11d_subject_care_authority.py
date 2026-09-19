@@ -211,7 +211,7 @@ async def test_shelf_manager_read_canonicalizes_a_member_forged_as_self_and_refu
         self_queue = await routine_service.shelf_manager(
             session, account_id=account_a, decision_subject=None,
         )
-    assert member_queue["subject"]["subject_id"] == member_a
+    assert member_queue["subject"]["household_subject_id"] == member_a
     assert member_queue["subject"]["is_account_holder"] is False
     assert self_queue["subject"]["is_account_holder"] is True
     assert member_queue["primary"] != self_queue["primary"]
@@ -275,7 +275,7 @@ async def test_real_deletion_worker_erases_subject_scoped_shelf_state_and_retain
                 CareProductPreference(
                     account_id=account_id, household_subject_id=self_id,
                     inventory_item_id=item.id, preference_kind="paused",
-                    authority_source="user_direct",
+                    authority_source="direct_user",
                 ),
                 CareProductPreference(
                     account_id=account_id, household_subject_id=uuid.UUID(member_id),
