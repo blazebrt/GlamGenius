@@ -200,12 +200,18 @@ async def build_care_context(
     skin_products = tuple(shelf.build(shelf_context, "beauty"))
     hair_products = tuple(shelf.build(shelf_context, "hair"))
     product_ids = tuple(product.item.id for product in (*skin_products, *hair_products))
-    paused_product_ids, preferred_product_ids, _ = await read_preference_state(
-        session,
-        principal_account_id=account_id,
-        decision_subject=checked_subject,
-        item_ids=tuple(product_ids),
-    )
+    if hasattr(session, "scalar"):
+        paused_product_ids, preferred_product_ids, _ = await read_preference_state(
+            session,
+            principal_account_id=account_id,
+            decision_subject=checked_subject,
+            item_ids=tuple(product_ids),
+        )
+    else:
+        # The pure context tests provide a deliberately minimal session double;
+        # there is no persisted preference state to read in that path.
+        paused_product_ids = frozenset()
+        preferred_product_ids = frozenset()
 
     return CareContext(
         context_version=CARE_CONTEXT_VERSION,

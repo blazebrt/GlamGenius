@@ -1836,7 +1836,10 @@ def _manager_response(
 
 
 async def _build_manager_queue(session: AsyncSession, *, account_id: uuid.UUID, decision_subject: DecisionSubject | None = None) -> manager.ManagerQueue:
-    if decision_subject is None:
+    # The account-holder path predates subject-aware queue builders.  Keep its
+    # call shape stable for integrations that replace the legacy builder, while
+    # still passing an explicit household subject when one is selected.
+    if decision_subject is None or decision_subject.is_account_holder:
         return await manager.build_queue(session, account_id=account_id)
     return await manager.build_queue(session, account_id=account_id, decision_subject=decision_subject)
 
