@@ -165,6 +165,73 @@ async def test_manager_care_boundary_canonicalizes_a_member_forged_as_self(
     assert await _routine_fingerprint(account_id) == before
 
 
+async def test_shelf_manager_read_canonicalizes_a_member_forged_as_self_and_refuses_foreign(
+    app_client, db_clean, registered_supabase_user,
+):
+    """Queue selection is determined only after the selected person is proved."""
+    from app.domains.family.decision_subject import DecisionSubject
+    from app.domains.family.subject import (
+        AGE_BAND_NOT_STATED,
+        SUBJECT_ACCOUNT_HOLDER,
+        ResolvedSubject,
+        SubjectNotFound,
+    )
+    from app.domains.routines import service as routine_service
+    from app.domains.routines.service import _pause_care_product_for_manager
+
+    token_a, account_a = await registered_supabase_user()
+    token_b, _account_b = await registered_supabase_user()
+    await _seed(app_client)
+    item_id = await _expired_shelf(app_client, token_a)
+    member_a = await _member(app_client, token_a)
+    member_b = await _member(app_client, token_b)
+    forged_member = DecisionSubject(
+        subject=ResolvedSubject(
+            kind=SUBJECT_ACCOUNT_HOLDER, account_id=account_a,
+            subject_id=uuid.UUID(member_a), relation="self",
+            age_band=AGE_BAND_NOT_STATED,
+        ),
+        circle_created_at=None,
+    )
+
+    async with get_sessionmaker()() as session:
+        # Member A has already accepted the pause.  Self has not, so the
+        # queues are materially different if the compiler reads the canonical
+        # selected person rather than the forged holder flag.
+        await _pause_care_product_for_manager(
+            session, account_id=account_a, account_id_str=str(account_a),
+            item_id=uuid.UUID(item_id), subject_claim=forged_member,
+        )
+        await session.commit()
+
+    async with get_sessionmaker()() as session:
+        member_queue = await routine_service.shelf_manager(
+            session, account_id=account_a, decision_subject=forged_member,
+        )
+        self_queue = await routine_service.shelf_manager(
+            session, account_id=account_a, decision_subject=None,
+        )
+    assert member_queue["subject"]["subject_id"] == member_a
+    assert member_queue["subject"]["is_account_holder"] is False
+    assert self_queue["subject"]["is_account_holder"] is True
+    assert member_queue["primary"] != self_queue["primary"]
+
+    foreign = DecisionSubject(
+        subject=ResolvedSubject(
+            kind=SUBJECT_ACCOUNT_HOLDER, account_id=account_a,
+            subject_id=uuid.UUID(member_b), relation="self",
+            age_band=AGE_BAND_NOT_STATED,
+        ),
+        circle_created_at=None,
+    )
+    async with get_sessionmaker()() as session:
+        with pytest.raises(SubjectNotFound) as raised:
+            await routine_service.shelf_manager(
+                session, account_id=account_a, decision_subject=foreign,
+            )
+    assert member_b not in str(raised.value)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
