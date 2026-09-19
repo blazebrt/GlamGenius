@@ -33,7 +33,6 @@ from app.domains.care import simplification as care_simplification
 from app.domains.care import snapshot as care_snapshot
 from app.domains.care.subject_preferences import AuthoritySource as CareAuthoritySource
 from app.domains.family.decision_subject import DecisionSubject
-from app.domains.family.subject import ResolvedSubject
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryAttribute, InventoryItem
 from app.domains.planning import clock
@@ -723,17 +722,8 @@ async def _care_product_preference(
     account_id_str: str,
     item_id: uuid.UUID,
     pause: bool,
-    #: An already-canonical subject, or ``None`` for "resolve the account
-    #: holder here". The Shelf Manager has taken its write authority — and the
-    #: locks that go with it — before it reaches this function, so it passes
-    #: the checked subject rather than paying for it twice. The public route
-    #: passes nothing, which is how it stays a self-only endpoint.
-    subject: ResolvedSubject | None = None,
-    #: Server-derived, never from a request. The public endpoint always says
-    #: ``direct_user``; the Shelf Manager says ``shelf_manager`` when it applies
-    #: its own suggestion. A client able to name this could make its own choice
-    #: look like the product's and be offered a give-back on its own decision.
-    authority_source: CareAuthoritySource = "direct_user",
+    subject_claim: DecisionSubject | None,
+    authority_source: CareAuthoritySource,
 ) -> dict[str, Any]:
     """Apply one explicit Care product pause/resume in the current transaction.
 
@@ -748,12 +738,18 @@ async def _care_product_preference(
     routine reconciliation. It is deliberately not duplicated here.
     """
     from app.domains.care.subject_preferences import (
-        apply_subject_preference,
-        claim_preference_ownership,
+        _apply_subject_preference,
+        _claim_preference_ownership,
         read_preference_state,
     )
-    if subject is None:
-        subject = await _self_write_subject(session, account_id)
+    from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
+
+    # This is the Care write boundary.  Even the Manager's canonical-looking
+    # object is a claim at this layer: re-resolve and lock it here before its
+    # id, kind, or household membership can choose a stored preference.
+    subject = await canonicalize_decision_subject_for_write(
+        session, principal_account_id=account_id, decision_subject=subject_claim,
+    )
     item = await inventory_service.owned_item(session, account_id, item_id)
     _assert_care_product_eligible(item, action="paused")
 
@@ -767,11 +763,21 @@ async def _care_product_preference(
         # customer is told. Ownership may still move: saying it yourself makes
         # it yours even when the Manager had already done it, and that is what
         # stops the Manager offering to undo your own decision later.
-        await claim_preference_ownership(
+        ownership_source = await _claim_preference_ownership(
             session, principal_account_id=account_id, subject=subject,
             item_id=item.id, kind="paused", effective=effective,
             authority_source=authority_source,
         )
+        if ownership_source is not None:
+            await inventory_service.record_event(
+                session, item,
+                "care_routine_paused" if pause else "care_routine_resumed",
+                {
+                    "effective_state_unchanged": True,
+                    "authority_source": ownership_source,
+                },
+                household_subject_id=subject.subject_id,
+            )
         return {
             "product_preference_version": product_preferences.CARE_PRODUCT_PREFERENCE_VERSION,
             "changed": False,
@@ -813,7 +819,7 @@ async def _care_product_preference(
         # bottle. The bottle itself did not change, so its version does not
         # move — a member pausing a cleanser must not look like the product
         # being edited for everybody.
-        await apply_subject_preference(
+        await _apply_subject_preference(
             session, principal_account_id=account_id, subject=subject,
             item_id=item.id, kind="paused", active=pause,
             authority_source=authority_source,
@@ -854,29 +860,6 @@ async def _care_product_preference(
         result=result,
     )
     return result
-
-
-async def _self_write_subject(
-    session: AsyncSession, account_id: uuid.UUID,
-) -> ResolvedSubject:
-    """The account holder, checked with write authority, for the direct routes.
-
-    ``/routines/products/{id}/pause`` and its three siblings have no subject
-    parameter and are not getting one in Step 11D: they are the endpoints the
-    signed-in person uses on their own Care routine. "Me" is still a person the
-    server resolves rather than assumes, though, and resolving them takes the
-    same account lock every other write takes — so that a household created
-    concurrently cannot leave a just-written preference belonging to nobody.
-    """
-    from app.domains.family.decision_subject import (
-        canonicalize_decision_subject_for_write,
-    )
-    from app.domains.family.subject import account_holder_subject
-
-    return await canonicalize_decision_subject_for_write(
-        session, principal_account_id=account_id,
-        decision_subject=account_holder_subject(account_id),
-    )
 
 
 def _assert_care_product_eligible(item: InventoryItem, *, action: str) -> None:
@@ -977,23 +960,19 @@ async def _reconcile_self_routines(
 
 async def pause_care_product(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
-    subject: ResolvedSubject | None = None,
-    authority_source: CareAuthoritySource = "direct_user",
 ) -> dict[str, Any]:
     return await _care_product_preference(
         session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, pause=True,
-        subject=subject, authority_source=authority_source,
+        subject_claim=None, authority_source="direct_user",
     )
 
 
 async def resume_care_product(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
-    subject: ResolvedSubject | None = None,
-    authority_source: CareAuthoritySource = "direct_user",
 ) -> dict[str, Any]:
     return await _care_product_preference(
         session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, pause=False,
-        subject=subject, authority_source=authority_source,
+        subject_claim=None, authority_source="direct_user",
     )
 
 
@@ -1014,10 +993,8 @@ async def _selection_preference(
     account_id_str: str,
     item_id: uuid.UUID,
     prefer: bool,
-    #: Already canonical, or ``None``. See ``_care_product_preference``.
-    subject: ResolvedSubject | None = None,
-    #: Server-derived. See ``_care_product_preference``.
-    authority_source: CareAuthoritySource = "direct_user",
+    subject_claim: DecisionSubject | None,
+    authority_source: CareAuthoritySource,
 ) -> dict[str, Any]:
     """Apply an explicit product selection preference atomically.
 
@@ -1028,12 +1005,15 @@ async def _selection_preference(
     slots moved.
     """
     from app.domains.care.subject_preferences import (
-        apply_subject_preference,
-        claim_preference_ownership,
+        _apply_subject_preference,
+        _claim_preference_ownership,
         read_preference_state,
     )
-    if subject is None:
-        subject = await _self_write_subject(session, account_id)
+    from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
+
+    subject = await canonicalize_decision_subject_for_write(
+        session, principal_account_id=account_id, decision_subject=subject_claim,
+    )
     item = await inventory_service.owned_item(session, account_id, item_id)
     _assert_care_product_eligible(item, action="preferred")
 
@@ -1083,11 +1063,21 @@ async def _selection_preference(
     )
 
     if prefer and target_effective and not conflicting_ids:
-        await claim_preference_ownership(
+        ownership_source = await _claim_preference_ownership(
             session, principal_account_id=account_id, subject=subject,
             item_id=item.id, kind="preferred", effective=target_effective,
             authority_source=authority_source,
         )
+        if ownership_source is not None:
+            await inventory_service.record_event(
+                session, item, "care_routine_preferred",
+                {
+                    "effective_state_unchanged": True,
+                    "authority_source": ownership_source,
+                    "slot": product.slot,
+                },
+                household_subject_id=subject.subject_id,
+            )
         return {
             "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
             "changed": False, "status": "already_preferred", "inventory_item_id": str(item.id),
@@ -1161,7 +1151,7 @@ async def _selection_preference(
         # same-slot replacement clears only this subject's conflict — in both
         # stores, because somebody who preferred one cleanser before the
         # household and another after would otherwise keep two.
-        await apply_subject_preference(
+        await _apply_subject_preference(
             session, principal_account_id=account_id, subject=subject,
             item_id=item.id, kind="preferred", active=prefer,
             authority_source=authority_source,
@@ -1233,23 +1223,19 @@ async def _selection_preference(
 
 async def prefer_care_product(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
-    subject: ResolvedSubject | None = None,
-    authority_source: CareAuthoritySource = "direct_user",
 ) -> dict[str, Any]:
     return await _selection_preference(
         session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, prefer=True,
-        subject=subject, authority_source=authority_source,
+        subject_claim=None, authority_source="direct_user",
     )
 
 
 async def unprefer_care_product(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
-    subject: ResolvedSubject | None = None,
-    authority_source: CareAuthoritySource = "direct_user",
 ) -> dict[str, Any]:
     return await _selection_preference(
         session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, prefer=False,
-        subject=subject, authority_source=authority_source,
+        subject_claim=None, authority_source="direct_user",
     )
 
 
@@ -1935,11 +1921,51 @@ async def improve_overview(session: AsyncSession, *, account_id: uuid.UUID) -> d
 # the person accepts a decision — handing the change to the Care authority that
 # already owns it. Nothing below writes a Care preference directly.
 
+async def _pause_care_product_for_manager(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str,
+    item_id: uuid.UUID, subject_claim: DecisionSubject | None,
+) -> dict[str, Any]:
+    return await _care_product_preference(
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id,
+        pause=True, subject_claim=subject_claim, authority_source="shelf_manager",
+    )
+
+
+async def _resume_care_product_for_manager(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str,
+    item_id: uuid.UUID, subject_claim: DecisionSubject | None,
+) -> dict[str, Any]:
+    return await _care_product_preference(
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id,
+        pause=False, subject_claim=subject_claim, authority_source="shelf_manager",
+    )
+
+
+async def _prefer_care_product_for_manager(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str,
+    item_id: uuid.UUID, subject_claim: DecisionSubject | None,
+) -> dict[str, Any]:
+    return await _selection_preference(
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id,
+        prefer=True, subject_claim=subject_claim, authority_source="shelf_manager",
+    )
+
+
+async def _unprefer_care_product_for_manager(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str,
+    item_id: uuid.UUID, subject_claim: DecisionSubject | None,
+) -> dict[str, Any]:
+    return await _selection_preference(
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id,
+        prefer=False, subject_claim=subject_claim, authority_source="shelf_manager",
+    )
+
+
 _MANAGER_MUTATIONS = {
-    manager.ACTION_PAUSE_PRODUCT: pause_care_product,
-    manager.ACTION_RESUME_PRODUCT: resume_care_product,
-    manager.ACTION_PREFER_PRODUCT: prefer_care_product,
-    manager.ACTION_UNPREFER_PRODUCT: unprefer_care_product,
+    manager.ACTION_PAUSE_PRODUCT: _pause_care_product_for_manager,
+    manager.ACTION_RESUME_PRODUCT: _resume_care_product_for_manager,
+    manager.ACTION_PREFER_PRODUCT: _prefer_care_product_for_manager,
+    manager.ACTION_UNPREFER_PRODUCT: _unprefer_care_product_for_manager,
 }
 
 _REPLAYABLE_CHOICES = {
@@ -1979,25 +2005,28 @@ def _manager_response(
     return payload
 
 
-async def _build_manager_queue(session: AsyncSession, *, account_id: uuid.UUID, decision_subject: DecisionSubject | None = None) -> manager.ManagerQueue:
-    # The account-holder path predates subject-aware queue builders.  Keep its
-    # call shape stable for integrations that replace the legacy builder, while
-    # still passing an explicit household subject when one is selected.
-    if decision_subject is None or decision_subject.is_account_holder:
-        return await manager.build_queue(session, account_id=account_id)
-    return await manager.build_queue(session, account_id=account_id, decision_subject=decision_subject)
+async def _build_manager_queue(
+    session: AsyncSession, *, account_id: uuid.UUID, decision_subject: DecisionSubject,
+) -> manager.ManagerQueue:
+    return await manager.build_queue(
+        session, account_id=account_id, decision_subject=decision_subject,
+    )
 
 
 async def shelf_manager(session: AsyncSession, *, account_id: uuid.UUID, decision_subject: DecisionSubject | None = None) -> dict[str, Any]:
     """The one thing your manager has decided, and how much is behind it."""
-    payload = _manager_payload(await _build_manager_queue(session, account_id=account_id, decision_subject=decision_subject))
-    if decision_subject is not None:
-        from app.domains.family.decision_subject import canonicalize_decision_subject, serialize_decision_subject
-        checked = await canonicalize_decision_subject(session, principal_account_id=account_id, decision_subject=decision_subject)
-        payload["subject"] = serialize_decision_subject(checked)
-        payload["manager_history_coverage"] = (await manager.history_coverage(
-            session, account_id=account_id, decision_subject=checked,
-        )).as_dict()
+    from app.domains.family.decision_subject import canonicalize_decision_subject, serialize_decision_subject
+
+    checked = await canonicalize_decision_subject(
+        session, principal_account_id=account_id, decision_subject=decision_subject,
+    )
+    payload = _manager_payload(await _build_manager_queue(
+        session, account_id=account_id, decision_subject=checked,
+    ))
+    payload["subject"] = serialize_decision_subject(checked)
+    payload["manager_history_coverage"] = (await manager.history_coverage(
+        session, account_id=account_id, decision_subject=checked,
+    )).as_dict()
     return payload
 
 
@@ -2026,7 +2055,7 @@ async def _manager_replay(
     account_id: uuid.UUID,
     existing: ShelfManagerDecisionEvent,
     body: ShelfManagerRespondRequest,
-    decision_subject: DecisionSubject | None = None,
+    decision_subject: DecisionSubject,
 ) -> dict[str, Any]:
     """Answer a retry without applying anything a second time.
 
@@ -2053,16 +2082,12 @@ async def _manager_replay(
         action_applied=False,
         replayed=True,
     )
-    if decision_subject is not None:
-        from app.domains.family.decision_subject import serialize_decision_subject
-        response["subject"] = serialize_decision_subject(decision_subject)
-        # A replay says the same thing about coverage as the original answer
-        # did. It is the same history, read the same way; a retry that reported
-        # complete history where the first attempt reported doubt would be the
-        # clearest possible signal that one of the two was invented.
-        response["manager_history_coverage"] = (await manager.history_coverage(
-            session, account_id=account_id, decision_subject=decision_subject,
-        )).as_dict()
+    from app.domains.family.decision_subject import serialize_decision_subject
+    response["subject"] = serialize_decision_subject(decision_subject)
+    # A replay says the same thing about coverage as the original answer did.
+    response["manager_history_coverage"] = (await manager.history_coverage(
+        session, account_id=account_id, decision_subject=decision_subject,
+    )).as_dict()
     return response
 
 
@@ -2275,7 +2300,7 @@ async def shelf_manager_respond(
         # it.
         await mutate(
             session, account_id=account_id, account_id_str=account_id_str, item_id=target_id,
-            subject=checked_subject, authority_source="shelf_manager",
+            subject_claim=checked_subject,
         )
         applied = True
 

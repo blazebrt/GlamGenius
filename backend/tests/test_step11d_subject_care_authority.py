@@ -24,6 +24,7 @@ makes the answer ambiguous.
 """
 from __future__ import annotations
 
+import inspect
 import uuid
 from datetime import date, timedelta
 
@@ -51,6 +52,32 @@ TODAY = date.today()
 PROFILES_URL = "/api/v2/family-circle/profiles"
 MANAGER_URL = "/api/v2/shelf/manager"
 RESPOND_URL = "/api/v2/shelf/manager/respond"
+
+
+async def test_public_care_writers_are_self_only_and_raw_storage_is_not_exported():
+    """No caller-supplied Python object is an authority boundary.
+
+    This deliberately checks the public domain surface, not just the HTTP
+    route.  Internal Manager application is allowed to carry a subject claim,
+    but it must enter through its private wrapper and be canonicalized again.
+    """
+    from app.domains.care import subject_preferences
+    from app.domains.routines import service
+
+    for writer in (
+        service.pause_care_product,
+        service.resume_care_product,
+        service.prefer_care_product,
+        service.unprefer_care_product,
+    ):
+        assert tuple(inspect.signature(writer).parameters) == (
+            "session", "account_id", "account_id_str", "item_id",
+        )
+    assert {
+        "apply_subject_preference",
+        "claim_preference_ownership",
+        "current_authority_source",
+    }.isdisjoint(subject_preferences.__all__)
 
 
 # ---------------------------------------------------------------------------
@@ -693,13 +720,13 @@ async def test_a_preference_cannot_be_stored_against_another_accounts_product(
 ):
     """The item is re-derived under the principal, never taken on trust.
 
-    ``apply_subject_preference`` is an internal authority, and internal is
+    ``_apply_subject_preference`` is an internal authority, and internal is
     exactly where an id arrives having been checked by somebody else. A caller
     that had already resolved the wrong item would otherwise write one account's
     person against another account's bottle, and the row would look ordinary
     from either side.
     """
-    from app.domains.care.subject_preferences import apply_subject_preference
+    from app.domains.care.subject_preferences import _apply_subject_preference
     from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
     from app.shared.errors.exceptions import IdentityInvariantError
 
@@ -717,7 +744,7 @@ async def test_a_preference_cannot_be_stored_against_another_accounts_product(
             session, principal_account_id=account_id, decision_subject=None,
         )
         with pytest.raises(IdentityInvariantError) as raised:
-            await apply_subject_preference(
+            await _apply_subject_preference(
                 session, principal_account_id=account_id, subject=subject,
                 item_id=uuid.UUID(theirs), kind="paused", active=True,
                 authority_source="direct_user",
@@ -748,6 +775,7 @@ async def test_give_back_is_offered_for_the_managers_pause_and_not_for_your_own(
     primary = (await _queue(app_client, token))["primary"]
     assert primary["action"]["kind"] == manager.ACTION_PAUSE_PRODUCT
     assert (await _answer(app_client, token, primary, "accept")).status_code == 200
+    event_count = len(await _care_events(item_id))
 
     async def _candidates() -> set[uuid.UUID]:
         async with get_sessionmaker()() as session:
@@ -779,10 +807,22 @@ async def test_give_back_is_offered_for_the_managers_pause_and_not_for_your_own(
     )
     assert mine.status_code == 200, mine.text
     assert mine.json()["changed"] is False
+    changed_events = await _care_events(item_id)
+    assert len(changed_events) == event_count + 1
+    assert changed_events[-1] == (
+        "care_routine_paused", str(await _self_subject_id(account_id)),
+        {"effective_state_unchanged": True, "authority_source": "direct_user"},
+    )
 
     assert uuid.UUID(item_id) not in await _candidates(), (
         "the manager offered to undo a pause the person made themselves"
     )
+    exact_repeat = await app_client.post(
+        f"/api/v2/routines/products/{item_id}/pause", headers=auth(token),
+    )
+    assert exact_repeat.status_code == 200, exact_repeat.text
+    assert exact_repeat.json()["changed"] is False
+    assert len(await _care_events(item_id)) == event_count + 1
 
 
 async def test_saying_it_again_in_a_household_adopts_the_old_row_rather_than_doubling_it(
@@ -879,7 +919,7 @@ async def test_the_manager_offers_back_what_it_paused_and_not_what_you_paused(
     difference is now recorded on the row instead of inferred from which write
     happened to land second.
     """
-    from app.domains.care.subject_preferences import current_authority_source
+    from app.domains.care.subject_preferences import _current_authority_source
     from app.domains.family.decision_subject import canonicalize_decision_subject
 
     token, account_id = await registered_supabase_user()
@@ -895,7 +935,7 @@ async def test_the_manager_offers_back_what_it_paused_and_not_what_you_paused(
         subject = await canonicalize_decision_subject(
             session, principal_account_id=account_id, decision_subject=None,
         )
-        assert await current_authority_source(
+        assert await _current_authority_source(
             session, principal_account_id=account_id, subject=subject,
             item_id=uuid.UUID(item_id), kind="paused",
         ) == "shelf_manager"
@@ -912,7 +952,7 @@ async def test_the_manager_offers_back_what_it_paused_and_not_what_you_paused(
         subject = await canonicalize_decision_subject(
             session, principal_account_id=account_id, decision_subject=None,
         )
-        assert await current_authority_source(
+        assert await _current_authority_source(
             session, principal_account_id=account_id, subject=subject,
             item_id=uuid.UUID(item_id), kind="paused",
         ) == "direct_user"

@@ -266,7 +266,7 @@ async def read_preference_state(
     return frozenset(paused), frozenset(preferred), PreferenceCoverage(ambiguous)
 
 
-async def current_authority_source(
+async def _current_authority_source(
     session: AsyncSession,
     *,
     principal_account_id: uuid.UUID,
@@ -342,7 +342,7 @@ async def _same_slot_conflicts(
     return explicit, legacy
 
 
-async def apply_subject_preference(
+async def _apply_subject_preference(
     session: AsyncSession,
     *,
     principal_account_id: uuid.UUID,
@@ -364,7 +364,7 @@ async def apply_subject_preference(
     make its own choice look like the product's and hand itself back a
     give-back offer.
 
-    Authority is assumed to be held already: this is reached only from a caller
+    This private storage helper assumes authority is held already: it is reached only from a caller
     that has taken ``canonicalize_decision_subject_for_write``, so the account
     and, for a member, their household row are locked.
     """
@@ -442,7 +442,7 @@ async def apply_subject_preference(
     await session.flush()
 
 
-async def claim_preference_ownership(
+async def _claim_preference_ownership(
     session: AsyncSession,
     *,
     principal_account_id: uuid.UUID,
@@ -451,7 +451,7 @@ async def claim_preference_ownership(
     kind: str,
     effective: bool,
     authority_source: AuthoritySource,
-) -> bool:
+) -> AuthoritySource | None:
     """Settle who owns a preference whose effective value is not changing.
 
     Two different nothings happen here, and both matter.
@@ -470,12 +470,12 @@ async def claim_preference_ownership(
     state is what it always was and nobody made a new choice, so the Manager
     must not read it as its own to offer back.
 
-    Returns whether anything was written, so the caller can keep saying
+    Returns the persisted authority source when anything was written, so the caller can keep saying
     ``changed: false`` about the effective state while this quietly settles
     ownership underneath.
     """
     if subject.subject_id is None:
-        return False
+        return None
     row = (await session.execute(select(CareProductPreference).where(
         CareProductPreference.account_id == principal_account_id,
         CareProductPreference.household_subject_id == subject.subject_id,
@@ -484,18 +484,21 @@ async def claim_preference_ownership(
     ))).scalar_one_or_none()
     if row is not None:
         if row.authority_source == authority_source:
-            return False
+            return None
         row.authority_source = authority_source
         row.updated_at = utcnow()
         await session.flush()
-        return True
+        return authority_source
     if not effective:
-        return False
-    await apply_subject_preference(
+        return None
+    await _apply_subject_preference(
         session, principal_account_id=principal_account_id, subject=subject,
         item_id=item_id, kind=kind, active=True, authority_source=authority_source,
     )
-    return True
+    return await _current_authority_source(
+        session, principal_account_id=principal_account_id, subject=subject,
+        item_id=item_id, kind=kind,
+    )
 
 
 __all__ = [
@@ -505,8 +508,5 @@ __all__ = [
     "AUTHORITY_SOURCES",
     "AuthoritySource",
     "PreferenceCoverage",
-    "apply_subject_preference",
-    "claim_preference_ownership",
-    "current_authority_source",
     "read_preference_state",
 ]

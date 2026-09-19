@@ -59,7 +59,7 @@ from app.domains.care.product_preferences import (
 )
 from app.domains.care.subject_preferences import (
     AUTHORITY_SHELF_MANAGER,
-    current_authority_source,
+    _current_authority_source,
     read_preference_state,
 )
 from app.domains.family.decision_subject import DecisionSubject, canonicalize_decision_subject
@@ -977,7 +977,7 @@ async def give_back_candidates(
         rule_id = _rule_id_from_key(event.decision_key)
         if rule_id is None:
             continue
-        owner = await current_authority_source(
+        owner = await _current_authority_source(
             session, principal_account_id=account_id, subject=checked,
             item_id=item_id, kind="paused",
         )
