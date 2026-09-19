@@ -80,6 +80,91 @@ async def test_public_care_writers_are_self_only_and_raw_storage_is_not_exported
     }.isdisjoint(subject_preferences.__all__)
 
 
+async def test_manager_care_boundary_rejects_a_foreign_subject_claim_before_writing(
+    app_client, db_clean, registered_supabase_user,
+):
+    """Manager's second canonicalization is a write boundary, not ceremony."""
+    from app.domains.family.decision_subject import DecisionSubject
+    from app.domains.family.subject import (
+        AGE_BAND_NOT_STATED,
+        SUBJECT_ACCOUNT_HOLDER,
+        ResolvedSubject,
+        SubjectNotFound,
+    )
+    from app.domains.routines.service import _pause_care_product_for_manager
+
+    token_a, account_a = await registered_supabase_user()
+    token_b, _account_b = await registered_supabase_user()
+    await _seed(app_client)
+    await _member(app_client, token_a)
+    foreign_member = await _member(app_client, token_b)
+    item_id = await _add(
+        app_client, token_a, name="A Cleanser", product_type="cleanser",
+        expiry=TODAY + timedelta(days=400),
+    )
+    forged = DecisionSubject(
+        subject=ResolvedSubject(
+            kind=SUBJECT_ACCOUNT_HOLDER, account_id=account_a,
+            subject_id=uuid.UUID(foreign_member), relation="self",
+            age_band=AGE_BAND_NOT_STATED,
+        ),
+        circle_created_at=None,
+    )
+
+    async with get_sessionmaker()() as session:
+        with pytest.raises(SubjectNotFound) as raised:
+            await _pause_care_product_for_manager(
+                session, account_id=account_a, account_id_str=str(account_a),
+                item_id=uuid.UUID(item_id), subject_claim=forged,
+            )
+    assert foreign_member not in str(raised.value)
+    assert await _preferences(account_a) == []
+    assert await _care_events(item_id) == []
+    assert await _routine_fingerprint(account_a) == []
+
+
+async def test_manager_care_boundary_canonicalizes_a_member_forged_as_self(
+    app_client, db_clean, registered_supabase_user,
+):
+    """A named member cannot turn their mutation into an account-holder write."""
+    from app.domains.family.decision_subject import DecisionSubject
+    from app.domains.family.subject import (
+        AGE_BAND_NOT_STATED,
+        SUBJECT_ACCOUNT_HOLDER,
+        ResolvedSubject,
+    )
+    from app.domains.routines.service import _pause_care_product_for_manager
+
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    member = await _member(app_client, token)
+    item_id = await _add(
+        app_client, token, name="Member Cleanser", product_type="cleanser",
+        expiry=TODAY + timedelta(days=400),
+    )
+    forged = DecisionSubject(
+        subject=ResolvedSubject(
+            kind=SUBJECT_ACCOUNT_HOLDER, account_id=account_id,
+            subject_id=uuid.UUID(member), relation="self",
+            age_band=AGE_BAND_NOT_STATED,
+        ),
+        circle_created_at=None,
+    )
+    before = await _routine_fingerprint(account_id)
+    async with get_sessionmaker()() as session:
+        result = await _pause_care_product_for_manager(
+            session, account_id=account_id, account_id_str=str(account_id),
+            item_id=uuid.UUID(item_id), subject_claim=forged,
+        )
+        await session.commit()
+    assert result["changed"] is True
+    assert await _preferences(account_id) == [(member, item_id, "paused", "shelf_manager")]
+    assert await _care_events(item_id) == [
+        ("care_routine_paused", member, {"from_state": "active", "to_state": "paused"}),
+    ]
+    assert await _routine_fingerprint(account_id) == before
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

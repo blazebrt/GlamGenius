@@ -1103,10 +1103,10 @@ def test_every_state_changing_action_is_wired_to_the_care_authority_that_owns_it
 
     assert set(routines_service._MANAGER_MUTATIONS) == manager.MUTATING_ACTION_KINDS
     assert {
-        "pause_product": routines_service.pause_care_product,
-        "resume_product": routines_service.resume_care_product,
-        "prefer_product": routines_service.prefer_care_product,
-        "unprefer_product": routines_service.unprefer_care_product,
+        "pause_product": routines_service._pause_care_product_for_manager,
+        "resume_product": routines_service._resume_care_product_for_manager,
+        "prefer_product": routines_service._prefer_care_product_for_manager,
+        "unprefer_product": routines_service._unprefer_care_product_for_manager,
     } == routines_service._MANAGER_MUTATIONS
 
 
