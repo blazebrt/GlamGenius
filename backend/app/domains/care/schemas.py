@@ -13,7 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.domains.care.maintenance_rules import MAX_INTERVAL_DAYS, MIN_INTERVAL_DAYS
 from app.domains.routines.rules import ShelfProduct
 
-CARE_CONTEXT_VERSION = "v3-03.12"
+# Step 11D. Same fields, different subject: ``paused_product_ids`` and
+# ``preferred_product_ids`` are now one person's relationship to the shelf
+# rather than the account's, and the profile facts are read for whoever the
+# context is about. A stored context carrying the old version was assembled
+# under the account-wide meaning and must not be compared with a new one.
+CARE_CONTEXT_VERSION = "step-11d-v1"
 
 
 @dataclass(frozen=True, slots=True)

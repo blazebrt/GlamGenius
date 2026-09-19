@@ -286,5 +286,8 @@ class InventoryEvent(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "inventory_events"
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"))
+    household_subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("family_profiles.id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED")
+    )
     event_type: Mapped[str] = mapped_column(String(48), nullable=False); actor: Mapped[str] = mapped_column(String(32), nullable=False); payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     __table_args__ = (Index("ix_inventory_events_account_item", "account_id", "item_id", "created_at"),)

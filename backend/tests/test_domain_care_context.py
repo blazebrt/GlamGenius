@@ -7,6 +7,9 @@ from datetime import UTC, date, datetime
 import pytest
 from app.domains.care.context_adapter import project_environment, project_primary_event
 from app.domains.care.service import build_care_context
+from app.domains.care.subject_preferences import PreferenceCoverage
+from app.domains.family.decision_subject import DecisionSubject
+from app.domains.family.subject import account_holder_subject
 from app.domains.planning.context import DayContext, DayEvent
 from app.domains.planning.providers.base import AirQualityReading, WeatherReading
 from app.domains.profile.models import AppearanceProfile, ProfileAttribute, ProfileChangeEvent
@@ -113,6 +116,19 @@ async def test_no_event_is_valid_context(monkeypatch):
     async def get_profile(*args, **kwargs):
         return None
 
+    # This test is about projection, not identity, so the identity boundaries
+    # are stubbed explicitly rather than skipped by handing the service an
+    # object with no ``scalar`` method and letting it notice. A double that
+    # makes an authority check quietly not happen is the one kind of double
+    # that can hide the absence of the check itself.
+    async def canonical(*args, **kwargs):
+        return DecisionSubject(subject=account_holder_subject(owner), circle_created_at=None)
+
+    async def preferences(*args, **kwargs):
+        return frozenset(), frozenset(), PreferenceCoverage()
+
+    monkeypatch.setattr("app.domains.care.service.canonicalize_decision_subject", canonical)
+    monkeypatch.setattr("app.domains.care.service.read_preference_state", preferences)
     monkeypatch.setattr("app.domains.care.service.resolve_self_profile_for_read", get_profile)
     monkeypatch.setattr("app.domains.care.service.shelf.gather", gather)
     monkeypatch.setattr("app.domains.care.service.shelf.build", lambda *_: [])
@@ -210,7 +226,7 @@ async def test_successful_assembly_is_account_scoped_and_projects_shelf(
             session, account_a, day_context=_day_context(account_a)
         )
 
-    assert context.context_version == "v3-03.12"
+    assert context.context_version == "step-11d-v1"
     assert context.plan_date == _day_context(account_a).plan_date
     assert context.skin_facts["care_skin_usual_feel"].value == "often_dry_or_tight"
     assert context.hair_facts["care_hair_pattern"].value == "curly"

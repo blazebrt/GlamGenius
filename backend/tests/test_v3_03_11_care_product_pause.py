@@ -311,7 +311,7 @@ async def test_snapshot_history_adjustment_separation_and_resume_determinism(
         run_b = await _latest_run(session, account_id)
         snapshot_b = run_b.inputs["care_snapshot"]
         assert run_b.inputs["care_adjustment"] == {
-            "version": "v3-03.11", "kind": "explicit_product_pause", "item_id": item_id,
+            "version": "step-11d-v1", "kind": "explicit_product_pause", "item_id": item_id,
             "from_state": "active", "to_state": "paused",
         }
         decision = next(row for row in snapshot_b["decisions"]["product_decisions"] if row["item_id"] == item_id)
@@ -338,7 +338,7 @@ async def test_snapshot_history_adjustment_separation_and_resume_determinism(
     async with factory() as session:
         run_c = await _latest_run(session, account_id)
         assert run_c.inputs["care_adjustment"] == {
-            "version": "v3-03.11", "kind": "explicit_product_resume", "item_id": item_id,
+            "version": "step-11d-v1", "kind": "explicit_product_resume", "item_id": item_id,
             "from_state": "paused", "to_state": "active",
         }
         assert run_c.inputs["care_snapshot"]["snapshot_version"] == "v3-03.18"
@@ -467,7 +467,7 @@ async def test_pause_resume_privacy_export_retains_preference_history(
     routines = export["domains"]["routines"]
     assert any(
         row["key"] == "care_routine_paused" and row["value"] is True
-        for row in inventory["attributes"]
+        for row in inventory["care_preference_history"]["account_holder_legacy"]
     )
     assert any(row["event_type"] == "care_routine_paused" for row in inventory["events"])
     assert any(
@@ -480,7 +480,10 @@ async def test_pause_resume_privacy_export_retains_preference_history(
     export = (await app_client.get("/api/v2/privacy/export", headers=auth(token))).json()
     inventory = export["domains"]["inventory"]
     routines = export["domains"]["routines"]
-    assert not any(row["key"] == "care_routine_paused" for row in inventory["attributes"])
+    assert not any(
+        row["key"] == "care_routine_paused"
+        for row in inventory["care_preference_history"]["account_holder_legacy"]
+    )
     assert {row["event_type"] for row in inventory["events"]} >= {"care_routine_paused", "care_routine_resumed"}
     assert any(
         run["inputs"].get("care_adjustment", {}).get("kind") == "explicit_product_resume"

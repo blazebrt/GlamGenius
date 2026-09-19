@@ -174,8 +174,8 @@ async def set_images(session: AsyncSession, item: InventoryItem, account_id: uui
             session.add(InventoryItemImage(item_id=item.id, media_asset_id=asset_id, position=position))
 
 
-async def record_event(session: AsyncSession, item: InventoryItem, event_type: str, payload: dict[str, Any] | None = None, actor: str = "user") -> None:
-    session.add(InventoryEvent(account_id=item.account_id, item_id=item.id, event_type=event_type, actor=actor, payload=payload or {}))
+async def record_event(session: AsyncSession, item: InventoryItem, event_type: str, payload: dict[str, Any] | None = None, actor: str = "user", household_subject_id: uuid.UUID | None = None) -> None:
+    session.add(InventoryEvent(account_id=item.account_id, item_id=item.id, household_subject_id=household_subject_id, event_type=event_type, actor=actor, payload=payload or {}))
 
 
 async def detect_duplicates(session: AsyncSession, item: InventoryItem) -> None:

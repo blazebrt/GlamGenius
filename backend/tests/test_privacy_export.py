@@ -46,7 +46,11 @@ ROUTINES_MODEL_EXPORT_COLLECTIONS = {
     routines_models.CareExperienceFeedback.__tablename__: "experience_feedback",
     routines_models.MaintenancePreference.__tablename__: "maintenance_preferences",
     routines_models.MaintenanceEvent.__tablename__: "maintenance_events",
-    routines_models.ShelfManagerDecisionEvent.__tablename__: "shelf_manager_decision_events",
+    # Step 11D: exported under ``manager_history``, grouped by the person who
+    # answered. The flat collection that used to sit beside it carried every
+    # row exactly as stored, including the foreign subject id the grouped
+    # structure strips, so it was removed rather than kept in parallel.
+    routines_models.ShelfManagerDecisionEvent.__tablename__: "manager_history",
 }
 
 # Routine steps do not carry a direct account_id; they are exported through

@@ -100,7 +100,7 @@ def test_an_empty_shelf_decides_nothing_and_says_so():
     assert payload["counts"] == {"active": 0, "overridden": 0, "give_back": 0}
     # Not filler, not a generic tip, and not a blank card.
     assert payload["message"] == manager.NO_PRODUCTS_MESSAGE
-    assert payload["contract_version"] == "step-10b-v1"
+    assert payload["contract_version"] == "step-11d-v1"
 
 
 def test_a_shelf_with_nothing_to_decide_says_something_different():

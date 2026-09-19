@@ -17,9 +17,9 @@ async def test_privacy_export_returns_versioned_snapshot(
     resp = await app_client.get("/api/v2/privacy/export", headers=auth(token))
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    # 1.1 since Step 11B: the appearance domain is grouped by subject and the
-    # five profile tables the registry promised but nothing exported are in it.
-    assert body["schema_version"] == "1.2"
+    # Step 11D adds subject-scoped Care preference history to the versioned
+    # export contract.
+    assert body["schema_version"] == "1.3"
     assert "domains" in body
     assert "identity" in body["domains"]
     # No storage-key leak

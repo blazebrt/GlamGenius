@@ -57,6 +57,12 @@ from app.domains.care.product_preferences import (
     is_effective_user_pause,
     is_effective_user_preference,
 )
+from app.domains.care.subject_preferences import (
+    AUTHORITY_SHELF_MANAGER,
+    _current_authority_source,
+    read_preference_state,
+)
+from app.domains.family.decision_subject import DecisionSubject, canonicalize_decision_subject
 from app.domains.inventory.models import InventoryAttribute, InventoryEvent
 from app.domains.routines import rules as rules_engine
 from app.domains.routines import shelf
@@ -65,7 +71,11 @@ from app.domains.routines.ontology import SEVERITY_AVOID, SEVERITY_CAUTION, SEVE
 from app.domains.routines.rules import Finding, ShelfProduct
 from app.domains.routines.shelf import ShelfContext
 
-MANAGER_CONTRACT_VERSION = "step-10b-v1"
+# Step 11D. The queue shape is unchanged; what it means is not. Every
+# decision, every give-back offer and every stored answer now belongs to one
+# named person rather than to an account, and a client that cached a
+# "step-10b-v1" queue cached one household's answers as everybody's.
+MANAGER_CONTRACT_VERSION = "step-11d-v1"
 
 # The manager reasons over exactly the two care categories. This is not a
 # convenience alias: widening it would pull perfumes, supplements or wardrobe
@@ -757,11 +767,19 @@ def compile_queue(
 
 
 async def care_preference_state(
-    session: AsyncSession, item_ids: Sequence[uuid.UUID]
+    session: AsyncSession, item_ids: Sequence[uuid.UUID], *,
+    account_id: uuid.UUID | None = None,
+    decision_subject: DecisionSubject | None = None,
 ) -> tuple[frozenset[uuid.UUID], frozenset[uuid.UUID]]:
     """Current paused and preferred products, read the one canonical way."""
     if not item_ids:
         return frozenset(), frozenset()
+    if account_id is not None:
+        paused, preferred, _ = await read_preference_state(
+            session, principal_account_id=account_id, decision_subject=decision_subject,
+            item_ids=tuple(item_ids),
+        )
+        return paused, preferred
     rows = (await session.execute(
         select(InventoryAttribute).where(
             InventoryAttribute.item_id.in_(tuple(item_ids)),
@@ -785,15 +803,85 @@ async def care_preference_state(
     return paused, preferred
 
 
-async def declined_fingerprints(session: AsyncSession, account_id: uuid.UUID) -> dict[str, str]:
+@dataclass(frozen=True, slots=True)
+class ManagerHistoryCoverage:
+    """How much of this subject's Manager history can honestly be theirs.
+
+    Separate from :class:`~app.domains.care.subject_preferences.PreferenceCoverage`
+    and deliberately not merged with it. They answer different questions about
+    different tables — "whose answers to the manager are these" and "whose
+    pauses and preferences are these" — and a household can be complete in one
+    and not the other. Collapsing them into a single flag would report doubt
+    about a preference as doubt about the history, and the customer would be
+    told the wrong thing is incomplete.
+    """
+
+    unattributed_legacy_events_present: bool = False
+
+    @property
+    def complete_for_subject(self) -> bool:
+        return not self.unattributed_legacy_events_present
+
+    def as_dict(self) -> dict[str, bool]:
+        return {
+            "unattributed_legacy_events_present": self.unattributed_legacy_events_present,
+            "complete_for_subject": self.complete_for_subject,
+        }
+
+
+async def history_coverage(
+    session: AsyncSession, *, account_id: uuid.UUID,
+    decision_subject: DecisionSubject | None = None,
+) -> ManagerHistoryCoverage:
+    """Are there Manager answers this household cannot attribute to anybody?
+
+    One implementation, used by the queue, by the answer to a response and by
+    the replay of one. Three of them existed; two were honest and the third
+    asserted ``complete_for_subject: true`` unconditionally, so a household with
+    unattributable history was told its history was complete every time it
+    answered a decision — the one moment it is looking most closely.
+
+    The rule is Step 11C's, unchanged: an event written *before* this account
+    opened its household belongs to the one person who could have written it,
+    and an event written at or after that instant, with no subject on it, is
+    nobody's. Equality is doubt rather than ownership.
+
+    Answered for the whole household rather than per subject. "Somebody's
+    answers are unattributable" is as true for the member as for the account
+    holder, and telling only one of them would mean one screen claiming to be
+    complete while the other admits it is not.
+    """
+    await canonicalize_decision_subject(
+        session, principal_account_id=account_id, decision_subject=decision_subject,
+    )
+    from app.domains.family.models import FamilyCircle
+    ambiguous = await session.scalar(
+        select(ShelfManagerDecisionEvent.id)
+        .join(FamilyCircle, FamilyCircle.account_id == ShelfManagerDecisionEvent.account_id)
+        .where(
+            ShelfManagerDecisionEvent.account_id == account_id,
+            ShelfManagerDecisionEvent.household_subject_id.is_(None),
+            ShelfManagerDecisionEvent.created_at >= FamilyCircle.created_at,
+        ).limit(1)
+    )
+    return ManagerHistoryCoverage(ambiguous is not None)
+
+
+async def declined_fingerprints(
+    session: AsyncSession, account_id: uuid.UUID, *, decision_subject: DecisionSubject | None = None,
+) -> dict[str, str]:
     """The last answer for every decision key this account has responded to.
 
     Only the latest answer counts, and only a "no" quietens anything. Saying no
     once and then yes later must not leave the decision silenced.
     """
+    checked = await canonicalize_decision_subject(
+        session, principal_account_id=account_id, decision_subject=decision_subject,
+    )
+    from app.domains.family.decision_subject import subject_row_filter
     rows = (await session.execute(
         select(ShelfManagerDecisionEvent)
-        .where(ShelfManagerDecisionEvent.account_id == account_id)
+        .where(ShelfManagerDecisionEvent.account_id == account_id, subject_row_filter(ShelfManagerDecisionEvent, checked))
         .order_by(ShelfManagerDecisionEvent.created_at, ShelfManagerDecisionEvent.id)
     )).scalars().all()
     latest: dict[str, ShelfManagerDecisionEvent] = {row.decision_key: row for row in rows}
@@ -824,6 +912,7 @@ async def give_back_candidates(
     account_id: uuid.UUID,
     products: dict[str, ShelfProduct],
     paused_item_ids: frozenset[uuid.UUID],
+    decision_subject: DecisionSubject | None = None,
 ) -> list[GiveBackCandidate]:
     """Products this manager paused that the person could have back.
 
@@ -832,14 +921,29 @@ async def give_back_candidates(
 
     * the pause is no longer in place — they already resumed it, so there is
       nothing to give back;
-    * the pause currently in place is **newer** than the manager's, which means
-      they paused it themselves afterwards. Offering to undo that would be the
-      manager overruling them.
+    * the pause currently in place is **theirs**, not the manager's. Offering to
+      undo somebody's own decision would be the manager overruling them.
+
+    Who owns the pause is now recorded rather than inferred. Where this
+    subject's preference is stored explicitly, ``authority_source`` says so
+    outright: only ``shelf_manager`` is the manager's to offer back, and both
+    ``direct_user`` and ``legacy_adopted`` are the person's. The old rule
+    compared timestamps — a pause event newer than the manager's answer — which
+    is a guess that reads the wrong way whenever two writes land in the same
+    transaction, and which cannot see a pause the person re-affirmed without
+    changing. It survives only where there is nothing better: an account with no
+    household, whose preference still lives in the pre-household store that has
+    no such column.
     """
+    checked = await canonicalize_decision_subject(
+        session, principal_account_id=account_id, decision_subject=decision_subject,
+    )
+    from app.domains.family.decision_subject import subject_row_filter
     rows = (await session.execute(
         select(ShelfManagerDecisionEvent)
         .where(
             ShelfManagerDecisionEvent.account_id == account_id,
+            subject_row_filter(ShelfManagerDecisionEvent, checked),
             ShelfManagerDecisionEvent.choice == CHOICE_ACCEPTED,
             ShelfManagerDecisionEvent.action_kind == ACTION_PAUSE_PRODUCT,
             ShelfManagerDecisionEvent.target_inventory_item_id.is_not(None),
@@ -856,6 +960,7 @@ async def give_back_candidates(
     pause_events = (await session.execute(
         select(InventoryEvent).where(
             InventoryEvent.account_id == account_id,
+            subject_row_filter(InventoryEvent, checked, timestamp=InventoryEvent.created_at),
             InventoryEvent.item_id.in_(tuple(accepted)),
             InventoryEvent.event_type == "care_routine_paused",
         ).order_by(InventoryEvent.created_at, InventoryEvent.id)
@@ -872,9 +977,19 @@ async def give_back_candidates(
         rule_id = _rule_id_from_key(event.decision_key)
         if rule_id is None:
             continue
-        pause_event = latest_pause.get(item_id)
-        if pause_event is not None and pause_event.created_at > event.created_at:
-            continue
+        owner = await _current_authority_source(
+            session, principal_account_id=account_id, subject=checked,
+            item_id=item_id, kind="paused",
+        )
+        if owner is not None:
+            if owner != AUTHORITY_SHELF_MANAGER:
+                continue
+        else:
+            # No stored owner: the pre-household store, which predates the
+            # column. Fall back to the timestamp comparison rather than assume.
+            pause_event = latest_pause.get(item_id)
+            if pause_event is not None and pause_event.created_at > event.created_at:
+                continue
         candidates.append(GiveBackCandidate(
             item_id=item_id,
             rule_id=rule_id,
@@ -886,26 +1001,33 @@ async def give_back_candidates(
 
 
 async def build_queue(
-    session: AsyncSession, *, account_id: uuid.UUID, today: date | None = None
+    session: AsyncSession, *, account_id: uuid.UUID, today: date | None = None,
+    decision_subject: DecisionSubject | None = None,
 ) -> ManagerQueue:
     """Read everything the manager is allowed to see, then compile."""
-    context = await shelf.gather(session, account_id=account_id, today=today)
+    checked = await canonicalize_decision_subject(
+        session, principal_account_id=account_id, decision_subject=decision_subject,
+    )
+    context = await shelf.gather(session, account_id=account_id, today=today, decision_subject=checked)
     products: dict[str, ShelfProduct] = {}
     for category in MANAGER_CATEGORIES:
         for product in shelf.build(context, category):
             products[product.id] = product
 
     item_ids = [product.item.id for product in products.values()]
-    paused, preferred = await care_preference_state(session, item_ids)
+    paused, preferred = await care_preference_state(
+        session, item_ids, account_id=account_id, decision_subject=checked,
+    )
     candidates = await give_back_candidates(
         session, account_id=account_id, products=products, paused_item_ids=paused,
+        decision_subject=checked,
     )
     return compile_queue(
         context,
         paused_item_ids=paused,
         preferred_item_ids=preferred,
         give_back_candidates=candidates,
-        declined=await declined_fingerprints(session, account_id),
+        declined=await declined_fingerprints(session, account_id, decision_subject=checked),
     )
 
 
@@ -930,8 +1052,10 @@ __all__ = [
     "build_queue",
     "compile_queue",
     "decision_rank",
+    "ManagerHistoryCoverage",
     "give_back_candidates",
     "give_back_decisions",
+    "history_coverage",
     "can_ask_to_use",
     "preference_blocked_item_ids",
     "stored_choice_for",

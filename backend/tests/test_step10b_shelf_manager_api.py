@@ -247,7 +247,7 @@ async def test_a_new_account_gets_an_honest_empty_answer(
     assert payload["remaining_count"] == 0
     assert payload["counts"] == {"active": 0, "overridden": 0, "give_back": 0}
     assert payload["message"] == manager.NO_PRODUCTS_MESSAGE
-    assert payload["contract_version"] == "step-10b-v1"
+    assert payload["contract_version"] == "step-11d-v1"
     assert payload["disclaimer"]
 
 
@@ -1103,10 +1103,10 @@ def test_every_state_changing_action_is_wired_to_the_care_authority_that_owns_it
 
     assert set(routines_service._MANAGER_MUTATIONS) == manager.MUTATING_ACTION_KINDS
     assert {
-        "pause_product": routines_service.pause_care_product,
-        "resume_product": routines_service.resume_care_product,
-        "prefer_product": routines_service.prefer_care_product,
-        "unprefer_product": routines_service.unprefer_care_product,
+        "pause_product": routines_service._pause_care_product_for_manager,
+        "resume_product": routines_service._resume_care_product_for_manager,
+        "prefer_product": routines_service._prefer_care_product_for_manager,
+        "unprefer_product": routines_service._unprefer_care_product_for_manager,
     } == routines_service._MANAGER_MUTATIONS
 
 
@@ -1458,12 +1458,19 @@ async def test_the_log_is_exported_with_the_account_that_owns_it(
         export_a = await build_export(session, account_a)
         export_b = await build_export(session, account_b)
 
-    rows_a = export_a["domains"]["routines"]["shelf_manager_decision_events"]
-    rows_b = export_b["domains"]["routines"]["shelf_manager_decision_events"]
+    # Step 11D groups the log by the person who answered. This account has no
+    # household, so its answers are subject-less and are the account holder's by
+    # the pre-household rule — which is where they appear.
+    history_a = export_a["domains"]["routines"]["manager_history"]
+    history_b = export_b["domains"]["routines"]["manager_history"]
+    rows_a = history_a["account_holder_legacy"]
     assert len(rows_a) == 1
     assert rows_a[0]["decision_key"] == primary_a["decision_key"]
     assert rows_a[0]["choice"] == "accepted"
-    assert rows_b == []
+    assert history_a["by_subject"] == {}
+    assert history_a["unattributed"] == []
+    assert history_b["account_holder_legacy"] == []
+    assert history_b["unattributed"] == []
 
 
 async def test_the_log_holds_identifiers_and_state_and_nothing_written(
@@ -1479,7 +1486,7 @@ async def test_the_log_holds_identifiers_and_state_and_nothing_written(
     assert columns == {
         "id", "created_at", "updated_at", "account_id", "decision_key",
         "decision_fingerprint", "choice", "action_kind",
-        "target_inventory_item_id", "client_mutation_id",
+        "target_inventory_item_id", "client_mutation_id", "household_subject_id",
     }
     # No note, no payload, no reason, nothing a person or a label wrote.
     assert not columns & {"note", "payload", "reason", "detail", "text", "headline"}

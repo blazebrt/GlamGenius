@@ -16,6 +16,7 @@ from app.domains.beta_access.models import (
     Invite,
     InviteRedemption,
 )
+from app.domains.care import models as care_models
 from app.domains.community import models as community_models
 from app.domains.consent.models import Consent
 from app.domains.evidence import models as evidence_models
@@ -109,6 +110,7 @@ __all__ = [
     "community_models",
     "official_records_models",
     "family_models",
+    "care_models",
     "substances_models",
     "supplement_models",
     "PersonalDecisionRelease",

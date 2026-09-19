@@ -651,7 +651,7 @@ async def test_today_cache_recomputes_after_ingredient_confirmation(
         "care_maintenance_version", "care_maintenance_fingerprint",
         "care_maintenance_due_count", "care_maintenance_tracked_count",
     }
-    assert care_inputs["care_context_version"] == "v3-03.12"
+    assert care_inputs["care_context_version"] == "step-11d-v1"
     assert care_inputs["care_decision_version"] == "v3-03.11"
     assert care_inputs["care_blocked_product_count"] == 1
     assert care_inputs["care_confirmation_advisory_count"] == 0

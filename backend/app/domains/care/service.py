@@ -6,16 +6,9 @@ from collections.abc import Iterable
 from types import MappingProxyType
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.care.context_adapter import project_environment, project_primary_event
-from app.domains.care.product_preferences import (
-    CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
-    CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
-    is_effective_user_pause,
-    is_effective_user_preference,
-)
 from app.domains.care.reasons import CareFactSource, CareMissingReason
 from app.domains.care.schemas import (
     CARE_CONTEXT_VERSION,
@@ -23,12 +16,15 @@ from app.domains.care.schemas import (
     CareFact,
     MissingCareFact,
 )
-from app.domains.inventory.models import InventoryAttribute
+from app.domains.care.subject_preferences import read_preference_state
+from app.domains.family.decision_subject import DecisionSubject, canonicalize_decision_subject
 from app.domains.planning.context import DayContext
 from app.domains.profile import service as profile_service
-from app.domains.profile.identity import resolve_self_profile_for_read
+from app.domains.profile.identity import resolve_self_profile_for_read, resolve_subject_profile_for_read
 from app.domains.profile.models import ProfileAttribute
 from app.domains.routines import shelf
+from app.domains.routines.hard_handoff import evaluate as evaluate_hard_handoff
+from app.shared.errors.exceptions import ValidationFailedError
 
 SKIN_KEYS = (
     "care_skin_usual_feel",
@@ -153,6 +149,7 @@ async def build_care_context(
     account_id: uuid.UUID,
     *,
     day_context: DayContext,
+    decision_subject: DecisionSubject | None = None,
 ) -> CareContext:
     """Assemble trusted account facts without making Care decisions.
 
@@ -163,7 +160,33 @@ async def build_care_context(
     if day_context.account_id != account_id:
         raise ValueError("DayContext account does not match Care account")
 
-    profile = await resolve_self_profile_for_read(session, account_id)
+    checked_subject = await canonicalize_decision_subject(
+        session, principal_account_id=account_id, decision_subject=decision_subject,
+    )
+    # The gate, before the first byte of anybody's profile is read.
+    #
+    # It used to sit further down, inside ``shelf.gather``, which meant a Care
+    # context for a member recorded as under twelve read that child's skin and
+    # hair attributes into memory first and handed off afterwards. The refusal
+    # was correct and the reading was not: the product's hardest rule is that it
+    # does not answer for a child, and "does not answer" has to include not
+    # looking. It also failed open in one direction — a profile read that raised
+    # for its own reasons would have produced some other error instead of the
+    # handoff, which is precisely the uncertain case this gate resolves toward
+    # handing off.
+    handoff = evaluate_hard_handoff(
+        subject_is_child=checked_subject.subject.is_child,
+        stated_age=checked_subject.subject.stated_age,
+    )
+    if handoff.handoff:
+        raise ValidationFailedError(handoff.message, field="subject_id")
+    profile = (
+        await resolve_self_profile_for_read(session, account_id)
+        if checked_subject.is_account_holder
+        else await resolve_subject_profile_for_read(
+            session, checked_subject.subject, principal_account_id=account_id,
+        )
+    )
     rows = (
         {row.key: row for row in await profile_service.attributes_for(session, profile.id)}
         if profile is not None
@@ -179,6 +202,7 @@ async def build_care_context(
         session,
         account_id=account_id,
         today=day_context.plan_date,
+        decision_subject=checked_subject,
     )
     environment = project_environment(day_context)
     primary_event = project_primary_event(day_context)
@@ -190,30 +214,19 @@ async def build_care_context(
     skin_products = tuple(shelf.build(shelf_context, "beauty"))
     hair_products = tuple(shelf.build(shelf_context, "hair"))
     product_ids = tuple(product.item.id for product in (*skin_products, *hair_products))
-    paused_product_ids: frozenset[uuid.UUID] = frozenset()
-    preferred_product_ids: frozenset[uuid.UUID] = frozenset()
-    if product_ids:
-        attribute_rows = (await session.execute(
-            select(InventoryAttribute).where(
-                InventoryAttribute.item_id.in_(product_ids),
-                InventoryAttribute.key.in_((
-                    CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
-                    CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
-                )),
-            )
-        )).scalars().all()
-        paused_product_ids = frozenset(
-            row.item_id for row in attribute_rows
-            if row.key == CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY and is_effective_user_pause(
-                value=row.value, source=row.source, verification_state=row.verification_state,
-            )
-        )
-        preferred_product_ids = frozenset(
-            row.item_id for row in attribute_rows
-            if row.key == CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY and is_effective_user_preference(
-                value=row.value, source=row.source, verification_state=row.verification_state,
-            )
-        )
+    # No ``hasattr(session, "scalar")`` guard. Asking the session what methods
+    # it has, and taking the unauthorised branch when the answer disappoints,
+    # made the strength of an identity check depend on the shape of an object
+    # the caller supplied — a test double got a synthesised account-holder
+    # subject and an empty preference set without any of it being checked.
+    # Tests that need a double now provide one that answers; production code
+    # has only ever passed a real session.
+    paused_product_ids, preferred_product_ids, _ = await read_preference_state(
+        session,
+        principal_account_id=account_id,
+        decision_subject=checked_subject,
+        item_ids=tuple(product_ids),
+    )
 
     return CareContext(
         context_version=CARE_CONTEXT_VERSION,
@@ -240,4 +253,19 @@ __all__ = [
     "PREFERENCE_KEYS",
     "SKIN_KEYS",
     "build_care_context",
+    "build_care_context_for_subject",
 ]
+
+
+async def build_care_context_for_subject(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+    day_context: DayContext,
+) -> CareContext:
+    """Subject-aware Care facts; day/environment remains account-level."""
+    return await build_care_context(
+        session, principal_account_id, day_context=day_context,
+        decision_subject=decision_subject,
+    )
