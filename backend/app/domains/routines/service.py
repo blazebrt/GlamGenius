@@ -2003,9 +2003,22 @@ async def shelf_manager_respond(
     Steps 4 and 5 commit together or not at all. An answer is never recorded
     for a change that did not happen.
     """
-    from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
-    checked_subject = await canonicalize_decision_subject_for_write(
-        session, principal_account_id=account_id, decision_subject=decision_subject,
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject,
+        canonicalize_decision_subject_for_write,
+    )
+    # The legacy subject-less endpoint historically compiled the account-holder
+    # queue without an account-row lock. Keep that compatibility path so two
+    # concurrent legacy requests can reach the existing item-lock race gate;
+    # explicit household subjects still take the full write-authority lock.
+    checked_subject = await (
+        canonicalize_decision_subject_for_write(
+            session, principal_account_id=account_id, decision_subject=decision_subject,
+        )
+        if decision_subject is not None
+        else canonicalize_decision_subject(
+            session, principal_account_id=account_id, decision_subject=None,
+        )
     )
     existing = await _manager_event_for_key(session, account_id, body.client_mutation_id)
     if existing is not None:

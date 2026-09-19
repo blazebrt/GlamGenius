@@ -170,18 +170,7 @@ async def decision_subject_for_write(
         session, principal_account_id=principal_account_id, subject=subject,
     )
     if provisional.is_account_holder:
-        # Before a household exists, the account-holder path is the legacy
-        # single-person path and the product-row lock in the caller is the
-        # mutation serialization boundary.  Do not add an account lock ahead
-        # of that boundary: concurrent legacy requests must still be able to
-        # compile together and let the item lock decide the winner.  Once a
-        # household exists, account locking protects legacy adoption against
-        # household creation and deletion as documented below.
-        circle_id = await session.scalar(
-            select(FamilyCircle.id).where(FamilyCircle.account_id == principal_account_id)
-        )
-        if circle_id is not None:
-            await lock_account(session, principal_account_id)
+        await lock_account(session, principal_account_id)
         # Re-resolved under the lock. A household that committed while this
         # request was deciding changes both the canonical self row and the
         # boundary every legacy row is read against.
