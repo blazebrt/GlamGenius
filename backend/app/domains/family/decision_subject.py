@@ -201,6 +201,11 @@ def _claimed_subject(decision_subject: Any) -> ResolvedSubject | None:
     """
     if decision_subject is None:
         return None
+    if isinstance(decision_subject, ResolvedSubject):
+        # HTTP routes pass an untrusted subject claim, not a checked
+        # DecisionSubject.  It is still re-resolved below under the
+        # authenticated account before any data is read or written.
+        return decision_subject
     if not isinstance(decision_subject, DecisionSubject):
         raise ValueError("decision_subject must be a DecisionSubject")
     return decision_subject.subject

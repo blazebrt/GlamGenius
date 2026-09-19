@@ -32,6 +32,7 @@ from tests.test_v3_05_7_care_purchase_experience import _seed_db_candidate
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 STEP_11C_REVISION = "g5h6i7j8k9"
 STEP_11B_REVISION = "f4g5h6i7j8"
+CURRENT_HEAD_REVISION = "h6i7j8k9l0"
 
 PROFILES_URL = "/api/v2/family-circle/profiles"
 
@@ -146,7 +147,7 @@ async def test_downgrade_refuses_once_a_decision_names_a_person(
         # Nothing was dropped, nulled, or merged, and the database did not land
         # halfway through: the version row still says 11C.
         assert await _counts() == before
-        assert await _current_revision() == STEP_11C_REVISION
+        assert await _current_revision() == CURRENT_HEAD_REVISION
         for table in before:
             assert await _has_column(table), table
         assert await _index_predicate(
@@ -201,7 +202,7 @@ async def test_downgrade_and_re_upgrade_succeed_while_nothing_is_attributed(
         returncode, output = await _alembic("upgrade", "head")
         assert returncode == 0, output
 
-    assert await _current_revision() == STEP_11C_REVISION
+    assert await _current_revision() == CURRENT_HEAD_REVISION
     assert await _counts() == before
 
     # The re-upgrade is the only place the migration's own ``upgrade()`` runs

@@ -20,7 +20,7 @@ from app.domains.care.subject_preferences import read_preference_state
 from app.domains.family.decision_subject import DecisionSubject, canonicalize_decision_subject
 from app.domains.planning.context import DayContext
 from app.domains.profile import service as profile_service
-from app.domains.profile.identity import resolve_subject_profile_for_read
+from app.domains.profile.identity import resolve_self_profile_for_read, resolve_subject_profile_for_read
 from app.domains.profile.models import ProfileAttribute
 from app.domains.routines import shelf
 
@@ -161,8 +161,12 @@ async def build_care_context(
     checked_subject = await canonicalize_decision_subject(
         session, principal_account_id=account_id, decision_subject=decision_subject,
     )
-    profile = await resolve_subject_profile_for_read(
-        session, checked_subject.subject, principal_account_id=account_id,
+    profile = (
+        await resolve_self_profile_for_read(session, account_id)
+        if checked_subject.is_account_holder
+        else await resolve_subject_profile_for_read(
+            session, checked_subject.subject, principal_account_id=account_id,
+        )
     )
     rows = (
         {row.key: row for row in await profile_service.attributes_for(session, profile.id)}
