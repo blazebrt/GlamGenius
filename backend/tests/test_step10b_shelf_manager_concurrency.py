@@ -20,8 +20,19 @@ Three races, and they are not the same race:
   the same Care change and the second would hit the unique constraint on the
   preference attribute: a 500 on a button somebody pressed twice.
 
-The overlap is arranged with a barrier at the point both requests compile the
-queue, not with sleeps. Both are released together and then race for real.
+The overlap is arranged with a barrier at the first thing every answer does,
+not with sleeps. Both are released together and then race for real.
+
+Step 11D moved that point. Every answer now establishes write authority before
+anything else — the account row is taken ``FOR UPDATE`` so that a household
+cannot appear underneath a just-written event, and for a named member their
+household row is taken too. That happens *before* the queue is compiled, so a
+barrier at the first compile stopped being a point both racers could reach: the
+first would hold the account lock while waiting for a partner who was blocked on
+that very lock, and both would time out. The gate is therefore taken one step
+earlier, before either request has locked anything, which widens the overlap
+rather than narrowing it. The races themselves are unchanged and so are the
+outcomes they demand.
 """
 from __future__ import annotations
 
@@ -48,29 +59,34 @@ TODAY = date.today()
 RESPOND = "/api/v2/shelf/manager/respond"
 
 
-def _release_both_at_the_first_compile(monkeypatch, barrier: asyncio.Barrier) -> None:
-    """Hold each racing request at its first queue compile, then release both.
+def _release_both_before_they_lock_anything(monkeypatch, barrier: asyncio.Barrier) -> None:
+    """Hold each racing request just before it takes write authority.
 
-    Every answer compiles the queue before it does anything else, whether or
-    not it goes on to take a row lock, so this is the one point both racers
-    reach. Waiting only on each task's *first* compile leaves the recompiles
-    that happen later — under the lock, and for the response — running at full
-    speed, which is where the contention we are trying to observe lives.
+    Establishing write authority is the first thing every answer does and the
+    first thing that takes a lock, so this is the last point both racers can
+    still reach independently. Everything after it — the account lock, the
+    replay lookup, the compile, the product lock, the write — runs at full
+    speed against a partner that started at the same instant, which is where
+    the contention being observed lives.
+
+    Only each task's *first* pass is gated. Anything the test does afterwards
+    runs normally rather than waiting for a partner that is never coming.
     """
-    original = manager.build_queue
+    from app.domains.family import decision_subject as subject_authority
+
+    original = subject_authority.canonicalize_decision_subject_for_write
     gated: set[object] = set()
 
-    async def _build_queue(session, *, account_id, today=None):
+    async def _authorise(session, **kwargs):
         task = asyncio.current_task()
-        # Exactly the two racers, and only their first compile. Anything the
-        # test does afterwards runs normally rather than waiting for a partner
-        # that is never coming.
         if len(gated) < 2 and task not in gated:
             gated.add(task)
             await asyncio.wait_for(barrier.wait(), timeout=60)
-        return await original(session, account_id=account_id, today=today)
+        return await original(session, **kwargs)
 
-    monkeypatch.setattr(manager, "build_queue", _build_queue)
+    monkeypatch.setattr(
+        subject_authority, "canonicalize_decision_subject_for_write", _authorise,
+    )
 
 
 async def _pausing_primary(client, token: str) -> dict:
@@ -146,7 +162,7 @@ async def test_two_identical_answers_racing_apply_the_change_exactly_once(
     item_id = primary["action"]["inventory_item_id"]
     body = _body(primary, choice="accept", key="mut-race-identical")
 
-    _release_both_at_the_first_compile(monkeypatch, asyncio.Barrier(2))
+    _release_both_before_they_lock_anything(monkeypatch, asyncio.Barrier(2))
     first, second = await asyncio.gather(
         app_client.post(RESPOND, headers=auth(token), json=body),
         app_client.post(RESPOND, headers=auth(token), json=body),
@@ -185,7 +201,7 @@ async def test_opposite_answers_under_one_key_leave_the_product_matching_the_win
     item_id = primary["action"]["inventory_item_id"]
     key = "mut-race-opposite"
 
-    _release_both_at_the_first_compile(monkeypatch, asyncio.Barrier(2))
+    _release_both_before_they_lock_anything(monkeypatch, asyncio.Barrier(2))
     accepted, overridden = await asyncio.gather(
         app_client.post(RESPOND, headers=auth(token), json=_body(primary, choice="accept", key=key)),
         app_client.post(RESPOND, headers=auth(token), json=_body(primary, choice="override", key=key)),
@@ -228,7 +244,7 @@ async def test_two_different_keys_answering_one_decision_change_it_once(
     primary = await _pausing_primary(app_client, token)
     item_id = primary["action"]["inventory_item_id"]
 
-    _release_both_at_the_first_compile(monkeypatch, asyncio.Barrier(2))
+    _release_both_before_they_lock_anything(monkeypatch, asyncio.Barrier(2))
     first, second = await asyncio.gather(
         app_client.post(RESPOND, headers=auth(token), json=_body(primary, choice="accept", key="mut-race-k1")),
         app_client.post(RESPOND, headers=auth(token), json=_body(primary, choice="accept", key="mut-race-k2")),
@@ -258,7 +274,7 @@ async def test_a_racing_loser_can_still_answer_whatever_is_in_front_afterwards(
     await _seed(app_client)
     primary = await _pausing_primary(app_client, token)
 
-    _release_both_at_the_first_compile(monkeypatch, asyncio.Barrier(2))
+    _release_both_before_they_lock_anything(monkeypatch, asyncio.Barrier(2))
     await asyncio.gather(
         app_client.post(RESPOND, headers=auth(token), json=_body(primary, choice="accept", key="mut-after-k1")),
         app_client.post(RESPOND, headers=auth(token), json=_body(primary, choice="accept", key="mut-after-k2")),

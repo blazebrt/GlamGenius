@@ -311,7 +311,7 @@ async def test_snapshot_history_adjustment_separation_and_resume_determinism(
         run_b = await _latest_run(session, account_id)
         snapshot_b = run_b.inputs["care_snapshot"]
         assert run_b.inputs["care_adjustment"] == {
-            "version": "v3-03.11", "kind": "explicit_product_pause", "item_id": item_id,
+            "version": "step-11d-v1", "kind": "explicit_product_pause", "item_id": item_id,
             "from_state": "active", "to_state": "paused",
         }
         decision = next(row for row in snapshot_b["decisions"]["product_decisions"] if row["item_id"] == item_id)
@@ -338,7 +338,7 @@ async def test_snapshot_history_adjustment_separation_and_resume_determinism(
     async with factory() as session:
         run_c = await _latest_run(session, account_id)
         assert run_c.inputs["care_adjustment"] == {
-            "version": "v3-03.11", "kind": "explicit_product_resume", "item_id": item_id,
+            "version": "step-11d-v1", "kind": "explicit_product_resume", "item_id": item_id,
             "from_state": "paused", "to_state": "active",
         }
         assert run_c.inputs["care_snapshot"]["snapshot_version"] == "v3-03.18"

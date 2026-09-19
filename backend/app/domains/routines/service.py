@@ -31,7 +31,9 @@ from app.domains.care import routine_plan as care_routine_plan
 from app.domains.care import service as care_service
 from app.domains.care import simplification as care_simplification
 from app.domains.care import snapshot as care_snapshot
+from app.domains.care.subject_preferences import AuthoritySource as CareAuthoritySource
 from app.domains.family.decision_subject import DecisionSubject
+from app.domains.family.subject import ResolvedSubject
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryAttribute, InventoryItem
 from app.domains.planning import clock
@@ -721,62 +723,55 @@ async def _care_product_preference(
     account_id_str: str,
     item_id: uuid.UUID,
     pause: bool,
+    #: An already-canonical subject, or ``None`` for "resolve the account
+    #: holder here". The Shelf Manager has taken its write authority — and the
+    #: locks that go with it — before it reaches this function, so it passes
+    #: the checked subject rather than paying for it twice. The public route
+    #: passes nothing, which is how it stays a self-only endpoint.
+    subject: ResolvedSubject | None = None,
+    #: Server-derived, never from a request. The public endpoint always says
+    #: ``direct_user``; the Shelf Manager says ``shelf_manager`` when it applies
+    #: its own suggestion. A client able to name this could make its own choice
+    #: look like the product's and be offered a give-back on its own decision.
+    authority_source: CareAuthoritySource = "direct_user",
 ) -> dict[str, Any]:
-    """Apply one explicit Care product pause/resume in the current transaction."""
-    from app.domains.care.subject_preferences import set_preference
-    from app.domains.family.decision_subject import account_holder_subject, canonicalize_decision_subject_for_write
-    checked_subject = await canonicalize_decision_subject_for_write(
-        session, principal_account_id=account_id,
-        decision_subject=account_holder_subject(account_id),
-    )
-    if checked_subject.subject_id is not None:
-        item = await inventory_service.owned_item(session, account_id, item_id)
-        if item.category not in ("beauty", "hair"):
-            raise ValidationFailedError(
-                "Only Skin Care and Hair Care products can be paused from Care routines.", field="item_id",
-            )
-        if item.status != "active" or item.verification_state != "confirmed":
-            raise ValidationFailedError(
-                "Please confirm this product before changing its Care routine preference.", field="item_id",
-            )
-        await set_preference(
-            session, principal_account_id=account_id, decision_subject=checked_subject,
-            item_id=item_id, kind="paused", active=pause, authority_source="direct_user",
-        )
-        await inventory_service.record_event(
-            session, item, "care_routine_paused" if pause else "care_routine_resumed",
-            {"from_state": "active" if pause else "paused", "to_state": "paused" if pause else "active"},
-            household_subject_id=checked_subject.subject_id,
-        )
-        return {
-            "product_preference_version": product_preferences.CARE_PRODUCT_PREFERENCE_VERSION,
-            "changed": True, "status": "paused" if pause else "active",
-            "inventory_item_id": str(item.id), "display_name": item.display_name,
-            "category": _customer_category(item.category), "affected_slots": [],
-            "message": "Paused from your Care routine. It stays in your inventory." if pause else "Available to your Care routine again.",
-        }
-    item = await inventory_service.owned_item(session, account_id, item_id)
-    if item.category not in ("beauty", "hair"):
-        raise ValidationFailedError(
-            "Only Skin Care and Hair Care products can be paused from Care routines.",
-            field="item_id",
-        )
-    if item.status != "active" or item.verification_state != "confirmed":
-        raise ValidationFailedError(
-            "Please confirm this product before changing its Care routine preference.",
-            field="item_id",
-        )
+    """Apply one explicit Care product pause/resume in the current transaction.
 
-    row = (await session.execute(
-        select(InventoryAttribute).where(
-            InventoryAttribute.item_id == item.id,
-            InventoryAttribute.key == product_preferences.CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
-        )
-    )).scalar_one_or_none()
-    effective = row is not None and product_preferences.is_effective_user_pause(
-        value=row.value, source=row.source, verification_state=row.verification_state,
+    One algorithm, two storage backends. Everything a customer can observe —
+    what is refused, whether anything changed, which routine slots moved, the
+    before and after fingerprints — is decided the same way whether this
+    account has a household or not. Only *where the preference is written* and
+    *whose* it is differ, which is the whole of Step 11D.
+
+    Duplicating the algorithm per branch was how the household path quietly
+    lost the eligibility checks, the idempotence answer and the persisted
+    routine reconciliation. It is deliberately not duplicated here.
+    """
+    from app.domains.care.subject_preferences import (
+        apply_subject_preference,
+        claim_preference_ownership,
+        read_preference_state,
     )
+    if subject is None:
+        subject = await _self_write_subject(session, account_id)
+    item = await inventory_service.owned_item(session, account_id, item_id)
+    _assert_care_product_eligible(item, action="paused")
+
+    paused, _preferred, _coverage = await read_preference_state(
+        session, principal_account_id=account_id, decision_subject=subject,
+        item_ids=(item.id,),
+    )
+    effective = item.id in paused
     if pause == effective:
+        # Nothing about the effective state changes, and that is what the
+        # customer is told. Ownership may still move: saying it yourself makes
+        # it yours even when the Manager had already done it, and that is what
+        # stops the Manager offering to undo your own decision later.
+        await claim_preference_ownership(
+            session, principal_account_id=account_id, subject=subject,
+            item_id=item.id, kind="paused", effective=effective,
+            authority_source=authority_source,
+        )
         return {
             "product_preference_version": product_preferences.CARE_PRODUCT_PREFERENCE_VERSION,
             "changed": False,
@@ -789,67 +784,51 @@ async def _care_product_preference(
         }
 
     plan_date = clock.local_today(clock.DEFAULT_TIMEZONE)
-    _, before_context, before_decisions = await _current_care_decisions(session, account_id, plan_date)
+    _, before_context, before_decisions = await _current_care_decisions(
+        session, account_id, plan_date, decision_subject=subject,
+    )
     before_plan = care_routine_plan.plan_care_routine(before_context, before_decisions)
     previous_version = item.version
 
-    if pause:
-        if row is None:
-            row = InventoryAttribute(
-                item_id=item.id,
-                key=product_preferences.CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
-                value=True,
-                source="user_declared",
-                confidence=1.0,
-                verification_state="confirmed",
-            )
-            session.add(row)
-        else:
-            row.value = True
-            row.source = "user_declared"
-            row.confidence = 1.0
-            row.verification_state = "confirmed"
-        event_type = "care_routine_paused"
-        from_state, to_state = "active", "paused"
-        status = "paused"
-        message = "Paused from your Care routine. It stays in your inventory."
-        kind = "explicit_product_pause"
-    else:
-        await session.delete(row)
-        event_type = "care_routine_resumed"
-        from_state, to_state = "paused", "active"
-        status = "active"
-        message = "Available to your Care routine again."
-        kind = "explicit_product_resume"
+    event_type = "care_routine_paused" if pause else "care_routine_resumed"
+    from_state, to_state = ("active", "paused") if pause else ("paused", "active")
+    status = "paused" if pause else "active"
+    message = (
+        "Paused from your Care routine. It stays in your inventory." if pause
+        else "Available to your Care routine again."
+    )
+    kind = "explicit_product_pause" if pause else "explicit_product_resume"
 
-    item.version += 1
-    item.updated_at = utcnow()
+    payload: dict[str, Any] = {"from_state": from_state, "to_state": to_state}
+    if subject.subject_id is None:
+        # No household: the account is one person and their state lives where
+        # it always has. The item version still moves, because before Step 11D
+        # that version *was* the personal preference version.
+        await _write_legacy_pause(session, item, pause=pause)
+        item.version += 1
+        item.updated_at = utcnow()
+        payload["version"] = item.version
+    else:
+        # A household exists, so this is one person's relationship to a shared
+        # bottle. The bottle itself did not change, so its version does not
+        # move — a member pausing a cleanser must not look like the product
+        # being edited for everybody.
+        await apply_subject_preference(
+            session, principal_account_id=account_id, subject=subject,
+            item_id=item.id, kind="paused", active=pause,
+            authority_source=authority_source,
+        )
+
     await inventory_service.record_event(
-        session, item, event_type,
-        {"version": item.version, "from_state": from_state, "to_state": to_state},
+        session, item, event_type, payload,
+        household_subject_id=subject.subject_id,
     )
     # The session deliberately disables autoflush.  Make the preference
     # visible to the immediately following Care assembly while keeping all
     # writes inside the caller's transaction.
     await session.flush()
-    adjustment = {
-        "version": product_preferences.CARE_PRODUCT_PREFERENCE_VERSION,
-        "kind": kind,
-        "item_id": str(item.id),
-        "from_state": from_state,
-        "to_state": to_state,
-    }
-    await generate_routines(
-        session,
-        account_id=account_id,
-        account_id_str=account_id_str,
-        body=RoutineGenerateRequest(as_of=plan_date, explain=False),
-        care_adjustment=adjustment,
-    )
-    _, after_context, after_decisions = await _current_care_decisions(session, account_id, plan_date)
-    after_plan = care_routine_plan.plan_care_routine(after_context, after_decisions)
-    await session.flush()
-    return {
+
+    result = {
         "product_preference_version": product_preferences.CARE_PRODUCT_PREFERENCE_VERSION,
         "changed": True,
         "status": status,
@@ -859,27 +838,162 @@ async def _care_product_preference(
         "previous_item_version": previous_version,
         "new_item_version": item.version,
         "previous_decision_fingerprint": care_decisions.decision_fingerprint(before_decisions),
-        "new_decision_fingerprint": care_decisions.decision_fingerprint(after_decisions),
         "previous_plan_fingerprint": care_routine_plan.routine_plan_fingerprint(before_plan),
-        "new_plan_fingerprint": care_routine_plan.routine_plan_fingerprint(after_plan),
-        "affected_slots": _changed_slots(before_plan, after_plan),
         "message": message,
     }
+    await _reconcile_self_routines(
+        session, account_id=account_id, account_id_str=account_id_str,
+        subject=subject, plan_date=plan_date, before_plan=before_plan,
+        adjustment={
+            "version": product_preferences.CARE_PRODUCT_PREFERENCE_VERSION,
+            "kind": kind,
+            "item_id": str(item.id),
+            "from_state": from_state,
+            "to_state": to_state,
+        },
+        result=result,
+    )
+    return result
+
+
+async def _self_write_subject(
+    session: AsyncSession, account_id: uuid.UUID,
+) -> ResolvedSubject:
+    """The account holder, checked with write authority, for the direct routes.
+
+    ``/routines/products/{id}/pause`` and its three siblings have no subject
+    parameter and are not getting one in Step 11D: they are the endpoints the
+    signed-in person uses on their own Care routine. "Me" is still a person the
+    server resolves rather than assumes, though, and resolving them takes the
+    same account lock every other write takes — so that a household created
+    concurrently cannot leave a just-written preference belonging to nobody.
+    """
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject_for_write,
+    )
+    from app.domains.family.subject import account_holder_subject
+
+    return await canonicalize_decision_subject_for_write(
+        session, principal_account_id=account_id,
+        decision_subject=account_holder_subject(account_id),
+    )
+
+
+def _assert_care_product_eligible(item: InventoryItem, *, action: str) -> None:
+    """The rules a Care preference has always had to satisfy.
+
+    Shared so that a household cannot weaken them by taking a different branch.
+    ``action`` only picks the sentence; the rules are identical.
+    """
+    if item.category not in ("beauty", "hair"):
+        raise ValidationFailedError(
+            "Only Skin Care and Hair Care products can be "
+            + ("made preferred." if action == "preferred" else "paused from Care routines."),
+            field="item_id",
+        )
+    if item.status != "active" or item.verification_state != "confirmed":
+        raise ValidationFailedError(
+            "Please confirm this product before changing its Care routine preference.",
+            field="item_id",
+        )
+
+
+async def _write_legacy_pause(
+    session: AsyncSession, item: InventoryItem, *, pause: bool,
+) -> None:
+    """The pre-household store, byte for byte as it was.
+
+    An account with no household is one person, and their Care preferences have
+    always lived on the item as an ``InventoryAttribute``. Step 11D does not
+    migrate them on read or on write: they move only when a household appears
+    and that person makes a choice, which is the one moment the row can be
+    attributed truthfully.
+    """
+    row = (await session.execute(
+        select(InventoryAttribute).where(
+            InventoryAttribute.item_id == item.id,
+            InventoryAttribute.key == product_preferences.CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
+        )
+    )).scalar_one_or_none()
+    if pause:
+        if row is None:
+            session.add(InventoryAttribute(
+                item_id=item.id,
+                key=product_preferences.CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
+                value=True,
+                source="user_declared",
+                confidence=1.0,
+                verification_state="confirmed",
+            ))
+        else:
+            row.value = True
+            row.source = "user_declared"
+            row.confidence = 1.0
+            row.verification_state = "confirmed"
+    elif row is not None:
+        await session.delete(row)
+
+
+async def _reconcile_self_routines(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    account_id_str: str,
+    subject,
+    plan_date,
+    before_plan,
+    adjustment: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    """Re-plan and re-persist the account holder's routine, and nobody else's.
+
+    Persisted ``Routine`` and ``RoutineStep`` rows belong to the account holder
+    and stay that way in Step 11D: a member's preference changes what *they*
+    are shown, and must never rewrite the routine somebody else follows. So the
+    reconciliation that has always followed a self preference change still
+    does, and a member's change stops at their own preference row.
+
+    The after-fingerprints are filled in for everybody, because "what did my
+    Care picture look like before and after" is a truthful question for a
+    member too — it just does not end in a stored routine for them.
+    """
+    if subject.is_account_holder:
+        await generate_routines(
+            session,
+            account_id=account_id,
+            account_id_str=account_id_str,
+            body=RoutineGenerateRequest(as_of=plan_date, explain=False),
+            care_adjustment=adjustment,
+        )
+    _, after_context, after_decisions = await _current_care_decisions(
+        session, account_id, plan_date, decision_subject=subject,
+    )
+    after_plan = care_routine_plan.plan_care_routine(after_context, after_decisions)
+    await session.flush()
+    result["new_decision_fingerprint"] = care_decisions.decision_fingerprint(after_decisions)
+    result["new_plan_fingerprint"] = care_routine_plan.routine_plan_fingerprint(after_plan)
+    result["affected_slots"] = _changed_slots(before_plan, after_plan)
 
 
 async def pause_care_product(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
+    subject: ResolvedSubject | None = None,
+    authority_source: CareAuthoritySource = "direct_user",
 ) -> dict[str, Any]:
     return await _care_product_preference(
         session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, pause=True,
+        subject=subject, authority_source=authority_source,
     )
 
 
 async def resume_care_product(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
+    subject: ResolvedSubject | None = None,
+    authority_source: CareAuthoritySource = "direct_user",
 ) -> dict[str, Any]:
     return await _care_product_preference(
         session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, pause=False,
+        subject=subject, authority_source=authority_source,
     )
 
 
@@ -900,49 +1014,33 @@ async def _selection_preference(
     account_id_str: str,
     item_id: uuid.UUID,
     prefer: bool,
+    #: Already canonical, or ``None``. See ``_care_product_preference``.
+    subject: ResolvedSubject | None = None,
+    #: Server-derived. See ``_care_product_preference``.
+    authority_source: CareAuthoritySource = "direct_user",
 ) -> dict[str, Any]:
-    """Apply an explicit product selection preference atomically."""
-    from app.domains.care.subject_preferences import set_preference
-    from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
-    from app.domains.family.subject import account_holder_subject
-    checked_subject = await canonicalize_decision_subject_for_write(
-        session, principal_account_id=account_id,
-        decision_subject=account_holder_subject(account_id),
+    """Apply an explicit product selection preference atomically.
+
+    One algorithm, two storage backends — see ``_care_product_preference`` for
+    why that is not duplicated per branch. Everything the customer can observe
+    is decided once: the eligibility rules, the same-slot replacement, the
+    idempotence answer, the before and after fingerprints, and which routine
+    slots moved.
+    """
+    from app.domains.care.subject_preferences import (
+        apply_subject_preference,
+        claim_preference_ownership,
+        read_preference_state,
     )
-    if checked_subject.subject_id is not None:
-        item = await inventory_service.owned_item(session, account_id, item_id)
-        if item.category not in ("beauty", "hair"):
-            raise ValidationFailedError(
-                "Only Skin Care and Hair Care products can be made preferred.", field="item_id",
-            )
-        await set_preference(
-            session, principal_account_id=account_id, decision_subject=checked_subject,
-            item_id=item_id, kind="preferred", active=prefer, authority_source="direct_user",
-        )
-        await inventory_service.record_event(
-            session, item, "care_routine_preferred" if prefer else "care_routine_preference_cleared",
-            {"preferred": prefer}, household_subject_id=checked_subject.subject_id,
-        )
-        return {
-            "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
-            "changed": True, "status": "preferred" if prefer else "standard",
-            "inventory_item_id": str(item.id), "display_name": item.display_name,
-            "category": _customer_category(item.category), "slot": None,
-            "cleared_preferred_item_ids": [], "selection_applied": prefer,
-            "message": "This product is preferred for your Care routine." if prefer else "Preference removed from your Care routine.",
-        }
+    if subject is None:
+        subject = await _self_write_subject(session, account_id)
     item = await inventory_service.owned_item(session, account_id, item_id)
-    if item.category not in ("beauty", "hair"):
-        raise ValidationFailedError(
-            "Only Skin Care and Hair Care products can be made preferred.", field="item_id",
-        )
-    if item.status != "active" or item.verification_state != "confirmed":
-        raise ValidationFailedError(
-            "Please confirm this product before making it preferred.", field="item_id",
-        )
+    _assert_care_product_eligible(item, action="preferred")
 
     plan_date = clock.local_today(clock.DEFAULT_TIMEZONE)
-    _, before_context, before_decisions = await _current_care_decisions(session, account_id, plan_date)
+    _, before_context, before_decisions = await _current_care_decisions(
+        session, account_id, plan_date, decision_subject=subject,
+    )
     product = _care_product_row(before_context, item_id)
     if product is None or product.slot is None:
         raise ValidationFailedError(
@@ -964,27 +1062,20 @@ async def _selection_preference(
             "This product is not currently eligible for your Care routine.", field="item_id",
         )
 
-    rows = (await session.execute(
-        select(InventoryAttribute).where(
-            InventoryAttribute.item_id.in_(
-                product.item.id for product in (*before_context.skin_products, *before_context.hair_products)
-            ),
-            InventoryAttribute.key == product_preferences.CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
-        )
-    )).scalars().all()
-    by_item = {row.item_id: row for row in rows}
-    effective_ids = {
-        row.item_id for row in rows
-        if product_preferences.is_effective_user_preference(
-            value=row.value, source=row.source, verification_state=row.verification_state,
-        )
-    }
+    shelf_item_ids = tuple(
+        row.item.id for row in (*before_context.skin_products, *before_context.hair_products)
+    )
+    _paused, effective_ids, _coverage = await read_preference_state(
+        session, principal_account_id=account_id, decision_subject=subject,
+        item_ids=shelf_item_ids,
+    )
     target_effective = item_id in effective_ids
     same_slot_ids = {
-        candidate.item.id for candidate in (*before_context.skin_products, *before_context.hair_products)
+        candidate.item.id
+        for candidate in (*before_context.skin_products, *before_context.hair_products)
         if candidate.slot == product.slot and candidate.item.category == product.item.category
     }
-    conflicting_ids = sorted((effective_ids & same_slot_ids) - {item_id}, key=str)
+    conflicting_ids = sorted((set(effective_ids) & same_slot_ids) - {item_id}, key=str)
     before_plan = care_routine_plan.plan_care_routine(before_context, before_decisions)
     before_slot = next(
         row for row in (*before_plan.skin_slots, *before_plan.hair_slots)
@@ -992,6 +1083,11 @@ async def _selection_preference(
     )
 
     if prefer and target_effective and not conflicting_ids:
+        await claim_preference_ownership(
+            session, principal_account_id=account_id, subject=subject,
+            item_id=item.id, kind="preferred", effective=target_effective,
+            authority_source=authority_source,
+        )
         return {
             "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
             "changed": False, "status": "already_preferred", "inventory_item_id": str(item.id),
@@ -1011,51 +1107,89 @@ async def _selection_preference(
         }
 
     cleared_ids: list[str] = []
-    if prefer:
-        row = by_item.get(item_id)
-        if not target_effective:
-            if row is None:
-                row = InventoryAttribute(
-                    item_id=item.id,
-                    key=product_preferences.CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
-                    value=True, source="user_declared", confidence=1.0, verification_state="confirmed",
+    if subject.subject_id is None:
+        # No household. The pre-household store, unchanged, item versions and
+        # all: before Step 11D that version *was* the personal preference
+        # version, and an account of one has no reason to stop using it.
+        rows = (await session.execute(
+            select(InventoryAttribute).where(
+                InventoryAttribute.item_id.in_(shelf_item_ids) if shelf_item_ids else False,
+                InventoryAttribute.key == product_preferences.CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
+            )
+        )).scalars().all() if shelf_item_ids else []
+        by_item = {row.item_id: row for row in rows}
+        if prefer:
+            row = by_item.get(item_id)
+            if not target_effective:
+                if row is None:
+                    session.add(InventoryAttribute(
+                        item_id=item.id,
+                        key=product_preferences.CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY,
+                        value=True, source="user_declared", confidence=1.0,
+                        verification_state="confirmed",
+                    ))
+                else:
+                    row.value = True
+                    row.source = "user_declared"
+                    row.confidence = 1.0
+                    row.verification_state = "confirmed"
+                item.version += 1
+                await inventory_service.record_event(
+                    session, item, "care_routine_preferred",
+                    {"version": item.version, "slot": product.slot},
                 )
-                session.add(row)
-            else:
-                row.value = True
-                row.source = "user_declared"
-                row.confidence = 1.0
-                row.verification_state = "confirmed"
+            for other_id in conflicting_ids:
+                other = await session.get(InventoryItem, other_id)
+                await session.delete(by_item[other_id])
+                other.version += 1
+                cleared_ids.append(str(other.id))
+                await inventory_service.record_event(
+                    session, other, "care_routine_preference_cleared",
+                    {"version": other.version, "slot": product.slot,
+                     "replaced_by_item_id": str(item.id)},
+                )
+        else:
+            await session.delete(by_item[item_id])
             item.version += 1
             await inventory_service.record_event(
-                session, item, "care_routine_preferred", {"version": item.version, "slot": product.slot},
+                session, item, "care_routine_preference_cleared",
+                {"version": item.version, "slot": product.slot},
             )
+    else:
+        # A household exists. The preference is one person's relationship to a
+        # shared bottle, so the bottle's version does not move and the
+        # same-slot replacement clears only this subject's conflict — in both
+        # stores, because somebody who preferred one cleanser before the
+        # household and another after would otherwise keep two.
+        await apply_subject_preference(
+            session, principal_account_id=account_id, subject=subject,
+            item_id=item.id, kind="preferred", active=prefer,
+            authority_source=authority_source,
+        )
+        cleared_ids = [str(other_id) for other_id in conflicting_ids]
+        await inventory_service.record_event(
+            session, item,
+            "care_routine_preferred" if prefer else "care_routine_preference_cleared",
+            {"slot": product.slot,
+             **({"cleared_preferred_item_ids": cleared_ids} if prefer and cleared_ids else {})},
+            household_subject_id=subject.subject_id,
+        )
         for other_id in conflicting_ids:
             other = await session.get(InventoryItem, other_id)
-            other_row = by_item[other_id]
-            await session.delete(other_row)
-            other.version += 1
-            cleared_ids.append(str(other.id))
             await inventory_service.record_event(
                 session, other, "care_routine_preference_cleared",
-                {"version": other.version, "slot": product.slot, "replaced_by_item_id": str(item.id)},
+                {"slot": product.slot, "replaced_by_item_id": str(item.id)},
+                household_subject_id=subject.subject_id,
             )
-        kind = "explicit_product_preference"
-        message = (
-            "Preferred for this Care step."
-            if before_slot.active else
+
+    kind = "explicit_product_preference" if prefer else "explicit_product_preference_clear"
+    message = (
+        (
+            "Preferred for this Care step." if before_slot.active else
             "Preferred for this Care step. It will be used when that step is active."
-        )
-    else:
-        row = by_item[item_id]
-        await session.delete(row)
-        item.version += 1
-        await inventory_service.record_event(
-            session, item, "care_routine_preference_cleared",
-            {"version": item.version, "slot": product.slot},
-        )
-        kind = "explicit_product_preference_clear"
-        message = "Your routine will use its normal product choice for this step again."
+        ) if prefer
+        else "Your routine will use its normal product choice for this step again."
+    )
 
     await session.flush()
     adjustment = {
@@ -1065,11 +1199,15 @@ async def _selection_preference(
         "slot": product.slot,
         **({"cleared_preferred_item_ids": cleared_ids} if prefer else {}),
     }
-    await generate_routines(
-        session, account_id=account_id, account_id_str=account_id_str,
-        body=RoutineGenerateRequest(as_of=plan_date, explain=False), care_adjustment=adjustment,
+    if subject.is_account_holder:
+        await generate_routines(
+            session, account_id=account_id, account_id_str=account_id_str,
+            body=RoutineGenerateRequest(as_of=plan_date, explain=False),
+            care_adjustment=adjustment,
+        )
+    _, after_context, after_decisions = await _current_care_decisions(
+        session, account_id, plan_date, decision_subject=subject,
     )
-    _, after_context, after_decisions = await _current_care_decisions(session, account_id, plan_date)
     after_plan = care_routine_plan.plan_care_routine(after_context, after_decisions)
     after_slot = next(
         row for row in (*after_plan.skin_slots, *after_plan.hair_slots)
@@ -1095,17 +1233,23 @@ async def _selection_preference(
 
 async def prefer_care_product(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
+    subject: ResolvedSubject | None = None,
+    authority_source: CareAuthoritySource = "direct_user",
 ) -> dict[str, Any]:
     return await _selection_preference(
         session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, prefer=True,
+        subject=subject, authority_source=authority_source,
     )
 
 
 async def unprefer_care_product(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
+    subject: ResolvedSubject | None = None,
+    authority_source: CareAuthoritySource = "direct_user",
 ) -> dict[str, Any]:
     return await _selection_preference(
         session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, prefer=False,
+        subject=subject, authority_source=authority_source,
     )
 
 
@@ -1851,20 +1995,9 @@ async def shelf_manager(session: AsyncSession, *, account_id: uuid.UUID, decisio
         from app.domains.family.decision_subject import canonicalize_decision_subject, serialize_decision_subject
         checked = await canonicalize_decision_subject(session, principal_account_id=account_id, decision_subject=decision_subject)
         payload["subject"] = serialize_decision_subject(checked)
-        from app.domains.family.models import FamilyCircle
-        ambiguous = await session.scalar(
-            select(ShelfManagerDecisionEvent.id)
-            .join(FamilyCircle, FamilyCircle.account_id == ShelfManagerDecisionEvent.account_id)
-            .where(
-                ShelfManagerDecisionEvent.account_id == account_id,
-                ShelfManagerDecisionEvent.household_subject_id.is_(None),
-                ShelfManagerDecisionEvent.created_at >= FamilyCircle.created_at,
-            ).limit(1)
-        )
-        payload["manager_history_coverage"] = {
-            "unattributed_legacy_events_present": ambiguous is not None,
-            "complete_for_subject": ambiguous is None,
-        }
+        payload["manager_history_coverage"] = (await manager.history_coverage(
+            session, account_id=account_id, decision_subject=checked,
+        )).as_dict()
     return payload
 
 
@@ -1923,6 +2056,13 @@ async def _manager_replay(
     if decision_subject is not None:
         from app.domains.family.decision_subject import serialize_decision_subject
         response["subject"] = serialize_decision_subject(decision_subject)
+        # A replay says the same thing about coverage as the original answer
+        # did. It is the same history, read the same way; a retry that reported
+        # complete history where the first attempt reported doubt would be the
+        # clearest possible signal that one of the two was invented.
+        response["manager_history_coverage"] = (await manager.history_coverage(
+            session, account_id=account_id, decision_subject=decision_subject,
+        )).as_dict()
     return response
 
 
@@ -2004,21 +2144,37 @@ async def shelf_manager_respond(
     for a change that did not happen.
     """
     from app.domains.family.decision_subject import (
-        canonicalize_decision_subject,
         canonicalize_decision_subject_for_write,
     )
-    # The legacy subject-less endpoint historically compiled the account-holder
-    # queue without an account-row lock. Keep that compatibility path so two
-    # concurrent legacy requests can reach the existing item-lock race gate;
-    # explicit household subjects still take the full write-authority lock.
-    checked_subject = await (
-        canonicalize_decision_subject_for_write(
-            session, principal_account_id=account_id, decision_subject=decision_subject,
-        )
-        if decision_subject is not None
-        else canonicalize_decision_subject(
-            session, principal_account_id=account_id, decision_subject=None,
-        )
+    # Write authority first, for everybody, before anything is read that could
+    # answer a question about who exists.
+    #
+    # Omitting the subject means the account holder. It does not mean a weaker
+    # check: every path through this function appends a
+    # ``ShelfManagerDecisionEvent``, and an override or a navigation answer is
+    # as much a write as an applied pause. Taking the read authority for the
+    # unnamed case used to leave the account unlocked while the replay lookup
+    # and the item lock ran, so a household created in that window could make a
+    # just-written event unattributable to anybody — including the person who
+    # wrote it.
+    #
+    # This is deliberately ahead of the replay lookup as well, because the
+    # replay answer reveals whether a key belongs to the same logical subject.
+    #
+    # Lock order (``canonicalize_decision_subject_for_write`` owns the first
+    # two, ``_locked_target_item`` the third)::
+    #
+    #     self:   Account FOR UPDATE -> canonical self re-resolution
+    #             -> InventoryItem FOR UPDATE -> preference -> event
+    #     member: Account FOR KEY SHARE -> FamilyProfile FOR UPDATE
+    #             -> InventoryItem FOR UPDATE -> preference -> event
+    #
+    # Step 10B's unlocked account path reached the item lock sooner, which two
+    # of its concurrency tests relied on. Those tests were written before
+    # households existed; the household and deletion orderings take precedence
+    # and the tests are updated rather than the authority weakened.
+    checked_subject = await canonicalize_decision_subject_for_write(
+        session, principal_account_id=account_id, decision_subject=decision_subject,
     )
     existing = await _manager_event_for_key(session, account_id, body.client_mutation_id)
     if existing is not None:
@@ -2105,26 +2261,22 @@ async def shelf_manager_respond(
 
     applied = False
     if will_mutate and mutate is not None and target_id is not None:
-        if checked_subject.is_account_holder:
-            await mutate(
-                session, account_id=account_id, account_id_str=account_id_str, item_id=target_id,
-            )
-        else:
-            from app.domains.care.subject_preferences import set_preference
-            kind = {
-                manager.ACTION_PAUSE_PRODUCT: "paused",
-                manager.ACTION_RESUME_PRODUCT: "paused",
-                manager.ACTION_PREFER_PRODUCT: "preferred",
-                manager.ACTION_UNPREFER_PRODUCT: "preferred",
-            }[decision.action.kind]
-            active = decision.action.kind in {
-                manager.ACTION_PAUSE_PRODUCT, manager.ACTION_PREFER_PRODUCT,
-            }
-            await set_preference(
-                session, principal_account_id=account_id,
-                decision_subject=checked_subject, item_id=target_id,
-                kind=kind, active=active, authority_source="shelf_manager",
-            )
+        # One call, whoever the subject is. The member path used to be a second
+        # implementation that wrote the preference row and stopped there: no
+        # eligibility checks, no same-slot replacement, no inventory event, no
+        # idempotence answer. A suggestion accepted in the Manager must land as
+        # exactly the change the person could have made themselves, so it goes
+        # through the same Care authority with the subject attached.
+        #
+        # ``shelf_manager`` is the authority source because *the product*
+        # proposed this, not the person. It is what lets the Manager offer the
+        # change back later without offering to undo a decision somebody made
+        # deliberately, and it is server-derived here — the request cannot name
+        # it.
+        await mutate(
+            session, account_id=account_id, account_id_str=account_id_str, item_id=target_id,
+            subject=checked_subject, authority_source="shelf_manager",
+        )
         applied = True
 
     await session.flush()
@@ -2137,8 +2289,7 @@ async def shelf_manager_respond(
     )
     from app.domains.family.decision_subject import serialize_decision_subject
     response["subject"] = serialize_decision_subject(checked_subject)
-    response["manager_history_coverage"] = {
-        "unattributed_legacy_events_present": False,
-        "complete_for_subject": True,
-    }
+    response["manager_history_coverage"] = (await manager.history_coverage(
+        session, account_id=account_id, decision_subject=checked_subject,
+    )).as_dict()
     return response

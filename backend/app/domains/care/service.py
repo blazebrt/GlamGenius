@@ -18,12 +18,13 @@ from app.domains.care.schemas import (
 )
 from app.domains.care.subject_preferences import read_preference_state
 from app.domains.family.decision_subject import DecisionSubject, canonicalize_decision_subject
-from app.domains.family.subject import account_holder_subject
 from app.domains.planning.context import DayContext
 from app.domains.profile import service as profile_service
 from app.domains.profile.identity import resolve_self_profile_for_read, resolve_subject_profile_for_read
 from app.domains.profile.models import ProfileAttribute
 from app.domains.routines import shelf
+from app.domains.routines.hard_handoff import evaluate as evaluate_hard_handoff
+from app.shared.errors.exceptions import ValidationFailedError
 
 SKIN_KEYS = (
     "care_skin_usual_feel",
@@ -159,13 +160,26 @@ async def build_care_context(
     if day_context.account_id != account_id:
         raise ValueError("DayContext account does not match Care account")
 
-    checked_subject = (
-        DecisionSubject(subject=account_holder_subject(account_id), circle_created_at=None)
-        if not hasattr(session, "scalar")
-        else await canonicalize_decision_subject(
-            session, principal_account_id=account_id, decision_subject=decision_subject,
-        )
+    checked_subject = await canonicalize_decision_subject(
+        session, principal_account_id=account_id, decision_subject=decision_subject,
     )
+    # The gate, before the first byte of anybody's profile is read.
+    #
+    # It used to sit further down, inside ``shelf.gather``, which meant a Care
+    # context for a member recorded as under twelve read that child's skin and
+    # hair attributes into memory first and handed off afterwards. The refusal
+    # was correct and the reading was not: the product's hardest rule is that it
+    # does not answer for a child, and "does not answer" has to include not
+    # looking. It also failed open in one direction — a profile read that raised
+    # for its own reasons would have produced some other error instead of the
+    # handoff, which is precisely the uncertain case this gate resolves toward
+    # handing off.
+    handoff = evaluate_hard_handoff(
+        subject_is_child=checked_subject.subject.is_child,
+        stated_age=checked_subject.subject.stated_age,
+    )
+    if handoff.handoff:
+        raise ValidationFailedError(handoff.message, field="subject_id")
     profile = (
         await resolve_self_profile_for_read(session, account_id)
         if checked_subject.is_account_holder
@@ -200,18 +214,19 @@ async def build_care_context(
     skin_products = tuple(shelf.build(shelf_context, "beauty"))
     hair_products = tuple(shelf.build(shelf_context, "hair"))
     product_ids = tuple(product.item.id for product in (*skin_products, *hair_products))
-    if hasattr(session, "scalar"):
-        paused_product_ids, preferred_product_ids, _ = await read_preference_state(
-            session,
-            principal_account_id=account_id,
-            decision_subject=checked_subject,
-            item_ids=tuple(product_ids),
-        )
-    else:
-        # The pure context tests provide a deliberately minimal session double;
-        # there is no persisted preference state to read in that path.
-        paused_product_ids = frozenset()
-        preferred_product_ids = frozenset()
+    # No ``hasattr(session, "scalar")`` guard. Asking the session what methods
+    # it has, and taking the unauthorised branch when the answer disappoints,
+    # made the strength of an identity check depend on the shape of an object
+    # the caller supplied — a test double got a synthesised account-holder
+    # subject and an empty preference set without any of it being checked.
+    # Tests that need a double now provide one that answers; production code
+    # has only ever passed a real session.
+    paused_product_ids, preferred_product_ids, _ = await read_preference_state(
+        session,
+        principal_account_id=account_id,
+        decision_subject=checked_subject,
+        item_ids=tuple(product_ids),
+    )
 
     return CareContext(
         context_version=CARE_CONTEXT_VERSION,

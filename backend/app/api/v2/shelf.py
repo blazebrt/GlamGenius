@@ -6,6 +6,7 @@ so there is nothing to tamper with.
 """
 from __future__ import annotations
 
+import contextlib
 import uuid
 
 from fastapi import APIRouter, Depends, Query
@@ -15,11 +16,13 @@ from app.domains.family.subject import (
     AGE_BAND_NOT_STATED,
     SUBJECT_HOUSEHOLD_MEMBER,
     ResolvedSubject,
+    SubjectNotFound,
     account_holder_subject,
 )
 from app.domains.routines import service
 from app.domains.routines.schemas import ShelfAnalyseRequest, ShelfManagerRespondRequest
 from app.shared.database.sql import get_session
+from app.shared.errors.exceptions import NotFoundError
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_routines"))])
@@ -34,6 +37,26 @@ def _subject_claim(subject_id: uuid.UUID | None, account_id: uuid.UUID) -> Resol
     )
 
 
+@contextlib.contextmanager
+def _subject_or_404():
+    """One answer for every id this account may not ask about.
+
+    An id belonging to another household, an id of somebody who has been
+    switched off, and an id that never existed are deliberately the same 404
+    with nothing echoed back: telling them apart would confirm that the id names
+    a real person in a household the caller cannot see.
+
+    It also covers the member who is deactivated *between* a request being
+    authorised and being written. That is a refusal, not a fault, and it was
+    reaching the client as a 500 — an error page for something the product
+    decided on purpose.
+    """
+    try:
+        yield
+    except SubjectNotFound as exc:
+        raise NotFoundError("That person is not on this account.") from exc
+
+
 @router.post("/shelf/analyse")
 async def analyse_shelf(
     body: ShelfAnalyseRequest,
@@ -42,10 +65,11 @@ async def analyse_shelf(
     session: AsyncSession = Depends(get_session),
 ):
     """Re-read your beauty and hair products and store what we worked out."""
-    result = await service.analyse_shelf(
-        session, account_id=current.account_id, body=body,
-        decision_subject=_subject_claim(subject_id, current.account_id),
-    )
+    with _subject_or_404():
+        result = await service.analyse_shelf(
+            session, account_id=current.account_id, body=body,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
     await session.commit()
     return result
 
@@ -58,10 +82,11 @@ async def shelf_summary(
     session: AsyncSession = Depends(get_session),
 ):
     """Your whole shelf at a glance. Counted, never scored."""
-    return await service.shelf_summary(
-        session, account_id=current.account_id, climate=climate,
-        decision_subject=_subject_claim(subject_id, current.account_id),
-    )
+    with _subject_or_404():
+        return await service.shelf_summary(
+            session, account_id=current.account_id, climate=climate,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
 
 
 @router.get("/shelf/expiring")
@@ -103,10 +128,11 @@ async def shelf_manager(
     Read-only, and it never runs out of an honest answer: an empty shelf and a
     shelf with nothing to decide both return a real message rather than filler.
     """
-    return await service.shelf_manager(
-        session, account_id=current.account_id,
-        decision_subject=_subject_claim(subject_id, current.account_id),
-    )
+    with _subject_or_404():
+        return await service.shelf_manager(
+            session, account_id=current.account_id,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
 
 
 @router.post("/shelf/manager/respond")
@@ -122,18 +148,18 @@ async def shelf_manager_respond(
     else. Which product it touches and what happens to it are decided here, from
     a queue recompiled on this request.
     """
-    result = await service.shelf_manager_respond(
-        session,
-        account_id=current.account_id,
-        account_id_str=current.account_id_str,
-        body=body,
-        # Preserve the legacy subject-less write path when no household member
-        # was selected. The service canonicalizes the account holder read-only
-        # before the existing item lock; named household writes use the full
-        # subject write authority.
-        decision_subject=(
-            _subject_claim(subject_id, current.account_id) if subject_id is not None else None
-        ),
-    )
+    with _subject_or_404():
+        result = await service.shelf_manager_respond(
+            session,
+            account_id=current.account_id,
+            account_id_str=current.account_id_str,
+            body=body,
+            # Always a claim, never ``None``. Omitting the subject means "me",
+            # and "me" is a person the server resolves — not a weaker authority.
+            # Every response through this route writes a
+            # ShelfManagerDecisionEvent, so every one of them needs write
+            # authority established first.
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
     await session.commit()
     return result

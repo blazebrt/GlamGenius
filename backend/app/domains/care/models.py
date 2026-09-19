@@ -46,6 +46,17 @@ class CareProductPreference(UUIDPrimaryKey, TimestampMixin, Base):
             "account_id", "household_subject_id", "inventory_item_id", "preference_kind",
             name="uq_care_product_preference_subject_item_kind",
         ),
-        Index("ix_care_product_preferences_subject_kind", "account_id", "household_subject_id", "preference_kind"),
-        Index("ix_care_product_preferences_subject_item", "account_id", "household_subject_id", "inventory_item_id"),
+        # One index, not two. A second on
+        # ``(account_id, household_subject_id, inventory_item_id)`` was a strict
+        # prefix of the unique constraint above, so PostgreSQL could already
+        # serve every lookup it covered from the constraint's own index — it
+        # bought nothing and cost a write on every preference change.
+        #
+        # This one is not a prefix of it: the constraint orders the item before
+        # the kind, and "everything this person has paused" — the read every
+        # Care assembly does — has no item to give.
+        Index(
+            "ix_care_product_preferences_subject_kind",
+            "account_id", "household_subject_id", "preference_kind",
+        ),
     )

@@ -281,7 +281,7 @@ async def test_prefer_existing_target_cleans_conflict_without_target_churn(
         assert str(step_after.inventory_item_id) == item_a
         run = await _latest_run(session, account_id)
         assert run.inputs["care_adjustment"] == {
-            "version": "v3-03.12", "kind": "explicit_product_preference", "item_id": item_a,
+            "version": "step-11d-v1", "kind": "explicit_product_preference", "item_id": item_a,
             "slot": "cleanser", "cleared_preferred_item_ids": [item_b],
         }
 

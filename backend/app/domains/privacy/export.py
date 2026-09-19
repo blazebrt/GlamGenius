@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -232,22 +233,89 @@ def _empty_profile_payload() -> dict[str, Any]:
     return {"profile": None, **{label: [] for label, _ in _PROFILE_CHILD_TABLES}}
 
 
-async def _household_members(
+@dataclass(frozen=True, slots=True)
+class _HouseholdIdentity:
+    """Everything the export needs to know about who this account contains.
+
+    Read once per section and passed around rather than re-derived, because the
+    four questions it answers — does a household exist, when did it start, who
+    is in it, and which of them is the account holder — have to be answered the
+    same way in every section of one file. They were previously re-derived per
+    section, and two sections got the last one wrong: the Care and Manager
+    sections never asked it at all, so a household whose account holder could
+    not be identified still had its pre-household preferences and Manager
+    answers handed to that unidentifiable person.
+    """
+
+    circle_id: uuid.UUID | None
+    circle_created_at: datetime | None
+    members: list[FamilyProfile]
+    self_row: FamilyProfile | None
+    self_row_count: int
+
+    @property
+    def exists(self) -> bool:
+        """Did this account ever open a household?
+
+        A fact about the circle, never inferred from the member count: a circle
+        with no rows at all is the most alarming state there is, and inferring
+        would report it as the most ordinary one.
+        """
+        return self.circle_id is not None
+
+    @property
+    def account_holder_identified(self) -> bool:
+        """Is there exactly one human a subject-less row could belong to?
+
+        With no household, yes — the account is one person. With a household
+        and exactly one active ``self`` row, yes. With none or several, no, and
+        nothing subject-less may be attributed to anybody.
+        """
+        return not self.exists or self.self_row is not None
+
+    @property
+    def member_ids(self) -> set[uuid.UUID]:
+        return {member.id for member in self.members}
+
+    def invariant_errors(self) -> list[dict[str, str]]:
+        """The household-level problems, phrased the same way in every section."""
+        if self.account_holder_identified:
+            return []
+        return [{
+            "error": (
+                "household_self_profile_missing" if self.self_row_count == 0
+                else "household_has_multiple_self_profiles"
+            ),
+        }]
+
+
+async def _household_identity(
     session: AsyncSession, account_id: uuid.UUID,
-) -> tuple[uuid.UUID | None, list[FamilyProfile]]:
-    """This account's circle and its members, in household order."""
-    circle_id = await session.scalar(
-        select(FamilyCircle.id).where(FamilyCircle.account_id == account_id)
-    )
-    if circle_id is None:
-        return None, []
-    members = await _fetch(
+) -> _HouseholdIdentity:
+    """This account's circle, its members in household order, and its holder."""
+    circle = (await session.execute(
+        select(FamilyCircle.id, FamilyCircle.created_at)
+        .where(FamilyCircle.account_id == account_id)
+    )).first()
+    if circle is None:
+        return _HouseholdIdentity(None, None, [], None, 0)
+    circle_id, circle_created_at = circle
+    members = list(await _fetch(
         session,
         select(FamilyProfile)
         .where(FamilyProfile.circle_id == circle_id)
         .order_by(FamilyProfile.position),
+    ))
+    # Exactly one, or none named at all. Taking the first of two would label one
+    # human as the account holder by insertion order.
+    self_rows = [row for row in members if row.relation == RELATION_SELF and row.active]
+    return _HouseholdIdentity(
+        circle_id=circle_id,
+        circle_created_at=circle_created_at,
+        members=members,
+        self_row=self_rows[0] if len(self_rows) == 1 else None,
+        self_row_count=len(self_rows),
     )
-    return circle_id, list(members)
 
 
 def _group_decision_rows(
@@ -283,7 +351,7 @@ def _group_decision_rows(
 
 
 def _safe_legacy_split(
-    rows: list[Any], *, circle_created_at: datetime | None, timestamp: str,
+    rows: list[Any], *, household: _HouseholdIdentity, timestamp: str,
 ) -> tuple[list[Any], list[Any]]:
     """Legacy rows the account holder can honestly claim, and the rest.
 
@@ -291,13 +359,24 @@ def _safe_legacy_split(
     is ambiguous, and ambiguity is never resolved in favour of the account
     holder. One row, one account — getting it wrong shows one person another
     person's purchase history.
+
+    A household whose account holder cannot be identified has nobody to claim
+    them, so every legacy row is ambiguous however old it is. That rule used to
+    be written out again after each call, and the two Step 11D sections did not
+    write it out at all. It lives here now, where a caller cannot forget it.
     """
-    if circle_created_at is None:
+    if not household.exists:
         return list(rows), []
+    if not household.account_holder_identified:
+        return [], list(rows)
+    created_at = household.circle_created_at
     safe, ambiguous = [], []
     for row in rows:
         when = getattr(row, timestamp, None)
-        (safe if when is not None and when < circle_created_at else ambiguous).append(row)
+        is_safe = (
+            when is not None and created_at is not None and when < created_at
+        )
+        (safe if is_safe else ambiguous).append(row)
     return safe, ambiguous
 
 
@@ -338,40 +417,18 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
         select(AppearanceProfile).where(AppearanceProfile.account_id == account_id),
     )
     # Whether a household exists is a fact about the circle, not about how many
-    # members happen to be in it. Inferring it from ``members`` would read a
-    # corrupt circle with no rows at all as "this account never opened a
-    # household" — the most alarming state there is, silently reported as the
-    # most ordinary one.
-    circle_id = await session.scalar(
-        select(FamilyCircle.id).where(FamilyCircle.account_id == account_id)
-    )
-    members = (await _fetch(
-        session,
-        select(FamilyProfile)
-        .join(FamilyCircle, FamilyCircle.id == FamilyProfile.circle_id)
-        .where(FamilyCircle.account_id == account_id)
-        .order_by(FamilyProfile.position),
-    )) if circle_id is not None else []
-
-    # Exactly one active account holder, or none named at all. Taking the first
-    # of two would label one human as the account holder by insertion order,
-    # and the profile underneath a ``self`` label is the one the legacy row is
-    # attributed to — so getting it wrong would attach the signed-in person's
-    # history to somebody else in their household, inside the file they asked
-    # for precisely to see who has what.
-    self_rows = [m for m in members if m.relation == RELATION_SELF and m.active]
-    invariant_errors: list[dict[str, str]] = []
-    if len(self_rows) == 1:
-        self_row = self_rows[0]
-    else:
-        self_row = None
-        if circle_id is not None:
-            invariant_errors.append({
-                "error": (
-                    "household_self_profile_missing" if not self_rows
-                    else "household_has_multiple_self_profiles"
-                ),
-            })
+    # members happen to be in it; and the account holder is the one active
+    # ``self`` row or nobody, never the first of two. Both rules live in
+    # ``_household_identity`` so that every section of one file answers them
+    # identically — the profile underneath a ``self`` label is the one legacy
+    # rows are attributed to, so a section that decided it differently would
+    # attach the signed-in person's history to somebody else in their household,
+    # inside the file they asked for precisely to see who has what.
+    household = await _household_identity(session, account_id)
+    circle_id = household.circle_id
+    members = household.members
+    self_row = household.self_row
+    invariant_errors: list[dict[str, str]] = household.invariant_errors()
 
     by_subject = {p.household_subject_id: p for p in profiles if p.household_subject_id}
     legacy = next((p for p in profiles if p.household_subject_id is None), None)
@@ -547,50 +604,59 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
         session,
         select(InventoryProductLink).where(InventoryProductLink.account_id == account_id),
     )
-    _, _members = await _household_members(session, account_id)
-    member_ids = {member.id for member in _members}
-    circle_created_at = await session.scalar(
-        select(FamilyCircle.created_at).where(FamilyCircle.account_id == account_id)
-    )
+    household = await _household_identity(session, account_id)
+    member_ids = household.member_ids
+    event_fields = [c.name for c in InventoryEvent.__table__.columns]
+    invariant_errors = household.invariant_errors()
+
+    # Every Care preference event is now attributed to the person who made it,
+    # rather than listed flat with a marker. A flat list of one household's
+    # pauses and preferences is the shape that made this slice necessary: the
+    # customer could see that four products were paused and not which of the
+    # three people in the file paused them.
     preference_event_types = {
         "care_routine_paused", "care_routine_resumed", "care_routine_preferred",
         "care_routine_preference_cleared",
     }
     event_payloads: list[dict[str, Any]] = []
-    care_event_payloads: list[dict[str, Any]] = []
+    preference_events: list[InventoryEvent] = []
     for event in events:
-        row = _row_dict(event, [c.name for c in InventoryEvent.__table__.columns])
+        row = _row_dict(event, event_fields)
         if event.household_subject_id is not None and event.household_subject_id not in member_ids:
             row["household_subject_id"] = None
             row["invariant"] = "inventory_event_subject_ownership_invalid"
         event_payloads.append(row)
         if event.event_type in preference_event_types:
-            if event.household_subject_id is None and circle_created_at is not None and event.created_at >= circle_created_at:
-                row = dict(row)
-                row["household_subject_id"] = None
-                row["invariant"] = "legacy_preference_event_unattributed"
-            care_event_payloads.append(row)
+            preference_events.append(event)
+
+    events_by_member, legacy_events, orphan_events = _group_decision_rows(
+        preference_events, household.members,
+    )
+    safe_events, ambiguous_events = _safe_legacy_split(
+        legacy_events, household=household, timestamp="created_at",
+    )
+    invariant_errors.extend(
+        {"inventory_event_id": str(row.id),
+         "error": "inventory_event_subject_ownership_invalid"}
+        for row in orphan_events
+    )
+
     care_keys = {CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY, CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY}
     physical_attrs = [row for row in attrs if row.key not in care_keys]
     legacy_care_attrs = [row for row in attrs if row.key in care_keys]
-    _, members = await _household_members(session, account_id)
-    circle_created_at = await session.scalar(
-        select(FamilyCircle.created_at).where(FamilyCircle.account_id == account_id)
-    )
     safe_legacy_attrs, ambiguous_legacy_attrs = _safe_legacy_split(
-        legacy_care_attrs, circle_created_at=circle_created_at, timestamp="updated_at",
+        legacy_care_attrs, household=household, timestamp="updated_at",
     )
+    attribute_fields = [c.name for c in InventoryAttribute.__table__.columns]
     return {
         "items": [_row_dict(i, [c.name for c in InventoryItem.__table__.columns]) for i in items],
         "attributes": [_row_dict(a, [c.name for c in InventoryAttribute.__table__.columns]) for a in physical_attrs],
         "care_preference_history": {
             "account_holder_legacy": [
-                _row_dict(a, [c.name for c in InventoryAttribute.__table__.columns])
-                for a in safe_legacy_attrs
+                _row_dict(a, attribute_fields) for a in safe_legacy_attrs
             ],
             "unattributed": [
-                _row_dict(a, [c.name for c in InventoryAttribute.__table__.columns])
-                for a in ambiguous_legacy_attrs
+                _row_dict(a, attribute_fields) for a in ambiguous_legacy_attrs
             ],
             "coverage": {
                 "unattributed_legacy_preferences_present": bool(ambiguous_legacy_attrs),
@@ -598,7 +664,32 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
             },
         },
         "events": event_payloads,
-        "care_preference_events": care_event_payloads,
+        "care_preference_events": {
+            "by_subject": {
+                str(member.id): [
+                    _row_dict(row, event_fields)
+                    for row in list(events_by_member.get(member.id, []))
+                    + (safe_events if (
+                        household.self_row is not None and member.id == household.self_row.id
+                    ) else [])
+                ] for member in household.members
+            },
+            # Only where no household was ever opened. With one, the account
+            # holder's share is inside ``by_subject`` under their own id, and a
+            # second copy out here would be the same events counted twice.
+            "account_holder_legacy": [
+                _row_dict(row, event_fields) for row in safe_events
+            ] if not household.exists else [],
+            "unattributed": (
+                [_row_dict(row, event_fields) for row in ambiguous_events]
+                + [_unattributed_row(row, event_fields) for row in orphan_events]
+            ),
+            "coverage": {
+                "unattributed_legacy_events_present": bool(ambiguous_events or orphan_events),
+                "complete_for_subject": not bool(ambiguous_events or orphan_events),
+            },
+        },
+        "invariant_errors": invariant_errors,
         "supplement_details": [
             _row_dict(row, [c.name for c in SupplementDetail.__table__.columns])
             for row in supplement_details
@@ -672,30 +763,18 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
     # The scan itself stays account-level: it records that this account looked
     # at a barcode, which is true regardless of who the answer was for. What
     # somebody *decided* is about a person, so only that is grouped.
-    circle_id, members = await _household_members(session, account_id)
-    circle_created_at = await session.scalar(
-        select(FamilyCircle.created_at).where(FamilyCircle.account_id == account_id)
-    )
-    self_rows = [m for m in members if m.relation == RELATION_SELF and m.active]
-    self_row = self_rows[0] if len(self_rows) == 1 else None
+    household = await _household_identity(session, account_id)
+    members = household.members
+    self_row = household.self_row
 
     by_member, legacy, orphaned = _group_decision_rows(
         memory_rows, members,
     )
     safe, ambiguous = _safe_legacy_split(
-        legacy, circle_created_at=circle_created_at, timestamp="created_at",
+        legacy, household=household, timestamp="created_at",
     )
-    if self_row is None and circle_id is not None:
-        ambiguous, safe = legacy, []
 
-    invariant_errors: list[dict[str, str]] = []
-    if circle_id is not None and self_row is None:
-        invariant_errors.append({
-            "error": (
-                "household_self_profile_missing" if not self_rows
-                else "household_has_multiple_self_profiles"
-            ),
-        })
+    invariant_errors: list[dict[str, str]] = household.invariant_errors()
     invariant_errors.extend(
         {"scan_decision_event_id": str(r.id), "error": "decision_subject_ownership_invalid"}
         for r in orphaned
@@ -713,7 +792,7 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
             "is_account_holder": is_self,
             "scan_decision_events": [_row_dict(r, memory_fields) for r in own],
         })
-    if circle_id is None:
+    if not household.exists:
         subjects.append({
             "household_subject_id": None,
             "relation": RELATION_SELF,
@@ -812,22 +891,12 @@ async def _shopping(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
     decisions = list(await _fetch(session, select(PurchaseDecision).where(PurchaseDecision.account_id == account_id)))
     decision_events = list(await _fetch(session, select(PurchaseDecisionEvent).where(PurchaseDecisionEvent.account_id == account_id)))
 
-    circle_id, members = await _household_members(session, account_id)
-    circle_created_at = await session.scalar(
-        select(FamilyCircle.created_at).where(FamilyCircle.account_id == account_id)
-    )
-    self_rows = [m for m in members if m.relation == RELATION_SELF and m.active]
-    self_row = self_rows[0] if len(self_rows) == 1 else None
-    invariant_errors: list[dict[str, str]] = []
-    if circle_id is not None and self_row is None:
-        # Reuses the household posture from Step 11B: with no single account
-        # holder, nothing subject-less is confidently assigned to anybody.
-        invariant_errors.append({
-            "error": (
-                "household_self_profile_missing" if not self_rows
-                else "household_has_multiple_self_profiles"
-            ),
-        })
+    # The household posture is read once, here, and the "nobody to attribute
+    # them to, so nobody gets them" rule lives inside ``_safe_legacy_split``.
+    household = await _household_identity(session, account_id)
+    members = household.members
+    self_row = household.self_row
+    invariant_errors: list[dict[str, str]] = household.invariant_errors()
 
     decision_fields = [c.name for c in PurchaseDecision.__table__.columns]
     event_fields = [c.name for c in PurchaseDecisionEvent.__table__.columns]
@@ -841,16 +910,11 @@ async def _shopping(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
     # A mutable current decision is judged on when it last said something; an
     # immutable event on when it was written.
     safe_decisions, ambiguous_decisions = _safe_legacy_split(
-        legacy_decisions, circle_created_at=circle_created_at, timestamp="updated_at",
+        legacy_decisions, household=household, timestamp="updated_at",
     )
     safe_events, ambiguous_events = _safe_legacy_split(
-        legacy_events, circle_created_at=circle_created_at, timestamp="created_at",
+        legacy_events, household=household, timestamp="created_at",
     )
-    if self_row is None and circle_id is not None:
-        # Nobody to attribute them to, so nobody gets them.
-        ambiguous_decisions = legacy_decisions
-        ambiguous_events = legacy_events
-        safe_decisions = safe_events = []
 
     subjects: list[dict[str, Any]] = []
     for member in members:
@@ -872,7 +936,7 @@ async def _shopping(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
             "decision_events": [_row_dict(r, event_fields) for r in own_events],
         })
 
-    if circle_id is None:
+    if not household.exists:
         # No household ever existed, so subject-less is simply how this
         # account's own decisions have always been written.
         subjects.append({
@@ -996,27 +1060,41 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         session,
         select(CareProductPreference).where(CareProductPreference.account_id == account_id),
     )
-    _, members = await _household_members(session, account_id)
-    member_ids = {member.id for member in members}
-    circle_created_at = await session.scalar(
-        select(FamilyCircle.created_at).where(FamilyCircle.account_id == account_id)
-    )
+    household = await _household_identity(session, account_id)
+    members = household.members
+    member_ids = household.member_ids
+    invariant_errors: list[dict[str, str]] = household.invariant_errors()
     manager_by_subject, manager_legacy, manager_orphaned = _group_decision_rows(
         list(manager_decision_events), members,
     )
     manager_safe, manager_ambiguous = _safe_legacy_split(
-        manager_legacy, circle_created_at=circle_created_at, timestamp="created_at",
+        manager_legacy, household=household, timestamp="created_at",
     )
-    preferences_by_subject: dict[str, list[dict[str, Any]]] = {str(member_id): [] for member_id in member_ids}
+    invariant_errors.extend(
+        {"shelf_manager_decision_event_id": str(row.id),
+         "error": "decision_subject_ownership_invalid"}
+        for row in manager_orphaned
+    )
+    manager_fields = [c.name for c in ShelfManagerDecisionEvent.__table__.columns]
+    preference_fields = [c.name for c in CareProductPreference.__table__.columns]
+    preferences_by_subject: dict[str, list[dict[str, Any]]] = {
+        str(member_id): [] for member_id in member_ids
+    }
     unattributed_preferences: list[dict[str, Any]] = []
     for preference in care_preferences:
-        row = _row_dict(preference, [c.name for c in CareProductPreference.__table__.columns])
+        row = _row_dict(preference, preference_fields)
         if preference.household_subject_id in member_ids:
             preferences_by_subject[str(preference.household_subject_id)].append(row)
         else:
+            # The row is this account's — ``account_id`` says so — and the
+            # subject it names is not. The data stays; the stranger's id goes.
             row["household_subject_id"] = None
             row["invariant"] = "preference_subject_ownership_invalid"
             unattributed_preferences.append(row)
+            invariant_errors.append({
+                "care_product_preference_id": str(preference.id),
+                "error": "preference_subject_ownership_invalid",
+            })
     maintenance_preferences = await _fetch(
         session,
         select(MaintenancePreference).where(MaintenancePreference.account_id == account_id),
@@ -1073,39 +1151,38 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
             _row_dict(r, [c.name for c in CareExperienceFeedback.__table__.columns])
             for r in experience_feedback
         ],
-        "shelf_manager_decision_events": [
-            _row_dict(r, [c.name for c in ShelfManagerDecisionEvent.__table__.columns])
-            for r in manager_decision_events
-        ],
+        # ``shelf_manager_decision_events`` and ``care_product_preferences``
+        # used to sit here as flat dumps of every row exactly as stored. They
+        # are gone, and their removal is the point rather than tidying: a row
+        # whose ``household_subject_id`` points into another account's
+        # household had that id stripped in the grouped structures below and
+        # echoed verbatim in the flat ones — so the redaction was real and the
+        # leak was two keys further up the same file. Every row they held is
+        # still exported, under ``manager_history`` and
+        # ``care_product_preferences_by_subject``, attributed or honestly
+        # unattributed.
         "manager_history": {
             "by_subject": {
                 str(member_id): [
-                    _row_dict(row, [c.name for c in ShelfManagerDecisionEvent.__table__.columns])
-                    for row in rows
+                    _row_dict(row, manager_fields) for row in rows
                 ] for member_id, rows in manager_by_subject.items()
             },
             "account_holder_legacy": [
-                _row_dict(row, [c.name for c in ShelfManagerDecisionEvent.__table__.columns])
-                for row in manager_safe
+                _row_dict(row, manager_fields) for row in manager_safe
             ],
             "unattributed": [
-                _row_dict(row, [c.name for c in ShelfManagerDecisionEvent.__table__.columns])
-                for row in manager_ambiguous
+                _row_dict(row, manager_fields) for row in manager_ambiguous
             ] + [
-                _unattributed_row(row, [c.name for c in ShelfManagerDecisionEvent.__table__.columns])
-                for row in manager_orphaned
+                _unattributed_row(row, manager_fields) for row in manager_orphaned
             ],
             "coverage": {
                 "unattributed_legacy_events_present": bool(manager_ambiguous or manager_orphaned),
                 "complete_for_subject": not bool(manager_ambiguous or manager_orphaned),
             },
         },
-        "care_product_preferences": [
-            _row_dict(r, [c.name for c in CareProductPreference.__table__.columns])
-            for r in care_preferences
-        ],
         "care_product_preferences_by_subject": preferences_by_subject,
         "unattributed_care_product_preferences": unattributed_preferences,
+        "invariant_errors": invariant_errors,
     }
 
 

@@ -247,7 +247,7 @@ async def test_a_new_account_gets_an_honest_empty_answer(
     assert payload["remaining_count"] == 0
     assert payload["counts"] == {"active": 0, "overridden": 0, "give_back": 0}
     assert payload["message"] == manager.NO_PRODUCTS_MESSAGE
-    assert payload["contract_version"] == "step-10b-v1"
+    assert payload["contract_version"] == "step-11d-v1"
     assert payload["disclaimer"]
 
 
@@ -1458,12 +1458,19 @@ async def test_the_log_is_exported_with_the_account_that_owns_it(
         export_a = await build_export(session, account_a)
         export_b = await build_export(session, account_b)
 
-    rows_a = export_a["domains"]["routines"]["shelf_manager_decision_events"]
-    rows_b = export_b["domains"]["routines"]["shelf_manager_decision_events"]
+    # Step 11D groups the log by the person who answered. This account has no
+    # household, so its answers are subject-less and are the account holder's by
+    # the pre-household rule — which is where they appear.
+    history_a = export_a["domains"]["routines"]["manager_history"]
+    history_b = export_b["domains"]["routines"]["manager_history"]
+    rows_a = history_a["account_holder_legacy"]
     assert len(rows_a) == 1
     assert rows_a[0]["decision_key"] == primary_a["decision_key"]
     assert rows_a[0]["choice"] == "accepted"
-    assert rows_b == []
+    assert history_a["by_subject"] == {}
+    assert history_a["unattributed"] == []
+    assert history_b["account_holder_legacy"] == []
+    assert history_b["unattributed"] == []
 
 
 async def test_the_log_holds_identifiers_and_state_and_nothing_written(

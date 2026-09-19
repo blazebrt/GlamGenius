@@ -1,8 +1,13 @@
 """Pure, explicit Care product preference contracts for V3."""
 from __future__ import annotations
 
-CARE_PRODUCT_PAUSE_VERSION = "v3-03.11"
-CARE_PRODUCT_SELECTION_PREFERENCE_VERSION = "v3-03.12"
+# Step 11D. A pause and a selection preference are no longer facts about a
+# product on a shelf; they are facts about one person's relationship to it, they
+# are stored in a different table when a household exists, and they now carry
+# who set them. The response shape survived that change and the meaning did not,
+# which is exactly when a version has to move.
+CARE_PRODUCT_PAUSE_VERSION = "step-11d-v1"
+CARE_PRODUCT_SELECTION_PREFERENCE_VERSION = "step-11d-v1"
 CARE_PRODUCT_PREFERENCE_VERSION = CARE_PRODUCT_PAUSE_VERSION
 CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY = "care_routine_paused"
 CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY = "care_routine_preferred"
