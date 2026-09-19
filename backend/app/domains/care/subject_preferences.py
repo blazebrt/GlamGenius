@@ -145,12 +145,16 @@ async def _legacy_rows(
 def _legacy_is_safely_mine(row: InventoryAttribute, subject: DecisionSubject) -> bool:
     """Can this subject honestly claim a pre-household row?
 
-    Only the account holder can, and only from the safe side of the boundary.
-    ``updated_at`` is when the row last said something, which is what matters
-    for a mutable current state.
+    The rule itself lives on the subject and is deliberately not repeated here.
+    Only the account holder can claim one, and only from the safe side of the
+    household boundary — and a second copy of that sentence in this module would
+    be a place for one of the two to drift without any test being able to see it,
+    because the stricter copy would keep answering correctly.
+
+    All this adds is *which* timestamp to ask about: ``updated_at``, because a
+    preference is mutable current state and what matters is when it last said
+    something, not when the row first appeared.
     """
-    if not subject.is_account_holder:
-        return False
     return subject.legacy_row_is_mine(row.updated_at)
 
 

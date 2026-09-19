@@ -27,11 +27,13 @@ from app.domains.care.product_preferences import (
 )
 from app.domains.care.schemas import CARE_CONTEXT_VERSION
 from app.domains.care.service import build_care_context
+from app.domains.care.subject_preferences import PreferenceCoverage
 from app.domains.family.decision_subject import DecisionSubject
 from app.domains.family.subject import (
     AGE_BAND_UNDER_12,
     SUBJECT_HOUSEHOLD_MEMBER,
     ResolvedSubject,
+    account_holder_subject,
 )
 from app.domains.planning.context import DayContext
 from app.domains.routines.manager import MANAGER_CONTRACT_VERSION
@@ -118,22 +120,63 @@ async def test_the_handoff_fires_before_a_childs_profile_is_read(
         assert banned not in message.lower()
 
 
-async def test_the_care_context_cannot_be_talked_out_of_resolving_a_subject(
-    db_clean, registered_supabase_user,
+async def test_the_care_context_always_resolves_the_subject_it_is_about(
+    db_clean, registered_supabase_user, monkeypatch,
 ):
-    """A session that cannot answer is a failure, never a free pass.
+    """Identity is resolved on every call, whatever the session looks like.
 
-    The account boundary still comes first — a mismatched day context is refused
-    before any database work, which is the one thing that may short-circuit. Past
-    that, identity is resolved or the call fails; it is never quietly assumed.
+    The old code asked the session which methods it had and took the
+    unauthorised branch when the answer disappointed, which meant the strength
+    of the check depended on the shape of an object the caller supplied. Passing
+    a double is not the proof — a double that cannot answer raises for its own
+    reasons and looks like a refusal. The proof is that the resolver is actually
+    called, so this counts the calls rather than watching for an exception.
+
+    The account boundary still comes first: a mismatched day context is refused
+    before any database work, and that is the one short-circuit there is.
     """
     _token, account_id = await registered_supabase_user()
 
     with pytest.raises(ValueError, match="does not match"):
         await build_care_context(object(), uuid.uuid4(), day_context=_day(account_id))
 
-    with pytest.raises(AttributeError):
-        await build_care_context(object(), account_id, day_context=_day(account_id))
+    resolved: list[uuid.UUID] = []
+
+    async def _canonical(session, *, principal_account_id, decision_subject):
+        resolved.append(principal_account_id)
+        return DecisionSubject(
+            subject=account_holder_subject(principal_account_id), circle_created_at=None,
+        )
+
+    read: list[str] = []
+
+    async def _no_profile(*args, **kwargs):
+        read.append("profile")
+        return None
+
+    async def _preferences(*args, **kwargs):
+        return frozenset(), frozenset(), PreferenceCoverage()
+
+    class _EmptyShelf:
+        allergies: list[str] = []
+        draft_count = 0
+
+    async def _gather(*args, **kwargs):
+        return _EmptyShelf()
+
+    monkeypatch.setattr("app.domains.care.service.canonicalize_decision_subject", _canonical)
+    monkeypatch.setattr("app.domains.care.service.resolve_self_profile_for_read", _no_profile)
+    monkeypatch.setattr("app.domains.care.service.read_preference_state", _preferences)
+    monkeypatch.setattr("app.domains.care.service.shelf.gather", _gather)
+    monkeypatch.setattr("app.domains.care.service.shelf.build", lambda *_: [])
+
+    context = await build_care_context(object(), account_id, day_context=_day(account_id))
+
+    assert resolved == [account_id], (
+        "the Care context produced a subject without resolving one"
+    )
+    assert read == ["profile"]
+    assert context.account_id == account_id
 
 
 def test_the_contract_versions_moved_with_their_meaning() -> None:

@@ -39,7 +39,7 @@ from app.domains.routines import manager
 from app.domains.routines.models import Routine, RoutineStep
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_sessionmaker
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from tests.conftest import auth
 from tests.test_step10b_shelf_manager_api import _add
@@ -306,6 +306,34 @@ async def _self_subject_id(account_id: uuid.UUID) -> uuid.UUID:
 # ---------------------------------------------------------------------------
 # Isolation between people
 # ---------------------------------------------------------------------------
+
+
+async def test_an_unnamed_request_is_still_about_a_person_the_server_resolved(
+    app_client, db_clean, registered_supabase_user,
+):
+    """Omitting the subject means "me", and the answer says who "me" was.
+
+    A response that left the subject out when none was asked for would make the
+    default case the one the client cannot reason about: it could not tell
+    whether it was reading the account holder's queue or an account-wide one,
+    and in a household those are different things. The coverage statement has
+    the same problem — "your history may be incomplete" is exactly the sentence
+    the person browsing without a selector needs.
+    """
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    await _expired_shelf(app_client, token)
+    await _member(app_client, token)
+
+    queue = await _queue(app_client, token)
+    assert queue["subject"] == {
+        "household_subject_id": str(await _self_subject_id(account_id)),
+        "is_account_holder": True,
+    }
+    assert queue["manager_history_coverage"] == {
+        "unattributed_legacy_events_present": False,
+        "complete_for_subject": True,
+    }
 
 
 async def test_one_members_pause_is_invisible_to_everybody_else(
@@ -599,6 +627,162 @@ async def test_a_pause_written_after_the_household_belongs_to_nobody(
     assert paused == frozenset()
     assert coverage.complete_for_subject is False
     assert coverage.unattributed_legacy_preferences_present is True
+
+
+async def test_a_pause_written_in_the_very_instant_the_household_began_is_nobodys(
+    app_client, db_clean, registered_supabase_user,
+):
+    """Equality is doubt, not ownership.
+
+    The comparison is strictly ``<``. A row whose timestamp is the household's
+    creation instant could have been written by the person before they added
+    anybody or by the household a microsecond later, and the two are
+    indistinguishable. Resolving that toward the account holder would be the one
+    place the product guesses about whose decision it is looking at — so the
+    instant itself is pinned here rather than left to a test that happens to sit
+    a few seconds on the safe side of it.
+    """
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    item_id = await _add(app_client, token, name="Old Moisturiser",
+                         product_type="moisturiser", expiry=TODAY + timedelta(days=400))
+    assert (await app_client.post(
+        f"/api/v2/routines/products/{item_id}/pause", headers=auth(token),
+    )).status_code == 200
+    await _member(app_client, token)
+
+    async with get_sessionmaker()() as session:
+        circle_created_at = await session.scalar(
+            select(FamilyCircle.created_at).where(FamilyCircle.account_id == account_id)
+        )
+        # Written with SQL rather than through the ORM: ``updated_at`` carries
+        # an ``onupdate``, so assigning it and flushing would quietly replace it
+        # with the current time and this test would pin nothing.
+        await session.execute(
+            text(
+                "UPDATE inventory_attributes SET updated_at = :when "
+                "WHERE item_id = :item AND key = :key"
+            ),
+            {"when": circle_created_at, "item": uuid.UUID(item_id),
+             "key": CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY},
+        )
+        await session.commit()
+        stored = await session.scalar(
+            text("SELECT updated_at FROM inventory_attributes "
+                 "WHERE item_id = :item AND key = :key"),
+            {"item": uuid.UUID(item_id), "key": CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY},
+        )
+    assert stored == circle_created_at, "the equality instant was not actually set"
+
+    from app.domains.care.subject_preferences import read_preference_state
+
+    async with get_sessionmaker()() as session:
+        paused, _preferred, coverage = await read_preference_state(
+            session, principal_account_id=account_id, decision_subject=None,
+            item_ids=(uuid.UUID(item_id),),
+        )
+    assert paused == frozenset(), (
+        "a row written in the same instant the household began was handed to the "
+        "account holder"
+    )
+    assert coverage.complete_for_subject is False
+
+
+async def test_a_preference_cannot_be_stored_against_another_accounts_product(
+    app_client, db_clean, registered_supabase_user,
+):
+    """The item is re-derived under the principal, never taken on trust.
+
+    ``apply_subject_preference`` is an internal authority, and internal is
+    exactly where an id arrives having been checked by somebody else. A caller
+    that had already resolved the wrong item would otherwise write one account's
+    person against another account's bottle, and the row would look ordinary
+    from either side.
+    """
+    from app.domains.care.subject_preferences import apply_subject_preference
+    from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
+    from app.shared.errors.exceptions import IdentityInvariantError
+
+    token, account_id = await registered_supabase_user()
+    other_token, _other_account = await registered_supabase_user()
+    await _seed(app_client)
+    await _member(app_client, token)
+    theirs = await _add(
+        app_client, other_token, name="Their Moisturiser", product_type="moisturiser",
+        expiry=TODAY + timedelta(days=400),
+    )
+
+    async with get_sessionmaker()() as session:
+        subject = await canonicalize_decision_subject_for_write(
+            session, principal_account_id=account_id, decision_subject=None,
+        )
+        with pytest.raises(IdentityInvariantError) as raised:
+            await apply_subject_preference(
+                session, principal_account_id=account_id, subject=subject,
+                item_id=uuid.UUID(theirs), kind="paused", active=True,
+                authority_source="direct_user",
+            )
+    assert raised.value.reason == "care_preference_item_ownership_invalid"
+    assert await _preferences(account_id) == []
+
+
+async def test_give_back_is_offered_for_the_managers_pause_and_not_for_your_own(
+    app_client, db_clean, registered_supabase_user,
+):
+    """The same state, two owners, two different answers.
+
+    Read at the level the rule lives at, because the queue also suppresses a
+    give-back for other reasons — an expired product stays paused whoever paused
+    it — and a test that could not tell those apart would pass while the rule
+    did nothing. The pause here is identical in both halves: same product, same
+    person, same effective state. Only ``authority_source`` differs.
+    """
+    from app.domains.family.decision_subject import canonicalize_decision_subject
+    from app.domains.routines import shelf as shelf_domain
+
+    token, account_id = await registered_supabase_user()
+    await _seed(app_client)
+    item_id = await _expired_shelf(app_client, token)
+    await _member(app_client, token)
+
+    primary = (await _queue(app_client, token))["primary"]
+    assert primary["action"]["kind"] == manager.ACTION_PAUSE_PRODUCT
+    assert (await _answer(app_client, token, primary, "accept")).status_code == 200
+
+    async def _candidates() -> set[uuid.UUID]:
+        async with get_sessionmaker()() as session:
+            checked = await canonicalize_decision_subject(
+                session, principal_account_id=account_id, decision_subject=None,
+            )
+            context = await shelf_domain.gather(
+                session, account_id=account_id, decision_subject=checked,
+            )
+            products = {
+                product.id: product
+                for category in ("beauty", "hair")
+                for product in shelf_domain.build(context, category)
+            }
+            rows = await manager.give_back_candidates(
+                session, account_id=account_id, products=products,
+                paused_item_ids=frozenset({uuid.UUID(item_id)}),
+                decision_subject=checked,
+            )
+        return {row.item_id for row in rows}
+
+    assert uuid.UUID(item_id) in await _candidates(), (
+        "the manager would not offer back a pause it applied itself"
+    )
+
+    # Same state, said by the person. Nothing they can see changes.
+    mine = await app_client.post(
+        f"/api/v2/routines/products/{item_id}/pause", headers=auth(token),
+    )
+    assert mine.status_code == 200, mine.text
+    assert mine.json()["changed"] is False
+
+    assert uuid.UUID(item_id) not in await _candidates(), (
+        "the manager offered to undo a pause the person made themselves"
+    )
 
 
 async def test_saying_it_again_in_a_household_adopts_the_old_row_rather_than_doubling_it(
