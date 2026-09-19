@@ -38,6 +38,8 @@ from app.domains.beta_access.models import (
     Invite,
     InviteRedemption,
 )
+from app.domains.care.models import CareProductPreference
+from app.domains.care.product_preferences import CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY, CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY
 from app.domains.community.models import CommunityObservationReport
 from app.domains.consent.models import Consent
 from app.domains.family.models import FamilyCircle, FamilyProfile
@@ -545,10 +547,58 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
         session,
         select(InventoryProductLink).where(InventoryProductLink.account_id == account_id),
     )
+    _, _members = await _household_members(session, account_id)
+    member_ids = {member.id for member in _members}
+    circle_created_at = await session.scalar(
+        select(FamilyCircle.created_at).where(FamilyCircle.account_id == account_id)
+    )
+    preference_event_types = {
+        "care_routine_paused", "care_routine_resumed", "care_routine_preferred",
+        "care_routine_preference_cleared",
+    }
+    event_payloads: list[dict[str, Any]] = []
+    care_event_payloads: list[dict[str, Any]] = []
+    for event in events:
+        row = _row_dict(event, [c.name for c in InventoryEvent.__table__.columns])
+        if event.household_subject_id is not None and event.household_subject_id not in member_ids:
+            row["household_subject_id"] = None
+            row["invariant"] = "inventory_event_subject_ownership_invalid"
+        event_payloads.append(row)
+        if event.event_type in preference_event_types:
+            if event.household_subject_id is None and circle_created_at is not None and event.created_at >= circle_created_at:
+                row = dict(row)
+                row["household_subject_id"] = None
+                row["invariant"] = "legacy_preference_event_unattributed"
+            care_event_payloads.append(row)
+    care_keys = {CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY, CARE_ROUTINE_PREFERRED_ATTRIBUTE_KEY}
+    physical_attrs = [row for row in attrs if row.key not in care_keys]
+    legacy_care_attrs = [row for row in attrs if row.key in care_keys]
+    _, members = await _household_members(session, account_id)
+    circle_created_at = await session.scalar(
+        select(FamilyCircle.created_at).where(FamilyCircle.account_id == account_id)
+    )
+    safe_legacy_attrs, ambiguous_legacy_attrs = _safe_legacy_split(
+        legacy_care_attrs, circle_created_at=circle_created_at, timestamp="updated_at",
+    )
     return {
         "items": [_row_dict(i, [c.name for c in InventoryItem.__table__.columns]) for i in items],
-        "attributes": [_row_dict(a, [c.name for c in InventoryAttribute.__table__.columns]) for a in attrs],
-        "events": [_row_dict(e, [c.name for c in InventoryEvent.__table__.columns]) for e in events],
+        "attributes": [_row_dict(a, [c.name for c in InventoryAttribute.__table__.columns]) for a in physical_attrs],
+        "care_preference_history": {
+            "account_holder_legacy": [
+                _row_dict(a, [c.name for c in InventoryAttribute.__table__.columns])
+                for a in safe_legacy_attrs
+            ],
+            "unattributed": [
+                _row_dict(a, [c.name for c in InventoryAttribute.__table__.columns])
+                for a in ambiguous_legacy_attrs
+            ],
+            "coverage": {
+                "unattributed_legacy_preferences_present": bool(ambiguous_legacy_attrs),
+                "complete_for_subject": not bool(ambiguous_legacy_attrs),
+            },
+        },
+        "events": event_payloads,
+        "care_preference_events": care_event_payloads,
         "supplement_details": [
             _row_dict(row, [c.name for c in SupplementDetail.__table__.columns])
             for row in supplement_details
@@ -942,6 +992,31 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         session,
         select(ShelfManagerDecisionEvent).where(ShelfManagerDecisionEvent.account_id == account_id),
     )
+    care_preferences = await _fetch(
+        session,
+        select(CareProductPreference).where(CareProductPreference.account_id == account_id),
+    )
+    _, members = await _household_members(session, account_id)
+    member_ids = {member.id for member in members}
+    circle_created_at = await session.scalar(
+        select(FamilyCircle.created_at).where(FamilyCircle.account_id == account_id)
+    )
+    manager_by_subject, manager_legacy, manager_orphaned = _group_decision_rows(
+        list(manager_decision_events), members,
+    )
+    manager_safe, manager_ambiguous = _safe_legacy_split(
+        manager_legacy, circle_created_at=circle_created_at, timestamp="created_at",
+    )
+    preferences_by_subject: dict[str, list[dict[str, Any]]] = {str(member_id): [] for member_id in member_ids}
+    unattributed_preferences: list[dict[str, Any]] = []
+    for preference in care_preferences:
+        row = _row_dict(preference, [c.name for c in CareProductPreference.__table__.columns])
+        if preference.household_subject_id in member_ids:
+            preferences_by_subject[str(preference.household_subject_id)].append(row)
+        else:
+            row["household_subject_id"] = None
+            row["invariant"] = "preference_subject_ownership_invalid"
+            unattributed_preferences.append(row)
     maintenance_preferences = await _fetch(
         session,
         select(MaintenancePreference).where(MaintenancePreference.account_id == account_id),
@@ -1002,6 +1077,35 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
             _row_dict(r, [c.name for c in ShelfManagerDecisionEvent.__table__.columns])
             for r in manager_decision_events
         ],
+        "manager_history": {
+            "by_subject": {
+                str(member_id): [
+                    _row_dict(row, [c.name for c in ShelfManagerDecisionEvent.__table__.columns])
+                    for row in rows
+                ] for member_id, rows in manager_by_subject.items()
+            },
+            "account_holder_legacy": [
+                _row_dict(row, [c.name for c in ShelfManagerDecisionEvent.__table__.columns])
+                for row in manager_safe
+            ],
+            "unattributed": [
+                _row_dict(row, [c.name for c in ShelfManagerDecisionEvent.__table__.columns])
+                for row in manager_ambiguous
+            ] + [
+                _unattributed_row(row, [c.name for c in ShelfManagerDecisionEvent.__table__.columns])
+                for row in manager_orphaned
+            ],
+            "coverage": {
+                "unattributed_legacy_events_present": bool(manager_ambiguous or manager_orphaned),
+                "complete_for_subject": not bool(manager_ambiguous or manager_orphaned),
+            },
+        },
+        "care_product_preferences": [
+            _row_dict(r, [c.name for c in CareProductPreference.__table__.columns])
+            for r in care_preferences
+        ],
+        "care_product_preferences_by_subject": preferences_by_subject,
+        "unattributed_care_product_preferences": unattributed_preferences,
     }
 
 

@@ -25,16 +25,19 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.family.decision_subject import DecisionSubject, canonicalize_decision_subject
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryItem
 from app.domains.profile import service as profile_service
-from app.domains.profile.identity import resolve_self_profile_for_read
+from app.domains.profile.identity import resolve_self_profile_for_read, resolve_subject_profile_for_read
 from app.domains.recommendation.context import OwnedItem
 from app.domains.routines import parser
 from app.domains.routines import rules as rules_engine
+from app.domains.routines.hard_handoff import evaluate as evaluate_hard_handoff
 from app.domains.routines.models import ProductIngredient
 from app.domains.routines.ontology import INGREDIENT_BY_KEY, SEVERITY_AVOID, SEVERITY_CAUTION, SLOT_BY_KEY
 from app.domains.routines.rules import Finding, ShelfProduct
+from app.shared.errors.exceptions import ValidationFailedError
 
 # Categories the routine engine reasons over. Perfumes and supplements are
 # inventory with their own, narrower handling.
@@ -75,7 +78,10 @@ class ShelfContext:
 SHELF_ATTRIBUTES = ("allergies", "climate", "city", "hydration_habits", "preferred_style")
 
 
-async def shelf_attributes(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
+async def shelf_attributes(
+    session: AsyncSession, account_id: uuid.UUID,
+    decision_subject: DecisionSubject | None = None,
+) -> dict[str, Any]:
     """Confirmed attributes only.
 
     An unconfirmed observation must never silently decide that a product is
@@ -85,7 +91,17 @@ async def shelf_attributes(session: AsyncSession, account_id: uuid.UUID) -> dict
     # bare account lookup with ``scalar_one_or_none()``, which would have raised
     # the moment a household recorded a second person — a 500 on the shelf, not
     # a wrong answer.
-    profile = await resolve_self_profile_for_read(session, account_id)
+    checked = await canonicalize_decision_subject(
+        session, principal_account_id=account_id, decision_subject=decision_subject,
+    )
+    handoff = evaluate_hard_handoff(subject_is_child=checked.subject.is_child, stated_age=checked.subject.stated_age)
+    if handoff.handoff:
+        raise ValidationFailedError(handoff.message, field="subject_id")
+    profile = (
+        await resolve_subject_profile_for_read(
+            session, checked.subject, principal_account_id=account_id,
+        ) if not checked.is_account_holder else await resolve_self_profile_for_read(session, account_id)
+    )
     if profile is None:
         return {}
     rows = await profile_service.attributes_for(session, profile.id)
@@ -127,6 +143,7 @@ async def gather(
     account_id: uuid.UUID,
     climate: str | None = None,
     today: date | None = None,
+    decision_subject: DecisionSubject | None = None,
 ) -> ShelfContext:
     """Read every confirmed fact the shelf engine may use."""
     rows = (await session.execute(
@@ -159,7 +176,7 @@ async def gather(
             currency=row.currency,
         ))
 
-    attributes = await shelf_attributes(session, account_id)
+    attributes = await shelf_attributes(session, account_id, decision_subject)
     allergies = attributes.get("allergies") or []
     if isinstance(allergies, str):
         allergies = [allergies]
