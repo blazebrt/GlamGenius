@@ -17,9 +17,9 @@ from app.domains.family.subject import (
     SUBJECT_HOUSEHOLD_MEMBER,
     ResolvedSubject,
 )
-from app.domains.routines import adherence
 from app.domains.inventory.models import InventoryItem
 from app.domains.planning.models import NotificationDelivery
+from app.domains.routines import adherence
 from app.domains.routines.models import (
     Routine,
     RoutineAdherence,
