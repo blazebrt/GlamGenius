@@ -763,8 +763,12 @@ async def test_maintenance_is_exported_and_deleted_with_the_account(
         payload = await export_service.build_export(session, account_id)
     routines = payload["domains"]["routines"]
     assert [row["kind_key"] for row in routines["maintenance_preferences"]] == ["haircut"]
+    # An ISO string, which is what the customer's file has always contained:
+    # the route's encoder converted the date on the way out and the export dict
+    # kept a Python object, so this assertion was reading a value nobody was
+    # ever handed. The export now serialises it itself, and asserts on that.
     assert [row["done_on"] for row in routines["maintenance_events"]] == [
-        PLAN_DATE - timedelta(days=10)
+        (PLAN_DATE - timedelta(days=10)).isoformat()
     ]
 
     async with factory() as session:
