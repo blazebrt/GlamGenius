@@ -57,7 +57,8 @@ from enum import StrEnum
 # account-wide, because they are things the account is considering rather than
 # decisions a person took.
 # 1.3 — Step 11D. Care preference and Shelf Manager identity are subject-aware.
-EXPORT_SCHEMA_VERSION = "1.3"
+# 1.4 — Step 11E. Persisted Care routine execution/history is grouped by human.
+EXPORT_SCHEMA_VERSION = "1.4"
 
 
 class Classification(StrEnum):

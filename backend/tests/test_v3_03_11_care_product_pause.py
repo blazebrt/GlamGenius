@@ -465,6 +465,9 @@ async def test_pause_resume_privacy_export_retains_preference_history(
     export = (await app_client.get("/api/v2/privacy/export", headers=auth(token))).json()
     inventory = export["domains"]["inventory"]
     routines = export["domains"]["routines"]
+    # Step 11E: runs are grouped by the person whose routine they built.
+    # This account has no household, so its runs are the account holder's.
+    runs = routines["routine_history"]["account_holder_legacy"]["recommendation_runs"]
     assert any(
         row["key"] == "care_routine_paused" and row["value"] is True
         for row in inventory["care_preference_history"]["account_holder_legacy"]
@@ -472,7 +475,7 @@ async def test_pause_resume_privacy_export_retains_preference_history(
     assert any(row["event_type"] == "care_routine_paused" for row in inventory["events"])
     assert any(
         run["inputs"].get("care_adjustment", {}).get("kind") == "explicit_product_pause"
-        for run in routines["recommendation_runs"]
+        for run in runs
     )
 
     resumed = await app_client.post(f"/api/v2/routines/products/{item_id}/resume", headers=auth(token))
@@ -480,6 +483,9 @@ async def test_pause_resume_privacy_export_retains_preference_history(
     export = (await app_client.get("/api/v2/privacy/export", headers=auth(token))).json()
     inventory = export["domains"]["inventory"]
     routines = export["domains"]["routines"]
+    # Step 11E: runs are grouped by the person whose routine they built.
+    # This account has no household, so its runs are the account holder's.
+    runs = routines["routine_history"]["account_holder_legacy"]["recommendation_runs"]
     assert not any(
         row["key"] == "care_routine_paused"
         for row in inventory["care_preference_history"]["account_holder_legacy"]
@@ -487,9 +493,9 @@ async def test_pause_resume_privacy_export_retains_preference_history(
     assert {row["event_type"] for row in inventory["events"]} >= {"care_routine_paused", "care_routine_resumed"}
     assert any(
         run["inputs"].get("care_adjustment", {}).get("kind") == "explicit_product_resume"
-        for run in routines["recommendation_runs"]
+        for run in runs
     )
-    assert all(run["account_id"] == str(account_id) for run in routines["recommendation_runs"])
+    assert all(run["account_id"] == str(account_id) for run in runs)
 
 
 def test_only_exact_confirmed_user_boolean_is_an_effective_pause():

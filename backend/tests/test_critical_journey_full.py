@@ -803,8 +803,14 @@ async def test_critical_journey_full_product_flow(db_clean, fake_admin, fake_sto
     assert len(payload["domains"]["planning"]["weekly_plans"]) == 1
     assert len(payload["domains"]["planning"]["weather_snapshots"]) == 1
     # Routines and adherence present.
-    assert len(payload["domains"]["routines"]["routines"]) == 2
-    assert len(payload["domains"]["routines"]["adherence"]) == 3
+    # Step 11E groups the persisted routine graph by the person whose routine
+    # it is. This account has no household, so its rows are the account
+    # holder's own history.
+    own_routines = (
+        payload["domains"]["routines"]["routine_history"]["account_holder_legacy"]
+    )
+    assert len(own_routines["routines"]) == 2
+    assert len(own_routines["adherence"]) == 3
     # Progress + memory present. Deleted memory row still exported (as
     # tombstone with blank fact).
     assert len(payload["domains"]["progress_and_memory"]["memory_facts"]) == 1

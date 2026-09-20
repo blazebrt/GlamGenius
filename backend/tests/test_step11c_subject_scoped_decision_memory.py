@@ -32,6 +32,7 @@ from app.domains.family.subject import (
     SubjectNotFound,
     account_holder_subject,
 )
+from app.domains.privacy import EXPORT_SCHEMA_VERSION
 from app.domains.privacy import export as privacy_export
 from app.domains.product.models import LabelSnapshot, ScanDecisionEvent, ScanEvent
 from app.domains.recommendation.models import PurchaseDecision, PurchaseDecisionEvent
@@ -1443,7 +1444,10 @@ class TestExportAndDeletion:
 
         async with get_sessionmaker()() as session:
             payload = await privacy_export.build_export(session, account_id)
-        assert payload["schema_version"] == "1.3"
+        # Against the constant rather than a literal: this test is about
+        # grouping, and a schema bump it does not care about should turn
+        # red only where the version itself is the subject.
+        assert payload["schema_version"] == EXPORT_SCHEMA_VERSION
 
         shopping = {s["household_subject_id"]: s for s in payload["domains"]["shopping"]["subjects"]}
         assert [d["decision"] for d in shopping[self_id]["decisions"]] == ["waiting"]

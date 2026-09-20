@@ -287,7 +287,12 @@ async def test_real_generation_persists_snapshot_and_privacy_export_is_scoped(
     assert run_a.inputs["care_routine_plan_fingerprint"] == snapshot["routine_plan"]["routine_plan_fingerprint"]
 
     exported = (await app_client.get("/api/v2/privacy/export", headers=auth(token_a))).json()
-    rows = exported["domains"]["routines"]["recommendation_runs"]
+    # Step 11E groups the persisted routine graph by the person whose routine
+    # it is. This account has no household, so its rows are the account
+    # holder's own history.
+    rows = (
+        exported["domains"]["routines"]["routine_history"]["account_holder_legacy"]["recommendation_runs"]
+    )
     row = next(item for item in rows if item["id"] == str(run_a.id))
     assert row["inputs"]["care_snapshot"]["snapshot_version"] == "v3-03.18"
     assert row["inputs"]["care_snapshot"]["fingerprint"] == snapshot["fingerprint"]

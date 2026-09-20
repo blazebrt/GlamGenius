@@ -38,8 +38,18 @@ from app.domains.inventory.models import InventoryAttribute, InventoryItem
 from app.domains.planning import clock
 from app.domains.planning import context as planning_context
 from app.domains.profile import service as profile_service
-from app.domains.profile.identity import resolve_self_profile_for_write
-from app.domains.routines import adherence, compiler, explanation, manager, parser, perfume, selection, shelf
+from app.domains.profile.identity import resolve_subject_profile_for_write
+from app.domains.routines import (
+    adherence,
+    compiler,
+    explanation,
+    hard_handoff,
+    manager,
+    parser,
+    perfume,
+    selection,
+    shelf,
+)
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import (
     CARE_EXPERIENCE_FEEDBACK_VERSION,
@@ -54,6 +64,7 @@ from app.domains.routines.models import (
     UserReportedObservation,
 )
 from app.domains.routines.ontology import INGREDIENT_BY_KEY, ONTOLOGY_VERSION
+from app.domains.routines.ownership import routine_subject_filter
 from app.domains.routines.rules import ShelfProduct
 from app.domains.routines.safety import (
     PROFESSIONAL_BOUNDARY,
@@ -71,10 +82,30 @@ from app.domains.routines.schemas import (
     ShelfManagerRespondRequest,
 )
 from app.shared.database.base import utcnow
-from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
+from app.shared.errors.exceptions import (
+    IdentityInvariantError,
+    NotFoundError,
+    ValidationFailedError,
+)
 
 CONSISTENCY_WINDOW_DAYS = 14
 ROUTINE_ENGINE_VERSION = "care-v3-03.5"
+
+
+def _enforce_subject_handoff(subject: DecisionSubject) -> None:
+    """Fail closed before any personal Care/preference/routine fact is read.
+
+    The one gate, called by its own name. ``hard_handoff`` is a legal and
+    safety boundary with a single implementation; this reaches for it through
+    the module so there is no second name in this package that could drift from
+    it, and no doubt about which evaluator a reader is looking at.
+    """
+    handoff = hard_handoff.evaluate(
+        subject_is_child=subject.subject.is_child,
+        stated_age=subject.subject.stated_age,
+    )
+    if handoff.handoff:
+        raise ValidationFailedError(handoff.message, field="subject_id")
 
 
 async def _current_care_decisions(
@@ -93,19 +124,75 @@ async def _current_care_decisions(
     return day_context, care_context, decisions
 
 
+def _assert_no_dual_self_routines(
+    rows: Sequence[Routine], subject: DecisionSubject,
+) -> None:
+    """Refuse to read a routine kind the account holder owns twice over.
+
+    One person, one morning routine. A legacy row and an explicit row of the
+    same kind means adoption did not happen when it should have, and there is
+    no honest way to proceed: picking one decides which of somebody's own
+    history counts, and merging them invents a third routine nobody follows.
+
+    This is an :class:`~app.shared.errors.exceptions.IdentityInvariantError`
+    rather than a validation failure, and the distinction is the customer's.
+    Nothing about the request was wrong — the same request was fine yesterday
+    and will be fine again — so blaming ``subject_id`` would point the app at a
+    field the person cannot fix and invite them to try another member and meet
+    the same wall. It is the stored state that cannot be used, which is the one
+    thing this error class exists to say: one fixed sentence to the customer,
+    the reason in the log, and the same governed answer wherever in Step 11
+    identity turns out to be in a shape no route could have produced.
+    """
+    if not subject.is_account_holder or subject.subject_id is None:
+        return
+    by_kind: dict[str, set[uuid.UUID | None]] = {}
+    for row in rows:
+        by_kind.setdefault(row.kind, set()).add(row.household_subject_id)
+    if any(
+        None in owners and subject.subject_id in owners
+        for owners in by_kind.values()
+    ):
+        raise IdentityInvariantError("routine_dual_self_state")
+
+
+async def _routine_rows_for_subject(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    subject: DecisionSubject,
+    status: str | None = None,
+    for_update: bool = False,
+) -> list[Routine]:
+    stmt = select(Routine).where(
+        Routine.account_id == account_id,
+        routine_subject_filter(subject),
+    )
+    if status is not None:
+        stmt = stmt.where(Routine.status == status)
+    if for_update:
+        stmt = stmt.with_for_update()
+    rows = list((await session.execute(stmt)).scalars().all())
+    _assert_no_dual_self_routines(rows, subject)
+    return rows
+
+
 async def _current_hair_wash_cadence(
     session: AsyncSession, *, account_id: uuid.UUID, care_context,
+    decision_subject: DecisionSubject,
 ) -> care_cadence.HairWashCadenceDecision:
     frequency_fact = care_context.hair_facts.get("care_hair_wash_frequency")
     last_wash_on = await adherence.last_completed_wash_on(
-        session, account_id=account_id, through=care_context.plan_date,
+        session,
+        account_id=account_id,
+        through=care_context.plan_date,
+        decision_subject=decision_subject,
     )
     return care_cadence.decide_hair_wash_cadence(
         frequency_fact.value if frequency_fact is not None else None,
         plan_date=care_context.plan_date,
         last_wash_on=last_wash_on,
     )
-
 
 def _routine_eligibility(decisions: care_decisions.CareDecisionSet) -> compiler.RoutineEligibility:
     allergy_blocked = {
@@ -377,25 +464,55 @@ async def shelf_value_to_recover(session: AsyncSession, *, account_id: uuid.UUID
 
 
 async def _replace_routines(
-    session: AsyncSession, account_id: uuid.UUID, compiled: Sequence[compiler.CompiledRoutine],
-    *, climate: str | None, explanation_source: str,
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    compiled: Sequence[compiler.CompiledRoutine],
+    *,
+    decision_subject: DecisionSubject | None = None,
+    climate: str | None,
+    explanation_source: str,
 ) -> list[Routine]:
-    """Write compiled routines, keeping the version number moving forward."""
-    existing = {
-        row.kind: row for row in (await session.execute(
-            select(Routine).where(Routine.account_id == account_id)
-        )).scalars().all()
-    }
+    """Reconcile only the selected subject's mutable persisted routines.
 
+    The optional subject keeps the historical private test seam working; it is
+    not trusted. Omission means self and is canonicalized under write authority.
+    """
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject_for_write,
+    )
+
+    checked_subject = await canonicalize_decision_subject_for_write(
+        session,
+        principal_account_id=account_id,
+        decision_subject=decision_subject,
+    )
+    _enforce_subject_handoff(checked_subject)
+    rows = await _routine_rows_for_subject(
+        session,
+        account_id=account_id,
+        subject=checked_subject,
+        for_update=True,
+    )
+
+    # A legacy NULL routine is provably self-only before Step 11E. Adopt it in
+    # place on the first household-self write so its id, steps and adherence
+    # history remain unchanged.
+    if checked_subject.is_account_holder and checked_subject.subject_id is not None:
+        for row in rows:
+            if row.household_subject_id is None:
+                row.household_subject_id = checked_subject.subject_id
+
+    existing = {row.kind: row for row in rows}
     stored: list[Routine] = []
     for built in compiled:
         routine = existing.get(built.kind)
         if routine is None:
-            # Label and frequency are set here rather than after the flush:
-            # both are NOT NULL, so a bare Routine() cannot be flushed.
             routine = Routine(
-                account_id=account_id, kind=built.kind,
-                label=built.label, frequency=built.frequency,
+                account_id=account_id,
+                household_subject_id=checked_subject.subject_id,
+                kind=built.kind,
+                label=built.label,
+                frequency=built.frequency,
             )
             session.add(routine)
             await session.flush()
@@ -408,7 +525,8 @@ async def _replace_routines(
             for current in current_rows:
                 if current.slot in current_steps:
                     raise ValueError(
-                        f"Routine {routine.kind!r} has duplicate current step slot {current.slot!r}; refusing reconciliation"
+                        f"Routine {routine.kind!r} has duplicate current step slot "
+                        f"{current.slot!r}; refusing reconciliation"
                     )
                 current_steps[current.slot] = current
             routine.version += 1
@@ -440,39 +558,35 @@ async def _replace_routines(
             current.climate_note = step.climate_note
             current.is_gap = step.is_gap
 
-        # A removed rendering row is safe to delete: the SET NULL FK keeps its
-        # historical adherence, whose durable identity is routine + slot + day.
         for removed in current_steps.values():
             await session.delete(removed)
         stored.append(routine)
 
-    # A routine that no longer makes sense — every product for it archived, say —
-    # is retired rather than left showing stale steps.
     built_kinds = {row.kind for row in compiled}
     for kind, routine in existing.items():
         if kind not in built_kinds:
             routine.status = "retired"
     return stored
 
-
-async def generate_routines(
-    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str,
-    body: RoutineGenerateRequest, care_adjustment: dict[str, Any] | None = None,
+async def _routine_generation_material(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    body: RoutineGenerateRequest,
+    decision_subject: DecisionSubject,
 ) -> dict[str, Any]:
-    """Build every routine this person has the products for.
-
-    The compiler decides; the model, if it is reachable and its wording passes
-    the safety sweep, only rephrases.
-    """
     day_context, care_context, decisions = await _current_care_decisions(
-        session, account_id, body.as_of,
+        session, account_id, body.as_of, decision_subject=decision_subject,
     )
     care_plan = care_routine_plan.plan_care_routine(care_context, decisions)
     guidance = await care_guidance.build_care_guidance(
         session, care_context=care_context, care_plan=care_plan,
     )
     hair_wash_cadence = await _current_hair_wash_cadence(
-        session, account_id=account_id, care_context=care_context,
+        session,
+        account_id=account_id,
+        care_context=care_context,
+        decision_subject=decision_subject,
     )
     home_care_set = await home_care.build_home_care(
         session, care_context=care_context, hair_wash_cadence=hair_wash_cadence,
@@ -481,19 +595,23 @@ async def generate_routines(
     beauty = list(care_context.skin_products)
     hair = list(care_context.hair_products)
     eligibility = _routine_eligibility(decisions)
-    legacy_attributes = await shelf.shelf_attributes(session, account_id)
+    legacy_attributes = await shelf.shelf_attributes(
+        session, account_id, decision_subject,
+    )
     legacy_climate = body.climate or legacy_attributes.get("climate")
 
     compiled = compiler.compile_all(
-        beauty, hair, allergies=care_context.allergies, climate=legacy_climate,
-        today=care_context.plan_date, eligibility=eligibility,
+        beauty,
+        hair,
+        allergies=care_context.allergies,
+        climate=legacy_climate,
+        today=care_context.plan_date,
+        eligibility=eligibility,
         selection_plan=selection_plan,
     )
     if body.kinds:
         compiled = [row for row in compiled if row.kind in body.kinds]
 
-    # Capture deterministic Care material before any optional AI explanation
-    # and before mutable Routine/RoutineStep rows are reconciled.
     audit_snapshot = care_snapshot.build_care_recommendation_snapshot(
         care_context=care_context,
         decisions=decisions,
@@ -507,69 +625,154 @@ async def generate_routines(
         hair_wash_cadence=hair_wash_cadence,
         home_care=home_care_set,
     )
+    return {
+        "day_context": day_context,
+        "care_context": care_context,
+        "decisions": decisions,
+        "care_plan": care_plan,
+        "guidance": guidance,
+        "hair_wash_cadence": hair_wash_cadence,
+        "home_care_set": home_care_set,
+        "beauty": beauty,
+        "hair": hair,
+        "legacy_climate": legacy_climate,
+        "compiled": compiled,
+        "audit_snapshot": audit_snapshot,
+    }
+
+
+async def generate_routines(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    account_id_str: str,
+    body: RoutineGenerateRequest,
+    care_adjustment: dict[str, Any] | None = None,
+    decision_subject: DecisionSubject | None = None,
+) -> dict[str, Any]:
+    """Compile and persist routines for exactly one canonical subject.
+
+    Optional model wording is generated only between the read and write phases.
+    No Account or FamilyProfile lock is held across that external call. Before
+    persistence the subject is revalidated for write and deterministic material
+    is rebuilt; stale wording is discarded if anything material changed.
+    """
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject,
+        canonicalize_decision_subject_for_write,
+        serialize_decision_subject,
+    )
+
+    read_subject = await canonicalize_decision_subject(
+        session,
+        principal_account_id=account_id,
+        decision_subject=decision_subject,
+    )
+    _enforce_subject_handoff(read_subject)
+    initial = await _routine_generation_material(
+        session,
+        account_id=account_id,
+        body=body,
+        decision_subject=read_subject,
+    )
 
     narratives: dict[str, Any] = {}
     ai_run_id = None
     source = explanation.SOURCE_DETERMINISTIC
-    if body.explain and compiled:
+    if body.explain and initial["compiled"]:
         narratives, ai_run_id, source = await explanation.explain_routines(
-            compiled, climate=legacy_climate, account_id_str=account_id_str,
+            initial["compiled"],
+            climate=initial["legacy_climate"],
+            account_id_str=account_id_str,
         )
 
+    write_subject = await canonicalize_decision_subject_for_write(
+        session,
+        principal_account_id=account_id,
+        decision_subject=decision_subject,
+    )
+    _enforce_subject_handoff(write_subject)
+    current = await _routine_generation_material(
+        session,
+        account_id=account_id,
+        body=body,
+        decision_subject=write_subject,
+    )
+    if current["audit_snapshot"] != initial["audit_snapshot"]:
+        narratives = {}
+        ai_run_id = None
+        source = explanation.SOURCE_DETERMINISTIC
+
     stored = await _replace_routines(
-        session, account_id, compiled, climate=legacy_climate, explanation_source=source,
+        session,
+        account_id,
+        current["compiled"],
+        decision_subject=write_subject,
+        climate=current["legacy_climate"],
+        explanation_source=source,
     )
 
     run_inputs = _care_run_inputs(
-        day_context, care_context, decisions, care_plan, guidance,
-        hair_wash_cadence, home_care_set,
+        current["day_context"],
+        current["care_context"],
+        current["decisions"],
+        current["care_plan"],
+        current["guidance"],
+        current["hair_wash_cadence"],
+        current["home_care_set"],
     )
     if care_adjustment is not None:
         run_inputs["care_adjustment"] = dict(care_adjustment)
 
     session.add(RoutineRecommendationRun(
-        account_id=account_id, status="succeeded", engine_version=ROUTINE_ENGINE_VERSION,
+        account_id=account_id,
+        household_subject_id=write_subject.subject_id,
+        status="succeeded",
+        engine_version=ROUTINE_ENGINE_VERSION,
         explanation_source=source,
-        ai_run_id=ai_run_id, products_considered=len(beauty) + len(hair),
-        routines_built=len(compiled),
-        warnings_raised=sum(len(row.findings) for row in compiled),
+        ai_run_id=ai_run_id,
+        products_considered=len(current["beauty"]) + len(current["hair"]),
+        routines_built=len(current["compiled"]),
+        warnings_raised=sum(len(row.findings) for row in current["compiled"]),
         inputs={
-            "climate": legacy_climate,
-            "allergies_declared": len(care_context.allergies),
-            "beauty_products": len(beauty),
-            "hair_products": len(hair),
-            "draft_items_ignored": care_context.draft_product_count,
-            "as_of": care_context.plan_date.isoformat(),
+            "climate": current["legacy_climate"],
+            "allergies_declared": len(current["care_context"].allergies),
+            "beauty_products": len(current["beauty"]),
+            "hair_products": len(current["hair"]),
+            "draft_items_ignored": current["care_context"].draft_product_count,
+            "as_of": current["care_context"].plan_date.isoformat(),
             **run_inputs,
-            "care_snapshot": audit_snapshot,
+            "care_snapshot": current["audit_snapshot"],
         },
     ))
     await session.flush()
 
-    # Serialised from the stored rows rather than from the compiler's objects,
-    # so every step carries the id the completion route needs. The two shapes
-    # would otherwise drift, and a caller would get steps it could not tick off.
     routines = [
-        explanation.apply_to_routine(await _serialize_routine(session, row), narratives.get(row.kind))
+        explanation.apply_to_routine(
+            await _serialize_routine(session, row),
+            narratives.get(row.kind),
+        )
         for row in stored
     ]
 
     return {
+        "subject": serialize_decision_subject(write_subject),
         "routines": routines,
         "explanation_source": source,
         "knowledge_version": ONTOLOGY_VERSION,
-        "care_safety": _care_safety_payload(care_context, decisions),
-        "care_guidance": guidance.as_payload(),
-        "home_care": home_care_set.as_payload(),
-        "products_considered": len(beauty) + len(hair),
-        "drafts_ignored": care_context.draft_product_count,
+        "care_safety": _care_safety_payload(
+            current["care_context"], current["decisions"],
+        ),
+        "care_guidance": current["guidance"].as_payload(),
+        "home_care": current["home_care_set"].as_payload(),
+        "products_considered": len(current["beauty"]) + len(current["hair"]),
+        "drafts_ignored": current["care_context"].draft_product_count,
         "disclaimer": ROUTINE_DISCLAIMER,
-        "message": None if compiled else (
-            "Nothing to build a routine from yet. Add a face wash, a moisturiser or a shampoo "
-            "you already own and this starts working."
+        "message": None if current["compiled"] else (
+            "Nothing to build a routine from yet. Add a face wash, a moisturiser "
+            "or a shampoo you already own and this starts working."
         ),
     }
-
 
 def _effort_payload(plan: care_routine_plan.CareRoutinePlan) -> dict[str, Any]:
     decision = care_simplification.decide_care_simplification(plan.resolved_effort)
@@ -647,17 +850,40 @@ def _simplification_response(
 
 
 async def simplify_care_routine(
-    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str,
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    account_id_str: str,
+    decision_subject: DecisionSubject | None = None,
 ) -> dict[str, Any]:
-    """Apply one explicit simplification atomically and regenerate routines."""
+    """Apply one explicit simplification to the selected subject only."""
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject_for_write,
+        serialize_decision_subject,
+    )
+
+    checked = await canonicalize_decision_subject_for_write(
+        session,
+        principal_account_id=account_id,
+        decision_subject=decision_subject,
+    )
+    _enforce_subject_handoff(checked)
     plan_date = clock.local_today(clock.DEFAULT_TIMEZONE)
-    _, care_context, decisions = await _current_care_decisions(session, account_id, plan_date)
+    _, care_context, decisions = await _current_care_decisions(
+        session, account_id, plan_date, decision_subject=checked,
+    )
     before = care_routine_plan.plan_care_routine(care_context, decisions)
     decision = care_simplification.decide_care_simplification(before.resolved_effort)
     if decision.target_effort is None:
-        return _simplification_response(decision=decision, before=before, after=None)
+        result = _simplification_response(decision=decision, before=before, after=None)
+        result["subject"] = serialize_decision_subject(checked)
+        return result
 
-    profile = await resolve_self_profile_for_write(session, account_id)
+    profile = await resolve_subject_profile_for_write(
+        session,
+        checked.subject,
+        principal_account_id=account_id,
+    )
     await profile_service.apply_attributes(
         session,
         profile,
@@ -680,11 +906,15 @@ async def simplify_care_routine(
         account_id_str=account_id_str,
         body=RoutineGenerateRequest(as_of=plan_date, explain=False),
         care_adjustment=adjustment,
+        decision_subject=checked,
     )
-    _, after_context, after_decisions = await _current_care_decisions(session, account_id, plan_date)
+    _, after_context, after_decisions = await _current_care_decisions(
+        session, account_id, plan_date, decision_subject=checked,
+    )
     after = care_routine_plan.plan_care_routine(after_context, after_decisions)
-    return _simplification_response(decision=decision, before=before, after=after)
-
+    result = _simplification_response(decision=decision, before=before, after=after)
+    result["subject"] = serialize_decision_subject(checked)
+    return result
 
 def _customer_category(category: str) -> str:
     return {"beauty": "skin_care", "hair": "hair_care"}[category]
@@ -742,7 +972,10 @@ async def _care_product_preference(
         _claim_preference_ownership,
         read_preference_state,
     )
-    from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject_for_write,
+        serialize_decision_subject,
+    )
 
     # This is the Care write boundary.  Even the Manager's canonical-looking
     # object is a claim at this layer: re-resolve and lock it here before its
@@ -750,6 +983,7 @@ async def _care_product_preference(
     subject = await canonicalize_decision_subject_for_write(
         session, principal_account_id=account_id, decision_subject=subject_claim,
     )
+    _enforce_subject_handoff(subject)
     item = await inventory_service.owned_item(session, account_id, item_id)
     _assert_care_product_eligible(item, action="paused")
 
@@ -779,6 +1013,11 @@ async def _care_product_preference(
                 household_subject_id=subject.subject_id,
             )
         return {
+            # Whose change this was. Every other subject-aware response says so,
+            # and in a household it is the one confirmation that matters: the
+            # shelf is shared, so "paused" without a name on it is ambiguous in
+            # exactly the situation this slice exists for.
+            "subject": serialize_decision_subject(subject),
             "product_preference_version": product_preferences.CARE_PRODUCT_PREFERENCE_VERSION,
             "changed": False,
             "status": "already_paused" if pause else "already_active",
@@ -847,7 +1086,7 @@ async def _care_product_preference(
         "previous_plan_fingerprint": care_routine_plan.routine_plan_fingerprint(before_plan),
         "message": message,
     }
-    await _reconcile_self_routines(
+    await _reconcile_subject_routines(
         session, account_id=account_id, account_id_str=account_id_str,
         subject=subject, plan_date=plan_date, before_plan=before_plan,
         adjustment={
@@ -859,6 +1098,7 @@ async def _care_product_preference(
         },
         result=result,
     )
+    result["subject"] = serialize_decision_subject(subject)
     return result
 
 
@@ -917,37 +1157,26 @@ async def _write_legacy_pause(
         await session.delete(row)
 
 
-async def _reconcile_self_routines(
+async def _reconcile_subject_routines(
     session: AsyncSession,
     *,
     account_id: uuid.UUID,
     account_id_str: str,
-    subject,
-    plan_date,
+    subject: DecisionSubject,
+    plan_date: date,
     before_plan,
     adjustment: dict[str, Any],
     result: dict[str, Any],
 ) -> None:
-    """Re-plan and re-persist the account holder's routine, and nobody else's.
-
-    Persisted ``Routine`` and ``RoutineStep`` rows belong to the account holder
-    and stay that way in Step 11D: a member's preference changes what *they*
-    are shown, and must never rewrite the routine somebody else follows. So the
-    reconciliation that has always followed a self preference change still
-    does, and a member's change stops at their own preference row.
-
-    The after-fingerprints are filled in for everybody, because "what did my
-    Care picture look like before and after" is a truthful question for a
-    member too — it just does not end in a stored routine for them.
-    """
-    if subject.is_account_holder:
-        await generate_routines(
-            session,
-            account_id=account_id,
-            account_id_str=account_id_str,
-            body=RoutineGenerateRequest(as_of=plan_date, explain=False),
-            care_adjustment=adjustment,
-        )
+    """Re-plan and persist exactly the selected subject's routine."""
+    await generate_routines(
+        session,
+        account_id=account_id,
+        account_id_str=account_id_str,
+        body=RoutineGenerateRequest(as_of=plan_date, explain=False),
+        care_adjustment=adjustment,
+        decision_subject=subject,
+    )
     _, after_context, after_decisions = await _current_care_decisions(
         session, account_id, plan_date, decision_subject=subject,
     )
@@ -957,13 +1186,32 @@ async def _reconcile_self_routines(
     result["new_plan_fingerprint"] = care_routine_plan.routine_plan_fingerprint(after_plan)
     result["affected_slots"] = _changed_slots(before_plan, after_plan)
 
+async def pause_care_product_for_subject(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str,
+    item_id: uuid.UUID, decision_subject: DecisionSubject,
+) -> dict[str, Any]:
+    return await _care_product_preference(
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id,
+        pause=True, subject_claim=decision_subject, authority_source="direct_user",
+    )
+
+
+async def resume_care_product_for_subject(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str,
+    item_id: uuid.UUID, decision_subject: DecisionSubject,
+) -> dict[str, Any]:
+    return await _care_product_preference(
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id,
+        pause=False, subject_claim=decision_subject, authority_source="direct_user",
+    )
+
 
 async def pause_care_product(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
 ) -> dict[str, Any]:
     return await _care_product_preference(
-        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, pause=True,
-        subject_claim=None, authority_source="direct_user",
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id,
+        pause=True, subject_claim=None, authority_source="direct_user",
     )
 
 
@@ -971,8 +1219,8 @@ async def resume_care_product(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
 ) -> dict[str, Any]:
     return await _care_product_preference(
-        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, pause=False,
-        subject_claim=None, authority_source="direct_user",
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id,
+        pause=False, subject_claim=None, authority_source="direct_user",
     )
 
 
@@ -1009,11 +1257,15 @@ async def _selection_preference(
         _claim_preference_ownership,
         read_preference_state,
     )
-    from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject_for_write,
+        serialize_decision_subject,
+    )
 
     subject = await canonicalize_decision_subject_for_write(
         session, principal_account_id=account_id, decision_subject=subject_claim,
     )
+    _enforce_subject_handoff(subject)
     item = await inventory_service.owned_item(session, account_id, item_id)
     _assert_care_product_eligible(item, action="preferred")
 
@@ -1079,6 +1331,7 @@ async def _selection_preference(
                 household_subject_id=subject.subject_id,
             )
         return {
+            "subject": serialize_decision_subject(subject),
             "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
             "changed": False, "status": "already_preferred", "inventory_item_id": str(item.id),
             "display_name": item.display_name, "category": _customer_category(item.category),
@@ -1088,6 +1341,7 @@ async def _selection_preference(
         }
     if not prefer and not target_effective:
         return {
+            "subject": serialize_decision_subject(subject),
             "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
             "changed": False, "status": "already_standard", "inventory_item_id": str(item.id),
             "display_name": item.display_name, "category": _customer_category(item.category),
@@ -1189,12 +1443,12 @@ async def _selection_preference(
         "slot": product.slot,
         **({"cleared_preferred_item_ids": cleared_ids} if prefer else {}),
     }
-    if subject.is_account_holder:
-        await generate_routines(
-            session, account_id=account_id, account_id_str=account_id_str,
-            body=RoutineGenerateRequest(as_of=plan_date, explain=False),
-            care_adjustment=adjustment,
-        )
+    await generate_routines(
+        session, account_id=account_id, account_id_str=account_id_str,
+        body=RoutineGenerateRequest(as_of=plan_date, explain=False),
+        care_adjustment=adjustment,
+        decision_subject=subject,
+    )
     _, after_context, after_decisions = await _current_care_decisions(
         session, account_id, plan_date, decision_subject=subject,
     )
@@ -1205,6 +1459,7 @@ async def _selection_preference(
     )
     await session.flush()
     return {
+        "subject": serialize_decision_subject(subject),
         "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
         "changed": True, "status": "preferred" if prefer else "standard",
         "inventory_item_id": str(item.id), "display_name": item.display_name,
@@ -1221,12 +1476,32 @@ async def _selection_preference(
     }
 
 
+async def prefer_care_product_for_subject(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str,
+    item_id: uuid.UUID, decision_subject: DecisionSubject,
+) -> dict[str, Any]:
+    return await _selection_preference(
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id,
+        prefer=True, subject_claim=decision_subject, authority_source="direct_user",
+    )
+
+
+async def unprefer_care_product_for_subject(
+    session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str,
+    item_id: uuid.UUID, decision_subject: DecisionSubject,
+) -> dict[str, Any]:
+    return await _selection_preference(
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id,
+        prefer=False, subject_claim=decision_subject, authority_source="direct_user",
+    )
+
+
 async def prefer_care_product(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
 ) -> dict[str, Any]:
     return await _selection_preference(
-        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, prefer=True,
-        subject_claim=None, authority_source="direct_user",
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id,
+        prefer=True, subject_claim=None, authority_source="direct_user",
     )
 
 
@@ -1234,8 +1509,8 @@ async def unprefer_care_product(
     session: AsyncSession, *, account_id: uuid.UUID, account_id_str: str, item_id: uuid.UUID,
 ) -> dict[str, Any]:
     return await _selection_preference(
-        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id, prefer=False,
-        subject_claim=None, authority_source="direct_user",
+        session, account_id=account_id, account_id_str=account_id_str, item_id=item_id,
+        prefer=False, subject_claim=None, authority_source="direct_user",
     )
 
 
@@ -1328,33 +1603,51 @@ async def _routine_plan_drifted(
 
 
 async def routines_today(
-    session: AsyncSession, *, account_id: uuid.UUID, on: date | None = None
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    on: date | None = None,
+    decision_subject: DecisionSubject | None = None,
 ) -> dict[str, Any]:
-    """The routines that are actually relevant right now.
+    """The selected subject's routines that are relevant right now."""
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject,
+        serialize_decision_subject,
+    )
 
-    Morning before the evening, evening after it, and the weekly extras only on
-    the day they are due. Showing all five at once is how a routine feature
-    turns into noise nobody opens.
-    """
+    checked = await canonicalize_decision_subject(
+        session,
+        principal_account_id=account_id,
+        decision_subject=decision_subject,
+    )
+    _enforce_subject_handoff(checked)
     today = on or clock.local_today(clock.DEFAULT_TIMEZONE)
     part = clock.part_of_day(clock.local_now(clock.DEFAULT_TIMEZONE))
 
-    _, care_context, decisions = await _current_care_decisions(session, account_id, today)
+    _, care_context, decisions = await _current_care_decisions(
+        session, account_id, today, decision_subject=checked,
+    )
     care_plan = care_routine_plan.plan_care_routine(care_context, decisions)
     guidance = await care_guidance.build_care_guidance(
         session, care_context=care_context, care_plan=care_plan,
     )
     hair_wash_cadence = await _current_hair_wash_cadence(
-        session, account_id=account_id, care_context=care_context,
+        session,
+        account_id=account_id,
+        care_context=care_context,
+        decision_subject=checked,
     )
     home_care_set = await home_care.build_home_care(
         session, care_context=care_context, hair_wash_cadence=hair_wash_cadence,
     )
     blocked_ids = {str(value) for value in decisions.blocked_product_ids}
 
-    rows = (await session.execute(
-        select(Routine).where(Routine.account_id == account_id, Routine.status == "active")
-    )).scalars().all()
+    rows = await _routine_rows_for_subject(
+        session,
+        account_id=account_id,
+        subject=checked,
+        status="active",
+    )
     by_kind = {row.kind: row for row in rows}
 
     wanted: list[str] = []
@@ -1362,7 +1655,6 @@ async def routines_today(
         wanted.append(compiler.ROUTINE_MORNING)
     if part in ("afternoon", "evening", "night"):
         wanted.append(compiler.ROUTINE_EVENING)
-    # Weekly extras surface on a weekend day, which is when people have time.
     if clock.is_weekend(today):
         wanted.append(compiler.ROUTINE_WEEKLY)
     if hair_wash_cadence.status is care_cadence.HairWashCadenceStatus.DUE:
@@ -1380,19 +1672,31 @@ async def routines_today(
             if step["inventory_item_id"]
         }
         if routine_item_ids & blocked_ids or await _routine_plan_drifted(
-            session, routine_row, kind=kind, care_context=care_context,
-            decisions=decisions, care_plan=care_plan,
+            session,
+            routine_row,
+            kind=kind,
+            care_context=care_context,
+            decisions=decisions,
+            care_plan=care_plan,
         ):
             refresh_required_kinds.append(kind)
             continue
         routines.append(routine)
 
+    done_rows = (await session.execute(
+        select(RoutineAdherence)
+        .join(Routine, Routine.id == RoutineAdherence.routine_id)
+        .where(
+            RoutineAdherence.account_id == account_id,
+            Routine.account_id == account_id,
+            routine_subject_filter(checked),
+            RoutineAdherence.done_on == today,
+        )
+    )).scalars().all()
     done = {
-        (row.routine_id, row.slot) for row in (await session.execute(
-            select(RoutineAdherence).where(
-                RoutineAdherence.account_id == account_id, RoutineAdherence.done_on == today,
-            )
-        )).scalars().all() if row.completed
+        (row.routine_id, row.slot)
+        for row in done_rows
+        if row.completed
     }
     for routine in routines:
         routine_id = uuid.UUID(routine["id"])
@@ -1401,6 +1705,7 @@ async def routines_today(
 
     refresh_required = bool(refresh_required_kinds)
     return {
+        "subject": serialize_decision_subject(checked),
         "date": today.isoformat(),
         "part_of_day": part,
         "routines": routines,
@@ -1411,9 +1716,11 @@ async def routines_today(
         "hair_wash_cadence": hair_wash_cadence.as_payload(),
         "home_care": home_care_set.as_payload(),
         "message": (
-            "Your saved Care routine needs a refresh before we show those steps because its Care plan or safety facts changed."
+            "Your saved Care routine needs a refresh before we show those steps because "
+            "its Care plan or safety facts changed."
             if refresh_required else (None if routines else (
-                "Complete a wash routine once and GlamGenius can use that date as the starting point for the wash rhythm you recorded."
+                "Complete a wash routine once and GlamGenius can use that date as the "
+                "starting point for the wash rhythm you recorded."
                 if hair_wash_cadence.status is care_cadence.HairWashCadenceStatus.NEEDS_ANCHOR
                 else "Nothing due right now."
             ))
@@ -1421,15 +1728,42 @@ async def routines_today(
         "disclaimer": ROUTINE_DISCLAIMER,
     }
 
-
 async def complete_step(
-    session: AsyncSession, *, account_id: uuid.UUID, step_id: uuid.UUID, body: RoutineStepComplete
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    step_id: uuid.UUID,
+    body: RoutineStepComplete,
+    decision_subject: DecisionSubject | None = None,
 ) -> dict[str, Any]:
-    """Mark a step done. Ownership is checked from the token, not the request."""
+    """Mark one selected subject's routine step done or skipped."""
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject_for_write,
+        serialize_decision_subject,
+    )
+
+    checked = await canonicalize_decision_subject_for_write(
+        session,
+        principal_account_id=account_id,
+        decision_subject=decision_subject,
+    )
+    _enforce_subject_handoff(checked)
+    # Fail closed on a dual legacy/explicit self state before choosing a step.
+    await _routine_rows_for_subject(
+        session,
+        account_id=account_id,
+        subject=checked,
+    )
+
     row = (await session.execute(
         select(RoutineStep, Routine)
         .join(Routine, Routine.id == RoutineStep.routine_id)
-        .where(RoutineStep.id == step_id, Routine.account_id == account_id)
+        .where(
+            RoutineStep.id == step_id,
+            Routine.account_id == account_id,
+            routine_subject_filter(checked),
+        )
+        .with_for_update(of=Routine)
     )).first()
     if row is None:
         raise NotFoundError("We could not find that routine step.")
@@ -1437,46 +1771,80 @@ async def complete_step(
 
     done_on = body.done_on or clock.local_today(clock.DEFAULT_TIMEZONE)
     existing = (await session.execute(
-        select(RoutineAdherence).where(
-            RoutineAdherence.account_id == account_id,
+        select(RoutineAdherence)
+        .where(
             RoutineAdherence.routine_id == routine.id,
             RoutineAdherence.slot == step.slot,
             RoutineAdherence.done_on == done_on,
         )
+        .with_for_update()
     )).scalar_one_or_none()
+    if existing is not None and existing.account_id != account_id:
+        raise ValidationFailedError(
+            "This saved completion cannot be changed safely.",
+            field="step_id",
+        )
     if existing is None:
         existing = RoutineAdherence(
-            account_id=account_id, routine_id=routine.id, slot=step.slot,
-            step_id=step_id, done_on=done_on,
+            account_id=account_id,
+            routine_id=routine.id,
+            slot=step.slot,
+            step_id=step_id,
+            done_on=done_on,
         )
         session.add(existing)
     else:
-        # The UUID is provenance for the current rendering row, never the
-        # logical identity of this historical completion.
         existing.step_id = step_id
     existing.completed = body.completed
     existing.note = body.note
     await session.flush()
 
     return {
+        "subject": serialize_decision_subject(checked),
         "step_id": str(step_id),
         "routine_id": str(routine.id),
         "done_on": done_on.isoformat(),
         "completed": existing.completed,
         "note": (
-            "Marked done." if existing.completed else "Unmarked. Missing one is not a problem."
+            "Marked done." if existing.completed
+            else "Unmarked. Missing one is not a problem."
         ),
     }
 
-
 async def consistency(
-    session: AsyncSession, *, account_id: uuid.UUID, days: int = CONSISTENCY_WINDOW_DAYS
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    days: int = CONSISTENCY_WINDOW_DAYS,
+    decision_subject: DecisionSubject | None = None,
 ) -> dict[str, Any]:
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject,
+        serialize_decision_subject,
+    )
+
+    checked = await canonicalize_decision_subject(
+        session,
+        principal_account_id=account_id,
+        decision_subject=decision_subject,
+    )
+    _enforce_subject_handoff(checked)
+    # This also enforces the legacy+explicit self invariant.
+    await _routine_rows_for_subject(
+        session,
+        account_id=account_id,
+        subject=checked,
+    )
+
     today = clock.local_today(clock.DEFAULT_TIMEZONE)
     since = today - timedelta(days=days - 1)
     rows = (await session.execute(
-        select(RoutineAdherence).where(
+        select(RoutineAdherence)
+        .join(Routine, Routine.id == RoutineAdherence.routine_id)
+        .where(
             RoutineAdherence.account_id == account_id,
+            Routine.account_id == account_id,
+            routine_subject_filter(checked),
             RoutineAdherence.done_on >= since,
             RoutineAdherence.done_on <= today,
         )
@@ -1484,10 +1852,15 @@ async def consistency(
     expected = (await session.execute(
         select(RoutineStep.id)
         .join(Routine, Routine.id == RoutineStep.routine_id)
-        .where(Routine.account_id == account_id, Routine.status == "active")
+        .where(
+            Routine.account_id == account_id,
+            routine_subject_filter(checked),
+            Routine.status == "active",
+        )
     )).scalars().all()
-    return shelf.consistency(rows, len(expected), days=days)
-
+    result = shelf.consistency(rows, len(expected), days=days)
+    result["subject"] = serialize_decision_subject(checked)
+    return result
 
 # --- Ingredients ---------------------------------------------------------------
 
@@ -1760,10 +2133,18 @@ async def _validate_care_feedback_subject(
             raise NotFoundError("We could not find that Care product in your inventory.")
         return None, None
 
+    from app.domains.family.decision_subject import canonicalize_decision_subject
+    self_subject = await canonicalize_decision_subject(
+        session, principal_account_id=account_id, decision_subject=None,
+    )
     row = (await session.execute(
         select(RoutineStep, Routine)
         .join(Routine, Routine.id == RoutineStep.routine_id)
-        .where(RoutineStep.id == body.subject_id, Routine.account_id == account_id)
+        .where(
+            RoutineStep.id == body.subject_id,
+            Routine.account_id == account_id,
+            routine_subject_filter(self_subject),
+        )
     )).first()
     if row is None:
         raise NotFoundError("We could not find that routine step.")
@@ -1858,25 +2239,47 @@ async def list_observations(
 # --- The You → Improve overview ----------------------------------------------------
 
 
-async def improve_overview(session: AsyncSession, *, account_id: uuid.UUID) -> dict[str, Any]:
-    """Everything the Improve screen shows, in one call.
+async def improve_overview(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    decision_subject: DecisionSubject | None = None,
+) -> dict[str, Any]:
+    """Subject-specific Care state over the account's shared physical shelf."""
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject,
+        serialize_decision_subject,
+    )
 
-    Modules with nothing in them are reported as empty rather than filled with
-    placeholder content — the brief is explicit that a user who has not
-    populated a module should not be shown it.
-    """
-    context = await shelf.gather(session, account_id=account_id)
+    checked = await canonicalize_decision_subject(
+        session,
+        principal_account_id=account_id,
+        decision_subject=decision_subject,
+    )
+    _enforce_subject_handoff(checked)
+    context = await shelf.gather(
+        session, account_id=account_id, decision_subject=checked,
+    )
     summary = shelf.summary(context)
 
-    rows = (await session.execute(
-        select(Routine).where(Routine.account_id == account_id, Routine.status == "active")
-    )).scalars().all()
+    rows = await _routine_rows_for_subject(
+        session,
+        account_id=account_id,
+        subject=checked,
+        status="active",
+    )
     routines = [await _serialize_routine(session, row) for row in rows]
     plan_date = clock.local_today(clock.DEFAULT_TIMEZONE)
-    _, care_context, care_decisions = await _current_care_decisions(session, account_id, plan_date)
-    care_plan = care_routine_plan.plan_care_routine(care_context, care_decisions)
+    _, care_context, care_decisions_set = await _current_care_decisions(
+        session, account_id, plan_date, decision_subject=checked,
+    )
+    care_plan = care_routine_plan.plan_care_routine(
+        care_context, care_decisions_set,
+    )
 
-    decisions_by_item = {row.item_id: row for row in care_decisions.product_decisions}
+    decisions_by_item = {
+        row.item_id: row for row in care_decisions_set.product_decisions
+    }
     care_product_controls = [
         {
             "inventory_item_id": str(product.item.id),
@@ -1885,8 +2288,10 @@ async def improve_overview(session: AsyncSession, *, account_id: uuid.UUID) -> d
             "slot": product.slot,
             "paused": product.item.id in care_context.paused_product_ids,
             "preferred": product.item.id in care_context.preferred_product_ids,
-            "eligible": decisions_by_item.get(product.item.id).eligible
-            if product.item.id in decisions_by_item else False,
+            "eligible": (
+                decisions_by_item[product.item.id].eligible
+                if product.item.id in decisions_by_item else False
+            ),
         }
         for product in sorted(
             (*care_context.skin_products, *care_context.hair_products),
@@ -1898,12 +2303,18 @@ async def improve_overview(session: AsyncSession, *, account_id: uuid.UUID) -> d
         row for report in summary["reports"].values() for row in report["warnings"]
         if row["rule_id"] == rules_engine.RULE_MISSING_SLOT
     ]
+    consistency_payload = await consistency(
+        session,
+        account_id=account_id,
+        decision_subject=checked,
+    )
 
     return {
+        "subject": serialize_decision_subject(checked),
         "has_shelf": summary["counts"]["products"] > 0,
         "has_routines": bool(routines),
         "routines": routines,
-        "consistency": await consistency(session, account_id=account_id),
+        "consistency": consistency_payload,
         "needs_attention": summary["needs_attention"],
         "expiring": shelf.expiring(context),
         "low_use": shelf.low_use(context),
@@ -1913,7 +2324,6 @@ async def improve_overview(session: AsyncSession, *, account_id: uuid.UUID) -> d
         "care_product_controls": care_product_controls,
         "disclaimer": ROUTINE_DISCLAIMER,
     }
-
 
 # --- The Skin & Hair manager -------------------------------------------------
 # The queue itself is compiled in ``manager.py``, which is pure. What lives here

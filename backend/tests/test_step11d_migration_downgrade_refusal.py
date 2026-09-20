@@ -26,11 +26,14 @@ import pytest
 from app.shared.database import sql
 from sqlalchemy import text
 
-from tests.conftest import auth
+from tests.conftest import alembic_head_revision, auth
 from tests.test_step11d_subject_care_authority import _expired_shelf, _member, _queue
 from tests.test_v3_03_3_integration import _seed
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+#: Read from the chain, not typed. A later slice adding a revision must not
+#: break a test that is about an earlier slice's own guard.
+CURRENT_HEAD_REVISION = alembic_head_revision()
 STEP_11D_REVISION = "h6i7j8k9l0"
 STEP_11C_REVISION = "g5h6i7j8k9"
 
@@ -124,6 +127,29 @@ async def test_downgrade_refuses_once_a_care_preference_names_a_person(
     assert before["shelf_manager_decision_events"] == (1, 1)
     assert before["inventory_events"][1] == 1
 
+    # Step 11E made accepting a Manager suggestion for a member also build that
+    # member's own persisted routine, and Step 11E's downgrade refuses on that
+    # state. Its guard therefore fires first and this test never reaches the one
+    # it is about. The routine rows are removed here — and only here, in the
+    # setup of a test about a different migration — so that the chain gets as far
+    # as Step 11D's own refusal. Step 11E's refusal has its own test.
+    async with sql.get_engine().begin() as connection:
+        await connection.execute(text(
+            "DELETE FROM routine_adherence WHERE routine_id IN "
+            "(SELECT id FROM routines WHERE household_subject_id IS NOT NULL)"
+        ))
+        await connection.execute(text(
+            "DELETE FROM routine_steps WHERE routine_id IN "
+            "(SELECT id FROM routines WHERE household_subject_id IS NOT NULL)"
+        ))
+        await connection.execute(text(
+            "DELETE FROM routines WHERE household_subject_id IS NOT NULL"
+        ))
+        await connection.execute(text(
+            "DELETE FROM routine_recommendation_runs "
+            "WHERE household_subject_id IS NOT NULL"
+        ))
+
     # The engine holds pooled connections; alembic runs in its own process and
     # must not be racing this one for the same rows.
     await sql.dispose_engine()
@@ -145,7 +171,7 @@ async def test_downgrade_refuses_once_a_care_preference_names_a_person(
         # Nothing was dropped, nulled or merged, and the database did not land
         # halfway through: the version row still says 11D.
         assert await _counts() == before
-        assert await _current_revision() == STEP_11D_REVISION
+        assert await _current_revision() == CURRENT_HEAD_REVISION
         assert await _table_exists("care_product_preferences")
         for table in ("shelf_manager_decision_events", "inventory_events"):
             assert await _has_column(table), table
@@ -201,7 +227,7 @@ async def test_the_round_trip_succeeds_while_nothing_is_attributed(
         returncode, output = await _alembic("upgrade", "head")
         assert returncode == 0, output
 
-    assert await _current_revision() == STEP_11D_REVISION
+    assert await _current_revision() == CURRENT_HEAD_REVISION
     assert await _counts() == before
 
     # Asserted by definition rather than by name: an index that exists with the

@@ -351,7 +351,7 @@ async def test_preference_privacy_export_and_no_usage_side_effects(
         for row in export["domains"]["inventory"]["care_preference_history"]["account_holder_legacy"]
     )
     assert any(row["event_type"] == "care_routine_preferred" for row in export["domains"]["inventory"]["events"])
-    assert any(run["inputs"].get("care_adjustment", {}).get("kind") == "explicit_product_preference" for run in export["domains"]["routines"]["recommendation_runs"])
+    assert any(run["inputs"].get("care_adjustment", {}).get("kind") == "explicit_product_preference" for run in export["domains"]["routines"]["routine_history"]["account_holder_legacy"]["recommendation_runs"])
     await app_client.post(f"/api/v2/routines/products/{item_id}/unprefer", headers=auth(token))
     export = (await app_client.get("/api/v2/privacy/export", headers=auth(token))).json()
     assert not any(
