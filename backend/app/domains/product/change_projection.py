@@ -15,14 +15,15 @@ result reproducible for the exact two observations a caller names.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from app.domains.formulas.parser import ParseStatus
-from app.domains.product.formula_projection import project_formula_from_label_snapshot
+from app.domains.formulas.parser import FormulaParse, ParseStatus, parse_formula
 from app.domains.product.models import LabelSnapshot
 from app.domains.product.service import label_changed_fields, label_content_fingerprint
+from app.domains.substances.normalization import normalize_name
 from app.shared.errors.codes import ErrorCode
 from app.shared.errors.exceptions import AppError
 
@@ -136,16 +137,26 @@ def _validate_chain(current: LabelSnapshot, previous: LabelSnapshot | None) -> N
         raise LabelHistoryInvariantError("label_changed_fields_mismatch")
 
 
-def _entry_counts(rows) -> tuple[list[str], Counter[str], dict[str, str]] | None:
+def _formula_parse(snapshot: LabelSnapshot) -> FormulaParse:
+    ingredients_text: object = (
+        snapshot.facts.get("ingredients_text")
+        if isinstance(snapshot.facts, Mapping)
+        else None
+    )
+    return parse_formula(ingredients_text)
+
+
+def _entry_counts(parse: FormulaParse) -> tuple[list[str], Counter[str], dict[str, str]] | None:
     sequence: list[str] = []
     counts: Counter[str] = Counter()
     display: dict[str, str] = {}
-    for row in rows:
-        if row.normalized_name is None:
+    for row in parse.tokens:
+        normalized = normalize_name(row.raw_name)
+        if normalized is None:
             return None
-        sequence.append(row.normalized_name)
-        counts[row.normalized_name] += 1
-        display.setdefault(row.normalized_name, row.raw_name)
+        sequence.append(normalized)
+        counts[normalized] += 1
+        display.setdefault(normalized, row.raw_name)
     return sequence, counts, display
 
 
@@ -165,18 +176,15 @@ def _count_payload(
     return tuple(out)
 
 
-async def _formula_change(
-    session,
+def _formula_change(
     current: LabelSnapshot,
     previous: LabelSnapshot,
 ) -> FormulaChange:
     if "ingredients" not in (current.changed_fields or []):
         return FormulaChange(status=FormulaChangeStatus.UNCHANGED)
 
-    old_projection = await project_formula_from_label_snapshot(session, previous)
-    new_projection = await project_formula_from_label_snapshot(session, current)
-    old_formula = old_projection.formula
-    new_formula = new_projection.formula
+    old_formula = _formula_parse(previous)
+    new_formula = _formula_parse(current)
 
     if old_formula.status is not ParseStatus.PARSED or new_formula.status is not ParseStatus.PARSED:
         return FormulaChange(
@@ -185,8 +193,8 @@ async def _formula_change(
             current_parse_status=new_formula.status,
         )
 
-    old_counts = _entry_counts(old_formula.ingredients)
-    new_counts = _entry_counts(new_formula.ingredients)
+    old_counts = _entry_counts(old_formula)
+    new_counts = _entry_counts(new_formula)
     if old_counts is None or new_counts is None:
         return FormulaChange(
             status=FormulaChangeStatus.NOT_COMPARABLE,
@@ -224,7 +232,6 @@ async def _formula_change(
         ),
     )
 
-
 async def project_label_change(
     session,
     *,
@@ -243,12 +250,13 @@ async def project_label_change(
             formula=FormulaChange(status=FormulaChangeStatus.NOT_APPLICABLE),
         )
 
+    del session  # Step 12A is deliberately pure after explicit snapshot selection.
     return LabelChangeProjection(
         status=LabelChangeStatus.CHANGED,
         current_version=current.version_number,
         previous_version=previous.version_number,
         changed_fields=tuple(current.changed_fields or ()),
-        formula=await _formula_change(session, current, previous),
+        formula=_formula_change(current, previous),
     )
 
 
