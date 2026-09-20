@@ -40,8 +40,8 @@ from app.domains.planning import context as planning_context
 from app.domains.profile import service as profile_service
 from app.domains.profile.identity import resolve_subject_profile_for_write
 from app.domains.routines import adherence, compiler, explanation, manager, parser, perfume, selection, shelf
-from app.domains.routines.hard_handoff import evaluate_hard_handoff
 from app.domains.routines import rules as rules_engine
+from app.domains.routines.hard_handoff import evaluate_hard_handoff
 from app.domains.routines.models import (
     CARE_EXPERIENCE_FEEDBACK_VERSION,
     CareExperienceFeedback,
@@ -451,25 +451,37 @@ async def _replace_routines(
     account_id: uuid.UUID,
     compiled: Sequence[compiler.CompiledRoutine],
     *,
-    decision_subject: DecisionSubject,
+    decision_subject: DecisionSubject | None = None,
     climate: str | None,
     explanation_source: str,
 ) -> list[Routine]:
-    """Reconcile only the selected subject's mutable persisted routines."""
+    """Reconcile only the selected subject's mutable persisted routines.
+
+    The optional subject keeps the historical private test seam working; it is
+    not trusted. Omission means self and is canonicalized under write authority.
+    """
+    from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
+
+    checked_subject = await canonicalize_decision_subject_for_write(
+        session,
+        principal_account_id=account_id,
+        decision_subject=checked_subject,
+    )
+    _enforce_subject_handoff(checked_subject)
     rows = await _routine_rows_for_subject(
         session,
         account_id=account_id,
-        subject=decision_subject,
+        subject=checked_subject,
         for_update=True,
     )
 
     # A legacy NULL routine is provably self-only before Step 11E. Adopt it in
     # place on the first household-self write so its id, steps and adherence
     # history remain unchanged.
-    if decision_subject.is_account_holder and decision_subject.subject_id is not None:
+    if checked_subject.is_account_holder and checked_subject.subject_id is not None:
         for row in rows:
             if row.household_subject_id is None:
-                row.household_subject_id = decision_subject.subject_id
+                row.household_subject_id = checked_subject.subject_id
 
     existing = {row.kind: row for row in rows}
     stored: list[Routine] = []
@@ -478,7 +490,7 @@ async def _replace_routines(
         if routine is None:
             routine = Routine(
                 account_id=account_id,
-                household_subject_id=decision_subject.subject_id,
+                household_subject_id=checked_subject.subject_id,
                 kind=built.kind,
                 label=built.label,
                 frequency=built.frequency,
@@ -2404,11 +2416,11 @@ async def _manager_event_for_key(
 
 
 def _manager_event_matches_subject(event: ShelfManagerDecisionEvent, decision_subject: DecisionSubject) -> bool:
-    if event.household_subject_id == decision_subject.subject_id:
+    if event.household_subject_id == checked_subject.subject_id:
         return True
     return (
         event.household_subject_id is None
-        and decision_subject.is_account_holder
+        and checked_subject.is_account_holder
         and decision_subject.legacy_row_is_mine(event.created_at)
     )
 
@@ -2679,6 +2691,6 @@ async def shelf_manager_respond(
     from app.domains.family.decision_subject import serialize_decision_subject
     response["subject"] = serialize_decision_subject(checked_subject)
     response["manager_history_coverage"] = (await manager.history_coverage(
-        session, account_id=account_id, decision_subject=checked_subject,
+        session, account_id=account_id, decision_subject=decision_subject,
     )).as_dict()
     return response

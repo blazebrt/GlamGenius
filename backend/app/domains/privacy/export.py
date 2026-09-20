@@ -1017,7 +1017,6 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         session,
         select(RoutineStep).where(RoutineStep.routine_id.in_(routine_ids)),
     ) if routine_ids else []
-    step_ids = {row.id for row in steps}
     adherence = await _fetch(
         session,
         select(RoutineAdherence).where(RoutineAdherence.account_id == account_id),
