@@ -18,6 +18,7 @@ from app.domains.family.subject import (
     ResolvedSubject,
 )
 from app.domains.inventory.models import InventoryItem
+from app.domains.planning import notifications
 from app.domains.planning.models import NotificationDelivery
 from app.domains.routines import adherence
 from app.domains.routines.models import (
@@ -31,7 +32,13 @@ from sqlalchemy import select
 
 from tests.conftest import auth
 from tests.test_domain_routines_api import _seeded_shelf
-from tests.test_step11d_subject_care_authority import _member, _self_subject_id
+from tests.test_step11d_subject_care_authority import (
+    _answer,
+    _expired_shelf,
+    _member,
+    _queue,
+    _self_subject_id,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -500,3 +507,82 @@ async def test_notification_action_cannot_complete_a_members_step(
             )
         )).scalars().all()
         assert rows == []
+
+
+
+async def test_member_manager_acceptance_reconciles_only_that_members_routine(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    token, account_id = await registered_supabase_user()
+    await _seeded_shelf(app_client, token)
+    # Add one Manager-worthy product after the ordinary Care shelf exists.
+    await _expired_shelf(app_client, token)
+    member_a = await _member(app_client, token)
+    member_b = await _member(app_client, token)
+    self_id = await _self_subject_id(account_id)
+
+    await _generate(app_client, token)
+    await _generate(app_client, token, member_a)
+    await _generate(app_client, token, member_b)
+    before = await _versions(account_id)
+
+    primary = (await _queue(app_client, token, member_a))["primary"]
+    assert primary is not None
+    response = await _answer(
+        app_client, token, primary, "accept", subject_id=member_a,
+    )
+    assert response.status_code == 200, response.text
+    after = await _versions(account_id)
+
+    assert after[uuid.UUID(member_a)] != before[uuid.UUID(member_a)]
+    assert after[uuid.UUID(member_b)] == before[uuid.UUID(member_b)]
+    assert after[self_id] == before[self_id]
+
+
+async def test_member_simplification_changes_only_that_members_profile_and_routines(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    token, account_id = await registered_supabase_user()
+    await _seeded_shelf(app_client, token)
+    member_a = await _member(app_client, token)
+    member_b = await _member(app_client, token)
+    self_id = await _self_subject_id(account_id)
+
+    await _generate(app_client, token)
+    await _generate(app_client, token, member_a)
+    await _generate(app_client, token, member_b)
+    before = await _versions(account_id)
+
+    response = await app_client.post(
+        f"/api/v2/routines/simplify?subject_id={member_a}",
+        headers=auth(token),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["subject"]["household_subject_id"] == member_a
+    assert response.json()["changed"] is True
+
+    after = await _versions(account_id)
+    assert after[uuid.UUID(member_a)] != before[uuid.UUID(member_a)]
+    assert after[uuid.UUID(member_b)] == before[uuid.UUID(member_b)]
+    assert after[self_id] == before[self_id]
+
+
+async def test_protocol_notification_worker_never_queues_a_member_only_routine(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    token, account_id = await registered_supabase_user()
+    await _seeded_shelf(app_client, token)
+    member = await _member(app_client, token)
+
+    # Only the named member has persisted routines. Notification delivery is
+    # still account-holder/self-only in Step 11E.
+    await _generate(app_client, token, member)
+
+    async with get_sessionmaker()() as session:
+        delivery = await notifications.queue_for_protocol_day(
+            session,
+            account_id=account_id,
+            plan_date=date(2026, 9, 20),
+            timezone_name="Asia/Kolkata",
+        )
+        assert delivery is None
