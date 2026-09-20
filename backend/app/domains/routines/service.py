@@ -39,9 +39,18 @@ from app.domains.planning import clock
 from app.domains.planning import context as planning_context
 from app.domains.profile import service as profile_service
 from app.domains.profile.identity import resolve_subject_profile_for_write
-from app.domains.routines import adherence, compiler, explanation, manager, parser, perfume, selection, shelf
+from app.domains.routines import (
+    adherence,
+    compiler,
+    explanation,
+    hard_handoff,
+    manager,
+    parser,
+    perfume,
+    selection,
+    shelf,
+)
 from app.domains.routines import rules as rules_engine
-from app.domains.routines.hard_handoff import evaluate_hard_handoff
 from app.domains.routines.models import (
     CARE_EXPERIENCE_FEEDBACK_VERSION,
     CareExperienceFeedback,
@@ -79,8 +88,14 @@ ROUTINE_ENGINE_VERSION = "care-v3-03.5"
 
 
 def _enforce_subject_handoff(subject: DecisionSubject) -> None:
-    """Fail closed before any personal Care/preference/routine fact is read."""
-    handoff = evaluate_hard_handoff(
+    """Fail closed before any personal Care/preference/routine fact is read.
+
+    The one gate, called by its own name. ``hard_handoff`` is a legal and
+    safety boundary with a single implementation; this reaches for it through
+    the module so there is no second name in this package that could drift from
+    it, and no doubt about which evaluator a reader is looking at.
+    """
+    handoff = hard_handoff.evaluate(
         subject_is_child=subject.subject.is_child,
         stated_age=subject.subject.stated_age,
     )
