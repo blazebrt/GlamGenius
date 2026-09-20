@@ -271,3 +271,148 @@ async def test_a_to_b_to_a_compares_only_the_immediate_predecessor(
         )).scalars().all()
     assert [row.version_number for row in versions] == [1, 2, 3]
     assert versions[2].previous_snapshot_id == versions[1].id
+
+
+
+async def test_open_food_facts_refresh_never_manufactures_confirmed_label_history(
+    db_clean, off_clean, app_client, device, monkeypatch,
+):
+    from datetime import UTC, datetime, timedelta
+
+    from app.domains.off import client as off_client
+    from app.domains.off.models import OffProduct
+    from app.domains.off.store import get_off_sessionmaker
+    from app.domains.product import service as product_service
+
+    barcode = "8900000000142"
+    async with get_off_sessionmaker()() as off_session:
+        off_session.add(OffProduct(
+            barcode=barcode,
+            product_name="Catalogue version A",
+            ingredients_text="water",
+            fetched_at=datetime.now(UTC) - product_service.OFF_CACHE_TTL - timedelta(days=1),
+        ))
+        await off_session.commit()
+
+    async def _refresh(_barcode: str):
+        return {
+            "product_name": "Catalogue version B",
+            "brands": "Example",
+            "ingredients_text": "water,glycerin",
+        }
+
+    monkeypatch.setattr(off_client, "fetch_product", _refresh)
+    response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["facts_provenance"] == "open_food_facts"
+    assert payload["label_version"] is None
+    assert payload["label_change"] is None
+
+
+async def test_label_change_is_additive_and_does_not_change_scientific_verdict(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    barcode = "8900000000159"
+    token, account_id = await registered_supabase_user()
+    base = {
+        "product_name": "Observed food",
+        "ingredients_text": "Water,Glycerin",
+        "nutrition_per_100g": {
+            "energy_kcal": "100",
+            "sugars_g": "2",
+            "salt_g": "0.1",
+        },
+        "nutrition_basis": "per_100g",
+    }
+    await _confirm(app_client, device, token, account_id, barcode, base)
+    before = (await app_client.get(
+        f"/api/v2/scan/verdict/{barcode}", headers=device,
+    )).json()
+
+    await _confirm(
+        app_client, device, token, account_id, barcode,
+        {**base, "ingredients_text": "Water,Niacinamide"},
+    )
+    after = (await app_client.get(
+        f"/api/v2/scan/verdict/{barcode}", headers=device,
+    )).json()
+
+    for key in (
+        "grade",
+        "band",
+        "outcome",
+        "decision",
+        "negatives",
+        "positives",
+        "components",
+        "evidence",
+        "trace",
+        "result_contract_version",
+    ):
+        assert after[key] == before[key], key
+
+    assert before["label_change"]["status"] == "first_observed_version"
+    assert after["label_change"]["status"] == "changed"
+
+
+async def test_reference_mode_keeps_history_explicitly_product_scoped(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    barcode = "8900000000166"
+    token, account_id = await registered_supabase_user()
+    first = {
+        "product_name": "Observed product",
+        "ingredients_text": "Water",
+        "nutrition_per_100g": {"energy_kcal": "10"},
+        "nutrition_basis": "per_100g",
+    }
+    await _confirm(app_client, device, token, account_id, barcode, first)
+    await _confirm(
+        app_client, device, token, account_id, barcode,
+        {**first, "ingredients_text": "Water,Glycerin"},
+    )
+
+    response = await app_client.get(
+        f"/api/v2/scan/verdict/{barcode}?physical_pack_context=false",
+        headers=device,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["physical_pack_context"] is False
+    assert payload["label_change"]["scope"] == "confirmed_label_history"
+    assert payload["label_change"]["status"] == "changed"
+
+
+async def test_corrupt_chain_is_a_governed_public_failure_without_internal_reason(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    barcode = "8900000000173"
+    token, account_id = await registered_supabase_user()
+    base = {
+        "product_name": "Observed product",
+        "ingredients_text": "Water",
+        "nutrition_per_100g": {"energy_kcal": "10"},
+        "nutrition_basis": "per_100g",
+    }
+    await _confirm(app_client, device, token, account_id, barcode, base)
+    await _confirm(
+        app_client, device, token, account_id, barcode,
+        {**base, "ingredients_text": "Water,Glycerin"},
+    )
+
+    async with get_sessionmaker()() as session:
+        latest = (await session.execute(
+            select(LabelSnapshot)
+            .where(LabelSnapshot.barcode == barcode)
+            .order_by(LabelSnapshot.version_number.desc())
+            .limit(1)
+        )).scalar_one()
+        latest.previous_snapshot_id = uuid.uuid4()
+        await session.commit()
+
+    response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["message"] == "This product history is not available right now."
+    assert "label_predecessor" not in response.text
