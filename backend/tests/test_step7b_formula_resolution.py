@@ -1645,6 +1645,14 @@ def _imported_modules(path: Path) -> set[str]:
 ALLOWED_IMPORT_PREFIXES = (
     "app.domains.formulas",
     "app.domains.substances.service",
+    # Step 12A: the same canonical normalizer, reached without the registry.
+    # A caller comparing two stored observations of one product must be given
+    # the same answer tomorrow, and the resolver reads a table a reviewer keeps
+    # adding to — so publishing a synonym would look like a manufacturer
+    # changing a pack. The normalizer is pure and settles nothing about
+    # identity, which is exactly why this layer may key entries with it and
+    # still not be deciding what anything is.
+    "app.domains.substances.normalization",
     "sqlalchemy.ext.asyncio",
     "dataclasses",
     "enum",

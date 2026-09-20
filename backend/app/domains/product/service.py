@@ -33,6 +33,7 @@ from app.domains.off.join import join_on_barcode, read_off_product, read_off_pro
 from app.domains.off.models import OffProduct
 from app.domains.off.store import get_off_sessionmaker
 from app.domains.product.confidence import CONFIDENCE_TEXT, ProductConfidence
+from app.domains.product.formula_projection import LINE_BOUNDARIES
 from app.domains.product.fssai import find_licence, is_valid_licence
 from app.domains.product.models import LabelErrorReport, LabelSnapshot, ProductRecord, ScanEvent
 from app.shared.database.base import utcnow
@@ -128,19 +129,100 @@ CONTENT_FACT_FIELDS = (
     "nutrition_basis", "serving_size", "net_quantity", "fssai_licence", "veg_mark", "allergen_text",
     "product_category",
 )
-def _normalise(value: Any) -> Any:
+#: Fields whose text is handed to the Step 7B formula parser, and therefore the
+#: fields where a difference in whitespace can change what the product concludes
+#: rather than merely how the pack was printed.
+#:
+#: Only ``ingredients_text`` is parsed today. The set is named rather than
+#: inlined so that the day a second field is parsed, the person wiring it up
+#: finds one list to add it to instead of discovering months later that its
+#: structure was being flattened.
+FORMULA_SIGNIFICANT_FACT_FIELDS: frozenset[str] = frozenset({"ingredients_text"})
+
+def _collapse_whitespace(value: str) -> str:
+    """Every run of whitespace becomes one space. Presentation only."""
+    return " ".join(value.split())
+
+def _collapse_preserving_boundaries(value: str) -> str:
+    """Collapse whitespace but keep every boundary the formula parser cannot place.
+
+    Two observations of one pack may be printed with different spacing and mean
+    exactly the same thing — except where a line break falls. Step 7B refuses to
+    place a top-level line break: it cannot tell a visual wrap inside one long
+    name from a break between two names, so it returns ``AMBIGUOUS_BOUNDARY``
+    and emits nothing. That makes a line break a fact about the formula, not
+    about the printing.
+
+    Flattening it was the defect this repairs. ``"Water\nGlycerin"`` and
+    ``"Water Glycerin"`` collapsed to one canonical string, so they shared a
+    fingerprint, shared a version, and the second confirmation was discarded as
+    a duplicate of the first — while the parser read one of them as "I cannot
+    compare this list" and the other as "one ingredient called Water Glycerin".
+    A version authority that cannot hold those apart cannot carry Step 12.
+
+    So a run of whitespace collapses to a single space when it is only spacing,
+    and to a single ``\n`` when it contains any character
+    :data:`~app.domains.formulas.parser.LINE_BOUNDARIES` names. Which boundary
+    character it was does not survive, and does not need to: the parser treats
+    every one of them identically.
+
+    Leading and trailing runs are kept when they carry a boundary and dropped
+    when they do not, because the parser draws the same distinction — a leading
+    newline makes a whole list unreadable while a leading space does not.
+
+    The result is strictly finer than plain collapsing: two texts equal here are
+    equal under the old rule too, so this can only tell more observations apart,
+    never fewer.
+    """
+    out: list[str] = []
+    run: list[str] = []
+    for character in value:
+        if character.isspace():
+            run.append(character)
+            continue
+        if run:
+            out.append("\n" if any(c in LINE_BOUNDARIES for c in run) else " ")
+            run = []
+        out.append(character)
+    if run and any(c in LINE_BOUNDARIES for c in run):
+        out.append("\n")
+    # A leading run was emitted only if something followed it; strip a leading
+    # space, which is spacing, and keep a leading newline, which is not.
+    text = "".join(out)
+    return text[1:] if text.startswith(" ") else text
+
+def _normalise(value: Any, *, preserve_boundaries: bool = False) -> Any:
     if isinstance(value, dict):
-        return {str(k): _normalise(v) for k, v in sorted(value.items()) if v not in (None, "")}
+        return {
+            str(k): _normalise(v, preserve_boundaries=preserve_boundaries)
+            for k, v in sorted(value.items()) if v not in (None, "")
+        }
     if isinstance(value, list):
-        return [_normalise(v) for v in value]
+        return [_normalise(v, preserve_boundaries=preserve_boundaries) for v in value]
     if isinstance(value, str):
-        collapsed = " ".join(value.split())
+        collapsed = (
+            _collapse_preserving_boundaries(value) if preserve_boundaries
+            else _collapse_whitespace(value)
+        )
         return collapsed or None
     return value
 
 def canonical_label_facts(facts: dict[str, Any]) -> dict[str, Any]:
-    """Canonical content only; batch and extraction metadata are observations."""
-    return _normalise({key: facts.get(key) for key in CONTENT_FACT_FIELDS})
+    """Canonical content only; batch and extraction metadata are observations.
+
+    Presentation differences are folded away — case is kept, spacing is not —
+    except in the fields the formula parser reads, where a boundary it cannot
+    place is content rather than printing. See
+    :func:`_collapse_preserving_boundaries`.
+    """
+    return {
+        key: _normalise(
+            facts.get(key),
+            preserve_boundaries=key in FORMULA_SIGNIFICANT_FACT_FIELDS,
+        )
+        for key in CONTENT_FACT_FIELDS
+        if facts.get(key) not in (None, "")
+    }
 
 def label_content_fingerprint(facts: dict[str, Any]) -> str:
     encoded = json.dumps(canonical_label_facts(facts), ensure_ascii=False, separators=(",", ":"), sort_keys=True)

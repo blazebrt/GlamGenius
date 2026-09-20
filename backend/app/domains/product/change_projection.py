@@ -4,32 +4,55 @@ This layer answers one question:
 
     What did two confirmed physical-label observations say differently?
 
-It does not decide why a manufacturer changed a pack, whether the change is
-good or bad, whether an ingredient is safer, whether concentration changed, or
-whether any regulation requires an action. Those are later authorities.
+It reports a fact, not a verdict. Nothing here decides whether a change is
+good or bad, whether an ingredient is safer, whether concentration moved,
+whether a rule now applies, or whether anybody should be told. Those are later
+authorities, and a field one could be smuggled into does not exist in this
+module.
 
-Both snapshots are explicit inputs. The projection never chooses "latest" and
-never writes. That keeps version selection outside the comparison and makes the
-result reproducible for the exact two observations a caller names.
+**Confirmed pack observations are the only source.** A ``LabelSnapshot`` is
+written when somebody photographed a physical pack. Open Food Facts refreshing
+its copy of a product is not that, and can never produce a version here — see
+``docs/architecture/ODBL_DATA_WALL.md``.
+
+**Both versions are explicit inputs.** The projection never chooses "latest",
+never queries and never writes. Selection stays with the caller, so the answer
+for a named pair of observations is reproducible — including after a reviewer
+publishes a canonical identity these two labels never mentioned.
 """
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from app.domains.formulas.parser import FormulaParse, ParseStatus, parse_formula
+from app.domains.product.formula_projection import (
+    FormulaEntries,
+    ParseStatus,
+    formula_entries_from_label_snapshot,
+)
 from app.domains.product.models import LabelSnapshot
-from app.domains.product.service import label_changed_fields, label_content_fingerprint
-from app.domains.substances.normalization import normalize_name
+from app.domains.product.service import (
+    canonical_label_facts,
+    label_changed_fields,
+    label_content_fingerprint,
+)
 from app.shared.errors.codes import ErrorCode
 from app.shared.errors.exceptions import AppError
 
 
 class LabelHistoryInvariantError(AppError):
-    """Stored label history is in a shape no supported write path can create."""
+    """Stored label history is in a shape no supported write path can create.
+
+    Raised rather than repaired. A projection that quietly picked the reading
+    that still made sense would be inventing the history it could not find, and
+    the corruption would never be seen again.
+
+    The reason is for the server log only. ``AppError.to_detail()`` serialises
+    the code, the message, ``retryable`` and ``extra`` — and this carries no
+    ``extra`` — so naming the broken invariant cannot reach a customer.
+    """
 
     status_code = 503
     code = ErrorCode.FEATURE_UNAVAILABLE
@@ -38,24 +61,46 @@ class LabelHistoryInvariantError(AppError):
 
     def __init__(self, reason: str) -> None:
         super().__init__(self.MESSAGE)
-        self.reason = reason  # log-only; AppError serialises only extra.
+        self.reason = reason
 
 
 class LabelChangeStatus(StrEnum):
+    #: The first confirmed observation of this product's label. Not a change:
+    #: nothing was added, nothing was removed, and nothing about the pack
+    #: moved. We had simply never seen this one before.
     FIRST_OBSERVED_VERSION = "first_observed_version"
+    #: A later confirmed observation differed from the one before it.
     CHANGED = "changed"
+    #: Stored history for this product did not survive its own invariants, so
+    #: no change fact can be stated. Distinct from having no history at all.
+    UNAVAILABLE = "unavailable"
 
 
 class FormulaChangeStatus(StrEnum):
+    #: No predecessor to compare against.
     NOT_APPLICABLE = "not_applicable"
+    #: The printed ingredient list reads the same on both packs.
     UNCHANGED = "unchanged"
+    #: The same entries, the same number of times, printed in a different
+    #: order. Printed order is order. It is not concentration, and a change in
+    #: it is not evidence that anything about the product moved.
     REORDERED_ONLY = "reordered_only"
+    #: At least one entry is present a different number of times.
     INGREDIENT_SET_CHANGED = "ingredient_set_changed"
+    #: At least one of the two lists could not be read as a list of entries, so
+    #: no difference between them can be stated. No partial answer is given.
     NOT_COMPARABLE = "not_comparable"
 
 
 @dataclass(frozen=True)
 class IngredientCount:
+    """One printed name and how many occurrences of it the delta accounts for.
+
+    Occurrences are counted rather than flattened to a set because a label that
+    prints a name twice has printed it twice, and a pack that drops one of the
+    two has changed.
+    """
+
     name: str
     occurrences: int
 
@@ -75,10 +120,12 @@ class FormulaChange:
         return {
             "status": self.status.value,
             "previous_parse_status": (
-                self.previous_parse_status.value if self.previous_parse_status else None
+                None if self.previous_parse_status is None
+                else self.previous_parse_status.value
             ),
             "current_parse_status": (
-                self.current_parse_status.value if self.current_parse_status else None
+                None if self.current_parse_status is None
+                else self.current_parse_status.value
             ),
             "added": [row.as_payload() for row in self.added],
             "removed": [row.as_payload() for row in self.removed],
@@ -88,12 +135,19 @@ class FormulaChange:
 @dataclass(frozen=True)
 class LabelChangeProjection:
     status: LabelChangeStatus
-    current_version: int
+    current_version: int | None
     previous_version: int | None
     changed_fields: tuple[str, ...]
     formula: FormulaChange
 
     def as_payload(self) -> dict[str, Any]:
+        """The customer-facing shape.
+
+        ``scope`` is part of it because this is the product's confirmed label
+        history and not a statement about anybody's own packet. No snapshot id,
+        device, account or invariant reason appears here, and none may be
+        added: this envelope is served to an anonymous device.
+        """
         return {
             "scope": "confirmed_label_history",
             "status": self.status.value,
@@ -104,7 +158,20 @@ class LabelChangeProjection:
         }
 
 
+#: What a caller shows when stored history failed its invariants. It states
+#: that the history is not available; it does not guess at one, and it does not
+#: pretend the product has never been seen before.
+UNAVAILABLE_PROJECTION = LabelChangeProjection(
+    status=LabelChangeStatus.UNAVAILABLE,
+    current_version=None,
+    previous_version=None,
+    changed_fields=(),
+    formula=FormulaChange(status=FormulaChangeStatus.NOT_APPLICABLE),
+)
+
+
 def _assert_snapshot_integrity(snapshot: LabelSnapshot, *, role: str) -> None:
+    """The stored version identity must still describe the stored content."""
     if label_content_fingerprint(snapshot.facts) != snapshot.content_fingerprint:
         raise LabelHistoryInvariantError(f"{role}_label_fingerprint_mismatch")
     if snapshot.version_number < 1:
@@ -112,7 +179,14 @@ def _assert_snapshot_integrity(snapshot: LabelSnapshot, *, role: str) -> None:
 
 
 def _validate_chain(current: LabelSnapshot, previous: LabelSnapshot | None) -> None:
+    """Every shape the supported write path can produce, and no other.
+
+    Each check names a way the two rows could disagree about what they are. A
+    comparison run over rows that disagree would state a change nobody
+    observed, so none of these is recoverable here.
+    """
     _assert_snapshot_integrity(current, role="current")
+
     if current.version_number == 1:
         if current.previous_snapshot_id is not None or previous is not None:
             raise LabelHistoryInvariantError("first_label_version_has_predecessor")
@@ -129,43 +203,49 @@ def _validate_chain(current: LabelSnapshot, previous: LabelSnapshot | None) -> N
         raise LabelHistoryInvariantError("label_predecessor_barcode_mismatch")
     if previous.version_number != current.version_number - 1:
         raise LabelHistoryInvariantError("label_version_chain_non_contiguous")
-    if previous.content_fingerprint == current.content_fingerprint:
+    # Recomputed from the immutable facts rather than compared between the two
+    # stored fingerprints, so a pair of rows that both carry a wrong identity
+    # cannot agree their way past this.
+    if canonical_label_facts(previous.facts) == canonical_label_facts(current.facts):
         raise LabelHistoryInvariantError("adjacent_label_versions_have_same_content")
-
-    expected_fields = label_changed_fields(previous.facts, current.facts)
-    if list(current.changed_fields or []) != expected_fields:
+    if list(current.changed_fields or []) != label_changed_fields(
+        previous.facts, current.facts
+    ):
         raise LabelHistoryInvariantError("label_changed_fields_mismatch")
 
 
-def _formula_parse(snapshot: LabelSnapshot) -> FormulaParse:
-    ingredients_text: object = (
-        snapshot.facts.get("ingredients_text")
-        if isinstance(snapshot.facts, Mapping)
-        else None
-    )
-    return parse_formula(ingredients_text)
+def _keyed_occurrences(
+    entries: FormulaEntries,
+) -> tuple[tuple[str, ...], Counter[str], dict[str, str]] | None:
+    """Printed order, occurrence counts, and one printed name per key.
 
+    ``None`` when any entry has no canonical key at all, which is the only
+    honest answer: an entry that cannot be keyed cannot be said to be present
+    in one list and absent from the other.
 
-def _entry_counts(parse: FormulaParse) -> tuple[list[str], Counter[str], dict[str, str]] | None:
+    The display name kept is the first printing of that key, so the delta is
+    reported in the words the pack used rather than in a normalised form no
+    customer has ever seen.
+    """
     sequence: list[str] = []
     counts: Counter[str] = Counter()
     display: dict[str, str] = {}
-    for row in parse.tokens:
-        normalized = normalize_name(row.raw_name)
-        if normalized is None:
+    for entry in entries.entries:
+        if entry.normalized_name is None:
             return None
-        sequence.append(normalized)
-        counts[normalized] += 1
-        display.setdefault(normalized, row.raw_name)
-    return sequence, counts, display
+        sequence.append(entry.normalized_name)
+        counts[entry.normalized_name] += 1
+        display.setdefault(entry.normalized_name, entry.raw_name)
+    return tuple(sequence), counts, display
 
 
-def _count_payload(
+def _delta_payload(
     delta: Counter[str],
     *,
-    sequence: list[str],
+    sequence: tuple[str, ...],
     display: dict[str, str],
 ) -> tuple[IngredientCount, ...]:
+    """The delta in printed order, one row per key, never a negative count."""
     emitted: set[str] = set()
     out: list[IngredientCount] = []
     for key in sequence:
@@ -176,60 +256,55 @@ def _count_payload(
     return tuple(out)
 
 
-def _formula_change(
-    current: LabelSnapshot,
-    previous: LabelSnapshot,
-) -> FormulaChange:
+def _formula_change(current: LabelSnapshot, previous: LabelSnapshot) -> FormulaChange:
+    """Compare the two printed ingredient lists, or say that we cannot.
+
+    Sameness is decided on the canonical label text before parseability is
+    considered. Two packs that printed the same unreadable list did not change,
+    and saying they were not comparable would invite a client to tell somebody
+    the label moved when it did not.
+    """
+    previous_entries = formula_entries_from_label_snapshot(previous)
+    current_entries = formula_entries_from_label_snapshot(current)
+    statuses = {
+        "previous_parse_status": previous_entries.status,
+        "current_parse_status": current_entries.status,
+    }
+
     if "ingredients" not in (current.changed_fields or []):
-        return FormulaChange(status=FormulaChangeStatus.UNCHANGED)
+        return FormulaChange(status=FormulaChangeStatus.UNCHANGED, **statuses)
 
-    old_formula = _formula_parse(previous)
-    new_formula = _formula_parse(current)
+    if (
+        previous_entries.status is not ParseStatus.PARSED
+        or current_entries.status is not ParseStatus.PARSED
+    ):
+        return FormulaChange(status=FormulaChangeStatus.NOT_COMPARABLE, **statuses)
 
-    if old_formula.status is not ParseStatus.PARSED or new_formula.status is not ParseStatus.PARSED:
-        return FormulaChange(
-            status=FormulaChangeStatus.NOT_COMPARABLE,
-            previous_parse_status=old_formula.status,
-            current_parse_status=new_formula.status,
-        )
+    previous_keyed = _keyed_occurrences(previous_entries)
+    current_keyed = _keyed_occurrences(current_entries)
+    if previous_keyed is None or current_keyed is None:
+        return FormulaChange(status=FormulaChangeStatus.NOT_COMPARABLE, **statuses)
 
-    old_counts = _entry_counts(old_formula)
-    new_counts = _entry_counts(new_formula)
-    if old_counts is None or new_counts is None:
-        return FormulaChange(
-            status=FormulaChangeStatus.NOT_COMPARABLE,
-            previous_parse_status=old_formula.status,
-            current_parse_status=new_formula.status,
-        )
+    previous_sequence, previous_counts, previous_display = previous_keyed
+    current_sequence, current_counts, current_display = current_keyed
 
-    old_sequence, old_counter, old_display = old_counts
-    new_sequence, new_counter, new_display = new_counts
-
-    if old_sequence == new_sequence:
-        return FormulaChange(
-            status=FormulaChangeStatus.UNCHANGED,
-            previous_parse_status=old_formula.status,
-            current_parse_status=new_formula.status,
-        )
-    if old_counter == new_counter:
-        return FormulaChange(
-            status=FormulaChangeStatus.REORDERED_ONLY,
-            previous_parse_status=old_formula.status,
-            current_parse_status=new_formula.status,
-        )
-
-    added_counter = new_counter - old_counter
-    removed_counter = old_counter - new_counter
+    if previous_sequence == current_sequence:
+        return FormulaChange(status=FormulaChangeStatus.UNCHANGED, **statuses)
+    if previous_counts == current_counts:
+        return FormulaChange(status=FormulaChangeStatus.REORDERED_ONLY, **statuses)
     return FormulaChange(
         status=FormulaChangeStatus.INGREDIENT_SET_CHANGED,
-        previous_parse_status=old_formula.status,
-        current_parse_status=new_formula.status,
-        added=_count_payload(
-            added_counter, sequence=new_sequence, display=new_display,
+        added=_delta_payload(
+            current_counts - previous_counts,
+            sequence=current_sequence,
+            display=current_display,
         ),
-        removed=_count_payload(
-            removed_counter, sequence=old_sequence, display=old_display,
+        removed=_delta_payload(
+            previous_counts - current_counts,
+            sequence=previous_sequence,
+            display=previous_display,
         ),
+        **statuses,
     )
 
 
@@ -240,8 +315,10 @@ def project_label_change(
 ) -> LabelChangeProjection:
     """Compare exactly the two supplied immutable label observations.
 
-    No session parameter is accepted: Step 12A cannot query, write, consult a
-    clock, or ask a model after the caller has selected the two observations.
+    There is no session parameter, and that is the contract rather than an
+    omission: once a caller has named the two observations, Step 12A cannot
+    query, write, consult a clock or ask a model. The same pair yields the same
+    answer on any machine, on any day.
     """
     _validate_chain(current, previous)
 
@@ -264,6 +341,7 @@ def project_label_change(
 
 
 __all__ = [
+    "UNAVAILABLE_PROJECTION",
     "FormulaChange",
     "FormulaChangeStatus",
     "IngredientCount",

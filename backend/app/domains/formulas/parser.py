@@ -94,9 +94,18 @@ TOP_LEVEL_DELIMITER = ","
 #: The list is Python's own ``str.splitlines()`` set, spelled out rather than
 #: derived so a reader can see exactly what is covered, with a test asserting it
 #: still matches ``splitlines()`` if Python ever adds one.
-_LINE_BOUNDARIES: frozenset[str] = frozenset(
+#: Exported under the public name because one layer outside this module needs
+#: the same list and must not restate it: the label version authority, which
+#: has to keep two observations apart whenever a difference between them could
+#: change what this parser concludes. A second copy of this set would be a
+#: second answer to "where can a boundary be", and the two would drift.
+LINE_BOUNDARIES: frozenset[str] = frozenset(
     "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
 )
+
+#: The spelling the parser's own protected functions use, and the one its
+#: source audit pins. Same object, so there is one set and not two.
+_LINE_BOUNDARIES: frozenset[str] = LINE_BOUNDARIES
 
 #: Separators a printed list may genuinely use, which this parser will not
 #: guess at. A semicolon between two entries and a semicolon inside one
@@ -604,6 +613,7 @@ def parse_formula(ingredients_text: object) -> FormulaParse:
 
 
 __all__ = [
+    "LINE_BOUNDARIES",
     "MAX_FORMULA_TOKENS",
     "MAX_INGREDIENTS_TEXT_LENGTH",
     "TOP_LEVEL_DELIMITER",

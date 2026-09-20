@@ -7,6 +7,7 @@ up. A device token reaches product data and nothing else.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Literal
@@ -48,6 +49,8 @@ from app.shared.errors.exceptions import ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account
 from app.shared.security.network import client_ip
 from app.shared.security.rate_limit import FixedWindowLimiter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -391,6 +394,11 @@ async def read_product_verdict(
     # Step 12A is observation history, not a claim about the packet in the
     # caller's hand and not a regulatory interpretation. Version selection is
     # explicit here; the projection itself never performs a "latest" lookup.
+    #
+    # ``None`` means this product has no confirmed pack observation at all — an
+    # Open Food Facts record alone never produces one. It is deliberately not
+    # the answer when history exists but failed its invariants; that is
+    # ``unavailable``, and conflating the two would hide the corruption.
     if snapshot is None:
         payload["label_change"] = None
     else:
@@ -399,9 +407,23 @@ async def read_product_verdict(
             if snapshot.previous_snapshot_id is not None
             else None
         )
-        payload["label_change"] = change_projection.project_label_change(
-            current=snapshot, previous=previous_snapshot,
-        ).as_payload()
+        try:
+            projection = change_projection.project_label_change(
+                current=snapshot, previous=previous_snapshot,
+            )
+        except change_projection.LabelHistoryInvariantError as broken:
+            # An addition may not take the page down with it. Everything below
+            # — grade, band, negatives, positives, evidence, official records,
+            # alternatives, value — was established without this envelope and
+            # is still true, so the history goes quiet and the verdict stands.
+            # The broken invariant is named to the log and to nobody else.
+            logger.warning(
+                "label_history_invariant_failed barcode=%s reason=%s",
+                barcode,
+                broken.reason,
+            )
+            projection = change_projection.UNAVAILABLE_PROJECTION
+        payload["label_change"] = projection.as_payload()
     payload["attribution"] = found.get("attribution")
     # What the pack actually holds, so "one packet" on the screen means this
     # packet. Absent when neither source states a net quantity, and the screen

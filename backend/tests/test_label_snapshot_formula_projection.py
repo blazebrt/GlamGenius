@@ -123,9 +123,13 @@ async def test_exact_snapshot_provenance_is_copied_without_recomputation(monkeyp
 
 
 async def test_exact_raw_line_boundary_is_not_canonicalised_before_step_7b():
-    raw = "Water\nGlycerin"
+    raw = "Water\r\n  Glycerin"
     snapshot = _snapshot(raw)
-    assert canonical_label_facts(snapshot.facts)["ingredients_text"] == "Water Glycerin"
+    # The version authority folds how the boundary was printed — a carriage
+    # return, a line feed and the spaces around them are one presentation of the
+    # same break — but it does not fold the break itself away, because Step 7B
+    # cannot place it and the two readings are not the same label.
+    assert canonical_label_facts(snapshot.facts)["ingredients_text"] == "Water\nGlycerin"
 
     result = await project_formula_from_label_snapshot(object(), snapshot)
 
