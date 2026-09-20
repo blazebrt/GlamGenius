@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import date
 
 import pytest
 from app.domains.privacy import EXPORT_SCHEMA_VERSION
