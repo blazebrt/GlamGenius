@@ -38,6 +38,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -216,6 +217,9 @@ class Routine(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "routines"
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    household_subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("family_profiles.id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED")
+    )
     kind: Mapped[str] = mapped_column(String(24), nullable=False)
     label: Mapped[str] = mapped_column(String(80), nullable=False)
     frequency: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -229,8 +233,22 @@ class Routine(UUIDPrimaryKey, TimestampMixin, Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
     __table_args__ = (
-        UniqueConstraint("account_id", "kind", name="uq_routine_account_kind"),
-        Index("ix_routines_account", "account_id", "status"),
+        Index(
+            "uq_routine_account_kind_legacy",
+            "account_id", "kind",
+            unique=True,
+            postgresql_where=text("household_subject_id IS NULL"),
+        ),
+        Index(
+            "uq_routine_account_subject_kind",
+            "account_id", "household_subject_id", "kind",
+            unique=True,
+            postgresql_where=text("household_subject_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_routines_account_subject_status",
+            "account_id", "household_subject_id", "status",
+        ),
     )
 
 
@@ -360,6 +378,9 @@ class RoutineRecommendationRun(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "routine_recommendation_runs"
 
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    household_subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("family_profiles.id", ondelete="NO ACTION", deferrable=True, initially="DEFERRED")
+    )
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="succeeded", server_default="succeeded")
     engine_version: Mapped[str] = mapped_column(String(24), nullable=False, default=KNOWLEDGE_VERSION, server_default=KNOWLEDGE_VERSION)
     explanation_source: Mapped[str] = mapped_column(String(24), nullable=False, default="deterministic", server_default="deterministic")
@@ -369,7 +390,12 @@ class RoutineRecommendationRun(UUIDPrimaryKey, TimestampMixin, Base):
     warnings_raised: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     inputs: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
 
-    __table_args__ = (Index("ix_routine_runs_account", "account_id", "created_at"),)
+    __table_args__ = (
+        Index(
+            "ix_routine_runs_account_subject_created",
+            "account_id", "household_subject_id", "created_at",
+        ),
+    )
 
 
 class SupplementSafetyFlag(UUIDPrimaryKey, TimestampMixin, Base):
