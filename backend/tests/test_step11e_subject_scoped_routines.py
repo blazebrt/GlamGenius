@@ -586,3 +586,257 @@ async def test_protocol_notification_worker_never_queues_a_member_only_routine(
             timezone_name="Asia/Kolkata",
         )
         assert delivery is None
+
+
+async def test_an_unadopted_legacy_routine_is_never_visible_to_a_member(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    """A household can exist for a long time before its holder writes again.
+
+    Until they do, the pre-household routine sits there with no subject on it.
+    It is structurally theirs — no route could have written a member's routine
+    before this slice — and a member must not pick it up in the meantime. This
+    is the state adoption has not yet reached, which is where a subject
+    predicate that quietly matches everything stops being visible: once the
+    legacy row has been adopted there is nothing left for a loose predicate to
+    wrongly match.
+    """
+    token, account_id = await registered_supabase_user()
+    await _seeded_shelf(app_client, token)
+    await _generate(app_client, token)
+    member = await _member(app_client, token)
+
+    async with get_sessionmaker()() as session:
+        legacy_kinds = set((await session.execute(
+            select(Routine.kind).where(
+                Routine.account_id == account_id,
+                Routine.household_subject_id.is_(None),
+            )
+        )).scalars().all())
+    assert legacy_kinds, "the pre-household routine should still be unadopted"
+
+    # The member has written nothing, so they have nothing.
+    member_today = await app_client.get(
+        f"/api/v2/routines/today?subject_id={member}", headers=auth(token),
+    )
+    assert member_today.status_code == 200, member_today.text
+    assert member_today.json()["routines"] == []
+
+    member_improve = await app_client.get(
+        f"/api/v2/routines/improve?subject_id={member}", headers=auth(token),
+    )
+    assert member_improve.status_code == 200, member_improve.text
+    assert member_improve.json()["routines"] == []
+
+    # The account holder still sees their own, unchanged and still unadopted.
+    holder_today = await app_client.get("/api/v2/routines/today", headers=auth(token))
+    assert holder_today.status_code == 200, holder_today.text
+    assert holder_today.json()["subject"]["is_account_holder"] is True
+    async with get_sessionmaker()() as session:
+        still_legacy = set((await session.execute(
+            select(Routine.kind).where(
+                Routine.account_id == account_id,
+                Routine.household_subject_id.is_(None),
+            )
+        )).scalars().all())
+    assert still_legacy == legacy_kinds, "a read adopted rows; reads must not write"
+
+
+async def test_one_persons_generation_never_retires_another_persons_routine(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    """Reconciliation retires what *this* person no longer has, and no more.
+
+    Building a member's morning routine says nothing about the account holder's
+    evening one. A reconciliation that looked at every routine on the account
+    would retire every kind the current subject did not just build — quietly
+    switching off somebody else's evening routine because a different person
+    asked for a different thing.
+    """
+    token, account_id = await registered_supabase_user()
+    await _seeded_shelf(app_client, token)
+    member = await _member(app_client, token)
+
+    everything = await app_client.post(
+        "/api/v2/routines/generate",
+        headers=auth(token),
+        json={"kinds": ["morning", "evening", "wash_day"], "explain": False},
+    )
+    assert everything.status_code == 200, everything.text
+    me = await _self_subject_id(account_id)
+
+    async def _active_kinds(subject_id) -> set[str]:
+        async with get_sessionmaker()() as session:
+            return set((await session.execute(
+                select(Routine.kind).where(
+                    Routine.account_id == account_id,
+                    Routine.household_subject_id == subject_id,
+                    Routine.status == "active",
+                )
+            )).scalars().all())
+
+    holder_before = await _active_kinds(me)
+    assert {"morning", "evening"} <= holder_before
+
+    only_morning = await app_client.post(
+        f"/api/v2/routines/generate?subject_id={member}",
+        headers=auth(token),
+        json={"kinds": ["morning"], "explain": False},
+    )
+    assert only_morning.status_code == 200, only_morning.text
+
+    assert await _active_kinds(me) == holder_before, (
+        "generating for one person retired another person's routine"
+    )
+    assert await _active_kinds(uuid.UUID(member)) == {"morning"}
+
+
+async def test_a_member_with_no_routine_is_told_there_is_nothing_to_measure(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    """Nothing to measure is not the same as a score of zero.
+
+    Somebody who has never built a routine has not failed at anything, and the
+    product does not tell them they completed none of it. The distinction turns
+    entirely on whose steps count as expected: read across the household, a
+    member with no routine inherits the account holder's expectations and gets a
+    real reading of zero against them.
+    """
+    token, account_id = await registered_supabase_user()
+    await _seeded_shelf(app_client, token)
+    member = await _member(app_client, token)
+    await _generate(app_client, token)
+
+    empty = await app_client.get(
+        f"/api/v2/routines/consistency?days=7&subject_id={member}", headers=auth(token),
+    )
+    assert empty.status_code == 200, empty.text
+    body = empty.json()
+    assert body["note"] == "Nothing to measure yet."
+    assert body["steps_completed"] == 0
+    assert body["subject"]["household_subject_id"] == member
+    # And nothing in the sentence blames them for it.
+    for banned in ("fail", "missed", "wasted", "poor", "bad"):
+        assert banned not in body["note"].lower()
+
+    # The account holder, who does have one, gets a real reading.
+    mine = await app_client.get(
+        "/api/v2/routines/consistency?days=7", headers=auth(token),
+    )
+    assert mine.status_code == 200, mine.text
+    assert mine.json()["note"] != "Nothing to measure yet."
+
+
+async def test_consistency_ignores_an_adherence_row_from_another_account(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    """The row says it is mine; the routine it points at says otherwise.
+
+    Adherence carries its own ``account_id`` and inherits its real owner through
+    the routine. Reading one without the other means a row written against
+    somebody else's routine can be counted into this account's consistency —
+    a number about a stranger's mornings, shown as this person's.
+    """
+    token_a, account_a = await registered_supabase_user()
+    token_b, account_b = await registered_supabase_user()
+    await _seeded_shelf(app_client, token_a)
+    await _seeded_shelf(app_client, token_b)
+    await _generate(app_client, token_a)
+    await _generate(app_client, token_b)
+
+    async with get_sessionmaker()() as session:
+        foreign_routine = (await session.execute(
+            select(Routine).where(
+                Routine.account_id == account_b, Routine.kind == "morning",
+            )
+        )).scalar_one()
+        foreign_step = (await session.execute(
+            select(RoutineStep).where(RoutineStep.routine_id == foreign_routine.id).limit(1)
+        )).scalar_one()
+        session.add(RoutineAdherence(
+            account_id=account_a,
+            routine_id=foreign_routine.id,
+            slot=foreign_step.slot,
+            step_id=foreign_step.id,
+            done_on=date.today(),
+            completed=True,
+        ))
+        await session.commit()
+
+    reading = await app_client.get(
+        "/api/v2/routines/consistency?days=1", headers=auth(token_a),
+    )
+    assert reading.status_code == 200, reading.text
+    assert reading.json()["steps_completed"] == 0, (
+        "a completion recorded against another account's routine was counted"
+    )
+
+
+async def test_a_self_claim_naming_a_member_cannot_read_the_holders_own_care_state(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    """The claim says "me"; the household says otherwise, and the server asks it.
+
+    A caller-supplied subject that names a member while claiming to be the
+    account holder is the sharpest forgery available, because the two halves
+    change different things. The id decides which preference row is written; the
+    ``is_account_holder`` flag decides whether the *pre-household* Care state is
+    readable at all. Believing the flag would let a request made about a member
+    read what the account holder decided before the household existed — and then
+    report the member's own state as already settled on the strength of it.
+    """
+    from app.domains.care.product_preferences import CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY
+    from app.domains.family.decision_subject import DecisionSubject
+    from app.domains.family.subject import SUBJECT_ACCOUNT_HOLDER
+    from app.domains.inventory.models import InventoryAttribute
+    from app.domains.routines.service import _pause_care_product_for_manager
+
+    token, account_id = await registered_supabase_user()
+    await _seeded_shelf(app_client, token)
+    async with get_sessionmaker()() as session:
+        item = (await session.execute(
+            select(InventoryItem).where(
+                InventoryItem.account_id == account_id,
+                InventoryItem.category == "beauty",
+            ).limit(1)
+        )).scalar_one()
+        item_id = item.id
+    # The account holder's own pre-household pause, in the store it lived in.
+    paused = await app_client.post(
+        f"/api/v2/routines/products/{item_id}/pause", headers=auth(token),
+    )
+    assert paused.status_code == 200, paused.text
+    member = await _member(app_client, token)
+
+    forged = DecisionSubject(
+        subject=ResolvedSubject(
+            kind=SUBJECT_ACCOUNT_HOLDER, account_id=account_id,
+            subject_id=uuid.UUID(member), relation="self",
+            age_band=AGE_BAND_NOT_STATED,
+        ),
+        circle_created_at=None,
+    )
+    async with get_sessionmaker()() as session:
+        result = await _pause_care_product_for_manager(
+            session, account_id=account_id, account_id_str=str(account_id),
+            item_id=item_id, subject_claim=forged,
+        )
+        await session.commit()
+
+    # Resolved as the member they actually are: this is a new decision for that
+    # person, not a restatement of somebody else's.
+    assert result["changed"] is True, (
+        "the forged claim read the account holder's pre-household Care state"
+    )
+    assert result["subject"]["household_subject_id"] == member
+    assert result["subject"]["is_account_holder"] is False
+
+    # And the account holder's own pre-household row was not taken over.
+    async with get_sessionmaker()() as session:
+        legacy = (await session.execute(
+            select(InventoryAttribute).where(
+                InventoryAttribute.item_id == item_id,
+                InventoryAttribute.key == CARE_ROUTINE_PAUSED_ATTRIBUTE_KEY,
+            )
+        )).scalars().all()
+    assert len(legacy) == 1 and legacy[0].value is True

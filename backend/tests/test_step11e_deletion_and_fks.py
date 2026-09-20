@@ -16,7 +16,7 @@ from app.domains.routines.models import (
     RoutineStep,
 )
 from app.shared.database.sql import get_sessionmaker
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from tests.conftest import auth
@@ -67,6 +67,70 @@ async def test_direct_family_profile_delete_is_blocked_by_subject_routine_identi
             )
         )).scalar_one()
         assert run is not None
+
+
+async def test_each_piece_of_a_members_routine_identity_blocks_the_delete_on_its_own(
+    app_client, db_clean, registered_supabase_user, fake_provider,
+):
+    """Two protections, proved one at a time.
+
+    A member who has generated a routine leaves two rows naming them: the
+    routine itself and the run that built it. With both present, a delete is
+    refused — but that proves only that *something* refused, and either foreign
+    key could be carrying the other. If one were ever relaxed to cascade, the
+    member's Care history would start disappearing with them silently, and the
+    combined test would keep passing on the strength of the one that was left.
+
+    So each is asked alone: remove the runs and the routine must still refuse,
+    remove the routine graph and the run must still refuse.
+    """
+    token, _account_id = await registered_supabase_user()
+    await _seeded_shelf(app_client, token)
+    member = await _member(app_client, token)
+    await _generate(app_client, token, member)
+    member_uuid = uuid.UUID(member)
+
+    async def _delete_is_refused() -> None:
+        async with get_sessionmaker()() as session:
+            profile = await session.get(FamilyProfile, member_uuid)
+            assert profile is not None
+            await session.delete(profile)
+            with pytest.raises(IntegrityError):
+                await session.commit()
+            await session.rollback()
+        async with get_sessionmaker()() as session:
+            assert await session.get(FamilyProfile, member_uuid) is not None
+
+    # The routine alone.
+    async with get_sessionmaker()() as session:
+        await session.execute(text(
+            "DELETE FROM routine_recommendation_runs WHERE household_subject_id = :id"
+        ), {"id": member_uuid})
+        await session.commit()
+    await _delete_is_refused()
+
+    # The run alone.
+    await _generate(app_client, token, member)
+    async with get_sessionmaker()() as session:
+        await session.execute(text(
+            "DELETE FROM routine_adherence WHERE routine_id IN "
+            "(SELECT id FROM routines WHERE household_subject_id = :id)"
+        ), {"id": member_uuid})
+        await session.execute(text(
+            "DELETE FROM routine_steps WHERE routine_id IN "
+            "(SELECT id FROM routines WHERE household_subject_id = :id)"
+        ), {"id": member_uuid})
+        await session.execute(text(
+            "DELETE FROM routines WHERE household_subject_id = :id"
+        ), {"id": member_uuid})
+        await session.commit()
+    async with get_sessionmaker()() as session:
+        remaining = await session.scalar(text(
+            "SELECT count(*) FROM routine_recommendation_runs "
+            "WHERE household_subject_id = :id"
+        ), {"id": member_uuid})
+    assert remaining, "the run that built the routine should still name the member"
+    await _delete_is_refused()
 
 
 async def test_real_account_deletion_erases_subject_routine_graph_and_keeps_tombstone(

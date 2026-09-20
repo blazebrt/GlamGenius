@@ -477,7 +477,9 @@ async def _replace_routines(
     The optional subject keeps the historical private test seam working; it is
     not trusted. Omission means self and is canonicalized under write authority.
     """
-    from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject_for_write,
+    )
 
     checked_subject = await canonicalize_decision_subject_for_write(
         session,
@@ -970,7 +972,10 @@ async def _care_product_preference(
         _claim_preference_ownership,
         read_preference_state,
     )
-    from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject_for_write,
+        serialize_decision_subject,
+    )
 
     # This is the Care write boundary.  Even the Manager's canonical-looking
     # object is a claim at this layer: re-resolve and lock it here before its
@@ -1008,6 +1013,11 @@ async def _care_product_preference(
                 household_subject_id=subject.subject_id,
             )
         return {
+            # Whose change this was. Every other subject-aware response says so,
+            # and in a household it is the one confirmation that matters: the
+            # shelf is shared, so "paused" without a name on it is ambiguous in
+            # exactly the situation this slice exists for.
+            "subject": serialize_decision_subject(subject),
             "product_preference_version": product_preferences.CARE_PRODUCT_PREFERENCE_VERSION,
             "changed": False,
             "status": "already_paused" if pause else "already_active",
@@ -1088,6 +1098,7 @@ async def _care_product_preference(
         },
         result=result,
     )
+    result["subject"] = serialize_decision_subject(subject)
     return result
 
 
@@ -1246,7 +1257,10 @@ async def _selection_preference(
         _claim_preference_ownership,
         read_preference_state,
     )
-    from app.domains.family.decision_subject import canonicalize_decision_subject_for_write
+    from app.domains.family.decision_subject import (
+        canonicalize_decision_subject_for_write,
+        serialize_decision_subject,
+    )
 
     subject = await canonicalize_decision_subject_for_write(
         session, principal_account_id=account_id, decision_subject=subject_claim,
@@ -1317,6 +1331,7 @@ async def _selection_preference(
                 household_subject_id=subject.subject_id,
             )
         return {
+            "subject": serialize_decision_subject(subject),
             "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
             "changed": False, "status": "already_preferred", "inventory_item_id": str(item.id),
             "display_name": item.display_name, "category": _customer_category(item.category),
@@ -1326,6 +1341,7 @@ async def _selection_preference(
         }
     if not prefer and not target_effective:
         return {
+            "subject": serialize_decision_subject(subject),
             "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
             "changed": False, "status": "already_standard", "inventory_item_id": str(item.id),
             "display_name": item.display_name, "category": _customer_category(item.category),
@@ -1443,6 +1459,7 @@ async def _selection_preference(
     )
     await session.flush()
     return {
+        "subject": serialize_decision_subject(subject),
         "selection_preference_version": product_preferences.CARE_PRODUCT_SELECTION_PREFERENCE_VERSION,
         "changed": True, "status": "preferred" if prefer else "standard",
         "inventory_item_id": str(item.id), "display_name": item.display_name,
