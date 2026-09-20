@@ -38,10 +38,10 @@ from app.domains.nutrition.grading.production_rules import (
     resolve_production_ruleset,
 )
 from app.domains.official_records import service as official_records_service
-from app.domains.product import complaints, devices, extraction, pack_context, service
+from app.domains.product import change_projection, complaints, devices, extraction, pack_context, service
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
-from app.domains.product.models import FssaiComplaintHandoff, ScanDevice
+from app.domains.product.models import FssaiComplaintHandoff, LabelSnapshot, ScanDevice
 from app.domains.value import service as value_service
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import ValidationFailedError
@@ -388,6 +388,22 @@ async def read_product_verdict(
         "changed_fields": snapshot.changed_fields,
         "completeness": snapshot.completeness,
     } if snapshot else None)
+    # Step 12A is observation history, not a claim about the packet in the
+    # caller's hand and not a regulatory interpretation. Version selection is
+    # explicit here; the projection itself never performs a "latest" lookup.
+    if snapshot is None:
+        payload["label_change"] = None
+    else:
+        previous_snapshot = (
+            await session.get(LabelSnapshot, snapshot.previous_snapshot_id)
+            if snapshot.previous_snapshot_id is not None
+            else None
+        )
+        payload["label_change"] = (
+            await change_projection.project_label_change(
+                session, current=snapshot, previous=previous_snapshot,
+            )
+        ).as_payload()
     payload["attribution"] = found.get("attribution")
     # What the pack actually holds, so "one packet" on the screen means this
     # packet. Absent when neither source states a net quantity, and the screen

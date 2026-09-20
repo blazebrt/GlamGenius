@@ -21,7 +21,7 @@ from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import select
 
 from tests.conftest import auth
-from tests.test_product_scan import _seed_label_run
+from tests.test_product_scan import _seed_label_run, device, off_clean  # noqa: F401
 
 pytestmark = pytest.mark.asyncio
 
@@ -121,10 +121,10 @@ async def test_noningredient_pack_change_does_not_query_formula(monkeypatch):
         previous=old,
     )
 
-    async def _must_not_run(*args, **kwargs):
-        pytest.fail("formula projection ran even though ingredients did not change")
+    def _must_not_run(*args, **kwargs):
+        pytest.fail("formula parser ran even though ingredients did not change")
 
-    monkeypatch.setattr(change_projection, "project_formula_from_label_snapshot", _must_not_run)
+    monkeypatch.setattr(change_projection, "_formula_parse", _must_not_run)
     result = await project_label_change(object(), current=new, previous=old)
     assert result.changed_fields == ("net_quantity",)
     assert result.formula.status is FormulaChangeStatus.UNCHANGED
