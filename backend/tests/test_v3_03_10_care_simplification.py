@@ -353,7 +353,7 @@ async def test_simplification_preserves_safety_and_isolated_export(
     assert before_rows[expired]["blocking_reasons"] == after_rows[expired]["blocking_reasons"]
     assert after.inputs["care_adjustment"]["to_effort"] == "minimal"
     exported = (await app_client.get("/api/v2/privacy/export", headers=auth(token_a))).json()
-    runs = exported["domains"]["routines"]["recommendation_runs"]
+    runs = exported["domains"]["routines"]["routine_history"]["account_holder_legacy"]["recommendation_runs"]
     assert any(row["inputs"].get("care_adjustment") for row in runs)
     assert str(account_b) not in str(exported)
 

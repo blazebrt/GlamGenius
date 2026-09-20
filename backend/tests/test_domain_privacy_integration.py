@@ -287,10 +287,11 @@ async def test_routines_export_includes_all_owned_records_and_is_account_scoped(
     export_a = ok(await app_client.get("/api/v2/privacy/export", headers=auth(token_a)))
     routines = export_a["domains"]["routines"]
 
-    assert routines["routines"]
-    assert routines["steps"]
-    assert routines["adherence"]
-    assert routines["recommendation_runs"]
+    legacy_routines = routines["routine_history"]["account_holder_legacy"]
+    assert legacy_routines["routines"]
+    assert legacy_routines["steps"]
+    assert legacy_routines["adherence"]
+    assert legacy_routines["recommendation_runs"]
 
     exported_observation = next(row for row in routines["observations"] if row["id"] == observation["id"])
     assert exported_observation["note"] == "A-owned observation must remain verbatim in the export."
