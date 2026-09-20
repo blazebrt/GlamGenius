@@ -232,6 +232,7 @@ def _formula_change(
         ),
     )
 
+
 def project_label_change(
     *,
     current: LabelSnapshot,

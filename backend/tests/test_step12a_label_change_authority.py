@@ -60,8 +60,7 @@ async def test_case_only_label_change_does_not_become_an_ingredient_change(db_cl
     new = _snapshot(
         {"ingredients_text": "water,glycerin"}, version=2, previous=old,
     )
-    async with get_sessionmaker()() as session:
-        result = project_label_change(current=new, previous=old)
+    result = project_label_change(current=new, previous=old)
     assert result.changed_fields == ("ingredients",)
     assert result.formula.status is FormulaChangeStatus.UNCHANGED
     assert result.formula.added == ()
@@ -75,8 +74,7 @@ async def test_reorder_is_reported_without_calling_it_add_or_remove(db_clean):
         version=2,
         previous=old,
     )
-    async with get_sessionmaker()() as session:
-        result = project_label_change(current=new, previous=old)
+    result = project_label_change(current=new, previous=old)
     assert result.formula.status is FormulaChangeStatus.REORDERED_ONLY
     assert result.formula.added == ()
     assert result.formula.removed == ()
@@ -89,8 +87,7 @@ async def test_occurrence_delta_preserves_duplicates_and_printed_names(db_clean)
         version=2,
         previous=old,
     )
-    async with get_sessionmaker()() as session:
-        result = project_label_change(current=new, previous=old)
+    result = project_label_change(current=new, previous=old)
     assert result.formula.status is FormulaChangeStatus.INGREDIENT_SET_CHANGED
     assert [row.as_payload() for row in result.formula.added] == [
         {"name": "Niacinamide", "occurrences": 2},
@@ -105,8 +102,7 @@ async def test_unreadable_formula_is_not_partially_compared(db_clean):
     new = _snapshot(
         {"ingredients_text": "Water\nGlycerin"}, version=2, previous=old,
     )
-    async with get_sessionmaker()() as session:
-        result = project_label_change(current=new, previous=old)
+    result = project_label_change(current=new, previous=old)
     assert result.formula.status is FormulaChangeStatus.NOT_COMPARABLE
     assert result.formula.added == ()
     assert result.formula.removed == ()
