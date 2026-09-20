@@ -180,7 +180,7 @@ async def test_1_a_first_observation_is_not_a_change():
     assert result.current_version == 1
     assert result.changed_fields == ()
     assert result.formula.status is FormulaChangeStatus.NOT_APPLICABLE
-    assert result.formula.added == () and result.formula.removed == ()
+    assert result.formula.only_on_current_label == () and result.formula.only_on_previous_label == ()
 
 
 async def test_2_case_only_difference_is_a_label_change_but_not_a_formula_change():
@@ -189,7 +189,7 @@ async def test_2_case_only_difference_is_a_label_change_but_not_a_formula_change
 
     assert result.changed_fields == ("ingredients",)
     assert result.formula.status is FormulaChangeStatus.UNCHANGED
-    assert result.formula.added == () and result.formula.removed == ()
+    assert result.formula.only_on_current_label == () and result.formula.only_on_previous_label == ()
 
 
 def test_3_harmless_spacing_is_not_a_different_label():
@@ -274,7 +274,7 @@ async def test_5_reordering_is_reported_as_reordering_and_nothing_more():
     result = project_label_change(current=new, previous=old)
 
     assert result.formula.status is FormulaChangeStatus.REORDERED_ONLY
-    assert result.formula.added == () and result.formula.removed == ()
+    assert result.formula.only_on_current_label == () and result.formula.only_on_previous_label == ()
 
 
 async def test_6_a_single_addition_is_reported_once():
@@ -282,10 +282,10 @@ async def test_6_a_single_addition_is_reported_once():
     result = project_label_change(current=new, previous=old)
 
     assert result.formula.status is FormulaChangeStatus.INGREDIENT_SET_CHANGED
-    assert [row.as_payload() for row in result.formula.added] == [
+    assert [row.as_payload() for row in result.formula.only_on_current_label] == [
         {"name": "Niacinamide", "occurrences": 1},
     ]
-    assert result.formula.removed == ()
+    assert result.formula.only_on_previous_label == ()
 
 
 async def test_7_a_single_removal_is_reported_once():
@@ -293,8 +293,8 @@ async def test_7_a_single_removal_is_reported_once():
     result = project_label_change(current=new, previous=old)
 
     assert result.formula.status is FormulaChangeStatus.INGREDIENT_SET_CHANGED
-    assert result.formula.added == ()
-    assert [row.as_payload() for row in result.formula.removed] == [
+    assert result.formula.only_on_current_label == ()
+    assert [row.as_payload() for row in result.formula.only_on_previous_label] == [
         {"name": "Niacinamide", "occurrences": 1},
     ]
 
@@ -311,10 +311,10 @@ async def test_8_duplicates_are_counted_not_flattened():
     result = project_label_change(current=new, previous=old)
 
     assert result.formula.status is FormulaChangeStatus.INGREDIENT_SET_CHANGED
-    assert [row.as_payload() for row in result.formula.added] == [
+    assert [row.as_payload() for row in result.formula.only_on_current_label] == [
         {"name": "Niacinamide", "occurrences": 2},
     ]
-    assert [row.as_payload() for row in result.formula.removed] == [
+    assert [row.as_payload() for row in result.formula.only_on_previous_label] == [
         {"name": "Glycerin", "occurrences": 1},
     ]
 
@@ -325,7 +325,7 @@ async def test_9_an_unreadable_list_is_never_partially_compared():
     result = project_label_change(current=new, previous=old)
 
     assert result.formula.status is FormulaChangeStatus.NOT_COMPARABLE
-    assert result.formula.added == () and result.formula.removed == ()
+    assert result.formula.only_on_current_label == () and result.formula.only_on_previous_label == ()
     assert result.formula.previous_parse_status.value == "parsed"
     assert result.formula.current_parse_status.value == "malformed"
 
@@ -362,7 +362,7 @@ async def test_11_an_absent_ingredient_observation_is_not_comparable():
     assert result.changed_fields == ("ingredients",)
     assert result.formula.status is FormulaChangeStatus.NOT_COMPARABLE
     assert result.formula.current_parse_status.value == "empty"
-    assert result.formula.added == () and result.formula.removed == ()
+    assert result.formula.only_on_current_label == () and result.formula.only_on_previous_label == ()
 
 
 async def test_12_a_pack_change_that_left_the_ingredients_alone_is_not_a_formula_change():
@@ -374,7 +374,7 @@ async def test_12_a_pack_change_that_left_the_ingredients_alone_is_not_a_formula
 
     assert result.changed_fields == ("net_quantity",)
     assert result.formula.status is FormulaChangeStatus.UNCHANGED
-    assert result.formula.added == () and result.formula.removed == ()
+    assert result.formula.only_on_current_label == () and result.formula.only_on_previous_label == ()
 
 
 async def test_13_an_unreadable_list_that_did_not_change_is_unchanged():
@@ -511,7 +511,9 @@ async def test_17_publishing_a_canonical_identity_later_does_not_move_the_delta(
 
     after = project_label_change(current=new, previous=old).as_payload()
     assert after == before
-    assert after["formula"]["added"] == [{"name": "Niacinamide", "occurrences": 1}]
+    assert after["formula"]["only_on_current_label"] == [
+        {"name": "Niacinamide", "occurrences": 1},
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -614,8 +616,8 @@ async def test_20_the_product_result_carries_the_immediate_version_change(
             "status": "not_applicable",
             "previous_parse_status": None,
             "current_parse_status": None,
-            "added": [],
-            "removed": [],
+            "only_on_current_label": [],
+            "only_on_previous_label": [],
         },
     }
 
@@ -630,8 +632,8 @@ async def test_20_the_product_result_carries_the_immediate_version_change(
     assert (change["previous_version"], change["current_version"]) == (1, 2)
     assert change["changed_fields"] == ["ingredients"]
     assert change["formula"]["status"] == "ingredient_set_changed"
-    assert change["formula"]["added"] == [{"name": "Niacinamide", "occurrences": 1}]
-    assert change["formula"]["removed"] == [{"name": "Glycerin", "occurrences": 1}]
+    assert change["formula"]["only_on_current_label"] == [{"name": "Niacinamide", "occurrences": 1}]
+    assert change["formula"]["only_on_previous_label"] == [{"name": "Glycerin", "occurrences": 1}]
     # Nothing in the envelope identifies a row, a device or an account. The
     # label *version* block already carries the snapshot id under its own
     # contract; this envelope adds no second copy of it.
@@ -782,8 +784,8 @@ async def test_24_a_to_b_to_a_compares_only_the_immediate_predecessor(
     )).json()["label_change"]
 
     assert (change["previous_version"], change["current_version"]) == (2, 3)
-    assert change["formula"]["removed"] == [{"name": "Glycerin", "occurrences": 1}]
-    assert change["formula"]["added"] == []
+    assert change["formula"]["only_on_previous_label"] == [{"name": "Glycerin", "occurrences": 1}]
+    assert change["formula"]["only_on_current_label"] == []
 
     versions = await _versions(barcode)
     assert [row.version_number for row in versions] == [1, 2, 3]
@@ -1005,3 +1007,124 @@ def test_29_the_boundary_rule_is_one_rule_in_three_places_that_agree():
         assert migration._normalise(
             facts.get("ingredients_text"), preserve_boundaries=True,
         ) == canonical_label_facts(facts).get("ingredients_text"), facts
+
+
+async def test_30_the_backfill_moves_every_stored_copy_of_a_stale_fingerprint(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """The migration body, run against real rows rather than only on release day.
+
+    Three tables hold a snapshot's fingerprint, and Step 12A's integrity check
+    reads one of them on every product request. A backfill that moved the
+    snapshot and left the two copies behind would silence the history for every
+    shelf item and every remembered decision on a line-broken label.
+
+    The snapshot and the remembered decision are written through their real
+    routes. The shelf link is constructed, because the shelf only accepts care
+    categories and the food-label schema has no category field — and what is
+    under test here is the backfill's SQL, not the shelf's eligibility rule.
+    """
+    import importlib.util
+
+    from app.bootstrap import seed_inventory_categories
+    from app.domains.inventory.models import InventoryItem, InventoryProductLink
+    from app.domains.product.models import ProductRecord
+    from sqlalchemy import text
+
+    barcode = "8900000000203"
+    token, account_id = await registered_supabase_user()
+    await _confirm(
+        app_client, device, token, account_id, barcode,
+        {"product_name": "Observed", "ingredients_text": "Water\nGlycerin", **NUTRITION},
+    )
+    snapshot = (await _versions(barcode))[0]
+
+    remembered = await app_client.post(
+        f"/api/v2/scan/verdict/{barcode}/memory",
+        headers={**device, **auth(token)},
+        json={
+            "decision": "BUY",
+            "label_snapshot_id": str(snapshot.id),
+            "label_version": snapshot.version_number,
+            "content_fingerprint": snapshot.content_fingerprint,
+            "idempotency_key": uuid.uuid4().hex,
+        },
+    )
+    assert remembered.status_code == 200, remembered.text
+
+    async with get_sessionmaker()() as session:
+        await seed_inventory_categories(session)
+        product = (await session.execute(
+            select(ProductRecord).where(ProductRecord.barcode == barcode)
+        )).scalar_one()
+        item = InventoryItem(
+            account_id=account_id, category="beauty", display_name="Observed",
+        )
+        session.add(item)
+        await session.flush()
+        session.add(InventoryProductLink(
+            account_id=account_id,
+            inventory_item_id=item.id,
+            product_record_id=product.id,
+            barcode=barcode,
+            label_snapshot_id=snapshot.id,
+            label_version=snapshot.version_number,
+            content_fingerprint=snapshot.content_fingerprint,
+        ))
+        await session.commit()
+
+    path = (
+        BACKEND_ROOT / "migrations" / "versions"
+        / "j8k9l0m1n2_step12a_boundary_aware_label_identity.py"
+    )
+    spec = importlib.util.spec_from_file_location("step12a_migration_rows", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    stale = migration._fingerprint(snapshot.facts, boundary_aware=False)
+    assert stale != snapshot.content_fingerprint  # the row really is affected
+
+    async def _fingerprints() -> set[str]:
+        async with get_sessionmaker()() as session:
+            rows = await session.execute(text(
+                "SELECT content_fingerprint FROM product_label_snapshots "
+                "UNION ALL SELECT content_fingerprint FROM scan_decision_events "
+                "UNION ALL SELECT content_fingerprint FROM inventory_product_links"
+            ))
+            return set(rows.scalars().all())
+
+    def _run_revision(sync_connection, *, forward: bool) -> None:
+        """Run the revision's own ``upgrade`` / ``downgrade``, not its helper.
+
+        Going through Alembic's operations context means the wiring is under
+        test too: a revision whose ``upgrade`` quietly did nothing, or applied
+        the rule it was meant to undo, fails here rather than on release day.
+        """
+        from alembic.migration import MigrationContext
+        from alembic.operations import Operations
+
+        context = MigrationContext.configure(sync_connection)
+        with Operations.context(context):
+            migration.upgrade() if forward else migration.downgrade()
+
+    async def _run_backfill(*, forward: bool) -> None:
+        async with get_sessionmaker()() as session:
+            connection = await session.connection()
+            await connection.run_sync(lambda sync: _run_revision(sync, forward=forward))
+            await session.commit()
+
+    assert len(await _fingerprints()) == 1  # all three tables agree to begin with
+
+    # Wind the three tables back to the identity the old rule produced, then
+    # let the migration bring them forward again.
+    await _run_backfill(forward=False)
+    assert await _fingerprints() == {stale}
+
+    await _run_backfill(forward=True)
+    assert await _fingerprints() == {snapshot.content_fingerprint}
+
+    # And the product page is readable again, which is the point of the whole
+    # backfill: a stale copy is what the integrity check refuses.
+    response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
+    assert response.status_code == 200, response.text
+    assert response.json()["label_change"]["status"] == "first_observed_version"

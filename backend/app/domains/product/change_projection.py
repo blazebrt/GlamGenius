@@ -85,7 +85,8 @@ class FormulaChangeStatus(StrEnum):
     #: order. Printed order is order. It is not concentration, and a change in
     #: it is not evidence that anything about the product moved.
     REORDERED_ONLY = "reordered_only"
-    #: At least one entry is present a different number of times.
+    #: At least one entry is present a different number of times. The two
+    #: sides of the difference are reported as what each label held alone.
     INGREDIENT_SET_CHANGED = "ingredient_set_changed"
     #: At least one of the two lists could not be read as a list of entries, so
     #: no difference between them can be stated. No partial answer is given.
@@ -110,11 +111,22 @@ class IngredientCount:
 
 @dataclass(frozen=True)
 class FormulaChange:
+    """What the two printed lists each held that the other did not.
+
+    The two sides are named for where an entry was *seen*, not for what
+    somebody did. "Added" and "removed" would attribute an action to a
+    manufacturer, and an action is not something two photographs can establish
+    — a pack printed one list and a later pack printed another. Stating the
+    observation also keeps this out of the way of the official-record notice
+    that may be sitting on the same screen, where that vocabulary means
+    something else entirely, and means it about safety.
+    """
+
     status: FormulaChangeStatus
     previous_parse_status: ParseStatus | None = None
     current_parse_status: ParseStatus | None = None
-    added: tuple[IngredientCount, ...] = ()
-    removed: tuple[IngredientCount, ...] = ()
+    only_on_current_label: tuple[IngredientCount, ...] = ()
+    only_on_previous_label: tuple[IngredientCount, ...] = ()
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -127,8 +139,12 @@ class FormulaChange:
                 None if self.current_parse_status is None
                 else self.current_parse_status.value
             ),
-            "added": [row.as_payload() for row in self.added],
-            "removed": [row.as_payload() for row in self.removed],
+            "only_on_current_label": [
+                row.as_payload() for row in self.only_on_current_label
+            ],
+            "only_on_previous_label": [
+                row.as_payload() for row in self.only_on_previous_label
+            ],
         }
 
 
@@ -294,12 +310,12 @@ def _formula_change(current: LabelSnapshot, previous: LabelSnapshot) -> FormulaC
         return FormulaChange(status=FormulaChangeStatus.REORDERED_ONLY, **statuses)
     return FormulaChange(
         status=FormulaChangeStatus.INGREDIENT_SET_CHANGED,
-        added=_delta_payload(
+        only_on_current_label=_delta_payload(
             current_counts - previous_counts,
             sequence=current_sequence,
             display=current_display,
         ),
-        removed=_delta_payload(
+        only_on_previous_label=_delta_payload(
             previous_counts - current_counts,
             sequence=previous_sequence,
             display=previous_display,

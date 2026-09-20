@@ -115,8 +115,13 @@ def _fingerprint(facts: dict[str, Any], *, boundary_aware: bool) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _refingerprint(*, boundary_aware: bool) -> None:
-    connection = op.get_bind()
+def _refingerprint(connection: sa.engine.Connection, *, boundary_aware: bool) -> None:
+    """Recompute every stored fingerprint under the named rule.
+
+    The connection is a parameter rather than something this function reaches
+    for, so the body can be run against a real table in a test instead of only
+    ever running once, unobserved, on the day of the release.
+    """
     rows = connection.execute(sa.text(
         "SELECT id, facts, content_fingerprint FROM product_label_snapshots"
     )).mappings().all()
@@ -156,10 +161,10 @@ def _refingerprint(*, boundary_aware: bool) -> None:
 
 
 def upgrade() -> None:
-    _refingerprint(boundary_aware=True)
+    _refingerprint(op.get_bind(), boundary_aware=True)
 
 
 def downgrade() -> None:
     # Faithful, not lossy: both rules are pure functions of the immutable facts,
     # so the older identity is recomputed rather than remembered.
-    _refingerprint(boundary_aware=False)
+    _refingerprint(op.get_bind(), boundary_aware=False)
