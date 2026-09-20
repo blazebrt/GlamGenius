@@ -365,6 +365,31 @@ async def test_11_an_absent_ingredient_observation_is_not_comparable():
     assert result.formula.only_on_current_label == () and result.formula.only_on_previous_label == ()
 
 
+async def test_11b_an_entry_with_no_usable_key_makes_the_pair_not_comparable():
+    """Both lists parsed, and still no difference can be stated.
+
+    Step 7A refuses to key a name beyond its length ceiling, and an entry that
+    cannot be keyed cannot be said to be present on one label and absent from
+    the other. The readable entries around it are not reported as a difference
+    either: half a comparison is a difference somebody did not observe.
+    """
+    from app.domains.substances.normalization import MAX_NAME_LENGTH
+
+    unkeyable = "W" * (MAX_NAME_LENGTH + 5)
+    old, new = _pair("Water,Glycerin", f"Water,{unkeyable}")
+
+    entries = formula_entries_from_label_snapshot(new)
+    assert entries.status.value == "parsed"  # the parser was perfectly happy
+    assert [row.normalized_name for row in entries.entries] == ["water", None]
+
+    result = project_label_change(current=new, previous=old)
+    assert result.formula.status is FormulaChangeStatus.NOT_COMPARABLE
+    assert result.formula.previous_parse_status.value == "parsed"
+    assert result.formula.current_parse_status.value == "parsed"
+    assert result.formula.only_on_current_label == ()
+    assert result.formula.only_on_previous_label == ()
+
+
 async def test_12_a_pack_change_that_left_the_ingredients_alone_is_not_a_formula_change():
     old = _snapshot({"ingredients_text": "Water", "net_quantity": "100 g"})
     new = _snapshot(

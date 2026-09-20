@@ -169,8 +169,8 @@ invariant name and no internal identifier can reach a customer.
              | "ingredient_set_changed" | "not_comparable",
     "previous_parse_status": "parsed",
     "current_parse_status": "parsed",
-    "added": [{"name": "Niacinamide", "occurrences": 1}],
-    "removed": [{"name": "Glycerin", "occurrences": 1}]
+    "only_on_current_label": [{"name": "Niacinamide", "occurrences": 1}],
+    "only_on_previous_label": [{"name": "Glycerin", "occurrences": 1}]
   }
 }
 ```
@@ -209,16 +209,27 @@ When it did move:
 | --- | --- |
 | `unchanged` | The keyed entry sequence is identical (a case-only or spacing-only edit). |
 | `reordered_only` | The same entries the same number of times, in a different order. |
-| `ingredient_set_changed` | Occurrence counts differ. `added` / `removed` report the delta in printed order, in the words the pack used. |
+| `ingredient_set_changed` | Occurrence counts differ. `only_on_current_label` / `only_on_previous_label` report the delta in printed order, in the words the pack used. |
 | `not_comparable` | One of the lists could not be read as a list, or an entry has no usable canonical key. No partial difference is calculated. |
 
 Both parse statuses are always reported, so a client can tell "we could not
 tell where one ingredient ended" from "this is not a list".
 
+### Why the two sides are not called "added" and "removed"
+
+They are named for where an entry was *seen*, not for what somebody did. Two
+photographs cannot establish that a manufacturer did anything: one pack printed
+one list and a later pack printed another. Stating the observation is what the
+first of the six writing rules in [`LEGAL_RULES.md`](../../LEGAL_RULES.md) asks
+for, and it also keeps this envelope out of the way of the official-record
+notice that may be sitting on the same screen, where that vocabulary means
+something else entirely and means it about safety.
+
 Duplicates are counted, not flattened. `Water, Glycerin, Glycerin` becoming
-`Water, Glycerin, Niacinamide, Niacinamide` reports Niacinamide added twice and
-Glycerin removed once. Comparing sets would report one addition and no removal,
-which is not what the two labels say.
+`Water, Glycerin, Niacinamide, Niacinamide` reports Niacinamide twice on the
+current label and Glycerin once on the previous one. Comparing sets would
+report a single difference in one direction, which is not what the two labels
+say.
 
 **Printed order is printed order.** A reorder is not a concentration claim.
 Ordering conventions do exist in some regimes, and reading one here would be an
