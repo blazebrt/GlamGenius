@@ -465,7 +465,7 @@ async def _replace_routines(
     checked_subject = await canonicalize_decision_subject_for_write(
         session,
         principal_account_id=account_id,
-        decision_subject=checked_subject,
+        decision_subject=decision_subject,
     )
     _enforce_subject_handoff(checked_subject)
     rows = await _routine_rows_for_subject(
@@ -2416,11 +2416,11 @@ async def _manager_event_for_key(
 
 
 def _manager_event_matches_subject(event: ShelfManagerDecisionEvent, decision_subject: DecisionSubject) -> bool:
-    if event.household_subject_id == checked_subject.subject_id:
+    if event.household_subject_id == decision_subject.subject_id:
         return True
     return (
         event.household_subject_id is None
-        and checked_subject.is_account_holder
+        and decision_subject.is_account_holder
         and decision_subject.legacy_row_is_mine(event.created_at)
     )
 
@@ -2691,6 +2691,6 @@ async def shelf_manager_respond(
     from app.domains.family.decision_subject import serialize_decision_subject
     response["subject"] = serialize_decision_subject(checked_subject)
     response["manager_history_coverage"] = (await manager.history_coverage(
-        session, account_id=account_id, decision_subject=decision_subject,
+        session, account_id=account_id, decision_subject=checked_subject,
     )).as_dict()
     return response
