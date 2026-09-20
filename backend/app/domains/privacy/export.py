@@ -1009,12 +1009,19 @@ async def _planning(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
 
 
 async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
-    routines = await _fetch(session, select(Routine).where(Routine.account_id == account_id))
+    routines = await _fetch(
+        session, select(Routine).where(Routine.account_id == account_id),
+    )
+    routine_ids = {row.id for row in routines}
     steps = await _fetch(
         session,
-        select(RoutineStep).where(RoutineStep.routine_id.in_([r.id for r in routines])),
-    ) if routines else []
-    adherence = await _fetch(session, select(RoutineAdherence).where(RoutineAdherence.account_id == account_id))
+        select(RoutineStep).where(RoutineStep.routine_id.in_(routine_ids)),
+    ) if routine_ids else []
+    step_ids = {row.id for row in steps}
+    adherence = await _fetch(
+        session,
+        select(RoutineAdherence).where(RoutineAdherence.account_id == account_id),
+    )
     recommendation_runs = await _fetch(
         session,
         select(RoutineRecommendationRun).where(
@@ -1038,7 +1045,10 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         select(SupplementSafetyFlag).where(SupplementSafetyFlag.account_id == account_id),
     )
     label_components = await _fetch(
-        session, select(SupplementLabelComponent).where(SupplementLabelComponent.account_id == account_id),
+        session,
+        select(SupplementLabelComponent).where(
+            SupplementLabelComponent.account_id == account_id,
+        ),
     )
     nutrition_preferences = await _fetch(
         session,
@@ -1054,16 +1064,161 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
     )
     manager_decision_events = await _fetch(
         session,
-        select(ShelfManagerDecisionEvent).where(ShelfManagerDecisionEvent.account_id == account_id),
+        select(ShelfManagerDecisionEvent).where(
+            ShelfManagerDecisionEvent.account_id == account_id,
+        ),
     )
     care_preferences = await _fetch(
         session,
         select(CareProductPreference).where(CareProductPreference.account_id == account_id),
     )
+    maintenance_preferences = await _fetch(
+        session,
+        select(MaintenancePreference).where(MaintenancePreference.account_id == account_id),
+    )
+    maintenance_events = await _fetch(
+        session,
+        select(MaintenanceEvent).where(MaintenanceEvent.account_id == account_id),
+    )
+
     household = await _household_identity(session, account_id)
     members = household.members
     member_ids = household.member_ids
     invariant_errors: list[dict[str, str]] = household.invariant_errors()
+
+    routine_fields = [c.name for c in Routine.__table__.columns]
+    step_fields = [c.name for c in RoutineStep.__table__.columns]
+    adherence_fields = [c.name for c in RoutineAdherence.__table__.columns]
+    run_fields = [c.name for c in RoutineRecommendationRun.__table__.columns]
+
+    routine_by_id = {row.id: row for row in routines}
+    steps_by_routine: dict[uuid.UUID, list[RoutineStep]] = {}
+    for step in steps:
+        steps_by_routine.setdefault(step.routine_id, []).append(step)
+
+    adherence_by_routine: dict[uuid.UUID, list[RoutineAdherence]] = {}
+    malformed_adherence: list[dict[str, Any]] = []
+    for row in adherence:
+        parent = routine_by_id.get(row.routine_id)
+        if parent is None:
+            payload = _row_dict(row, adherence_fields)
+            payload["routine_id"] = None
+            payload["step_id"] = None
+            payload["invariant"] = "adherence_routine_ownership_invalid"
+            malformed_adherence.append(payload)
+            invariant_errors.append({
+                "routine_adherence_id": str(row.id),
+                "error": "adherence_routine_ownership_invalid",
+            })
+            continue
+        parent_steps = {step.id for step in steps_by_routine.get(parent.id, [])}
+        if row.step_id is not None and row.step_id not in parent_steps:
+            payload = _row_dict(row, adherence_fields)
+            payload["step_id"] = None
+            payload["invariant"] = "adherence_step_ownership_invalid"
+            malformed_adherence.append(payload)
+            invariant_errors.append({
+                "routine_adherence_id": str(row.id),
+                "error": "adherence_step_ownership_invalid",
+            })
+            continue
+        adherence_by_routine.setdefault(row.routine_id, []).append(row)
+
+    by_subject: dict[str, dict[str, list[dict[str, Any]]]] = {
+        str(member_id): {
+            "routines": [], "steps": [], "adherence": [], "recommendation_runs": [],
+        }
+        for member_id in member_ids
+    }
+    account_holder_legacy = {
+        "routines": [], "steps": [], "adherence": [], "recommendation_runs": [],
+    }
+    unattributed = {
+        "routines": [], "steps": [], "adherence": list(malformed_adherence),
+        "recommendation_runs": [],
+    }
+
+    def append_routine_graph(
+        target: dict[str, list[dict[str, Any]]],
+        routine: Routine,
+        *,
+        strip_subject: bool = False,
+    ) -> None:
+        routine_payload = _row_dict(routine, routine_fields)
+        if strip_subject:
+            routine_payload["household_subject_id"] = None
+            routine_payload["invariant"] = "routine_subject_ownership_invalid"
+        target["routines"].append(routine_payload)
+        target["steps"].extend(
+            _row_dict(step, step_fields)
+            for step in steps_by_routine.get(routine.id, [])
+        )
+        target["adherence"].extend(
+            _row_dict(row, adherence_fields)
+            for row in adherence_by_routine.get(routine.id, [])
+        )
+
+    legacy_routines: list[Routine] = []
+    explicit_self_kinds: set[str] = set()
+    legacy_self_kinds: set[str] = set()
+    for routine in routines:
+        if routine.household_subject_id is None:
+            legacy_routines.append(routine)
+            legacy_self_kinds.add(routine.kind)
+            continue
+        if routine.household_subject_id in member_ids:
+            append_routine_graph(
+                by_subject[str(routine.household_subject_id)], routine,
+            )
+            if (
+                household.self_row is not None
+                and routine.household_subject_id == household.self_row.id
+            ):
+                explicit_self_kinds.add(routine.kind)
+        else:
+            append_routine_graph(unattributed, routine, strip_subject=True)
+            invariant_errors.append({
+                "routine_id": str(routine.id),
+                "error": "routine_subject_ownership_invalid",
+            })
+
+    if not household.exists or household.account_holder_identified:
+        for routine in legacy_routines:
+            append_routine_graph(account_holder_legacy, routine)
+    else:
+        for routine in legacy_routines:
+            append_routine_graph(unattributed, routine)
+            invariant_errors.append({
+                "routine_id": str(routine.id),
+                "error": "legacy_routine_account_holder_unidentified",
+            })
+
+    for kind in sorted(explicit_self_kinds & legacy_self_kinds):
+        invariant_errors.append({
+            "routine_kind": kind,
+            "error": "account_has_dual_self_routines",
+        })
+
+    for run in recommendation_runs:
+        payload = _row_dict(run, run_fields)
+        if run.household_subject_id is None:
+            if not household.exists or household.account_holder_identified:
+                account_holder_legacy["recommendation_runs"].append(payload)
+            else:
+                payload["invariant"] = "legacy_run_account_holder_unidentified"
+                unattributed["recommendation_runs"].append(payload)
+            continue
+        if run.household_subject_id in member_ids:
+            by_subject[str(run.household_subject_id)]["recommendation_runs"].append(payload)
+        else:
+            payload["household_subject_id"] = None
+            payload["invariant"] = "routine_run_subject_ownership_invalid"
+            unattributed["recommendation_runs"].append(payload)
+            invariant_errors.append({
+                "routine_recommendation_run_id": str(run.id),
+                "error": "routine_run_subject_ownership_invalid",
+            })
+
     manager_by_subject, manager_legacy, manager_orphaned = _group_decision_rows(
         list(manager_decision_events), members,
     )
@@ -1071,8 +1226,10 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         manager_legacy, household=household, timestamp="created_at",
     )
     invariant_errors.extend(
-        {"shelf_manager_decision_event_id": str(row.id),
-         "error": "decision_subject_ownership_invalid"}
+        {
+            "shelf_manager_decision_event_id": str(row.id),
+            "error": "decision_subject_ownership_invalid",
+        }
         for row in manager_orphaned
     )
     manager_fields = [c.name for c in ShelfManagerDecisionEvent.__table__.columns]
@@ -1086,8 +1243,6 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         if preference.household_subject_id in member_ids:
             preferences_by_subject[str(preference.household_subject_id)].append(row)
         else:
-            # The row is this account's — ``account_id`` says so — and the
-            # subject it names is not. The data stays; the stranger's id goes.
             row["household_subject_id"] = None
             row["invariant"] = "preference_subject_ownership_invalid"
             unattributed_preferences.append(row)
@@ -1095,14 +1250,7 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
                 "care_product_preference_id": str(preference.id),
                 "error": "preference_subject_ownership_invalid",
             })
-    maintenance_preferences = await _fetch(
-        session,
-        select(MaintenancePreference).where(MaintenancePreference.account_id == account_id),
-    )
-    maintenance_events = await _fetch(
-        session,
-        select(MaintenanceEvent).where(MaintenanceEvent.account_id == account_id),
-    )
+
     return {
         "maintenance_preferences": [
             _row_dict(r, [c.name for c in MaintenancePreference.__table__.columns])
@@ -1112,13 +1260,11 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
             _row_dict(r, [c.name for c in MaintenanceEvent.__table__.columns])
             for r in maintenance_events
         ],
-        "routines": [_row_dict(r, [c.name for c in Routine.__table__.columns]) for r in routines],
-        "steps": [_row_dict(r, [c.name for c in RoutineStep.__table__.columns]) for r in steps],
-        "adherence": [_row_dict(r, [c.name for c in RoutineAdherence.__table__.columns]) for r in adherence],
-        "recommendation_runs": [
-            _row_dict(r, [c.name for c in RoutineRecommendationRun.__table__.columns])
-            for r in recommendation_runs
-        ],
+        "routine_history": {
+            "by_subject": by_subject,
+            "account_holder_legacy": account_holder_legacy,
+            "unattributed": unattributed,
+        },
         "product_ingredients": [
             _row_dict(r, [c.name for c in ProductIngredient.__table__.columns])
             for r in product_ingredients
@@ -1151,21 +1297,12 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
             _row_dict(r, [c.name for c in CareExperienceFeedback.__table__.columns])
             for r in experience_feedback
         ],
-        # ``shelf_manager_decision_events`` and ``care_product_preferences``
-        # used to sit here as flat dumps of every row exactly as stored. They
-        # are gone, and their removal is the point rather than tidying: a row
-        # whose ``household_subject_id`` points into another account's
-        # household had that id stripped in the grouped structures below and
-        # echoed verbatim in the flat ones — so the redaction was real and the
-        # leak was two keys further up the same file. Every row they held is
-        # still exported, under ``manager_history`` and
-        # ``care_product_preferences_by_subject``, attributed or honestly
-        # unattributed.
         "manager_history": {
             "by_subject": {
                 str(member_id): [
                     _row_dict(row, manager_fields) for row in rows
-                ] for member_id, rows in manager_by_subject.items()
+                ]
+                for member_id, rows in manager_by_subject.items()
             },
             "account_holder_legacy": [
                 _row_dict(row, manager_fields) for row in manager_safe
@@ -1176,15 +1313,18 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
                 _unattributed_row(row, manager_fields) for row in manager_orphaned
             ],
             "coverage": {
-                "unattributed_legacy_events_present": bool(manager_ambiguous or manager_orphaned),
-                "complete_for_subject": not bool(manager_ambiguous or manager_orphaned),
+                "unattributed_legacy_events_present": bool(
+                    manager_ambiguous or manager_orphaned
+                ),
+                "complete_for_subject": not bool(
+                    manager_ambiguous or manager_orphaned
+                ),
             },
         },
         "care_product_preferences_by_subject": preferences_by_subject,
         "unattributed_care_product_preferences": unattributed_preferences,
         "invariant_errors": invariant_errors,
     }
-
 
 async def _progress_and_memory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     # Local imports to keep the top of the module tidy.
