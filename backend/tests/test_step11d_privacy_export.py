@@ -292,17 +292,12 @@ async def test_care_preference_events_are_grouped_by_the_person_who_made_them(
 async def test_the_export_schema_version_still_says_what_this_shape_is(
     app_client, db_clean, registered_supabase_user,
 ):
-    """The shape changed in Step 11D, and the version says so once.
-
-    It moved to ``1.3`` when subject-scoped Care state was added and stays there
-    through this correction: the same release, the same schema, and a version
-    that moved twice inside one release would tell an integrator there were two.
-    """
+    """Step 11E moves the export to 1.4 for subject-owned routine history."""
     token, account_id = await registered_supabase_user()
     await _seed(app_client)
     async with get_sessionmaker()() as session:
         export = await build_export(session, account_id)
-    assert export["schema_version"] == EXPORT_SCHEMA_VERSION == "1.3"
+    assert export["schema_version"] == EXPORT_SCHEMA_VERSION == "1.4"
 
 
 async def test_erasure_leaves_no_preference_and_no_subject_behind(
