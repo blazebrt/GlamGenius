@@ -6,12 +6,20 @@ not populated it, so the app can hide a module instead of showing an empty one.
 """
 from __future__ import annotations
 
+import contextlib
 import uuid
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.family.subject import (
+    AGE_BAND_NOT_STATED,
+    SUBJECT_HOUSEHOLD_MEMBER,
+    ResolvedSubject,
+    SubjectNotFound,
+    account_holder_subject,
+)
 from app.domains.nutrition import service as nutrition_service
 from app.domains.nutrition.schemas import HydrationPreferencePatch, NutritionPreferencePatch
 from app.domains.planning.models import NotificationDelivery
@@ -28,10 +36,30 @@ from app.domains.routines.schemas import (
     RoutineStepComplete,
 )
 from app.shared.database.sql import get_session
-from app.shared.errors.exceptions import ValidationFailedError
+from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_routines"))])
+
+
+def _subject_claim(subject_id: uuid.UUID | None, account_id: uuid.UUID) -> ResolvedSubject:
+    if subject_id is None:
+        return account_holder_subject(account_id)
+    return ResolvedSubject(
+        kind=SUBJECT_HOUSEHOLD_MEMBER,
+        account_id=account_id,
+        subject_id=subject_id,
+        relation="other",
+        age_band=AGE_BAND_NOT_STATED,
+    )
+
+
+@contextlib.contextmanager
+def _subject_or_404():
+    try:
+        yield
+    except SubjectNotFound as exc:
+        raise NotFoundError("That person is not on this account.") from exc
 
 
 # --- Routines ------------------------------------------------------------------
@@ -40,26 +68,37 @@ router = APIRouter(dependencies=[Depends(require_flag("v2_routines"))])
 @router.post("/routines/generate")
 async def generate_routines(
     body: RoutineGenerateRequest,
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Build routines from the products you already own."""
-    result = await service.generate_routines(
-        session, account_id=current.account_id, account_id_str=current.account_id_str, body=body,
-    )
+    """Build routines for one selected person from the shared products you own."""
+    with _subject_or_404():
+        result = await service.generate_routines(
+            session,
+            account_id=current.account_id,
+            account_id_str=current.account_id_str,
+            body=body,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
     await session.commit()
     return result
 
 
 @router.post("/routines/simplify")
 async def simplify_routines(
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Apply one explicit, user-authorized Care effort reduction."""
-    result = await service.simplify_care_routine(
-        session, account_id=current.account_id, account_id_str=current.account_id_str,
-    )
+    """Apply one explicit Care effort reduction for the selected person."""
+    with _subject_or_404():
+        result = await service.simplify_care_routine(
+            session,
+            account_id=current.account_id,
+            account_id_str=current.account_id_str,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
     await session.commit()
     return result
 
@@ -67,13 +106,19 @@ async def simplify_routines(
 @router.post("/routines/products/{item_id}/pause")
 async def pause_care_product(
     item_id: uuid.UUID,
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
     """Keep an owned Skin/Hair product while excluding it from Care routines."""
-    result = await service.pause_care_product(
-        session, account_id=current.account_id, account_id_str=current.account_id_str, item_id=item_id,
-    )
+    with _subject_or_404():
+        result = await service.pause_care_product_for_subject(
+            session,
+            account_id=current.account_id,
+            account_id_str=current.account_id_str,
+            item_id=item_id,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
     await session.commit()
     return result
 
@@ -81,13 +126,19 @@ async def pause_care_product(
 @router.post("/routines/products/{item_id}/resume")
 async def resume_care_product(
     item_id: uuid.UUID,
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
     """Make an explicitly paused Skin/Hair product eligible for Care again."""
-    result = await service.resume_care_product(
-        session, account_id=current.account_id, account_id_str=current.account_id_str, item_id=item_id,
-    )
+    with _subject_or_404():
+        result = await service.resume_care_product_for_subject(
+            session,
+            account_id=current.account_id,
+            account_id_str=current.account_id_str,
+            item_id=item_id,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
     await session.commit()
     return result
 
@@ -95,13 +146,19 @@ async def resume_care_product(
 @router.post("/routines/products/{item_id}/prefer")
 async def prefer_care_product(
     item_id: uuid.UUID,
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
     """Prefer an owned eligible product for its canonical Care step."""
-    result = await service.prefer_care_product(
-        session, account_id=current.account_id, account_id_str=current.account_id_str, item_id=item_id,
-    )
+    with _subject_or_404():
+        result = await service.prefer_care_product_for_subject(
+            session,
+            account_id=current.account_id,
+            account_id_str=current.account_id_str,
+            item_id=item_id,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
     await session.commit()
     return result
 
@@ -109,13 +166,19 @@ async def prefer_care_product(
 @router.post("/routines/products/{item_id}/unprefer")
 async def unprefer_care_product(
     item_id: uuid.UUID,
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
     """Clear an explicit product selection preference."""
-    result = await service.unprefer_care_product(
-        session, account_id=current.account_id, account_id_str=current.account_id_str, item_id=item_id,
-    )
+    with _subject_or_404():
+        result = await service.unprefer_care_product_for_subject(
+            session,
+            account_id=current.account_id,
+            account_id_str=current.account_id_str,
+            item_id=item_id,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
     await session.commit()
     return result
 
@@ -123,24 +186,37 @@ async def unprefer_care_product(
 @router.get("/routines/today")
 async def routines_today(
     on: date | None = Query(None, description="Defaults to today in your timezone"),
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Only the routines that are actually relevant right now."""
-    return await service.routines_today(session, account_id=current.account_id, on=on)
+    """Only this selected person's routines that are actually relevant now."""
+    with _subject_or_404():
+        return await service.routines_today(
+            session,
+            account_id=current.account_id,
+            on=on,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
 
 
 @router.post("/routines/steps/{step_id}/complete")
 async def complete_step(
     step_id: uuid.UUID,
     body: RoutineStepComplete,
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Mark a step done for a day. Consistency, not streaks."""
-    result = await service.complete_step(
-        session, account_id=current.account_id, step_id=step_id, body=body,
-    )
+    """Mark the selected person's step done for a day. Consistency, not streaks."""
+    with _subject_or_404():
+        result = await service.complete_step(
+            session,
+            account_id=current.account_id,
+            step_id=step_id,
+            body=body,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
     await session.commit()
     return result
 
@@ -175,19 +251,32 @@ async def complete_step_from_notification(
 @router.get("/routines/consistency")
 async def routine_consistency(
     days: int = Query(14, ge=1, le=90),
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    return await service.consistency(session, account_id=current.account_id, days=days)
+    with _subject_or_404():
+        return await service.consistency(
+            session,
+            account_id=current.account_id,
+            days=days,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
 
 
 @router.get("/routines/improve")
 async def improve_overview(
+    subject_id: uuid.UUID | None = Query(None),
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Everything the You → Improve screen shows, in one call."""
-    return await service.improve_overview(session, account_id=current.account_id)
+    """Selected-person Care progress over the shared physical shelf."""
+    with _subject_or_404():
+        return await service.improve_overview(
+            session,
+            account_id=current.account_id,
+            decision_subject=_subject_claim(subject_id, current.account_id),
+        )
 
 
 # --- Ingredients ---------------------------------------------------------------
