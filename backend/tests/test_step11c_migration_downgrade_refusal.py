@@ -26,13 +26,15 @@ import pytest
 from app.shared.database import sql
 from sqlalchemy import text
 
-from tests.conftest import auth
+from tests.conftest import alembic_head_revision, auth
 from tests.test_v3_05_7_care_purchase_experience import _seed_db_candidate
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 STEP_11C_REVISION = "g5h6i7j8k9"
 STEP_11B_REVISION = "f4g5h6i7j8"
-CURRENT_HEAD_REVISION = "h6i7j8k9l0"
+#: Read from the chain, not typed. A later slice adding a revision must not
+#: break a test that is about an earlier slice's own guard.
+CURRENT_HEAD_REVISION = alembic_head_revision()
 
 PROFILES_URL = "/api/v2/family-circle/profiles"
 

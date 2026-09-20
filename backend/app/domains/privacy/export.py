@@ -26,7 +26,8 @@ import logging
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -136,19 +137,33 @@ def _iso(dt: datetime | None) -> str | None:
 
 
 def _row_dict(row: Any, fields: list[str]) -> dict[str, Any]:
-    """Turn a subset of a row's columns into a JSON-safe dict.
+    """Turn a subset of a row's columns into a genuinely JSON-safe dict.
 
-    ``uuid.UUID`` and ``datetime`` are serialised to strings; everything else
-    is returned as-is (SQLAlchemy already gives us primitives for JSON, int
-    and bool).
+    This claimed to be JSON-safe and was not. ``datetime`` was converted and a
+    plain ``date`` was not — ``done_on``, ``experienced_on``, ``purchase_date``
+    and a dozen others went out as Python objects — and ``Decimal`` was left
+    alone too. The route survived because the web framework re-encodes whatever
+    it is handed, so the only thing that ever broke was anything treating the
+    export as what it says it is: a serialisable document. Checking that no
+    other household's identifier appears anywhere in the file means serialising
+    the file, so it has to serialise.
+
+    ``date`` is tested after ``datetime`` because ``datetime`` is a subclass of
+    it; reversing the two would turn every timestamp into a bare day.
+
+    ``Decimal`` becomes a float rather than a string, because that is what the
+    API has always emitted through its own encoder and this is not the place to
+    change a money field's shape for the clients reading it.
     """
     out: dict[str, Any] = {}
     for name in fields:
         value = getattr(row, name, None)
         if isinstance(value, uuid.UUID):
             out[name] = str(value)
-        elif isinstance(value, datetime):
+        elif isinstance(value, datetime | date | time):
             out[name] = value.isoformat()
+        elif isinstance(value, Decimal):
+            out[name] = float(value)
         else:
             out[name] = value
     return out

@@ -35,11 +35,17 @@ pytestmark = pytest.mark.asyncio
 
 ROUTINES_MODEL_EXPORT_COLLECTIONS = {
     routines_models.ProductIngredient.__tablename__: "product_ingredients",
-    routines_models.Routine.__tablename__: "routines",
-    routines_models.RoutineAdherence.__tablename__: "adherence",
+    # Step 11E: the persisted routine graph — routines, their steps, their
+    # adherence and the runs that built them — is exported under
+    # ``routine_history``, grouped by the human whose routine it is. The flat
+    # collections that used to sit beside it stated an account-wide contract
+    # this slice replaced: in a household, whose morning routine a row records
+    # is the question the file exists to answer.
+    routines_models.Routine.__tablename__: "routine_history",
+    routines_models.RoutineAdherence.__tablename__: "routine_history",
     routines_models.UserReportedObservation.__tablename__: "observations",
     routines_models.ProductExpiryEvent.__tablename__: "product_expiry_events",
-    routines_models.RoutineRecommendationRun.__tablename__: "recommendation_runs",
+    routines_models.RoutineRecommendationRun.__tablename__: "routine_history",
     routines_models.SupplementSafetyFlag.__tablename__: "supplement_safety_flags",
     routines_models.NutritionPreference.__tablename__: "nutrition_preferences",
     routines_models.HydrationPreference.__tablename__: "hydration_preferences",
@@ -56,7 +62,7 @@ ROUTINES_MODEL_EXPORT_COLLECTIONS = {
 # Routine steps do not carry a direct account_id; they are exported through
 # their account-owned parent routine and are asserted separately below.
 ROUTINES_PARENT_OWNED_EXPORT_COLLECTIONS = {
-    routines_models.RoutineStep.__tablename__: "steps",
+    routines_models.RoutineStep.__tablename__: "routine_history",
 }
 
 

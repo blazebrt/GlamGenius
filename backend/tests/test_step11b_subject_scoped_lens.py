@@ -39,6 +39,7 @@ from app.domains.family.subject import (
 )
 from app.domains.personal_lens.enums import PersonalLensCategory, PersonalLensStatus
 from app.domains.personal_lens.service import build_personal_lens_context
+from app.domains.privacy import EXPORT_SCHEMA_VERSION
 from app.domains.privacy import export as export_service
 from app.domains.profile import service as profile_service
 from app.domains.profile.identity import (
@@ -1793,7 +1794,10 @@ class TestExportGrouping:
             "onboarding_sessions",
         ):
             assert table in holder, table
-        assert payload["schema_version"] == "1.3"
+        # Against the constant rather than a literal: this test is about
+        # grouping, and a schema bump it does not care about should turn
+        # red only where the version itself is the subject.
+        assert payload["schema_version"] == EXPORT_SCHEMA_VERSION
 
     async def test_two_subjects_are_grouped_without_leaking(
         self, db_clean, app_client, registered_supabase_user,

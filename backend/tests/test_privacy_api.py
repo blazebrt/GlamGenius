@@ -19,7 +19,9 @@ async def test_privacy_export_returns_versioned_snapshot(
     body = resp.json()
     # Step 11D adds subject-scoped Care preference history to the versioned
     # export contract.
-    assert body["schema_version"] == "1.3"
+    # Step 11E. Deliberately a literal: this assertion exists to make a
+    # schema change a conscious act rather than something that rides along.
+    assert body["schema_version"] == "1.4"
     assert "domains" in body
     assert "identity" in body["domains"]
     # No storage-key leak

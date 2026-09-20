@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 from typing import Any
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,6 +64,7 @@ from app.domains.routines.models import (
     UserReportedObservation,
 )
 from app.domains.routines.ontology import INGREDIENT_BY_KEY, ONTOLOGY_VERSION
+from app.domains.routines.ownership import routine_subject_filter
 from app.domains.routines.rules import ShelfProduct
 from app.domains.routines.safety import (
     PROFESSIONAL_BOUNDARY,
@@ -81,7 +82,11 @@ from app.domains.routines.schemas import (
     ShelfManagerRespondRequest,
 )
 from app.shared.database.base import utcnow
-from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
+from app.shared.errors.exceptions import (
+    IdentityInvariantError,
+    NotFoundError,
+    ValidationFailedError,
+)
 
 CONSISTENCY_WINDOW_DAYS = 14
 ROUTINE_ENGINE_VERSION = "care-v3-03.5"
@@ -119,26 +124,26 @@ async def _current_care_decisions(
     return day_context, care_context, decisions
 
 
-def _routine_subject_filter(subject: DecisionSubject):
-    """Rows owned by one logical routine subject.
-
-    Persisted member routines did not exist before Step 11E, so legacy NULL
-    routines are structurally account-holder rows even when they were updated
-    after household creation. Named members never inherit them.
-    """
-    if not subject.is_account_holder:
-        return Routine.household_subject_id == subject.subject_id
-    if subject.subject_id is None:
-        return Routine.household_subject_id.is_(None)
-    return or_(
-        Routine.household_subject_id.is_(None),
-        Routine.household_subject_id == subject.subject_id,
-    )
-
-
 def _assert_no_dual_self_routines(
     rows: Sequence[Routine], subject: DecisionSubject,
 ) -> None:
+    """Refuse to read a routine kind the account holder owns twice over.
+
+    One person, one morning routine. A legacy row and an explicit row of the
+    same kind means adoption did not happen when it should have, and there is
+    no honest way to proceed: picking one decides which of somebody's own
+    history counts, and merging them invents a third routine nobody follows.
+
+    This is an :class:`~app.shared.errors.exceptions.IdentityInvariantError`
+    rather than a validation failure, and the distinction is the customer's.
+    Nothing about the request was wrong — the same request was fine yesterday
+    and will be fine again — so blaming ``subject_id`` would point the app at a
+    field the person cannot fix and invite them to try another member and meet
+    the same wall. It is the stored state that cannot be used, which is the one
+    thing this error class exists to say: one fixed sentence to the customer,
+    the reason in the log, and the same governed answer wherever in Step 11
+    identity turns out to be in a shape no route could have produced.
+    """
     if not subject.is_account_holder or subject.subject_id is None:
         return
     by_kind: dict[str, set[uuid.UUID | None]] = {}
@@ -148,10 +153,7 @@ def _assert_no_dual_self_routines(
         None in owners and subject.subject_id in owners
         for owners in by_kind.values()
     ):
-        raise ValidationFailedError(
-            "Your saved Care routine needs attention before it can be used.",
-            field="subject_id",
-        )
+        raise IdentityInvariantError("routine_dual_self_state")
 
 
 async def _routine_rows_for_subject(
@@ -164,7 +166,7 @@ async def _routine_rows_for_subject(
 ) -> list[Routine]:
     stmt = select(Routine).where(
         Routine.account_id == account_id,
-        _routine_subject_filter(subject),
+        routine_subject_filter(subject),
     )
     if status is not None:
         stmt = stmt.where(Routine.status == status)
@@ -1670,7 +1672,7 @@ async def routines_today(
         .where(
             RoutineAdherence.account_id == account_id,
             Routine.account_id == account_id,
-            _routine_subject_filter(checked),
+            routine_subject_filter(checked),
             RoutineAdherence.done_on == today,
         )
     )).scalars().all()
@@ -1742,7 +1744,7 @@ async def complete_step(
         .where(
             RoutineStep.id == step_id,
             Routine.account_id == account_id,
-            _routine_subject_filter(checked),
+            routine_subject_filter(checked),
         )
         .with_for_update(of=Routine)
     )).first()
@@ -1825,7 +1827,7 @@ async def consistency(
         .where(
             RoutineAdherence.account_id == account_id,
             Routine.account_id == account_id,
-            _routine_subject_filter(checked),
+            routine_subject_filter(checked),
             RoutineAdherence.done_on >= since,
             RoutineAdherence.done_on <= today,
         )
@@ -1835,7 +1837,7 @@ async def consistency(
         .join(Routine, Routine.id == RoutineStep.routine_id)
         .where(
             Routine.account_id == account_id,
-            _routine_subject_filter(checked),
+            routine_subject_filter(checked),
             Routine.status == "active",
         )
     )).scalars().all()
@@ -2124,7 +2126,7 @@ async def _validate_care_feedback_subject(
         .where(
             RoutineStep.id == body.subject_id,
             Routine.account_id == account_id,
-            _routine_subject_filter(self_subject),
+            routine_subject_filter(self_subject),
         )
     )).first()
     if row is None:

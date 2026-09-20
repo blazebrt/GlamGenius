@@ -115,8 +115,15 @@ async def test_dual_self_routine_is_governed_on_regular_read_but_export_still_co
         ))
         await session.commit()
 
+    # 503, not 422. Nothing about the request was wrong: the stored state is in
+    # a shape no route could have produced, which is the governed identity
+    # failure the rest of Step 11 already answers this way. A 422 on
+    # ``subject_id`` would blame a field the person cannot fix.
     regular = await app_client.get("/api/v2/routines/today", headers=auth(token))
-    assert regular.status_code == 422
+    assert regular.status_code == 503, regular.text
+    assert regular.json()["detail"]["message"] == "This result is not available right now."
+    # The reason is for the log, never the customer.
+    assert "routine_dual_self_state" not in regular.text
 
     async with get_sessionmaker()() as session:
         export = await build_export(session, account_id)

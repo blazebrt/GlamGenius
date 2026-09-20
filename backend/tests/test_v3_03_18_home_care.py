@@ -25,6 +25,7 @@ from app.domains.evidence.service import (
     assert_rule_exists,
     assess_rule_evidence,
 )
+from app.domains.family.decision_subject import canonicalize_decision_subject
 from app.domains.routines import service as routines_service
 from app.domains.routines.models import RoutineRecommendationRun
 from app.shared.database.sql import get_sessionmaker
@@ -339,8 +340,15 @@ async def test_routines_today_projects_fresh_home_care_read_only(
     from app.domains.planning.models import DailyPlan
     from app.domains.routines.models import RoutineStep
     async with factory() as session:
+        # Step 11E: the wash anchor is one person's history, so the helper
+        # names whose. This account has no household, which is what the
+        # canonical self subject resolves to.
+        self_subject = await canonicalize_decision_subject(
+            session, principal_account_id=account_id, decision_subject=None,
+        )
         before_cadence = await routines_service._current_hair_wash_cadence(
             session, account_id=account_id, care_context=context,
+            decision_subject=self_subject,
         )
         before_steps = {
             row.slot: (str(row.inventory_item_id) if row.inventory_item_id else None)
@@ -355,6 +363,7 @@ async def test_routines_today_projects_fresh_home_care_read_only(
         }
         after_cadence = await routines_service._current_hair_wash_cadence(
             session, account_id=account_id, care_context=context,
+            decision_subject=self_subject,
         )
     assert [item["rule_id"] for item in body["home_care"]["items"]] == ["care.home.skin_gentle_bathing"]
     assert before_steps == after_steps

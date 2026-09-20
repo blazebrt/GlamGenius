@@ -20,6 +20,8 @@ import pytest
 from app.shared.database import sql
 from sqlalchemy import text
 
+from tests.conftest import alembic_head_revision
+
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 STEP_11B_REVISION = "f4g5h6i7j8"
 PREVIOUS_REVISION = "e3f4g5h6i7"
@@ -27,7 +29,9 @@ PREVIOUS_REVISION = "e3f4g5h6i7"
 #: it first. Named rather than counted: ``downgrade -2`` would silently follow
 #: the chain wherever it grows next.
 STEP_11C_REVISION = "g5h6i7j8k9"
-CURRENT_HEAD_REVISION = "h6i7j8k9l0"
+#: Read from the chain, not typed. A later slice adding a revision must not
+#: break a test that is about an earlier slice's own guard.
+CURRENT_HEAD_REVISION = alembic_head_revision()
 
 pytestmark = pytest.mark.asyncio
 

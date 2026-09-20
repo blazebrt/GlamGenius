@@ -57,6 +57,26 @@ from app.shared.database import sql  # noqa: E402
 from app.shared.security import supabase_auth  # noqa: E402
 
 
+def alembic_head_revision() -> str:
+    """The one head of the migration chain, read from disk rather than typed.
+
+    Three downgrade-refusal tests used to spell the head out as a literal, so
+    every new slice broke all three at once and the repair was to retype a
+    revision id into files that had nothing to do with the change. A constant
+    that must be edited by unrelated work is a constant that will one day be
+    edited wrongly, and the chain is the source of truth already.
+    """
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    backend_root = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_root / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_root / "migrations"))
+    return ScriptDirectory.from_config(config).get_current_head()
+
+
 @pytest.fixture(scope="session")
 def anyio_backend() -> str:
     return "asyncio"

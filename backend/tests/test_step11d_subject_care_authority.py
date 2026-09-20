@@ -150,7 +150,8 @@ async def test_manager_care_boundary_canonicalizes_a_member_forged_as_self(
         ),
         circle_created_at=None,
     )
-    before = await _routine_fingerprint(account_id)
+    me = await _self_subject_id(account_id)
+    before = await _routine_fingerprint(account_id, me)
     async with get_sessionmaker()() as session:
         result = await _pause_care_product_for_manager(
             session, account_id=account_id, account_id_str=str(account_id),
@@ -162,7 +163,7 @@ async def test_manager_care_boundary_canonicalizes_a_member_forged_as_self(
     assert await _care_events(item_id) == [
         ("care_routine_paused", member, {"from_state": "active", "to_state": "paused"}),
     ]
-    assert await _routine_fingerprint(account_id) == before
+    assert await _routine_fingerprint(account_id, me) == before
 
 
 async def test_shelf_manager_read_canonicalizes_a_member_forged_as_self_and_refuses_foreign(
@@ -433,11 +434,28 @@ async def _care_events(item_id: str) -> list[tuple[str, str | None, dict]]:
     ]
 
 
-async def _routine_fingerprint(account_id: uuid.UUID) -> list[tuple[str, int, str]]:
-    """The persisted routine, as a comparable shape."""
+async def _routine_fingerprint(
+    account_id: uuid.UUID, subject_id: uuid.UUID | None = None,
+) -> list[tuple[str, int, str]]:
+    """One person's persisted routine, as a comparable shape.
+
+    Read per subject rather than per account since Step 11E, because persisted
+    routines are now one human's. Account-wide it would read every member's
+    rows at once, and "the account holder's routine did not change" would stop
+    being the thing it measured the moment a member acquired one of their own —
+    which is exactly what these tests arrange.
+
+    ``None`` means the legacy rows: the ones written before this account had a
+    household, which are structurally the account holder's.
+    """
     async with get_sessionmaker()() as session:
         routines = (await session.execute(
-            select(Routine).where(Routine.account_id == account_id).order_by(Routine.kind)
+            select(Routine).where(
+                Routine.account_id == account_id,
+                Routine.household_subject_id == subject_id
+                if subject_id is not None
+                else Routine.household_subject_id.is_(None),
+            ).order_by(Routine.kind)
         )).scalars().all()
         out: list[tuple[str, int, str]] = []
         for routine in routines:
@@ -522,7 +540,8 @@ async def test_a_member_answering_their_manager_does_not_rewrite_the_stored_rout
         "/api/v2/routines/generate", headers=auth(token), json={"explain": False},
     )
     assert generated.status_code == 200, generated.text
-    before = await _routine_fingerprint(account_id)
+    me = await _self_subject_id(account_id)
+    before = await _routine_fingerprint(account_id, me)
     assert before, "the account holder should have a stored routine to protect"
 
     primary = (await _queue(app_client, token, member))["primary"]
@@ -531,7 +550,11 @@ async def test_a_member_answering_their_manager_does_not_rewrite_the_stored_rout
     assert response.status_code == 200, response.text
     assert response.json()["applied"]["action_applied"] is True
 
-    assert await _routine_fingerprint(account_id) == before
+    assert await _routine_fingerprint(account_id, me) == before
+    # Step 11E: the member now has a routine of their own, built from the same
+    # shared shelf. That is the point of the slice, and it is still not the
+    # account holder's — which is what the line above measures.
+    assert await _routine_fingerprint(account_id, uuid.UUID(member))
     # And it really did land — for the member, in the member's own store.
     assert await _preferences(account_id) == [
         (member, item_id, "paused", "shelf_manager"),
@@ -555,14 +578,15 @@ async def test_the_account_holder_answering_their_manager_still_regenerates_the_
     await app_client.post(
         "/api/v2/routines/generate", headers=auth(token), json={"explain": False},
     )
-    before = await _routine_fingerprint(account_id)
+    me = await _self_subject_id(account_id)
+    before = await _routine_fingerprint(account_id, me)
 
     primary = (await _queue(app_client, token))["primary"]
     assert primary["action"]["inventory_item_id"] == item_id
     response = await _answer(app_client, token, primary, "accept")
     assert response.status_code == 200, response.text
 
-    after = await _routine_fingerprint(account_id)
+    after = await _routine_fingerprint(account_id, me)
     assert after != before, "the account holder's stored routine was not reconciled"
     # Their own preference is stored against them by name, because a household
     # exists — not left in the pre-household attribute store.
