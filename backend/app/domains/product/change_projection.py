@@ -232,13 +232,16 @@ def _formula_change(
         ),
     )
 
-async def project_label_change(
-    session,
+def project_label_change(
     *,
     current: LabelSnapshot,
     previous: LabelSnapshot | None,
 ) -> LabelChangeProjection:
-    """Compare exactly the two supplied immutable label observations."""
+    """Compare exactly the two supplied immutable label observations.
+
+    No session parameter is accepted: Step 12A cannot query, write, consult a
+    clock, or ask a model after the caller has selected the two observations.
+    """
     _validate_chain(current, previous)
 
     if previous is None:
@@ -250,7 +253,6 @@ async def project_label_change(
             formula=FormulaChange(status=FormulaChangeStatus.NOT_APPLICABLE),
         )
 
-    del session  # Step 12A is deliberately pure after explicit snapshot selection.
     return LabelChangeProjection(
         status=LabelChangeStatus.CHANGED,
         current_version=current.version_number,

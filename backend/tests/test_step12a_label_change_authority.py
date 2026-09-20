@@ -49,7 +49,7 @@ def _snapshot(
 
 async def test_first_observation_has_no_invented_change():
     current = _snapshot({"ingredients_text": "Water,Glycerin"})
-    result = await project_label_change(object(), current=current, previous=None)
+    result = project_label_change(current=current, previous=None)
     assert result.status is LabelChangeStatus.FIRST_OBSERVED_VERSION
     assert result.changed_fields == ()
     assert result.formula.status is FormulaChangeStatus.NOT_APPLICABLE
@@ -61,7 +61,7 @@ async def test_case_only_label_change_does_not_become_an_ingredient_change(db_cl
         {"ingredients_text": "water,glycerin"}, version=2, previous=old,
     )
     async with get_sessionmaker()() as session:
-        result = await project_label_change(session, current=new, previous=old)
+        result = project_label_change(current=new, previous=old)
     assert result.changed_fields == ("ingredients",)
     assert result.formula.status is FormulaChangeStatus.UNCHANGED
     assert result.formula.added == ()
@@ -76,7 +76,7 @@ async def test_reorder_is_reported_without_calling_it_add_or_remove(db_clean):
         previous=old,
     )
     async with get_sessionmaker()() as session:
-        result = await project_label_change(session, current=new, previous=old)
+        result = project_label_change(current=new, previous=old)
     assert result.formula.status is FormulaChangeStatus.REORDERED_ONLY
     assert result.formula.added == ()
     assert result.formula.removed == ()
@@ -90,7 +90,7 @@ async def test_occurrence_delta_preserves_duplicates_and_printed_names(db_clean)
         previous=old,
     )
     async with get_sessionmaker()() as session:
-        result = await project_label_change(session, current=new, previous=old)
+        result = project_label_change(current=new, previous=old)
     assert result.formula.status is FormulaChangeStatus.INGREDIENT_SET_CHANGED
     assert [row.as_payload() for row in result.formula.added] == [
         {"name": "Niacinamide", "occurrences": 2},
@@ -106,7 +106,7 @@ async def test_unreadable_formula_is_not_partially_compared(db_clean):
         {"ingredients_text": "Water\nGlycerin"}, version=2, previous=old,
     )
     async with get_sessionmaker()() as session:
-        result = await project_label_change(session, current=new, previous=old)
+        result = project_label_change(current=new, previous=old)
     assert result.formula.status is FormulaChangeStatus.NOT_COMPARABLE
     assert result.formula.added == ()
     assert result.formula.removed == ()
@@ -125,7 +125,7 @@ async def test_noningredient_pack_change_does_not_query_formula(monkeypatch):
         pytest.fail("formula parser ran even though ingredients did not change")
 
     monkeypatch.setattr(change_projection, "_formula_parse", _must_not_run)
-    result = await project_label_change(object(), current=new, previous=old)
+    result = project_label_change(current=new, previous=old)
     assert result.changed_fields == ("net_quantity",)
     assert result.formula.status is FormulaChangeStatus.UNCHANGED
 
@@ -161,26 +161,19 @@ async def test_corrupt_history_fails_closed(mutation):
         new.facts = {"ingredients_text": "Different"}
 
     with pytest.raises(LabelHistoryInvariantError):
-        await project_label_change(object(), current=new, previous=old)
+        project_label_change(current=new, previous=old)
 
 
-async def test_projection_never_selects_latest_or_writes(monkeypatch):
+async def test_projection_never_selects_latest_or_accepts_an_io_handle(monkeypatch):
+    from inspect import signature
+
     from app.domains.product import service as product_service
 
     async def _latest_must_not_run(*args, **kwargs):
         pytest.fail("projection selected a latest snapshot")
 
     monkeypatch.setattr(product_service, "latest_label_snapshot", _latest_must_not_run)
-
-    class Session:
-        def add(self, *args, **kwargs):
-            pytest.fail("projection attempted a write")
-
-        async def flush(self, *args, **kwargs):
-            pytest.fail("projection attempted a write")
-
-        async def commit(self, *args, **kwargs):
-            pytest.fail("projection attempted a write")
+    assert tuple(signature(project_label_change).parameters) == ("current", "previous")
 
     old = _snapshot({"ingredients_text": "Water", "net_quantity": "100 g"})
     new = _snapshot(
@@ -188,7 +181,7 @@ async def test_projection_never_selects_latest_or_writes(monkeypatch):
         version=2,
         previous=old,
     )
-    result = await project_label_change(Session(), current=new, previous=old)
+    result = project_label_change(current=new, previous=old)
     assert result.formula.status is FormulaChangeStatus.UNCHANGED
 
 

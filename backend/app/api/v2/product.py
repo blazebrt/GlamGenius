@@ -399,10 +399,8 @@ async def read_product_verdict(
             if snapshot.previous_snapshot_id is not None
             else None
         )
-        payload["label_change"] = (
-            await change_projection.project_label_change(
-                session, current=snapshot, previous=previous_snapshot,
-            )
+        payload["label_change"] = change_projection.project_label_change(
+            current=snapshot, previous=previous_snapshot,
         ).as_payload()
     payload["attribution"] = found.get("attribution")
     # What the pack actually holds, so "one packet" on the screen means this
