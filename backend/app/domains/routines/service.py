@@ -40,6 +40,7 @@ from app.domains.planning import context as planning_context
 from app.domains.profile import service as profile_service
 from app.domains.profile.identity import resolve_subject_profile_for_write
 from app.domains.routines import adherence, compiler, explanation, manager, parser, perfume, selection, shelf
+from app.domains.routines.hard_handoff import evaluate_hard_handoff
 from app.domains.routines import rules as rules_engine
 from app.domains.routines.models import (
     CARE_EXPERIENCE_FEEDBACK_VERSION,
@@ -75,6 +76,16 @@ from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
 
 CONSISTENCY_WINDOW_DAYS = 14
 ROUTINE_ENGINE_VERSION = "care-v3-03.5"
+
+
+def _enforce_subject_handoff(subject: DecisionSubject) -> None:
+    """Fail closed before any personal Care/preference/routine fact is read."""
+    handoff = evaluate_hard_handoff(
+        subject_is_child=subject.subject.is_child,
+        stated_age=subject.subject.stated_age,
+    )
+    if handoff.handoff:
+        raise ValidationFailedError(handoff.message, field="subject_id")
 
 
 async def _current_care_decisions(
@@ -626,6 +637,7 @@ async def generate_routines(
         principal_account_id=account_id,
         decision_subject=decision_subject,
     )
+    _enforce_subject_handoff(read_subject)
     initial = await _routine_generation_material(
         session,
         account_id=account_id,
@@ -648,6 +660,7 @@ async def generate_routines(
         principal_account_id=account_id,
         decision_subject=decision_subject,
     )
+    _enforce_subject_handoff(write_subject)
     current = await _routine_generation_material(
         session,
         account_id=account_id,
@@ -823,6 +836,7 @@ async def simplify_care_routine(
         principal_account_id=account_id,
         decision_subject=decision_subject,
     )
+    _enforce_subject_handoff(checked)
     plan_date = clock.local_today(clock.DEFAULT_TIMEZONE)
     _, care_context, decisions = await _current_care_decisions(
         session, account_id, plan_date, decision_subject=checked,
@@ -935,6 +949,7 @@ async def _care_product_preference(
     subject = await canonicalize_decision_subject_for_write(
         session, principal_account_id=account_id, decision_subject=subject_claim,
     )
+    _enforce_subject_handoff(subject)
     item = await inventory_service.owned_item(session, account_id, item_id)
     _assert_care_product_eligible(item, action="paused")
 
@@ -1207,6 +1222,7 @@ async def _selection_preference(
     subject = await canonicalize_decision_subject_for_write(
         session, principal_account_id=account_id, decision_subject=subject_claim,
     )
+    _enforce_subject_handoff(subject)
     item = await inventory_service.owned_item(session, account_id, item_id)
     _assert_care_product_eligible(item, action="preferred")
 
@@ -1558,6 +1574,7 @@ async def routines_today(
         principal_account_id=account_id,
         decision_subject=decision_subject,
     )
+    _enforce_subject_handoff(checked)
     today = on or clock.local_today(clock.DEFAULT_TIMEZONE)
     part = clock.part_of_day(clock.local_now(clock.DEFAULT_TIMEZONE))
 
@@ -1684,6 +1701,7 @@ async def complete_step(
         principal_account_id=account_id,
         decision_subject=decision_subject,
     )
+    _enforce_subject_handoff(checked)
     # Fail closed on a dual legacy/explicit self state before choosing a step.
     await _routine_rows_for_subject(
         session,
@@ -1764,6 +1782,7 @@ async def consistency(
         principal_account_id=account_id,
         decision_subject=decision_subject,
     )
+    _enforce_subject_handoff(checked)
     # This also enforces the legacy+explicit self invariant.
     await _routine_rows_for_subject(
         session,
@@ -2191,6 +2210,7 @@ async def improve_overview(
         principal_account_id=account_id,
         decision_subject=decision_subject,
     )
+    _enforce_subject_handoff(checked)
     context = await shelf.gather(
         session, account_id=account_id, decision_subject=checked,
     )
