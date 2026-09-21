@@ -31,8 +31,11 @@ exists because the first was mistaken for the second.
 
 The engine is not weakened and is not going away: it decides identity, it
 decides what the migration must move, and it is what the integrity check runs.
-`test_3*` still proves it against the same fixtures it always did, by calling
-it directly.
+Every test that proved its answers still proves them, by calling
+`project_label_change()` directly on two explicitly supplied snapshots —
+including `test_the_engine_still_compares_two_valid_observations_correctly`,
+which asserts the exact comparison the Product Result then declines to
+publish.
 
 What changed is that its output is no longer published just because it exists.
 The Product Constitution is unconditional — *the app never makes a claim in its
@@ -96,9 +99,15 @@ There are three distinct outcomes and they must stay distinct:
 
 `unavailable` is the governed vocabulary that already existed for the
 fail-soft case (`UNAVAILABLE_PROJECTION`), and the publication boundary reuses
-it rather than inventing a second way to say nothing. When it is returned,
-**none** of `changed_fields`, the formula delta, the ingredient names or
-`first_observed_version` appears anywhere in the response.
+it rather than inventing a second way to say nothing.
+
+The envelope keeps its shape — the keys are all there, so no client has to
+branch on their absence — but every one of them is empty: `changed_fields` and
+both `only_on_*` lists are `[]`, `current_version` and `previous_version` are
+`null`, and `formula.status` is `not_applicable`. **No ingredient name, no
+field name and no version number reaches the response.** Those empty lists sit
+under `status: "unavailable"`, which governs the whole envelope, so none of them
+asserts that nothing changed.
 
 That last part matters because the envelope is not the only door.
 `label_version.changed_fields` carries the same claim in a smaller box, so it
@@ -476,6 +485,11 @@ branch:
 | A readable confirmed snapshot | `confirmed_label_snapshot` | that snapshot's own confidence |
 | Open Food Facts, because no readable snapshot | `open_food_facts` | `unverified` |
 | Nothing usable at all | `open_food_facts` | `not_enough_information` |
+
+`facts_provenance` in the last row is unchanged from before this correction: it
+names the channel that was consulted, not a record that was found, and
+`not_enough_information` beside it is what says nothing came back. Changing that
+string is a separate question from this defect, so it was left alone.
 
 The defect this closes: when a snapshot's facts were unreadable the route fell
 back to the Open Food Facts record for the *facts* but kept the product
