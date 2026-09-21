@@ -7,7 +7,9 @@ up. A device token reaches product data and nothing else.
 """
 from __future__ import annotations
 
+import logging
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -38,16 +40,18 @@ from app.domains.nutrition.grading.production_rules import (
     resolve_production_ruleset,
 )
 from app.domains.official_records import service as official_records_service
-from app.domains.product import complaints, devices, extraction, pack_context, service
+from app.domains.product import change_projection, complaints, devices, extraction, pack_context, service
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
-from app.domains.product.models import FssaiComplaintHandoff, ScanDevice
+from app.domains.product.models import FssaiComplaintHandoff, LabelSnapshot, ScanDevice
 from app.domains.value import service as value_service
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import ValidationFailedError
 from app.shared.security.deps import CurrentAccount, get_current_account
 from app.shared.security.network import client_ip
 from app.shared.security.rate_limit import FixedWindowLimiter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -352,6 +356,14 @@ async def read_product_verdict(
     """
     found = await service.lookup(session, barcode)
     snapshot = await service.latest_label_snapshot(session, barcode)
+    # A snapshot whose stored facts are not an object is not a readable
+    # observation. It is still a real version — decision memory and shelf links
+    # are pinned to its id and fingerprint, and hiding it would detach them —
+    # so the version is still reported and Step 12A still says its history is
+    # unavailable. But nothing is graded from facts that cannot be read: the
+    # verdict falls back to what can be, exactly as it does for a product
+    # nobody has photographed. No supported write path produces such a row.
+    readable = snapshot if isinstance(getattr(snapshot, "facts", None), Mapping) else None
     # What this server can prove about the packet in this caller's hand, as
     # opposed to what the caller asked to be treated as. The request can only
     # withhold authority; it cannot create it.
@@ -360,13 +372,13 @@ async def read_product_verdict(
     # Store B is selected at query time and never copied into ODbL Store A.
     # Its schema is adapted explicitly; it is not disguised as an OFF record
     # and missing physical-pack values are never filled from Store A.
-    source_half = snapshot.facts if snapshot is not None else found.get("open_food_facts")
+    source_half = readable.facts if readable is not None else found.get("open_food_facts")
     # One identity helper, shared with the alternative card, so the name a
     # shopper is offered and the name on the screen it opens cannot drift.
     name, brand = service.result_identity(barcode, source_half)
     product = (
-        from_scan.build_confirmed_label(barcode=barcode, facts=snapshot.facts)
-        if snapshot is not None
+        from_scan.build_confirmed_label(barcode=barcode, facts=readable.facts)
+        if readable is not None
         else from_scan.build(barcode=barcode, name=name, off_half=source_half)
     )
     # The customer path asks the evidence domain which rules have finished the
@@ -379,8 +391,8 @@ async def read_product_verdict(
     # Keep absent catalogue values absent instead of manufacturing a brand.
     payload["barcode"] = barcode
     payload["brand"] = brand
-    payload["confidence"] = service.confidence_block(snapshot.confidence) if snapshot else found["confidence"]
-    payload["facts_provenance"] = "confirmed_label_snapshot" if snapshot else "open_food_facts"
+    payload["confidence"] = service.confidence_block(readable.confidence) if readable else found["confidence"]
+    payload["facts_provenance"] = "confirmed_label_snapshot" if readable else "open_food_facts"
     payload["label_version"] = ({
         "id": str(snapshot.id), "version_number": snapshot.version_number,
         "content_fingerprint": snapshot.content_fingerprint,
@@ -388,13 +400,46 @@ async def read_product_verdict(
         "changed_fields": snapshot.changed_fields,
         "completeness": snapshot.completeness,
     } if snapshot else None)
+    # Step 12A is observation history, not a claim about the packet in the
+    # caller's hand and not a regulatory interpretation. Version selection is
+    # explicit here; the projection itself never performs a "latest" lookup.
+    #
+    # ``None`` means this product has no confirmed pack observation at all — an
+    # Open Food Facts record alone never produces one. It is deliberately not
+    # the answer when history exists but failed its invariants; that is
+    # ``unavailable``, and conflating the two would hide the corruption.
+    if snapshot is None:
+        payload["label_change"] = None
+    else:
+        previous_snapshot = (
+            await session.get(LabelSnapshot, snapshot.previous_snapshot_id)
+            if snapshot.previous_snapshot_id is not None
+            else None
+        )
+        try:
+            projection = change_projection.project_label_change(
+                current=snapshot, previous=previous_snapshot,
+            )
+        except change_projection.LabelHistoryInvariantError as broken:
+            # An addition may not take the page down with it. Everything below
+            # — grade, band, negatives, positives, evidence, official records,
+            # alternatives, value — was established without this envelope and
+            # is still true, so the history goes quiet and the verdict stands.
+            # The broken invariant is named to the log and to nobody else.
+            logger.warning(
+                "label_history_invariant_failed barcode=%s reason=%s",
+                barcode,
+                broken.reason,
+            )
+            projection = change_projection.UNAVAILABLE_PROJECTION
+        payload["label_change"] = projection.as_payload()
     payload["attribution"] = found.get("attribution")
     # What the pack actually holds, so "one packet" on the screen means this
     # packet. Absent when neither source states a net quantity, and the screen
     # then says "in 100 g" rather than inventing a pack.
     quantity = (
         (source_half or {}).get("net_quantity")
-        if snapshot is not None
+        if readable is not None
         else (source_half or {}).get("quantity")
     )
     size = from_scan.pack_size_g(quantity)

@@ -53,11 +53,18 @@ async def test_downgrade_refuses_once_a_persisted_routine_names_a_subject(
     assert response.status_code == 200, response.text
 
     await sql.dispose_engine()
+    # Whatever revisions sit above this one, a refused downgrade must leave the
+    # database exactly where it was. Captured rather than written out, because
+    # the invariant is "nothing moved", not "it stopped at one named revision"
+    # — and a later step stacking a revision on top must not be able to turn
+    # this into a partial downgrade that still passes.
+    before = await _revision()
+    assert before is not None
     try:
         returncode, output = await _alembic("downgrade", STEP_11D_REVISION)
         assert returncode != 0, output
         assert "Step 11E downgrade refused" in output
-        assert await _revision() == STEP_11E_REVISION
+        assert await _revision() == before
     finally:
         await sql.dispose_engine()
         await _alembic("upgrade", "head")

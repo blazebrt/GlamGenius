@@ -94,9 +94,18 @@ TOP_LEVEL_DELIMITER = ","
 #: The list is Python's own ``str.splitlines()`` set, spelled out rather than
 #: derived so a reader can see exactly what is covered, with a test asserting it
 #: still matches ``splitlines()`` if Python ever adds one.
-_LINE_BOUNDARIES: frozenset[str] = frozenset(
+#: Exported under the public name because one layer outside this module needs
+#: the same list and must not restate it: the label version authority, which
+#: has to keep two observations apart whenever a difference between them could
+#: change what this parser concludes. A second copy of this set would be a
+#: second answer to "where can a boundary be", and the two would drift.
+LINE_BOUNDARIES: frozenset[str] = frozenset(
     "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
 )
+
+#: The spelling the parser's own protected functions use, and the one its
+#: source audit pins. Same object, so there is one set and not two.
+_LINE_BOUNDARIES: frozenset[str] = LINE_BOUNDARIES
 
 #: Separators a printed list may genuinely use, which this parser will not
 #: guess at. A semicolon between two entries and a semicolon inside one
@@ -474,6 +483,71 @@ def classify_comma(text: str, position: int, *, entry_prefix: str) -> CommaRole:
     return CommaRole.DELIMITER
 
 
+def _grouping_step(character: str, stack: list[str]) -> bool:
+    """Apply one structural character to the grouping stack.
+
+    The single place that decides what grouping is. ``False`` means the
+    character cannot balance — a closer that does not match the innermost
+    opener, or one with nothing open — which is what makes a formula
+    ``MALFORMED``. Anything that is not a grouping character leaves the stack
+    alone and is accepted, because this function answers only the grouping
+    question.
+
+    Factored out so :func:`_split_top_level` and :func:`boundary_significance`
+    cannot come to disagree about where a group begins and ends. Two copies of
+    this would be two answers to "is this character protected", and the label
+    version authority reads the second one.
+    """
+    if character in _GROUPING_PAIRS:
+        stack.append(_GROUPING_PAIRS[character])
+        return True
+    if character in _CLOSERS:
+        if not stack or stack[-1] != character:
+            return False
+        stack.pop()
+    return True
+
+
+def boundary_significance(text: str) -> tuple[bool, ...] | None:
+    """Per character, whether a line boundary there is one this parser refuses.
+
+    Exactly the positions at which :func:`_split_top_level` would answer
+    ``AMBIGUOUS_BOUNDARY`` for a line boundary: outside balanced grouping.
+    Inside grouping the parser keeps the run verbatim within one entry, and
+    Step 7A collapses it to a single space when producing that entry's
+    canonical key — so ``"Parfum (A\nB), Water"`` and ``"Parfum (A B), Water"``
+    are the same formula, read the same way, resolving to the same identities.
+
+    ``None`` when this layer cannot speak for the text at all: a compatibility
+    form whose normalisation would relocate structure, or grouping that never
+    balances. A caller must then assume nothing, which for the label version
+    authority means keeping every boundary rather than folding one away.
+
+    The result is index-for-index with ``text``, because
+    :func:`structural_view` is length-preserving by construction.
+
+    This exists for one caller outside this domain — the label version
+    authority, which must not fold away a difference that changes what this
+    parser concludes, and must not manufacture a version out of one that does
+    not. It is a view of this grammar, not a second one: it decides no
+    boundary, emits no entry and produces no identity.
+    """
+    view = structural_view(text)
+    if view is None:
+        return None
+    stack: list[str] = []
+    significance: list[bool] = []
+    for character in view:
+        # Depth *before* this character: an opener is itself at the outer
+        # level, and its matching closer is the character that returns there.
+        significance.append(not stack)
+        if not _grouping_step(character, stack):
+            return None
+    if stack:
+        return None
+    return tuple(significance)
+
+
 def _split_top_level(text: str) -> tuple[ParseStatus, list[str]]:
     """Split on top-level commas, reporting how it went.
 
@@ -511,13 +585,9 @@ def _split_top_level(text: str) -> tuple[ParseStatus, list[str]]:
     for index, character in enumerate(view):
         # ``character`` decides structure; ``text[index]`` is what gets kept.
         raw_character = text[index]
-        if character in _GROUPING_PAIRS:
-            stack.append(_GROUPING_PAIRS[character])
-            current.append(raw_character)
-        elif character in _CLOSERS:
-            if not stack or stack[-1] != character:
+        if character in _GROUPING_PAIRS or character in _CLOSERS:
+            if not _grouping_step(character, stack):
                 return ParseStatus.MALFORMED, []
-            stack.pop()
             current.append(raw_character)
         elif (
             character in _LINE_BOUNDARIES or character in _AMBIGUOUS_SEPARATORS
@@ -604,6 +674,8 @@ def parse_formula(ingredients_text: object) -> FormulaParse:
 
 
 __all__ = [
+    "LINE_BOUNDARIES",
+    "boundary_significance",
     "MAX_FORMULA_TOKENS",
     "MAX_INGREDIENTS_TEXT_LENGTH",
     "TOP_LEVEL_DELIMITER",

@@ -50,6 +50,7 @@ from app.domains.formulas.parser import (
     ParseStatus,
     parse_formula,
 )
+from app.domains.substances.normalization import normalize_name
 from app.domains.substances.service import ResolutionStatus, resolve_names
 
 
@@ -101,6 +102,67 @@ class FormulaResolution:
         return sum(1 for row in self.ingredients if row.status is ResolutionStatus.RESOLVED)
 
 
+@dataclass(frozen=True)
+class FormulaEntry:
+    """One printed entry and its canonical lookup key. No identity attached."""
+
+    #: 1-based printed order. Order only — never a concentration.
+    position: int
+    #: Exactly as printed, minus surrounding whitespace.
+    raw_name: str
+    #: Step 7A's canonical lookup key, or ``None`` when the name is unusable.
+    normalized_name: str | None
+
+
+@dataclass(frozen=True)
+class FormulaEntries:
+    """A parsed printed list keyed for comparison, and nothing more."""
+
+    status: ParseStatus
+    entries: tuple[FormulaEntry, ...] = ()
+
+
+def canonical_formula_entries(ingredients_text: object) -> FormulaEntries:
+    """Parse a printed list and key each entry, without consulting the registry.
+
+    This is :func:`resolve_formula` with the registry lookup removed: the same
+    parser, the same Step 7A normalisation, and deliberately no identity. It
+    exists because one caller — comparing two observations of the same product
+    — must be told whether the printed entries are the same entries, and must
+    be told the same thing tomorrow.
+
+    That last part is the whole reason this is a separate function rather than
+    a flag on the resolver. :func:`resolve_formula` reads a table a reviewer
+    keeps adding to, so the identity it reports for a name can legitimately
+    change between two calls. A comparison built on it would report that a
+    formula changed on the day somebody published a synonym, which is a claim
+    about a manufacturer nobody made. Keyed by normalised printed name, two
+    stored observations compare the same way forever.
+
+    It is pure: no session, no query, no clock, no model. A caller holding two
+    immutable snapshots can therefore answer the question without touching the
+    database at all.
+    """
+    parse: FormulaParse = parse_formula(ingredients_text)
+    if not parse.ok:
+        return FormulaEntries(status=parse.status)
+    if not parse.tokens:
+        # Same defensive line the resolver draws: PARSED with nothing in it
+        # would otherwise read as a confidently empty formula.
+        return FormulaEntries(status=ParseStatus.EMPTY)
+    return FormulaEntries(
+        status=ParseStatus.PARSED,
+        entries=tuple(
+            FormulaEntry(
+                position=token.position,
+                raw_name=token.raw_name,
+                normalized_name=normalize_name(token.raw_name),
+            )
+            for token in parse.tokens
+        ),
+    )
+
+
 async def resolve_formula(session: AsyncSession, ingredients_text: object) -> FormulaResolution:
     """Parse a printed ingredient list and resolve each entry against Step 7A.
 
@@ -144,7 +206,10 @@ async def resolve_formula(session: AsyncSession, ingredients_text: object) -> Fo
 
 
 __all__ = [
+    "FormulaEntries",
+    "FormulaEntry",
     "FormulaIngredientResolution",
     "FormulaResolution",
+    "canonical_formula_entries",
     "resolve_formula",
 ]
