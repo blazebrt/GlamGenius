@@ -16,6 +16,98 @@ prove that two people photographed two different packs — and to be unable to
 say it when all that really happened was that a catalogue was edited, a camera
 read a line break differently, or a reviewer published a synonym.
 
+## Two authorities, not one: knowing and publishing
+
+Step 12A holds **two** separate authorities, and the post-merge correction
+exists because the first was mistaken for the second.
+
+| | **Internal deterministic change authority** | **Customer-publishable change claim** |
+| --- | --- | --- |
+| Question | What do these two stored observations say differently? | May a customer be told that? |
+| Decided by | `project_label_change()` in `change_projection.py` | `comparison_is_publishable()` in `label_evidence.py` |
+| Inputs | Two `LabelSnapshot` rows and nothing else | Whether each of those observations has a source the customer could open |
+| Wrong answer looks like | A change fact that does not follow from the rows | A true fact stated in the app's own voice, with nothing to point at |
+| If it cannot answer | `LabelHistoryInvariantError` — refuse in the open | Withhold the claim; the page carries on |
+
+The engine is not weakened and is not going away: it decides identity, it
+decides what the migration must move, and it is what the integrity check runs.
+`test_3*` still proves it against the same fixtures it always did, by calling
+it directly.
+
+What changed is that its output is no longer published just because it exists.
+The Product Constitution is unconditional — *the app never makes a claim in its
+own voice; it reports what a named, openable source says. No source, no claim.*
+"This moisturiser's ingredient list changed, and here is the ingredient that
+appeared" is a claim about a manufacturer. Two of our own database rows are not
+a source for it.
+
+### Identity metadata is not evidence
+
+These are the four things closest to hand, and not one of them may be offered
+as the source of a change claim:
+
+| Value | What it actually is |
+| --- | --- |
+| `version_number` | Our own counter. It says how many times *we* recorded something, not what any pack said. |
+| `content_fingerprint` | Our own integrity hash. It detects that stored bytes moved; it is not a witness to a pack. |
+| `observed_at` | When we wrote a row. A timestamp of our bookkeeping. |
+| The stored transcription | The thing the claim is *derived from*. A claim cannot be its own independent support. |
+
+All four are **identity and integrity metadata**. They are exactly why the
+engine can be trusted internally, and exactly why they cannot travel outward as
+evidence: pointing at any of them is the app citing itself.
+
+### Why the answer is currently "no", every time
+
+Walk the chain a confirmed observation is built from.
+`POST /scan/label/transcribe` reads a private `MediaAsset` and records an
+`AIRun` with an `AIRunOutput`. `POST /scan/label/confirm` writes a `ScanEvent`
+carrying the `ai_run_id`, and a `LabelSnapshot` carrying the `scan_event_id`.
+
+Not one of `AIRun`, `AIRunOutput`, `ScanEvent` or `LabelSnapshot` persists the
+`media_asset_id`. The photograph is reachable only from the request that
+created the run, and that request is gone. Even if it were stored, every media
+route is account-private (`app/domains/media/service.py::get_owned_asset`) — so
+the photograph behind a stranger's observation is not something this caller may
+open, and the Product Result answers an **anonymous device token**.
+
+So `label_evidence.observation_source()` looks for an openable locator, finds
+that the schema has nowhere to keep one (`_LOCATOR_FIELDS` is empty, and says
+in the code why), and returns `None`. `comparison_is_publishable()` therefore
+returns `False` for every pair, and the Product Result withholds the claim.
+
+This is not a permanent verdict, and it is not relaxable from here. Restoring
+publication is a **schema** change — persisting a locator on the
+confirmed-observation chain and giving it a lawful public reader — reviewed on
+its own terms. `is_openable_customer_source()` refuses anything that is not
+`http`/`https` with a host, and refuses any path under `/api/`, `/media/`,
+`/scan/` or `/internal/`, so a locator that merely points back into this
+application cannot be used to switch publication on.
+
+### Withheld is not "unchanged", and not "never seen"
+
+There are three distinct outcomes and they must stay distinct:
+
+| `label_change` | Means |
+| --- | --- |
+| `null` | This product has no confirmed observation at all. Nobody has photographed it. |
+| `status: "unavailable"` | There is history, and we are not stating what it says — either the stored history failed its invariants, or the comparison has no openable source. |
+| `status: "first_observed_version"` / `"changed"` | A publishable claim, with its sources. |
+
+`unavailable` is the governed vocabulary that already existed for the
+fail-soft case (`UNAVAILABLE_PROJECTION`), and the publication boundary reuses
+it rather than inventing a second way to say nothing. When it is returned,
+**none** of `changed_fields`, the formula delta, the ingredient names or
+`first_observed_version` appears anywhere in the response.
+
+That last part matters because the envelope is not the only door.
+`label_version.changed_fields` carries the same claim in a smaller box, so it
+is `null` when the comparison is unpublishable. Explicitly **not** `[]` — an
+empty list asserts that nothing changed, which is a claim in its own right and
+one we have no source for either. `LabelSnapshot.changed_fields` is still
+stored, still migrated, still what the integrity check compares against; it
+simply stops being served.
+
 ## Store B is the only authority
 
 A `LabelSnapshot` exists because somebody photographed a physical pack and
@@ -112,10 +204,11 @@ Measured, not asserted (see the PR for the exact runs):
 changes no schema. It re-derives the two values that depend on the rule:
 
 - **`content_fingerprint`** — a pure function of one row's own immutable facts.
-  There is exactly one correct value and no pairing decision, so it is
-  recomputed unconditionally, and the copies in `scan_decision_events` and
+  There is exactly one correct value and no pairing decision. It moves under
+  the source rule below, and the copies in `scan_decision_events` and
   `inventory_product_links` are realigned **by `label_snapshot_id`**, never by
-  fingerprint value.
+  fingerprint value, and only for the snapshot ids this invocation actually
+  moved.
 - **`changed_fields`** — a statement about *two* rows, and therefore equally
   stale after the rule moves. A pack whose ingredient line wrapped differently
   was legitimately recorded as "only the quantity changed", because under the
@@ -137,13 +230,56 @@ The predecessor is always the row's explicit `previous_snapshot_id`. Never the
 previous version number, never the same barcode, never a matching fingerprint:
 pairing rows by anything other than the link they carry would invent a history.
 
-A row's `changed_fields` is migrated **only** where the stored value is exactly
-what the source rule derives from that row and its recorded predecessor. A row
-that already disagreed with its own history was not produced by any supported
-write path, and rewriting it would launder corruption into a clean-looking
-history nobody can see any more. Those rows are left as found, for the Step 12A
-integrity check to refuse in the open — as are version 1 rows (whose value does
-not depend on the rule) and rows whose predecessor is missing or unreadable.
+### The source-fingerprint rule
+
+A migration that moves an identity rule is not entitled to assume every stored
+row was written under the rule it is moving *from*. Some were not — a row whose
+fingerprint never described its own facts is corrupt, and it is corrupt for a
+reason nobody here can see.
+
+Recomputing such a row unconditionally does something worse than leaving it
+broken. It replaces a value that is visibly wrong with one that is *plausibly
+right*: the row now passes the new integrity check, the corruption is gone from
+the record, and nothing downstream will ever ask about it again. That is
+laundering, and it is irreversible.
+
+So the rule, in both directions:
+
+> **A row may migrate only if its stored `content_fingerprint` is exactly the
+> value the *source* rule derives from that row's own facts.**
+
+"Source rule" is the rule the migration is leaving: the old, non-boundary-aware
+composition on `upgrade()`, the new boundary-aware one on `downgrade()`. Rows
+that fail this are left exactly as found, for the Step 12A integrity check to
+refuse in the open. So are rows whose `facts` is not a fact object at all.
+
+Three consequences follow, and each is a test:
+
+1. **Predecessors must be source-valid too.** `changed_fields` is a statement
+   about two rows. A difference recomputed against a predecessor whose own
+   identity was never trustworthy is not a migrated value, it is a new
+   invention. Such rows are skipped.
+2. **A row already inconsistent with its own history is not ours to fix.**
+   Where the stored `changed_fields` is not what the source rule derives from
+   the pair, it is left alone for the same reason.
+3. **Linked copies follow only migrated snapshots, named one by one.** The
+   `UPDATE … FROM product_label_snapshots` statements in
+   `scan_decision_events` and `inventory_product_links` are parameterised by
+   the exact snapshot ids this invocation moved. A blanket "realign every copy
+   that disagrees with its snapshot" would quietly repair copies of rows the
+   migration deliberately refused to touch — the same laundering, one join
+   further out.
+
+#### Operational note: already-executed migrations
+
+This rule can only govern a database that has **not yet** run
+`j8k9l0m1n2`. Where the revision has already been applied to a persistent
+database, the old unconditional pass has already rewritten whatever it
+rewrote, and the pre-migration source state no longer exists to be checked
+against. Nothing in this correction repairs that, and nothing in it should be
+read as claiming it does: recovering such a database is an operational
+question — restore the pre-migration state, or accept the rows as they now
+stand and let the integrity check speak — not a code question.
 
 The migration carries a frozen copy of the rule rather than importing it — a
 migration has to keep doing what it did on the day it ran — and that copy now
@@ -223,7 +359,9 @@ invariant name and no internal identifier can reach a customer.
 
 ## On the Product Result
 
-`GET /api/v2/scan/verdict/{barcode}` gains exactly one key, `label_change`:
+`GET /api/v2/scan/verdict/{barcode}` gains exactly one key, `label_change`.
+Its **publishable** shape — which no caller receives today, for the reason in
+*Two authorities* above — is:
 
 ```json
 {
@@ -240,6 +378,20 @@ invariant name and no internal identifier can reach a customer.
     "only_on_current_label": [{"name": "Niacinamide", "occurrences": 1}],
     "only_on_previous_label": [{"name": "Glycerin", "occurrences": 1}]
   }
+}
+```
+
+What a caller receives while no observation carries an openable source is the
+governed unavailable envelope, and `label_version.changed_fields` is `null`
+beside it:
+
+```json
+{
+  "label_version": {
+    "id": "…", "version_number": 2, "content_fingerprint": "…",
+    "observed_at": "…", "changed_fields": null, "completeness": "…"
+  },
+  "label_change": {"scope": "confirmed_label_history", "status": "unavailable"}
 }
 ```
 
@@ -277,6 +429,61 @@ but grades from what can still be read, exactly as it does for a product nobody
 has photographed, and says so in `facts_provenance`. `test_35` corrupts a real
 row in PostgreSQL and asserts the resulting page is identical, key for key, to
 the page that product gets with no confirmed observation at all.
+
+### One boundary, asked everywhere
+
+"Can these stored facts be read as a fact object?" is asked by the Product
+Result, by the comparable-alternative engine, and by both FSSAI complaint
+routes. It is therefore **one** function, in the product domain's service:
+
+```python
+readable_label_snapshot(snapshot) -> LabelSnapshot | None
+readable_label_facts(snapshot)    -> dict[str, Any]
+```
+
+It is deliberately the *weakest* question in this area, and must not be
+confused with the strong one. `project_label_change()` asks whether a whole
+stored history is coherent and refuses loudly when it is not. This asks only
+whether one row's `facts` is a mapping, and answers `None` / `{}` when it is
+not. A caller that needs the strong guarantee must still ask for it.
+
+Two consequences the post-merge correction had to close:
+
+- **The alternative engine gets the same authority.** It used to receive the
+  original `snapshot` while the page around it had already been built from the
+  validated one, and `current_facts.get(...)` then raised on a JSONB array
+  three frames down. It now receives `readable_label_snapshot(snapshot)` —
+  `None` when the row is unreadable, which is the shape it already handles for
+  a product with no confirmed observation. There is no alternative-specific,
+  weaker version of the rule.
+- **Both FSSAI paths get it too.** `POST /api/v2/reports/fssai/preview` and
+  `/confirm` read pack facts directly. Unreadable facts now mean *pack fields
+  are unavailable* — never a silent substitution of Open Food Facts values,
+  which are a catalogue and not the pack a complaint is about. Preview answers
+  with the governed "what is missing" shape instead of a 500; confirm returns
+  the **existing** `422 pack_fields_missing` and creates no
+  `FssaiComplaintHandoff` row. No product name, brand, batch or licence number
+  is ever invented to fill a gap.
+
+### Confidence describes the facts actually used
+
+`confidence` and `facts_provenance` are two statements about the same thing and
+must not be able to disagree. They are therefore decided together, in one
+branch:
+
+| Facts used to build and grade the response | `facts_provenance` | `confidence` |
+| --- | --- | --- |
+| A readable confirmed snapshot | `confirmed_label_snapshot` | that snapshot's own confidence |
+| Open Food Facts, because no readable snapshot | `open_food_facts` | `unverified` |
+| Nothing usable at all | `open_food_facts` | `not_enough_information` |
+
+The defect this closes: when a snapshot's facts were unreadable the route fell
+back to the Open Food Facts record for the *facts* but kept the product
+record's stored confidence for the *label*, so a page built entirely from a
+catalogue could be badged "Checked by us against the pack." Confidence is a
+claim about the facts in front of the customer, not about a row that exists
+somewhere. The vocabulary is unchanged — these are the existing
+`ProductConfidence` values, no new level was added.
 
 ## The formula classification
 
@@ -333,9 +540,13 @@ Step 12A does not, and its code contains no field one could be smuggled into:
 - infer why a manufacturer changed a pack;
 - infer concentration from printed order;
 - decide whether a change is good, bad, safer, stronger or weaker;
-- interpret an FSSAI notice or any other regulatory instrument (**Step 12B**);
-- subscribe anybody to a product, send a notification, or run a watcher
-  (**Step 12C**);
+- interpret an FSSAI notice or any other regulatory instrument;
+- subscribe anybody to a product, send a notification, or run a watcher;
+- publish a change claim without an openable source for each observation;
 - store a change event, a watch, a queue or a schedule — the delta is derived
   on read from history that already exists;
 - add paid infrastructure of any kind.
+
+None of those exists in this repository. Later roadmap steps are named in the
+roadmap, not here; nothing in this layer should be read as a statement that the
+work behind one of them has been started.

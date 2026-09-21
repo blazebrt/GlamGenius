@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -53,6 +53,45 @@ async def _own_record(session: AsyncSession, barcode: str) -> ProductRecord | No
     return (await session.execute(
         select(ProductRecord).where(ProductRecord.barcode == barcode)
     )).scalar_one_or_none()
+
+
+def readable_label_snapshot(snapshot: LabelSnapshot | None) -> LabelSnapshot | None:
+    """The snapshot when its stored facts can be read as a fact object, else ``None``.
+
+    ``facts`` is JSONB, so the column can hold an array, a bare string, a
+    number or ``null``. No supported write path produces one, but a row that
+    holds one is still served by every reader that goes looking for the latest
+    snapshot — and each of those readers calls ``.get()`` on it sooner or
+    later. One corrupt row therefore became a 500 on a public route.
+
+    This is the single answer to "may this snapshot's facts be treated as facts
+    at all". It exists so the question is asked in one place: a second
+    ``isinstance`` written at a third call site would drift from this one, and
+    the drift would only be visible as an outage.
+
+    It is deliberately the **weakest** question in this area, and must not be
+    confused with the strong one.
+    :func:`app.domains.product.change_projection.project_label_change` asks
+    whether a stored history satisfies every Step 12A integrity invariant —
+    fingerprint agreement, chain contiguity, recomputable difference — and
+    refuses far more than this does. "Readable enough to attempt ordinary
+    fallback processing" and "trustworthy enough to state a change fact" are
+    different questions with different answers, and neither may be used as the
+    other.
+    """
+    return snapshot if isinstance(getattr(snapshot, "facts", None), Mapping) else None
+
+
+def readable_label_facts(snapshot: LabelSnapshot | None) -> dict[str, Any]:
+    """The snapshot's facts as an object, or ``{}`` when there are none to read.
+
+    ``{}`` covers both "no confirmed observation" and "an observation nobody
+    can read", because a caller assembling pack fields treats them the same
+    way: every field it wanted is missing, and it says so rather than filling
+    the gap from somewhere else.
+    """
+    readable = readable_label_snapshot(snapshot)
+    return dict(readable.facts) if readable is not None else {}
 
 
 async def latest_label_snapshot(session: AsyncSession, barcode: str) -> LabelSnapshot | None:

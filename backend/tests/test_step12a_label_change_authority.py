@@ -793,9 +793,18 @@ async def test_19_a_governed_failure_says_nothing_internal():
 # ---------------------------------------------------------------------------
 # 20–24. Product Result: additive, product-scoped, and never invented from OFF
 # ---------------------------------------------------------------------------
-async def test_20_the_product_result_carries_the_immediate_version_change(
+async def test_20_the_product_result_withholds_a_comparison_it_cannot_source(
     db_clean, off_clean, app_client, device, registered_supabase_user,
 ):
+    """The envelope is present, and says nothing it cannot back.
+
+    Both observations here are real, and the deterministic engine compares them
+    correctly — the same test proves that directly, below. What neither of them
+    has is a source a customer could open: nothing on the confirmed-observation
+    chain stores a locator for the photograph, and the only stored image is a
+    private MediaAsset. So the claim is withheld rather than dressed in our own
+    version numbers, and the customer sees the governed unavailable envelope.
+    """
     barcode = "8900000000128"
     token, account_id = await registered_supabase_user()
     first = {"product_name": "Observed serum", "ingredients_text": "Water,Glycerin", **NUTRITION}
@@ -803,20 +812,7 @@ async def test_20_the_product_result_carries_the_immediate_version_change(
 
     opening = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
     assert opening.status_code == 200, opening.text
-    assert opening.json()["label_change"] == {
-        "scope": "confirmed_label_history",
-        "status": "first_observed_version",
-        "current_version": 1,
-        "previous_version": None,
-        "changed_fields": [],
-        "formula": {
-            "status": "not_applicable",
-            "previous_parse_status": None,
-            "current_parse_status": None,
-            "only_on_current_label": [],
-            "only_on_previous_label": [],
-        },
-    }
+    assert opening.json()["label_change"] == UNAVAILABLE_PROJECTION.as_payload()
 
     await _confirm(
         app_client, device, token, account_id, barcode,
@@ -825,16 +821,30 @@ async def test_20_the_product_result_carries_the_immediate_version_change(
     second = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
     assert second.status_code == 200, second.text
     change = second.json()["label_change"]
-    assert change["status"] == "changed"
-    assert (change["previous_version"], change["current_version"]) == (1, 2)
-    assert change["changed_fields"] == ["ingredients"]
-    assert change["formula"]["status"] == "ingredient_set_changed"
-    assert change["formula"]["only_on_current_label"] == [{"name": "Niacinamide", "occurrences": 1}]
-    assert change["formula"]["only_on_previous_label"] == [{"name": "Glycerin", "occurrences": 1}]
-    # Nothing in the envelope identifies a row, a device or an account. The
-    # label *version* block already carries the snapshot id under its own
-    # contract; this envelope adds no second copy of it.
+    assert change == UNAVAILABLE_PROJECTION.as_payload()
+    # Not one word of the comparison reaches the caller.
+    assert change["status"] not in ("changed", "unchanged", "first_observed_version")
+    assert change["changed_fields"] == []
+    assert change["formula"]["only_on_current_label"] == []
+    assert change["formula"]["only_on_previous_label"] == []
+    assert "Niacinamide" not in repr(change) and "Glycerin" not in repr(change)
     assert not _uuids_in(change)
+
+    # And the engine underneath is untouched: given the two stored observations
+    # explicitly, it still produces exactly the comparison that was previously
+    # published. Withholding is a publication decision, not a lobotomy.
+    versions = await _versions(barcode)
+    internal = project_label_change(current=versions[1], previous=versions[0])
+    assert internal.status is LabelChangeStatus.CHANGED
+    assert (internal.previous_version, internal.current_version) == (1, 2)
+    assert internal.changed_fields == ("ingredients",)
+    assert internal.formula.status is FormulaChangeStatus.INGREDIENT_SET_CHANGED
+    assert [row.as_payload() for row in internal.formula.only_on_current_label] == [
+        {"name": "Niacinamide", "occurrences": 1},
+    ]
+    assert [row.as_payload() for row in internal.formula.only_on_previous_label] == [
+        {"name": "Glycerin", "occurrences": 1},
+    ]
 
 
 #: Every key ``GET /api/v2/scan/verdict/{barcode}`` returned before Step 12A,
@@ -884,12 +894,18 @@ async def test_21_the_envelope_changes_nothing_else_on_the_page(
 
     # The pack really did print a different ingredient list, so the ingredient
     # line and the version identity are expected to move. Nothing else may.
+    # ``label_change`` no longer moves at all: it is withheld before and after,
+    # because neither observation has an openable source. ``label_version``
+    # still moves — a new version really was recorded — but its own
+    # ``changed_fields`` is withheld rather than asserting a difference.
     assert {key for key in before if before[key] != after[key]} == {
-        "ingredients", "label_version", "label_change",
+        "ingredients", "label_version",
     }
+    assert before["label_change"] == after["label_change"] == UNAVAILABLE_PROJECTION.as_payload()
+    assert before["label_version"]["changed_fields"] is None
+    assert after["label_version"]["changed_fields"] is None
 
-    assert before["label_change"]["status"] == "first_observed_version"
-    assert after["label_change"]["status"] == "changed"
+
 
 
 async def test_22_history_stays_product_scoped_in_reference_mode(
@@ -916,7 +932,9 @@ async def test_22_history_stays_product_scoped_in_reference_mode(
     payload = response.json()
     assert payload["physical_pack_context"] is False
     assert payload["label_change"]["scope"] == "confirmed_label_history"
-    assert payload["label_change"]["status"] == "changed"
+    # Product-scoped, and withheld: reference mode does not lower the evidence
+    # bar, and holding the pack would not raise it either.
+    assert payload["label_change"] == UNAVAILABLE_PROJECTION.as_payload()
 
 
 async def test_23_an_open_food_facts_refresh_never_becomes_a_pack_change(
@@ -976,15 +994,22 @@ async def test_24_a_to_b_to_a_compares_only_the_immediate_predecessor(
             {**base, "ingredients_text": ingredients},
         )
 
+    # Withheld to the customer, for want of an openable source on either side.
     change = (await app_client.get(
         f"/api/v2/scan/verdict/{barcode}", headers=device,
     )).json()["label_change"]
-
-    assert (change["previous_version"], change["current_version"]) == (2, 3)
-    assert change["formula"]["only_on_previous_label"] == [{"name": "Glycerin", "occurrences": 1}]
-    assert change["formula"]["only_on_current_label"] == []
+    assert change == UNAVAILABLE_PROJECTION.as_payload()
 
     versions = await _versions(barcode)
+    # The invariant this test exists for is about which predecessor is used,
+    # and it is the engine's to keep. Version 3 repeats version 1's content, so
+    # comparing against the wrong one would report no change at all.
+    internal = project_label_change(current=versions[2], previous=versions[1])
+    assert (internal.previous_version, internal.current_version) == (2, 3)
+    assert [row.as_payload() for row in internal.formula.only_on_previous_label] == [
+        {"name": "Glycerin", "occurrences": 1},
+    ]
+    assert internal.formula.only_on_current_label == ()
     assert [row.version_number for row in versions] == [1, 2, 3]
     assert versions[2].previous_snapshot_id == versions[1].id
     # Version 3 repeats version 1's content. The history keeps both, because
@@ -1076,10 +1101,12 @@ async def test_26_two_identical_confirmations_at_once_make_one_version(
     versions = await _versions(barcode)
     assert [row.version_number for row in versions] == [1]
 
+    # One version, and the envelope stays governed-unavailable throughout: what
+    # this test proves is the allocation, not the publication.
     change = (await app_client.get(
         f"/api/v2/scan/verdict/{barcode}", headers=device,
     )).json()["label_change"]
-    assert change["status"] == "first_observed_version"
+    assert change == UNAVAILABLE_PROJECTION.as_payload()
 
 
 async def test_27_two_different_confirmations_at_once_leave_one_unbroken_chain(
@@ -1116,10 +1143,11 @@ async def test_27_two_different_confirmations_at_once_leave_one_unbroken_chain(
     assert len({row.content_fingerprint for row in versions}) == 3
 
     response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
-    change = response.json()["label_change"]
     assert response.status_code == 200, response.text
-    assert change["status"] == "changed"
-    assert (change["previous_version"], change["current_version"]) == (2, 3)
+    assert response.json()["label_change"] == UNAVAILABLE_PROJECTION.as_payload()
+    # The chain the race produced is what matters, and the engine reads it.
+    internal = project_label_change(current=versions[2], previous=versions[1])
+    assert (internal.previous_version, internal.current_version) == (2, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -1322,7 +1350,14 @@ async def test_30_the_backfill_moves_every_stored_copy_of_a_stale_fingerprint(
     # backfill: a stale copy is what the integrity check refuses.
     response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
     assert response.status_code == 200, response.text
-    assert response.json()["label_change"]["status"] == "first_observed_version"
+    # Readable again: the integrity boundary no longer refuses this row, which
+    # is what the backfill was for. Publication is a separate question and is
+    # still withheld, so the page says so in the governed way.
+    assert response.json()["label_change"] == UNAVAILABLE_PROJECTION.as_payload()
+    snapshot_now = (await _versions(barcode))[0]
+    assert project_label_change(current=snapshot_now, previous=None).status is (
+        LabelChangeStatus.FIRST_OBSERVED_VERSION
+    )
 
 
 def _load_migration():
@@ -1424,12 +1459,18 @@ async def test_31_the_backfill_migrates_the_difference_between_two_labels(
     # And the point of all of it: the product page reads its own history back.
     response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
     assert response.status_code == 200, response.text
-    change = response.json()["label_change"]
-    assert change["status"] == "changed"
-    assert change["changed_fields"] == ["ingredients", "net_quantity"]
-    assert change["formula"]["status"] == "not_comparable"
-    assert change["formula"]["previous_parse_status"] == "ambiguous_boundary"
-    assert change["formula"]["current_parse_status"] == "parsed"
+    assert response.json()["label_change"] == UNAVAILABLE_PROJECTION.as_payload()
+
+    # The point of the backfill is that the engine can read this history back
+    # without the integrity check refusing it. Asked directly, it does — and
+    # the migrated difference is the one the new rule derives.
+    migrated = await _versions(barcode)
+    internal = project_label_change(current=migrated[1], previous=migrated[0])
+    assert internal.status is LabelChangeStatus.CHANGED
+    assert internal.changed_fields == ("ingredients", "net_quantity")
+    assert internal.formula.status is FormulaChangeStatus.NOT_COMPARABLE
+    assert internal.formula.previous_parse_status.value == "ambiguous_boundary"
+    assert internal.formula.current_parse_status.value == "parsed"
 
 
 async def test_32_the_backfill_never_invents_a_predecessor(
@@ -1577,7 +1618,7 @@ async def test_35_a_corrupt_row_silences_the_history_not_the_product(
     healthy = (await app_client.get(
         f"/api/v2/scan/verdict/{barcode}", headers=device,
     )).json()
-    assert healthy["label_change"]["status"] == "first_observed_version"
+    assert healthy["label_change"] == UNAVAILABLE_PROJECTION.as_payload()
     assert healthy["facts_provenance"] == "confirmed_label_snapshot"
 
     async with get_sessionmaker()() as session:
@@ -1699,4 +1740,291 @@ async def test_36_the_backfill_pairs_rows_only_by_the_link_they_carry(
     for barcode in (first_barcode, second_barcode):
         response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
         assert response.status_code == 200, response.text
-        assert response.json()["label_change"]["status"] == "changed"
+        assert response.json()["label_change"] == UNAVAILABLE_PROJECTION.as_payload()
+        pair = await _versions(barcode)
+        assert project_label_change(
+            current=pair[1], previous=pair[0]
+        ).status is LabelChangeStatus.CHANGED
+
+
+# ---------------------------------------------------------------------------
+# 38–48. The migration may only move rows that were valid under the rule it
+# is moving away from. Post-merge review: rewriting a fingerprint that matched
+# neither rule does not repair the row, it launders it — the row stops looking
+# broken while still being broken, and the integrity boundary that would have
+# refused it never fires again.
+# ---------------------------------------------------------------------------
+async def _snapshot_row(barcode: str) -> dict:
+    from sqlalchemy import text
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(
+            text("SELECT id, facts, content_fingerprint, changed_fields, version_number "
+                 "FROM product_label_snapshots WHERE barcode = :b ORDER BY version_number"),
+            {"b": barcode},
+        )).mappings().all()
+        return [dict(r) for r in row]
+
+
+async def _set_fingerprint(barcode: str, version: int, value: str) -> None:
+    from sqlalchemy import text
+    async with get_sessionmaker()() as session:
+        await session.execute(
+            text("UPDATE product_label_snapshots SET content_fingerprint = :v "
+                 "WHERE barcode = :b AND version_number = :n"),
+            {"v": value, "b": barcode, "n": version},
+        )
+        await session.commit()
+
+
+GARBAGE_FINGERPRINT = "d" * 64
+
+
+async def test_38_a_fingerprint_migrates_only_from_the_source_rule(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """Upgrade moves a row only when its stored value is the OLD rule's answer.
+
+    The old rule is the one upgrade is moving away from. A row whose stored
+    fingerprint is that value is a row a supported write path produced, and it
+    is ours to move. Anything else was already inconsistent with its own
+    immutable facts, and the target value is not a repair for it.
+    """
+    barcode = "8900000000272"
+    token, account_id = await registered_supabase_user()
+    facts = {"product_name": "Observed", "ingredients_text": "Water\nGlycerin", **NUTRITION}
+    await _confirm(app_client, device, token, account_id, barcode, facts)
+
+    migration = _load_migration()
+    stored = (await _snapshot_row(barcode))[0]
+    old_rule = migration._fingerprint(stored["facts"], boundary_aware=False)
+    new_rule = migration._fingerprint(stored["facts"], boundary_aware=True)
+    assert old_rule != new_rule  # this row is genuinely affected by the rule
+
+    await _set_fingerprint(barcode, 1, old_rule)
+    await _apply_revision(migration, forward=True)
+    assert (await _snapshot_row(barcode))[0]["content_fingerprint"] == new_rule
+
+
+async def test_39_a_downgrade_migrates_only_from_the_new_rule(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """The same gate, in the other direction: source is the boundary-aware rule."""
+    barcode = "8900000000289"
+    token, account_id = await registered_supabase_user()
+    facts = {"product_name": "Observed", "ingredients_text": "Water\nGlycerin", **NUTRITION}
+    await _confirm(app_client, device, token, account_id, barcode, facts)
+
+    migration = _load_migration()
+    stored = (await _snapshot_row(barcode))[0]
+    old_rule = migration._fingerprint(stored["facts"], boundary_aware=False)
+    new_rule = migration._fingerprint(stored["facts"], boundary_aware=True)
+
+    await _set_fingerprint(barcode, 1, new_rule)
+    await _apply_revision(migration, forward=False)
+    assert (await _snapshot_row(barcode))[0]["content_fingerprint"] == old_rule
+
+
+@pytest.mark.parametrize("forward", [True, False], ids=["upgrade", "downgrade"])
+async def test_40_a_corrupt_fingerprint_is_left_byte_for_byte_in_both_directions(
+    db_clean, off_clean, app_client, device, registered_supabase_user, forward,
+):
+    """A value that matches neither rule is not this migration's to touch.
+
+    Rewriting it to the target rule would make a row that no write path
+    produced look exactly like one that did.
+    """
+    barcode = "8900000000296"
+    token, account_id = await registered_supabase_user()
+    facts = {"product_name": "Observed", "ingredients_text": "Water\nGlycerin", **NUTRITION}
+    await _confirm(app_client, device, token, account_id, barcode, facts)
+
+    await _set_fingerprint(barcode, 1, GARBAGE_FINGERPRINT)
+    await _apply_revision(_load_migration(), forward=forward)
+    assert (await _snapshot_row(barcode))[0]["content_fingerprint"] == GARBAGE_FINGERPRINT
+
+
+async def test_41_an_inconsistent_row_is_not_cleaned_into_the_target_rule(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """Not even when the garbage happens to be a well-formed hash of something else.
+
+    The test deliberately uses another row's legitimate fingerprint: it is a
+    real sha256, the right length, and still not this row's own derivation.
+    """
+    barcode = "8900000000302"
+    other = "8900000000319"
+    token, account_id = await registered_supabase_user()
+    await _confirm(app_client, device, token, account_id, barcode,
+                   {"product_name": "A", "ingredients_text": "Water\nGlycerin", **NUTRITION})
+    await _confirm(app_client, device, token, account_id, other,
+                   {"product_name": "B", "ingredients_text": "Cocamidopropyl Betaine", **NUTRITION})
+
+    migration = _load_migration()
+    borrowed = (await _snapshot_row(other))[0]["content_fingerprint"]
+    own_facts = (await _snapshot_row(barcode))[0]["facts"]
+    await _set_fingerprint(barcode, 1, borrowed)
+
+    await _apply_revision(migration, forward=True)
+    after = (await _snapshot_row(barcode))[0]["content_fingerprint"]
+    assert after == borrowed
+    assert after != migration._fingerprint(own_facts, boundary_aware=True)
+
+
+async def test_42_a_predecessor_must_also_be_source_valid(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """A difference is about two rows, so both have to be ours to trust.
+
+    Facts from a predecessor whose own identity never matched the source rule
+    are not a basis for rewriting anybody's derived history.
+    """
+    barcode = "8900000000326"
+    token, account_id = await registered_supabase_user()
+    first = {"product_name": "Observed", "ingredients_text": "Water\nGlycerin",
+             "net_quantity": "100 g", **NUTRITION}
+    await _confirm(app_client, device, token, account_id, barcode, first)
+    await _confirm(app_client, device, token, account_id, barcode,
+                   {**first, "ingredients_text": "Water Glycerin", "net_quantity": "120 g"})
+
+    migration = _load_migration()
+    # Wind the pair back to the state a pre-Step-12A deployment left behind …
+    await _apply_revision(migration, forward=False)
+    assert (await _snapshot_row(barcode))[1]["changed_fields"] == ["net_quantity"]
+    # … then corrupt only the PREDECESSOR's identity.
+    await _set_fingerprint(barcode, 1, GARBAGE_FINGERPRINT)
+
+    await _apply_revision(migration, forward=True)
+    rows = await _snapshot_row(barcode)
+    assert rows[0]["content_fingerprint"] == GARBAGE_FINGERPRINT  # untouched
+    assert rows[1]["changed_fields"] == ["net_quantity"]  # not recomputed from it
+
+
+async def test_43_the_link_the_row_carries_is_the_only_predecessor_authority(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """Severing the link stops the difference migrating, whatever else is nearby.
+
+    Version 1 of the same barcode is still sitting there, source-valid and one
+    version lower. It is not a predecessor, because this row does not say so.
+    """
+    from sqlalchemy import text
+
+    barcode = "8900000000333"
+    token, account_id = await registered_supabase_user()
+    first = {"product_name": "Observed", "ingredients_text": "Water\nGlycerin",
+             "net_quantity": "100 g", **NUTRITION}
+    await _confirm(app_client, device, token, account_id, barcode, first)
+    await _confirm(app_client, device, token, account_id, barcode,
+                   {**first, "ingredients_text": "Water Glycerin", "net_quantity": "120 g"})
+
+    migration = _load_migration()
+    await _apply_revision(migration, forward=False)
+    async with get_sessionmaker()() as session:
+        await session.execute(text(
+            "UPDATE product_label_snapshots SET previous_snapshot_id = NULL "
+            "WHERE barcode = :b AND version_number = 2"), {"b": barcode})
+        await session.commit()
+
+    await _apply_revision(migration, forward=True)
+    assert (await _snapshot_row(barcode))[1]["changed_fields"] == ["net_quantity"]
+
+
+async def test_44_a_legitimate_row_still_migrates_its_linked_copies(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """The ordinary case still works, all the way out to the copies."""
+    from sqlalchemy import text
+
+    barcode = "8900000000340"
+    token, account_id = await registered_supabase_user()
+    await _confirm(app_client, device, token, account_id, barcode,
+                   {"product_name": "Observed", "ingredients_text": "Water\nGlycerin", **NUTRITION})
+    snapshot = (await _versions(barcode))[0]
+
+    remembered = await app_client.post(
+        f"/api/v2/scan/verdict/{barcode}/memory",
+        headers={**device, **auth(token)},
+        json={"decision": "BUY", "label_snapshot_id": str(snapshot.id),
+              "label_version": 1, "content_fingerprint": snapshot.content_fingerprint,
+              "idempotency_key": uuid.uuid4().hex},
+    )
+    assert remembered.status_code == 200, remembered.text
+
+    migration = _load_migration()
+    await _apply_revision(migration, forward=False)
+    await _apply_revision(migration, forward=True)
+
+    async with get_sessionmaker()() as session:
+        copies = (await session.execute(text(
+            "SELECT content_fingerprint FROM scan_decision_events"))).scalars().all()
+    assert copies == [(await _snapshot_row(barcode))[0]["content_fingerprint"]]
+
+
+async def test_45_a_copy_of_a_non_migrated_snapshot_is_left_alone(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """One migrated row must not drag unrelated evidence along with it.
+
+    The blanket "realign every copy that disagrees with its snapshot" this
+    replaces would repair the copy of a source-invalid row purely because some
+    other product in the same run was legitimately migrated — hiding exactly
+    the inconsistency the integrity boundary exists to surface.
+    """
+    from sqlalchemy import text
+
+    good, bad = "8900000000357", "8900000000364"
+    token, account_id = await registered_supabase_user()
+    for code in (good, bad):
+        await _confirm(app_client, device, token, account_id, code,
+                       {"product_name": code, "ingredients_text": "Water\nGlycerin", **NUTRITION})
+
+    migration = _load_migration()
+    await _apply_revision(migration, forward=False)  # both now source-valid for upgrade
+
+    bad_snapshot = (await _versions(bad))[0]
+    remembered = await app_client.post(
+        f"/api/v2/scan/verdict/{bad}/memory",
+        headers={**device, **auth(token)},
+        json={"decision": "BUY", "label_snapshot_id": str(bad_snapshot.id),
+              "label_version": 1, "content_fingerprint": bad_snapshot.content_fingerprint,
+              "idempotency_key": uuid.uuid4().hex},
+    )
+    assert remembered.status_code == 200, remembered.text
+    await _set_fingerprint(bad, 1, GARBAGE_FINGERPRINT)
+
+    await _apply_revision(migration, forward=True)
+
+    assert (await _snapshot_row(bad))[0]["content_fingerprint"] == GARBAGE_FINGERPRINT
+    async with get_sessionmaker()() as session:
+        copy = (await session.execute(text(
+            "SELECT content_fingerprint FROM scan_decision_events"))).scalar_one()
+    # Still the value it was written with — not realigned to anything.
+    assert copy == bad_snapshot.content_fingerprint
+    assert copy != GARBAGE_FINGERPRINT
+    # And the good product did migrate in the same invocation.
+    good_row = (await _snapshot_row(good))[0]
+    assert good_row["content_fingerprint"] == migration._fingerprint(
+        good_row["facts"], boundary_aware=True)
+
+
+async def test_46_upgrade_downgrade_upgrade_is_deterministic_for_valid_rows(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """Round-tripping a legitimate row lands on the same two values, repeatedly."""
+    barcode = "8900000000371"
+    token, account_id = await registered_supabase_user()
+    first = {"product_name": "Observed", "ingredients_text": "Water\nGlycerin",
+             "net_quantity": "100 g", **NUTRITION}
+    await _confirm(app_client, device, token, account_id, barcode, first)
+    await _confirm(app_client, device, token, account_id, barcode,
+                   {**first, "ingredients_text": "Water Glycerin", "net_quantity": "120 g"})
+
+    migration = _load_migration()
+    seen = []
+    for forward in (False, True, False, True):
+        await _apply_revision(migration, forward=forward)
+        rows = await _snapshot_row(barcode)
+        seen.append(tuple((r["content_fingerprint"], tuple(r["changed_fields"])) for r in rows))
+    assert seen[0] == seen[2]  # both downgrades agree
+    assert seen[1] == seen[3]  # both upgrades agree
+    assert seen[0] != seen[1]  # and the two rules really do differ here
