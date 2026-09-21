@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -355,6 +356,14 @@ async def read_product_verdict(
     """
     found = await service.lookup(session, barcode)
     snapshot = await service.latest_label_snapshot(session, barcode)
+    # A snapshot whose stored facts are not an object is not a readable
+    # observation. It is still a real version — decision memory and shelf links
+    # are pinned to its id and fingerprint, and hiding it would detach them —
+    # so the version is still reported and Step 12A still says its history is
+    # unavailable. But nothing is graded from facts that cannot be read: the
+    # verdict falls back to what can be, exactly as it does for a product
+    # nobody has photographed. No supported write path produces such a row.
+    readable = snapshot if isinstance(getattr(snapshot, "facts", None), Mapping) else None
     # What this server can prove about the packet in this caller's hand, as
     # opposed to what the caller asked to be treated as. The request can only
     # withhold authority; it cannot create it.
@@ -363,13 +372,13 @@ async def read_product_verdict(
     # Store B is selected at query time and never copied into ODbL Store A.
     # Its schema is adapted explicitly; it is not disguised as an OFF record
     # and missing physical-pack values are never filled from Store A.
-    source_half = snapshot.facts if snapshot is not None else found.get("open_food_facts")
+    source_half = readable.facts if readable is not None else found.get("open_food_facts")
     # One identity helper, shared with the alternative card, so the name a
     # shopper is offered and the name on the screen it opens cannot drift.
     name, brand = service.result_identity(barcode, source_half)
     product = (
-        from_scan.build_confirmed_label(barcode=barcode, facts=snapshot.facts)
-        if snapshot is not None
+        from_scan.build_confirmed_label(barcode=barcode, facts=readable.facts)
+        if readable is not None
         else from_scan.build(barcode=barcode, name=name, off_half=source_half)
     )
     # The customer path asks the evidence domain which rules have finished the
@@ -382,8 +391,8 @@ async def read_product_verdict(
     # Keep absent catalogue values absent instead of manufacturing a brand.
     payload["barcode"] = barcode
     payload["brand"] = brand
-    payload["confidence"] = service.confidence_block(snapshot.confidence) if snapshot else found["confidence"]
-    payload["facts_provenance"] = "confirmed_label_snapshot" if snapshot else "open_food_facts"
+    payload["confidence"] = service.confidence_block(readable.confidence) if readable else found["confidence"]
+    payload["facts_provenance"] = "confirmed_label_snapshot" if readable else "open_food_facts"
     payload["label_version"] = ({
         "id": str(snapshot.id), "version_number": snapshot.version_number,
         "content_fingerprint": snapshot.content_fingerprint,
@@ -430,7 +439,7 @@ async def read_product_verdict(
     # then says "in 100 g" rather than inventing a pack.
     quantity = (
         (source_half or {}).get("net_quantity")
-        if snapshot is not None
+        if readable is not None
         else (source_half or {}).get("quantity")
     )
     size = from_scan.pack_size_g(quantity)

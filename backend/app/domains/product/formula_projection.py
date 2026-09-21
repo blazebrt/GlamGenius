@@ -10,10 +10,11 @@ this module, and no other file under ``app/domains/product`` imports that
 domain — a boundary ``tests/test_step7b_formula_resolution.py`` holds up by
 name.  Two things pass through besides the snapshot projection itself:
 
-* :data:`LINE_BOUNDARIES`, because the label *version* authority has to keep
-  two observations apart whenever the difference between them could change
-  what the parser concludes, and the parser is the only authority on where a
-  boundary can be.
+* :data:`LINE_BOUNDARIES` and :func:`boundary_significance`, because the label
+  *version* authority has to keep two observations apart whenever the
+  difference between them could change what the parser concludes — and the
+  parser is the only authority both on where a boundary can be and on where
+  one would matter. Grouping is its grammar, not the product domain's.
 * :func:`formula_entries_from_label_snapshot`, the pure comparison keying two
   stored observations need — no session, no registry, no write.
 """
@@ -25,7 +26,11 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.formulas.parser import LINE_BOUNDARIES, ParseStatus
+from app.domains.formulas.parser import (
+    LINE_BOUNDARIES,
+    ParseStatus,
+    boundary_significance,
+)
 from app.domains.formulas.service import (
     FormulaEntries,
     FormulaEntry,
@@ -100,6 +105,7 @@ def formula_entries_from_label_snapshot(snapshot: LabelSnapshot) -> FormulaEntri
 
 __all__ = [
     "LINE_BOUNDARIES",
+    "boundary_significance",
     "FormulaEntries",
     "FormulaEntry",
     "FormulaProjectionProvenance",

@@ -23,6 +23,7 @@ publishes a canonical identity these two labels never mentioned.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -186,9 +187,38 @@ UNAVAILABLE_PROJECTION = LabelChangeProjection(
 )
 
 
+def _readable_facts(snapshot: LabelSnapshot, *, role: str) -> dict[str, Any]:
+    """The stored facts, or a governed refusal if they are not facts at all.
+
+    ``facts`` is JSONB. The column can hold an array, a bare string or a number,
+    and a row in any of those shapes was not written by a supported path. The
+    canonicaliser is entitled to assume an object — weakening it to accept
+    anything would make every caller's contract vaguer to cover one corrupt
+    row — so the shape is checked here, at the boundary that already exists to
+    refuse impossible history.
+
+    This is the difference between a product page that goes quiet about its
+    label history and one that returns a 500. The route can only fail soft over
+    a failure it can recognise, and an ``AttributeError`` from three frames
+    down is not one.
+    """
+    if not isinstance(snapshot.facts, Mapping):
+        raise LabelHistoryInvariantError(f"{role}_label_facts_invalid")
+    return snapshot.facts
+
+
 def _assert_snapshot_integrity(snapshot: LabelSnapshot, *, role: str) -> None:
     """The stored version identity must still describe the stored content."""
-    if label_content_fingerprint(snapshot.facts) != snapshot.content_fingerprint:
+    facts = _readable_facts(snapshot, role=role)
+    try:
+        computed = label_content_fingerprint(facts)
+    except (AttributeError, TypeError, ValueError) as unusable:
+        # An object at the top level whose insides are still not facts — a
+        # nested member with mixed key types, say. Same conclusion, same
+        # governed refusal. Anything outside these is a bug in the
+        # canonicaliser and must not be disguised as corrupt data.
+        raise LabelHistoryInvariantError(f"{role}_label_facts_invalid") from unusable
+    if computed != snapshot.content_fingerprint:
         raise LabelHistoryInvariantError(f"{role}_label_fingerprint_mismatch")
     if snapshot.version_number < 1:
         raise LabelHistoryInvariantError(f"{role}_label_version_invalid")

@@ -27,7 +27,10 @@ from app.domains.product.change_projection import (
     project_label_change,
 )
 from app.domains.product.confidence import ProductConfidence
-from app.domains.product.formula_projection import formula_entries_from_label_snapshot
+from app.domains.product.formula_projection import (
+    boundary_significance,
+    formula_entries_from_label_snapshot,
+)
 from app.domains.product.models import LabelSnapshot
 from app.domains.product.service import (
     canonical_label_facts,
@@ -260,6 +263,157 @@ def test_4b_boundary_presentation_folds_but_boundary_presence_does_not(left, rig
         assert parsed_alike
 
 
+def _assert_same_version(left: str, right: str) -> None:
+    assert label_content_fingerprint({"ingredients_text": left}) == (
+        label_content_fingerprint({"ingredients_text": right})
+    )
+    assert label_changed_fields({"ingredients_text": left}, {"ingredients_text": right}) == []
+
+
+def _assert_different_versions(left: str, right: str) -> None:
+    assert label_content_fingerprint({"ingredients_text": left}) != (
+        label_content_fingerprint({"ingredients_text": right})
+    )
+    assert label_changed_fields(
+        {"ingredients_text": left}, {"ingredients_text": right}
+    ) == ["ingredients"]
+
+
+@pytest.mark.parametrize(
+    ("wrapped", "spaced"),
+    [
+        # Grouping wins. Step 7B keeps a break inside balanced grouping within
+        # one entry, and Step 7A collapses it when producing that entry's
+        # canonical key, so both packs printed the same formula.
+        ("Parfum (A\nB), Water", "Parfum (A B), Water"),
+        # Nested grouping is still grouping.
+        (
+            "Aqua, Parfum (Linalool (A\nB), Citral), Water",
+            "Aqua, Parfum (Linalool (A B), Citral), Water",
+        ),
+        # Square and curly brackets are grouping pairs too.
+        ("Parfum [A\nB], Water", "Parfum [A B], Water"),
+        ("Parfum {A\nB}, Water", "Parfum {A B}, Water"),
+        # Compatibility forms. Step 7B reads structure through an NFKC view, so
+        # fullwidth brackets group exactly as ASCII ones do — the case a
+        # grouping rule written locally in the product domain would miss.
+        ("Parfum（A\nB）, Water", "Parfum（A B）, Water"),
+        ("Parfum［A\nB］, Water", "Parfum［A B］, Water"),
+        # A break at either end of a protected region, not only in the middle.
+        ("Parfum (\nA B), Water", "Parfum ( A B), Water"),
+        ("Parfum (A B\n), Water", "Parfum (A B ), Water"),
+    ],
+)
+def test_4c_a_break_protected_by_grouping_is_printing_not_a_new_version(wrapped, spaced):
+    """A line wrap inside a bracket must not manufacture a label version.
+
+    The version identity is what decision memory and shelf links are pinned
+    to. Splitting it on a difference the formula engine cannot see would
+    detach a remembered decision from the pack it was made about, over a wrap
+    the printer chose.
+    """
+    _assert_same_version(wrapped, spaced)
+
+    # Same reading, same entries, same canonical identities — which is why
+    # they are one version and not two.
+    outcomes = {
+        tuple(
+            (row.position, row.normalized_name)
+            for row in formula_entries_from_label_snapshot(
+                _snapshot({"ingredients_text": text})
+            ).entries
+        )
+        for text in (wrapped, spaced)
+    }
+    assert len(outcomes) == 1
+
+
+def test_4d_the_distinction_is_exactly_as_wide_as_the_grammar():
+    """One rule, both directions, in one place.
+
+    A top-level break changes what the parser concludes and is therefore a
+    different label. The same characters inside balanced grouping do not, and
+    are therefore the same label. Anything wider manufactures versions;
+    anything narrower loses the reading attached to a pack.
+    """
+    _assert_different_versions("Water\nGlycerin", "Water Glycerin")
+    _assert_same_version("Parfum (A\nB), Water", "Parfum (A B), Water")
+
+    # And the parser agrees, which is the whole justification.
+    assert formula_entries_from_label_snapshot(
+        _snapshot({"ingredients_text": "Water\nGlycerin"})
+    ).status.value == "ambiguous_boundary"
+    assert formula_entries_from_label_snapshot(
+        _snapshot({"ingredients_text": "Water Glycerin"})
+    ).status.value == "parsed"
+    for grouped in ("Parfum (A\nB), Water", "Parfum (A B), Water"):
+        entries = formula_entries_from_label_snapshot(
+            _snapshot({"ingredients_text": grouped})
+        )
+        assert entries.status.value == "parsed"
+        assert [row.normalized_name for row in entries.entries] == ["parfum (a b)", "water"]
+
+
+def test_4e_grouping_the_parser_cannot_balance_keeps_every_boundary():
+    """When the grammar will not speak, the authority keeps the difference.
+
+    An unbalanced bracket makes the formula MALFORMED, so there is no grouping
+    to protect anything and no position the parser has judged. Folding the
+    break away on a guess would be the one error that cannot be undone: a lost
+    version, not a spare one.
+    """
+    assert boundary_significance("Water)G\nH") is None
+    _assert_different_versions("Water)G\nH", "Water)G H")
+
+
+def test_4f_canonicalising_never_changes_what_the_parser_concludes():
+    """The canonical form is a faithful stand-in for the printed one.
+
+    This is the property the whole rule rests on: folding presentation may not
+    add, remove or re-read a single entry. Checked over the shapes that make
+    boundaries interesting rather than over one example.
+    """
+    for text in (
+        "Water,Glycerin", "  Water ,  Glycerin  ", "Water\nGlycerin",
+        "\nWater,Glycerin", "Water,Glycerin\n", "Parfum (A\nB), Water",
+        "Parfum（A\nB）, Water", "A(B(C\nD)E), F", "Water)G\nH",
+        "N,N-Dimethylacetamide, Water", "CI 77491,CI 77492",
+        "Aqua\t(Water\r\nDeionised) , Glycerin",
+    ):
+        canonical = canonical_label_facts({"ingredients_text": text})["ingredients_text"]
+        before = formula_entries_from_label_snapshot(_snapshot({"ingredients_text": text}))
+        after = formula_entries_from_label_snapshot(
+            _snapshot({"ingredients_text": canonical})
+        )
+        assert before.status is after.status, text
+        assert [row.normalized_name for row in before.entries] == [
+            row.normalized_name for row in after.entries
+        ], text
+
+
+def test_4g_the_product_domain_holds_no_grammar_of_its_own():
+    """Structure is asked for, never re-derived on this side of the door.
+
+    The grouping and Unicode rules live in one place. A second copy here would
+    answer the fullwidth-bracket case differently on the day somebody forgot
+    it, and the label version identity would quietly move underneath every
+    remembered decision.
+    """
+    source = (BACKEND_ROOT / "app" / "domains" / "product" / "service.py").read_text(
+        encoding="utf-8"
+    )
+    for grammar in (
+        "_GROUPING_PAIRS", "_CLOSERS", "structural_view", "unicodedata", "NFKC",
+    ):
+        assert grammar not in source, grammar
+    assert "boundary_significance" in source  # it asks, through the one door
+
+    door = (
+        BACKEND_ROOT / "app" / "domains" / "product" / "formula_projection.py"
+    ).read_text(encoding="utf-8")
+    assert "boundary_significance" in door
+
+
 # ---------------------------------------------------------------------------
 # 5–13. The formula change classification
 # ---------------------------------------------------------------------------
@@ -460,6 +614,7 @@ def test_14_the_projection_takes_two_snapshots_and_no_way_to_reach_anything():
     assert imported == {
         "__future__",
         "collections",
+        "collections.abc",
         "dataclasses",
         "enum",
         "typing",
@@ -1017,21 +1172,43 @@ def test_29_the_boundary_rule_is_one_rule_in_three_places_that_agree():
         == set(FORMULA_SIGNIFICANT_FACT_FIELDS)
     )
 
-    # And the frozen implementation still agrees fingerprint for fingerprint.
+    # And the frozen implementation still agrees, fingerprint for fingerprint,
+    # across the shapes that make boundaries interesting — including the
+    # grouping and compatibility forms the structural grammar has to get right.
+    texts = (
+        "Water,  Glycerin", "Water\nGlycerin", "Water\r\n Glycerin",
+        "\nWater,Glycerin\n", "", "Parfum (A\nB), Water", "Parfum (A B), Water",
+        "Parfum（A\nB）, Water", "A(B(C\nD)E), F", "Water)G\nH",
+        "Aqua\t(Water\r\nDeionised) , Glycerin", "N,N-Dimethylacetamide\nWater",
+    )
+    for text in texts:
+        facts = {"product_name": " Oats  ", "ingredients_text": text}
+        assert migration._fingerprint(facts, boundary_aware=True) == (
+            label_content_fingerprint(facts)
+        ), text
+        assert migration._normalise(
+            text, preserve_boundaries=True,
+        ) == canonical_label_facts(facts).get("ingredients_text"), text
+        assert migration._boundary_significance(text) == boundary_significance(text), text
+
     for facts in (
-        {"product_name": " Oats  ", "ingredients_text": "Water,  Glycerin"},
-        {"ingredients_text": "Water\nGlycerin"},
-        {"ingredients_text": "Water\r\n Glycerin", "brand": "Acme\n Labs"},
-        {"ingredients_text": "\nWater,Glycerin\n"},
         {"nutrition_per_100g": {"sugars_g": "1"}, "nutrition_basis": "per_100g"},
         {"ingredients_text": "", "product_name": "Only a name"},
     ):
         assert migration._fingerprint(facts, boundary_aware=True) == (
             label_content_fingerprint(facts)
         ), facts
-        assert migration._normalise(
-            facts.get("ingredients_text"), preserve_boundaries=True,
-        ) == canonical_label_facts(facts).get("ingredients_text"), facts
+
+    # The difference between two labels is derived the same way on both sides
+    # too. This is the value the migration rewrites, so a drift here would put
+    # every migrated row at odds with the projection that reads it back.
+    for left in texts:
+        for right in texts:
+            previous = {"ingredients_text": left, "net_quantity": "100 g"}
+            current = {"ingredients_text": right, "net_quantity": "120 g"}
+            assert migration._changed_fields(
+                previous, current, boundary_aware=True
+            ) == label_changed_fields(previous, current), (left, right)
 
 
 async def test_30_the_backfill_moves_every_stored_copy_of_a_stale_fingerprint(
@@ -1049,7 +1226,6 @@ async def test_30_the_backfill_moves_every_stored_copy_of_a_stale_fingerprint(
     categories and the food-label schema has no category field — and what is
     under test here is the backfill's SQL, not the shelf's eligibility rule.
     """
-    import importlib.util
 
     from app.bootstrap import seed_inventory_categories
     from app.domains.inventory.models import InventoryItem, InventoryProductLink
@@ -1098,13 +1274,7 @@ async def test_30_the_backfill_moves_every_stored_copy_of_a_stale_fingerprint(
         ))
         await session.commit()
 
-    path = (
-        BACKEND_ROOT / "migrations" / "versions"
-        / "j8k9l0m1n2_step12a_boundary_aware_label_identity.py"
-    )
-    spec = importlib.util.spec_from_file_location("step12a_migration_rows", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
+    migration = _load_migration()
 
     stale = migration._fingerprint(snapshot.facts, boundary_aware=False)
     assert stale != snapshot.content_fingerprint  # the row really is affected
@@ -1118,25 +1288,8 @@ async def test_30_the_backfill_moves_every_stored_copy_of_a_stale_fingerprint(
             ))
             return set(rows.scalars().all())
 
-    def _run_revision(sync_connection, *, forward: bool) -> None:
-        """Run the revision's own ``upgrade`` / ``downgrade``, not its helper.
-
-        Going through Alembic's operations context means the wiring is under
-        test too: a revision whose ``upgrade`` quietly did nothing, or applied
-        the rule it was meant to undo, fails here rather than on release day.
-        """
-        from alembic.migration import MigrationContext
-        from alembic.operations import Operations
-
-        context = MigrationContext.configure(sync_connection)
-        with Operations.context(context):
-            migration.upgrade() if forward else migration.downgrade()
-
     async def _run_backfill(*, forward: bool) -> None:
-        async with get_sessionmaker()() as session:
-            connection = await session.connection()
-            await connection.run_sync(lambda sync: _run_revision(sync, forward=forward))
-            await session.commit()
+        await _apply_revision(migration, forward=forward)
 
     assert len(await _fingerprints()) == 1  # all three tables agree to begin with
 
@@ -1153,3 +1306,317 @@ async def test_30_the_backfill_moves_every_stored_copy_of_a_stale_fingerprint(
     response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
     assert response.status_code == 200, response.text
     assert response.json()["label_change"]["status"] == "first_observed_version"
+
+
+def _load_migration():
+    """The Step 12A revision, loaded as a module so its own body can be run."""
+    import importlib.util
+
+    path = (
+        BACKEND_ROOT / "migrations" / "versions"
+        / "j8k9l0m1n2_step12a_boundary_aware_label_identity.py"
+    )
+    spec = importlib.util.spec_from_file_location("step12a_revision", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+def _run_revision(sync_connection, migration, *, forward: bool) -> None:
+    """Run the revision's own ``upgrade`` / ``downgrade``, not its helper.
+
+    Going through Alembic's operations context means the wiring is under test
+    too: a revision whose ``upgrade`` quietly did nothing, or applied the rule
+    it was meant to undo, fails here rather than on release day.
+    """
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    context = MigrationContext.configure(sync_connection)
+    with Operations.context(context):
+        migration.upgrade() if forward else migration.downgrade()
+
+
+async def _apply_revision(migration, *, forward: bool) -> None:
+    async with get_sessionmaker()() as session:
+        connection = await session.connection()
+        await connection.run_sync(
+            lambda sync: _run_revision(sync, migration, forward=forward)
+        )
+        await session.commit()
+
+
+async def test_31_the_backfill_migrates_the_difference_between_two_labels(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """History written before Step 12A has to arrive as history it still owns.
+
+    ``changed_fields`` is a derived reading of two labels, and Step 12A changed
+    the canonicalisation it is derived from. A pack whose ingredient line wrapped
+    differently was legitimately recorded as "only the quantity changed", because
+    under the old rule the newline *was* a space. Leave that value behind and the
+    projection recomputes a different one on the very next request and refuses the
+    whole history as corrupt — for data nothing was ever wrong with.
+
+    So the migration moves it, in both directions, using the predecessor each row
+    actually names.
+    """
+    from sqlalchemy import text
+
+    barcode = "8900000000210"
+    token, account_id = await registered_supabase_user()
+
+    # The exact pre-Step-12A history: a wrapped ingredient line that the old
+    # rule could not tell apart, and a quantity that genuinely changed.
+    first = {"product_name": "Observed", "ingredients_text": "Water\nGlycerin",
+             "net_quantity": "100 g", **NUTRITION}
+    second = {**first, "ingredients_text": "Water Glycerin", "net_quantity": "120 g"}
+    await _confirm(app_client, device, token, account_id, barcode, first)
+    await _confirm(app_client, device, token, account_id, barcode, second)
+
+    versions = await _versions(barcode)
+    assert [row.version_number for row in versions] == [1, 2]
+    assert versions[1].previous_snapshot_id == versions[0].id
+
+    migration = _load_migration()
+
+    async def _second_version_changed_fields() -> list[str]:
+        async with get_sessionmaker()() as session:
+            return (await session.execute(
+                text(
+                    "SELECT changed_fields FROM product_label_snapshots "
+                    "WHERE barcode = :barcode AND version_number = 2"
+                ),
+                {"barcode": barcode},
+            )).scalar_one()
+
+    # Today's write path already stores the new reading, so wind the pair back
+    # to the state a pre-Step-12A deployment left behind.
+    await _apply_revision(migration, forward=False)
+    assert await _second_version_changed_fields() == ["net_quantity"]
+
+    await _apply_revision(migration, forward=True)
+    assert await _second_version_changed_fields() == ["ingredients", "net_quantity"]
+
+    await _apply_revision(migration, forward=False)
+    assert await _second_version_changed_fields() == ["net_quantity"]
+
+    await _apply_revision(migration, forward=True)
+    assert await _second_version_changed_fields() == ["ingredients", "net_quantity"]
+
+    # And the point of all of it: the product page reads its own history back.
+    response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
+    assert response.status_code == 200, response.text
+    change = response.json()["label_change"]
+    assert change["status"] == "changed"
+    assert change["changed_fields"] == ["ingredients", "net_quantity"]
+    assert change["formula"]["status"] == "not_comparable"
+    assert change["formula"]["previous_parse_status"] == "ambiguous_boundary"
+    assert change["formula"]["current_parse_status"] == "parsed"
+
+
+async def test_32_the_backfill_never_invents_a_predecessor(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """Structurally broken history is left broken, not tidied into a story.
+
+    Two rows that no longer name each other cannot have their difference
+    recomputed from anything. Pairing them by barcode or by version number
+    would produce a clean-looking history that no observation supports, and the
+    corruption would never be seen again.
+    """
+    from sqlalchemy import text
+
+    barcode = "8900000000227"
+    token, account_id = await registered_supabase_user()
+    first = {"product_name": "Observed", "ingredients_text": "Water\nGlycerin",
+             "net_quantity": "100 g", **NUTRITION}
+    await _confirm(app_client, device, token, account_id, barcode, first)
+    await _confirm(
+        app_client, device, token, account_id, barcode,
+        {**first, "ingredients_text": "Water Glycerin", "net_quantity": "120 g"},
+    )
+
+    async with get_sessionmaker()() as session:
+        await session.execute(
+            text(
+                "UPDATE product_label_snapshots SET previous_snapshot_id = NULL, "
+                "changed_fields = CAST('[\"net_quantity\"]' AS jsonb) "
+                "WHERE barcode = :barcode AND version_number = 2"
+            ),
+            {"barcode": barcode},
+        )
+        await session.commit()
+
+    await _apply_revision(_load_migration(), forward=True)
+
+    async with get_sessionmaker()() as session:
+        stored = (await session.execute(
+            text(
+                "SELECT changed_fields FROM product_label_snapshots "
+                "WHERE barcode = :barcode AND version_number = 2"
+            ),
+            {"barcode": barcode},
+        )).scalar_one()
+    assert stored == ["net_quantity"]  # untouched, not rewritten
+
+    # The projection refuses it in the open rather than the migration hiding it.
+    response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
+    assert response.status_code == 200, response.text
+    assert response.json()["label_change"]["status"] == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        pytest.param(["not", "an", "object"], id="json-array"),
+        pytest.param("broken", id="json-string"),
+        pytest.param(42, id="json-number"),
+        pytest.param(None, id="json-null"),
+        pytest.param({"nutrition_per_100g": {1: "a", "b": "c"}}, id="unsortable-member"),
+    ],
+)
+def test_33_facts_that_are_not_facts_are_refused_in_the_governed_way(broken):
+    """A corrupt JSONB row must not arrive as an ``AttributeError``.
+
+    The route can only fail soft over a failure it recognises. An ordinary
+    Python exception three frames down is not one, so a single malformed row
+    would take the whole product page to a 500 — the exact opposite of the
+    contract this layer was given.
+    """
+    current = _snapshot({"ingredients_text": "Water"})
+    current.facts = broken
+
+    with pytest.raises(LabelHistoryInvariantError) as raised:
+        project_label_change(current=current, previous=None)
+    assert raised.value.reason == "current_label_facts_invalid"
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        pytest.param(["not", "an", "object"], id="json-array"),
+        pytest.param("broken", id="json-string"),
+    ],
+)
+def test_34_a_predecessor_that_is_not_facts_is_refused_the_same_way(broken):
+    """The predecessor is read too, and is corrupt on the same terms."""
+    old, new = _pair("Water", "Water,Glycerin")
+    old.facts = broken
+
+    with pytest.raises(LabelHistoryInvariantError) as raised:
+        project_label_change(current=new, previous=old)
+    assert raised.value.reason == "previous_label_facts_invalid"
+
+
+@pytest.mark.parametrize(
+    ("broken", "sql"),
+    [
+        pytest.param("array", "CAST('[\"not\",\"an\",\"object\"]' AS jsonb)", id="json-array"),
+        pytest.param("string", "CAST('\"broken\"' AS jsonb)", id="json-string"),
+    ],
+)
+async def test_35_a_corrupt_row_silences_the_history_not_the_product(
+    db_clean, off_clean, app_client, device, registered_supabase_user, broken, sql,
+):
+    """The whole point of the fail-soft envelope, against a really corrupt row.
+
+    Corrupted in the database rather than in memory, because that is where this
+    can actually happen and because an in-memory object cannot prove the route
+    survives the trip.
+    """
+    from datetime import UTC, datetime
+
+    from app.domains.off.models import OffProduct
+    from app.domains.off.store import get_off_sessionmaker
+    from sqlalchemy import text
+
+    barcode = f"890000000023{'4' if broken == 'array' else '5'}"
+    control = f"890000000024{'4' if broken == 'array' else '5'}"
+    token, account_id = await registered_supabase_user()
+
+    # A catalogue record for the corrupted barcode, so that once the confirmed
+    # facts become unreadable there is still something the page can honestly
+    # grade — and an identical one for a barcode nobody has photographed, which
+    # is the control the corrupted page has to match. Store A is read at query
+    # time and never written into Store B.
+    catalogue = {
+        "product_name": "Catalogue biscuit",
+        "brands": "Example",
+        "ingredients_text": "wheat flour, sugar",
+        "nutriments": {"energy-kcal_100g": 480.0, "sugars_100g": 22.5, "salt_100g": 0.7},
+    }
+    async with get_off_sessionmaker()() as off_session:
+        for code in (barcode, control):
+            off_session.add(
+                OffProduct(barcode=code, fetched_at=datetime.now(UTC), **catalogue)
+            )
+        await off_session.commit()
+
+    await _confirm(
+        app_client, device, token, account_id, barcode,
+        {"product_name": "Observed food", "ingredients_text": "Water,Glycerin", **NUTRITION},
+    )
+    healthy = (await app_client.get(
+        f"/api/v2/scan/verdict/{barcode}", headers=device,
+    )).json()
+    assert healthy["label_change"]["status"] == "first_observed_version"
+    assert healthy["facts_provenance"] == "confirmed_label_snapshot"
+
+    async with get_sessionmaker()() as session:
+        await session.execute(
+            text(
+                f"UPDATE product_label_snapshots SET facts = {sql} "  # noqa: S608 - fixed literals
+                "WHERE barcode = :barcode"
+            ),
+            {"barcode": barcode},
+        )
+        await session.commit()
+
+    response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert set(payload) == VERDICT_KEYS
+
+    # The precise claim, rather than a hand-picked field or two: the page is
+    # exactly the page this product gets when it has no readable confirmed
+    # observation at all. Step 12A silenced its own envelope and nothing else.
+    reference = (await app_client.get(
+        f"/api/v2/scan/verdict/{control}", headers=device,
+    )).json()
+    assert reference["label_version"] is None
+    assert reference["label_change"] is None
+    # ``physical_pack_context`` is about this device's own scan history, not
+    # about the snapshot's contents: this device really did photograph this
+    # pack and never photographed the control's. That the corrupted row does
+    # not cost the caller that authority is itself worth stating.
+    assert payload["physical_pack_context"] is True
+    assert reference["physical_pack_context"] is False
+
+    moved = {
+        key for key in VERDICT_KEYS
+        if key not in ("barcode", "physical_pack_context", "label_version", "label_change")
+        and payload[key] != reference[key]
+    }
+    assert moved == set(), moved
+
+    # And that page really does carry a verdict, graded from what could still
+    # be read, rather than claiming a confirmed pack it cannot open.
+    assert payload["band"] is not None
+    assert payload["nutrition"]["total_sugar_g"] == 22.5
+    assert payload["components"]
+    assert payload["facts_provenance"] == "open_food_facts"
+    # The version still exists and is still what decision memory and shelf
+    # links are pinned to, so it is still reported.
+    assert payload["label_version"] is not None
+    assert payload["label_version"]["version_number"] == 1
+    assert payload["label_version"]["id"] == healthy["label_version"]["id"]
+    # And the history says it cannot speak, rather than claiming there is none.
+    assert payload["label_change"] == UNAVAILABLE_PROJECTION.as_payload()
+    assert payload["label_change"]["status"] == "unavailable"
+    assert payload["label_change"] is not None
+    # Nothing the log was told reaches the customer.
+    for reason in ("facts_invalid", "label_facts", "invariant", "mismatch"):
+        assert reason not in response.text
+    assert not _uuids_in(payload["label_change"])

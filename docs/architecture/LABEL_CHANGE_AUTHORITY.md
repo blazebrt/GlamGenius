@@ -48,44 +48,111 @@ single entry called "Water Glycerin".
 The version authority previously folded those together. That meant a pack whose
 list the parser could not read could be stored as "no change" against a pack
 whose list it could, and the earlier reading would stay attached to the later
-observation. So the rule is now:
+observation. So the rule is:
 
-> **The version authority preserves every distinction that can change what the
-> formula parser concludes, and folds away the rest.**
+> **The version authority preserves exactly those boundary distinctions the
+> Step 7B structural grammar marks as significant, and folds away the rest.**
+
+"Significant" is the grammar's word, not ours. Step 7B refuses a line boundary
+only **outside balanced grouping**; inside grouping, *grouping still wins* — the
+run is kept inside one entry, and Step 7A collapses it when producing that
+entry's canonical key. So:
+
+| Pair | Same version? | Why |
+| --- | --- | --- |
+| `Water\nGlycerin` vs `Water Glycerin` | **No** | Top-level break. One reads as `ambiguous_boundary` with no entries, the other as one entry. |
+| `Parfum (A\nB), Water` vs `Parfum (A B), Water` | **Yes** | Protected by grouping. Same entries, same canonical identities. |
+| `Parfum（A\nB）, Water` vs `Parfum（A B）, Water` | **Yes** | Fullwidth brackets group too — Step 7B reads structure through an NFKC view. |
+| `Water\r\nGlycerin` vs `Water\nGlycerin` | **Yes** | Which boundary character was printed is presentation. |
+| `Water)G\nH` vs `Water)G H` | **No** | Grouping never balances, so the grammar declines to speak and every boundary is kept. |
+
+Treating a protected wrap as a new version would have been its own defect: the
+label version identity is what decision memory (`ScanDecisionEvent`) and shelf
+links (`InventoryProductLink`) are pinned to, so splitting it over a line wrap
+detaches a remembered decision from the pack it was made about.
 
 Concretely, in `app/domains/product/service.py`:
 
 - Fields the parser reads (`FORMULA_SIGNIFICANT_FACT_FIELDS`, today just
-  `ingredients_text`) collapse whitespace **except** that any run containing a
-  boundary character becomes a single `\n`. Which boundary was printed is
-  presentation; *that* one was printed is content. A break at either end counts,
-  because Step 7B treats a leading or trailing break exactly as it treats one in
-  the middle.
+  `ingredients_text`) collapse whitespace **except** that a run carrying a
+  boundary at a position the grammar marks significant becomes a single `\n`.
+  A break at either end counts, because Step 7B treats a leading or trailing
+  break exactly as it treats one in the middle.
 - Every other field collapses whitespace as before.
 
-The boundary set is not restated. `LINE_BOUNDARIES` is exported from the parser
-itself, because a second copy would be a second answer to "where can a boundary
-be" and the two would drift.
+Neither the boundary set nor the grammar is restated on the product side.
+`LINE_BOUNDARIES` and `boundary_significance()` come from the parser through
+`formula_projection.py`, the product domain's one door into formulas. A second
+copy of the grouping and Unicode rules would answer the fullwidth-bracket case
+differently on the day somebody forgot it, and the version identity would move
+underneath every remembered decision. `test_4g` fails if the product domain
+grows a grammar of its own.
 
-This rule is strictly **finer** than the one it replaces: two labels that are
-the same under the new rule were always the same under the old one. It can
-therefore only split identities, never merge them — which is what makes the
-backfill safe.
+### The properties this rests on
+
+Measured, not asserted (see the PR for the exact runs):
+
+- **Faithfulness** — canonicalising never changes what the parser concludes.
+  120,000 samples, 0 violations. This is why the canonical form is a legitimate
+  stand-in for the printed one.
+- **Refinement** — two labels equal under the new rule were equal under the old
+  one. 108,432 whitespace-variant pairs, 0 violations; strictly finer in 89,668.
+  It can only split identities, never merge them, which is what makes the
+  backfill safe.
+- **Governed distinction** — every one of those 89,668 distinctions rests on a
+  boundary the grammar refuses at that position, or on the grammar declining to
+  speak for the text at all. 0 ungoverned.
+- **Protected folds merge** — 40,000 generated labels with a boundary inside
+  balanced, nested and compatibility-form grouping: all 40,000 fold to one
+  version.
 
 ## Backward compatibility
 
 `migrations/versions/j8k9l0m1n2_step12a_boundary_aware_label_identity.py`
-recomputes `product_label_snapshots.content_fingerprint` from the immutable
-`facts`, then realigns the copies in `scan_decision_events` and
-`inventory_product_links` **by `label_snapshot_id`**, never by fingerprint
-value. It changes no schema. Only rows whose `ingredients_text` contains a
-boundary character move at all.
+changes no schema. It re-derives the two values that depend on the rule:
 
-The migration carries a frozen copy of the rule rather than importing it: a
-migration has to keep doing what it did on the day it ran. A test
-(`test_29_the_boundary_rule_is_one_rule_in_three_places_that_agree`) asserts the
-copy still agrees with the application, so the duplication is visible rather
-than silent.
+- **`content_fingerprint`** — a pure function of one row's own immutable facts.
+  There is exactly one correct value and no pairing decision, so it is
+  recomputed unconditionally, and the copies in `scan_decision_events` and
+  `inventory_product_links` are realigned **by `label_snapshot_id`**, never by
+  fingerprint value.
+- **`changed_fields`** — a statement about *two* rows, and therefore equally
+  stale after the rule moves. A pack whose ingredient line wrapped differently
+  was legitimately recorded as "only the quantity changed", because under the
+  old rule the newline *was* a space:
+
+  ```text
+  v1  ingredients_text = "Water\nGlycerin"   net_quantity = "100 g"
+  v2  ingredients_text = "Water Glycerin"    net_quantity = "120 g"
+
+  stored (old rule)  ["net_quantity"]
+  new rule           ["ingredients", "net_quantity"]
+  ```
+
+  Left behind, the projection would recompute the second value on the very next
+  request and refuse the whole history as corrupt — for data nothing was ever
+  wrong with. So the migration moves it, in both directions.
+
+The predecessor is always the row's explicit `previous_snapshot_id`. Never the
+previous version number, never the same barcode, never a matching fingerprint:
+pairing rows by anything other than the link they carry would invent a history.
+
+A row's `changed_fields` is migrated **only** where the stored value is exactly
+what the source rule derives from that row and its recorded predecessor. A row
+that already disagreed with its own history was not produced by any supported
+write path, and rewriting it would launder corruption into a clean-looking
+history nobody can see any more. Those rows are left as found, for the Step 12A
+integrity check to refuse in the open — as are version 1 rows (whose value does
+not depend on the rule) and rows whose predecessor is missing or unreadable.
+
+The migration carries a frozen copy of the rule rather than importing it — a
+migration has to keep doing what it did on the day it ran — and that copy now
+includes the part of the Step 7B structural grammar the rule depends on, so it
+folds a protected wrap exactly as the application does.
+`test_29_the_boundary_rule_is_one_rule_in_three_places_that_agree` asserts the
+copy still agrees with the application across grouping, nesting and
+compatibility forms, and across the derived difference between every pair of
+those texts, so the duplication is visible rather than silent.
 
 Rejected alternatives, and why:
 
@@ -134,6 +201,7 @@ The projection refuses, with `LabelHistoryInvariantError`, when:
 
 | Invariant | Broken shape |
 | --- | --- |
+| `*_label_facts_invalid` | Stored `facts` is not an object — a JSONB array, string or number, or an object the canonicaliser cannot read. |
 | `*_label_fingerprint_mismatch` | A stored fingerprint no longer describes the stored facts. |
 | `*_label_version_invalid` | A version number below 1. |
 | `first_label_version_has_predecessor` | Version 1 names one. |
@@ -194,6 +262,21 @@ were established without Step 12A and are still true. `unavailable` is
 deliberately distinct from `null`: `null` means this product has never been
 observed, and conflating the two would hide the corruption the invariant just
 caught.
+
+Failing soft only works over a failure the route can *recognise*. `facts` is
+JSONB and the column can hold an array, a bare string or a number; the
+canonicaliser is entitled to assume an object, so the shape is checked at the
+Step 12A integrity boundary and becomes `*_label_facts_invalid` rather than an
+`AttributeError` three frames down. `label_content_fingerprint` keeps its own
+contract unweakened.
+
+A snapshot whose facts cannot be read is also not something the *verdict* can be
+built from. The route still reports the version — decision memory and shelf
+links are pinned to its id and fingerprint, and hiding it would detach them —
+but grades from what can still be read, exactly as it does for a product nobody
+has photographed, and says so in `facts_provenance`. `test_35` corrupts a real
+row in PostgreSQL and asserts the resulting page is identical, key for key, to
+the page that product gets with no confirmed observation at all.
 
 ## The formula classification
 
