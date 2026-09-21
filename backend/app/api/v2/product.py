@@ -552,7 +552,7 @@ async def read_product_verdict(
         # engine has no business inventing a weaker rule of its own. With no
         # readable confirmed pack it reports not_enough_information, which is
         # the honest answer when the comparison's own requirements are absent.
-        current_snapshot=snapshot,
+        current_snapshot=readable,
         current_product=product,
         current_result=result,
         ruleset=ruleset,
