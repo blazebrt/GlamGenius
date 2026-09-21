@@ -201,6 +201,13 @@ def _readable_facts(snapshot: LabelSnapshot, *, role: str) -> dict[str, Any]:
     label history and one that returns a 500. The route can only fail soft over
     a failure it can recognise, and an ``AttributeError`` from three frames
     down is not one.
+
+    Removing *this* check alone changes nothing observable: the guard around
+    the fingerprint computation catches what a non-object would raise and
+    reports the same refusal, so a mutation that deletes it survives. It is
+    kept because it says at the boundary what the boundary is for, and because
+    the two together are what make the refusal total — deleting both is a
+    mutation that does not survive.
     """
     if not isinstance(snapshot.facts, Mapping):
         raise LabelHistoryInvariantError(f"{role}_label_facts_invalid")

@@ -354,16 +354,33 @@ def test_4d_the_distinction_is_exactly_as_wide_as_the_grammar():
         assert [row.normalized_name for row in entries.entries] == ["parfum (a b)", "water"]
 
 
-def test_4e_grouping_the_parser_cannot_balance_keeps_every_boundary():
-    """When the grammar will not speak, the authority keeps the difference.
+@pytest.mark.parametrize(
+    ("wrapped", "spaced"),
+    [
+        # A closer with nothing open: refused as the walk reaches it.
+        pytest.param("Water)G\nH", "Water)G H", id="stray-closer"),
+        # An opener never closed: refused only once the whole text is read.
+        pytest.param("Parfum (A\nB, Water", "Parfum (A B, Water", id="unclosed-opener"),
+        pytest.param("Aqua, Parfum ([A\nB), Water", "Aqua, Parfum ([A B), Water", id="crossed-pairs"),
+        # Compatibility forms whose normalisation would relocate structure.
+        # Step 7B withholds the formula rather than guess at the offsets, so
+        # it has judged no position and nothing here may be folded away.
+        pytest.param("Water\u2474A\nB", "Water\u2474A B", id="circled-paren-one"),
+        pytest.param("Water\u2033A\nB", "Water\u2033A B", id="double-prime"),
+        pytest.param("Water\u2116A\nB", "Water\u2116A B", id="numero-sign"),
+    ],
+)
+def test_4e_when_the_grammar_will_not_speak_every_boundary_is_kept(wrapped, spaced):
+    """No answer is not the same as "no boundary here".
 
-    An unbalanced bracket makes the formula MALFORMED, so there is no grouping
-    to protect anything and no position the parser has judged. Folding the
-    break away on a guess would be the one error that cannot be undone: a lost
-    version, not a spare one.
+    Grouping that never balances, and a compatibility form whose offsets cannot
+    be reconstructed, both leave the parser with no position it has judged.
+    Folding the break away on a guess would be the one error that cannot be
+    undone: a lost version, not a spare one.
     """
-    assert boundary_significance("Water)G\nH") is None
-    _assert_different_versions("Water)G\nH", "Water)G H")
+    assert boundary_significance(wrapped) is None
+    assert boundary_significance(spaced) is None
+    _assert_different_versions(wrapped, spaced)
 
 
 def test_4f_canonicalising_never_changes_what_the_parser_concludes():
@@ -1620,3 +1637,66 @@ async def test_35_a_corrupt_row_silences_the_history_not_the_product(
     for reason in ("facts_invalid", "label_facts", "invariant", "mismatch"):
         assert reason not in response.text
     assert not _uuids_in(payload["label_change"])
+
+
+async def test_36_the_backfill_pairs_rows_only_by_the_link_they_carry(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """Two products, interleaved versions, and no room to guess.
+
+    Version numbers are per barcode, so "the row one version lower" is not a
+    predecessor — it is a different product's pack. Pairing on anything other
+    than ``previous_snapshot_id`` computes a difference between two labels that
+    were never observed as a sequence, and writes it into history as though
+    somebody had seen it.
+    """
+    from sqlalchemy import text
+
+    token, account_id = await registered_supabase_user()
+    first_barcode, second_barcode = "8900000000241", "8900000000258"
+
+    # Deliberately different products, so a mis-pairing produces a visibly
+    # different answer rather than accidentally the right one.
+    left = {"product_name": "Left", "ingredients_text": "Water\nGlycerin",
+            "net_quantity": "100 g", **NUTRITION}
+    right = {"product_name": "Right", "ingredients_text": "Cocamidopropyl Betaine",
+             "net_quantity": "500 ml", **NUTRITION}
+
+    await _confirm(app_client, device, token, account_id, first_barcode, left)
+    await _confirm(app_client, device, token, account_id, second_barcode, right)
+    await _confirm(
+        app_client, device, token, account_id, first_barcode,
+        {**left, "ingredients_text": "Water Glycerin", "net_quantity": "120 g"},
+    )
+    await _confirm(
+        app_client, device, token, account_id, second_barcode,
+        {**right, "ingredients_text": "Cocamidopropyl Betaine, Water", "net_quantity": "750 ml"},
+    )
+
+    migration = _load_migration()
+
+    async def _stored(barcode: str) -> list[str]:
+        async with get_sessionmaker()() as session:
+            return (await session.execute(
+                text(
+                    "SELECT changed_fields FROM product_label_snapshots "
+                    "WHERE barcode = :barcode AND version_number = 2"
+                ),
+                {"barcode": barcode},
+            )).scalar_one()
+
+    await _apply_revision(migration, forward=False)
+    assert await _stored(first_barcode) == ["net_quantity"]
+    assert await _stored(second_barcode) == ["ingredients", "net_quantity"]
+
+    await _apply_revision(migration, forward=True)
+    # The wrapped line is now visible on the left product, and the right
+    # product is untouched — which it would not be if the walk had reached
+    # across the two chains looking for "the previous version number".
+    assert await _stored(first_barcode) == ["ingredients", "net_quantity"]
+    assert await _stored(second_barcode) == ["ingredients", "net_quantity"]
+
+    for barcode in (first_barcode, second_barcode):
+        response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
+        assert response.status_code == 200, response.text
+        assert response.json()["label_change"]["status"] == "changed"
