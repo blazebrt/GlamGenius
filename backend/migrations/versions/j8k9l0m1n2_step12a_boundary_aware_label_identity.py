@@ -256,20 +256,25 @@ def _fingerprint(facts: dict[str, Any], *, boundary_aware: bool) -> str:
 
 
 def _rederive(connection: sa.engine.Connection, *, boundary_aware: bool) -> None:
-    """Recompute every derived label value under the named rule.
+    """Re-derive every derived label value, for the rows that are ours to move.
 
-    Two things are derived from ``facts``, and both move when the rule does:
+    ``boundary_aware`` names the **target** rule. The **source** rule is the
+    other one: upgrade moves old → new, downgrade moves new → old.
 
-    * ``content_fingerprint`` — a pure function of one row's own immutable
-      facts. There is exactly one correct value and no pairing decision to
-      make, so it is recomputed unconditionally.
-    * ``changed_fields`` — a statement about *two* rows. It is migrated only
-      where the stored value is exactly what the source rule derived from the
-      row and its recorded predecessor. A row that already disagreed with its
-      own history was not produced by any supported write path, and rewriting
-      it here would launder that into a clean-looking history nobody can see
-      any more. Those rows are left exactly as found, for the Step 12A
-      integrity check to refuse in the open.
+    A row may migrate only if its stored ``content_fingerprint`` is exactly
+    what the source rule derives from its own immutable facts. That check is
+    the whole point. Recomputing the target value and writing it wherever it
+    differs looks like the same thing and is not: a row whose fingerprint
+    matched *neither* rule was never produced by a supported write path, and
+    rewriting it to the target value does not repair it — it launders it. The
+    row stops looking broken while still being broken, and the application
+    integrity boundary that would have refused it in the open never fires
+    again. Those rows are left byte-for-byte as found, in both directions.
+
+    ``changed_fields`` is a statement about *two* rows, so both must be
+    source-valid: the row itself and the predecessor its difference was
+    measured against. Facts from a source-invalid predecessor are not a basis
+    for rewriting anybody's derived history.
 
     The predecessor is always the row's explicit ``previous_snapshot_id``.
     Never the previous version number, never the same barcode, never a
@@ -289,15 +294,27 @@ def _rederive(connection: sa.engine.Connection, *, boundary_aware: bool) -> None
         row["id"]: row["facts"] for row in rows if isinstance(row["facts"], dict)
     }
 
+    #: Snapshots whose stored fingerprint is exactly what the source rule
+    #: derives from their own facts. Only these may move, and only these may
+    #: carry a change out to the tables that copied their fingerprint.
+    source_valid: set[Any] = {
+        row["id"] for row in rows
+        if row["id"] in facts_by_id
+        and row["content_fingerprint"] == _fingerprint(
+            facts_by_id[row["id"]], boundary_aware=not boundary_aware
+        )
+    }
+
     fingerprints: list[dict[str, Any]] = []
     differences: list[dict[str, Any]] = []
     for row in rows:
-        facts = facts_by_id.get(row["id"])
-        if facts is None:
-            # Nothing a supported write path can produce; left exactly as found
-            # rather than guessed at, and the Step 12A integrity check will
-            # refuse it in the open.
+        if row["id"] not in source_valid:
+            # Either the facts are not a fact object at all, or the stored
+            # identity never matched the rule this migration is moving away
+            # from. Nothing a supported write path can produce; left exactly as
+            # found for the Step 12A integrity check to refuse in the open.
             continue
+        facts = facts_by_id[row["id"]]
 
         expected = _fingerprint(facts, boundary_aware=boundary_aware)
         if expected != row["content_fingerprint"]:
@@ -312,12 +329,14 @@ def _rederive(connection: sa.engine.Connection, *, boundary_aware: bool) -> None
             # does not depend on the rule, so there is nothing to migrate.
             continue
 
-        predecessor = facts_by_id.get(row["previous_snapshot_id"])
-        if row["previous_snapshot_id"] is None or predecessor is None:
-            # A later version with no readable predecessor. The difference it
-            # records cannot be recomputed from anything, and inventing one
-            # would be fabricating the history this migration exists to keep.
+        if row["previous_snapshot_id"] not in source_valid:
+            # A later version whose predecessor is missing, unreadable, or
+            # itself inconsistent with the source rule. The difference it
+            # records cannot be recomputed from anything trustworthy, and
+            # inventing one would be fabricating the history this migration
+            # exists to keep.
             continue
+        predecessor = facts_by_id[row["previous_snapshot_id"]]
 
         source = _changed_fields(predecessor, facts, boundary_aware=not boundary_aware)
         if stored != source:
@@ -347,16 +366,30 @@ def _rederive(connection: sa.engine.Connection, *, boundary_aware: bool) -> None
         )
     if not fingerprints:
         return
-    # The two tables that copied a snapshot's fingerprint follow it, by the
-    # snapshot they already name. Nothing is matched on the fingerprint value
-    # itself, so a row cannot be attached to a different observation.
+    # The two tables that copied a snapshot's fingerprint follow it — but only
+    # for the snapshots this invocation actually moved, named one by one.
+    #
+    # A blanket "realign every copy that disagrees with its snapshot" would
+    # reach across to snapshots nothing legitimate happened to, and quietly
+    # repair copies of a source-invalid row that the integrity boundary is
+    # supposed to catch. One migrated row must not drag unrelated evidence
+    # along with it.
+    #
+    # Matched on ``label_snapshot_id``: never on the fingerprint value, never
+    # on barcode and version.
+    moved = [{"row_id": row["row_id"]} for row in fingerprints]
     for table in ("scan_decision_events", "inventory_product_links"):
-        connection.execute(sa.text(
-            f"UPDATE {table} AS copy SET content_fingerprint = snapshot.content_fingerprint "
-            "FROM product_label_snapshots AS snapshot "
-            "WHERE copy.label_snapshot_id = snapshot.id "
-            "AND copy.content_fingerprint <> snapshot.content_fingerprint"
-        ))
+        connection.execute(
+            sa.text(
+                f"UPDATE {table} AS copy "  # noqa: S608 - fixed table names
+                "SET content_fingerprint = snapshot.content_fingerprint "
+                "FROM product_label_snapshots AS snapshot "
+                "WHERE copy.label_snapshot_id = snapshot.id "
+                "AND snapshot.id = :row_id "
+                "AND copy.content_fingerprint <> snapshot.content_fingerprint"
+            ),
+            moved,
+        )
 
 
 def upgrade() -> None:

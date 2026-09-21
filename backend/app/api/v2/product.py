@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -40,7 +39,15 @@ from app.domains.nutrition.grading.production_rules import (
     resolve_production_ruleset,
 )
 from app.domains.official_records import service as official_records_service
-from app.domains.product import change_projection, complaints, devices, extraction, pack_context, service
+from app.domains.product import (
+    change_projection,
+    complaints,
+    devices,
+    extraction,
+    label_evidence,
+    pack_context,
+    service,
+)
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
 from app.domains.product.models import FssaiComplaintHandoff, LabelSnapshot, ScanDevice
@@ -363,7 +370,13 @@ async def read_product_verdict(
     # unavailable. But nothing is graded from facts that cannot be read: the
     # verdict falls back to what can be, exactly as it does for a product
     # nobody has photographed. No supported write path produces such a row.
-    readable = snapshot if isinstance(getattr(snapshot, "facts", None), Mapping) else None
+    #
+    # One boundary, asked once and then carried. Every consumer of this
+    # snapshot below — the graded product, the confidence, the pack quantity
+    # and the alternative — reads ``readable`` rather than re-deciding, because
+    # a second answer to "are these facts readable" is how a corrupt row
+    # reaches a ``.get()`` somewhere nobody was looking.
+    readable = service.readable_label_snapshot(snapshot)
     # What this server can prove about the packet in this caller's hand, as
     # opposed to what the caller asked to be treated as. The request can only
     # withhold authority; it cannot create it.
@@ -391,31 +404,55 @@ async def read_product_verdict(
     # Keep absent catalogue values absent instead of manufacturing a brand.
     payload["barcode"] = barcode
     payload["brand"] = brand
-    payload["confidence"] = service.confidence_block(readable.confidence) if readable else found["confidence"]
-    payload["facts_provenance"] = "confirmed_label_snapshot" if readable else "open_food_facts"
-    payload["label_version"] = ({
-        "id": str(snapshot.id), "version_number": snapshot.version_number,
-        "content_fingerprint": snapshot.content_fingerprint,
-        "observed_at": snapshot.created_at.isoformat(),
-        "changed_fields": snapshot.changed_fields,
-        "completeness": snapshot.completeness,
-    } if snapshot else None)
-    # Step 12A is observation history, not a claim about the packet in the
-    # caller's hand and not a regulatory interpretation. Version selection is
-    # explicit here; the projection itself never performs a "latest" lookup.
+    # Confidence describes the facts THIS response was graded from, not the
+    # best thing known about the barcode. A ``ProductRecord`` marked verified
+    # says a reviewer checked a pack; it does not make the catalogue row we
+    # fell back to pack-checked, and "Checked by us against the pack" printed
+    # over Open Food Facts facts is simply false. So the two fields are decided
+    # together and can never contradict each other.
+    if readable is not None:
+        payload["confidence"] = service.confidence_block(readable.confidence)
+        payload["facts_provenance"] = "confirmed_label_snapshot"
+    else:
+        payload["facts_provenance"] = "open_food_facts"
+        payload["confidence"] = service.confidence_block(
+            ProductConfidence.UNVERIFIED.value
+            if source_half
+            else ProductConfidence.NOT_ENOUGH_INFORMATION.value
+        )
+    # Step 12A history. Two authorities answer two different questions, and the
+    # order they run in is the whole design:
     #
-    # ``None`` means this product has no confirmed pack observation at all — an
-    # Open Food Facts record alone never produces one. It is deliberately not
-    # the answer when history exists but failed its invariants; that is
-    # ``unavailable``, and conflating the two would hide the corruption.
+    # 1. ``change_projection`` — is the stored history internally valid, and
+    #    what do these two observations mean? It runs **first, and always**,
+    #    for every request that has a snapshot.
+    # 2. ``label_evidence`` — may a valid answer leave this server? A claim
+    #    about a manufacturer needs a named, openable source for each
+    #    observation it rests on. The confirmed-observation chain persists no
+    #    such locator and the only stored image is a private ``MediaAsset``, so
+    #    today the answer is always no.
+    #
+    # A correct internal result may be withheld. A corrupt one must never slip
+    # past validation just because publication was going to be withheld anyway:
+    # that would leave the integrity boundary behind a gate that is currently
+    # always closed, and the day a locator field is added it would open with an
+    # unexamined chain behind it. So the projection is never conditioned on the
+    # evidence decision, in either direction.
     if snapshot is None:
+        # No confirmed pack observation at all — an Open Food Facts record
+        # alone never produces one. Deliberately not the same answer as history
+        # that exists and is not being characterised; that is ``unavailable``.
+        payload["label_version"] = None
         payload["label_change"] = None
     else:
+        # Version selection stays explicit: the projection never performs a
+        # "latest" lookup, and the predecessor is always the one the row names.
         previous_snapshot = (
             await session.get(LabelSnapshot, snapshot.previous_snapshot_id)
             if snapshot.previous_snapshot_id is not None
             else None
         )
+        # First authority: integrity. Unconditional.
         try:
             projection = change_projection.project_label_change(
                 current=snapshot, previous=previous_snapshot,
@@ -431,8 +468,36 @@ async def read_product_verdict(
                 barcode,
                 broken.reason,
             )
-            projection = change_projection.UNAVAILABLE_PROJECTION
-        payload["label_change"] = projection.as_payload()
+            projection = None
+        # Second authority, asked separately: may a valid result be published?
+        publishable = label_evidence.comparison_is_publishable(
+            current=snapshot, previous=previous_snapshot,
+        )
+        # Both, or nothing. Integrity alone is not permission to speak, and
+        # evidence alone can never make a corrupt chain publishable.
+        disclosed = projection is not None and publishable
+
+        # Version identity, which decision memory and the shelf are pinned to,
+        # and which is ours to state: an id, our own counter, our own integrity
+        # hash, when we recorded it, and how complete it was. None of that
+        # depends on either authority, so none of it is withheld.
+        #
+        # ``changed_fields`` is not identity. It is the same "this pack differs
+        # from that one" assertion ``label_change`` makes, published beside it
+        # under a quieter name, so it answers to both authorities too. Withheld
+        # as ``None`` — never ``[]``, which would positively assert that no
+        # field changed. The stored value is untouched; this is publication.
+        payload["label_version"] = {
+            "id": str(snapshot.id), "version_number": snapshot.version_number,
+            "content_fingerprint": snapshot.content_fingerprint,
+            "observed_at": snapshot.created_at.isoformat(),
+            "changed_fields": snapshot.changed_fields if disclosed else None,
+            "completeness": snapshot.completeness,
+        }
+        payload["label_change"] = (
+            projection.as_payload() if disclosed
+            else change_projection.UNAVAILABLE_PROJECTION.as_payload()
+        )
     payload["attribution"] = found.get("attribution")
     # What the pack actually holds, so "one packet" on the screen means this
     # packet. Absent when neither source states a net quantity, and the screen
@@ -481,7 +546,13 @@ async def read_product_verdict(
     payload["alternative"] = await alternatives_service.comparable_alternative_envelope(
         session,
         barcode=barcode,
-        current_snapshot=snapshot,
+        # The SAME readable-snapshot authority the verdict above used. Handing
+        # the raw row over would put a JSONB array behind a ``.get()`` in the
+        # alternative engine and turn a recoverable page into a 500 — and the
+        # engine has no business inventing a weaker rule of its own. With no
+        # readable confirmed pack it reports not_enough_information, which is
+        # the honest answer when the comparison's own requirements are absent.
+        current_snapshot=readable,
         current_product=product,
         current_result=result,
         ruleset=ruleset,
@@ -519,7 +590,11 @@ async def preview_fssai_complaint(
     """
     del current
     snapshot = await service.latest_label_snapshot(session, body.barcode)
-    facts = snapshot.facts if snapshot is not None else {}
+    # Pack facts come from a confirmed observation or from nowhere. A snapshot
+    # nobody can read is the second case: every field stays visibly missing,
+    # and none of it is filled from Open Food Facts, which cannot state a
+    # batch, a licence or what this particular pack said.
+    facts = service.readable_label_facts(snapshot)
     fields = complaints.prepared_fields(facts, str(body.photo_asset_id) if body.photo_asset_id else None)
     return {
         "ready_for_official_handoff": not complaints.missing_preparation_fields(fields),
@@ -549,7 +624,12 @@ async def confirm_fssai_complaint_handoff(
 
     await media_service.get_owned_asset(session, account_id=current.account_id, asset_id=body.photo_asset_id)
     snapshot = await service.latest_label_snapshot(session, body.barcode)
-    fields = complaints.prepared_fields(snapshot.facts if snapshot is not None else {}, str(body.photo_asset_id))
+    # Same boundary as the preview: an unreadable observation supplies no pack
+    # facts, so the missing-field refusal below is reached rather than a 500,
+    # and no handoff is recorded from facts nobody can read.
+    fields = complaints.prepared_fields(
+        service.readable_label_facts(snapshot), str(body.photo_asset_id),
+    )
     missing = complaints.missing_preparation_fields(fields)
     if missing:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "pack_fields_missing", "fields": missing})
