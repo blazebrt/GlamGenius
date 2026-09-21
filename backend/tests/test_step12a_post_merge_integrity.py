@@ -402,3 +402,195 @@ async def test_the_withheld_envelope_carries_nothing_private(
     for leaked in ("media", "storage_key", "device_id", "account_id",
                    "label_facts_invalid", "invariant", "previous_snapshot_id"):
         assert leaked not in repr(change)
+
+
+# ---------------------------------------------------------------------------
+# Ordering: integrity first, publication second
+#
+# The two authorities answer different questions and must not be wired in
+# series. When publication was decided first and the projection ran only inside
+# its ``True`` branch, the integrity authority silently left the Product Result
+# — ``comparison_is_publishable()`` is False for every pair today, so
+# ``project_label_change()`` never ran on this route at all. A corrupt chain
+# was then never examined, and the day a locator field is persisted it would be
+# examined for the first time with real callers behind it.
+#
+# Every test below fails on a route that asks the evidence gate first.
+# ---------------------------------------------------------------------------
+def _publication(monkeypatch, allowed: bool) -> None:
+    """Force the evidence gate's answer without touching the real schema.
+
+    No fake locator is persisted and ``is_openable_customer_source`` is left
+    exactly as it is. This only simulates the day a lawful source exists, so
+    the branch behind that day can be tested before it arrives.
+    """
+    from app.api.v2 import product as product_api
+
+    monkeypatch.setattr(
+        product_api.label_evidence,
+        "comparison_is_publishable",
+        lambda **_kwargs: allowed,
+    )
+
+
+async def _corrupt_fingerprint(barcode: str) -> None:
+    """Break a Step 12A integrity invariant, leaving the facts readable.
+
+    ``readable_label_snapshot`` still accepts this row — its ``facts`` are a
+    perfectly good object — so nothing upstream filters it out. Only
+    ``project_label_change`` can refuse it, which is the point.
+    """
+    async with get_sessionmaker()() as session:
+        await session.execute(
+            text("UPDATE product_label_snapshots SET content_fingerprint = :v "
+                 "WHERE barcode = :b"),
+            {"v": "d" * 64, "b": barcode},
+        )
+        await session.commit()
+
+
+async def test_the_internal_authority_runs_even_when_publication_is_withheld(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """The projection is called on the real route, with evidence absent.
+
+    Kills "skip the projection whenever the evidence gate returns false".
+    A withheld answer is still an answer that had to be computed and checked.
+    """
+    from app.api.v2 import product as product_api
+
+    barcode = "8900000000449"
+    token, account_id = await registered_supabase_user()
+    base = {"product_name": "Observed", "ingredients_text": "Water,Glycerin", **NUTRITION}
+    await _confirm(app_client, device, token, account_id, barcode, base)
+    await _confirm(app_client, device, token, account_id, barcode,
+                   {**base, "ingredients_text": "Water,Niacinamide"})
+
+    calls: list[tuple[object, object]] = []
+    original = product_api.change_projection.project_label_change
+
+    def spy(*, current, previous):
+        calls.append((current, previous))
+        return original(current=current, previous=previous)
+
+    product_api.change_projection.project_label_change = spy
+    try:
+        response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
+    finally:
+        product_api.change_projection.project_label_change = original
+
+    assert response.status_code == 200, response.text
+    # It ran, on exactly the two rows the stored link names.
+    assert len(calls) == 1
+    current, previous = calls[0]
+    assert current.version_number == 2
+    assert previous is not None and previous.id == current.previous_snapshot_id
+    # And the customer is still told nothing, because nothing sources it.
+    payload = response.json()
+    assert payload["label_change"] == UNAVAILABLE_PROJECTION.as_payload()
+    assert payload["label_version"]["changed_fields"] is None
+
+
+async def test_a_corrupt_history_is_still_detected_when_evidence_is_absent(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+    published_rules, no_off_network, caplog,
+):
+    """Corruption is found and logged even though nobody was going to be told.
+
+    On a route that asks the evidence gate first this row is never read by the
+    integrity authority at all: the page looks identical, and the warning that
+    is the only trace of the corruption is never emitted.
+    """
+    import logging
+
+    barcode = "8900000000456"
+    token, account_id = await registered_supabase_user()
+    base = {"product_name": "Observed", "ingredients_text": "Water,Glycerin", **NUTRITION}
+    await _confirm(app_client, device, token, account_id, barcode, base)
+    await _confirm(app_client, device, token, account_id, barcode,
+                   {**base, "ingredients_text": "Water,Niacinamide"})
+    await _corrupt_fingerprint(barcode)
+
+    with caplog.at_level(logging.WARNING, logger="app.api.v2.product"):
+        response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
+
+    # The page survives: everything around this envelope was established
+    # without it and is still true.
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["grade"] is not None
+    assert payload["label_change"] == UNAVAILABLE_PROJECTION.as_payload()
+    assert payload["label_version"]["changed_fields"] is None
+
+    # The corruption was seen, named to the log, and named to nobody else.
+    warnings = [r for r in caplog.records if "label_history_invariant_failed" in r.getMessage()]
+    assert warnings, "the integrity authority never ran"
+    logged = warnings[0].getMessage()
+    assert "fingerprint_mismatch" in logged
+    assert barcode in logged
+    # The reason is for the server log. It is not in the response, anywhere.
+    assert "fingerprint_mismatch" not in response.text
+    assert "invariant" not in response.text
+
+
+async def test_evidence_can_never_override_integrity(
+    db_clean, off_clean, app_client, device, registered_supabase_user, monkeypatch,
+):
+    """With publication allowed and the history corrupt, nothing is published.
+
+    This is the milestone-after-next test. When a lawful locator is finally
+    persisted, the evidence gate starts returning True — and that must not turn
+    a chain the integrity authority rejects into a customer-facing claim.
+    """
+    barcode = "8900000000463"
+    token, account_id = await registered_supabase_user()
+    base = {"product_name": "Observed", "ingredients_text": "Water,Glycerin", **NUTRITION}
+    await _confirm(app_client, device, token, account_id, barcode, base)
+    await _confirm(app_client, device, token, account_id, barcode,
+                   {**base, "ingredients_text": "Water,Niacinamide"})
+    await _corrupt_fingerprint(barcode)
+    _publication(monkeypatch, True)
+
+    response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["label_change"] == UNAVAILABLE_PROJECTION.as_payload()
+    assert payload["label_version"]["changed_fields"] is None
+    # Not one word of the comparison the corrupt rows would have implied.
+    assert "Niacinamide" not in repr(payload["label_change"])
+    assert "Glycerin" not in repr(payload["label_change"])
+
+
+async def test_valid_history_with_publication_allowed_is_published(
+    db_clean, off_clean, app_client, device, registered_supabase_user, monkeypatch,
+):
+    """Structural proof of the far side: both authorities satisfied.
+
+    Nothing here weakens the real evidence gate — it is stubbed for this one
+    request and no locator is written. It exists so the publishing branch is
+    exercised at all, and so the two published values are proven to come from
+    the validated projection rather than straight from the stored row.
+    """
+    barcode = "8900000000470"
+    token, account_id = await registered_supabase_user()
+    base = {"product_name": "Observed", "ingredients_text": "Water,Glycerin", **NUTRITION}
+    await _confirm(app_client, device, token, account_id, barcode, base)
+    await _confirm(app_client, device, token, account_id, barcode,
+                   {**base, "ingredients_text": "Water,Niacinamide"})
+    _publication(monkeypatch, True)
+
+    payload = (await app_client.get(
+        f"/api/v2/scan/verdict/{barcode}", headers=device,
+    )).json()
+
+    versions = await _versions(barcode)
+    expected = project_label_change(current=versions[1], previous=versions[0])
+    assert payload["label_change"] == expected.as_payload()
+    assert payload["label_change"]["status"] == LabelChangeStatus.CHANGED.value
+    assert payload["label_change"]["formula"]["status"] == (
+        FormulaChangeStatus.INGREDIENT_SET_CHANGED.value
+    )
+    # The version block agrees with the projection that was validated, not with
+    # whatever the row happens to store.
+    assert payload["label_version"]["changed_fields"] == list(expected.changed_fields)

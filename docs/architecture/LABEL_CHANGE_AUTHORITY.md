@@ -37,6 +37,48 @@ including `test_the_engine_still_compares_two_valid_observations_correctly`,
 which asserts the exact comparison the Product Result then declines to
 publish.
 
+### The order they run in
+
+The two authorities are not wired in series, and which one runs first is the
+whole design:
+
+1. **`change_projection` runs first, and always.** Every Product Result request
+   that has a snapshot resolves the predecessor its row names and calls
+   `project_label_change()`. No condition, no short circuit.
+2. **`label_evidence` is then asked separately** whether a valid answer may
+   leave the server.
+3. **A claim is published only when both say yes.** Integrity alone is not
+   permission to speak. Evidence alone can never make a corrupt chain
+   publishable.
+
+Four cases, and only one of them speaks:
+
+| Stored history | Evidence | `label_change` |
+| --- | --- | --- |
+| valid | present | the projection |
+| valid | absent | `unavailable` |
+| invalid | absent | `unavailable`, and `label_history_invariant_failed` in the log |
+| invalid | present | `unavailable`, and `label_history_invariant_failed` in the log |
+
+**Why the order is load-bearing, and not merely tidy.** The first cut of this
+correction asked the evidence gate first and called the projection only inside
+its `True` branch. That reads as an optimisation — why compute an answer nobody
+will be told? — and it silently removed the Step 12A integrity authority from
+the Product Result altogether, because `comparison_is_publishable()` is `False`
+for every pair today. A corrupt chain was never examined, the warning that is
+its only trace was never emitted, and the bug was invisible precisely because
+the output looked identical either way. It would have become visible on the day
+a locator field was persisted: the gate would start returning `True`, and the
+integrity boundary would run for the first time with real callers behind it.
+
+So the projection is never conditioned on the evidence decision, in either
+direction. `test_the_internal_authority_runs_even_when_publication_is_withheld`
+spies on `project_label_change` through the real route and fails if it is
+skipped; `test_a_corrupt_history_is_still_detected_when_evidence_is_absent`
+corrupts a stored fingerprint and fails if the warning never appears; and
+`test_evidence_can_never_override_integrity` stubs the gate to `True` over a
+corrupt chain and fails if anything is published.
+
 What changed is that its output is no longer published just because it exists.
 The Product Constitution is unconditional — *the app never makes a claim in its
 own voice; it reports what a named, openable source says. No source, no claim.*
@@ -111,11 +153,22 @@ asserts that nothing changed.
 
 That last part matters because the envelope is not the only door.
 `label_version.changed_fields` carries the same claim in a smaller box, so it
-is `null` when the comparison is unpublishable. Explicitly **not** `[]` — an
-empty list asserts that nothing changed, which is a claim in its own right and
-one we have no source for either. `LabelSnapshot.changed_fields` is still
-stored, still migrated, still what the integrity check compares against; it
-simply stops being served.
+answers to **both** authorities on exactly the same terms: it is served only
+when the stored history passed `project_label_change()` *and* the comparison is
+publishable, and is `null` otherwise. Gating it on evidence alone would leave
+the stored value reachable the moment a locator field existed, before the
+integrity authority had rejected a corrupt chain — the future bypass this
+correction exists to close.
+
+Explicitly `null` and **not** `[]` — an empty list asserts that nothing
+changed, which is a claim in its own right and one we have no source for
+either. This is the one place the two shapes differ, and deliberately: the
+`label_change` envelope carries `changed_fields: []` under a governing
+`status: "unavailable"`, while `label_version` has no such status beside it, so
+only `null` is silent there.
+
+`LabelSnapshot.changed_fields` is still stored, still migrated, still what the
+integrity check compares against; it simply stops being served.
 
 ## Store B is the only authority
 
@@ -423,6 +476,13 @@ were established without Step 12A and are still true. `unavailable` is
 deliberately distinct from `null`: `null` means this product has never been
 observed, and conflating the two would hide the corruption the invariant just
 caught.
+
+This holds *whatever the evidence gate is about to say*, because the projection
+runs before the gate is consulted — see **The order they run in** above. A
+request whose comparison was never going to be published still examines the
+stored history and still logs `label_history_invariant_failed` when it is
+broken. Corruption found only when somebody was going to be told about it is
+corruption found too late.
 
 Failing soft only works over a failure the route can *recognise*. `facts` is
 JSONB and the column can hold an array, a bare string or a number; the

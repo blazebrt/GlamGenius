@@ -420,57 +420,39 @@ async def read_product_verdict(
             if source_half
             else ProductConfidence.NOT_ENOUGH_INFORMATION.value
         )
-    # Step 12A history. Two things are decided here, and both are the same
-    # question: may this caller be told that one pack said something another
-    # did not?
+    # Step 12A history. Two authorities answer two different questions, and the
+    # order they run in is the whole design:
     #
-    # The deterministic engine still runs and is still correct. What it produces
-    # is an internal change fact. Publishing it to a customer is a claim, and
-    # the Constitution allows a claim only where a named, openable source backs
-    # it — one for each observation the claim rests on. The confirmed-
-    # observation chain persists no such locator, and the only stored image is a
-    # private MediaAsset belonging to one account, so today nothing is
-    # publishable. See :mod:`app.domains.product.label_evidence`.
+    # 1. ``change_projection`` — is the stored history internally valid, and
+    #    what do these two observations mean? It runs **first, and always**,
+    #    for every request that has a snapshot.
+    # 2. ``label_evidence`` — may a valid answer leave this server? A claim
+    #    about a manufacturer needs a named, openable source for each
+    #    observation it rests on. The confirmed-observation chain persists no
+    #    such locator and the only stored image is a private ``MediaAsset``, so
+    #    today the answer is always no.
     #
-    # Version selection stays explicit: the projection never performs a
-    # "latest" lookup, and the predecessor is always the one the row names.
-    previous_snapshot = (
-        await session.get(LabelSnapshot, snapshot.previous_snapshot_id)
-        if snapshot is not None and snapshot.previous_snapshot_id is not None
-        else None
-    )
-    publishable = label_evidence.comparison_is_publishable(
-        current=snapshot, previous=previous_snapshot,
-    )
-
-    # Version identity, which decision memory and the shelf are pinned to, and
-    # which is ours to state: an id, our own counter, our own integrity hash,
-    # when we recorded it, and how complete it was.
-    #
-    # ``changed_fields`` is not identity. It is the same "this pack differs
-    # from that one" assertion ``label_change`` makes, published beside it
-    # under a quieter name, and it needs the same evidence. Withheld as
-    # ``None`` — never ``[]``, which would positively assert that no field
-    # changed. The stored value is untouched; this is about publication.
-    payload["label_version"] = ({
-        "id": str(snapshot.id), "version_number": snapshot.version_number,
-        "content_fingerprint": snapshot.content_fingerprint,
-        "observed_at": snapshot.created_at.isoformat(),
-        "changed_fields": snapshot.changed_fields if publishable else None,
-        "completeness": snapshot.completeness,
-    } if snapshot else None)
-
-    # ``None`` means this product has no confirmed pack observation at all — an
-    # Open Food Facts record alone never produces one. It is deliberately not
-    # the answer when history exists but cannot be published, whether because
-    # it failed its invariants or because nothing backs it that a customer
-    # could open. Both of those are ``unavailable``: the history exists, and we
-    # are not going to characterise it.
+    # A correct internal result may be withheld. A corrupt one must never slip
+    # past validation just because publication was going to be withheld anyway:
+    # that would leave the integrity boundary behind a gate that is currently
+    # always closed, and the day a locator field is added it would open with an
+    # unexamined chain behind it. So the projection is never conditioned on the
+    # evidence decision, in either direction.
     if snapshot is None:
+        # No confirmed pack observation at all — an Open Food Facts record
+        # alone never produces one. Deliberately not the same answer as history
+        # that exists and is not being characterised; that is ``unavailable``.
+        payload["label_version"] = None
         payload["label_change"] = None
-    elif not publishable:
-        payload["label_change"] = change_projection.UNAVAILABLE_PROJECTION.as_payload()
     else:
+        # Version selection stays explicit: the projection never performs a
+        # "latest" lookup, and the predecessor is always the one the row names.
+        previous_snapshot = (
+            await session.get(LabelSnapshot, snapshot.previous_snapshot_id)
+            if snapshot.previous_snapshot_id is not None
+            else None
+        )
+        # First authority: integrity. Unconditional.
         try:
             projection = change_projection.project_label_change(
                 current=snapshot, previous=previous_snapshot,
@@ -486,8 +468,36 @@ async def read_product_verdict(
                 barcode,
                 broken.reason,
             )
-            projection = change_projection.UNAVAILABLE_PROJECTION
-        payload["label_change"] = projection.as_payload()
+            projection = None
+        # Second authority, asked separately: may a valid result be published?
+        publishable = label_evidence.comparison_is_publishable(
+            current=snapshot, previous=previous_snapshot,
+        )
+        # Both, or nothing. Integrity alone is not permission to speak, and
+        # evidence alone can never make a corrupt chain publishable.
+        disclosed = projection is not None and publishable
+
+        # Version identity, which decision memory and the shelf are pinned to,
+        # and which is ours to state: an id, our own counter, our own integrity
+        # hash, when we recorded it, and how complete it was. None of that
+        # depends on either authority, so none of it is withheld.
+        #
+        # ``changed_fields`` is not identity. It is the same "this pack differs
+        # from that one" assertion ``label_change`` makes, published beside it
+        # under a quieter name, so it answers to both authorities too. Withheld
+        # as ``None`` — never ``[]``, which would positively assert that no
+        # field changed. The stored value is untouched; this is publication.
+        payload["label_version"] = {
+            "id": str(snapshot.id), "version_number": snapshot.version_number,
+            "content_fingerprint": snapshot.content_fingerprint,
+            "observed_at": snapshot.created_at.isoformat(),
+            "changed_fields": snapshot.changed_fields if disclosed else None,
+            "completeness": snapshot.completeness,
+        }
+        payload["label_change"] = (
+            projection.as_payload() if disclosed
+            else change_projection.UNAVAILABLE_PROJECTION.as_payload()
+        )
     payload["attribution"] = found.get("attribution")
     # What the pack actually holds, so "one packet" on the screen means this
     # packet. Absent when neither source states a net quantity, and the screen
@@ -542,7 +552,7 @@ async def read_product_verdict(
         # engine has no business inventing a weaker rule of its own. With no
         # readable confirmed pack it reports not_enough_information, which is
         # the honest answer when the comparison's own requirements are absent.
-        current_snapshot=readable,
+        current_snapshot=snapshot,
         current_product=product,
         current_result=result,
         ruleset=ruleset,
