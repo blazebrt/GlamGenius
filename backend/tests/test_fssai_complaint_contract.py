@@ -208,3 +208,190 @@ async def test_a_product_with_no_observation_at_all_behaves_as_before(
     assert set(response.json()["missing_fields"]) == {
         "product_name", "brand", "batch_number", "fssai_licence", "photo_asset_id",
     }
+
+
+# ---------------------------------------------------------------------------
+# Field-level pack-text validity
+#
+# The top-level question — "is this stored ``facts`` value a fact object at
+# all?" — is not asked here. It belongs to
+# ``service.readable_label_facts()``, which both routes already call before
+# reaching this layer, and asking it twice would create a second authority
+# that could drift from the real one.
+#
+# What is left is narrower and is this layer's own: a perfectly readable
+# mapping can still hold ``{"batch_number": 12345}``. A number is not
+# something a pack printed, and rendering it as text would put a string nobody
+# read onto a document a person is about to take to a regulator.
+# ---------------------------------------------------------------------------
+#: Values a JSONB object can legitimately hold that are not printed text. The
+#: sentinel makes any accidental ``str()`` coercion visible in a response body.
+NON_TEXT_VALUES = {
+    "list": ["SENTINEL-7788"],
+    "dict": {"name": "SENTINEL-7788"},
+    "int": 7788,
+    "float": 77.88,
+    "bool": True,
+    "null": None,
+}
+
+#: A readable mapping whose every required pack field is unusable.
+FIELD_LEVEL_MALFORMED = {
+    "product_name": ["SENTINEL-NAME"],
+    "brand": {"name": "SENTINEL-BRAND"},
+    "batch_number": 778899,
+    "fssai_licence": ["SENTINEL-LICENCE"],
+}
+
+
+async def _make_field_malformed(barcode: str) -> None:
+    """Keep the facts a readable object; make the pack values non-text.
+
+    Deliberately not the same corruption as ``_make_unreadable``. That one
+    breaks the top level and is already refused upstream. This row sails
+    through ``readable_label_facts()`` exactly as it should — it *is* a fact
+    object — and only the field boundary can catch it.
+    """
+    import json
+
+    async with get_sessionmaker()() as session:
+        await session.execute(
+            text(
+                "UPDATE product_label_snapshots SET facts = CAST(:facts AS jsonb) "
+                "WHERE barcode = :barcode"
+            ),
+            {"facts": json.dumps({**FIELD_LEVEL_MALFORMED, "ingredients_text": "Water"}),
+             "barcode": barcode},
+        )
+        await session.commit()
+
+
+@pytest.mark.parametrize("kind", list(NON_TEXT_VALUES))
+def test_non_text_values_never_become_prepared_pack_fields(kind):
+    """A. No JSON type other than a string may survive, and none is coerced."""
+    value = NON_TEXT_VALUES[kind]
+    fields = prepared_fields(
+        {"product_name": value, "brand": value, "batch_number": value,
+         "fssai_licence": value},
+        "photo-id",
+    )
+
+    assert fields == {
+        "product_name": None, "brand": None, "batch_number": None,
+        "fssai_licence": None, "photo_asset_id": "photo-id",
+    }
+    # Not "falsy, therefore reported missing" — actually absent, with no
+    # str() of the original anywhere in the prepared output.
+    assert "SENTINEL" not in repr(fields)
+    assert "7788" not in repr(fields)
+    assert missing_preparation_fields(fields) == [
+        "product_name", "brand", "batch_number", "fssai_licence",
+    ]
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t", "\n  \n"])
+def test_blank_text_is_missing(blank):
+    """B. A field that states nothing is absent, not present-and-empty."""
+    fields = prepared_fields(
+        {"product_name": blank, "brand": blank, "batch_number": blank,
+         "fssai_licence": blank},
+        None,
+    )
+
+    assert all(value is None for key, value in fields.items() if key != "photo_asset_id")
+    assert missing_preparation_fields(fields) == [
+        "product_name", "brand", "batch_number", "fssai_licence", "photo_asset_id",
+    ]
+
+
+def test_printed_text_is_normalized_not_altered():
+    """C. Trimming transcription whitespace is the only change permitted."""
+    fields = prepared_fields(
+        {
+            "product_name": "  Pack Name  ",
+            "brand": " Brand ",
+            "batch_number": " B-1 ",
+            "fssai_licence": " 10012345678901 ",
+        },
+        None,
+    )
+
+    assert fields["product_name"] == "Pack Name"
+    assert fields["brand"] == "Brand"
+    assert fields["batch_number"] == "B-1"
+    assert fields["fssai_licence"] == "10012345678901"
+    # Inner spacing, case and punctuation are the pack's, not ours.
+    assert prepared_fields({"brand": "  Dr.  Oetker  "}, None)["brand"] == "Dr.  Oetker"
+
+
+def test_the_product_name_alias_survives_an_unusable_preferred_key():
+    """D. A malformed ``product_name`` must not mask a good ``name`` beside it.
+
+    The alias is reached on *unusable* text, not merely on an absent key, so
+    the documented fallback keeps working through this new boundary.
+    """
+    assert prepared_fields(
+        {"product_name": ["SENTINEL"], "name": " Real Pack Name "}, None,
+    )["product_name"] == "Real Pack Name"
+    assert prepared_fields({"product_name": "   ", "name": "Real"}, None)["product_name"] == "Real"
+    assert prepared_fields({"name": "Only Alias"}, None)["product_name"] == "Only Alias"
+    # And a malformed alias does not resurrect a malformed preferred key.
+    assert prepared_fields({"product_name": 1, "name": ["x"]}, None)["product_name"] is None
+
+
+async def test_preview_fails_soft_on_field_level_malformed_values(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """E. The row is readable; only its values are not. The page stays up."""
+    barcode = "8900000000546"
+    token, account_id = await registered_supabase_user()
+    await _confirm(app_client, device, token, account_id, barcode,
+                   {**COMPLETE_PACK, "ingredients_text": "Water", **NUTRITION})
+    await _make_field_malformed(barcode)
+
+    response = await app_client.post(
+        "/api/v2/reports/fssai/preview", headers={**device, **auth(token)},
+        json={"barcode": barcode, "reason": "label_information"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ready_for_official_handoff"] is False
+    assert set(body["missing_fields"]) == {
+        "product_name", "brand", "batch_number", "fssai_licence", "photo_asset_id",
+    }
+    assert all(value is None for value in body["pack_fields"].values())
+    # Nothing was stringified into a document a person may take to a regulator.
+    assert "SENTINEL" not in response.text
+    assert "778899" not in response.text
+    # And nothing was filled in from the catalogue instead.
+    assert "open_food_facts" not in response.text
+    assert body["filing_status"] == "not_filed"
+
+
+async def test_confirm_refuses_field_level_malformed_values(
+    db_clean, off_clean, app_client, device, registered_supabase_user,
+):
+    """F. A real owned photo is not enough when no pack field is readable text."""
+    barcode = "8900000000553"
+    token, account_id = await registered_supabase_user()
+    await _confirm(app_client, device, token, account_id, barcode,
+                   {**COMPLETE_PACK, "ingredients_text": "Water", **NUTRITION})
+    photo = await _owned_photo(app_client, token)
+    await _make_field_malformed(barcode)
+
+    response = await app_client.post(
+        "/api/v2/reports/fssai/confirm", headers={**device, **auth(token)},
+        json={"barcode": barcode, "reason": "label_information", "photo_asset_id": photo},
+    )
+
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "pack_fields_missing"
+    assert set(detail["fields"]) == {
+        "product_name", "brand", "batch_number", "fssai_licence",
+    }
+    assert "SENTINEL" not in response.text
+    async with get_sessionmaker()() as session:
+        rows = (await session.execute(select(FssaiComplaintHandoff))).scalars().all()
+    assert rows == []
