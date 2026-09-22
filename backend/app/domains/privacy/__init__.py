@@ -306,6 +306,10 @@ REGISTRY: dict[str, Classification] = {
     # A report somebody filed about a pack. Theirs, and exported with their
     # scans; the photo lives in storage and is referenced by key, never inlined.
     "label_error_reports": Classification.INCLUDED,
+    # A pack this person asked to hear about. Theirs: exported with their scans
+    # (without the internal anchor ids or the notice cursor), and removed with
+    # the account.
+    "product_watches": Classification.INCLUDED,
 }
 
 

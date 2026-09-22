@@ -28,6 +28,7 @@ from app.domains.planning.schemas import (
     TodayRegenerate,
     WeatherInput,
 )
+from app.domains.product import watch as product_watch
 from app.domains.recommendation import orchestrator as recommendation_orchestrator
 from app.domains.recommendation import service as recommendation_service
 from app.domains.recommendation.schemas import LookSwapItem
@@ -330,7 +331,11 @@ async def patch_notification_preferences(
     session: AsyncSession = Depends(get_session),
 ):
     timezone_name = await context_stage.resolve_timezone_for(session, current.account_id)
-    row = await notifications.preferences_for(session, current.account_id, timezone_name)
+    # Locked, and before any watch row: the notification worker takes the same
+    # two locks in the same order, so turning Product Watch back on cannot
+    # deadlock with a cycle that is deciding about it.
+    row = await notifications.preferences_for(session, current.account_id, timezone_name, lock=True)
+    was_listening = product_watch.listening(row)
     fields = body.model_dump(exclude_unset=True)
     if fields.get("native_push_enabled") is True and not await notifications.active_devices(session, current.account_id):
         raise ValidationFailedError("Register this device before enabling native notifications.", field="native_push_enabled")
@@ -341,5 +346,10 @@ async def patch_notification_preferences(
     for key, value in fields.items():
         if value is not None:
             setattr(row, key, value)
+    if not was_listening and product_watch.listening(row):
+        # Nothing was evaluated for this account's watched products while it
+        # had asked not to hear about them. Whatever became true meanwhile is
+        # baseline now, so switching back on does not deliver a backlog.
+        await product_watch.rebaseline_account(session, current.account_id)
     await session.commit()
     return {"preferences": notifications.serialize_preferences(row)}

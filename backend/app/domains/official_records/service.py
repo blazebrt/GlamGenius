@@ -369,6 +369,42 @@ async def regulatory_change_for_record(
     return projection.as_payload()
 
 
+async def validated_revision_heads(
+    session: AsyncSession, external_record_ids: list[str],
+) -> dict[str, int | None]:
+    """Each official record's ledger head, as this module validates it — bookkeeping only.
+
+    Step 12C's baseline needs to remember *which* revision of a record was
+    current when a customer began watching, so that a later revision can be
+    told apart from one that already existed. That answer belongs to this
+    module: the head comes from :func:`_revision_pair`, which proves the ledger
+    is exactly ``1..N`` and that the canonical pointer agrees with it, and is
+    ``None`` whenever it does not.
+
+    Nothing here is publishable and nothing is published. The number is an
+    opaque cursor for set membership; whether a change may be *stated* is still
+    decided only by :func:`regulatory_change_for_record` and its evidence gate.
+    The invariant reason is not logged again here, because every caller also
+    builds the official-records envelope for the same records, and that path
+    has already named it to the log.
+    """
+    if not external_record_ids:
+        return {}
+    rows = (await session.execute(select(OfficialRecord).where(
+        OfficialRecord.authority == AUTHORITY_FSSAI_FOSCOS,
+        OfficialRecord.record_type == RECORD_TYPE_FOOD_RECALL,
+        OfficialRecord.external_record_id.in_(set(external_record_ids)),
+    ))).scalars().all()
+    heads: dict[str, int | None] = dict.fromkeys(external_record_ids)
+    for row in rows:
+        try:
+            _record, current, _previous = await _revision_pair(session, row)
+        except change_projection.RegulatoryHistoryInvariantError:
+            continue
+        heads[row.external_record_id] = current.revision_number
+    return heads
+
+
 async def official_records_envelope(session: AsyncSession, facts: dict[str, Any] | None) -> dict[str, Any]:
     latest_fetch = await latest_successful_source_check(session)
     return {"authority": "FSSAI / FoSCoS", "record_type": RECORD_TYPE_FOOD_RECALL,

@@ -48,6 +48,7 @@ from app.domains.product import (
     pack_context,
     service,
 )
+from app.domains.product import watch as product_watch
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
 from app.domains.product.models import FssaiComplaintHandoff, LabelSnapshot, ScanDevice
@@ -837,3 +838,93 @@ async def record_scan_decision_event(
         raise HTTPException(status_code=409, detail="idempotency_conflict") from None
 
     return scan_memory.serialize_scan_decision(event)
+
+
+# ---------------------------------------------------------------------------
+# Step 12C — Product Watch
+# ---------------------------------------------------------------------------
+class ProductWatchInput(BaseModel):
+    """The one thing the customer tells us: the version they saw.
+
+    Everything else — which capture, which snapshot, which records are already
+    known — is resolved here from rows this server wrote. ``label_version`` is
+    a compare-and-set against the pack this device proves, so a watch is never
+    anchored to a version the customer was not looking at.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    label_version: int = Field(ge=1)
+
+
+async def optional_device(
+    x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
+    session: AsyncSession = Depends(get_session),
+) -> ScanDevice | None:
+    """The device, when one is presented. Reading watch state needs no device."""
+    return await devices.resolve(session, x_device_token)
+
+
+def _watch_refused(refusal: product_watch.WatchRefused) -> HTTPException:
+    return HTTPException(
+        status_code=refusal.status_code,
+        detail={"code": refusal.code, "message": refusal.message},
+    )
+
+
+@router.get("/scan/verdict/{barcode}/watch")
+async def read_product_watch(
+    barcode: str = BARCODE_PATH,
+    current: CurrentAccount = Depends(get_current_account),
+    device: ScanDevice | None = Depends(optional_device),
+    session: AsyncSession = Depends(get_session),
+):
+    """Whether this account watches this product, and whether this device can.
+
+    Reading changes nothing and sends nothing.
+    """
+    if not product_watch.watchable_barcode(barcode):
+        raise _watch_refused(product_watch.WatchRefused(
+            "barcode_not_watchable", "This product cannot be watched.", status_code=422,
+        ))
+    return await product_watch.watch_state(
+        session, account_id=current.account_id, barcode=barcode, device=device,
+    )
+
+
+@router.put("/scan/verdict/{barcode}/watch")
+async def start_product_watch(
+    body: ProductWatchInput,
+    barcode: str = BARCODE_PATH,
+    current: CurrentAccount = Depends(get_current_account),
+    device: ScanDevice = Depends(current_device),
+    session: AsyncSession = Depends(get_session),
+):
+    """Watch the exact confirmed pack this device holds. Idempotent.
+
+    An explicit request, and the only way a watch begins: a scan, a shelf item,
+    a purchase or a saved decision never starts one. Starting a watch sends
+    nothing and does not ask for notification permission — everything already
+    true of the pack becomes the baseline.
+    """
+    try:
+        state = await product_watch.start_watch(
+            session, account_id=current.account_id, barcode=barcode,
+            label_version=body.label_version, device=device,
+        )
+    except product_watch.WatchRefused as refusal:
+        raise _watch_refused(refusal) from None
+    await session.commit()
+    return state
+
+
+@router.delete("/scan/verdict/{barcode}/watch")
+async def stop_product_watch(
+    barcode: str = BARCODE_PATH,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Stop watching this product. Idempotent; needs no device."""
+    state = await product_watch.stop_watch(session, account_id=current.account_id, barcode=barcode)
+    await session.commit()
+    return state

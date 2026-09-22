@@ -497,6 +497,51 @@ export async function confirmLabel(
   }
 }
 
+// --- Product Watch (Step 12C) ------------------------------------------------
+//
+// Watching is an explicit choice about one exact pack, so it needs both
+// credentials: the account that is choosing, and the device that holds the
+// confirmed capture the watch is anchored to. The server resolves the pack from
+// that device; the client sends only the label version it was shown, as a
+// compare-and-set, never an internal id.
+
+export type ProductWatchState = {
+  contract_version: string;
+  barcode: string;
+  watching: boolean;
+  label_version: number | null;
+  started_at: string | null;
+  watchable: boolean;
+  anchorable_label_version: number | null;
+  watching_this_pack: boolean;
+  reason: string | null;
+  delivery: {
+    notifications_enabled: boolean;
+    product_watch_enabled: boolean;
+    native_push_enabled: boolean;
+  };
+};
+
+const watchPath = (barcode: string): string => `/api/v2/scan/verdict/${encodeURIComponent(barcode)}/watch`;
+
+/** Whether this account watches the product, and whether this phone can. Changes nothing. */
+export async function readProductWatch(barcode: string): Promise<ProductWatchState> {
+  const headers = await deviceHeaders();
+  return (await api.get<ProductWatchState>(watchPath(barcode), { headers })).data;
+}
+
+/** Watch the confirmed pack on this phone. Idempotent; sends no notification and asks for no permission. */
+export async function watchProduct(barcode: string, labelVersion: number): Promise<ProductWatchState> {
+  const headers = await deviceHeaders();
+  if (!headers['X-Device-Token']) throw new Error('no device token');
+  return (await api.put<ProductWatchState>(watchPath(barcode), { label_version: labelVersion }, { headers })).data;
+}
+
+/** Stop watching. Idempotent, and needs no device. */
+export async function unwatchProduct(barcode: string): Promise<ProductWatchState> {
+  return (await api.delete<ProductWatchState>(watchPath(barcode))).data;
+}
+
 // --- Settling the generic scan ledger ---------------------------------------
 //
 // ``scanBarcode`` records its event in the background so a lookup can answer

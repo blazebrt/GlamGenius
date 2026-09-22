@@ -6,6 +6,7 @@ import Constants from 'expo-constants';
 import { COLORS, FONTS, SPACING } from '../src/theme/colors';
 import { getNotificationPreferences, patchNotificationPreferences, registerNotificationDevice, unregisterNotificationDevice, NotificationPreferences } from '../src/services/apiV2';
 import { getInstallationId } from '../src/services/deviceIdentity';
+import { S as PW } from '../src/strings/productWatch';
 
 export default function NotificationsScreen() {
   const router = useRouter();
@@ -99,6 +100,7 @@ export default function NotificationsScreen() {
     <Text style={styles.section}>What can notify me</Text>
     {preferences && ([
       ['today_style', 'Today & Style'], ['care', 'Care'], ['event_preparation', 'Event preparation'], ['maintenance', 'Maintenance'],
+      ['product_watch', PW.notificationsRow],
     ] as const).map(([topic, label]) => <Row key={topic} label={label} value={preferences.topics ? preferences.topics[topic] !== false : true} onValueChange={(value) => void update({ topics: { [topic]: value } })} />)}
     <Text style={styles.section}>Quiet hours</Text>
     <View style={styles.hours}>{[21, 22, 23, 0, 6, 7].map((hour) => <TouchableOpacity key={`quiet-start-${hour}`} accessibilityRole="button" accessibilityLabel={`Quiet hours start ${hour}:00`} onPress={() => void update({ quiet_hours_start: hour })} style={[styles.hour, preferences?.quiet_hours.start === hour && styles.hourActive]}><Text style={styles.hourText}>Start {String(hour).padStart(2, '0')}:00</Text></TouchableOpacity>)}</View>

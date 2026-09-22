@@ -33,6 +33,7 @@ from app.domains.product.models import (
     FssaiComplaintHandoff,
     LabelErrorReport,
     ProductRecord,
+    ProductWatch,
     ScanDevice,
     ScanEvent,
 )
