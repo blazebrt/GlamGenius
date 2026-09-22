@@ -9,7 +9,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from app.domains.routines.safety import needs_professional
+from app.domains.supplements.boundary import requires_boundary
 
 SUPPLEMENT_UTILITY_VERSION = "vc-07-v1"
 SUPPLEMENT_COMPONENT_NORMALIZATION_VERSION = "vc-07-r1"
@@ -83,6 +83,15 @@ def _fact_payload(fact: Any) -> dict[str, Any]:
     }
 
 
+def _purpose_needs_professional(purpose: str | None) -> bool:
+    """The customer's own note, through the one supplement boundary (Step 13).
+
+    A note is a record, not a question, so only the hard handoff gate and the
+    medical check apply to it; see ``boundary.evaluate``.
+    """
+    return requires_boundary(purpose, question=False)
+
+
 def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> dict[str, Any]:
     """Build stable customer-safe utility output from owned item facts."""
     now = today or date.today()
@@ -110,6 +119,7 @@ def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> 
         if not item.get("user_entered_purpose"):
             missing.append("purpose")
         component_rows = [_fact_payload(fact) for fact in facts]
+        professional = _purpose_needs_professional(item.get("user_entered_purpose"))
         for fact in confirmed:
             # The canonical key is established at validated write time. Do not
             # derive a competing identity from customer-entered raw text here.
@@ -133,7 +143,7 @@ def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> 
             "days_to_expiry": (expiry - now).days if expiry else None,
             "label_facts": component_rows,
             "missing_information": sorted(set(missing)),
-            "professional_boundary": bool(needs_professional(item.get("user_entered_purpose"))),
+            "professional_boundary": professional,
             "flags": [
                 {"flag": "no_expiry_date", "message": "Expiry date not added."}
                 for _ in [0] if expiry is None
@@ -145,7 +155,7 @@ def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> 
                 for _ in [0] if expiry is not None and 0 <= (expiry - now).days <= COMING_UP_DAYS
             ] + [
                 {"flag": "professional_question", "message": "This question is best discussed with a qualified professional."}
-                for _ in [0] if needs_professional(item.get("user_entered_purpose"))
+                for _ in [0] if professional
             ],
         })
     overlaps = []

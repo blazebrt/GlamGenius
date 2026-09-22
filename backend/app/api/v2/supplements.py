@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.routines.service import supplement_question
+from app.domains.supplements import boundary as supplement_boundary
 from app.domains.supplements import service
 from app.domains.supplements.schemas import LabelComponentCreate, LabelComponentPatch
 from app.shared.database.sql import get_session
@@ -36,7 +36,17 @@ async def supplement_professional_boundary(
     current: CurrentAccount = Depends(get_current_account),
 ):
     """Route health-like supplement questions without attempting an answer."""
-    return supplement_question(body.question)
+    return supplement_boundary.evaluate(body.question).as_dict()
+
+
+@router.get("/supplements/items/{item_id}")
+async def supplement_detail(
+    item_id: uuid.UUID,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Step 13: one owned supplement's label facts, provenance and overlap."""
+    return await service.detail(session, current.account_id, item_id)
 
 
 @router.get("/supplements/items/{item_id}/label-facts")

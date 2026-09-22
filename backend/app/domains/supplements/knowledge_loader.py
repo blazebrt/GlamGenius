@@ -12,6 +12,15 @@ gate still applies, which means an entry cannot be approved until somebody
 supplies a source URL that opens — and for entries marked
 ``not_enough_information`` that is the correct permanent state.
 
+Step 13 adds one thing to each draft: a **binding** in its ``structured_value``
+recording exactly which structured row values the draft is evidence for (see
+``knowledge_reader``). The customer-facing reader shows a row only while the
+published claim's binding still equals the row, so a row changed after review
+is withheld instead of shown under someone else's approval. A binding is only
+ever written onto a *draft* that has no recorded verification yet; once a
+reviewer has started verifying a draft, or it has moved past draft, the loader
+leaves it alone and any disagreement surfaces as a withheld entry.
+
 Idempotent: running it twice updates the knowledge rows in place and does not
 duplicate the drafts.
 
@@ -27,13 +36,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.evidence import authoring
+from app.domains.evidence.enums import ReviewStatus
 from app.domains.supplements.knowledge import COMPOUNDS, Compound, Verification
+from app.domains.supplements.knowledge_reader import BINDING_KEY, SUBJECT_TYPE, binding_for, row_binding_values
 from app.domains.supplements.models import SupplementComponentKnowledge
 from app.shared.database.sql import get_sessionmaker
 
 logger = logging.getLogger(__name__)
 
-SUBJECT_TYPE = "supplement_component"
+# SUBJECT_TYPE is imported from the reader so the writer and the reader of these
+# claims can never disagree about what they are filed under.
 LOADER_AUTHOR = "knowledge_loader"
 
 
@@ -62,6 +74,12 @@ def _notes(compound: Compound) -> str:
         lines.append(compound.equivalent_note)
     if compound.note:
         lines.append(compound.note)
+    if compound.absorption is not None:
+        # The figure a reviewer must confirm, stated where the reviewer reads.
+        lines.append(
+            f"Absorption figure carried: {compound.absorption.value_text} "
+            f"({compound.absorption.unit}); author's confidence rating: {compound.absorption.confidence}."
+        )
     if compound.absorption and compound.absorption.disagreement:
         lines.append(f"Sources disagree: {compound.absorption.disagreement}")
     lines.append(
@@ -110,11 +128,33 @@ async def _upsert_knowledge(
     return row
 
 
+def _bind_draft(claim: Any, row: SupplementComponentKnowledge) -> bool:
+    """Record on a draft which row values it is evidence for. Drafts only.
+
+    Returns whether anything was written. Never touches a claim that has left
+    draft, or a draft somebody has started verifying: rewriting the numbers
+    under a recorded attestation would make the attestation about something
+    else.
+    """
+    if claim.review_status != ReviewStatus.DRAFT.value:
+        return False
+    current = dict(claim.structured_value or {})
+    if current.get("publication_verification"):
+        return False
+    binding = binding_for(row_binding_values(row))
+    if current.get(BINDING_KEY) == binding:
+        return False
+    current[BINDING_KEY] = binding
+    claim.structured_value = current
+    return True
+
+
 async def load(session: AsyncSession, *, author: str = LOADER_AUTHOR) -> dict[str, Any]:
     from app.domains.evidence.models import EvidenceClaim
 
     created_drafts = 0
     reused_drafts = 0
+    bound_drafts = 0
     for compound in COMPOUNDS:
         # One draft per compound form, found by the subject it describes.
         existing = (await session.execute(
@@ -148,12 +188,17 @@ async def load(session: AsyncSession, *, author: str = LOADER_AUTHOR) -> dict[st
             claim_id = existing.id
             reused_drafts += 1
 
-        await _upsert_knowledge(session, compound, claim_id)
+        row = await _upsert_knowledge(session, compound, claim_id)
+        claim = await session.get(EvidenceClaim, row.evidence_claim_id) if row.evidence_claim_id else None
+        if claim is not None and _bind_draft(claim, row):
+            bound_drafts += 1
+            await session.flush()
 
     return {
         "compounds": len(COMPOUNDS),
         "drafts_created": created_drafts,
         "drafts_reused": reused_drafts,
+        "drafts_bound": bound_drafts,
         "with_absorption": sum(1 for c in COMPOUNDS if c.absorption),
         "not_enough_information": sum(1 for c in COMPOUNDS if not c.absorption),
     }

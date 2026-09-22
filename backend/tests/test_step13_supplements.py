@@ -1,0 +1,1197 @@
+"""Step 13 — governed supplement label and ownership intelligence.
+
+The matrix A–X from the Step 13 brief, against a real PostgreSQL database and
+the real routes. Where a test needs a supplement knowledge entry to be
+*published*, it walks the real authoring workflow (approve, record the
+verification attestations, publish) and performs, as explicit test fixtures,
+the two operator acts the generic authoring tool has no step for: grading the
+claim and classifying its source. Those fixtures stand in for people. Nothing
+in this file claims that any real entry was reviewed; the real knowledge base
+stays unreviewed and is proven dormant in section H.
+"""
+from __future__ import annotations
+
+import ast
+import json
+import logging
+import uuid
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+from app.domains.evidence import authoring as evidence_authoring
+from app.domains.evidence.enums import EvidenceStrength, ReviewStatus, SourceType
+from app.domains.evidence.grading import Verification
+from app.domains.evidence.models import EvidenceClaim, EvidenceClaimSource, EvidenceSource
+from app.domains.inventory.models import InventoryItem
+from app.domains.off.models import OffProduct
+from app.domains.off.store import get_off_sessionmaker
+from app.domains.privacy import deletion_service
+from app.domains.routines.hard_handoff import requires_handoff
+from app.domains.routines.safety import needs_professional
+from app.domains.supplements import boundary as supplement_boundary
+from app.domains.supplements import forms
+from app.domains.supplements.chemistry import elemental_percent
+from app.domains.supplements.detail import build_detail
+from app.domains.supplements.engine import build_utility
+from app.domains.supplements.knowledge import COMPOUNDS
+from app.domains.supplements.knowledge_loader import load
+from app.domains.supplements.knowledge_reader import (
+    BINDING_KEY,
+    KnowledgeStatus,
+    WithheldBecause,
+    read_form_knowledge,
+)
+from app.domains.supplements.models import SupplementComponentKnowledge, SupplementLabelComponent
+from app.shared.database.sql import get_sessionmaker
+from sqlalchemy import delete, select, text
+from sqlalchemy.exc import IntegrityError
+
+from tests.conftest import auth
+from tests.journey import ok
+
+VERIFIED = evidence_authoring.VerificationInput(
+    source_opened=True,
+    founder_verified_fact=True,
+    claude_review_completed=True,
+    codex_review_completed=True,
+    independent_reviews_agree=True,
+    adversarial_review_passed=True,
+    unresolved_doubt=False,
+)
+
+#: Wording this surface may never produce in its own voice.
+ADVICE_PHRASES = (
+    "you should take", "take 2", "take two", "take one", "your dose", "your dosage", "recommended dose",
+    "recommended dosage", "daily intake", "per day you", "you are taking", "too much", "exceed",
+    "safe limit", "upper limit", "you need", "deficient", "unsafe", "toxic", "spoiled", "ineffective",
+    "stop taking", "start taking", "absorbed amount", "you absorb", "you get",
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+async def _supplement(client, headers, name: str, *, expiry: str | None = None, purpose: str | None = None) -> str:
+    details: dict[str, str] = {"supplement_name": name}
+    if expiry:
+        details["expiry_date"] = expiry
+    if purpose:
+        details["user_entered_purpose"] = purpose
+    item = ok(await client.post(
+        "/api/v2/inventory/items", headers=headers,
+        json={"category": "supplements", "display_name": name, "details": details},
+    ))
+    return item["id"]
+
+
+async def _fact(client, headers, item_id: str, raw_name: str, amount: str | None = None,
+                unit: str | None = None, serving_text: str | None = None) -> dict:
+    body = {"raw_name": raw_name, "amount": amount, "unit": unit, "serving_text": serving_text}
+    return ok(await client.post(
+        f"/api/v2/supplements/items/{item_id}/label-facts", headers=headers,
+        json={key: value for key, value in body.items() if value is not None},
+    ))
+
+
+async def _detail(client, headers, item_id: str) -> dict:
+    return ok(await client.get(f"/api/v2/supplements/items/{item_id}", headers=headers))
+
+
+def _component(detail: dict, printed_name: str) -> dict:
+    return next(row for row in detail["components"] if row["printed"]["name"] == printed_name)
+
+
+async def _photo_draft(account_id, item_id: str, raw_name: str, **values) -> uuid.UUID:
+    """A draft as the dormant photo path would write it. There is no public writer today."""
+    from app.domains.supplements.engine import component_identity
+
+    key, _display = component_identity(raw_name)
+    async with get_sessionmaker()() as session:
+        row = SupplementLabelComponent(
+            account_id=account_id, item_id=uuid.UUID(item_id), raw_name=raw_name,
+            normalized_name=key, canonical_component_key=key,
+            source="photo_extracted", verification_state="draft", confidence=0.61,
+            **values,
+        )
+        session.add(row)
+        await session.commit()
+        return row.id
+
+
+async def _load_knowledge() -> None:
+    async with get_sessionmaker()() as session:
+        await load(session)
+        await session.commit()
+
+
+async def _publish_form(
+    form: str,
+    *,
+    confirm_row: bool = True,
+    publish: bool = True,
+    approve: bool = True,
+    source_type: str = SourceType.PEER_REVIEWED_RESEARCH.value,
+) -> uuid.UUID:
+    """Walk one loaded entry to publication. Test fixture: stands in for people.
+
+    Grading the claim and classifying its source are operator acts the generic
+    authoring tool has no step for; they are set directly here and nowhere else.
+    """
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(select(SupplementComponentKnowledge).where(
+            SupplementComponentKnowledge.compound_form == form,
+        ))).scalar_one()
+        claim = await session.get(EvidenceClaim, row.evidence_claim_id)
+        claim.evidence_strength = EvidenceStrength.MODERATE.value
+        claim.strength_rationale = "Test fixture: graded by a person in the real workflow."
+        for link, source in (await session.execute(
+            select(EvidenceClaimSource, EvidenceSource)
+            .join(EvidenceSource, EvidenceSource.id == EvidenceClaimSource.source_id)
+            .where(EvidenceClaimSource.claim_id == claim.id)
+        )).all():
+            source.source_type = source_type
+            source.license_or_use_note = "Test fixture: cited under the publisher's terms."
+        await session.flush()
+        if approve:
+            await evidence_authoring.approve(session, claim.id, reviewer="reviewer")
+            await evidence_authoring.record_publication_verification(
+                session, claim.id, verification=VERIFIED, actor="founder",
+            )
+        if approve and publish:
+            await evidence_authoring.publish(session, claim.id, publisher="founder")
+        if confirm_row:
+            row.verification = Verification.CONFIRMED.value
+        await session.commit()
+        return claim.id
+
+
+async def _knowledge(key: str, form: str):
+    async with get_sessionmaker()() as session:
+        return (await read_form_knowledge(session, [(key, form)]))[(key, form)]
+
+
+def _walk_keys(value, found: set[str]) -> set[str]:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            found.add(str(key))
+            _walk_keys(item, found)
+    elif isinstance(value, list):
+        for item in value:
+            _walk_keys(item, found)
+    return found
+
+
+# ---------------------------------------------------------------------------
+# A. Manual fact provenance
+# ---------------------------------------------------------------------------
+async def test_a_manual_entry_stays_user_declared_and_cannot_become_scan_confirmed(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    item_id = await _supplement(app_client, headers, "Daily C")
+    fact = await _fact(app_client, headers, item_id, "Vitamin C", "500", "mg")
+    assert fact["source"] == "user_declared" and fact["verification_state"] == "confirmed"
+
+    # Confirming a manual fact changes nothing about where it came from.
+    confirmed = ok(await app_client.post(
+        f"/api/v2/supplements/items/{item_id}/label-facts/{fact['id']}/confirm", headers=headers,
+    ))
+    assert confirmed["source"] == "user_declared"
+    for field, value in {"source": "photo_extracted", "verification_state": "draft"}.items():
+        patched = await app_client.patch(
+            f"/api/v2/supplements/items/{item_id}/label-facts/{fact['id']}", headers=headers, json={field: value},
+        )
+        assert patched.status_code == 422, field
+
+    detail = await _detail(app_client, headers, item_id)
+    row = _component(detail, "Vitamin C")
+    assert row["provenance"] == "you_entered"
+    rendered = json.dumps(detail).lower()
+    for masquerade in ("scan_confirmed", "scanned", "verified", "manufacturer", "regulator", "official", "ai_verified"):
+        assert masquerade not in rendered, masquerade
+
+    # The table itself refuses any other provenance, including a scan-confirmed one.
+    async with get_sessionmaker()() as session:
+        for forged in ("scan_confirmed", "manufacturer", "open_food_facts", "ai_verified"):
+            await session.execute(text("SAVEPOINT forged"))
+            with pytest.raises(IntegrityError):
+                await session.execute(
+                    text("UPDATE supplement_label_components SET source = :source WHERE id = :id"),
+                    {"source": forged, "id": uuid.UUID(fact["id"])},
+                )
+            await session.execute(text("ROLLBACK TO SAVEPOINT forged"))
+
+
+# ---------------------------------------------------------------------------
+# B. Cross-account isolation
+# ---------------------------------------------------------------------------
+async def test_b_another_account_cannot_read_change_or_delete_supplement_facts(
+    app_client, db_clean, registered_supabase_user,
+):
+    token_a, account_a = await registered_supabase_user()
+    token_b, account_b = await registered_supabase_user()
+    a, b = auth(token_a), auth(token_b)
+    item_a = await _supplement(app_client, a, "A's Magnesium")
+    fact_a = await _fact(app_client, a, item_a, "Magnesium oxide", "250", "mg")
+    item_b = await _supplement(app_client, b, "B's Magnesium")
+    await _fact(app_client, b, item_b, "Magnesium oxide", "400", "mg")
+
+    base = f"/api/v2/supplements/items/{item_a}"
+    assert (await app_client.get(base, headers=b)).status_code == 404
+    assert (await app_client.get(f"{base}/label-facts", headers=b)).status_code == 404
+    assert (await app_client.post(f"{base}/label-facts", headers=b, json={"raw_name": "Zinc"})).status_code == 404
+    assert (await app_client.patch(f"{base}/label-facts/{fact_a['id']}", headers=b, json={"amount": "1"})).status_code == 404
+    assert (await app_client.post(f"{base}/label-facts/{fact_a['id']}/confirm", headers=b)).status_code == 404
+    assert (await app_client.delete(f"{base}/label-facts/{fact_a['id']}", headers=b)).status_code == 404
+    # B cannot reach A's fact through B's own item either.
+    assert (await app_client.patch(
+        f"/api/v2/supplements/items/{item_b}/label-facts/{fact_a['id']}", headers=b, json={"amount": "1"},
+    )).status_code == 404
+
+    unchanged = ok(await app_client.get(f"{base}/label-facts", headers=a))["label_facts"]
+    assert [row["amount"] for row in unchanged] == ["250"]
+
+    # Same component in both accounts: never an overlap across accounts.
+    detail_a = await _detail(app_client, a, item_a)
+    assert detail_a["overlaps"] == []
+    summary_a = ok(await app_client.get("/api/v2/supplements/summary", headers=a))
+    assert summary_a["overlaps"] == []
+    for payload in (detail_a, summary_a):
+        rendered = json.dumps(payload)
+        assert item_b not in rendered and "B's Magnesium" not in rendered
+        assert str(account_a) not in rendered and str(account_b) not in rendered
+
+
+# ---------------------------------------------------------------------------
+# C. Confirmed versus draft
+# ---------------------------------------------------------------------------
+async def test_c_photo_drafts_drive_nothing_until_the_customer_confirms_them(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account = await registered_supabase_user()
+    headers = auth(token)
+    first = await _supplement(app_client, headers, "Bottle one")
+    second = await _supplement(app_client, headers, "Bottle two")
+    draft_id = await _photo_draft(account, first, "Magnesium oxide", amount=Decimal("250"), unit="mg")
+    await _fact(app_client, headers, second, "Magnesium oxide", "400", "mg")
+
+    detail = await _detail(app_client, headers, first)
+    row = _component(detail, "Magnesium oxide")
+    assert row["provenance"] == "read_from_photo_not_confirmed"
+    assert row["confirmed"] is False and row["counts_for_overlap"] is False
+    for block in ("nutrient", "form", "package_chemistry", "published_knowledge"):
+        assert row[block] == {"status": "awaiting_confirmation"}, block
+    assert detail["overlaps"] == [] and "confirmation" in detail["missing_information"]
+    assert ok(await app_client.get("/api/v2/supplements/summary", headers=headers))["overlaps"] == []
+
+    confirmed = ok(await app_client.post(
+        f"/api/v2/supplements/items/{first}/label-facts/{draft_id}/confirm", headers=headers,
+    ))
+    # Confirmation by the customer is recorded as that, and nothing grander.
+    assert confirmed["source"] == "photo_extracted" and confirmed["verification_state"] == "confirmed"
+    detail = await _detail(app_client, headers, first)
+    row = _component(detail, "Magnesium oxide")
+    assert row["provenance"] == "read_from_photo_confirmed_by_you"
+    assert row["form"] == {"status": "exact", "name": "magnesium oxide"}
+    assert [group["component_key"] for group in detail["overlaps"]] == ["magnesium"]
+
+
+async def test_c_an_unconfirmed_inventory_item_drives_nothing_either():
+    """An AI-drafted item the customer never confirmed: its facts do not count."""
+
+    class Fact:
+        def __init__(self, raw_name):
+            self.id = uuid.uuid4()
+            self.raw_name = raw_name
+            self.normalized_name = "magnesium"
+            self.canonical_component_key = "magnesium"
+            self.amount = Decimal("250")
+            self.unit = "mg"
+            self.serving_text = None
+            self.source = "user_declared"
+            self.verification_state = "confirmed"
+            self.confidence = 1.0
+
+    drafted = {"id": "a", "display_name": "A", "verification_state": "draft", "facts": [Fact("Magnesium oxide")]}
+    other = {"id": "b", "display_name": "B", "verification_state": "confirmed", "facts": [Fact("Magnesium oxide")]}
+    detail = build_detail(drafted, others=[drafted, other], knowledge={})
+    assert detail["overlaps"] == []
+    assert detail["components"][0]["form"] == {"status": "awaiting_confirmation"}
+    assert build_utility([drafted, other])["overlaps"] == []
+
+
+# ---------------------------------------------------------------------------
+# D. Same nutrient, different form
+# ---------------------------------------------------------------------------
+async def test_d_form_knowledge_is_never_transferred_through_a_shared_nutrient_key(
+    app_client, db_clean, registered_supabase_user,
+):
+    await _load_knowledge()
+    await _publish_form("magnesium oxide")
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    oxide = await _supplement(app_client, headers, "Oxide")
+    citrate = await _supplement(app_client, headers, "Citrate")
+    await _fact(app_client, headers, oxide, "Magnesium oxide", "250", "mg")
+    await _fact(app_client, headers, citrate, "Magnesium citrate", "250", "mg")
+
+    oxide_row = _component(await _detail(app_client, headers, oxide), "Magnesium oxide")
+    citrate_row = _component(await _detail(app_client, headers, citrate), "Magnesium citrate")
+    assert oxide_row["published_knowledge"]["status"] == "published"
+    assert citrate_row["published_knowledge"] == {"status": "not_enough_information"}
+    assert citrate_row["form"] == {"status": "exact", "name": "magnesium citrate"}
+    # Both share the nutrient key, which is exactly what must not carry knowledge.
+    assert oxide_row["nutrient"]["key"] == citrate_row["nutrient"]["key"] == "magnesium"
+    oxide_summary = oxide_row["published_knowledge"]["summary"]
+    assert oxide_summary not in json.dumps(citrate_row)
+
+
+def test_d_every_form_resolves_only_to_itself():
+    for spelling, form in forms.EXACT_FORMS.items():
+        resolution = forms.resolve_form(spelling, canonical_component_key=form.canonical_component_key)
+        assert resolution.knowledge_key == (form.canonical_component_key, form.compound_form), spelling
+        # The same printed name under a different nutrient key is refused, not re-keyed.
+        other_key = "iron" if form.canonical_component_key != "iron" else "zinc"
+        assert forms.resolve_form(spelling, canonical_component_key=other_key).status is forms.FormStatus.NOT_ENOUGH_INFORMATION
+
+
+# ---------------------------------------------------------------------------
+# E. Unknown form
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(("printed", "key"), [
+    ("Magnesium", "magnesium"), ("Elemental Iron", "iron"), ("Zinc", "zinc"), ("Calcium", "calcium"),
+    ("Vitamin C", "vitamin c"), ("Vitamin B12", "vitamin b12"), ("Curcumin", "curcumin"), ("CoQ10", "coenzyme q10"),
+])
+def test_e_a_bare_nutrient_name_states_no_form_and_inherits_none(printed, key):
+    resolution = forms.resolve_form(printed, canonical_component_key=key)
+    assert resolution.status is forms.FormStatus.NOT_STATED
+    assert resolution.form is None and resolution.knowledge_key is None
+    chemistry = forms.package_chemistry(resolution)
+    assert chemistry.percent_by_weight is None and chemistry.formula is None
+
+
+@pytest.mark.parametrize(("printed", "key"), [
+    ("Magnesium glycinate", "magnesium"),      # a form is printed, but not one we can pin exactly
+    ("Epsom salt", "magnesium"),               # trivial name; not read as a hydrate
+    ("Calcium citrate malate", "calcium"),     # a different compound from calcium citrate
+    ("5 MTHF", "folate"),                      # racemic or L- is not stated
+    ("Haldi extract", "curcumin"),
+    ("Chelated magnesium", "chelated magnesium"),
+])
+def test_e_an_unrecognised_form_is_not_enough_information(printed, key):
+    resolution = forms.resolve_form(printed, canonical_component_key=key)
+    assert resolution.status is forms.FormStatus.NOT_ENOUGH_INFORMATION
+    assert resolution.knowledge_key is None
+    assert forms.package_chemistry(resolution).status is forms.ChemistryStatus.NOT_ENOUGH_INFORMATION
+
+
+async def test_e_bare_magnesium_gets_nothing_even_when_every_magnesium_form_is_published(
+    app_client, db_clean, registered_supabase_user,
+):
+    await _load_knowledge()
+    for compound in COMPOUNDS:
+        if compound.key == "magnesium" and compound.absorption is not None:
+            await _publish_form(compound.form)
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    item = await _supplement(app_client, headers, "Plain magnesium")
+    await _fact(app_client, headers, item, "Magnesium", "300", "mg")
+    row = _component(await _detail(app_client, headers, item), "Magnesium")
+    assert row["form"] == {"status": "not_stated", "name": None}
+    assert row["package_chemistry"]["status"] == "withheld"
+    assert row["package_chemistry"]["withheld_reason"] == "form_not_stated"
+    assert row["published_knowledge"] == {"status": "not_enough_information"}
+    for compound in COMPOUNDS:
+        if compound.key == "magnesium" and compound.absorption is not None:
+            assert compound.absorption.summary not in json.dumps(row)
+
+
+# ---------------------------------------------------------------------------
+# F. Hydration ambiguity
+# ---------------------------------------------------------------------------
+WITHHELD_MINERALS = sorted(
+    (spelling, form) for spelling, form in forms.EXACT_FORMS.items()
+    if form.canonical_component_key in forms.MINERAL_KEYS and form.formula is None
+)
+
+
+@pytest.mark.parametrize(("spelling", "form"), WITHHELD_MINERALS, ids=[s for s, _ in WITHHELD_MINERALS])
+def test_f_an_ambiguous_mineral_name_never_gets_a_silent_formula(spelling, form):
+    chemistry = forms.package_chemistry(forms.resolve_form(spelling, canonical_component_key=form.canonical_component_key))
+    assert chemistry.status is forms.ChemistryStatus.WITHHELD
+    assert chemistry.withheld_reason is not None
+    assert chemistry.percent_by_weight is None and chemistry.formula is None and chemistry.hydration is None
+
+
+def test_f_the_names_indian_labels_usually_print_are_withheld_for_hydration():
+    for spelling in ("ferrous sulphate", "ferrous sulfate", "zinc sulphate", "calcium citrate",
+                     "calcium lactate", "magnesium chloride", "magnesium sulphate", "ferrous gluconate", "zinc gluconate"):
+        form = forms.EXACT_FORMS[spelling]
+        assert form.withheld is forms.WithheldReason.HYDRATION_NOT_STATED, spelling
+    assert forms.EXACT_FORMS["magnesium citrate"].withheld is forms.WithheldReason.SALT_FORM_NOT_STATED
+    assert forms.EXACT_FORMS["dried ferrous sulphate"].withheld is forms.WithheldReason.COMPOSITION_VARIES
+
+
+async def test_f_no_hydration_figure_reaches_the_customer_for_an_ambiguous_label(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    item = await _supplement(app_client, headers, "Iron")
+    await _fact(app_client, headers, item, "Ferrous Sulphate", "200", "mg")
+    detail = await _detail(app_client, headers, item)
+    row = _component(detail, "Ferrous Sulphate")
+    assert row["form"] == {"status": "exact", "name": "ferrous sulfate"}
+    assert row["package_chemistry"]["status"] == "withheld"
+    assert row["package_chemistry"]["withheld_reason"] == "hydration_not_stated"
+    rendered = json.dumps(detail)
+    for figure in ("36.8", "20.1", "30.0", "32.9", "FeSO4"):
+        assert figure not in rendered, figure
+
+
+# ---------------------------------------------------------------------------
+# G. Arithmetic
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(("printed", "key", "expected", "formula"), [
+    ("Magnesium Oxide", "magnesium", "60.3", "MgO"),
+    ("Zinc oxide", "zinc", "80.3", "ZnO"),
+    ("Calcium carbonate", "calcium", "40.0", "CaCO3"),
+    ("Ferrous fumarate", "iron", "32.9", "FeC4H2O4"),
+    ("Ferrous sulphate heptahydrate", "iron", "20.1", "FeSO4H14O7"),
+    ("Ferrous sulfate anhydrous", "iron", "36.8", "FeSO4"),
+    ("Magnesium chloride hexahydrate", "magnesium", "12.0", "MgCl2H12O6"),
+    ("Magnesium sulphate heptahydrate", "magnesium", "9.9", "MgSO4H14O7"),
+    ("Zinc sulphate monohydrate", "zinc", "36.4", "ZnSO4H2O"),
+    ("Zinc sulfate heptahydrate", "zinc", "22.7", "ZnSO4H14O7"),
+    ("Calcium citrate tetrahydrate", "calcium", "21.1", "Ca3C12H18O18"),
+    ("Calcium citrate anhydrous", "calcium", "24.1", "Ca3C12H10O14"),
+    ("Calcium lactate pentahydrate", "calcium", "13.0", "CaC6H20O11"),
+    ("Ferrous gluconate dihydrate", "iron", "11.6", "FeC12H26O16"),
+    ("Trimagnesium dicitrate anhydrous", "magnesium", "16.2", "Mg3C12H10O14"),
+])
+def test_g_an_exact_form_gives_deterministic_package_chemistry(printed, key, expected, formula):
+    chemistry = forms.package_chemistry(forms.resolve_form(printed, canonical_component_key=key))
+    assert chemistry.status is forms.ChemistryStatus.CALCULATED
+    assert chemistry.formula == formula
+    assert chemistry.percent_by_weight == Decimal(expected)
+    form = forms.EXACT_FORMS[forms.normalize_component(printed)]
+    assert chemistry.percent_by_weight == elemental_percent(form.formula, form.element, form.element_atoms)
+
+
+def test_g_hydrate_figures_agree_with_the_knowledge_base_notes():
+    """Two independent statements of the same arithmetic must agree."""
+    notes = {compound.form: compound.hydration or "" for compound in COMPOUNDS}
+    pairs = {
+        "ferrous sulphate heptahydrate": ("ferrous sulfate", "20.1"),
+        "magnesium chloride hexahydrate": ("magnesium chloride", "12.0"),
+        "magnesium sulphate heptahydrate": ("magnesium sulfate", "9.9"),
+        "zinc sulphate monohydrate": ("zinc sulfate", "36.4"),
+        "zinc sulphate heptahydrate": ("zinc sulfate", "22.7"),
+        "calcium lactate pentahydrate": ("calcium lactate", "13.0"),
+        "ferrous gluconate dihydrate": ("ferrous gluconate", "11.6"),
+        "calcium citrate anhydrous": ("calcium citrate", "24.1"),
+    }
+    for spelling, (compound_form, figure) in pairs.items():
+        form = forms.EXACT_FORMS[spelling]
+        assert str(elemental_percent(form.formula, form.element, form.element_atoms)) == figure
+        assert figure in notes[compound_form], (spelling, notes[compound_form])
+
+
+async def test_g_chemistry_is_never_combined_with_the_printed_amount(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    item = await _supplement(app_client, headers, "Mag")
+    await _fact(app_client, headers, item, "Magnesium oxide", "500", "mg", "2 capsules daily")
+    detail = await _detail(app_client, headers, item)
+    row = _component(detail, "Magnesium oxide")
+    assert row["package_chemistry"]["percent_by_weight"] == "60.3"
+    assert row["printed"] == {"name": "Magnesium oxide", "amount": "500", "unit": "mg", "serving_text": "2 capsules daily"}
+    rendered = json.dumps(detail).lower()
+    # 500 mg x 60.3% = 301.5 mg; no product of the two appears anywhere.
+    for derived in ("301.5", "301", "302", "603"):
+        assert derived not in rendered
+    keys = _walk_keys(detail, set())
+    for forbidden in ("absorbed", "absorption_amount", "intake", "daily", "dose", "dosage", "total", "sum", "elemental_amount"):
+        assert not any(forbidden in key for key in keys), forbidden
+    for phrase in ADVICE_PHRASES:
+        assert phrase not in rendered, phrase
+
+
+# ---------------------------------------------------------------------------
+# H. Unverified knowledge
+# ---------------------------------------------------------------------------
+async def test_h_the_loaded_knowledge_base_is_dormant_for_every_form(db_clean):
+    await _load_knowledge()
+    pairs = [(compound.key, compound.form) for compound in COMPOUNDS]
+    async with get_sessionmaker()() as session:
+        decided = await read_form_knowledge(session, pairs)
+        rows = (await session.execute(select(SupplementComponentKnowledge))).scalars().all()
+        claims = (await session.execute(select(EvidenceClaim).where(
+            EvidenceClaim.subject_type == "supplement_component",
+        ))).scalars().all()
+    assert len(decided) == len(COMPOUNDS)
+    assert {row.status for row in decided.values()} == {KnowledgeStatus.NOT_ENOUGH_INFORMATION}
+    assert {row.verification for row in rows} == {Verification.UNVERIFIED.value}
+    assert {claim.review_status for claim in claims} == {ReviewStatus.DRAFT.value}
+    # Every loaded draft carries its binding, so review has something exact to approve.
+    assert all(BINDING_KEY in (claim.structured_value or {}) for claim in claims)
+
+
+async def test_h_a_high_confidence_rating_is_not_verification(db_clean):
+    await _load_knowledge()
+    d3 = next(c for c in COMPOUNDS if c.form.startswith("vitamin D3"))
+    assert str(d3.absorption.confidence) == "high"
+    decided = await _knowledge("vitamin d", d3.form)
+    assert decided.status is KnowledgeStatus.NOT_ENOUGH_INFORMATION
+    assert decided.withheld_because is WithheldBecause.ROW_UNVERIFIED
+
+
+async def test_h_a_published_claim_over_an_unverified_row_is_withheld(db_clean):
+    await _load_knowledge()
+    await _publish_form("magnesium oxide", confirm_row=False)
+    decided = await _knowledge("magnesium", "magnesium oxide")
+    assert decided.status is KnowledgeStatus.NOT_ENOUGH_INFORMATION
+    assert decided.withheld_because is WithheldBecause.ROW_UNVERIFIED
+
+
+# ---------------------------------------------------------------------------
+# I. Draft evidence
+# ---------------------------------------------------------------------------
+async def test_i_a_confirmed_row_over_a_draft_claim_is_withheld(db_clean, caplog):
+    await _load_knowledge()
+    await _publish_form("magnesium oxide", approve=False, publish=False)
+    with caplog.at_level(logging.WARNING, logger="app.domains.supplements.knowledge_reader"):
+        decided = await _knowledge("magnesium", "magnesium oxide")
+    assert decided.status is KnowledgeStatus.NOT_ENOUGH_INFORMATION
+    assert decided.withheld_because is WithheldBecause.CLAIM_NOT_PUBLISHED
+    assert any(getattr(record, "reason", None) == "claim_not_published" for record in caplog.records)
+
+
+async def test_i_an_approved_but_unpublished_claim_is_withheld(db_clean):
+    await _load_knowledge()
+    await _publish_form("magnesium oxide", publish=False)
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(select(SupplementComponentKnowledge).where(
+            SupplementComponentKnowledge.compound_form == "magnesium oxide",
+        ))).scalar_one()
+        assert (await session.get(EvidenceClaim, row.evidence_claim_id)).review_status == ReviewStatus.APPROVED.value
+    decided = await _knowledge("magnesium", "magnesium oxide")
+    assert decided.withheld_because is WithheldBecause.CLAIM_NOT_PUBLISHED
+
+
+# ---------------------------------------------------------------------------
+# J. Published reviewed knowledge
+# ---------------------------------------------------------------------------
+async def test_j_only_fully_published_knowledge_reaches_the_customer_with_its_source(
+    app_client, db_clean, registered_supabase_user,
+):
+    await _load_knowledge()
+    claim_id = await _publish_form("magnesium oxide")
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    item = await _supplement(app_client, headers, "Oxide")
+    await _fact(app_client, headers, item, "Magnesium oxide", "250", "mg")
+    detail = await _detail(app_client, headers, item)
+    knowledge = _component(detail, "Magnesium oxide")["published_knowledge"]
+    oxide = next(c for c in COMPOUNDS if c.form == "magnesium oxide")
+    assert knowledge["status"] == "published"
+    assert knowledge["summary"] == oxide.absorption.summary
+    assert knowledge["value"] == oxide.absorption.value_text
+    assert knowledge["unit"] == oxide.absorption.unit
+    assert knowledge["disagreement"] == oxide.absorption.disagreement
+    assert knowledge["source"]["url"] == oxide.absorption.source_url
+    assert knowledge["source"]["name"] and knowledge["source"]["publisher"]
+    rendered = json.dumps(detail)
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(select(SupplementComponentKnowledge).where(
+            SupplementComponentKnowledge.compound_form == "magnesium oxide",
+        ))).scalar_one()
+    for internal in (str(claim_id), str(row.id), "reviewer", "founder", "publication_verification", BINDING_KEY):
+        assert internal not in rendered, internal
+
+
+# ---------------------------------------------------------------------------
+# K. Missing source
+# ---------------------------------------------------------------------------
+async def test_k_a_claim_with_no_source_link_is_withheld(db_clean):
+    await _load_knowledge()
+    claim_id = await _publish_form("magnesium oxide")
+    async with get_sessionmaker()() as session:
+        await session.execute(delete(EvidenceClaimSource).where(EvidenceClaimSource.claim_id == claim_id))
+        await session.commit()
+    decided = await _knowledge("magnesium", "magnesium oxide")
+    assert decided.withheld_because is WithheldBecause.NO_PUBLIC_SOURCE
+
+
+async def test_k_an_unclassified_source_is_withheld(db_clean):
+    """The authoring tool files new sources as ``other``; that cannot carry a public claim."""
+    await _load_knowledge()
+    await _publish_form("magnesium oxide", source_type=SourceType.OTHER.value)
+    decided = await _knowledge("magnesium", "magnesium oxide")
+    assert decided.withheld_because is WithheldBecause.NO_PUBLIC_SOURCE
+
+
+async def test_k_a_not_enough_information_entry_can_never_carry_a_figure(db_clean):
+    await _load_knowledge()
+    decided = await _knowledge("magnesium", "magnesium bisglycinate")
+    assert decided.status is KnowledgeStatus.NOT_ENOUGH_INFORMATION
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(select(SupplementComponentKnowledge).where(
+            SupplementComponentKnowledge.compound_form == "magnesium bisglycinate",
+        ))).scalar_one()
+        row.verification = Verification.CONFIRMED.value
+        await session.commit()
+    decided = await _knowledge("magnesium", "magnesium bisglycinate")
+    assert decided.withheld_because is WithheldBecause.ROW_HAS_NO_FIGURE
+
+
+# ---------------------------------------------------------------------------
+# L. Bad or unopenable source
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("bad_url", ["https://", "https://?x=1", "ftp://example.org/paper", "javascript:alert(1)", "https://exa mple.org/x"])
+async def test_l_an_unopenable_source_url_is_withheld(db_clean, bad_url):
+    await _load_knowledge()
+    claim_id = await _publish_form("magnesium oxide")
+    async with get_sessionmaker()() as session:
+        for _link, source in (await session.execute(
+            select(EvidenceClaimSource, EvidenceSource)
+            .join(EvidenceSource, EvidenceSource.id == EvidenceClaimSource.source_id)
+            .where(EvidenceClaimSource.claim_id == claim_id)
+        )).all():
+            source.canonical_url = bad_url
+        await session.commit()
+    assert (await _knowledge("magnesium", "magnesium oxide")).status is KnowledgeStatus.NOT_ENOUGH_INFORMATION
+
+
+async def test_l_a_row_url_that_is_not_the_reviewed_source_is_withheld(db_clean):
+    await _load_knowledge()
+    await _publish_form("magnesium oxide")
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(select(SupplementComponentKnowledge).where(
+            SupplementComponentKnowledge.compound_form == "magnesium oxide",
+        ))).scalar_one()
+        row.source_url = "https://"
+        await session.commit()
+    decided = await _knowledge("magnesium", "magnesium oxide")
+    assert decided.withheld_because is WithheldBecause.ROW_SOURCE_NOT_OPENABLE
+
+
+# ---------------------------------------------------------------------------
+# M. Knowledge row / evidence mismatch
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(("field", "value"), [
+    ("absorption_value", "about 40"),
+    ("absorption_summary", "Absorbed as well as any other salt."),
+    ("absorption_unit", "% of something else"),
+    ("disagreement", None),
+    ("confidence", "high"),
+])
+async def test_m_a_row_edited_after_review_is_withheld(db_clean, caplog, field, value):
+    await _load_knowledge()
+    await _publish_form("magnesium oxide")
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(select(SupplementComponentKnowledge).where(
+            SupplementComponentKnowledge.compound_form == "magnesium oxide",
+        ))).scalar_one()
+        setattr(row, field, value)
+        await session.commit()
+    with caplog.at_level(logging.WARNING, logger="app.domains.supplements.knowledge_reader"):
+        decided = await _knowledge("magnesium", "magnesium oxide")
+    assert decided.status is KnowledgeStatus.NOT_ENOUGH_INFORMATION
+    assert decided.withheld_because is WithheldBecause.BINDING_MISMATCH
+    assert any(getattr(record, "reason", None) == "binding_mismatch" for record in caplog.records)
+
+
+async def test_m_a_published_claim_for_another_form_is_never_accepted(db_clean):
+    """Point citrate's row at oxide's fully published claim: refused, not re-labelled."""
+    await _load_knowledge()
+    oxide_claim = await _publish_form("magnesium oxide")
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(select(SupplementComponentKnowledge).where(
+            SupplementComponentKnowledge.compound_form == "magnesium citrate",
+        ))).scalar_one()
+        row.evidence_claim_id = oxide_claim
+        row.verification = Verification.CONFIRMED.value
+        await session.commit()
+    decided = await _knowledge("magnesium", "magnesium citrate")
+    assert decided.withheld_because is WithheldBecause.CLAIM_SUBJECT_MISMATCH
+
+
+async def test_m_a_published_claim_without_its_binding_is_withheld(db_clean):
+    await _load_knowledge()
+    claim_id = await _publish_form("magnesium oxide")
+    async with get_sessionmaker()() as session:
+        claim = await session.get(EvidenceClaim, claim_id)
+        value = dict(claim.structured_value)
+        value.pop(BINDING_KEY)
+        claim.structured_value = value
+        await session.commit()
+    assert (await _knowledge("magnesium", "magnesium oxide")).withheld_because is WithheldBecause.BINDING_MISSING
+
+
+async def test_m_reviewed_claim_text_must_contain_the_sentence_shown(db_clean):
+    await _load_knowledge()
+    claim_id = await _publish_form("magnesium oxide")
+    async with get_sessionmaker()() as session:
+        claim = await session.get(EvidenceClaim, claim_id)
+        claim.summary = "magnesium oxide is 60.3% magnesium by weight (elemental)."
+        await session.commit()
+    assert (await _knowledge("magnesium", "magnesium oxide")).withheld_because is WithheldBecause.CLAIM_TEXT_MISMATCH
+
+
+async def test_m_a_disputed_row_is_withheld_even_over_a_published_claim(db_clean):
+    await _load_knowledge()
+    await _publish_form("magnesium oxide")
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(select(SupplementComponentKnowledge).where(
+            SupplementComponentKnowledge.compound_form == "magnesium oxide",
+        ))).scalar_one()
+        row.verification = Verification.DISPUTED.value
+        await session.commit()
+    assert (await _knowledge("magnesium", "magnesium oxide")).withheld_because is WithheldBecause.ROW_DISPUTED
+
+
+async def test_m_editing_a_published_claim_withdraws_it_until_the_new_version_is_published(db_clean):
+    await _load_knowledge()
+    claim_id = await _publish_form("magnesium oxide")
+    async with get_sessionmaker()() as session:
+        claim = await session.get(EvidenceClaim, claim_id)
+        await evidence_authoring.edit(session, claim_id, evidence_authoring.EntryInput(
+            subject_type=claim.subject_type, subject_key=claim.subject_key, claim=claim.summary,
+            source_name="Edited source", source_url="https://example.org/edited", evidence_tier=claim.evidence_tier,
+            domain=claim.domain,
+        ), author="editor")
+        await session.commit()
+    assert (await _knowledge("magnesium", "magnesium oxide")).status is KnowledgeStatus.NOT_ENOUGH_INFORMATION
+
+
+async def test_m_the_loader_never_rebinds_a_draft_under_recorded_verification(db_clean):
+    await _load_knowledge()
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(select(SupplementComponentKnowledge).where(
+            SupplementComponentKnowledge.compound_form == "magnesium oxide",
+        ))).scalar_one()
+        claim = await session.get(EvidenceClaim, row.evidence_claim_id)
+        await evidence_authoring.record_publication_verification(
+            session, claim.id, verification=VERIFIED, actor="founder",
+        )
+        value = dict(claim.structured_value)
+        binding = dict(value[BINDING_KEY])
+        binding["absorption_value"] = "a figure somebody verified"
+        value[BINDING_KEY] = binding
+        claim.structured_value = value
+        await session.commit()
+    async with get_sessionmaker()() as session:
+        summary = await load(session)
+        await session.commit()
+    assert summary["drafts_bound"] == 0
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(select(SupplementComponentKnowledge).where(
+            SupplementComponentKnowledge.compound_form == "magnesium oxide",
+        ))).scalar_one()
+        claim = await session.get(EvidenceClaim, row.evidence_claim_id)
+        assert claim.structured_value[BINDING_KEY]["absorption_value"] == "a figure somebody verified"
+
+
+# ---------------------------------------------------------------------------
+# N, O, P. Overlap, no totals, same-item duplicates
+# ---------------------------------------------------------------------------
+async def test_n_o_p_overlap_is_factual_per_product_and_never_a_total(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    one = await _supplement(app_client, headers, "One bottle")
+    two = await _supplement(app_client, headers, "Two bottle")
+    await _fact(app_client, headers, one, "Vitamin C", "500", "mg", "Per tablet")
+    await _fact(app_client, headers, one, "Ascorbic acid", "250", "mg", "Per tablet")   # same item, alias
+    await _fact(app_client, headers, two, "Vitamin C", "250", "mg", "Per tablet")
+
+    detail = await _detail(app_client, headers, one)
+    assert len(detail["overlaps"]) == 1
+    group = detail["overlaps"][0]
+    assert group["component_key"] == "vitamin c"
+    assert group["product_count"] == 2, "two rows on one bottle are still one product"
+    assert group["printed_names_here"] == ["Ascorbic acid", "Vitamin C"]
+    assert group["other_products"] == [{"inventory_item_id": two, "product_name": "Two bottle", "printed_names": ["Vitamin C"]}]
+    summary = ok(await app_client.get("/api/v2/supplements/summary", headers=headers))
+    assert [row["product_count"] for row in summary["overlaps"]] == [2]
+
+    for payload in (detail, summary):
+        rendered = json.dumps(payload).lower()
+        assert "750" not in rendered and "1000" not in rendered, "amounts are never added"
+        for phrase in ADVICE_PHRASES:
+            assert phrase not in rendered, phrase
+    keys = _walk_keys(detail, set())
+    assert not any(word in key for key in keys for word in ("total", "sum", "daily", "intake", "combined"))
+    # Overlap carries names, never amounts.
+    assert "amount" not in json.dumps(detail["overlaps"])
+
+
+# ---------------------------------------------------------------------------
+# Q. Printed serving text
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("serving", ["2 capsules daily", "Take 1 tablet after food", "1 scoop (5 g)", "As directed by physician"])
+async def test_q_serving_text_is_returned_exactly_as_printed(app_client, db_clean, registered_supabase_user, serving):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    item = await _supplement(app_client, headers, "Bottle")
+    await _fact(app_client, headers, item, "Zinc", "10", "mg", serving)
+    detail = await _detail(app_client, headers, item)
+    row = _component(detail, "Zinc")
+    assert row["printed"]["serving_text"] == serving
+    rendered = json.dumps(detail)
+    assert rendered.count(serving) == 1, "the printed text appears once, as printed, and is not restated"
+    lowered = rendered.lower()
+    for rewrite in ("you should take", "your dose", "your dosage", "take 2 capsules", "recommended"):
+        assert rewrite not in lowered.replace(serving.lower(), ""), rewrite
+
+
+# ---------------------------------------------------------------------------
+# R. Professional boundary
+# ---------------------------------------------------------------------------
+BOUNDARY_QUESTIONS = {
+    "medicine interaction": ["Can I take this with my blood pressure tablets?", "Does this interact with metformin?"],
+    "pregnancy": ["Is this ok while pregnant?", "Can I use this in my first trimester?"],
+    "breastfeeding": ["Is this fine while breastfeeding?"],
+    "child use": ["Is this ok for kids?", "Can children take this?", "Can my son have this?"],
+    "disease or condition": ["Does this help with a disease?", "Is this ok with my kidney condition?", "Will this help my diabetes?"],
+    "deficiency": ["Am I deficient in iron?", "Do I have low vitamin D?", "Is my B12 low?"],
+    "side effects": ["What are the side effects?"],
+    "adverse reaction": ["I felt sick after this", "I had a reaction to this", "I got a rash after taking this"],
+    "dose": ["How much should I take?", "Is this dose too high?", "How many capsules a day?"],
+    "overdose": ["What if I overdose?", "Can I take too much?"],
+    "lab result": ["My lab report shows low ferritin", "My test results came back low"],
+    "whether to start": ["Should I start this?", "Do I need this?", "Is it worth taking?"],
+    "whether to stop": ["Should I stop this?", "Can I quit taking it?"],
+    "recommendation": ["Which supplement should I buy?", "What is the best magnesium?"],
+}
+ORDINARY_QUESTIONS = ["Where should I store this bottle?", "When does this expire?", "What does the label say?"]
+
+
+@pytest.mark.parametrize(
+    ("category", "question"),
+    [(category, question) for category, items in BOUNDARY_QUESTIONS.items() for question in items],
+)
+async def test_r_health_like_questions_route_out_and_are_never_answered(
+    app_client, db_clean, registered_supabase_user, category, question,
+):
+    token, _account = await registered_supabase_user()
+    response = ok(await app_client.post(
+        "/api/v2/supplements/professional-boundary", headers=auth(token), json={"question": question},
+    ))
+    assert response["boundary"] is True, (category, question)
+    rendered = json.dumps(response).lower()
+    for phrase in ADVICE_PHRASES + ("mg", "mcg", "iu"):
+        assert f" {phrase} " not in f" {rendered} ", phrase
+    assert question.lower() not in rendered, "the person's words are never echoed back"
+
+
+@pytest.mark.parametrize("question", ORDINARY_QUESTIONS)
+async def test_r_ordinary_questions_get_the_tracking_statement_not_an_answer(
+    app_client, db_clean, registered_supabase_user, question,
+):
+    token, _account = await registered_supabase_user()
+    response = ok(await app_client.post(
+        "/api/v2/supplements/professional-boundary", headers=auth(token), json={"question": question},
+    ))
+    assert response == {"boundary": False, "message": supplement_boundary.NO_BOUNDARY_MESSAGE}
+
+
+def test_r_the_hard_handoff_gate_is_called_first_and_never_overridden():
+    decided = supplement_boundary.evaluate("Is this ok while pregnant?")
+    assert decided.rule == "hard_handoff:pregnancy"
+    # The gate's fail-closed reading of a bare taking-frame stands in supplement context too.
+    assert requires_handoff("I take this after breakfast.") is True
+    assert supplement_boundary.evaluate("I take this after breakfast.").boundary is True
+
+
+def test_r_the_supplement_patterns_close_gaps_the_existing_authorities_demonstrably_leave():
+    """Why a supplement layer exists at all: each of these slips past both older checks."""
+    gaps = [
+        "Is this ok for kids?", "Does this help with a disease?", "Do I have low vitamin D?",
+        "I felt sick after this", "How many capsules a day?", "What if I overdose?",
+        "My lab report shows low ferritin", "Should I start this?", "Should I stop this?",
+        "Do I need this?", "Which supplement should I buy?",
+    ]
+    for question in gaps:
+        assert requires_handoff(question) is False, question
+        assert needs_professional(question) is False, question
+        assert supplement_boundary.requires_boundary(question) is True, question
+
+
+async def test_r_a_health_like_note_on_the_item_shows_the_boundary_on_the_detail(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    flagged = await _supplement(app_client, headers, "Flagged", purpose="For my thyroid")
+    plain = await _supplement(app_client, headers, "Plain", purpose="Better sleep")
+    boundary = (await _detail(app_client, headers, flagged))["professional_boundary"]
+    assert boundary["boundary"] is True and boundary["message"]
+    assert "thyroid" not in json.dumps(boundary).lower()
+    assert (await _detail(app_client, headers, plain))["professional_boundary"] == {
+        "boundary": False, "reason": None, "message": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# S. Expiry
+# ---------------------------------------------------------------------------
+async def test_s_expiry_states_are_factual(app_client, db_clean, registered_supabase_user):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    today = date.today()
+    cases = {
+        "past": (today - timedelta(days=1)).isoformat(),
+        "coming_up": (today + timedelta(days=30)).isoformat(),
+        "current": (today + timedelta(days=400)).isoformat(),
+        "unknown": None,
+    }
+    for state, expiry in cases.items():
+        item = await _supplement(app_client, headers, f"Expiry {state}", expiry=expiry)
+        detail = await _detail(app_client, headers, item)
+        assert detail["expiry"]["state"] == state
+        assert detail["expiry"]["date"] == expiry
+        assert ("expiry_date" in detail["missing_information"]) is (expiry is None)
+        rendered = json.dumps(detail).lower()
+        for word in ("toxic", "unsafe", "ineffective", "spoiled", "dispose", "throw away", "replace it"):
+            assert word not in rendered, word
+    summary = ok(await app_client.get("/api/v2/supplements/summary", headers=headers))
+    messages = {flag["message"] for row in summary["supplements"] for flag in row["flags"]}
+    assert messages == {"Past the date you recorded.", "Date coming up.", "Expiry date not added."}
+
+
+# ---------------------------------------------------------------------------
+# T. Privacy export
+# ---------------------------------------------------------------------------
+async def test_t_export_carries_label_facts_and_provenance_without_internal_ids(
+    app_client, db_clean, registered_supabase_user,
+):
+    await _load_knowledge()
+    claim_id = await _publish_form("magnesium oxide")
+    token_a, account_a = await registered_supabase_user()
+    token_b, account_b = await registered_supabase_user()
+    a, b = auth(token_a), auth(token_b)
+    item_a = await _supplement(app_client, a, "A oxide")
+    fact_a = await _fact(app_client, a, item_a, "Magnesium oxide", "250", "mg", "1 tablet")
+    draft_a = await _photo_draft(account_a, item_a, "Zinc oxide")
+    item_b = await _supplement(app_client, b, "B oxide")
+    fact_b = await _fact(app_client, b, item_b, "Magnesium oxide", "400", "mg")
+
+    exported = ok(await app_client.get("/api/v2/privacy/export", headers=a))
+    rows = exported["domains"]["routines"]["supplement_label_components"]
+    by_id = {row["id"]: row for row in rows}
+    assert set(by_id) == {fact_a["id"], str(draft_a)}
+    manual = by_id[fact_a["id"]]
+    assert manual["raw_name"] == "Magnesium oxide" and manual["unit"] == "mg" and manual["serving_text"] == "1 tablet"
+    assert manual["source"] == "user_declared" and manual["verification_state"] == "confirmed"
+    assert by_id[str(draft_a)]["source"] == "photo_extracted" and by_id[str(draft_a)]["verification_state"] == "draft"
+    for row in rows:
+        for internal in ("account_id", "source_ai_run_id", "model_version", "prompt_version", "client_mutation_id"):
+            assert internal not in row, internal
+    rendered = json.dumps(exported["domains"]["routines"]["supplement_label_components"])
+    assert fact_b["id"] not in rendered and str(account_b) not in rendered
+    # Global knowledge and its review metadata are not the person's data.
+    assert str(claim_id) not in json.dumps(exported)
+    assert "supplement_component_knowledge" not in json.dumps(list(exported["domains"]))
+
+
+# ---------------------------------------------------------------------------
+# U. Inventory item deletion
+# ---------------------------------------------------------------------------
+async def test_u_removing_an_item_takes_its_label_facts_out_of_every_surface(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account = await registered_supabase_user()
+    headers = auth(token)
+    kept = await _supplement(app_client, headers, "Kept")
+    removed = await _supplement(app_client, headers, "Removed")
+    await _fact(app_client, headers, kept, "Zinc oxide", "10", "mg")
+    removed_fact = await _fact(app_client, headers, removed, "Zinc oxide", "15", "mg")
+    assert len((await _detail(app_client, headers, kept))["overlaps"]) == 1
+
+    assert (await app_client.delete(f"/api/v2/inventory/items/{removed}", headers=headers)).status_code == 200
+    assert (await app_client.get(f"/api/v2/supplements/items/{removed}", headers=headers)).status_code == 404
+    assert (await app_client.get(f"/api/v2/supplements/items/{removed}/label-facts", headers=headers)).status_code == 404
+    assert (await app_client.patch(
+        f"/api/v2/supplements/items/{removed}/label-facts/{removed_fact['id']}", headers=headers, json={"amount": "1"},
+    )).status_code == 404
+    assert (await _detail(app_client, headers, kept))["overlaps"] == []
+    summary = ok(await app_client.get("/api/v2/supplements/summary", headers=headers))
+    assert [row["display_name"] for row in summary["supplements"]] == ["Kept"] and summary["overlaps"] == []
+
+    # Removing the item row itself removes its facts with it: nothing is orphaned.
+    async with get_sessionmaker()() as session:
+        await session.execute(delete(InventoryItem).where(InventoryItem.id == uuid.UUID(removed)))
+        await session.commit()
+        left = (await session.execute(select(SupplementLabelComponent).where(
+            SupplementLabelComponent.account_id == account,
+        ))).scalars().all()
+    assert [row.item_id for row in left] == [uuid.UUID(kept)]
+
+
+async def test_u_label_facts_cascade_from_both_their_item_and_their_account(db_clean):
+    async with get_sessionmaker()() as session:
+        rules = dict((await session.execute(text(
+            """
+            SELECT kcu.column_name, rc.delete_rule
+            FROM information_schema.referential_constraints rc
+            JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = rc.constraint_name
+            WHERE kcu.table_name = 'supplement_label_components'
+              AND kcu.column_name IN ('item_id', 'account_id')
+            """
+        ))).all())
+    assert rules == {"item_id": "CASCADE", "account_id": "CASCADE"}
+
+
+# ---------------------------------------------------------------------------
+# V. Account deletion
+# ---------------------------------------------------------------------------
+async def test_v_deleting_the_account_removes_its_supplement_facts_and_nobody_elses(
+    app_client, db_clean, registered_supabase_user, monkeypatch,
+):
+    token_a, account_a = await registered_supabase_user()
+    token_b, account_b = await registered_supabase_user()
+    item_a = await _supplement(app_client, auth(token_a), "A")
+    await _fact(app_client, auth(token_a), item_a, "Vitamin C", "500", "mg")
+    await _photo_draft(account_a, item_a, "Zinc oxide")
+    item_b = await _supplement(app_client, auth(token_b), "B")
+    fact_b = await _fact(app_client, auth(token_b), item_b, "Vitamin C", "250", "mg")
+
+    class _Admin:
+        class auth:
+            class admin:
+                @staticmethod
+                def delete_user(_uid):
+                    return None
+
+    monkeypatch.setattr(deletion_service, "get_supabase_admin", lambda: _Admin())
+    assert (await app_client.delete("/api/v2/privacy/account", headers=auth(token_a))).status_code == 202
+    async with get_sessionmaker()() as session:
+        await deletion_service.drain_all(session)
+        await session.commit()
+    async with get_sessionmaker()() as session:
+        remaining = (await session.execute(select(SupplementLabelComponent))).scalars().all()
+    assert [str(row.id) for row in remaining] == [fact_b["id"]]
+    assert all(row.account_id == account_b for row in remaining)
+
+
+# ---------------------------------------------------------------------------
+# W. Open Food Facts separation
+# ---------------------------------------------------------------------------
+async def test_w_open_food_facts_can_never_become_a_confirmed_supplement_label_fact(
+    app_client, db_clean, off_clean, registered_supabase_user,
+):
+    token, account = await registered_supabase_user()
+    headers = auth(token)
+    barcode = "8901234567899"
+    async with get_off_sessionmaker()() as off_session:
+        off_session.add(OffProduct(
+            barcode=barcode, product_name="OFF Magnesium Tablets", brands="OFF Brand",
+            ingredients_text="Magnesium oxide 500 mg, Zinc oxide 10 mg", fetched_at=datetime.now(UTC),
+        ))
+        await off_session.commit()
+    device = await app_client.post("/api/v2/scan/device", json={"device_key": uuid.uuid4().hex, "platform": "android"})
+    assert device.status_code == 201
+    # A product lookup reads Store A; it must write nothing into supplement tables.
+    looked_up = await app_client.get(
+        f"/api/v2/scan/lookup/{barcode}", headers={**headers, "X-Device-Token": device.json()["token"]},
+    )
+    assert looked_up.status_code == 200 and "OFF Magnesium Tablets" in looked_up.text
+    item = await _supplement(app_client, headers, "OFF Magnesium Tablets")
+    detail = await _detail(app_client, headers, item)
+    assert detail["components"] == [] and "label_components" in detail["missing_information"]
+    async with get_sessionmaker()() as session:
+        assert (await session.execute(select(SupplementLabelComponent).where(
+            SupplementLabelComponent.account_id == account,
+        ))).scalars().all() == []
+    rendered = json.dumps(detail)
+    assert "Magnesium oxide 500 mg" not in rendered and "OFF Brand" not in rendered
+
+
+def test_w_the_supplement_domain_never_imports_store_a():
+    root = Path(__file__).resolve().parents[1] / "app" / "domains" / "supplements"
+    for path in sorted(root.glob("*.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                assert not node.module.startswith("app.domains.off"), f"{path.name} imports {node.module}"
+            if isinstance(node, ast.Import):
+                assert not any(alias.name.startswith("app.domains.off") for alias in node.names), path.name
+    from app.domains.off.models import OffBase
+    assert SupplementLabelComponent.__table__.metadata is not OffBase.metadata
+    assert SupplementComponentKnowledge.__table__.metadata is not OffBase.metadata
+
+
+# ---------------------------------------------------------------------------
+# X. Unknown knowledge
+# ---------------------------------------------------------------------------
+async def test_x_an_exact_form_with_no_knowledge_row_is_not_enough_information(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    item = await _supplement(app_client, headers, "Unloaded")
+    await _fact(app_client, headers, item, "Ferrous fumarate", "100", "mg")
+    row = _component(await _detail(app_client, headers, item), "Ferrous fumarate")
+    assert row["form"] == {"status": "exact", "name": "ferrous fumarate"}
+    assert row["published_knowledge"] == {"status": "not_enough_information"}
+    assert (await _knowledge("iron", "ferrous fumarate")).withheld_because is WithheldBecause.NO_ROW
+
+
+async def test_x_a_component_nobody_has_described_is_not_enough_information(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    item = await _supplement(app_client, headers, "Selenium")
+    await _fact(app_client, headers, item, "Sodium selenite", "55", "mcg")
+    row = _component(await _detail(app_client, headers, item), "Sodium selenite")
+    assert row["nutrient"]["status"] == "not_identified"
+    assert row["form"] == {"status": "not_enough_information", "name": None}
+    assert row["package_chemistry"]["status"] == "not_enough_information"
+    assert row["published_knowledge"] == {"status": "not_enough_information"}
+    # Printed unit kept exactly as entered; never normalised or converted.
+    assert row["printed"]["unit"] == "mcg"
+
+
+@pytest.mark.parametrize("unit", ["µg", "mcg", "IU", "mg", "% RDA", "mg/tab"])
+async def test_x_printed_units_are_preserved_and_never_converted(app_client, db_clean, registered_supabase_user, unit):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    item = await _supplement(app_client, headers, "Units")
+    await _fact(app_client, headers, item, "Vitamin D3", "1000", unit)
+    row = _component(await _detail(app_client, headers, item), "Vitamin D3")
+    assert row["printed"]["amount"] == "1000" and row["printed"]["unit"] == unit
+    assert row["package_chemistry"]["status"] == "not_applicable"
+
+
+# ---------------------------------------------------------------------------
+# Contract hygiene
+# ---------------------------------------------------------------------------
+async def test_the_detail_route_requires_a_registered_account(app_client, db_clean, fake_supabase_user):
+    item = uuid.uuid4()
+    assert (await app_client.get(f"/api/v2/supplements/items/{item}")).status_code == 401
+    token, _uid = fake_supabase_user()
+    response = await app_client.get(f"/api/v2/supplements/items/{item}", headers=auth(token))
+    assert response.status_code == 403
+
+
+async def test_the_detail_carries_no_internal_identifiers(app_client, db_clean, registered_supabase_user):
+    token, account = await registered_supabase_user()
+    headers = auth(token)
+    item = await _supplement(app_client, headers, "Hygiene")
+    await _photo_draft(account, item, "Zinc oxide")
+    detail = await _detail(app_client, headers, item)
+    keys = _walk_keys(detail, set())
+    for internal in ("account_id", "source_ai_run_id", "ai_run_id", "model_version", "prompt_version",
+                     "evidence_claim_id", "claim_id", "knowledge_row_id", "storage_key", "withheld_because",
+                     "reviewed_by", "published_by", "client_mutation_id", "confidence"):
+        assert internal not in keys, internal
+    assert str(account) not in json.dumps(detail)

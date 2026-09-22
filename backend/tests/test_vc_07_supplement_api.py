@@ -62,12 +62,21 @@ async def test_professional_boundary_requires_registered_account(
         assert prohibited not in medical_text
 
     ordinary = ok(await app_client.post(
-        path, headers=auth(registered_token), json={"question": "I take this after breakfast."},
+        path, headers=auth(registered_token), json={"question": "Where should I store this bottle?"},
     ))
     assert ordinary == {
         "boundary": False,
         "message": "We track supplements as inventory — name, brand, dates and how often you take them.",
     }
+
+    # Step 13: this route now calls the constitutional hard handoff gate, which
+    # fails closed on a bare "I take ..." frame whose object it cannot identify.
+    # This sentence was routed as ordinary before Step 13; it is now handed off.
+    taking_frame = ok(await app_client.post(
+        path, headers=auth(registered_token), json={"question": "I take this after breakfast."},
+    ))
+    assert taking_frame["boundary"] is True
+    assert taking_frame["reason"] == "hard_handoff:medication"
 
 
 async def test_owned_label_facts_overlap_and_cross_account_isolation(

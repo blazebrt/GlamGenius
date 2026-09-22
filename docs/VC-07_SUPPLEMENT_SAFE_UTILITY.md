@@ -32,3 +32,19 @@ or manufacturing a medical reference system.
 
 Amounts stored by this domain are printed package facts. They are displayed per
 product and never summed into an intake or daily total.
+
+## Relationship to Step 13
+
+Step 13 (`docs/architecture/SUPPLEMENT_AUTHORITY.md`) builds on this utility
+and keeps every boundary above. It adds a governed per-item detail
+(`GET /api/v2/supplements/items/{id}`): provenance worded as provenance, exact
+compound-form identity from the printed name, calculated package chemistry only
+when the printed name fixes one formula, published research only through one
+governed reader (which withholds every existing entry today), per-product
+overlap, and missing-information states. The professional-boundary route now
+calls the constitutional hard handoff gate first. The `vc-07-v1` summary
+contract is unchanged.
+
+"Intake calculations, elemental-form conversion" above remain unsupported:
+Step 13's package chemistry is the element's share of a compound's weight, a
+property of the compound, and is never multiplied by a printed amount.

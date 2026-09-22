@@ -3,6 +3,7 @@ import {
   confirmSupplementLabelFact,
   createSupplementLabelFact,
   deleteSupplementLabelFact,
+  getSupplementDetail,
   getSupplementLabelFacts,
   getSupplementUtility,
   patchSupplementLabelFact,
@@ -33,6 +34,12 @@ describe('VC-07 supplement utility API', () => {
     expect(api.patch).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-facts/fact-1', { amount: '250', unit: 'mg' });
     expect(api.post).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-facts/fact-1/confirm');
     expect(api.delete).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-facts/fact-1');
+  });
+
+  it('reads the Step 13 detail from the account-scoped item route', async () => {
+    (api.get as jest.Mock).mockResolvedValue({ data: { contract_version: 'step-13-v1', components: [] } });
+    await getSupplementDetail('item-1');
+    expect(api.get).toHaveBeenCalledWith('/api/v2/supplements/items/item-1');
   });
 
   it('keeps the utility summary and professional boundary separate from advice', async () => {

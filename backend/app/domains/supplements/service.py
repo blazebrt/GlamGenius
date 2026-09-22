@@ -10,7 +10,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.inventory.models import InventoryItem, SupplementDetail
+from app.domains.supplements.detail import build_detail, knowledge_pairs
 from app.domains.supplements.engine import build_utility, component_identity
+from app.domains.supplements.knowledge_reader import read_form_knowledge
 from app.domains.supplements.models import SupplementLabelComponent
 from app.domains.supplements.schemas import LabelComponentCreate, LabelComponentPatch
 from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
@@ -154,7 +156,12 @@ async def confirm_fact(session: AsyncSession, account_id: uuid.UUID, item_id: uu
     return row
 
 
-async def summary(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
+async def _owned_payloads(session: AsyncSession, account_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Every active supplement this account owns, with its detail row and facts.
+
+    Account-scoped at the SQL level on every read: items, facts and detail rows
+    are all filtered to this account's own items.
+    """
     items = list((await session.execute(select(InventoryItem).where(
         InventoryItem.account_id == account_id,
         InventoryItem.category == "supplements",
@@ -173,10 +180,24 @@ async def summary(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any
         detail = detail_by_item.get(item.id)
         payload_items.append({
             "id": str(item.id), "display_name": item.display_name, "brand": item.brand,
+            "source": item.source,
             "verification_state": item.verification_state,
             "user_entered_purpose": detail.user_entered_purpose if detail else None,
             "expiry_date": detail.expiry_date if detail else None,
             "use_frequency": detail.use_frequency if detail else None,
             "facts": facts_by_item[item.id],
         })
-    return build_utility(payload_items)
+    return payload_items
+
+
+async def summary(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
+    return build_utility(await _owned_payloads(session, account_id))
+
+
+async def detail(session: AsyncSession, account_id: uuid.UUID, item_id: uuid.UUID) -> dict[str, Any]:
+    """Step 13: the customer detail for one owned supplement."""
+    item = await owned_supplement_item(session, account_id, item_id)
+    payloads = await _owned_payloads(session, account_id)
+    this = next(row for row in payloads if row["id"] == str(item.id))
+    knowledge = await read_form_knowledge(session, knowledge_pairs(this, this["facts"]))
+    return build_detail(this, others=payloads, knowledge=knowledge)

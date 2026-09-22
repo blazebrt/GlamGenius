@@ -9,6 +9,7 @@
  * are shared. Only the path prefix differs.
  */
 import { api } from './api';
+import type { ChemistryWithheldReason, SupplementExpiryState, SupplementProvenance } from '../strings/supplements';
 
 // Every V2 call is prefixed with `/api/v2`. The shared axios instance in
 // `./api` uses the backend origin as its baseURL and does not add `/api` on
@@ -2399,6 +2400,70 @@ export interface SupplementUtilitySummary {
   fingerprint: string;
 }
 
+/** Step 13 — one owned supplement as the detail surface reads it. */
+export type SupplementDetailStatus = 'awaiting_confirmation';
+
+export interface SupplementDetailComponent {
+  id: string;
+  printed: { name: string; amount: string | null; unit: string | null; serving_text: string | null };
+  provenance: SupplementProvenance;
+  confirmed: boolean;
+  counts_for_overlap: boolean;
+  missing_information: string[];
+  nutrient:
+    | { status: SupplementDetailStatus }
+    | { status: 'identified' | 'not_identified'; key: string; display_name: string | null };
+  form:
+    | { status: SupplementDetailStatus }
+    | { status: 'exact' | 'not_stated' | 'not_enough_information'; name: string | null };
+  package_chemistry:
+    | { status: SupplementDetailStatus }
+    | {
+      status: 'calculated' | 'withheld' | 'not_applicable' | 'not_enough_information';
+      element: string | null;
+      element_symbol: string | null;
+      percent_by_weight: string | null;
+      formula: string | null;
+      hydration: string | null;
+      withheld_reason: ChemistryWithheldReason | null;
+    };
+  published_knowledge:
+    | { status: SupplementDetailStatus | 'not_enough_information' }
+    | {
+      status: 'published';
+      summary: string;
+      value: string;
+      unit: string | null;
+      disagreement: string | null;
+      evidence_strength: string | null;
+      source: { name: string; publisher: string; url: string };
+    };
+}
+
+export interface SupplementDetail {
+  contract_version: string;
+  item: {
+    inventory_item_id: string;
+    display_name: string;
+    brand: string | null;
+    user_entered_purpose: string | null;
+    provenance: SupplementProvenance;
+    confirmed: boolean;
+  };
+  expiry: { state: SupplementExpiryState; date: string | null; days_to_expiry: number | null };
+  components: SupplementDetailComponent[];
+  overlaps: {
+    component_key: string;
+    nutrient_display_name: string | null;
+    printed_names_here: string[];
+    other_products: { inventory_item_id: string; product_name: string; printed_names: string[] }[];
+    product_count: number;
+  }[];
+  missing_information: string[];
+  professional_boundary: { boundary: boolean; reason: string | null; message: string | null };
+  fingerprint: string;
+}
+
 export interface NutritionSuggestion {
   rule_id: string;
   rule_version: string;
@@ -2666,6 +2731,9 @@ export const getSupplementsSummary = async (): Promise<{
 
 export const getSupplementUtility = async (): Promise<SupplementUtilitySummary> =>
   (await api.get<SupplementUtilitySummary>(`${V2}/supplements/summary`)).data;
+
+export const getSupplementDetail = async (itemId: string): Promise<SupplementDetail> =>
+  (await api.get<SupplementDetail>(`${V2}/supplements/items/${encodeURIComponent(itemId)}`)).data;
 
 export const getSupplementLabelFacts = async (itemId: string): Promise<{ label_facts: SupplementLabelFact[] }> =>
   (await api.get<{ label_facts: SupplementLabelFact[] }>(`${V2}/supplements/items/${itemId}/label-facts`)).data;
