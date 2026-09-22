@@ -1889,6 +1889,8 @@ async def test_a_new_exact_record_with_corrupt_ledger_is_not_proactively_notifie
     async with get_sessionmaker()() as session:
         await session.execute(update(OfficialRecordRevision).values(content_hash="f" * 64))
         await session.commit()
+    async with get_sessionmaker()() as session:
+        assert (await official_records.validated_revision_heads(session, [RECALL_ID]))[RECALL_ID] is None
 
     with caplog.at_level(logging.WARNING):
         assert await _decide(account_id) is None
