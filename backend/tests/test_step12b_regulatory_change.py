@@ -480,6 +480,51 @@ async def test_l3_a_revision_of_another_record_cannot_be_the_predecessor(db_clea
 
 
 @pytest.mark.asyncio
+async def test_the_predecessor_is_selected_from_this_record_alone(db_clean, tmp_path):
+    """Pair selection is by record and revision number, not by "a revision 1".
+
+    Two records each hold a revision 1 and a revision 2. A selection that asked
+    only for ``revision_number == current - 1`` would be free to return the
+    other record's row, and the integrity authority would then refuse a
+    comparison that was never wrong in the first place — the customer sees the
+    same withheld envelope either way, so only this test can tell them apart.
+    """
+    await _ingest_rows(
+        tmp_path, checked_at=SOURCE_CHECKED_AT,
+        rows=[
+            data_row(recall_id=901, brand=BRAND, product=PRODUCT, batch=BATCH, status="Ongoing"),
+            data_row(recall_id=902, brand="Other", product="Other cereal", batch="B-777",
+                     status="Ongoing"),
+        ],
+    )
+    await _ingest_rows(
+        tmp_path, checked_at=LATER,
+        rows=[
+            data_row(recall_id=901, brand=BRAND, product=PRODUCT, batch=BATCH, status="Completed"),
+            data_row(recall_id=902, brand="Other", product="Other cereal", batch="B-777",
+                     status="Completed"),
+        ],
+    )
+
+    for external_id in ("901", "902"):
+        record = await _record(external_id)
+        async with get_sessionmaker()() as session:
+            current, previous = await official_records._revision_pair(session, record)
+        assert current is not None and previous is not None
+        assert current.record_id == record.id
+        assert previous.record_id == record.id
+        assert (current.revision_number, previous.revision_number) == (2, 1)
+        # And the pair projects cleanly, which it could not do if either row
+        # had come from the other record.
+        projection = project_regulatory_change(
+            record=record, current=current, previous=previous,
+            current_fetch=await _fetch_for(current), previous_fetch=await _fetch_for(previous),
+        )
+        assert projection.status is RegulatoryChangeStatus.CHANGED
+        assert projection.changed_fields == ("recall_status",)
+
+
+@pytest.mark.asyncio
 async def test_l5_a_fetch_from_another_authority_fails_closed(db_clean, tmp_path):
     """A revision must be derived from a look at this record's own register."""
     await _ingest(tmp_path, checked_at=SOURCE_CHECKED_AT, status="Initiated")
