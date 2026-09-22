@@ -745,25 +745,45 @@ async def test_o_the_publishing_branch_works_when_both_authorities_permit_it(
     12345,
 ])
 @pytest.mark.asyncio
-async def test_o2_the_gate_is_not_satisfied_by_a_manufactured_locator(db_clean, tmp_path, candidate):
+async def test_o2_the_gate_is_not_satisfied_by_a_manufactured_locator(
+    db_clean, tmp_path, candidate, monkeypatch,
+):
     """No assembled string opens the publication gate.
 
-    The register landing page is the tempting one: it is genuinely official and
-    genuinely openable. It is still refused as *revision* evidence, because one
-    constant page shared by every revision cannot say which revision it proves.
+    Two separate refusals, and both matter. A digest, a filename, a relative
+    path, a ``file://`` URL and an empty or non-string value are not sources at
+    all. The register landing page is the tempting one: it is genuinely
+    official and genuinely openable, and it is still refused as *revision*
+    evidence, because one constant page shared by every revision cannot say
+    which revision it proves.
     """
     await _ingest(tmp_path, checked_at=SOURCE_CHECKED_AT, status="Initiated")
     record = await _record()
     revision = (await _revisions())[0]
+    openable = candidate == "https://foscos.fssai.gov.in/food-recall"
 
-    if candidate == "https://foscos.fssai.gov.in/food-recall":
-        # Openable in the general sense, and still not a revision locator.
+    if openable:
         assert change_evidence.is_openable_official_source(candidate) is True
         assert record.source_url == candidate
+    else:
+        assert change_evidence.is_openable_official_source(candidate) is False
+
+    # As things stand there is no revision-level locator at all, so every
+    # candidate — the real page included — fails to evidence this revision.
     assert change_evidence.revision_source(revision) is None
     assert change_evidence.regulatory_change_is_publishable(
         record=record, current=revision, previous=None,
     ) is False
+
+    # And the day such a field exists, it still has to hold a real source.
+    # Wiring each candidate into that lookup opens the gate for the openable
+    # one and for none of the manufactured ones.
+    monkeypatch.setattr(change_evidence, "_REVISION_LOCATOR_FIELDS", ("archive_url",))
+    revision.archive_url = candidate
+    assert (change_evidence.revision_source(revision) is not None) is openable
+    assert change_evidence.regulatory_change_is_publishable(
+        record=record, current=revision, previous=None,
+    ) is openable
 
 
 # ---------------------------------------------------------------------------
