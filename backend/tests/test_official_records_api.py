@@ -148,10 +148,12 @@ async def test_confirmed_pack_receives_the_exact_matching_official_record(
         # locator exists to source a comparison from.
         "regulatory_change",
     }
+    # Withheld is not "unchanged": every part of the comparison is null, never
+    # an empty list or ``false`` that a client would read as "nothing moved".
     assert envelope["records"][0]["regulatory_change"] == {
         "scope": "official_record_history", "status": "unavailable",
         "current_revision": None, "previous_revision": None,
-        "changed_fields": [], "changes": [], "exact_identity_changed": False,
+        "changed_fields": None, "changes": None, "exact_identity_changed": None,
     }
 
 

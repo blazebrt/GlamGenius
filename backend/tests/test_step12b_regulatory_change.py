@@ -37,7 +37,7 @@ from app.domains.official_records.models import (
     OfficialRecordRevision,
     OfficialSourceFetch,
 )
-from app.domains.official_records.source import stable_content_hash
+from app.domains.official_records.source import SOURCE_URL, stable_content_hash
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import delete, select
 
@@ -509,7 +509,7 @@ async def test_the_predecessor_is_selected_from_this_record_alone(db_clean, tmp_
     for external_id in ("901", "902"):
         record = await _record(external_id)
         async with get_sessionmaker()() as session:
-            current, previous = await official_records._revision_pair(session, record)
+            _fresh, current, previous = await official_records._revision_pair(session, record)
         assert current is not None and previous is not None
         assert current.record_id == record.id
         assert previous.record_id == record.id
@@ -599,6 +599,267 @@ async def test_l4_a_record_with_no_revision_at_all_fails_closed(db_clean, tmp_pa
     assert "record_has_no_revision" in caplog.text
     # Never null, which a client could read as "there is no history here".
     assert envelope is not None
+
+
+# ---------------------------------------------------------------------------
+# The ledger proves its own head. The canonical pointer is a claim it checks.
+# ---------------------------------------------------------------------------
+async def _service_change(caplog, external_record_id: str = RECALL_ID):
+    """The real ``regulatory_change_for_record`` path, with the reasons it logged."""
+    record = await _record(external_record_id)
+    caplog.clear()
+    async with get_sessionmaker()() as session:
+        with caplog.at_level(logging.WARNING, logger="app.domains.official_records.service"):
+            envelope = await official_records.regulatory_change_for_record(session, record)
+    reasons = [
+        row.getMessage().rsplit("reason=", 1)[-1]
+        for row in caplog.records
+        if "regulatory_history_invariant_failed" in row.getMessage()
+    ]
+    return envelope, reasons
+
+
+async def _ingest_chain(tmp_path, statuses):
+    """One legitimate import per status, each at a later source time."""
+    for step, status in enumerate(statuses):
+        await _ingest(tmp_path, checked_at=SOURCE_CHECKED_AT + timedelta(days=3 * step), status=status)
+
+
+async def _set_record(**values):
+    async with get_sessionmaker()() as session:
+        record = (await session.execute(select(OfficialRecord).where(
+            OfficialRecord.external_record_id == RECALL_ID
+        ))).scalars().one()
+        for name, value in values.items():
+            setattr(record, name, value)
+        await session.commit()
+
+
+async def _delete_revision(number: int):
+    async with get_sessionmaker()() as session:
+        record = (await session.execute(select(OfficialRecord).where(
+            OfficialRecord.external_record_id == RECALL_ID
+        ))).scalars().one()
+        await session.execute(delete(OfficialRecordRevision).where(
+            OfficialRecordRevision.record_id == record.id,
+            OfficialRecordRevision.revision_number == number,
+        ))
+        await session.commit()
+
+
+def _force_publication(monkeypatch):
+    """Lift the evidence gate, so only the integrity authority stands in the way.
+
+    With the gate closed every answer is withheld anyway, which would hide
+    whether the integrity authority accepted a history it should have refused.
+    """
+    monkeypatch.setattr(
+        official_records.change_evidence, "regulatory_change_is_publishable",
+        lambda **_kwargs: True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_d2_a_regressed_pointer_is_refused_rather_than_trusted(db_clean, tmp_path, caplog):
+    """Ledger 1, 2; pointer 1. The newest observation may not be hidden by the pointer."""
+    await _ingest_chain(tmp_path, ["Ongoing", "Completed"])
+    await _set_record(latest_revision=1)
+
+    envelope, reasons = await _service_change(caplog)
+
+    assert envelope == UNAVAILABLE_PROJECTION.as_payload()
+    assert reasons == ["canonical_latest_revision_pointer_mismatch"]
+
+
+@pytest.mark.asyncio
+async def test_d2_revision_one_is_not_silently_accepted_as_the_whole_history(
+    db_clean, off_clean, app_client, device, registered_supabase_user, tmp_path, caplog, monkeypatch,  # noqa: F811
+):
+    """The sharp case: pointer *and* canonical row rolled back together.
+
+    A record row restored from an old backup agrees perfectly with revision 1,
+    so every content check passes — and revision 2 still sits in the ledger.
+    Trusting the pointer would present revision 1 as a first observation.
+    """
+    token, account_id = await registered_supabase_user()
+    await confirm_label(app_client, device, token, account_id, BARCODE, label_facts())
+    await _ingest_chain(tmp_path, ["Ongoing", "Completed"])
+    await _set_record(latest_revision=1, recall_status="Ongoing")
+    _force_publication(monkeypatch)
+
+    with caplog.at_level(logging.WARNING, logger="app.domains.official_records.service"):
+        change, body = await _matched_change(app_client, device)
+
+    assert change == UNAVAILABLE_PROJECTION.as_payload()
+    assert change["status"] != "first_observed_record"
+    assert "canonical_latest_revision_pointer_mismatch" in caplog.text
+    assert "canonical_latest_revision_pointer_mismatch" not in repr(body)
+
+
+@pytest.mark.asyncio
+async def test_d2_a_pointer_ahead_of_the_ledger_is_refused(db_clean, tmp_path, caplog):
+    """Ledger 1, 2; pointer 3. The pointer names an observation that does not exist."""
+    await _ingest_chain(tmp_path, ["Ongoing", "Completed"])
+    await _set_record(latest_revision=3)
+
+    envelope, reasons = await _service_change(caplog)
+
+    assert envelope == UNAVAILABLE_PROJECTION.as_payload()
+    assert reasons == ["canonical_latest_revision_pointer_mismatch"]
+
+
+@pytest.mark.parametrize("removed", [1, 2])
+@pytest.mark.asyncio
+async def test_d2_a_hidden_sequence_gap_is_refused_not_bridged(
+    db_clean, tmp_path, caplog, monkeypatch, removed,
+):
+    """Ledger 1..3 with one revision gone. No plausible chain is built from survivors.
+
+    Removing revision 1 leaves ``2, 3`` — a pair that compares cleanly on its
+    own. Removing revision 2 leaves ``1, 3``. Both are histories no supported
+    import writes, and both are refused whatever the evidence gate would say.
+    """
+    await _ingest_chain(tmp_path, ["Initiated", "Ongoing", "Completed"])
+    await _delete_revision(removed)
+    _force_publication(monkeypatch)
+
+    envelope, reasons = await _service_change(caplog)
+
+    assert envelope == UNAVAILABLE_PROJECTION.as_payload()
+    assert reasons == ["revision_ledger_sequence_invalid"]
+
+
+@pytest.mark.asyncio
+async def test_d2_a_valid_three_revision_ledger_still_compares_its_head(
+    db_clean, tmp_path, caplog, monkeypatch,
+):
+    """The checks refuse corruption, not length: 1..3 compares revision 3 with 2."""
+    await _ingest_chain(tmp_path, ["Initiated", "Ongoing", "Completed"])
+    _force_publication(monkeypatch)
+
+    envelope, reasons = await _service_change(caplog)
+
+    assert reasons == []
+    assert envelope["status"] == "changed"
+    assert (envelope["current_revision"], envelope["previous_revision"]) == (3, 2)
+    assert envelope["changes"] == [
+        {"field": "recall_status", "previous_value": "Ongoing", "current_value": "Completed"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_d2_a_concurrent_import_is_not_mistaken_for_a_corrupt_pointer(
+    db_clean, tmp_path, caplog, monkeypatch,
+):
+    """An import landing mid-request must not raise a false integrity alarm.
+
+    The record row is loaded first, as ``recalls_for_pack`` loads it; an import
+    then commits revision 3. Checking the stale in-memory pointer against the
+    live ledger would call that corruption. The pointer and the aggregate are
+    read in one statement, so they always come from the same snapshot.
+    """
+    await _ingest_chain(tmp_path, ["Initiated", "Ongoing"])
+    _force_publication(monkeypatch)
+    async with get_sessionmaker()() as session:
+        stale = (await session.execute(select(OfficialRecord).where(
+            OfficialRecord.external_record_id == RECALL_ID
+        ))).scalars().one()
+        assert stale.latest_revision == 2
+        await _ingest(tmp_path, checked_at=SOURCE_CHECKED_AT + timedelta(days=6), status="Completed")
+
+        with caplog.at_level(logging.WARNING, logger="app.domains.official_records.service"):
+            envelope = await official_records.regulatory_change_for_record(session, stale)
+
+    assert "regulatory_history_invariant_failed" not in caplog.text
+    assert envelope["status"] == "changed"
+    assert (envelope["current_revision"], envelope["previous_revision"]) == (3, 2)
+
+
+# ---------------------------------------------------------------------------
+# Revision time is bound to its own source check, and moves strictly forward
+# ---------------------------------------------------------------------------
+async def _revision_and_fetch(number: int):
+    async with get_sessionmaker()() as session:
+        record = (await session.execute(select(OfficialRecord).where(
+            OfficialRecord.external_record_id == RECALL_ID
+        ))).scalars().one()
+        revision = (await session.execute(select(OfficialRecordRevision).where(
+            OfficialRecordRevision.record_id == record.id,
+            OfficialRecordRevision.revision_number == number,
+        ))).scalars().one()
+        return revision.id, revision.source_fetch_id
+
+
+async def _stamp(number: int, *, observed_at=None, source_checked_at=None):
+    """Corrupt stored time after a legitimate import, as a hand edit would."""
+    revision_id, fetch_id = await _revision_and_fetch(number)
+    async with get_sessionmaker()() as session:
+        if observed_at is not None:
+            revision = await session.get(OfficialRecordRevision, revision_id)
+            revision.observed_at = observed_at
+        if source_checked_at is not None:
+            fetch = await session.get(OfficialSourceFetch, fetch_id)
+            fetch.source_checked_at = source_checked_at
+        await session.commit()
+
+
+@pytest.mark.parametrize(("number", "reason"), [
+    (2, "current_revision_observation_time_mismatch"),
+    (1, "previous_revision_observation_time_mismatch"),
+])
+@pytest.mark.asyncio
+async def test_d3_a_revision_detached_from_its_own_source_check_fails_closed(
+    db_clean, tmp_path, caplog, monkeypatch, number, reason,
+):
+    """``observed_at`` is the source time of the check that produced the revision.
+
+    The drift is kept small and keeps the pair in order, so no chronology
+    check could catch it: only binding each revision to its own fetch does.
+    """
+    await _ingest_chain(tmp_path, ["Ongoing", "Completed"])
+    drifted = (SOURCE_CHECKED_AT if number == 1 else LATER) + timedelta(minutes=1)
+    await _stamp(number, observed_at=drifted)
+    _force_publication(monkeypatch)
+
+    envelope, reasons = await _service_change(caplog)
+
+    assert envelope == UNAVAILABLE_PROJECTION.as_payload()
+    assert reasons == [reason]
+
+
+@pytest.mark.asyncio
+async def test_d3_two_revisions_at_the_same_source_time_fail_closed(
+    db_clean, tmp_path, caplog, monkeypatch,
+):
+    """The importer refuses a second artifact at the same instant; so does this.
+
+    Revision 1 *and* its fetch are moved to revision 2's time, so each revision
+    still agrees with its own fetch. What remains is two semantic revisions of
+    one record observed at one moment, which no accepted import produces.
+    """
+    await _ingest_chain(tmp_path, ["Ongoing", "Completed"])
+    await _stamp(1, observed_at=LATER, source_checked_at=LATER)
+    _force_publication(monkeypatch)
+
+    envelope, reasons = await _service_change(caplog)
+
+    assert envelope == UNAVAILABLE_PROJECTION.as_payload()
+    assert reasons == ["revision_observation_order_invalid"]
+
+
+@pytest.mark.asyncio
+async def test_d3_a_predecessor_observed_after_its_successor_fails_closed(
+    db_clean, tmp_path, caplog, monkeypatch,
+):
+    """Source time only moves forward. A predecessor from the future was not imported."""
+    await _ingest_chain(tmp_path, ["Ongoing", "Completed"])
+    await _stamp(1, observed_at=LATER_STILL, source_checked_at=LATER_STILL)
+    _force_publication(monkeypatch)
+
+    envelope, reasons = await _service_change(caplog)
+
+    assert envelope == UNAVAILABLE_PROJECTION.as_payload()
+    assert reasons == ["revision_observation_order_invalid"]
 
 
 # ---------------------------------------------------------------------------
@@ -734,56 +995,149 @@ async def test_o_the_publishing_branch_works_when_both_authorities_permit_it(
     assert change["exact_identity_changed"] is False
 
 
-@pytest.mark.parametrize("candidate", [
-    "https://foscos.fssai.gov.in/food-recall",  # real, openable, not revision-specific
-    "d" * 64,                                    # a SHA-256 is not a locator
-    "foscos-food-recall.xlsx",                   # a filename is not a locator
-    "/api/v2/official-records/901",              # our own API citing itself
+#: Never revision evidence, whatever field it sits in. The first block is the
+#: one generic register page in every spelling; the rest are not the regulator.
+NOT_REVISION_EVIDENCE = [
+    "https://foscos.fssai.gov.in/food-recall",
+    "https://foscos.fssai.gov.in/food-recall/",
+    "https://foscos.fssai.gov.in/food-recall//",
+    "https://foscos.fssai.gov.in/food-recall?revision=2",
+    "https://foscos.fssai.gov.in/food-recall#revision-2",
+    "https://FOSCOS.FSSAI.GOV.IN/food-recall",
+    "http://foscos.fssai.gov.in/food-recall/archive/revision-2",
+    "https://foscos.fssai.gov.in:443/food-recall/archive/revision-2",
+    "https://example.com/revision/2",
+    "https://example.com/archive/123",
+    "https://evil.example/food-recall/archive/revision-2",
+    "https://glamgenius.app/food-recall/archive/revision-2",
+    "https://foscos.fssai.gov.in.evil.example/food-recall/archive/revision-2",
+    "https://evil.foscos.fssai.gov.in/food-recall/archive/revision-2",
+    "https://foscos.fssai.gov.in./food-recall/archive/revision-2",
+    "https://foscos.fssai.gov.in@evil.example/food-recall/archive/revision-2",
+    "https://user:secret@foscos.fssai.gov.in/food-recall/archive/revision-2",
+    "https://foscos.fssai.gov.in/food-recall/../admin",
+    "https://foscos.fssai.gov.in/food-recall/%2e%2e/admin",
+    "https://foscos.fssai.gov.in/food-recallx/archive",
+    "https://foscos.fssai.gov.in/other/archive",
+    " https://foscos.fssai.gov.in/food-recall/archive/revision-2",
+    "/api/v2/official-records/901",
+    "/food-recall/archive/revision-2",
     "file:///tmp/foscos.xlsx",
+    "foscos-food-recall.xlsx",
+    "d" * 64,
     "",
     None,
     12345,
-])
-@pytest.mark.asyncio
-async def test_o2_the_gate_is_not_satisfied_by_a_manufactured_locator(
-    db_clean, tmp_path, candidate, monkeypatch,
-):
-    """No assembled string opens the publication gate.
+]
 
-    Two separate refusals, and both matter. A digest, a filename, a relative
-    path, a ``file://`` URL and an empty or non-string value are not sources at
-    all. The register landing page is the tempting one: it is genuinely
-    official and genuinely openable, and it is still refused as *revision*
-    evidence, because one constant page shared by every revision cannot say
-    which revision it proves.
+#: Test-only. Shaped like a page beneath the official register that shows one
+#: revision, and **not claimed to exist**: no locator of any kind is stored in
+#: production, and nothing here says FSSAI publishes one at this path.
+STAND_IN_REVISION_LOCATOR = "https://foscos.fssai.gov.in/food-recall/archive/revision-2"
+
+
+@pytest.mark.parametrize("candidate", NOT_REVISION_EVIDENCE)
+def test_o2_no_candidate_outside_the_official_policy_is_revision_evidence(candidate):
+    """Openable is not enough. The regulator's own host, beneath its register, or nothing."""
+    assert change_evidence.is_official_revision_locator(candidate) is False
+
+
+def test_o2_the_policy_is_one_exact_official_host():
+    """Explicit and narrow: not a suffix match, not "any .gov.in", not "not ours"."""
+    assert frozenset({"foscos.fssai.gov.in"}) == change_evidence.OFFICIAL_REVISION_HOSTS
+    # The structural stand-in is the only shape that passes, and only as shape.
+    assert change_evidence.is_official_revision_locator(STAND_IN_REVISION_LOCATOR) is True
+    assert STAND_IN_REVISION_LOCATOR != SOURCE_URL
+
+
+@pytest.mark.asyncio
+async def test_o2_the_generic_register_page_never_becomes_revision_evidence(
+    db_clean, tmp_path, monkeypatch,
+):
+    """Moving the landing page into a "revision locator" changes nothing it proves.
+
+    Every record and every revision already carries this exact official, openable
+    URL. It is refused as evidence for a historical value wherever it appears —
+    as the record's own ``source_url``, as a fetch's, or handed back by
+    ``revision_source`` as though a revision-level field had stored it.
     """
     await _ingest(tmp_path, checked_at=SOURCE_CHECKED_AT, status="Initiated")
+    await _ingest(tmp_path, checked_at=LATER, status="Completed")
     record = await _record()
-    revision = (await _revisions())[0]
-    openable = candidate == "https://foscos.fssai.gov.in/food-recall"
+    revisions = await _revisions()
+    current, previous = revisions[-1], revisions[-2]
 
-    if openable:
-        assert change_evidence.is_openable_official_source(candidate) is True
-        assert record.source_url == candidate
-    else:
-        assert change_evidence.is_openable_official_source(candidate) is False
+    assert record.source_url == SOURCE_URL
+    assert (await _fetch_for(current)).source_url == SOURCE_URL
+    assert change_evidence.is_official_revision_locator(SOURCE_URL) is False
 
-    # As things stand there is no revision-level locator at all, so every
-    # candidate — the real page included — fails to evidence this revision.
-    assert change_evidence.revision_source(revision) is None
+    monkeypatch.setattr(change_evidence, "revision_source", lambda _revision: SOURCE_URL)
     assert change_evidence.regulatory_change_is_publishable(
-        record=record, current=revision, previous=None,
+        record=record, current=current, previous=previous,
     ) is False
 
-    # And the day such a field exists, it still has to hold a real source.
-    # Wiring each candidate into that lookup opens the gate for the openable
-    # one and for none of the manufactured ones.
-    monkeypatch.setattr(change_evidence, "_REVISION_LOCATOR_FIELDS", ("archive_url",))
-    revision.archive_url = candidate
-    assert (change_evidence.revision_source(revision) is not None) is openable
+
+@pytest.mark.asyncio
+async def test_o2_production_revisions_have_no_revision_source_at_all(db_clean, tmp_path):
+    """Fail closed by construction: no field name can open the gate.
+
+    Even a revision object carrying an official, revision-shaped URL under any
+    attribute name is given no source, because ``revision_source`` reads no
+    field. Making it return anything is a reviewed provenance change.
+    """
+    await _ingest(tmp_path, checked_at=SOURCE_CHECKED_AT, status="Initiated")
+    await _ingest(tmp_path, checked_at=LATER, status="Completed")
+    record = await _record()
+    revisions = await _revisions()
+
+    for revision in revisions:
+        for name in ("archive_url", "source_url", "revision_url", "locator"):
+            setattr(revision, name, STAND_IN_REVISION_LOCATOR)
+        assert change_evidence.revision_source(revision) is None
     assert change_evidence.regulatory_change_is_publishable(
-        record=record, current=revision, previous=None,
-    ) is openable
+        record=record, current=revisions[-1], previous=revisions[-2],
+    ) is False
+
+
+@pytest.mark.parametrize("candidate", [*NOT_REVISION_EVIDENCE, STAND_IN_REVISION_LOCATOR])
+@pytest.mark.asyncio
+async def test_o2_the_future_branch_opens_only_for_an_official_revision_shape(
+    db_clean, tmp_path, monkeypatch, candidate,
+):
+    """Structural only: if a locator were ever produced, which ones could open the gate.
+
+    ``revision_source`` is replaced for the duration of the test; nothing is
+    written, and no production field exists for it to read. The point is that
+    the second refusal holds on its own: an arbitrary host or the generic page
+    fails even when the first refusal has been lifted.
+    """
+    await _ingest(tmp_path, checked_at=SOURCE_CHECKED_AT, status="Initiated")
+    await _ingest(tmp_path, checked_at=LATER, status="Completed")
+    record = await _record()
+    revisions = await _revisions()
+    monkeypatch.setattr(change_evidence, "revision_source", lambda _revision: candidate)
+
+    assert change_evidence.regulatory_change_is_publishable(
+        record=record, current=revisions[-1], previous=revisions[-2],
+    ) is (candidate == STAND_IN_REVISION_LOCATOR)
+
+
+@pytest.mark.asyncio
+async def test_o2_one_sourced_side_is_not_half_publishable(db_clean, tmp_path, monkeypatch):
+    """A before-and-after sentence needs evidence for the before and the after."""
+    await _ingest(tmp_path, checked_at=SOURCE_CHECKED_AT, status="Initiated")
+    await _ingest(tmp_path, checked_at=LATER, status="Completed")
+    record = await _record()
+    revisions = await _revisions()
+    current, previous = revisions[-1], revisions[-2]
+    monkeypatch.setattr(
+        change_evidence, "revision_source",
+        lambda revision: STAND_IN_REVISION_LOCATOR if revision is current else SOURCE_URL,
+    )
+
+    assert change_evidence.regulatory_change_is_publishable(
+        record=record, current=current, previous=previous,
+    ) is False
 
 
 # ---------------------------------------------------------------------------
@@ -864,13 +1218,80 @@ def test_material_fields_are_exactly_the_parsed_official_content():
 
 
 def test_the_withheld_envelope_carries_no_values_to_leak():
-    """The withheld envelope states nothing about any field."""
+    """The withheld envelope states nothing about any field — including "none"."""
     payload = UNAVAILABLE_PROJECTION.as_payload()
-    assert payload["changed_fields"] == []
-    assert payload["changes"] == []
-    assert payload["current_revision"] is None
-    assert payload["previous_revision"] is None
-    assert payload["status"] == "unavailable"
+    assert payload == {
+        "scope": "official_record_history",
+        "status": "unavailable",
+        "current_revision": None,
+        "previous_revision": None,
+        "changed_fields": None,
+        "changes": None,
+        "exact_identity_changed": None,
+    }
+
+
+def test_a_consumer_cannot_read_unavailable_as_nothing_changed():
+    """``[]`` says "no field changed"; ``False`` says "identity held". Neither is known.
+
+    The checks below are the ones a careless client would write. Each of them
+    must be unable to conclude "nothing changed" from a withheld comparison.
+    """
+    payload = UNAVAILABLE_PROJECTION.as_payload()
+
+    assert payload["changed_fields"] != []
+    assert payload["changes"] != []
+    assert payload["exact_identity_changed"] is not False
+    # Not an empty sequence dressed as an answer, and not a boolean at all.
+    assert not isinstance(payload["changed_fields"], list | tuple)
+    assert not isinstance(payload["changes"], list | tuple)
+    assert not isinstance(payload["exact_identity_changed"], bool)
+    # And the real non-change state stays distinct from it: a first observation
+    # is an established answer, so it does carry the empty comparison.
+    first = project_first_observation_payload()
+    assert first["changed_fields"] == [] and first["changes"] == []
+    assert first["exact_identity_changed"] is False
+    assert first != payload
+
+
+def project_first_observation_payload() -> dict:
+    return change_projection.RegulatoryChangeProjection(
+        status=RegulatoryChangeStatus.FIRST_OBSERVED_RECORD,
+        current_revision=1, previous_revision=None,
+        changed_fields=(), changes=(), exact_identity_changed=False,
+    ).as_payload()
+
+
+@pytest.mark.parametrize("leak", [
+    {"changed_fields": ()},
+    {"changes": ()},
+    {"exact_identity_changed": False},
+    {"exact_identity_changed": True},
+    {"current_revision": 2},
+    {"previous_revision": 1},
+])
+def test_an_unavailable_projection_that_states_anything_cannot_be_built(leak):
+    """The ambiguous state is unrepresentable, not merely avoided."""
+    fields = {
+        "status": RegulatoryChangeStatus.UNAVAILABLE,
+        "current_revision": None, "previous_revision": None,
+        "changed_fields": None, "changes": None, "exact_identity_changed": None,
+        **leak,
+    }
+    with pytest.raises(ValueError):
+        change_projection.RegulatoryChangeProjection(**fields)
+
+
+@pytest.mark.parametrize("status", [
+    RegulatoryChangeStatus.FIRST_OBSERVED_RECORD, RegulatoryChangeStatus.CHANGED,
+])
+def test_an_established_projection_must_state_its_whole_comparison(status):
+    """An answer we did establish may not quietly omit part of itself."""
+    with pytest.raises(ValueError):
+        change_projection.RegulatoryChangeProjection(
+            status=status, current_revision=1, previous_revision=None,
+            changed_fields=(), changes=None, exact_identity_changed=False,
+        )
 
 
 def test_the_hash_rule_is_the_importer_s_own():

@@ -116,9 +116,20 @@ facts these rows already state, and would have had to be kept true forever.
 ### Revision integrity rules
 
 Before any two revisions are compared, every one of these must hold. Each raises
-`RegulatoryHistoryInvariantError` with a stable internal reason:
+`RegulatoryHistoryInvariantError` with a stable internal reason.
 
-Per revision (`_check_revision`, prefixed `current_` or `previous_`):
+First, the ledger proves its own head (`service._revision_pair`, see
+§"The ledger proves its own head"):
+
+| Reason | Means |
+| --- | --- |
+| `record_has_no_revision` | A canonical record with no history at all |
+| `revision_ledger_sequence_invalid` | The ledger is not exactly `1, 2, … N` — a missing first revision or a gap |
+| `canonical_latest_revision_pointer_mismatch` | `OfficialRecord.latest_revision` is not the ledger's own head, in either direction |
+| `canonical_record_missing` | The record row vanished between being matched and being checked |
+| `revision_fetch_missing` | A revision's `OfficialSourceFetch` row does not exist |
+
+Then, per revision (`_check_revision`, prefixed `current_` or `previous_`):
 
 | Reason | Means |
 | --- | --- |
@@ -127,6 +138,7 @@ Per revision (`_check_revision`, prefixed `current_` or `previous_`):
 | `…_revision_fetch_mismatch` | The supplied fetch is not the revision's own |
 | `…_revision_fetch_unsuccessful` | Derived from a refused artifact |
 | `…_revision_fetch_authority_mismatch` | Fetch authority/record type disagrees with the record |
+| `…_revision_observation_time_mismatch` | `observed_at` is not its own fetch's `source_checked_at` |
 | `…_revision_payload_invalid` | The payload is not a mapping |
 | `…_revision_payload_schema_mismatch` | Payload keys are not exactly the canonical set |
 | `…_revision_identity_mismatch` | Payload `external_record_id` is not the record's |
@@ -141,10 +153,9 @@ Across the pair:
 | `first_revision_has_predecessor` | Revision 1 was handed a predecessor |
 | `revision_predecessor_missing` | Revision ≥ 2 was handed none |
 | `revision_sequence_non_contiguous` | The predecessor is not `current − 1` |
-| `revision_observation_order_invalid` | The predecessor was observed after the current one |
+| `revision_observation_order_invalid` | The predecessor was observed at the **same time as, or after,** the current one |
 | `adjacent_revisions_have_same_content` | Identical hashes; the importer never writes that |
 | `revision_change_outside_material_fields` | Hashes differ with no material difference |
-| `record_has_no_revision` | A canonical record with no history at all |
 
 The hash check is the load-bearing one. It is the only thing standing between a
 payload edited outside the import path and a customer-facing sentence about what
@@ -159,11 +170,52 @@ receives the same governed unavailable envelope they would receive for any other
 reason. The official record itself, which was established without this envelope,
 is still shown.
 
+### The ledger proves its own head
+
+`OfficialRecord.latest_revision` is a *claim* about the immutable ledger, and
+Step 12B exists to check that claim — so it is **never used to find** the
+current revision. Trusting it would let the pointer decide what the truth is:
+
+- Ledger `1, 2` with the pointer rolled back to `1` would select revision 1, see
+  a valid first observation, and never look at revision 2. If the canonical row
+  had been restored from the same old backup, every content check would pass.
+- Ledger `1, 2` with the pointer at `3` names an observation that does not exist.
+- Ledger `2, 3` (revision 1 gone) compares cleanly as a pair and would be
+  published as though nothing were missing.
+
+So the ledger establishes its own head from an aggregate over the record's
+revisions — `min`, `max` and `count` of `revision_number` — and then requires,
+in this order:
+
+1. `count > 0`, else `record_has_no_revision`;
+2. `min == 1` and `max == count`, else `revision_ledger_sequence_invalid`.
+   `(record_id, revision_number)` is unique, so `count` distinct numbers whose
+   smallest is 1 and largest is `count` are *exactly* `1, 2, … N`: no missing
+   first revision, no gap, no hidden extra;
+3. `max == OfficialRecord.latest_revision`, else
+   `canonical_latest_revision_pointer_mismatch`. Checked in both directions — a
+   pointer behind the ledger hides the newest observation, and a pointer ahead
+   of it names one that does not exist.
+
+Only then are revision `N` and `N − 1` loaded, by number, on that record alone.
+Nothing is repaired: no pointer is moved, no chain is rebuilt from the rows that
+survived, no plausible predecessor is substituted.
+
+The record row and the aggregate are read in **one SQL statement**, with
+`populate_existing` refreshing the record's canonical content from that same
+snapshot. Read separately, an import committing between the two reads would be
+indistinguishable from a corrupt pointer and would raise a false integrity
+alarm. Existing revisions are immutable and a concurrent import only ever adds
+`N + 1`, so loading `N` and `N − 1` afterwards stays consistent with the
+aggregate. `test_d2_a_concurrent_import_is_not_mistaken_for_a_corrupt_pointer`
+commits a revision between loading the record and checking it, and proves the
+check sees one consistent snapshot and logs nothing.
+
 ### The canonical-row / latest-revision invariant
 
-`OfficialRecord` is a projection of its own latest `OfficialRecordRevision`. When
-the compared current revision *is* `latest_revision`, every material field on the
-canonical row must equal the same field in that revision's payload. If they
+`OfficialRecord` is a projection of its own latest `OfficialRecordRevision`. Once
+the ledger has proven that its head *is* `latest_revision`, every material field
+on the canonical row must equal the same field in that revision's payload. If they
 disagree, one of them was written outside the import path and there is no way to
 tell which one is the register's word — so `canonical_record_disagrees_with_latest_revision`
 fails closed rather than picking the more plausible-looking side.
@@ -235,9 +287,27 @@ rather than picking a winner between two artifacts claiming the same instant.
 The comparison itself runs under a transaction-scoped advisory lock so two
 concurrent imports cannot both pass it.
 
-Step 12B re-checks the consequence rather than assuming it: a pair whose
-predecessor was observed *after* its successor was not written by that importer,
-and is refused as `revision_observation_order_invalid`.
+Step 12B re-checks the consequence rather than assuming it, in two steps:
+
+1. **Each revision is bound to its own source check.** The importer stamps a
+   revision with `observed_at = source_checked_at` of the one fetch that
+   produced it. Step 12B requires exactly that equality for every revision it
+   compares, and refuses anything else as
+   `current_revision_observation_time_mismatch` or
+   `previous_revision_observation_time_mismatch`. Neither timestamp is
+   normalised or substituted for the other: a revision whose time has drifted
+   from its own fetch can no longer be placed in the register's chronology.
+2. **Adjacent semantic revisions are strictly ordered.** Because the importer
+   refuses an older check *and* a second artifact at the same instant, two
+   revisions of one record can never share a source time. The pair must satisfy
+   `previous.observed_at < current.observed_at` — strictly — or it is refused as
+   `revision_observation_order_invalid`. Since step 1 has proven each
+   `observed_at` equal to its fetch's `source_checked_at`, this comparison *is*
+   a comparison of source times; the contract is stated on `observed_at` only
+   because that is the column the pair carries.
+
+Both are exercised against stored-row corruption after a legitimate import —
+states the supported importer never creates — in the `test_d3_…` tests.
 
 The projection itself has **no clock**. It is a pure function of two rows plus
 their fetches: same pair, same answer, on any machine on any day. A test asserts
@@ -282,10 +352,11 @@ record*, which need not describe the same pack. Four cases, and what each does:
 - **D — an ambiguous candidate set.** Nothing is published at all, per the
   matching authority above. No envelope, no partial answer.
 
-The pair is always selected explicitly by the caller. `_revision_pair()` reads
-`revision_number == record.latest_revision` and its predecessor
-`revision_number − 1`, **on that record alone** — never by timestamp, never "the
-nearest earlier row", never across records. `project_regulatory_change()` performs
+The pair is always selected explicitly by the caller. `_revision_pair()` lets the
+ledger prove its own head (§"The ledger proves its own head"), then reads that
+head revision and its predecessor `head − 1`, **on that record alone** — never
+by timestamp, never "the nearest earlier row", never across records, and never
+by trusting the canonical pointer. `project_regulatory_change()` performs
 no lookup of any kind and takes no session, so no vague identifier can quietly
 re-point the comparison at a different revision.
 
@@ -303,15 +374,60 @@ register said before. Each needs its own openable official source. Publishing it
 with evidence for only the current value would be citing today's page for
 yesterday's words.
 
-`regulatory_change_is_publishable()` therefore requires an openable official
+`regulatory_change_is_publishable()` therefore requires an official revision
 source for **every** observation the claim rests on. A comparison with one
 sourced side is not half-publishable; the sentence a customer reads is about
 both.
 
-`is_openable_official_source()` is deliberately strict, because the failure mode
-is a claim that merely *looks* sourced: an absolute `http`/`https` URL with a
-host, not pointing back into this application. A bare identifier, a file name, a
-SHA-256, a relative path or a `file://` URL is not a source.
+Two independent refusals stand in the way, and both must pass for every
+observation:
+
+1. **`revision_source(revision)` must produce a locator for that exact
+   revision.** It is hard-coded to return `None`. There is deliberately no list
+   of field names it reads: a field name cannot turn a URL into revision
+   evidence, and storing the generic register page in a column called
+   `archive_url` would change nothing about what that page proves.
+2. **`is_official_revision_locator(locator)` must accept it** under an explicit,
+   narrow official-source policy.
+
+"Openable" is not enough. An earlier version accepted any absolute external
+`http(s)` URL, so `https://example.com/archive/123` passed; that is not a named
+official source. The policy is now:
+
+- a string with no whitespace;
+- the `https` scheme — not `http`, not `file`, not relative;
+- no user information and no explicit port;
+- a host **exactly** in `OFFICIAL_REVISION_HOSTS = {"foscos.fssai.gov.in"}` —
+  the one authority this module supports. Not a suffix match
+  (`foscos.fssai.gov.in.evil.example`), not a sub-domain
+  (`evil.foscos.fssai.gov.in`), not "any government domain", and not "anything
+  that is not ours";
+- a path strictly **beneath** the generic register page `/food-recall/`, made
+  only of unreserved characters and `/`, with no `.` or `..` segment and no
+  percent-encoding;
+- no query string and no fragment.
+
+It is deliberately no broader than necessary. Adding a host — an official
+archive, say — is part of the reviewed provenance change that would introduce a
+real locator, not a configuration tweak.
+
+**The generic `SOURCE_URL` never becomes historical evidence**, wherever it is
+stored. Every spelling of it is refused — with or without a trailing slash, a
+query string, a fragment, an explicit port or different case — because the rule
+is "strictly beneath the register page", not "not equal to one string".
+`test_o2_the_generic_register_page_never_becomes_revision_evidence` hands the
+gate that exact URL as though a revision-level field had stored it, and the gate
+stays closed.
+
+URL shape is a **necessary** condition, never a sufficient one. No URL policy can
+prove on its own that a page shows one historical revision — which is exactly why
+refusal 1 stays closed until a provenance design binds a locator to the
+revision's own fetch and content hash. The policy exists so that, the day
+refusal 1 is lifted, an arbitrary external URL, a look-alike host or the generic
+landing page still cannot open the gate. `test_o2_the_future_branch_opens_only_for_an_official_revision_shape`
+proves that structurally, with `revision_source` replaced for the duration of the
+test by a stand-in `https://foscos.fssai.gov.in/food-recall/archive/revision-2`
+— an artificial test-only path that is **not** claimed to exist.
 
 ### Current limitation: historical openable provenance does not exist
 
@@ -334,9 +450,10 @@ for every pair:
   from*. A claim cannot be its own independent support.
 
 So **no stored field can locate a specific historical revision of the register**,
-and `_REVISION_LOCATOR_FIELDS` is empty. `OfficialRecord.source_url` is
-deliberately not listed in it: adding it would satisfy the gate while proving
-nothing, which is precisely the failure the module exists to prevent.
+and `revision_source()` returns `None` for every revision by construction. It
+reads neither `OfficialRecord.source_url` nor `OfficialSourceFetch.source_url`:
+treating the one generic page as revision evidence would satisfy the gate while
+proving nothing, which is precisely the failure the module exists to prevent.
 
 The consequence is stated plainly: **Step 12B ships as a complete, tested
 internal authority whose current customer-visible output is the governed
@@ -348,8 +465,10 @@ weakened to make the feature visible.
 Restoring publication is a **provenance** change, reviewed on its own terms:
 persist a revision-specific openable official locator — a durable public archive
 URL for the exact artifact, or an official per-record permalink that exposes
-history — and read it in `_REVISION_LOCATOR_FIELDS`. The publishing branch is
-already implemented and tested
+history — bound to the revision's own fetch and content hash, and rewrite
+`revision_source()` to return it. The locator must still pass
+`is_official_revision_locator()`, whose host list that same change may widen
+deliberately. The publishing branch is already implemented and tested
 (`test_o_the_publishing_branch_works_when_both_authorities_permit_it`), so that
 day is a small, reviewable diff rather than a rewrite.
 
@@ -387,13 +506,40 @@ The five states §14 requires are distinguishable:
 | No relevant official record | `records` is `[]`; there is no `regulatory_change` key at all |
 | First observed official record | `status: "first_observed_record"` |
 | Valid internal revision change | `status: "changed"` with `changes` populated |
-| Change unavailable / withheld | `status: "unavailable"` |
+| Change unavailable / withheld | `status: "unavailable"`, every comparison field `null` |
 | Publishable change | `changed` / `first_observed_record` are emitted **only** when the gate permits |
 
-An empty `changed_fields` is never used to assert "nothing changed": the
-unavailable state is a distinct `status`, and `current_revision` and
-`previous_revision` are `null` there, so it cannot be read as a comparison that
-came back empty.
+### Withheld is not "unchanged"
+
+In the unavailable state every part of the comparison is `null`:
+
+```json
+"regulatory_change": {
+  "scope": "official_record_history",
+  "status": "unavailable",
+  "current_revision": null,
+  "previous_revision": null,
+  "changed_fields": null,
+  "changes": null,
+  "exact_identity_changed": null
+}
+```
+
+`[]` would say "no field changed" and `false` would say "the exact identity did
+not change". In the unavailable state neither is known — the truth is only that
+the comparison is not being published — so neither may be said. An earlier
+version of this envelope did carry `[]` and `false`, which a client could
+correctly have read as "nothing moved"; that was wrong, and is the same
+distinction Step 12A already enforces for label changes.
+
+The real non-change state stays distinct. A first observation is an answer the
+integrity authority actually established, so it carries
+`changed_fields: []`, `changes: []`, `exact_identity_changed: false`.
+
+The pairing is enforced, not merely followed: `RegulatoryChangeProjection`
+refuses in `__post_init__` to be built as `unavailable` with any comparison
+value, or as an established state with any comparison value missing, so the
+ambiguous envelope cannot be constructed at all.
 
 **Withheld and corrupt look identical from outside, by design.** A customer, and
 anybody watching the response, cannot tell "we cannot cite this" from "our stored
@@ -495,6 +641,10 @@ what the rest of the list bans.
 | Situation | What happens |
 | --- | --- |
 | Record has no revision at all | Logged `record_has_no_revision`; unavailable envelope |
+| Ledger is not exactly `1..N` | Logged `revision_ledger_sequence_invalid`; unavailable envelope |
+| Canonical pointer behind or ahead of the ledger head | Logged `canonical_latest_revision_pointer_mismatch`; unavailable envelope |
+| A revision's time differs from its own fetch | Logged `…_revision_observation_time_mismatch`; unavailable envelope |
+| Adjacent revisions share a source time, or run backwards | Logged `revision_observation_order_invalid`; unavailable envelope |
 | Any revision integrity invariant fails | Logged with its reason; unavailable envelope; the official record is still shown |
 | A revision's `OfficialSourceFetch` row is missing | Logged `revision_fetch_missing`; unavailable envelope |
 | History is valid but no openable source backs it | Unavailable envelope, silently — this is the expected state today, not an error |
@@ -568,9 +718,12 @@ no data:
    row, or from another record.
 
 3. **How is the canonical `OfficialRecord` related to its latest revision?**
-   It is a projection of it: `latest_revision` names the revision and every
-   material column must equal that revision's payload. Disagreement is corruption
-   and fails closed.
+   It is a projection of it, and `latest_revision` is a claim about which
+   revision that is. The claim is checked, never used as the source of truth:
+   the ledger proves its own head from `min`/`max`/`count`, must be exactly
+   `1..N`, and that head must equal `latest_revision`; only then must every
+   material column equal the head revision's payload. Any disagreement is
+   corruption and fails closed.
 
 4. **Which fields are semantic source content versus observation metadata?**
    The eleven fields of `canonical_row()` minus `external_record_id` are source
@@ -581,7 +734,8 @@ no data:
 5. **Which source locator is actually openable by a customer?**
    Only `SOURCE_URL` (`https://foscos.fssai.gov.in/food-recall`), a single
    module constant shared by every record and every revision. Nothing else stored
-   is openable at all.
+   is openable at all. It is official, but it is the generic register page, so
+   the official-source policy refuses it as revision evidence in every spelling.
 
 6. **Can the previous revision's content currently be independently opened from
    that locator?**

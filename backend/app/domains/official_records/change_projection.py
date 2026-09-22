@@ -140,18 +140,42 @@ class FieldChange:
 
 @dataclass(frozen=True)
 class RegulatoryChangeProjection:
+    """One comparison, or the governed statement that none is being made.
+
+    The three comparison fields are ``None`` exactly when ``status`` is
+    ``UNAVAILABLE``, and concrete otherwise. That is not a style preference:
+    ``[]`` says "no field changed" and ``False`` says "the identity did not
+    change", and in the unavailable state neither is known. ``None`` is the
+    only value that does not assert a fact we are withholding. The pairing is
+    enforced in ``__post_init__`` so the ambiguous state cannot be built at all.
+    """
+
     status: RegulatoryChangeStatus
     current_revision: int | None
     previous_revision: int | None
-    changed_fields: tuple[str, ...]
-    #: The before/after pairs. Only ever populated for a published comparison;
-    #: an unavailable projection carries none, because the values themselves
-    #: are the claim.
-    changes: tuple[FieldChange, ...]
+    #: The official fields that differ. ``()`` is a real, established answer
+    #: (a first observation has nothing to compare); ``None`` is no answer.
+    changed_fields: tuple[str, ...] | None
+    #: The before/after pairs. The values themselves are the claim, so an
+    #: unavailable projection carries none — not an empty list of them.
+    changes: tuple[FieldChange, ...] | None
     #: True when the later revision states a different licence or batch from
     #: the earlier one. The pack the record is about may have changed, which is
-    #: never the same statement as "your pack is cleared".
-    exact_identity_changed: bool
+    #: never the same statement as "your pack is cleared". ``None`` when the
+    #: comparison is not being stated.
+    exact_identity_changed: bool | None
+
+    def __post_init__(self) -> None:
+        withheld = self.status is RegulatoryChangeStatus.UNAVAILABLE
+        comparison = (self.changed_fields, self.changes, self.exact_identity_changed)
+        if withheld and (
+            any(value is not None for value in comparison)
+            or self.current_revision is not None
+            or self.previous_revision is not None
+        ):
+            raise ValueError("an unavailable projection may not state any part of a comparison")
+        if not withheld and any(value is None for value in comparison):
+            raise ValueError("an established projection must state every part of its comparison")
 
     def as_payload(self) -> dict[str, Any]:
         """The customer-facing shape.
@@ -160,14 +184,18 @@ class RegulatoryChangeProjection:
         history, not a statement about the packet in anybody's hand. No record
         id, revision id, fetch id or invariant reason appears here, and none may
         be added: this envelope is served to an anonymous device.
+
+        ``None`` is carried through as ``null``. It is never coerced to ``[]``
+        or ``false`` on the way out, because a client reading those would
+        conclude "nothing changed" from a comparison we did not make.
         """
         return {
             "scope": "official_record_history",
             "status": self.status.value,
             "current_revision": self.current_revision,
             "previous_revision": self.previous_revision,
-            "changed_fields": list(self.changed_fields),
-            "changes": [change.as_payload() for change in self.changes],
+            "changed_fields": None if self.changed_fields is None else list(self.changed_fields),
+            "changes": None if self.changes is None else [change.as_payload() for change in self.changes],
             "exact_identity_changed": self.exact_identity_changed,
         }
 
@@ -175,14 +203,14 @@ class RegulatoryChangeProjection:
 #: The one governed way to say "there is history here and we are not stating
 #: what it says". Reused by the integrity failure path and by the publication
 #: boundary, so a customer cannot tell the two apart — and neither reveals
-#: anything.
+#: anything, including whether anything changed.
 UNAVAILABLE_PROJECTION = RegulatoryChangeProjection(
     status=RegulatoryChangeStatus.UNAVAILABLE,
     current_revision=None,
     previous_revision=None,
-    changed_fields=(),
-    changes=(),
-    exact_identity_changed=False,
+    changed_fields=None,
+    changes=None,
+    exact_identity_changed=None,
 )
 
 
@@ -214,6 +242,12 @@ def _check_revision(
         raise RegulatoryHistoryInvariantError(f"{role}_revision_fetch_unsuccessful")
     if fetch.authority != record.authority or fetch.record_type != record.record_type:
         raise RegulatoryHistoryInvariantError(f"{role}_revision_fetch_authority_mismatch")
+    # The importer stamps every revision with the source time of the one check
+    # that produced it. A revision whose time has drifted from its own fetch
+    # can no longer be placed in the register's chronology, so it is refused
+    # rather than trusted — and neither timestamp is normalised to the other.
+    if revision.observed_at != fetch.source_checked_at:
+        raise RegulatoryHistoryInvariantError(f"{role}_revision_observation_time_mismatch")
     payload = _payload_of(revision, role)
     if payload.get("external_record_id") != record.external_record_id:
         raise RegulatoryHistoryInvariantError(f"{role}_revision_identity_mismatch")
@@ -281,9 +315,13 @@ def project_regulatory_change(
     if previous.revision_number != current.revision_number - 1:
         raise RegulatoryHistoryInvariantError("revision_sequence_non_contiguous")
     previous_payload = _check_revision(previous, previous_fetch, record, "previous")
-    # Source time only ever moves forward, and the importer enforces that on the
-    # way in. A pair that disagrees was not written by it.
-    if previous.observed_at > current.observed_at:
+    # Source time strictly moves forward: the importer refuses an older check
+    # and refuses a second artifact at the same instant, so two semantic
+    # revisions of one record can never share a source time. Each revision's
+    # ``observed_at`` is proven equal to its own fetch's ``source_checked_at``
+    # above, so comparing observation times here *is* comparing source times.
+    # Equal is refused, not only earlier.
+    if previous.observed_at >= current.observed_at:
         raise RegulatoryHistoryInvariantError("revision_observation_order_invalid")
     if previous.content_hash == current.content_hash:
         # The importer only writes a revision when content changed, so two
