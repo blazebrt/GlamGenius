@@ -624,3 +624,11 @@ Step 12A does not, and its code contains no field one could be smuggled into:
 None of those exists in this repository. Later roadmap steps are named in the
 roadmap, not here; nothing in this layer should be read as a statement that the
 work behind one of them has been started.
+
+Step 12C (Product Watch) is built on top of this layer rather than inside it —
+see [`PRODUCT_WATCH_MATERIAL_NOTICES.md`](PRODUCT_WATCH_MATERIAL_NOTICES.md). It
+asks `comparison_is_publishable` exactly as the product screen does, so while this
+layer withholds a comparison no label-change notice can exist; and its background
+worker supplies no label pair at all, because choosing one would mean presenting
+a label observation this account's device did not make as news about their pack.
+Nothing in this layer was changed for it.

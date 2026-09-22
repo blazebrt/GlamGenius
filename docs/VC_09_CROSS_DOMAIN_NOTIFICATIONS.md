@@ -34,3 +34,14 @@ Notification devices are classified as secret-excluded from privacy export;
 preferences and safe delivery history are included. Account deletion removes
 preferences, deliveries, and devices through explicit cleanup and cascading
 foreign keys.
+
+## Product Watch (Step 12C)
+
+A new trigger, `queue_for_product_watch`, runs first in the same worker cycle,
+ahead of the ordinary reminders, and returns nothing unless a material notice is
+waiting for a pack the customer explicitly chose to watch. It uses its own typed
+topic, `product_watch` (a **Product watch** row on the Notifications screen), the
+same outbox, dedup, quiet hours, daily cap and claim lease, and one new server-owned
+destination: `/verdict` with a validated barcode and nothing else. No new worker,
+scheduler or transport was added. Details:
+[`architecture/PRODUCT_WATCH_MATERIAL_NOTICES.md`](architecture/PRODUCT_WATCH_MATERIAL_NOTICES.md).

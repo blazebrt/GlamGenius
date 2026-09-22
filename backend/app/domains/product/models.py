@@ -284,3 +284,73 @@ class ScanDecisionEvent(UUIDPrimaryKey, TimestampMixin, Base):
         UniqueConstraint("account_id", "idempotency_key", name="uq_scan_decision_event_idempotency"),
         CheckConstraint("decision IN ('BUY', 'WAIT', 'SKIP')", name="ck_scan_decision_event_decision"),
     )
+
+
+class ProductWatch(UUIDPrimaryKey, TimestampMixin, Base):
+    """One account's explicit request to hear about one exact confirmed pack.
+
+    Step 12C. The only customer-owned state Product Watch needs: *that* the
+    customer asked, *which* pack they asked about, and *what was already known*
+    when they asked. Every fact a notice could state comes from an authority
+    that already exists — Step 12A for the label, Step 12B and the official
+    matcher for FSSAI records — and none of those facts is copied here.
+
+    **Two anchors, because a label version is not a pack.** A
+    :class:`LabelSnapshot` version identifies label *content*, and batch is
+    deliberately not part of that content: two packs with the same printed
+    label and different lots share one version, and its stored facts carry the
+    lot of whoever captured it first. Official recall matching needs the exact
+    licence *and* lot, so matching on the version's facts could match a
+    stranger's lot. The watch therefore also anchors to this account's own
+    confirmed capture (``anchor_scan_event_id``), whose facts are the ones the
+    verdict screen matched against when the customer chose to watch.
+
+    Deliberately absent: any Open Food Facts field, any generated prose or AI
+    interpretation, any media reference. Barcode plus Store-B references is
+    enough, and anything more would widen the ODbL surface or leak a stranger's
+    photograph into someone's account.
+    """
+
+    __tablename__ = "product_watches"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False,
+    )
+    barcode: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: This account's own confirmed capture of the watched pack. Its facts are
+    #: what official records are matched against — the lot and licence of the
+    #: pack the customer was holding, never a stranger's. If the capture itself
+    #: is ever removed the watch has nothing left to stand on and goes with it.
+    anchor_scan_event_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scan_events.id", ondelete="CASCADE"), nullable=False,
+    )
+    #: The label version that capture resolved to through the governed
+    #: current-pack resolver. Snapshots are never deleted, so this is RESTRICT.
+    anchor_label_snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("product_label_snapshots.id", ondelete="RESTRICT"), nullable=False,
+    )
+    anchor_label_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    active: Mapped[bool] = mapped_column(nullable=False, default=True, server_default="true")
+    #: When the current anchor and baseline were established. Re-anchoring and
+    #: re-activating reset it, because both reset what "already known" means.
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: What was already known, and what has already been decided. Semantic
+    #: identities only — official record ids and revision numbers, label
+    #: versions — never timestamps. Validated by ``product.watch`` on every read
+    #: and never exposed to a client or an export.
+    notice_cursor: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    last_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        #: One logical watch per account and barcode. Watching a newer pack of
+        #: the same product re-anchors this row rather than adding a second.
+        UniqueConstraint("account_id", "barcode", name="uq_product_watch_account_barcode"),
+        CheckConstraint("anchor_label_version >= 1", name="ck_product_watch_anchor_version"),
+        CheckConstraint(
+            "(active AND stopped_at IS NULL) OR (NOT active AND stopped_at IS NOT NULL)",
+            name="ck_product_watch_active_stopped",
+        ),
+        Index("ix_product_watches_anchor_scan_event", "anchor_scan_event_id"),
+        Index("ix_product_watches_anchor_snapshot", "anchor_label_snapshot_id"),
+    )

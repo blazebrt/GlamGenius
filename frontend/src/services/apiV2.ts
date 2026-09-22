@@ -2012,7 +2012,7 @@ export interface NotificationPreferences {
   quiet_hours: { start: number; end: number };
   preferred_hour: number;
   modules: Record<PlanModule, boolean>;
-  topics: { today_style: boolean; care: boolean; event_preparation: boolean; maintenance: boolean };
+  topics: { today_style: boolean; care: boolean; event_preparation: boolean; maintenance: boolean; product_watch?: boolean };
   timezone: string;
   note: string;
 }

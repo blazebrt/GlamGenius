@@ -305,6 +305,36 @@ async def _revision_pair(session: AsyncSession, record: OfficialRecord) -> _Ledg
     return _LedgerPair(record=fresh, current=by_number[high], previous=by_number.get(high - 1))
 
 
+async def _validated_regulatory_history(
+    session: AsyncSession, record: OfficialRecord,
+) -> tuple[OfficialRecord, OfficialRecordRevision, OfficialRecordRevision | None, change_projection.RegulatoryChangeProjection]:
+    """Run the one complete Step 12B integrity proof for an official history.
+
+    A structurally consecutive ledger is not a trustworthy history on its own:
+    the revisions must also be bound to successful authoritative source fetches,
+    their canonical payloads and the current record. Callers may make different
+    publication decisions from this proof, but cannot use weaker history facts.
+    """
+    pair = await _revision_pair(session, record)
+    fetches = {
+        row.id: row
+        for row in (await session.execute(select(OfficialSourceFetch).where(
+            OfficialSourceFetch.id.in_(
+                {row.source_fetch_id for row in (pair.current, pair.previous) if row is not None}
+            )
+        ))).scalars().all()
+    }
+    current_fetch = fetches.get(pair.current.source_fetch_id)
+    previous_fetch = fetches.get(pair.previous.source_fetch_id) if pair.previous is not None else None
+    if current_fetch is None or (pair.previous is not None and previous_fetch is None):
+        raise change_projection.RegulatoryHistoryInvariantError("revision_fetch_missing")
+    projection = change_projection.project_regulatory_change(
+        record=pair.record, current=pair.current, previous=pair.previous,
+        current_fetch=current_fetch, previous_fetch=previous_fetch,
+    )
+    return pair.record, pair.current, pair.previous, projection
+
+
 async def regulatory_change_for_record(
     session: AsyncSession, record: OfficialRecord,
 ) -> dict[str, Any]:
@@ -334,23 +364,7 @@ async def regulatory_change_for_record(
     current: OfficialRecordRevision | None = None
     previous: OfficialRecordRevision | None = None
     try:
-        record, current, previous = await _revision_pair(session, record)
-        fetches = {
-            row.id: row
-            for row in (await session.execute(select(OfficialSourceFetch).where(
-                OfficialSourceFetch.id.in_(
-                    {row.source_fetch_id for row in (current, previous) if row is not None}
-                )
-            ))).scalars().all()
-        }
-        current_fetch = fetches.get(current.source_fetch_id)
-        previous_fetch = fetches.get(previous.source_fetch_id) if previous is not None else None
-        if current_fetch is None or (previous is not None and previous_fetch is None):
-            raise change_projection.RegulatoryHistoryInvariantError("revision_fetch_missing")
-        projection = change_projection.project_regulatory_change(
-            record=record, current=current, previous=previous,
-            current_fetch=current_fetch, previous_fetch=previous_fetch,
-        )
+        record, current, previous, projection = await _validated_regulatory_history(session, record)
     except change_projection.RegulatoryHistoryInvariantError as broken:
         # An addition may not take the page down with it. The official record
         # itself was established without this envelope and is still shown; the
@@ -367,6 +381,42 @@ async def regulatory_change_for_record(
     if projection is None or not publishable:
         return change_projection.UNAVAILABLE_PROJECTION.as_payload()
     return projection.as_payload()
+
+
+async def validated_revision_heads(
+    session: AsyncSession, external_record_ids: list[str],
+) -> dict[str, int | None]:
+    """Each official record's ledger head, as this module validates it — bookkeeping only.
+
+    Step 12C's baseline needs to remember *which* revision of a record was
+    current when a customer began watching, so that a later revision can be
+    told apart from one that already existed. That answer belongs to this
+    module: the head comes from :func:`_validated_regulatory_history`, which
+    proves both the ``1..N`` ledger shape and every Step 12B provenance and
+    payload invariant, and is ``None`` whenever either fails.
+
+    Nothing here is publishable and nothing is published. The number is an
+    opaque cursor for set membership; whether a change may be *stated* is still
+    decided only by :func:`regulatory_change_for_record` and its evidence gate.
+    The invariant reason is not logged again here, because every caller also
+    builds the official-records envelope for the same records, and that path
+    has already named it to the log.
+    """
+    if not external_record_ids:
+        return {}
+    rows = (await session.execute(select(OfficialRecord).where(
+        OfficialRecord.authority == AUTHORITY_FSSAI_FOSCOS,
+        OfficialRecord.record_type == RECORD_TYPE_FOOD_RECALL,
+        OfficialRecord.external_record_id.in_(set(external_record_ids)),
+    ))).scalars().all()
+    heads: dict[str, int | None] = dict.fromkeys(external_record_ids)
+    for row in rows:
+        try:
+            _record, current, _previous, _projection = await _validated_regulatory_history(session, row)
+        except change_projection.RegulatoryHistoryInvariantError:
+            continue
+        heads[row.external_record_id] = current.revision_number
+    return heads
 
 
 async def official_records_envelope(session: AsyncSession, facts: dict[str, Any] | None) -> dict[str, Any]:

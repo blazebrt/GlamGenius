@@ -212,6 +212,7 @@ async def test_worker_commits_suppressed_decision(monkeypatch):
     # reaches this fake session and fails on a real query, which is what
     # happened when the protocol-day trigger landed.
     for earlier in (
+        "queue_for_product_watch",
         "queue_for_environment_crossing",
         "queue_for_protocol_day",
         "queue_for_running_out",

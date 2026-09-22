@@ -106,8 +106,12 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
     await compiler.compile_day(session, context=context, force=False, trigger="notification_worker")
     # Ordered, real conditions.  The shared outbox still enforces one daily
     # delivery, quiet hours and repeat safety no matter which condition wins.
+    # A material notice about a product the customer explicitly chose to watch
+    # is considered first; it returns nothing unless one is actually waiting,
+    # so an ordinary reminder keeps the slot on every other day.
     decision = None
     for trigger in (
+        notifications.queue_for_product_watch,
         notifications.queue_for_environment_crossing,
         notifications.queue_for_protocol_day,
         notifications.queue_for_running_out,

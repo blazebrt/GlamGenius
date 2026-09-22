@@ -70,7 +70,7 @@ from app.domains.planning.models import (
     WeeklyPlan,
 )
 from app.domains.privacy import EXPORT_SCHEMA_VERSION, REGISTRY, Classification
-from app.domains.product.models import LabelErrorReport, ScanDecisionEvent, ScanEvent
+from app.domains.product.models import LabelErrorReport, ProductWatch, ScanDecisionEvent, ScanEvent
 from app.domains.profile.models import (
     AppearanceGoal,
     AppearanceProfile,
@@ -774,6 +774,12 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
         .order_by(ScanDecisionEvent.created_at.desc()),
     ))
     memory_fields = [c.name for c in ScanDecisionEvent.__table__.columns]
+    watches = await _fetch(
+        session,
+        select(ProductWatch)
+        .where(ProductWatch.account_id == account_id)
+        .order_by(ProductWatch.created_at.desc()),
+    )
 
     # The scan itself stays account-level: it records that this account looked
     # at a barcode, which is true regardless of who the answer was for. What
@@ -820,12 +826,33 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
     return {
         "scans": [_row_dict(r, fields) for r in rows],
         "label_error_reports": [_row_dict(r, report_fields) for r in reports],
+        "product_watches": [_product_watch_row(r) for r in watches],
         "subjects": subjects,
         "unattributed_scan_decision_events": (
             [_row_dict(r, memory_fields) for r in ambiguous]
             + [_unattributed_row(r, memory_fields) for r in orphaned]
         ),
         "invariant_errors": invariant_errors,
+    }
+
+
+def _product_watch_row(row: ProductWatch) -> dict[str, Any]:
+    """What a person can read about a watch they set: which product, since when.
+
+    The anchor ids and the notice cursor are left out on purpose. The ids point
+    at internal rows the person cannot open, and the cursor is bookkeeping about
+    which official revisions were already known — neither says anything to the
+    person that the fields below do not say better.
+    """
+    return {
+        "barcode": row.barcode,
+        "watching": bool(row.active),
+        "label_version": row.anchor_label_version,
+        "started_at": _iso(row.started_at),
+        "stopped_at": _iso(row.stopped_at),
+        "last_notified_at": _iso(row.last_notified_at),
+        "created_at": _iso(row.created_at),
+        "updated_at": _iso(row.updated_at),
     }
 
 

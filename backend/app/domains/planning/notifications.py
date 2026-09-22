@@ -16,6 +16,7 @@ suppressed ones, so "why didn't I hear about X" is answerable:
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime
@@ -60,8 +61,20 @@ DEFAULT_MODULE_NOTIFICATIONS: dict[str, bool] = {module: True for module in MODU
 
 # Customer-facing switches. These are deliberately not the Planning MODULES
 # map: an unknown topic must never silently become enabled.
-NOTIFICATION_TOPICS = ("today_style", "care", "event_preparation", "maintenance")
+#
+# ``product_watch`` (Step 12C) defaults on in this map because a Product Watch
+# notice can only exist for a pack the customer explicitly chose to watch; the
+# watch itself is the opt-in. The master switch, native push consent and the OS
+# permission all remain separate and authoritative.
+NOTIFICATION_TOPICS = ("today_style", "care", "event_preparation", "maintenance", "product_watch")
 DEFAULT_TOPIC_NOTIFICATIONS: dict[str, bool] = {topic: True for topic in NOTIFICATION_TOPICS}
+PRODUCT_WATCH_TOPIC = "product_watch"
+
+#: The only barcode a notification may carry into ``/verdict``: a GTIN of 8 to
+#: 14 digits. Deliberately narrower than what a scan accepts, because a push
+#: payload is untrusted the moment it leaves the server and this is what the
+#: app will route on.
+VERDICT_BARCODE = re.compile(r"[0-9]{8,14}")
 
 
 def topic_for_candidate(candidate: Any) -> str | None:
@@ -89,9 +102,18 @@ def topic_for_candidate(candidate: Any) -> str | None:
 
 def _target(destination: str | None, params: dict[str, Any] | None) -> tuple[str | None, dict[str, str]]:
     """Keep only server-owned destinations and their narrow routing data."""
-    allowed = {"/(tabs)/today", "/(tabs)/style", "/(tabs)/care", "/(tabs)/plan", "/event-ready", "/improve", "/(tabs)/services", "/(tabs)/inventory"}
+    allowed = {"/(tabs)/today", "/(tabs)/style", "/(tabs)/care", "/(tabs)/plan", "/event-ready", "/improve", "/(tabs)/services", "/(tabs)/inventory", "/verdict"}
     if destination not in allowed:
         return None, {}
+    if destination == "/verdict":
+        # Step 12C: a watched product opens on its own verdict, and nothing
+        # else rides along — no source URL, no snapshot, no account, no query.
+        # A missing or malformed barcode drops the destination entirely, so the
+        # app falls back to a safe screen rather than routing on a guess.
+        barcode = (params or {}).get("barcode")
+        if not isinstance(barcode, str) or not VERDICT_BARCODE.fullmatch(barcode):
+            return None, {}
+        return destination, {"barcode": barcode}
     if destination == "/event-ready":
         event_id = (params or {}).get("eventId")
         if not isinstance(event_id, str) or not event_id:
@@ -450,6 +472,24 @@ async def queue_for_deferred_purchase_relevance(
             deep_link="/(tabs)/care", source_kind="purchase_relevance", source_id=str(row.candidate_id),
         )
     return None
+
+
+async def queue_for_product_watch(
+    session: AsyncSession, *, account_id: uuid.UUID, plan_date: date,
+    timezone_name: str, moment: datetime | None = None,
+) -> NotificationDelivery | None:
+    """At most one material Product Watch notice, decided by Step 12C.
+
+    The facts come from Step 12A and Step 12B, the matching from the official
+    records matcher, and the decision about delivery from :func:`queue` like
+    every other notification here. This function is only the door.
+    """
+    from app.domains.product import watch as product_watch
+
+    return await product_watch.queue_material_notice(
+        session, account_id=account_id, plan_date=plan_date,
+        timezone_name=timezone_name, moment=moment,
+    )
 
 
 async def queue_for_agenda(

@@ -40,6 +40,7 @@ import {
 import { buildVerdictShareText } from '../src/services/verdictShare';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import { OfficialRecords } from '../src/components/verdict/OfficialRecords';
+import { ProductWatch } from '../src/components/verdict/ProductWatch';
 import { CommunityObservations } from '../src/components/verdict/CommunityObservations';
 import { BetterOption, REFERENCE_ALTERNATIVE } from '../src/components/verdict/BetterOption';
 import { CommunityReportSheet, BATCH_SCOPED_CODES } from '../src/components/verdict/CommunityReportSheet';
@@ -386,6 +387,13 @@ export default function VerdictScreen() {
               <VerdictLines view={view} onReport={openReport} />
             )}
             <OfficialRecords officialRecords={source.officialRecords} />
+            {/* Step 12C. Beside the official record it can later point back
+                to, and only for the pack actually in this person's hand: a
+                reference view, an anonymous visitor or an unconfirmed pack
+                never sees the control, and the server proves the pack again. */}
+            {!referenceView && signedIn && source.physicalPackContext && source.labelVersion && !!barcode && (
+              <ProductWatch barcode={barcode} />
+            )}
             <FactorSection title={S.factors.negatives} rows={source.negatives ?? source.lowers ?? []} empty={S.factors.noNegatives}
               onExplain={(row) => setExplanation(row)} />
             <FactorSection title={S.factors.positives} rows={source.positives ?? source.helps ?? []} empty={S.factors.noPositives}

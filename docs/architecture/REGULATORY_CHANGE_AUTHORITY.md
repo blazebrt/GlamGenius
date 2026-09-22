@@ -91,6 +91,16 @@ The practical reading: Step 12B makes the answer *derivable and governed*, so
 that Step 12C, when it is designed, has something correct to be built on rather
 than a screen that invented a regulatory event.
 
+Step 12C now exists as a separate consumer:
+[`PRODUCT_WATCH_MATERIAL_NOTICES.md`](PRODUCT_WATCH_MATERIAL_NOTICES.md). It reads
+this authority's published envelope and never the ledger behind it, so a
+regulatory-change notice exists only when this envelope says `changed` — which,
+while `revision_source()` returns `None`, is never. The one thing it asks of this
+module is bookkeeping: `validated_revision_heads()` returns each record's ledger
+head as `_revision_pair` validates it, so a watch can remember which revision was
+already current when it began. Nothing in `change_projection` or `change_evidence`
+changed, and the absence test above still holds for both.
+
 ## The ledger this reads: official revision authority
 
 Nothing new is stored. Step 12B is a pure read over three tables that already
