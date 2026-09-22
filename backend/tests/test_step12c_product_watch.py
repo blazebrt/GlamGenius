@@ -1856,6 +1856,47 @@ async def test_a_malformed_cursor_is_skipped_not_repaired(
     assert (await _watch_row(account_id)).notice_cursor == {}
 
 
+@pytest.mark.asyncio
+async def test_reenable_never_repairs_a_malformed_cursor(
+    db_clean, off_clean, app_client, registered_supabase_user, caplog,  # noqa: F811
+):
+    token, account_id, device = await _customer(app_client, registered_supabase_user)
+    await _watching(app_client, device, token, account_id)
+    async with get_sessionmaker()() as session:
+        await session.execute(text("UPDATE product_watches SET notice_cursor = '{}'::jsonb"))
+        await session.commit()
+
+    off = await app_client.patch(
+        "/api/v2/today/notifications", headers=auth(token), json={"topics": {"product_watch": False}},
+    )
+    assert off.status_code == 200
+    with caplog.at_level(logging.WARNING):
+        on = await app_client.patch(
+            "/api/v2/today/notifications", headers=auth(token), json={"topics": {"product_watch": True}},
+        )
+    assert on.status_code == 200
+    assert (await _watch_row(account_id)).notice_cursor == {}
+    assert "product_watch_cursor_invalid" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_new_exact_record_with_corrupt_ledger_is_not_proactively_notified(
+    db_clean, off_clean, app_client, registered_supabase_user, tmp_path, caplog,  # noqa: F811
+):
+    token, account_id, device = await _customer(app_client, registered_supabase_user)
+    await _watching(app_client, device, token, account_id)
+    await _ingest(tmp_path)
+    async with get_sessionmaker()() as session:
+        await session.execute(update(OfficialRecordRevision).values(content_hash="f" * 64))
+        await session.commit()
+
+    with caplog.at_level(logging.WARNING):
+        assert await _decide(account_id) is None
+    assert "regulatory_history_invariant_failed" in caplog.text
+    assert await _watch_deliveries(account_id) == []
+    assert RECALL_ID not in _cursor(await _watch_row(account_id)).records
+
+
 @pytest.mark.parametrize("raw", [
     {},
     {"v": 2, "records": {}, "label": {"baseline_version": 1, "notified_versions": []}},
@@ -1920,7 +1961,15 @@ async def test_only_an_openable_official_source_supports_a_current_state_notice(
         await session.commit()
 
     assert await _decide(account_id) is None
-    for url in (None, "", "http://foscos.fssai.gov.in/x", "https://example.org/x", "https://foscos.fssai.gov.in.evil/x"):
+    for url in (
+        None, "", "http://foscos.fssai.gov.in/x", "https://example.org/x",
+        "https://foscos.fssai.gov.in.evil/x", "https://foscos.fssai.gov.in/anything-else",
+        "https://foscos.fssai.gov.in/food-recall/anything",
+        "https://user@foscos.fssai.gov.in/food-recall",
+        "https://foscos.fssai.gov.in:443/food-recall",
+        "https://foscos.fssai.gov.in/food-recall?x=1",
+        "https://foscos.fssai.gov.in/food-recall#x",
+    ):
         assert product_watch.current_record_source_is_openable(url) is False, url
     assert product_watch.current_record_source_is_openable("https://foscos.fssai.gov.in/food-recall") is True
 
@@ -1960,6 +2009,52 @@ def test_a_published_revision_no_newer_than_one_already_known_is_not_news():
         barcode=BARCODE, cursor=cursor, official=_record_state("changed", 4),
     )
     assert (notice.kind, notice.revision) == (product_watch.KIND_REGULATORY_CHANGE, 4)
+
+
+def test_a_matched_record_without_a_validated_head_is_never_a_notice():
+    """Proactive publication refuses a corrupt official ledger, even if new."""
+    state = _record_state("first_observed_record", 1)
+    state = product_watch.OfficialState(records=state.records, heads={RECALL_ID: None})
+    assert product_watch.notices_for(
+        barcode=BARCODE, cursor=product_watch.WatchCursor(), official=state,
+    ) == []
+
+
+def test_rebaseline_cursor_is_monotonic_for_records_uncertainty_and_labels():
+    existing = product_watch.WatchCursor(
+        records={
+            "old": product_watch.RecordBaseline(revisions=(1,), baseline_unknown=True),
+            "kept": product_watch.RecordBaseline(revisions=(2,), baseline_unknown=False),
+        },
+        label_baseline_version=7,
+        label_notified_versions=(3, 7),
+    )
+    fresh = product_watch.WatchCursor(
+        records={
+            "kept": product_watch.RecordBaseline(revisions=(4,), baseline_unknown=False),
+            "new": product_watch.RecordBaseline(revisions=(5,), baseline_unknown=False),
+        },
+        label_baseline_version=4,
+        label_notified_versions=(4,),
+    )
+    merged = product_watch.merge_rebaseline_cursor(existing, fresh)
+    assert merged.records["old"] == product_watch.RecordBaseline((1,), True)
+    assert merged.records["kept"] == product_watch.RecordBaseline((2, 4), False)
+    assert merged.records["new"] == product_watch.RecordBaseline((5,), False)
+    assert merged.label_baseline_version == 7
+    assert merged.label_notified_versions == (3, 4, 7)
+
+
+def test_rebaseline_keeps_record_match_identity_after_it_temporarily_disappears():
+    existing = product_watch.WatchCursor(records={
+        RECALL_ID: product_watch.RecordBaseline(revisions=(1,)),
+    })
+    fresh = product_watch.WatchCursor()
+    cursor = product_watch.merge_rebaseline_cursor(existing, fresh)
+    assert product_watch.notices_for(
+        barcode=BARCODE, cursor=cursor,
+        official=_record_state("first_observed_record", 1),
+    ) == []
 
 
 def test_a_record_that_is_not_an_exact_match_is_never_a_notice():

@@ -45,14 +45,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
-from urllib.parse import urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.official_records import change_evidence as regulatory_evidence
 from app.domains.official_records import service as official_records_service
+from app.domains.official_records.source import SOURCE_URL as OFFICIAL_CURRENT_SOURCE_URL
 from app.domains.planning import notification_strings as strings
 from app.domains.planning import notifications
 from app.domains.product import change_projection as label_projection
@@ -267,16 +266,10 @@ def current_record_source_is_openable(source_url: object) -> bool:
 
     A current-state notice says "the register lists this", so the register's
     own page has to be openable from the destination screen. ``https`` on the
-    one official host Step 12B accepts, and nothing looser. This is about the
-    *current* record; revision evidence is Step 12B's separate, stricter rule.
+    one governed importer source, and nothing looser. This is about the
+    *current* record; revision evidence is Step 12B's separate authority.
     """
-    if not isinstance(source_url, str) or not source_url:
-        return False
-    try:
-        parts = urlsplit(source_url)
-    except ValueError:
-        return False
-    return parts.scheme == "https" and parts.hostname in regulatory_evidence.OFFICIAL_REVISION_HOSTS
+    return isinstance(source_url, str) and source_url == OFFICIAL_CURRENT_SOURCE_URL
 
 
 def _published_revision(change: object) -> int | None:
@@ -312,6 +305,13 @@ def notices_for(
         if not isinstance(recall_id, str) or not recall_id:
             continue
         if record.get("match_state") != "matched":
+            continue
+        # Product Watch is proactive publication. A current matcher result is
+        # not enough when this record's immutable Step 12B ledger is corrupt:
+        # do not call attention to a record whose official history cannot be
+        # validated, and do not manufacture a baseline for it.
+        head = official.heads.get(recall_id)
+        if not _positive_int(head):
             continue
         if not current_record_source_is_openable(record.get("source_url")):
             continue
@@ -385,6 +385,32 @@ def baseline_cursor(*, official: OfficialState, label_baseline_version: int) -> 
 
 def _record_baseline(head: int | None) -> RecordBaseline:
     return RecordBaseline(revisions=(head,) if head is not None else (), baseline_unknown=head is None)
+
+
+def merge_rebaseline_cursor(existing: WatchCursor, fresh: WatchCursor) -> WatchCursor:
+    """Monotonically extend a valid cursor with facts observed during opt-out.
+
+    Re-enabling delivery is not permission to forget an event this watch has
+    already decided. New current facts become baseline, while every prior
+    record identity, uncertainty marker and label decision remains durable.
+    """
+    records: dict[str, RecordBaseline] = dict(existing.records)
+    for recall_id, incoming in fresh.records.items():
+        prior = records.get(recall_id)
+        if prior is None:
+            records[recall_id] = incoming
+            continue
+        records[recall_id] = RecordBaseline(
+            revisions=tuple(sorted({*prior.revisions, *incoming.revisions})),
+            baseline_unknown=prior.baseline_unknown or incoming.baseline_unknown,
+        )
+    return WatchCursor(
+        records=records,
+        label_baseline_version=max(existing.label_baseline_version, fresh.label_baseline_version),
+        label_notified_versions=tuple(sorted({
+            *existing.label_notified_versions, *fresh.label_notified_versions,
+        })),
+    )
 
 
 def cursor_after_decision(cursor: WatchCursor, notice: WatchNotice, official: OfficialState) -> WatchCursor:
@@ -701,13 +727,19 @@ async def rebaseline_account(session: AsyncSession, account_id: uuid.UUID) -> in
     """
     watches = await _active_watches(session, account_id)
     for watch in watches:
+        try:
+            existing = WatchCursor.from_json(watch.notice_cursor)
+        except WatchCursorInvalid as broken:
+            # A preference toggle must never launder corrupt semantic history.
+            logger.warning("product_watch_cursor_invalid reason=%s", broken)
+            continue
         anchor = await anchor_context(session, watch)
         if anchor is None:
             continue
-        cursor = await _fresh_baseline(
+        fresh = await _fresh_baseline(
             session, barcode=watch.barcode, facts=anchor.facts, anchor_version=watch.anchor_label_version,
         )
-        watch.notice_cursor = cursor.to_json()
+        watch.notice_cursor = merge_rebaseline_cursor(existing, fresh).to_json()
     await session.flush()
     return len(watches)
 
@@ -823,6 +855,7 @@ __all__ = [
     "current_record_source_is_openable",
     "cursor_after_decision",
     "listening",
+    "merge_rebaseline_cursor",
     "notices_for",
     "official_state",
     "queue_material_notice",

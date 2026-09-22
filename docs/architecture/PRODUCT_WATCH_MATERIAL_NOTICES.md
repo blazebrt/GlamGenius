@@ -103,9 +103,10 @@ official-records matcher needs.
 
 ## Baseline semantics
 
-Creating a watch sends nothing. At creation — and at every explicit re-anchor or
-re-activation — Product Watch evaluates the current state and records it as
-baseline:
+Creating a watch sends nothing. At creation and every explicit re-anchor,
+Product Watch evaluates the current state and records it as baseline. On a
+notification preference re-enable it **monotonically merges** fresh baseline
+facts into an existing valid cursor; an opt-out does not erase semantic history.
 
 - every official record that currently matches this exact pack, with the ledger
   head revision Step 12B validates for it (`validated_revision_heads`);
@@ -120,8 +121,9 @@ baseline lives in `notice_cursor`, a strictly validated JSON document:
  "label": {"baseline_version": 1, "notified_versions": []}}
 ```
 
-A malformed cursor is never repaired into something plausible; the watch is
-skipped and `product_watch_cursor_invalid` is logged. If a record's ledger did
+A malformed cursor is never repaired into something plausible, including by a
+preference re-enable; the watch is skipped and `product_watch_cursor_invalid` is
+logged. If a record's ledger did
 not survive Step 12B's checks when it became known, it is stored with
 `baseline_unknown: true` and never produces a change notice for that anchor,
 because no later revision can be told apart from one that already existed.
@@ -147,10 +149,10 @@ healthier, new recall, newly, just recalled.
 
 ## What works today, and what is dormant
 
-- **Class A works today.** The official-records envelope is published whenever the
-  matcher resolves an exact match with an openable official source, so a record
-  that begins to match a watched pack after the baseline produces a current-state
-  notice.
+- **Class A works today.** The official-records envelope is published only when
+  the matcher resolves an exact match whose immutable official ledger has a
+  validated head and whose source equals the governed importer source. A corrupt
+  ledger produces no proactive notice.
 - **Class B is dormant.** Step 12B's publication gate is closed in production:
   `revision_source()` returns `None`, so every `regulatory_change` block is
   `unavailable`. Product Watch therefore produces no regulatory-change notice. The
@@ -171,8 +173,8 @@ Nothing is fabricated to make Product Watch produce more notices.
 The watch uses `official_records_envelope` — the verdict route's own call — with
 the anchor capture's facts. The same exact licence, meaningful exact lot, conflict
 handling, ambiguity withholding and OFF isolation apply; there is no second
-matcher. A class-A notice additionally requires the record's own `source_url` to be
-`https://` on the official FSSAI host, so the destination screen can open the
+matcher. A class-A notice additionally requires the record's own `source_url` to
+equal the official importer's canonical `SOURCE_URL`, so the destination screen can open the
 register page the notice rests on.
 
 A class-A notice is a current-state statement ("a current official record matches
@@ -386,9 +388,10 @@ routes them, and an older build falls back to `/scan`.
 
 ## Known limits
 
-- The Product Constitution lists proactive alerts among paid features. There is no
-  billing gate here because billing code is not permitted in this repository yet;
-  gating Product Watch is a product decision for when that work is reviewed.
+- The Product Constitution classifies proactive alerts as paid. Product Watch
+  remains usable under current private-beta full access because this repository
+  has no approved commerce or entitlement authority. Paid-entitlement enforcement
+  is deferred; this PR adds no billing or payment implementation.
 - While native push is off, the worker never visits the account, so nothing is
   decided; a notice that is still true when push is switched on may then be
   delivered once.
