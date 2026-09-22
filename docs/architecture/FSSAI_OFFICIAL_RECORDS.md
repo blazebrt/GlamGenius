@@ -64,6 +64,10 @@ Brand and product use a separate `normalise_identity_text` — NFKC, whitespace 
 
 Absence of a match makes no safety claim. Official records remain separate from Product Result grade, decision, community reporting, complaint handoff, and Open Food Facts attribution.
 
+## What changed in a record's own history
+
+The revision ledger this importer writes is read by a separate authority, Step 12B, which compares one immutable revision with its explicit predecessor and states which official content fields the register itself now says differently. It adds no table, writes nothing, and publishes a comparison only when every observation it rests on has its own openable official source — which no stored field provides today, so the current customer-visible answer is a governed unavailable state for every record. See `docs/architecture/REGULATORY_CHANGE_AUTHORITY.md`.
+
 ## Not community observations
 
 Step 5 adds a fourth, separate layer: structured shopper observations. It is not this one. A community report can never create an `OfficialRecord`, set `official_finding`, or claim a regulator said anything — however many people file it. Authority data enters only through the import path above.

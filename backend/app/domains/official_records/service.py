@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,9 @@ from typing import Any
 from sqlalchemy import desc, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+logger = logging.getLogger(__name__)
+
+from . import change_evidence, change_projection
 from .models import OfficialRecord, OfficialRecordRevision, OfficialSourceFetch
 from .source import (
     AUTHORITY_FSSAI_FOSCOS,
@@ -208,7 +212,118 @@ async def recalls_for_pack(
             )}
         for row in rows
     ]
-    return [{**record, "match_state": "matched"} for record in resolve_matches(facts, material)]
+    by_external_id = {row.external_record_id: row for row in rows}
+    matched = resolve_matches(facts, material)
+    # Step 12B is attached only to records that deterministically resolved to
+    # this exact pack. An unresolved or ambiguous candidate set publishes
+    # nothing at all, so there is nothing for a change claim to be about.
+    return [
+        {
+            **record,
+            "match_state": "matched",
+            "regulatory_change": await regulatory_change_for_record(
+                session, by_external_id[record["recall_id"]],
+            ),
+        }
+        for record in matched
+    ]
+
+
+async def _revision_pair(
+    session: AsyncSession, record: OfficialRecord,
+) -> tuple[OfficialRecordRevision | None, OfficialRecordRevision | None]:
+    """The record's latest immutable revision and its explicit predecessor.
+
+    Selected by ``revision_number`` on this record alone — never by "the
+    nearest earlier row", never by timestamp, never across records. The pair is
+    chosen here so the projection itself never performs a lookup and can be
+    reasoned about as a pure function of two rows.
+    """
+    current = (await session.execute(select(OfficialRecordRevision).where(
+        OfficialRecordRevision.record_id == record.id,
+        OfficialRecordRevision.revision_number == record.latest_revision,
+    ))).scalars().first()
+    if current is None or current.revision_number <= 1:
+        return current, None
+    previous = (await session.execute(select(OfficialRecordRevision).where(
+        OfficialRecordRevision.record_id == record.id,
+        OfficialRecordRevision.revision_number == current.revision_number - 1,
+    ))).scalars().first()
+    return current, previous
+
+
+async def regulatory_change_for_record(
+    session: AsyncSession, record: OfficialRecord,
+) -> dict[str, Any]:
+    """Step 12B: what this official record's own authority now says differently.
+
+    Two authorities run here, in this order, and the order is the design:
+
+    1. :func:`change_projection.project_regulatory_change` decides whether the
+       stored revision history is valid and what the two observations say
+       differently. It runs **first, and always** — a corrupt ledger must be
+       detected and logged whether or not anybody was ever going to be told.
+    2. :func:`change_evidence.regulatory_change_is_publishable` decides,
+       separately, whether a valid answer may leave the server.
+
+    A claim is published only when both permit it. Integrity alone is not
+    permission to speak; evidence alone can never make a corrupt history
+    publishable.
+
+    The return is always the same governed envelope shape. Every way of being
+    unable to state a comparison — corrupt history, missing history, or a
+    correct comparison no openable source backs — looks identical from outside,
+    so the envelope itself cannot be read as a diagnosis of our storage.
+    """
+    current, previous = await _revision_pair(session, record)
+    if current is None:
+        # A canonical record without any revision is a history no supported
+        # import path writes. Integrity runs first and always, so this is named
+        # to the log before anything else is decided.
+        logger.warning(
+            "regulatory_history_invariant_failed authority=%s record_type=%s reason=%s",
+            record.authority, record.record_type, "record_has_no_revision",
+        )
+        return change_projection.UNAVAILABLE_PROJECTION.as_payload()
+    fetches = {
+        row.id: row
+        for row in (await session.execute(select(OfficialSourceFetch).where(
+            OfficialSourceFetch.id.in_(
+                {row.source_fetch_id for row in (current, previous) if row is not None}
+            )
+        ))).scalars().all()
+    }
+    current_fetch = fetches.get(current.source_fetch_id)
+    previous_fetch = fetches.get(previous.source_fetch_id) if previous is not None else None
+    # First authority: integrity. Unconditional.
+    projection: change_projection.RegulatoryChangeProjection | None = None
+    if current_fetch is None or (previous is not None and previous_fetch is None):
+        logger.warning(
+            "regulatory_history_invariant_failed authority=%s record_type=%s reason=%s",
+            record.authority, record.record_type, "revision_fetch_missing",
+        )
+    else:
+        try:
+            projection = change_projection.project_regulatory_change(
+                record=record, current=current, previous=previous,
+                current_fetch=current_fetch, previous_fetch=previous_fetch,
+            )
+        except change_projection.RegulatoryHistoryInvariantError as broken:
+            # An addition may not take the page down with it. The official
+            # record itself was established without this envelope and is still
+            # shown; the broken invariant is named to the log and to nobody
+            # else, and never with a database identifier beside it.
+            logger.warning(
+                "regulatory_history_invariant_failed authority=%s record_type=%s reason=%s",
+                record.authority, record.record_type, broken.reason,
+            )
+    # Second authority, asked separately: may a valid result be published?
+    publishable = change_evidence.regulatory_change_is_publishable(
+        record=record, current=current, previous=previous,
+    )
+    if projection is None or not publishable:
+        return change_projection.UNAVAILABLE_PROJECTION.as_payload()
+    return projection.as_payload()
 
 
 async def official_records_envelope(session: AsyncSession, facts: dict[str, Any] | None) -> dict[str, Any]:

@@ -143,6 +143,15 @@ async def test_confirmed_pack_receives_the_exact_matching_official_record(
         "recall_id", "fbo_name", "brand_name", "product_name", "batch_lot", "licence", "reason",
         "recall_status", "recall_start_date", "recall_termination_date", "nature_of_recall",
         "source_url", "match_state", "source_last_seen_at", "seen_in_latest_successful_check",
+        # Step 12B, additive. A single-revision record is a first observation,
+        # and even that is withheld today because no revision-specific official
+        # locator exists to source a comparison from.
+        "regulatory_change",
+    }
+    assert envelope["records"][0]["regulatory_change"] == {
+        "scope": "official_record_history", "status": "unavailable",
+        "current_revision": None, "previous_revision": None,
+        "changed_fields": [], "changes": [], "exact_identity_changed": False,
     }
 
 
