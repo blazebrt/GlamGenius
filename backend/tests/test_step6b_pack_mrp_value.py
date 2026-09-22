@@ -2331,4 +2331,14 @@ async def test_deleting_an_account_removes_its_price_observation(
     after = await verdict(app_client, device)
     # The observation that is now newest — not a resurrection of the deleted one.
     assert after["value"]["comparison"]["current"]["mrp_inr"] == "110.00"
-    assert "120" not in str(after["value"])
+    # The candidate is still its own seeded ₹100, which — with the line above —
+    # pins both sides of the published comparison to a legitimate price and so
+    # leaves the erased ₹120 reading nowhere to participate: every other figure
+    # on the card (``mrp_per_100_inr``, ``relationship``,
+    # ``difference_inr_per_100``) is derived from these two.
+    #
+    # Asserted on the price fields rather than by scanning ``str(...)`` of the
+    # whole envelope. That envelope carries ISO timestamps, and a microsecond
+    # component such as ``.591206`` contains the digits "120" by chance, which
+    # failed this test in CI while the prices were entirely correct.
+    assert after["value"]["comparison"]["candidate"]["mrp_inr"] == "100.00"
