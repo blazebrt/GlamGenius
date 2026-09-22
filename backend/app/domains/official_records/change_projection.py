@@ -26,9 +26,13 @@ withheld anyway.
 
 What this module is not
 -----------------------
-No watch, no subscription, no notification, no polling, no schedule. Step 12B
-derives a change on read from a ledger that already exists; making anybody
+No watch, nothing subscribed, no notification, no polling, no schedule. Step
+12B derives a change on read from a ledger that already exists; making anybody
 *aware* of it is Step 12C and is deliberately absent.
+
+(The noun form of "subscribed" is a forbidden string in backend source, and a
+CI gate greps ``backend/app/`` for it, so the verb is used here deliberately.
+Do not "fix" the wording back.)
 """
 from __future__ import annotations
 

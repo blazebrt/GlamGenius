@@ -970,6 +970,41 @@ def test_the_step_12c_guard_would_actually_catch_step_12c_code():
     }
 
 
+#: The four absence greps the CI "PR gate" job runs over ``backend/app/`` and
+#: ``backend/server.py``. They are reproduced verbatim rather than referenced,
+#: because the job is the only thing that ran them until a Step 12B docstring
+#: used the word "subscription" to say Step 12B has none, and burned a CI cycle
+#: proving it. The gates themselves are not weakened here, and must not be:
+#: changing what they forbid is its own change, with its own review.
+CI_ABSENCE_GREPS: tuple[tuple[str, ...], ...] = (
+    ("mongodb", "MongoClient", "pymongo", "motor"),
+    ("minio", "MinIO", "boto3", "s3_client", "S3_BUCKET"),
+    ("stripe", "Stripe", "payment_intent", "billing", "subscription"),
+)
+
+
+@pytest.mark.parametrize("needles", CI_ABSENCE_GREPS, ids=lambda n: n[0])
+def test_ci_absence_gates_pass_locally(needles):
+    """Run the CI gate's own patterns here, so a docstring cannot fail CI alone.
+
+    ``tests/test_no_legacy_terms.py`` polices the Supabase-cutover vocabulary,
+    which is more specific: it forbids ``/api/subscription`` and
+    ``app.domains.billing``, not the bare words the CI job greps for. This test
+    closes that gap in the only direction that is safe — it matches CI exactly.
+    """
+    backend_root = Path(__file__).resolve().parents[1]
+    roots = [backend_root / "app", backend_root / "server.py"]
+    offenders = []
+    for root in roots:
+        paths = sorted(root.rglob("*.py")) if root.is_dir() else [root]
+        for path in paths:
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                for needle in needles:
+                    if needle in line:
+                        offenders.append(f"{path.relative_to(backend_root)}:{lineno}: {needle}")
+    assert not offenders, "the CI PR gate would fail on:\n" + "\n".join(offenders)
+
+
 def test_utc_helpers_stay_unused_so_the_projection_has_no_clock():
     """A pure function of two rows: same pair, same answer, any day."""
     import inspect
