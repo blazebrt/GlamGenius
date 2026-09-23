@@ -272,6 +272,34 @@ def current_record_source_is_openable(source_url: object) -> bool:
     return isinstance(source_url, str) and source_url == OFFICIAL_CURRENT_SOURCE_URL
 
 
+def record_governs_pack(record: object, heads: Mapping[str, int | None]) -> bool:
+    """Whether one official-records row is a governed, publishable match for this pack.
+
+    The one rule for "an official record matches this pack and may be said",
+    shared by Product Watch's record-match notice and the Step 14 purchase
+    guard so the two can never disagree about which records count:
+
+    * the exact matcher resolved it to this pack (``match_state == "matched"``;
+      ambiguity already published nothing);
+    * its immutable Step 12B ledger validates (a positive head), because a
+      record whose own history cannot be proven is not one to act on;
+    * its current source is the one openable official page.
+
+    Nothing about when it was last seen: a record omitted from a later export
+    is not withdrawn, corrected or resolved, so omission never releases it.
+    """
+    if not isinstance(record, Mapping):
+        return False
+    recall_id = record.get("recall_id")
+    if not isinstance(recall_id, str) or not recall_id:
+        return False
+    if record.get("match_state") != "matched":
+        return False
+    if not _positive_int(heads.get(recall_id)):
+        return False
+    return current_record_source_is_openable(record.get("source_url"))
+
+
 def _published_revision(change: object) -> int | None:
     """The revision a *published* Step 12B change names, or ``None``.
 
@@ -301,20 +329,13 @@ def notices_for(
     """
     found: list[WatchNotice] = []
     for record in official.records:
-        recall_id = record.get("recall_id")
-        if not isinstance(recall_id, str) or not recall_id:
-            continue
-        if record.get("match_state") != "matched":
-            continue
         # Product Watch is proactive publication. A current matcher result is
         # not enough when this record's immutable Step 12B ledger is corrupt:
         # do not call attention to a record whose official history cannot be
         # validated, and do not manufacture a baseline for it.
-        head = official.heads.get(recall_id)
-        if not _positive_int(head):
+        if not record_governs_pack(record, official.heads):
             continue
-        if not current_record_source_is_openable(record.get("source_url")):
-            continue
+        recall_id = record["recall_id"]
         observation = str(record.get("recall_start_date") or "")
         known = cursor.records.get(recall_id)
         if known is None:
@@ -853,6 +874,7 @@ __all__ = [
     "anchor_context",
     "baseline_cursor",
     "current_record_source_is_openable",
+    "record_governs_pack",
     "cursor_after_decision",
     "listening",
     "merge_rebaseline_cursor",

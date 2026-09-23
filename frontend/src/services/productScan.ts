@@ -21,6 +21,7 @@ import axios from 'axios';
 
 import { getInstallationId } from './deviceIdentity';
 import { api } from './api';
+import type { PurchaseOsCheck } from './apiV2';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
@@ -535,6 +536,30 @@ export async function watchProduct(barcode: string, labelVersion: number): Promi
   const headers = await deviceHeaders();
   if (!headers['X-Device-Token']) throw new Error('no device token');
   return (await api.put<ProductWatchState>(watchPath(barcode), { label_version: labelVersion }, { headers })).data;
+}
+
+// --- Purchase context (Step 14) ----------------------------------------------
+
+/**
+ * The scanned pack's one purchase answer, composed on the server from the
+ * Product Result and the authorities around it. Reads only.
+ *
+ * Here rather than in apiV2 because physical-pack authority is this phone's
+ * capture, proven by the X-Device-Token this module owns. It uses the device
+ * already stored and never registers one: opening a Product Result must not
+ * create a device, and without one there is simply no purchase context.
+ */
+export async function readScanPurchaseCheck(
+  barcode: string,
+  options: { physicalPackContext: boolean },
+): Promise<PurchaseOsCheck | null> {
+  const device = await readStoredDevice();
+  if (!device?.token) return null;
+  const params = options.physicalPackContext ? undefined : { physical_pack_context: 'false' };
+  return (await api.get<PurchaseOsCheck>(
+    `/api/v2/scan/verdict/${encodeURIComponent(barcode)}/purchase-check`,
+    { headers: { 'X-Device-Token': device.token }, params },
+  )).data;
 }
 
 /** Stop watching. Idempotent, and needs no device. */

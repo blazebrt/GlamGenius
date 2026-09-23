@@ -53,6 +53,7 @@ import {
 } from '../src/components/scan/SkinCarePieces';
 import { ForYouCard } from '../src/components/scan/ForYouCard';
 import { S } from '../src/strings/verdict';
+import { PURCHASE_OS } from '../src/strings/purchaseOs';
 import { transcribeProductLabel, transcribeSkinCareLabel, uploadMedia } from '../src/services/apiV2';
 import { errorMessage } from '../src/services/api';
 import { useUserStore } from '../src/store/userStore';
@@ -421,6 +422,21 @@ export default function ScanProductScreen() {
                 {queued} scan{queued === 1 ? '' : 's'} saved on this phone, waiting to sync.
               </Text>
             )}
+            {/* Step 14. Secondary and below the scan instruction: for the
+                product that cannot be scanned. Candidate checks belong to an
+                account, so the entry is offered only when signed in. */}
+            {!!userId && (
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel={PURCHASE_OS.scanEntry.action}
+                accessibilityHint={PURCHASE_OS.scanEntry.hint}
+                onPress={() => router.push('/purchase-candidate')}
+                style={styles.secondaryEntry}
+                testID="purchase-candidate-entry"
+              >
+                <Text style={styles.secondaryEntryText}>{PURCHASE_OS.scanEntry.action}</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </View>
@@ -581,6 +597,8 @@ const styles = StyleSheet.create({
   overlayTitle: { fontFamily: FONTS.family.heading, fontSize: 24, color: COLORS.white },
   overlayBody: { fontFamily: FONTS.family.body, fontSize: 14, color: 'rgba(255,255,255,0.82)' },
   overlayQueue: { fontFamily: FONTS.family.body, fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 4 },
+  secondaryEntry: { marginTop: SPACING.md, paddingVertical: SPACING.xs },
+  secondaryEntryText: { fontFamily: FONTS.family.bodyMedium, fontSize: 13, color: 'rgba(255,255,255,0.85)', textDecorationLine: 'underline' },
   looking: { alignItems: 'center', gap: SPACING.sm, paddingVertical: SPACING.xl },
   card: {
     backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: SPACING.lg,

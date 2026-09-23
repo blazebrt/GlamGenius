@@ -309,6 +309,55 @@ def serialize_scan_memory(
     }
 
 
+async def latest_decision_on_another_version(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+    barcode: str,
+    label_snapshot_id: uuid.UUID,
+    label_version: int,
+    content_fingerprint: str,
+) -> dict[str, Any] | None:
+    """This subject's newest decision on any *other* version of this barcode.
+
+    Step 14 says it out loud rather than presenting it as current: the pack a
+    decision was made about is identified by its exact label version, and a
+    newer verified label is a different version even when the barcode is the
+    same. Returning it separately, marked as not about the current version, is
+    what stops a stale choice from being read as the answer to today's pack.
+
+    A pure read under the same account and subject filters as every other scan
+    memory read. Only what was stored comes back — the person's own outcome and
+    the version it was about — never a reconstruction of what we recommended.
+    """
+    decision_subject = await canonicalize_decision_subject(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
+    row = await session.scalar(
+        select(ScanDecisionEvent).where(
+            ScanDecisionEvent.account_id == principal_account_id,
+            subject_row_filter(ScanDecisionEvent, decision_subject),
+            ScanDecisionEvent.barcode == barcode,
+            ~(
+                (ScanDecisionEvent.label_snapshot_id == label_snapshot_id)
+                & (ScanDecisionEvent.label_version == label_version)
+                & (ScanDecisionEvent.content_fingerprint == content_fingerprint)
+            ),
+        ).order_by(ScanDecisionEvent.created_at.desc(), ScanDecisionEvent.id.desc()).limit(1)
+    )
+    if row is None:
+        return None
+    return {
+        "decision": row.decision,
+        "label_version": row.label_version,
+        "occurred_at": row.created_at.isoformat() if row.created_at else None,
+        "applies_to_current_version": False,
+    }
+
+
 async def scan_decision_history(
     session: AsyncSession,
     *,
