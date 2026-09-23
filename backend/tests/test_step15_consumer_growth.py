@@ -702,7 +702,7 @@ def test_d_deletion_takes_the_account_before_the_invites():
     body = source[source.index("async def deactivate_referral_invites_for_account"):]
     assert body.index("select(Account.id)") < body.index("update(Invite)")
     ensure = source[source.index("async def ensure_referral"):source.index("async def deactivate_referral")]
-    assert ensure.index("with_for_update(key_share=True)") < ensure.index("_bound_invites(session, account_id, lock=True)")
+    assert ensure.index(".with_for_update()") < ensure.index("_bound_invites(session, account_id, lock=True)")
     worker = (BACKEND / "app" / "domains" / "privacy" / "deletion_service.py").read_text()
     stage = worker[worker.index("if job.state == STATE_DATABASE_DELETING"):]
     assert stage.index("_deactivate_referral_invites") < stage.index("_delete_account_row")

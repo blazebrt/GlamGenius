@@ -183,15 +183,17 @@ inviter are allowed (expired codes are replaced). No old migration is edited;
 ### Concurrency and lock order
 
 ```text
-ensure:    Account FOR NO KEY UPDATE → bound Invite rows FOR UPDATE → insert
+ensure:    Account FOR UPDATE        → bound Invite rows FOR UPDATE → insert
 deletion:  Account FOR UPDATE        → bound Invite rows (UPDATE active=false) → DELETE account
 ```
 
 The account row serialises issuance: concurrent `POST`s queue on it, and the
-second reads the invite the first committed. `FOR NO KEY UPDATE` conflicts with
-itself and with `DELETE` but not with the `FOR KEY SHARE` every child-row
-insert on the account takes. Deletion takes the same row first, so neither
-path can hold account and invite in opposite orders. A code collision is
+second reads the invite the first committed. `FOR UPDATE` is the repository's
+existing identity-transition lock on the account row; the weaker
+`FOR KEY SHARE` protection stays emitted in exactly one place
+(`identity.service.lock_account_against_delete`), as the Step 11C guard
+requires. Deletion takes the same row first, so neither path can hold account
+and invite in opposite orders. A code collision is
 retried inside a savepoint, never surfaced.
 
 ### Account deletion

@@ -32,8 +32,8 @@ never in a thirty-day denominator.
 
 No commercial numbers
 ---------------------
-Commercial access is not active, so there is no premium, subscription or
-revenue conversion, no ARPU and no LTV. Feature adoption is reported under the
+Commercial access is not active, so there is no premium, paid-plan or revenue
+conversion, no ARPU and no LTV. Feature adoption is reported under the
 feature's own name.
 """
 from __future__ import annotations

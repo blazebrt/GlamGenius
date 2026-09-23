@@ -29,14 +29,18 @@ Lock order
 ----------
 ::
 
-    Account FOR NO KEY UPDATE -> bound Invite rows FOR UPDATE -> insert
+    Account FOR UPDATE -> bound Invite rows FOR UPDATE -> insert
 
 The account row is the serialisation point: two simultaneous requests to
 ensure a code queue on it, and the second one reads the invite the first one
-committed instead of minting a second live code. ``FOR NO KEY UPDATE`` rather
-than ``FOR UPDATE`` because it still conflicts with itself and with ``DELETE``,
-but not with the ``FOR KEY SHARE`` every child-row insert on this account takes,
-so unrelated writes are not queued behind a referral.
+committed instead of minting a second live code. ``FOR UPDATE`` is the lock the
+repository already uses to order identity transitions on the account row
+(``profile.identity.lock_account``); it conflicts with itself and with
+``DELETE``. The one weaker account lock, ``FOR KEY SHARE`` against deletion, is
+emitted in exactly one place (``identity.service.lock_account_against_delete``)
+and is not what this needs, because two holders of it do not exclude each
+other. The cost is that a child-row insert on the same account waits for the
+few milliseconds an issuance takes.
 
 Account deletion takes the same account row first and the invites second
 (:func:`deactivate_referral_invites_for_account`), so the two can never hold
@@ -248,7 +252,7 @@ async def ensure_referral(
     status = await session.scalar(
         select(Account.status)
         .where(Account.id == account_id)
-        .with_for_update(key_share=True)  # FOR NO KEY UPDATE
+        .with_for_update()
     )
     if status != ACCOUNT_STATUS_ACTIVE:
         return ReferralState(state=STATE_UNAVAILABLE)
