@@ -13,6 +13,7 @@ from app.api.v2 import (
     config,
     consent,
     family,
+    growth,
     integrations,
     internal_scheduler,
     inventory,
@@ -59,6 +60,7 @@ router.include_router(integrations.router, tags=["v2-integrations"])
 router.include_router(shelf.router, tags=["v2-shelf"])
 router.include_router(maintenance.router, tags=["v2-maintenance"])
 router.include_router(routines.router, tags=["v2-routines"])
+router.include_router(growth.router, tags=["v2-growth"])
 router.include_router(admin.router, tags=["v2-admin"])
 # Not a customer surface: a shared-secret door for the external scheduler.
 router.include_router(internal_scheduler.router)

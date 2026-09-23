@@ -21,7 +21,7 @@ async def test_privacy_export_returns_versioned_snapshot(
     # export contract.
     # Step 11E. Deliberately a literal: this assertion exists to make a
     # schema change a conscious act rather than something that rides along.
-    assert body["schema_version"] == "1.4"
+    assert body["schema_version"] == "1.5"
     assert "domains" in body
     assert "identity" in body["domains"]
     # No storage-key leak

@@ -41,6 +41,9 @@ import {
   type ScanDecisionMemory, type CommunityOwnReport, type CommunityPackContext, type PurchaseOsCheck,
 } from '../src/services/apiV2';
 import { buildVerdictShareText } from '../src/services/verdictShare';
+import { ensureShareReferralCode, recordGrowthEvent, type ShareResult } from '../src/services/growth';
+import { requestFreshScan } from '../src/services/scanSession';
+import { GROWTH } from '../src/strings/growth';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
 import { OfficialRecords } from '../src/components/verdict/OfficialRecords';
 import { ProductWatch } from '../src/components/verdict/ProductWatch';
@@ -215,10 +218,44 @@ export default function VerdictScreen() {
     });
   }, [speaking, view]);
 
-  const onShare = useCallback(() => {
-    if (!source || !view) return;
-    void Share.share({ message: buildVerdictShareText(source, view) });
-  }, [source, view]);
+  // Step 15. The share is built from the Product Result itself, never from
+  // `view`: the view can carry the official-record ceiling for the pack in
+  // this person's hand, and the person reading the share is not holding it.
+  // A referral code is added when one is ready; growth failing, being slow or
+  // not applying never stops the share, and the outcome is recorded only as
+  // the platform reported it.
+  const sharing = useRef(false);
+  const onShare = useCallback(async () => {
+    if (!source || sharing.current) return;
+    sharing.current = true;
+    try {
+      const referralCode = signedIn ? await ensureShareReferralCode() : null;
+      let result: ShareResult = 'failed';
+      try {
+        const outcome = await Share.share({ message: buildVerdictShareText(source, { referralCode }) });
+        result = outcome?.action === Share.sharedAction ? 'shared' : 'dismissed';
+      } catch {
+        result = 'failed';
+      }
+      if (signedIn) {
+        void recordGrowthEvent({
+          name: 'growth.product_result_share',
+          properties: { surface: 'product_result', result, referral_included: referralCode !== null },
+        });
+      }
+    } finally {
+      sharing.current = false;
+    }
+  }, [signedIn, source]);
+
+  // Step 15. Back to a fresh scanner: the habit is checking the next product.
+  const scanAnother = useCallback(() => {
+    if (signedIn) {
+      void recordGrowthEvent({ name: 'growth.scan_again', properties: { surface: 'product_result' } });
+    }
+    requestFreshScan();
+    router.dismissTo('/scan-product');
+  }, [router, signedIn]);
 
   const openReport = useCallback((subject: string) => {
     setReportSubject(subject);
@@ -517,10 +554,25 @@ export default function VerdictScreen() {
             <VerdictActions
               onWhy={() => setTab('why')}
               onListen={onListen}
-              onShare={onShare}
+              onShare={() => void onShare()}
               speaking={speaking}
               speechAvailable={isSpeechAvailable()}
             />
+            {/* Step 15. One quiet link, after the result and its evidence and
+                below the closing actions, never above or instead of them. A
+                reference view already offers "scan it first" in this place. */}
+            {!referenceView && (
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel={GROWTH.scanAgain.action}
+                accessibilityHint={GROWTH.scanAgain.hint}
+                onPress={scanAnother}
+                style={styles.link}
+                testID="scan-another-product"
+              >
+                <Text style={styles.linkText}>{GROWTH.scanAgain.action}</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               accessibilityRole="button" accessibilityLabel={S.primary.ingredients}
               onPress={() => setTab('ingredients')} style={styles.link}

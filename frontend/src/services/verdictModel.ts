@@ -42,6 +42,8 @@ export interface VerdictFactor {
   explanation: string;
   rule: string | null;
   sources: VerdictEvidenceSource[];
+  /** Which lifecycle stage the rule behind this row reached, as the server said. */
+  evidence?: { status?: string | null } | null;
 }
 
 export interface VerdictComponent {
@@ -303,7 +305,7 @@ const ACTION_BY_DECISION: Record<Exclude<NonNullable<VerdictSource['decision']>[
   skip: S.primary.decisionSkip,
 };
 
-function primaryReasonFor(source: VerdictSource): string {
+export function primaryReasonFor(source: VerdictSource): string {
   const key = source.decision?.reasonKey;
   if (key === 'sugar') return S.primary.reasonSugar;
   if (key === 'salt' || key === 'sodium') return S.primary.reasonSalt;

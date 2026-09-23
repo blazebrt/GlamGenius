@@ -140,6 +140,12 @@ _SENSITIVE_KEY = re.compile(
     r"ai_run|media_asset|snapshot_id|label_snapshot|content_fingerprint|"
     r"fingerprint|barcode|product_name|brand|product_type|"
 
+    # --- Access capabilities ------------------------------------------------
+    # Step 15. An invite or referral code is a working key to the private
+    # beta, and a referral payload names who was given it. Redacted by
+    # container name, so the code inside is never reached.
+    r"invite|referral|"
+
     # --- The sentence a customer would have read --------------------------
     # The keys stay readable: `verdict_key` and `reason_key` are global
     # governance identifiers and are useful in a report. The rendered text is

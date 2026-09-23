@@ -297,7 +297,7 @@ async def test_the_export_schema_version_still_says_what_this_shape_is(
     await _seed(app_client)
     async with get_sessionmaker()() as session:
         export = await build_export(session, account_id)
-    assert export["schema_version"] == EXPORT_SCHEMA_VERSION == "1.4"
+    assert export["schema_version"] == EXPORT_SCHEMA_VERSION == "1.5"
 
 
 async def test_erasure_leaves_no_preference_and_no_subject_behind(

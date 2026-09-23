@@ -21,6 +21,7 @@ from app.domains.community import models as community_models
 from app.domains.consent.models import Consent
 from app.domains.evidence import models as evidence_models
 from app.domains.family import models as family_models
+from app.domains.growth.models import ConsumerReferralInvite
 from app.domains.identity.models import Account
 from app.domains.inventory import models as inventory_models
 from app.domains.media.models import MediaAsset
@@ -115,4 +116,5 @@ __all__ = [
     "substances_models",
     "supplement_models",
     "PersonalDecisionRelease",
+    "ConsumerReferralInvite",
 ]

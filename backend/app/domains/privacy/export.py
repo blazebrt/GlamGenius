@@ -1502,6 +1502,24 @@ def _ai_output_dict(row: AIRunOutput) -> dict[str, Any]:
     return data
 
 
+async def _growth(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
+    """Step 15. The account's own growth telemetry and referral history.
+
+    ``app_events`` was classified INCLUDED and exported by nothing; this is
+    where it is kept. Each event is its name, its whitelisted properties and
+    when — no row id and no client operation id. The referral history states
+    what this account was issued and how many people it admitted, never a
+    code (a live code is an access capability) and never who was admitted.
+    """
+    from app.domains.growth.analytics import analytics_export
+    from app.domains.growth.referral import referral_export
+
+    return {
+        "analytics_events": await analytics_export(session, account_id),
+        "referral": await referral_export(session, account_id),
+    }
+
+
 DomainHandler = Callable[[AsyncSession, uuid.UUID], Any]
 
 DOMAIN_HANDLERS: dict[str, DomainHandler] = {
@@ -1520,6 +1538,7 @@ DOMAIN_HANDLERS: dict[str, DomainHandler] = {
     "routines": _routines,
     "progress_and_memory": _progress_and_memory,
     "ai_and_ops": _ai_and_ops,
+    "growth": _growth,
 }
 
 

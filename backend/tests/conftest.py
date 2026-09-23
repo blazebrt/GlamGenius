@@ -87,11 +87,14 @@ async def _reset_access_rate_state():
     """The invite-reserve and device-registration routes have in-process rate
     limiters; other tests hitting the same fake IP would otherwise accumulate
     over a session."""
-    from app.api.v2 import access, product
+    from app.api.v2 import access, growth, product
+    from app.domains.growth import analytics as growth_analytics
 
     def _clear() -> None:
         access._rate_state.clear()
         product._device_registration_limiter.reset()
+        growth._event_limiter.reset()
+        growth_analytics.reset_prune_throttle()
 
     _clear()
     yield

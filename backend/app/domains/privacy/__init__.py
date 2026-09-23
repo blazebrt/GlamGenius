@@ -58,7 +58,10 @@ from enum import StrEnum
 # decisions a person took.
 # 1.3 — Step 11D. Care preference and Shelf Manager identity are subject-aware.
 # 1.4 — Step 11E. Persisted Care routine execution/history is grouped by human.
-EXPORT_SCHEMA_VERSION = "1.4"
+# 1.5 — Step 15. A ``growth`` domain: the account's own whitelisted telemetry
+# (``app_events``, INCLUDED since before this and exported by nothing until
+# now) and its consumer referral history, without codes or invitee identity.
+EXPORT_SCHEMA_VERSION = "1.5"
 
 
 class Classification(StrEnum):
@@ -82,6 +85,11 @@ REGISTRY: dict[str, Classification] = {
     "invites": Classification.NOT_USER_OWNED,
     "invite_redemptions": Classification.INCLUDED,
     "invite_registration_reservations": Classification.OPERATIONAL,
+    # Step 15. Which invites this account was issued to share. Theirs: exported
+    # under the ``growth`` domain (without the code, which is a live access
+    # capability), and cascaded away with the account after every invite it
+    # names has been switched off.
+    "consumer_referral_invites": Classification.INCLUDED,
     # --- Consent ---
     "consents": Classification.INCLUDED,
     # --- Profile + onboarding ---

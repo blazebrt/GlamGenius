@@ -230,6 +230,13 @@ async def run_job(session: AsyncSession, job: AccountDeletionJob) -> tuple[str, 
         if job.state == STATE_DATABASE_DELETING:
             # Before the cascade: rows the cascade will not reach, and which
             # could not be found by account afterwards.
+            #
+            # First of all, the invites this person was issued to share. The
+            # cascade removes the binding that says which invites were theirs,
+            # so they are switched off while that is still knowable — and a
+            # code that outlived the person it was issued to would let a
+            # stranger in on the strength of somebody who has left.
+            await _deactivate_referral_invites(session, job.account_id)
             await _delete_ai_outputs(session, job.account_id)
             await _delete_analytics_events(session, job.account_id)
             await _scrub_audit_events(session, job.account_id)
@@ -382,6 +389,20 @@ async def _delete_ai_outputs(session: AsyncSession, account_id: uuid.UUID) -> No
         )
     )
     await session.flush()
+
+
+async def _deactivate_referral_invites(session: AsyncSession, account_id: uuid.UUID) -> None:
+    """Switch off every referral invite this account was issued. Idempotent.
+
+    Takes the account row first and the invites second — the order referral
+    issuance takes — so a deletion and a concurrent "ensure my code" can never
+    hold the pair in opposite orders. If issuance committed first, its invite
+    is found and switched off here; if this ran first, issuance sees an account
+    that is no longer active and issues nothing.
+    """
+    from app.domains.growth.referral import deactivate_referral_invites_for_account
+
+    await deactivate_referral_invites_for_account(session, account_id)
 
 
 async def _delete_analytics_events(session: AsyncSession, account_id: uuid.UUID) -> None:

@@ -46,7 +46,7 @@ async def test_export_1_4_groups_routine_graph_by_subject_and_legacy_self(
     async with get_sessionmaker()() as session:
         export = await build_export(session, account_id)
 
-    assert export["schema_version"] == EXPORT_SCHEMA_VERSION == "1.4"
+    assert export["schema_version"] == EXPORT_SCHEMA_VERSION == "1.5"
     history = export["domains"]["routines"]["routine_history"]
     assert set(history["by_subject"]) == {str(self_id), member}
     assert history["by_subject"][member]["routines"]
