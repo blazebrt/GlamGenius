@@ -836,6 +836,23 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
     }
 
 
+def _supplement_label_component_row(row: SupplementLabelComponent) -> dict[str, Any]:
+    """What a person recorded from a supplement label, and where it came from.
+
+    Step 13. The printed facts and their provenance are the person's own data
+    and leave with them. Left out on purpose: ``account_id`` (the export is
+    already this account's), ``source_ai_run_id``, ``model_version`` and
+    ``prompt_version`` (internal pipeline bookkeeping, following the same rule
+    as ``product_watches`` below), and ``client_mutation_id`` (a retry key the
+    app generated, not something the person wrote).
+    """
+    return _row_dict(row, [
+        "id", "item_id", "raw_name", "normalized_name", "canonical_component_key",
+        "amount", "unit", "serving_text", "source", "verification_state", "confidence",
+        "schema_version", "created_at", "updated_at",
+    ])
+
+
 def _product_watch_row(row: ProductWatch) -> dict[str, Any]:
     """What a person can read about a watch they set: which product, since when.
 
@@ -1322,10 +1339,7 @@ async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
             _row_dict(r, [c.name for c in SupplementSafetyFlag.__table__.columns])
             for r in supplement_safety_flags
         ],
-        "supplement_label_components": [
-            _row_dict(r, [c.name for c in SupplementLabelComponent.__table__.columns])
-            for r in label_components
-        ],
+        "supplement_label_components": [_supplement_label_component_row(r) for r in label_components],
         "nutrition_preferences": [
             _row_dict(r, [c.name for c in NutritionPreference.__table__.columns])
             for r in nutrition_preferences

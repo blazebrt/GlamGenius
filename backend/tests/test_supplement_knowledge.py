@@ -13,7 +13,8 @@ from app.domains.evidence.enums import ReviewStatus
 from app.domains.evidence.models import EvidenceClaim
 from app.domains.supplements import knowledge
 from app.domains.supplements.chemistry import elemental_percent, molar_mass
-from app.domains.supplements.engine import REVIEWED_ALIASES, component_identity
+from app.domains.supplements.engine import component_identity, normalize_component
+from app.domains.supplements.identity import REVIEWED_IDENTITIES
 from app.domains.supplements.knowledge import COMPOUNDS, Confidence, Verification
 from app.domains.supplements.knowledge_loader import SUBJECT_TYPE, load
 from app.domains.supplements.models import SupplementComponentKnowledge
@@ -148,27 +149,37 @@ def test_the_original_two_aliases_still_resolve_the_way_vc07_set_them():
     [
         ("Ferrous Sulphate", "iron"),          # British spelling, usual on Indian labels
         ("Ferrous Bis-Glycinate", "iron"),
-        ("Magnesium Glycinate", "magnesium"),
-        ("Epsom Salt", "magnesium"),
         ("Zinc Sulphate", "zinc"),
-        ("Oyster Shell Calcium", "calcium"),
-        ("Vit D3", "vitamin d"),
         ("Cholecalciferol", "vitamin d"),
+        ("Vitamin D3", "vitamin d"),
         ("Methylcobalamin", "vitamin b12"),
-        ("5 MTHF", "folate"),
-        ("Haldi Extract", "curcumin"),
-        ("Turmeric with Black Pepper", "curcumin"),
+        ("Magnesium oxide", "magnesium"),
         ("Co Q 10", "coenzyme q10"),
     ],
 )
-def test_indian_label_spellings_resolve_to_the_right_canonical_key(label, key):
+def test_reviewed_label_spellings_resolve_to_the_right_canonical_key(label, key):
     assert component_identity(label)[0] == key, f"{label!r} did not resolve to {key}"
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        # Knowledge-file aliases that were never reviewed. Step 13's correction:
+        # they are authoring candidates, not identity authority, so each keeps
+        # its own printed spelling and groups with nothing else.
+        "Magnesium Glycinate", "Epsom Salt", "Oyster Shell Calcium", "Vit D3", "5 MTHF",
+        "Haldi Extract", "Turmeric with Black Pepper", "Turmeric extract", "Triglyceride",
+        "Fish oil concentrate", "Ethyl ester", "rTG", "Magtein", "Ferrochel", "Meriva",
+    ],
+)
+def test_unreviewed_knowledge_aliases_keep_their_literal_identity(label):
+    assert component_identity(label)[0] == normalize_component(label)
 
 
 def test_the_alias_map_is_keyed_on_normalised_text():
     """A key with capitals or punctuation would never match a lookup."""
-    for alias in REVIEWED_ALIASES:
-        assert alias == alias.strip().lower(), f"{alias!r} is not normalised"
+    for alias in REVIEWED_IDENTITIES:
+        assert alias == normalize_component(alias), f"{alias!r} is not normalised"
 
 
 # ---------------------------------------------------------------------------

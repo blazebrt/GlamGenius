@@ -3,48 +3,25 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
-import unicodedata
 from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from app.domains.routines.safety import needs_professional
+from app.domains.supplements.boundary import requires_boundary
+from app.domains.supplements.identity import component_identity, effective_key, normalize_component
 
 SUPPLEMENT_UTILITY_VERSION = "vc-07-v1"
-SUPPLEMENT_COMPONENT_NORMALIZATION_VERSION = "vc-07-r1"
+# r2 (Step 13): identity comes only from the reviewed authority, and stored keys
+# are revalidated against it before they group anything.
+SUPPLEMENT_COMPONENT_NORMALIZATION_VERSION = "vc-07-r2"
 COMING_UP_DAYS = 90
 
-# Deliberately small, explicit, reviewed identities. Unknown terms retain only
-# their deterministic normalized spelling; no runtime synonym invention occurs.
-# Label spellings that resolve to a canonical component key. The two original
-# entries are kept verbatim; the rest come from the absorption knowledge base,
-# which owns the compound forms and their Indian label spellings, so there is
-# one place to add a form rather than two that can drift apart.
-REVIEWED_ALIASES: dict[str, tuple[str, str]] = {
-    "ascorbic acid": ("vitamin c", "Vitamin C"),
-    "l ascorbic acid": ("vitamin c", "Vitamin C"),
-}
-
-
-
-def normalize_component(value: str) -> str:
-    text = unicodedata.normalize("NFKC", value).casefold()
-    text = re.sub(r"[^\w]+", " ", text, flags=re.UNICODE)
-    return " ".join(text.split())
-
-
-def component_identity(value: str) -> tuple[str, str]:
-    normalized = normalize_component(value)
-    return REVIEWED_ALIASES.get(normalized, (normalized, value.strip() or normalized))
-def _load_knowledge_aliases() -> None:
-    """Fold the knowledge base's aliases in, without letting it shadow these two."""
-    from app.domains.supplements.knowledge import raw_aliases  # noqa: PLC0415 - deferred by design
-
-    for alias, key, nutrient in raw_aliases():
-        REVIEWED_ALIASES.setdefault(normalize_component(alias), (key, nutrient))
-
-_load_knowledge_aliases()
+# Component identity is decided by one reviewed authority (``identity.py``):
+# hand-written nutrient spellings, the two VC-07 equivalents and the explicit
+# exact-form spellings. Nothing from ``knowledge.py`` is folded in — its alias
+# lists were never checked and must not decide what overlaps with what.
+# ``normalize_component`` and ``component_identity`` are re-exported here for
+# the callers that have always imported them from the engine.
 
 
 def _amount_text(value: Any) -> str | None:
@@ -68,7 +45,7 @@ def expiry_state(expiry: date | None, today: date) -> str:
 
 
 def _fact_payload(fact: Any) -> dict[str, Any]:
-    key = fact.canonical_component_key or fact.normalized_name
+    key = effective_key(fact)
     return {
         "id": str(fact.id),
         "raw_name": fact.raw_name,
@@ -81,6 +58,15 @@ def _fact_payload(fact: Any) -> dict[str, Any]:
         "verification_state": fact.verification_state,
         "confidence": fact.confidence,
     }
+
+
+def _purpose_needs_professional(purpose: str | None) -> bool:
+    """The customer's own note, through the one supplement boundary (Step 13).
+
+    A note is a record, not a question, so only the hard handoff gate and the
+    medical check apply to it; see ``boundary.evaluate``.
+    """
+    return requires_boundary(purpose, question=False)
 
 
 def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> dict[str, Any]:
@@ -110,10 +96,14 @@ def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> 
         if not item.get("user_entered_purpose"):
             missing.append("purpose")
         component_rows = [_fact_payload(fact) for fact in facts]
+        professional = _purpose_needs_professional(item.get("user_entered_purpose"))
         for fact in confirmed:
-            # The canonical key is established at validated write time. Do not
-            # derive a competing identity from customer-entered raw text here.
-            key = fact.canonical_component_key or fact.normalized_name
+            # The stored key is trusted only where the reviewed authority, applied
+            # to the printed name, still gives the same answer. A legacy key
+            # written by the old broad alias set groups nothing.
+            key = effective_key(fact)
+            if key is None:
+                continue
             group = confirmed_groups.setdefault(
                 key, {"component_key": key, "display_name": fact.raw_name, "items": {}},
             )
@@ -133,7 +123,7 @@ def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> 
             "days_to_expiry": (expiry - now).days if expiry else None,
             "label_facts": component_rows,
             "missing_information": sorted(set(missing)),
-            "professional_boundary": bool(needs_professional(item.get("user_entered_purpose"))),
+            "professional_boundary": professional,
             "flags": [
                 {"flag": "no_expiry_date", "message": "Expiry date not added."}
                 for _ in [0] if expiry is None
@@ -145,7 +135,7 @@ def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> 
                 for _ in [0] if expiry is not None and 0 <= (expiry - now).days <= COMING_UP_DAYS
             ] + [
                 {"flag": "professional_question", "message": "This question is best discussed with a qualified professional."}
-                for _ in [0] if needs_professional(item.get("user_entered_purpose"))
+                for _ in [0] if professional
             ],
         })
     overlaps = []
@@ -189,3 +179,14 @@ def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> 
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     payload["fingerprint"] = hashlib.sha256(canonical.encode()).hexdigest()
     return payload
+
+
+__all__ = [
+    "COMING_UP_DAYS",
+    "SUPPLEMENT_COMPONENT_NORMALIZATION_VERSION",
+    "SUPPLEMENT_UTILITY_VERSION",
+    "build_utility",
+    "component_identity",
+    "expiry_state",
+    "normalize_component",
+]

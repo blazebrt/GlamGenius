@@ -2054,14 +2054,15 @@ async def perfume_recommendation(
 
 
 def supplement_question(text: str) -> dict[str, Any]:
-    """Anything that reads like a health question gets the boundary, not an answer."""
-    boundary = boundary_for(text)
-    if boundary is None:
-        return {
-            "boundary": False,
-            "message": "We track supplements as inventory — name, brand, dates and how often you take them.",
-        }
-    return boundary.as_dict()
+    """Anything that reads like a health question gets the boundary, not an answer.
+
+    Step 13: one authority for supplement questions. It calls the hard handoff
+    gate first, then the narrow medical check, then the supplement-decision
+    shapes neither of those catches. See ``app.domains.supplements.boundary``.
+    """
+    from app.domains.supplements.boundary import evaluate as evaluate_supplement_boundary  # noqa: PLC0415
+
+    return evaluate_supplement_boundary(text).as_dict()
 
 
 # --- Observations -----------------------------------------------------------------
