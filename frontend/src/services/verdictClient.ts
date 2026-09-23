@@ -6,9 +6,8 @@
  * logic.
  */
 import { S, t } from '../strings/verdict';
-import {
-  readProductVerdict, type ProductVerdictWire,
-} from './apiV2';
+import type { ProductVerdictWire } from './apiV2';
+import { readDeviceProductVerdict } from './productScan';
 import type {
   Alternative, PackMrpObservation, VerdictComponent, VerdictIngredient, VerdictSource,
 } from './verdictModel';
@@ -240,8 +239,12 @@ export function toVerdictSource(
   };
 }
 
+/**
+ * The Product Result as the screen reads it: always as this phone, with its
+ * stored device credential. The route has no device-less form.
+ */
 export const getProductVerdict = async (
   barcode: string,
   options: { physicalPackContext?: boolean } = {},
 ): Promise<VerdictSource> =>
-  toVerdictSource(await readProductVerdict(barcode, options));
+  toVerdictSource(await readDeviceProductVerdict(barcode, options));

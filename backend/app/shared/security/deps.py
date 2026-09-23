@@ -17,6 +17,7 @@ import uuid
 from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.identity import service as identity
@@ -27,6 +28,7 @@ from app.shared.flags import service as flags
 from app.shared.security.network import client_ip
 from app.shared.security.supabase_auth import (
     SupabaseUser,
+    _bearer,
     get_current_supabase_user,
 )
 
@@ -109,6 +111,25 @@ async def get_current_account(
 get_registered_account = get_current_account
 
 
+async def get_optional_account(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    session: AsyncSession = Depends(get_session),
+) -> CurrentAccount | None:
+    """The caller's account when a token is presented, or ``None`` when none is.
+
+    For the few routes an anonymous scanning device may call that also carry
+    per-person context when somebody is signed in. Absence is the only thing
+    that makes a caller anonymous: a token that is presented is verified
+    exactly as :func:`get_current_account` verifies it, so an invalid or
+    expired token is still a 401 and a registered-less identity is still a 403
+    — never a silent downgrade to anonymous.
+    """
+    if credentials is None or not credentials.credentials:
+        return None
+    supabase_user = await get_current_supabase_user(credentials)
+    return await get_current_account(supabase_user, session)
+
+
 def require_flag(key: str):
     """Dependency factory gating a route behind a feature flag.
 
@@ -128,6 +149,7 @@ __all__ = [
     "RegistrationRequiredError",
     "client_ip",
     "get_current_account",
+    "get_optional_account",
     "get_current_supabase_user",
     "get_registered_account",
     "require_flag",

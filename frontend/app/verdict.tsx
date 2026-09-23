@@ -30,12 +30,15 @@ import {
   flushReports, makeReport, submitReport, type ReportReason,
 } from '../src/services/errorReports';
 import { getProductVerdict } from '../src/services/verdictClient';
+import { readScanPurchaseCheck } from '../src/services/productScan';
+import { dominantView, purchaseCheckMatches } from '../src/services/purchaseOsModel';
+import { PurchaseContextSection } from '../src/components/verdict/PurchaseContextSection';
 import { ScanDecisionMemorySection } from '../src/components/shopping/ScanDecisionMemorySection';
 import { ScanShelfOwnershipSection } from '../src/components/shopping/ScanShelfOwnershipSection';
 import {
   readScanMemory, readCommunityPackContext, submitCommunityObservation, uploadMedia,
   readOwnCommunityReports, withdrawCommunityObservation,
-  type ScanDecisionMemory, type CommunityOwnReport, type CommunityPackContext,
+  type ScanDecisionMemory, type CommunityOwnReport, type CommunityPackContext, type PurchaseOsCheck,
 } from '../src/services/apiV2';
 import { buildVerdictShareText } from '../src/services/verdictShare';
 import { OpenFoodFactsAttribution } from '../src/components/common/OpenFoodFactsAttribution';
@@ -160,7 +163,43 @@ export default function VerdictScreen() {
     }
   }, [barcode, labelSnapshotId, labelVersion, contentFingerprint, signedIn, referenceView, loadState, loadMemory]);
 
-  const view = useMemo(() => (source ? buildVerdict(source) : null), [source]);
+  // Step 14. The purchase check is read after the Product Result, for exactly
+  // the pack on screen, and dropped unless it describes that same pack. It is
+  // supplementary: a failure hides the section and never the verdict.
+  const [purchaseCheck, setPurchaseCheck] = useState<PurchaseOsCheck | null>(null);
+  const purchaseToken = useRef(0);
+  // Bumped when this person records a decision here, so "your prior decision"
+  // is never left saying what they chose before they changed it.
+  const [purchaseRefresh, setPurchaseRefresh] = useState(0);
+  useEffect(() => {
+    const token = ++purchaseToken.current;
+    setPurchaseCheck(null);
+    if (loadState !== 'ready' || !barcode || !source) return;
+    const shown = {
+      barcode,
+      referenceView,
+      labelVersion: source.labelVersion
+        ? { versionNumber: source.labelVersion.versionNumber, contentFingerprint: source.labelVersion.contentFingerprint }
+        : null,
+    };
+    // Started inside a promise so that even a synchronous failure lands in
+    // the catch below rather than taking the verdict screen down with it.
+    void Promise.resolve()
+      .then(() => readScanPurchaseCheck(barcode, { physicalPackContext: !referenceView }))
+      .then((check) => {
+        if (purchaseToken.current === token) setPurchaseCheck(purchaseCheckMatches(check, shown) ? check : null);
+      })
+      .catch(() => {
+        if (purchaseToken.current === token) setPurchaseCheck(null);
+      });
+  }, [barcode, referenceView, source, loadState, signedIn, purchaseRefresh]);
+
+  // One decision stays dominant. The purchase check changes the block only for
+  // the governed official-record ceiling; otherwise this is the Product Result.
+  const view = useMemo(
+    () => (source ? dominantView(buildVerdict(source), purchaseCheck) : null),
+    [source, purchaseCheck],
+  );
 
   const onListen = useCallback(() => {
     if (!view) return;
@@ -386,6 +425,10 @@ export default function VerdictScreen() {
             {source.outcome === 'graded' && (
               <VerdictLines view={view} onReport={openReport} />
             )}
+            {/* Step 14. Directly beneath the decision it explains, and never a
+                second copy of it. Only rows whose authority has something to
+                say are rendered. */}
+            {!!purchaseCheck && <PurchaseContextSection check={purchaseCheck} />}
             <OfficialRecords officialRecords={source.officialRecords} />
             {/* Step 12C. Beside the official record it can later point back
                 to, and only for the pack actually in this person's hand: a
@@ -460,6 +503,7 @@ export default function VerdictScreen() {
                   const current = activeIdentity.current;
                   if (!current || current.barcode !== identity.barcode || current.labelSnapshotId !== identity.labelSnapshotId || current.labelVersion !== identity.labelVersion || current.contentFingerprint !== identity.contentFingerprint) return;
                   void loadMemory(source);
+                  setPurchaseRefresh((value) => value + 1);
                 }}
               />
             )}

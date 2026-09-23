@@ -55,7 +55,7 @@ from app.domains.product.models import FssaiComplaintHandoff, LabelSnapshot, Sca
 from app.domains.value import service as value_service
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import ValidationFailedError
-from app.shared.security.deps import CurrentAccount, get_current_account
+from app.shared.security.deps import CurrentAccount, get_current_account, get_optional_account
 from app.shared.security.network import client_ip
 from app.shared.security.rate_limit import FixedWindowLimiter
 
@@ -838,6 +838,54 @@ async def record_scan_decision_event(
         raise HTTPException(status_code=409, detail="idempotency_conflict") from None
 
     return scan_memory.serialize_scan_decision(event)
+
+
+# ---------------------------------------------------------------------------
+# Step 14 — Purchase Operating System (scan)
+# ---------------------------------------------------------------------------
+@router.get("/scan/verdict/{barcode}/purchase-check")
+async def read_scan_purchase_check(
+    barcode: str = BARCODE_PATH,
+    physical_pack_context: bool = True,
+    subject_id: uuid.UUID | None = Query(None, description="Whose purchase context to read; omit for yourself"),
+    device: ScanDevice = Depends(current_device),
+    current: CurrentAccount | None = Depends(get_optional_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """One purchase answer for this barcode: the Product Result decision, composed.
+
+    The Product Result is built by its own route, in this request, with the
+    same pack ceiling — so the base decision, the ruleset, the effective pack
+    authority and the official-records envelope are exactly the screen's.
+    Nothing here re-grades, re-matches or re-derives any of them.
+
+    Anonymous devices get the decision, the governed official-record ceiling
+    and the one alternative, which are free. Memory and ownership are about a
+    person, so they need a signed-in account; a named ``subject_id`` without
+    one is refused rather than read as the device owner.
+
+    Read-only: no row is created, changed or locked.
+    """
+    from app.domains.purchase import operating_system
+    from app.shared.security.supabase_auth import AuthError
+
+    if current is None and subject_id is not None:
+        raise AuthError()
+    product_result = await read_product_verdict(
+        barcode=barcode, physical_pack_context=physical_pack_context, device=device, session=session,
+    )
+    decision_subject = (
+        await _scan_decision_subject(session, current, subject_id) if current is not None else None
+    )
+    return await operating_system.scan_purchase_check(
+        session,
+        barcode=barcode,
+        product_result=product_result,
+        device=device,
+        requested_physical_pack_context=physical_pack_context,
+        principal_account_id=current.account_id if current is not None else None,
+        decision_subject=decision_subject,
+    )
 
 
 # ---------------------------------------------------------------------------

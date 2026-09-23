@@ -964,23 +964,6 @@ export interface PackMrpObservationWire {
   source: 'confirmed_pack_label';
 }
 
-/**
- * The graded verdict for one barcode, shaped for the verdict screen.
- *
- * `physicalPackContext: false` is a reference read — the caller is looking at a
- * product it is not holding, which is what opening a comparable alternative is.
- * It only ever removes authority; it never adds any.
- */
-export const readProductVerdict = async (
-  barcode: string,
-  options: { physicalPackContext?: boolean } = {},
-): Promise<ProductVerdictWire> => {
-  const query = options.physicalPackContext === false ? '?physical_pack_context=false' : '';
-  return (await api.get<ProductVerdictWire>(
-    `${V2}/scan/verdict/${encodeURIComponent(barcode)}${query}`,
-  )).data;
-};
-
 export const readInventoryImport = async (jobId: string): Promise<InventoryImport> =>
   (await api.get<InventoryImport>(`${V2}/inventory/imports/${jobId}`)).data;
 
@@ -1772,6 +1755,68 @@ export const recordPurchaseCandidateDecision = async (
   id: string, decision: PurchaseDecisionValue, note?: string
 ): Promise<PurchaseDecisionMemory> =>
   (await api.post<PurchaseDecisionMemory>(`${V2}/shopping/candidates/${id}/decision`, { decision, note })).data;
+
+// --- Step 14: the Purchase Operating System --------------------------------
+//
+// One read model for "should I buy this?", composed from the authorities that
+// already answer it. Codes only: every word the app shows for it comes from
+// src/strings/purchaseOs.ts. See docs/architecture/PURCHASE_OPERATING_SYSTEM.md.
+
+export type PurchaseOsState = 'decided' | 'not_enough_information' | 'prohibited' | 'unsupported';
+
+export interface PurchaseOsDecision {
+  state: PurchaseOsState;
+  /** Present only when `state` is `decided`. */
+  verdict: 'buy' | 'wait' | 'skip' | null;
+  primary_reason_code: string | null;
+  primary_reason_authority: string;
+  decision_fingerprint: string | null;
+}
+
+export interface PurchaseOsAuthority {
+  authority: string;
+  status: string | null;
+  effect?: string;
+  source?: { name: string; url: string };
+  [key: string]: unknown;
+}
+
+export interface PurchaseOsCheck {
+  contract_version: 'step-14-v1';
+  context: { kind: 'scan' | 'candidate'; strategy: string | null; category: string | null };
+  subject: { household_subject_id: string | null; is_account_holder: boolean } | null;
+  identity: {
+    state: 'exact' | 'insufficient';
+    barcode?: string;
+    label_version?: number | null;
+    content_fingerprint?: string | null;
+    physical_pack_context?: boolean;
+    reference_view?: boolean;
+    [key: string]: unknown;
+  };
+  decision: PurchaseOsDecision;
+  authorities: PurchaseOsAuthority[];
+  memory: {
+    kind: 'scan_decision' | 'candidate_decision';
+    fidelity: 'user_outcome_only' | 'recommendation_snapshot';
+    state: string;
+    guard_state?: PurchaseGuardState | null;
+    current_decision?: { decision: string; occurred_at?: string | null; updated_at?: string | null; recommendation_at_decision?: string | null } | null;
+    earlier_version_decision?: { decision: string; label_version: number; occurred_at: string | null; applies_to_current_version: false } | null;
+    most_recent_exact?: { decision: string; recommendation_at_decision: string | null; occurred_at: string | null } | null;
+    prior_consideration_count?: number;
+    history_complete?: boolean;
+  } | null;
+  ownership: { state?: string; [key: string]: unknown } | null;
+  alternative: { status: string | null; reason_key: string | null; candidate: Record<string, unknown> | null } | null;
+  value: Record<string, unknown> | null;
+  boundary: { code: string; redirect: string } | null;
+  missing_information: string[];
+}
+
+/** The candidate's one purchase answer, routed server-side to its own strategy. Reads only. */
+export const getCandidatePurchaseCheck = async (id: string, on?: string): Promise<PurchaseOsCheck> =>
+  (await api.get<PurchaseOsCheck>(`${V2}/shopping/candidates/${id}/purchase-check`, { params: on ? { on } : undefined })).data;
 
 export const getPurchaseDecision = async (id: string): Promise<{ purchase_decision_memory_version: 'v3-05.8'; decision: PurchaseDecisionMemory | null }> =>
   (await api.get(`${V2}/shopping/candidates/${id}/decision`)).data;

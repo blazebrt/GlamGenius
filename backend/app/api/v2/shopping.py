@@ -248,6 +248,35 @@ async def get_fragrance_purchase_check(
     )
 
 
+@router.get("/shopping/candidates/{candidate_id}/purchase-check")
+async def get_candidate_purchase_check(
+    candidate_id: uuid.UUID,
+    on: date | None = Query(None, description="Check date; defaults to the account's local day"),
+    subject_id: uuid.UUID | None = Query(None, description="Whose purchase context to read; omit for yourself"),
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Step 14: one purchase answer for this candidate, from exactly its own strategy.
+
+    Care goes to the canonical Care check, Fragrance to the canonical Fragrance
+    check, and a supplement is purchase-prohibited. No strategy ever stands in
+    for another, and an unregistered category is unsupported rather than
+    defaulted. A pure read for one household member: nothing is adopted,
+    created or changed.
+    """
+    from app.domains.purchase import operating_system
+
+    decision_subject = await _decision_subject(session, current, subject_id)
+    return await operating_system.candidate_purchase_check(
+        session,
+        principal_account_id=current.account_id,
+        account_id_str=current.account_id_str,
+        candidate_id=candidate_id,
+        decision_subject=decision_subject,
+        plan_date=on,
+    )
+
+
 @router.post("/shopping/candidates/{candidate_id}/decision")
 async def record_candidate_decision(
     candidate_id: uuid.UUID,

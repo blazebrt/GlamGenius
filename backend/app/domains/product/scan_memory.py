@@ -309,6 +309,93 @@ def serialize_scan_memory(
     }
 
 
+async def latest_decision_on_another_version(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+    barcode: str,
+    label_snapshot_id: uuid.UUID,
+    label_version: int,
+    content_fingerprint: str,
+) -> dict[str, Any] | None:
+    """This subject's newest decision on any *other* version of this barcode.
+
+    Step 14 says it out loud rather than presenting it as current: the pack a
+    decision was made about is identified by its exact label version, and a
+    newer verified label is a different version even when the barcode is the
+    same. Returning it separately, marked as not about the current version, is
+    what stops a stale choice from being read as the answer to today's pack.
+
+    A pure read under the same account and subject filters as every other scan
+    memory read. Only what was stored comes back — the person's own outcome and
+    the version it was about — never a reconstruction of what we recommended.
+    """
+    decision_subject = await canonicalize_decision_subject(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
+    row = await session.scalar(
+        select(ScanDecisionEvent).where(
+            ScanDecisionEvent.account_id == principal_account_id,
+            subject_row_filter(ScanDecisionEvent, decision_subject),
+            ScanDecisionEvent.barcode == barcode,
+            ~(
+                (ScanDecisionEvent.label_snapshot_id == label_snapshot_id)
+                & (ScanDecisionEvent.label_version == label_version)
+                & (ScanDecisionEvent.content_fingerprint == content_fingerprint)
+            ),
+        ).order_by(ScanDecisionEvent.created_at.desc(), ScanDecisionEvent.id.desc()).limit(1)
+    )
+    if row is None:
+        return None
+    return {
+        "decision": row.decision,
+        "label_version": row.label_version,
+        "occurred_at": row.created_at.isoformat() if row.created_at else None,
+        "applies_to_current_version": False,
+    }
+
+
+async def barcode_history_coverage(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+    barcode: str,
+) -> dict[str, bool]:
+    """Is this subject's scan history for this barcode complete, across every label version?
+
+    :func:`read_scan_memory` answers completeness for the exact current version
+    only, which is right for that envelope. A caller that also reports other
+    versions — :func:`latest_decision_on_another_version` — needs the wider
+    answer: an unattributed decision on an older version belongs to nobody and
+    is excluded from that read, so without this a history that silently lost
+    it would look exactly like a complete one.
+
+    Completeness metadata only. The ambiguous rows are never returned, counted
+    for display, or adopted by anyone.
+
+    Public boundary: the subject is re-derived under the principal first.
+    """
+    decision_subject = await canonicalize_decision_subject(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
+    unattributed = await _unattributed_scan_events_exist(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+        extra=(ScanDecisionEvent.barcode == barcode,),
+    )
+    return {
+        "unattributed_legacy_events_present": unattributed,
+        "complete_for_subject": not unattributed,
+    }
+
+
 async def scan_decision_history(
     session: AsyncSession,
     *,
