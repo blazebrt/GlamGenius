@@ -158,6 +158,7 @@ Further findings:
 | Governed knowledge reader | `supplements/knowledge_reader.py` | The one path from knowledge to a customer; withholds on any disagreement. |
 | Loader lifecycle | `supplements/knowledge_loader.py` | Binds each pristine draft to its row values; never rewrites reviewed authority; reports drift. |
 | Supplement boundary | `supplements/boundary.py` | Gate → narrow check → supplement-decision shapes; supplement-only alternative copy. |
+| Customer copy | `supplements/strings.py` | Every Step 13 backend customer sentence, under a stable key (`supplement-copy.v1`). |
 | Photo bridge | `supplements/photo.py`, `POST /api/v2/supplements/items/{id}/label-photo/transcribe` | Owned photo → draft label facts, nothing else. |
 | Detail | `supplements/detail.py`, `service.detail`, `GET /api/v2/supplements/items/{id}` | One coherent, code-based customer payload per owned supplement. |
 | Export | `privacy/export.py` | Customer-readable label-fact rows. |
@@ -236,11 +237,22 @@ adds the writer, scoped to an item the customer already owns:
   under the existing per-account `client_mutation_id` uniqueness, and the
   operation runs under a transaction-scoped advisory lock on that key. A retry
   returns the same drafts with `status: replayed` and no second model call;
-  concurrent identical requests create one set. An operation that created no
-  drafts leaves nothing to replay.
-- **Payload**: the drafts through the existing fact serialiser — no media id,
-  storage key, AI run id, model or account id. A gateway refusal is re-raised
-  without its internal run id.
+  concurrent identical requests create one set.
+- **Nothing usable is not a success**: only an operation that wrote at least
+  one draft is complete. When the model's valid answer holds no usable
+  component (an empty list, or names blank once trimmed), nothing is written
+  and the route answers 422 `VALIDATION_FAILED` with `reason:
+  no_label_details` and `retryable: true` — never `created`. Without a durable
+  receipt, a success would let a lost response and its retry disagree. A retry
+  of that attempt reads the photo again: one more model call, counted against
+  the hourly cap like any other, while the gateway's run ledger and hourly
+  count keep the first call exactly as it happened. Persisting a receipt for
+  an empty read would need new storage, which this step does not add. The app
+  keeps the same photo and request id and offers "Try that photo again".
+- **Payload**: `{status, label_facts}` — `created` or `replayed`, with at least
+  one draft, through the existing fact serialiser (no media id, storage key,
+  AI run id, model or account id). No prose: the app renders its own keyed
+  copy. A gateway refusal is re-raised without its internal run id.
 - **Nothing else**: no `ScanEvent`, `LabelSnapshot`, `ProductRecord`,
   decision, Product Result grading or Product Watch is created, and the
   supplement domain imports nothing from the product scan stack or Open Food
@@ -316,22 +328,47 @@ to show back as a form and still not fix the compound a study describes.
 fix what a maker chelated; "dried" ferrous sulfate is a range. Those are
 recognised (shown, chemistry withheld with its reason) but not
 knowledge-eligible, so they never become a knowledge join key even when a
-same-named entry is published (asserted with a published "magnesium citrate"
-entry: a label printing "Magnesium citrate" gets nothing, one printing
-"Trimagnesium dicitrate anhydrous" gets it). A hydrate name, or an unstated
-hydrate, is still the same salt, so it is eligible: hydration changes the
-arithmetic, not the compound.
+same-named entry is published.
 
-The table today (`forms.py`, `FORM_IDENTITY_VERSION = "step-13-forms-v2"`) holds
+**A more specific printed form does not inherit a generic subject.** The
+knowledge base's mineral subjects are generic salt names ("ferrous sulfate",
+"magnesium chloride", "magnesium citrate"). Publishing one proves that claim and
+its source; it does not prove the claim was reviewed as applying to every
+hydrate or specific salt this table can name. Carrying it across would be an
+applicability inference, so a mineral spelling is knowledge-eligible only when
+it *is* the subject's own name (either English spelling of "sulfate"
+included). "Ferrous sulfate heptahydrate", "Magnesium chloride hexahydrate",
+the other hydrate spellings and "Trimagnesium dicitrate (anhydrous)" are
+recognised and get their hydrate-aware chemistry, and their published research
+is `not_enough_information`. Asserted with the generic "ferrous sulfate" and
+"magnesium chloride" entries published: "Ferrous sulfate" gets the research,
+"Ferrous sulfate heptahydrate" gets FeSO4·7H2O chemistry (20.1%) and no
+research; likewise "Magnesium chloride" and the hexahydrate (12.0%). A published
+"magnesium citrate" entry now reaches no label at all. `build_exact_forms`
+refuses an eligible spelling that is narrower than its subject, so the table
+cannot be edited back. True nomenclature synonyms of one molecule — vitamin D3
+and cholecalciferol, mecobalamin and methylcobalamin, cobamamide and
+adenosylcobalamin, folic acid and pteroylglutamic acid — are the same subject
+and stay eligible.
+
+A hydrate-specific empirical claim could become publishable later only if the
+governed knowledge and evidence system gains a dedicated reviewed subject for
+that exact form, or an explicit reviewed applicability authority. Neither
+exists, and neither is built here.
+
+The table today (`forms.py`, `FORM_IDENTITY_VERSION = "step-13-forms-v3"`) holds
 77 printed spellings: 55 mineral spellings (28 with a fixed formula, whose
 chemistry is calculated; 27 whose chemistry is withheld with a reason) and 22
 non-mineral spellings (vitamin, CoQ10, curcumin and omega-3 forms, which have no
-elemental arithmetic). 64 spellings are knowledge-eligible, covering 27 of the
-38 draft knowledge entries; 13 are recognised only (magnesium citrate, magnesium
-malate, the three bisglycinates and their spelling variants, the dried ferrous
-sulfate spellings, carbonyl iron). The other 11 knowledge entries — the
-formulations above and the forms that are recognised only — have no printed
-spelling that reaches them, and stay unreachable until a reviewer adds one.
+elemental arithmetic). 39 spellings are knowledge-eligible — 17 mineral
+spellings that are their subject's own name and 22 molecule names — covering 26
+of the 38 draft knowledge entries. 38 are recognised only: the 13 whose name
+does not fix the compound (magnesium citrate, magnesium malate, the three
+bisglycinates and their spelling variants, the dried ferrous sulfate
+spellings, carbonyl iron) and the 25 more specific than their subject (23
+hydrate spellings and the two trimagnesium dicitrate spellings). The other 12
+knowledge entries — the formulations above, magnesium citrate and the forms
+that are recognised only — have no printed spelling that reaches them.
 
 Form-specific chemistry and knowledge are looked up by the exact
 `(nutrient, form)` pair and never by nutrient key. A form whose nutrient
@@ -497,7 +534,9 @@ confirmation" — and it carries its own professional-boundary sentence. The
 generic routine boundary's "The order to use your products in" and food ideas
 are right for skin care and wrong here (they can read as supplement sequencing,
 timing or pairing), and its non-boundary line no longer says "how often you
-take them". Every boundary payload is tested free of order, timing, "take
+take them". Every sentence lives in `supplements/strings.py` under a key
+(`supplement.boundary.none`, `supplement.boundary.professional`,
+`supplement.boundary.can_help.*`). Every boundary payload is tested free of order, timing, "take
 first/together", food pairing and "best time" wording. The decision order:
 
 1. the constitutional hard handoff gate (`hard_handoff.evaluate`) — its decision
@@ -567,6 +606,29 @@ ingredients produces no fact, no component and no text on the detail.
 | Photo: bytes are not an image | 415 before any model call; nothing written |
 | Photo: model output malformed or carries a judgement field | 503 without a run id; nothing written |
 | Photo: retry of the same operation | same drafts returned; no second model call |
+| Photo: valid answer with no usable component | 422 `no_label_details`, retryable; nothing written; a retry reads the photo again |
+| Printed hydrate or specific salt, generic subject published | form exact, chemistry calculated, research `not_enough_information` |
+
+## Customer copy
+
+`LEGAL_RULES.md` says never to hard-code a user-facing string. Step 13's
+backend sentences live in `supplements/strings.py` (`SUPPLEMENT_COPY`, version
+`supplement-copy.v1`) under stable keys: the boundary's none/professional
+messages and its five alternatives, the photo refusals (`not_an_image`,
+`request_reused`, `no_label_details`) and the reserved retry-key message.
+`boundary.py`, `photo.py` and `schemas.py` resolve keys; the transcription
+route returns states rather than sentences. Not moved, by design: operator log
+reason codes, status and reason identifiers, schema names, developer exception
+text, the model-facing prompt and chemical names.
+
+A static test scans every supplement module and the supplement API route for
+string literals that read as customer prose outside those exempt contexts and
+fails on any it finds; it also checks every key used exists and every key is
+used. The VC-07 sentences in `engine.py` and `service.py` predate Step 13 and
+are frozen there by exact value — nothing may be added — rather than moved,
+so this change does not rewrite historical modules. On the app side, a test
+parses `SupplementPhotoReader.tsx` and `SupplementDetail.tsx` and fails on any
+literal word outside `strings/supplements.ts`.
 
 ## Proof
 
@@ -594,7 +656,7 @@ ingredients produces no fact, no component and no text on the detail.
   serving text, chemistry wording, research only with an openable source,
   factual overlap, the boundary, the photo action (camera permission only on
   choice, retry replays), and keyed-string sweeps.
-- A mutation pass applied 53 deliberate breaks to the real code
+- A mutation pass applied 62 deliberate breaks to the real code
   (and two to the real database), one at a time; every one was caught.
 
 ## Rollback
@@ -621,3 +683,11 @@ code-only. The VC-07 summary contract is unchanged.
   dormant.
 - The exact-form table is code authored in this step: chemistry nomenclature,
   not evidence, awaiting independent review.
+- Research about a hydrate or a specific salt is unreachable: every mineral
+  subject is a generic salt name, and no reviewed subject or applicability
+  authority for a specific form exists yet.
+- A photo read with no usable detail leaves no receipt, so a retry after a lost
+  response costs a second model call (within the hourly cap). A receipt would
+  need new storage.
+- The VC-07 sentences in `engine.py` and `service.py` are still inline, frozen
+  by the copy guard; moving them is a separate cleanup.

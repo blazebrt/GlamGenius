@@ -36,6 +36,22 @@ chelated. Such names are *recognised* (shown, and chemistry withheld with the
 reason) but not *knowledge-eligible*. Only a knowledge-eligible form is ever
 used as a key into ``supplement_component_knowledge``.
 
+A printed form that is *more specific* than a knowledge subject is not eligible
+for it either. "Ferrous sulfate heptahydrate" is a ferrous sulfate, and its
+chemistry is calculated from the heptahydrate formula; but a published claim
+about "ferrous sulfate" was reviewed as a claim about ferrous sulfate, not as
+one that applies to every hydrate this table can name. Carrying it across would
+be an applicability inference nobody reviewed. So a mineral spelling is
+knowledge-eligible only when it *is* the subject's own name (its British or
+American spelling included); hydrate-specific spellings and specific salts such
+as "trimagnesium dicitrate" are recognised, get their chemistry, and get no
+knowledge. A hydrate-specific claim could become publishable only through a
+dedicated reviewed subject for that exact form, or an explicit reviewed
+applicability authority; neither exists, so ``build_exact_forms`` refuses the
+join. True nomenclature synonyms of one molecule (vitamin D3 and
+cholecalciferol; mecobalamin and methylcobalamin) are the same subject and stay
+eligible.
+
 Package chemistry
 -----------------
 The share of a compound's weight that is the named element is arithmetic on
@@ -58,7 +74,7 @@ from app.domains.supplements.chemistry import elemental_percent
 from app.domains.supplements.knowledge import COMPOUNDS
 from app.domains.supplements.names import NUTRIENT_SPELLINGS, normalize_component
 
-FORM_IDENTITY_VERSION = "step-13-forms-v2"
+FORM_IDENTITY_VERSION = "step-13-forms-v3"
 
 
 class FormStatus(StrEnum):
@@ -143,19 +159,23 @@ _X = WithheldReason.EXACT_FORMULA_NOT_ESTABLISHED
 # British and American spellings of the same salt are the only spelling
 # synonyms here; a hydrate is only ever named by its own printed hydrate name.
 #
-# ``eligible=True``: the printed name fixes the salt the knowledge entry is
-# about. A hydrate name, or an unstated hydrate, is still that salt; hydration
-# changes the arithmetic, not which compound it is. ``eligible=False``: the
-# name does not fix the compound (salt stoichiometry unstated, or a chelate or
-# preparation whose make-up differs between makers).
+# ``eligible=True``: the printed name is the knowledge subject's own name, so
+# evidence reviewed for that subject is evidence about exactly what is printed.
+# ``eligible=False``: either the name does not fix the compound (salt
+# stoichiometry unstated, or a chelate or preparation whose make-up differs
+# between makers), or it is more specific than the only subject there is (a
+# printed hydrate, or "trimagnesium dicitrate" against "magnesium citrate"):
+# recognised, chemistry calculated where the formula is fixed, no knowledge.
+# ``build_exact_forms`` refuses an eligible spelling that is not the subject's
+# own name.
 _MINERAL_FORMS: dict[str, ExactForm] = {
     # --- Magnesium ---------------------------------------------------------
     "magnesium oxide": _mineral("magnesium", "magnesium oxide", eligible=True, formula="MgO", element="Mg"),
     # Mono- and trimagnesium citrate are both sold as "magnesium citrate".
     "magnesium citrate": _mineral("magnesium", "magnesium citrate", eligible=False, element="Mg", withheld=_S),
-    "trimagnesium dicitrate": _mineral("magnesium", "magnesium citrate", eligible=True, element="Mg", withheld=_H),
+    "trimagnesium dicitrate": _mineral("magnesium", "magnesium citrate", eligible=False, element="Mg", withheld=_H),
     "trimagnesium dicitrate anhydrous": _mineral(
-        "magnesium", "magnesium citrate", eligible=True, formula="Mg3C12H10O14", element="Mg", atoms=3,
+        "magnesium", "magnesium citrate", eligible=False, formula="Mg3C12H10O14", element="Mg", atoms=3,
         hydration="anhydrous"),
     # A chelate's make-up differs by manufacturer; the name does not fix it.
     "magnesium bisglycinate": _mineral("magnesium", "magnesium bisglycinate", eligible=False, element="Mg", withheld=_C),
@@ -163,35 +183,35 @@ _MINERAL_FORMS: dict[str, ExactForm] = {
     "magnesium malate": _mineral("magnesium", "magnesium malate", eligible=False, element="Mg", withheld=_S),
     "magnesium chloride": _mineral("magnesium", "magnesium chloride", eligible=True, element="Mg", withheld=_H),
     "magnesium chloride anhydrous": _mineral(
-        "magnesium", "magnesium chloride", eligible=True, formula="MgCl2", element="Mg", hydration="anhydrous"),
+        "magnesium", "magnesium chloride", eligible=False, formula="MgCl2", element="Mg", hydration="anhydrous"),
     "magnesium chloride hexahydrate": _mineral(
-        "magnesium", "magnesium chloride", eligible=True, formula="MgCl2H12O6", element="Mg", hydration="hexahydrate"),
+        "magnesium", "magnesium chloride", eligible=False, formula="MgCl2H12O6", element="Mg", hydration="hexahydrate"),
     "magnesium sulfate": _mineral("magnesium", "magnesium sulfate", eligible=True, element="Mg", withheld=_H),
     "magnesium sulphate": _mineral("magnesium", "magnesium sulfate", eligible=True, element="Mg", withheld=_H),
     "magnesium sulfate anhydrous": _mineral(
-        "magnesium", "magnesium sulfate", eligible=True, formula="MgSO4", element="Mg", hydration="anhydrous"),
+        "magnesium", "magnesium sulfate", eligible=False, formula="MgSO4", element="Mg", hydration="anhydrous"),
     "magnesium sulphate anhydrous": _mineral(
-        "magnesium", "magnesium sulfate", eligible=True, formula="MgSO4", element="Mg", hydration="anhydrous"),
+        "magnesium", "magnesium sulfate", eligible=False, formula="MgSO4", element="Mg", hydration="anhydrous"),
     "magnesium sulfate heptahydrate": _mineral(
-        "magnesium", "magnesium sulfate", eligible=True, formula="MgSO4H14O7", element="Mg", hydration="heptahydrate"),
+        "magnesium", "magnesium sulfate", eligible=False, formula="MgSO4H14O7", element="Mg", hydration="heptahydrate"),
     "magnesium sulphate heptahydrate": _mineral(
-        "magnesium", "magnesium sulfate", eligible=True, formula="MgSO4H14O7", element="Mg", hydration="heptahydrate"),
+        "magnesium", "magnesium sulfate", eligible=False, formula="MgSO4H14O7", element="Mg", hydration="heptahydrate"),
     "magnesium l threonate": _mineral("magnesium", "magnesium L-threonate", eligible=True, element="Mg", withheld=_X),
     # --- Iron --------------------------------------------------------------
     "ferrous sulfate": _mineral("iron", "ferrous sulfate", eligible=True, element="Fe", withheld=_H),
     "ferrous sulphate": _mineral("iron", "ferrous sulfate", eligible=True, element="Fe", withheld=_H),
     "ferrous sulfate anhydrous": _mineral(
-        "iron", "ferrous sulfate", eligible=True, formula="FeSO4", element="Fe", hydration="anhydrous"),
+        "iron", "ferrous sulfate", eligible=False, formula="FeSO4", element="Fe", hydration="anhydrous"),
     "ferrous sulphate anhydrous": _mineral(
-        "iron", "ferrous sulfate", eligible=True, formula="FeSO4", element="Fe", hydration="anhydrous"),
+        "iron", "ferrous sulfate", eligible=False, formula="FeSO4", element="Fe", hydration="anhydrous"),
     "ferrous sulfate monohydrate": _mineral(
-        "iron", "ferrous sulfate", eligible=True, formula="FeSO4H2O", element="Fe", hydration="monohydrate"),
+        "iron", "ferrous sulfate", eligible=False, formula="FeSO4H2O", element="Fe", hydration="monohydrate"),
     "ferrous sulphate monohydrate": _mineral(
-        "iron", "ferrous sulfate", eligible=True, formula="FeSO4H2O", element="Fe", hydration="monohydrate"),
+        "iron", "ferrous sulfate", eligible=False, formula="FeSO4H2O", element="Fe", hydration="monohydrate"),
     "ferrous sulfate heptahydrate": _mineral(
-        "iron", "ferrous sulfate", eligible=True, formula="FeSO4H14O7", element="Fe", hydration="heptahydrate"),
+        "iron", "ferrous sulfate", eligible=False, formula="FeSO4H14O7", element="Fe", hydration="heptahydrate"),
     "ferrous sulphate heptahydrate": _mineral(
-        "iron", "ferrous sulfate", eligible=True, formula="FeSO4H14O7", element="Fe", hydration="heptahydrate"),
+        "iron", "ferrous sulfate", eligible=False, formula="FeSO4H14O7", element="Fe", hydration="heptahydrate"),
     # "Dried" ferrous sulfate is partly dehydrated to a range, not one formula.
     "dried ferrous sulfate": _mineral("iron", "dried ferrous sulfate", eligible=False, element="Fe", withheld=_C),
     "dried ferrous sulphate": _mineral("iron", "dried ferrous sulfate", eligible=False, element="Fe", withheld=_C),
@@ -200,7 +220,7 @@ _MINERAL_FORMS: dict[str, ExactForm] = {
     "ferrous fumarate": _mineral("iron", "ferrous fumarate", eligible=True, formula="FeC4H2O4", element="Fe"),
     "ferrous gluconate": _mineral("iron", "ferrous gluconate", eligible=True, element="Fe", withheld=_H),
     "ferrous gluconate dihydrate": _mineral(
-        "iron", "ferrous gluconate", eligible=True, formula="FeC12H26O16", element="Fe", hydration="dihydrate"),
+        "iron", "ferrous gluconate", eligible=False, formula="FeC12H26O16", element="Fe", hydration="dihydrate"),
     "ferrous bisglycinate": _mineral("iron", "ferrous bisglycinate", eligible=False, element="Fe", withheld=_C),
     "ferrous bis glycinate": _mineral("iron", "ferrous bisglycinate", eligible=False, element="Fe", withheld=_C),
     # A purity, not a compound: the name fixes no formula.
@@ -210,17 +230,17 @@ _MINERAL_FORMS: dict[str, ExactForm] = {
     "zinc sulfate": _mineral("zinc", "zinc sulfate", eligible=True, element="Zn", withheld=_H),
     "zinc sulphate": _mineral("zinc", "zinc sulfate", eligible=True, element="Zn", withheld=_H),
     "zinc sulfate anhydrous": _mineral(
-        "zinc", "zinc sulfate", eligible=True, formula="ZnSO4", element="Zn", hydration="anhydrous"),
+        "zinc", "zinc sulfate", eligible=False, formula="ZnSO4", element="Zn", hydration="anhydrous"),
     "zinc sulphate anhydrous": _mineral(
-        "zinc", "zinc sulfate", eligible=True, formula="ZnSO4", element="Zn", hydration="anhydrous"),
+        "zinc", "zinc sulfate", eligible=False, formula="ZnSO4", element="Zn", hydration="anhydrous"),
     "zinc sulfate monohydrate": _mineral(
-        "zinc", "zinc sulfate", eligible=True, formula="ZnSO4H2O", element="Zn", hydration="monohydrate"),
+        "zinc", "zinc sulfate", eligible=False, formula="ZnSO4H2O", element="Zn", hydration="monohydrate"),
     "zinc sulphate monohydrate": _mineral(
-        "zinc", "zinc sulfate", eligible=True, formula="ZnSO4H2O", element="Zn", hydration="monohydrate"),
+        "zinc", "zinc sulfate", eligible=False, formula="ZnSO4H2O", element="Zn", hydration="monohydrate"),
     "zinc sulfate heptahydrate": _mineral(
-        "zinc", "zinc sulfate", eligible=True, formula="ZnSO4H14O7", element="Zn", hydration="heptahydrate"),
+        "zinc", "zinc sulfate", eligible=False, formula="ZnSO4H14O7", element="Zn", hydration="heptahydrate"),
     "zinc sulphate heptahydrate": _mineral(
-        "zinc", "zinc sulfate", eligible=True, formula="ZnSO4H14O7", element="Zn", hydration="heptahydrate"),
+        "zinc", "zinc sulfate", eligible=False, formula="ZnSO4H14O7", element="Zn", hydration="heptahydrate"),
     "zinc gluconate": _mineral("zinc", "zinc gluconate", eligible=True, element="Zn", withheld=_H),
     "zinc picolinate": _mineral("zinc", "zinc picolinate", eligible=True, element="Zn", withheld=_X),
     "zinc bisglycinate": _mineral("zinc", "zinc bisglycinate", eligible=False, element="Zn", withheld=_C),
@@ -229,16 +249,16 @@ _MINERAL_FORMS: dict[str, ExactForm] = {
     "calcium carbonate": _mineral("calcium", "calcium carbonate", eligible=True, formula="CaCO3", element="Ca"),
     "calcium citrate": _mineral("calcium", "calcium citrate", eligible=True, element="Ca", withheld=_H),
     "calcium citrate anhydrous": _mineral(
-        "calcium", "calcium citrate", eligible=True, formula="Ca3C12H10O14", element="Ca", atoms=3,
+        "calcium", "calcium citrate", eligible=False, formula="Ca3C12H10O14", element="Ca", atoms=3,
         hydration="anhydrous"),
     "calcium citrate tetrahydrate": _mineral(
-        "calcium", "calcium citrate", eligible=True, formula="Ca3C12H18O18", element="Ca", atoms=3,
+        "calcium", "calcium citrate", eligible=False, formula="Ca3C12H18O18", element="Ca", atoms=3,
         hydration="tetrahydrate"),
     "calcium lactate": _mineral("calcium", "calcium lactate", eligible=True, element="Ca", withheld=_H),
     "calcium lactate anhydrous": _mineral(
-        "calcium", "calcium lactate", eligible=True, formula="CaC6H10O6", element="Ca", hydration="anhydrous"),
+        "calcium", "calcium lactate", eligible=False, formula="CaC6H10O6", element="Ca", hydration="anhydrous"),
     "calcium lactate pentahydrate": _mineral(
-        "calcium", "calcium lactate", eligible=True, formula="CaC6H20O11", element="Ca", hydration="pentahydrate"),
+        "calcium", "calcium lactate", eligible=False, formula="CaC6H20O11", element="Ca", hydration="pentahydrate"),
 }
 
 # Named molecules of the non-mineral nutrients. Each printed spelling names one
@@ -273,14 +293,28 @@ _OTHER_FORMS: dict[str, ExactForm] = {
 }
 
 
-def build_exact_forms(knowledge_subjects: Iterable[Any]) -> dict[str, ExactForm]:
+def _is_subject_name(spelling: str, subject: str) -> bool:
+    """Is the printed spelling the subject's own name (either English spelling of "sulfate")?"""
+    name = normalize_component(subject)
+    return spelling in {name, name.replace("sulfate", "sulphate")}
+
+
+def build_exact_forms(
+    knowledge_subjects: Iterable[Any], *, table: dict[str, ExactForm] | None = None,
+) -> dict[str, ExactForm]:
     """The explicit table, validated against the knowledge base's subjects.
 
     ``knowledge_subjects`` is read for validation only — to prove that every
     knowledge-eligible entry names a subject the knowledge base defines. It is
     never a source of spellings: a compound added there adds nothing here.
+
+    A knowledge-eligible entry must also *be* its subject, not a narrower form
+    of it: a mineral spelling must be the subject's own name, and no eligible
+    entry may state a hydration the subject's name does not. ``table`` exists
+    so tests can prove the refusal; production always validates the literal
+    table below.
     """
-    table: dict[str, ExactForm] = {**_MINERAL_FORMS, **_OTHER_FORMS}
+    table = dict(table) if table is not None else {**_MINERAL_FORMS, **_OTHER_FORMS}
     clash = set(table) & NUTRIENT_LEVEL_NAMES
     if clash:
         raise ValueError(f"a nutrient-level name is also listed as a form: {sorted(clash)}")
@@ -289,8 +323,18 @@ def build_exact_forms(knowledge_subjects: Iterable[Any]) -> dict[str, ExactForm]
             raise ValueError(f"{spelling!r} is not a normalised spelling")
     known = {(subject.key, subject.form) for subject in knowledge_subjects}
     for spelling, form in table.items():
-        if form.knowledge_eligible and (form.canonical_component_key, form.compound_form) not in known:
+        if not form.knowledge_eligible:
+            continue
+        if (form.canonical_component_key, form.compound_form) not in known:
             raise ValueError(f"{spelling!r} is knowledge-eligible for a subject the knowledge base does not define")
+        narrower_hydrate = form.hydration is not None and form.hydration not in normalize_component(form.compound_form)
+        narrower_mineral = form.canonical_component_key in MINERAL_KEYS and not _is_subject_name(
+            spelling, form.compound_form)
+        if narrower_hydrate or narrower_mineral:
+            raise ValueError(
+                f"{spelling!r} is more specific than the knowledge subject {form.compound_form!r}; "
+                "evidence reviewed for the subject does not cover it",
+            )
     return table
 
 

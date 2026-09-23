@@ -131,7 +131,7 @@ export const S = {
     explain: 'We copy what is printed. Each detail stays unconfirmed until you check it.',
     busy: 'Reading the label…',
     done: 'Read from your photo. Confirm each detail before it is compared with your other products.',
-    empty: 'We could not read any label details from that photo. You can add them yourself.',
+    empty: 'We could not read any label details from that photo. You can try again, or add them yourself.',
     failed: 'We could not read that photo. Nothing was added.',
     retry: 'Try that photo again',
     cameraPermission: 'Camera permission is needed to photograph the label.',

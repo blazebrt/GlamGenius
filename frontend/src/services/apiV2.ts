@@ -53,6 +53,8 @@ export interface StructuredError {
   guidance?: string[];
   max_bytes?: number;
   allowed_types?: string[];
+  /** A stable machine reason where one code covers several cases, e.g. `no_label_details`. */
+  reason?: string;
 }
 
 /** Pull the structured error out of a failed request, if there is one. */
@@ -2736,11 +2738,15 @@ export const getSupplementDetail = async (itemId: string): Promise<SupplementDet
   (await api.get<SupplementDetail>(`${V2}/supplements/items/${encodeURIComponent(itemId)}`)).data;
 
 /** Step 13: read an owned supplement's label from the person's own photo, into drafts. */
+/** A completed read: always at least one unconfirmed detail. The app renders its own copy. */
 export interface SupplementLabelPhotoResult {
   status: 'created' | 'replayed';
   label_facts: SupplementLabelFact[];
-  message: string;
 }
+
+/** The photo was read and held no usable label detail: retryable, nothing was added. */
+export const isNoLabelDetails = (err: any): boolean =>
+  structuredError(err)?.reason === 'no_label_details';
 
 export const transcribeSupplementLabelPhoto = async (
   itemId: string, mediaAssetId: string, clientRequestId: string,

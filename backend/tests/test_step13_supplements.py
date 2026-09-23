@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import uuid
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -33,6 +34,7 @@ from app.domains.routines.hard_handoff import requires_handoff
 from app.domains.routines.safety import needs_professional
 from app.domains.supplements import boundary as supplement_boundary
 from app.domains.supplements import forms
+from app.domains.supplements import strings as supplement_copy
 from app.domains.supplements.chemistry import elemental_percent
 from app.domains.supplements.detail import build_detail
 from app.domains.supplements.engine import build_utility
@@ -1399,6 +1401,12 @@ def test_d2_recognised_is_not_knowledge_eligible_where_the_name_does_not_fix_the
 async def test_d2_published_knowledge_needs_an_eligible_exact_form_not_just_the_same_name(
     app_client, db_clean, registered_supabase_user,
 ):
+    """A published "magnesium citrate" entry reaches no label at all.
+
+    "Magnesium citrate" does not fix the salt; "Trimagnesium dicitrate
+    anhydrous" fixes it, but is narrower than the generic subject the evidence
+    was reviewed for. Both are recognised; neither inherits the research.
+    """
     await _load_knowledge()
     await _publish_form("magnesium citrate")
     token, _account = await registered_supabase_user()
@@ -1411,7 +1419,108 @@ async def test_d2_published_knowledge_needs_an_eligible_exact_form_not_just_the_
     exact_row = _component(await _detail(app_client, headers, exact), "Trimagnesium dicitrate anhydrous")
     assert ambiguous_row["form"] == {"status": "exact", "name": "magnesium citrate"}
     assert ambiguous_row["published_knowledge"] == {"status": "not_enough_information"}
-    assert exact_row["published_knowledge"]["status"] == "published"
+    assert exact_row["form"] == {"status": "exact", "name": "magnesium citrate"}
+    assert exact_row["package_chemistry"]["status"] == "calculated"
+    assert exact_row["package_chemistry"]["formula"] == "Mg3C12H10O14"
+    assert exact_row["published_knowledge"] == {"status": "not_enough_information"}
+
+
+# ---------------------------------------------------------------------------
+# P1. Generic evidence never crosses into a more specific printed form
+# ---------------------------------------------------------------------------
+HYDRATE_SPELLINGS = sorted(spelling for spelling, form in forms.EXACT_FORMS.items() if form.hydration)
+
+
+def test_p1_every_hydrate_spelling_is_recognised_calculated_and_never_a_knowledge_key():
+    assert len(HYDRATE_SPELLINGS) == 24
+    for spelling in HYDRATE_SPELLINGS:
+        form = forms.EXACT_FORMS[spelling]
+        resolution = forms.resolve_form(spelling, canonical_component_key=form.canonical_component_key)
+        assert resolution.status is forms.FormStatus.EXACT, spelling
+        assert forms.package_chemistry(resolution).status is forms.ChemistryStatus.CALCULATED, spelling
+        assert resolution.knowledge_key is None, spelling
+    for spelling in ("trimagnesium dicitrate", "trimagnesium dicitrate anhydrous"):
+        assert forms.resolve_form(spelling, canonical_component_key="magnesium").knowledge_key is None, spelling
+
+
+def test_p1_an_eligible_mineral_spelling_is_its_subjects_own_name():
+    for spelling, form in forms.EXACT_FORMS.items():
+        if form.knowledge_eligible and form.canonical_component_key in forms.MINERAL_KEYS:
+            subject = forms.normalize_component(form.compound_form)
+            assert spelling in {subject, subject.replace("sulfate", "sulphate")}, spelling
+            assert form.hydration is None, spelling
+
+
+@pytest.mark.parametrize("spelling", [
+    "ferrous sulfate heptahydrate", "ferrous sulphate monohydrate", "magnesium chloride hexahydrate",
+    "calcium citrate tetrahydrate", "ferrous gluconate dihydrate", "zinc sulfate anhydrous",
+    "trimagnesium dicitrate", "trimagnesium dicitrate anhydrous",
+])
+def test_p1_the_table_refuses_a_narrower_form_made_eligible_for_a_generic_subject(spelling):
+    table = {**forms.EXACT_FORMS, spelling: replace(forms.EXACT_FORMS[spelling], knowledge_eligible=True)}
+    with pytest.raises(ValueError, match="more specific than the knowledge subject"):
+        forms.build_exact_forms(COMPOUNDS, table=table)
+
+
+@pytest.mark.parametrize(("first", "second"), [
+    ("vitamin d3", "cholecalciferol"), ("mecobalamin", "methylcobalamin"), ("cobamamide", "adenosylcobalamin"),
+    ("folic acid", "pteroylglutamic acid"), ("ferrous sulphate", "ferrous sulfate"),
+    ("magnesium sulphate", "magnesium sulfate"), ("zinc sulphate", "zinc sulfate"),
+])
+def test_p1_nomenclature_synonyms_of_one_subject_stay_eligible(first, second):
+    one, other = forms.EXACT_FORMS[first], forms.EXACT_FORMS[second]
+    keys = {
+        forms.resolve_form(spelling, canonical_component_key=form.canonical_component_key).knowledge_key
+        for spelling, form in ((first, one), (second, other))
+    }
+    assert len(keys) == 1 and None not in keys
+
+
+async def _published_generic_and_hydrate(app_client, registered_supabase_user, subject, generic, hydrate):
+    await _load_knowledge()
+    await _publish_form(subject)
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    generic_item = await _supplement(app_client, headers, "Generic label")
+    hydrate_item = await _supplement(app_client, headers, "Hydrate label")
+    await _fact(app_client, headers, generic_item, generic, "100", "mg")
+    await _fact(app_client, headers, hydrate_item, hydrate, "100", "mg")
+    return (
+        _component(await _detail(app_client, headers, generic_item), generic),
+        _component(await _detail(app_client, headers, hydrate_item), hydrate),
+    )
+
+
+async def test_p1_generic_ferrous_sulfate_research_does_not_reach_the_heptahydrate(
+    app_client, db_clean, registered_supabase_user,
+):
+    generic, hydrate = await _published_generic_and_hydrate(
+        app_client, registered_supabase_user, "ferrous sulfate", "Ferrous sulfate", "Ferrous sulfate heptahydrate",
+    )
+    assert generic["published_knowledge"]["status"] == "published"
+    assert hydrate["form"] == {"status": "exact", "name": "ferrous sulfate"}
+    assert hydrate["package_chemistry"]["status"] == "calculated"
+    assert hydrate["package_chemistry"]["formula"] == "FeSO4H14O7"
+    assert hydrate["package_chemistry"]["hydration"] == "heptahydrate"
+    assert hydrate["package_chemistry"]["percent_by_weight"] == "20.1"
+    assert hydrate["published_knowledge"] == {"status": "not_enough_information"}
+    assert generic["published_knowledge"]["summary"] not in json.dumps(hydrate)
+
+
+async def test_p1_generic_magnesium_chloride_research_does_not_reach_the_hexahydrate(
+    app_client, db_clean, registered_supabase_user,
+):
+    generic, hydrate = await _published_generic_and_hydrate(
+        app_client, registered_supabase_user, "magnesium chloride", "Magnesium chloride",
+        "Magnesium chloride hexahydrate",
+    )
+    assert generic["published_knowledge"]["status"] == "published"
+    assert hydrate["form"] == {"status": "exact", "name": "magnesium chloride"}
+    assert hydrate["package_chemistry"]["status"] == "calculated"
+    assert hydrate["package_chemistry"]["formula"] == "MgCl2H12O6"
+    assert hydrate["package_chemistry"]["percent_by_weight"] == "12.0"
+    assert hydrate["published_knowledge"] == {"status": "not_enough_information"}
+    assert generic["published_knowledge"]["summary"] not in json.dumps(hydrate)
 
 
 # ---------------------------------------------------------------------------
@@ -1561,3 +1670,178 @@ def test_d4_the_supplement_alternatives_are_records_and_labels_only():
                        supplement_boundary.SUPPLEMENT_PROFESSIONAL_BOUNDARY):
         assert narrative_is_safe(text_value), text_value
         assert not any(phrase in text_value.lower() for phrase in USE_GUIDANCE), text_value
+
+
+# ---------------------------------------------------------------------------
+# P1 governance. Step 13 customer copy lives in the keyed string authority
+# ---------------------------------------------------------------------------
+SUPPLEMENTS_DIR = Path(supplement_boundary.__file__).parent
+BACKEND_DIR = SUPPLEMENTS_DIR.parents[2]
+
+#: Every supplement module is scanned unless it is listed here, with its reason.
+COPY_SCAN_EXCLUDED = {
+    "__init__.py": "no code",
+    "strings.py": "the string authority itself",
+    "knowledge.py": "unverified knowledge data; reaches a customer only as a reviewed, published claim",
+    "knowledge_loader.py": "writes that data into draft evidence claims for human review",
+}
+
+#: VC-07 customer copy that predates Step 13, frozen by exact value. Not Step 13
+#: copy, left in place so this PR does not rewrite historical modules; nothing
+#: may be added to it.
+PRE_STEP13_VC07_COPY = {
+    "engine.py": frozenset({
+        "Expiry date not added.",
+        "Past the date you recorded.",
+        "Date coming up.",
+        "This question is best discussed with a qualified professional.",
+        "Tell you how much to take",
+        "Tell you to start or stop anything",
+        "Say what a supplement will do for you",
+        "Advise on interactions with medicines",
+        "Label tracking only. GlamGenius does not provide supplement dosage or medical advice.",
+        "No supplements recorded. Add one and we will keep the label facts you enter.",
+        "Package label facts only; no instructions about how much to take, treatment, medical assessment, "
+        "or interaction conclusions.",
+        "Questions that need health guidance belong with a qualified professional.",
+        "Amounts are shown per product and are never added into intake totals.",
+        "Upper-limit, RDA, EAR, and deficiency comparisons are not active in this utility.",
+    }),
+    "service.py": frozenset({
+        "We could not find that supplement.",
+        "This label-fact submission key is already used for different data.",
+        "We could not find that label fact.",
+    }),
+}
+
+#: Developer-facing exceptions: raised on a programming or table error, never
+#: rendered to a customer.
+_DEVELOPER_EXCEPTIONS = frozenset({"ValueError", "TypeError", "KeyError", "LookupError", "RuntimeError"})
+
+
+def _reads_as_customer_prose(value: str) -> bool:
+    stripped = value.strip()
+    if stripped.isupper():  # SQL keywords such as "SET NULL"
+        return False
+    return len(stripped.split()) >= 2 and (stripped[:1].isupper() or stripped.endswith((".", "!", "?")))
+
+
+class _CopyScanner(ast.NodeVisitor):
+    """String literals that read as customer prose, outside exempt contexts.
+
+    Exempt: docstrings; operator logs; developer exceptions; SQL passed to
+    ``text()``; the model-facing prompt (``SYSTEM`` and ``prompt()``); and the
+    nutrient display names, which are vocabulary rather than sentences.
+    """
+
+    def __init__(self) -> None:
+        self.found: list[tuple[int, str]] = []
+        self.keys: set[str] = set()
+        self._exempt = 0
+
+    def _skip(self, node: ast.AST) -> None:
+        self._exempt += 1
+        self.generic_visit(node)
+        self._exempt -= 1
+
+    def _mark_docstring(self, node) -> None:
+        first = node.body[0] if node.body else None
+        if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+            first.value.docstring = True
+
+    def visit_Module(self, node):
+        self._mark_docstring(node)
+        self.generic_visit(node)
+
+    def visit_ClassDef(self, node):
+        self._mark_docstring(node)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node):
+        if node.name == "prompt":
+            return self._skip(node)
+        self._mark_docstring(node)
+        self.generic_visit(node)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_Assign(self, node):
+        if any(getattr(target, "id", "") == "SYSTEM" for target in node.targets):
+            return self._skip(node)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        if getattr(node.target, "id", "") == "NUTRIENT_DISPLAY_NAMES":
+            return self._skip(node)
+        self.generic_visit(node)
+
+    def visit_Raise(self, node):
+        if getattr(getattr(node.exc, "func", None), "id", "") in _DEVELOPER_EXCEPTIONS:
+            return self._skip(node)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        func = node.func
+        owner = getattr(getattr(func, "value", None), "id", "")
+        if isinstance(func, ast.Attribute) and owner == "copy" and func.attr == "text" and node.args \
+                and isinstance(node.args[0], ast.Constant):
+            self.keys.add(node.args[0].value)
+            return None
+        if owner in {"logger", "logging"} or getattr(func, "id", "") == "text":
+            return self._skip(node)
+        self.generic_visit(node)
+
+    def visit_Constant(self, node):
+        if isinstance(node.value, str) and not self._exempt and not getattr(node, "docstring", False) \
+                and _reads_as_customer_prose(node.value):
+            self.found.append((node.lineno, node.value))
+
+
+def _scan(path: Path) -> _CopyScanner:
+    scanner = _CopyScanner()
+    scanner.visit(ast.parse(path.read_text()))
+    return scanner
+
+
+def _scanned_modules() -> list[Path]:
+    modules = [path for path in sorted(SUPPLEMENTS_DIR.glob("*.py")) if path.name not in COPY_SCAN_EXCLUDED]
+    return [*modules, BACKEND_DIR / "app" / "api" / "v2" / "supplements.py"]
+
+
+def test_p1_step13_modules_carry_no_customer_prose_outside_the_string_authority():
+    assert set(COPY_SCAN_EXCLUDED) <= {path.name for path in SUPPLEMENTS_DIR.glob("*.py")} | {"__init__.py"}
+    for path in _scanned_modules():
+        allowed = PRE_STEP13_VC07_COPY.get(path.name, frozenset()) if path.parent == SUPPLEMENTS_DIR else frozenset()
+        stray = [(line, value) for line, value in _scan(path).found if value not in allowed]
+        assert stray == [], f"{path.name}: customer copy belongs in strings.py: {stray}"
+
+
+def test_p1_every_copy_key_used_exists_and_every_key_is_used():
+    used: set[str] = set(supplement_copy.CAN_HELP_WITH_KEYS)
+    for path in _scanned_modules():
+        used |= _scan(path).keys
+    assert used <= set(supplement_copy.SUPPLEMENT_COPY), used - set(supplement_copy.SUPPLEMENT_COPY)
+    assert set(supplement_copy.SUPPLEMENT_COPY) <= used, set(supplement_copy.SUPPLEMENT_COPY) - used
+
+
+def test_p1_the_scanner_catches_a_hard_coded_customer_sentence(tmp_path):
+    module = tmp_path / "hard_coded.py"
+    module.write_text(
+        '"""Docstring prose is fine."""\n'
+        'import logging\nlogger = logging.getLogger(__name__)\n'
+        'OK_KEY = "supplement.photo.not_an_image"\n'
+        'def f():\n'
+        '    logger.warning("Operator text is fine here.")\n'
+        '    raise ValueError("Developer text is fine here.")\n'
+        'def g():\n'
+        '    raise NotFoundError("We could not find that photo.")\n',
+    )
+    assert [value for _line, value in _scan(module).found] == ["We could not find that photo."]
+
+
+def test_p1_every_supplement_sentence_is_free_of_use_guidance_and_advice():
+    from app.domains.routines.safety import narrative_is_safe
+
+    for key, value in supplement_copy.SUPPLEMENT_COPY.items():
+        assert narrative_is_safe(value), key
+        assert not any(phrase in value.lower() for phrase in USE_GUIDANCE), key

@@ -61,6 +61,10 @@ async def transcribe_label_photo(
     Every row is ``photo_extracted`` and ``draft``: shown as not confirmed, and
     driving nothing until the person confirms it. Nothing else is written — no
     scan, no product record, no decision, no watch.
+
+    The answer is a state, ``created`` or ``replayed``, with at least one row;
+    the app renders its own keyed copy for it. A photo with no usable label
+    detail is a retryable ``no_label_details`` refusal, not a success.
     """
     status, rows = await photo.transcribe(
         session,
@@ -71,14 +75,7 @@ async def transcribe_label_photo(
         client_request_id=body.client_request_id,
     )
     await session.commit()
-    return {
-        "status": status,
-        "label_facts": [service.serialize_fact(row) for row in rows],
-        "message": (
-            "Read from your photo. Nothing is compared with your other products until you confirm each detail."
-            if rows else "We could not read any label details from that photo. You can add them yourself."
-        ),
-    }
+    return {"status": status, "label_facts": [service.serialize_fact(row) for row in rows]}
 
 
 @router.get("/supplements/items/{item_id}/label-facts")

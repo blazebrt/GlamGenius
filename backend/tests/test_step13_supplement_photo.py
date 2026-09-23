@@ -23,6 +23,7 @@ from app.domains.off.store import get_off_sessionmaker
 from app.domains.privacy import deletion_service
 from app.domains.product.models import LabelSnapshot, ProductRecord, ProductWatch, ScanDecisionEvent, ScanEvent
 from app.domains.supplements import photo
+from app.domains.supplements import strings as supplement_copy
 from app.domains.supplements.knowledge_loader import load
 from app.domains.supplements.models import SupplementLabelComponent
 from app.shared.database.sql import get_sessionmaker
@@ -403,6 +404,78 @@ async def test_a_new_photo_is_a_new_operation(
     ok(await _transcribe(app_client, headers, item, await _upload(app_client, headers), "same-request-01"))
     ok(await _transcribe(app_client, headers, item, await _upload(app_client, headers), "same-request-01"))
     assert fake_provider.calls == 2 and len(await _rows(account)) == 2
+
+
+# ---------------------------------------------------------------------------
+# P2. Nothing usable is a retryable refusal, never an idempotent success
+# ---------------------------------------------------------------------------
+def _assert_no_label_details(response) -> None:
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "VALIDATION_FAILED"
+    assert detail["reason"] == photo.NO_LABEL_DETAILS == "no_label_details"
+    assert detail["retryable"] is True
+    assert detail["message"] == supplement_copy.text("supplement.photo.no_label_details")
+    assert "created" not in response.text and "label_facts" not in response.text
+
+
+@pytest.mark.parametrize("payload", [
+    {"components": [], "confidence": 0.4},
+    {"components": [{"raw_name": "   "}, {"raw_name": "\t", "amount": "10", "unit": "mg"}], "confidence": 0.4},
+])
+async def test_a_transcription_with_nothing_usable_is_a_retryable_refusal_not_created(
+    app_client, db_clean, registered_supabase_user, fake_provider, media_root, payload,
+):
+    from app.domains.ai_gateway.models import AIRun
+    from app.domains.beta_access.models import BetaUsageEvent
+
+    token, account = await registered_supabase_user()
+    headers = auth(token)
+    item = await _supplement(app_client, headers)
+    _say(fake_provider, payload)
+    _assert_no_label_details(await _transcribe(app_client, headers, item, await _upload(app_client, headers)))
+    assert await _rows(account) == []
+    # The provider call happened and was valid: the ledger and the hourly count
+    # keep it exactly as the gateway recorded it.
+    async with get_sessionmaker()() as session:
+        runs = (await session.execute(select(AIRun).where(AIRun.feature == photo.FEATURE))).scalars().all()
+        usage = (await session.execute(select(BetaUsageEvent).where(
+            BetaUsageEvent.account_id == account, BetaUsageEvent.feature == "ai.request",
+        ))).scalars().all()
+    assert len(runs) == 1 and runs[0].failure_type is None and runs[0].validation_passed is True
+    assert [event.idempotency_key for event in usage] == [str(runs[0].id)]
+
+
+async def test_a_no_details_attempt_is_not_a_completed_operation_so_its_retry_reads_again(
+    app_client, db_clean, registered_supabase_user, fake_provider, media_root,
+):
+    token, account = await registered_supabase_user()
+    headers = auth(token)
+    item = await _supplement(app_client, headers)
+    media = await _upload(app_client, headers)
+    _say(fake_provider, {"components": [], "confidence": 0.4})
+    _assert_no_label_details(await _transcribe(app_client, headers, item, media, "lost-response-01"))
+    _assert_no_label_details(await _transcribe(app_client, headers, item, media, "lost-response-01"))
+    assert fake_provider.calls == 2, "no receipt exists, so the retry reads the photo again"
+    # Once a read yields details, that attempt is the completed one and replays.
+    _say(fake_provider, TRANSCRIPTION)
+    created = ok(await _transcribe(app_client, headers, item, media, "lost-response-01"))
+    assert created["status"] == "created" and len(created["label_facts"]) == 3
+    replayed = ok(await _transcribe(app_client, headers, item, media, "lost-response-01"))
+    assert replayed["status"] == "replayed"
+    assert [row["id"] for row in replayed["label_facts"]] == [row["id"] for row in created["label_facts"]]
+    assert fake_provider.calls == 3 and len(await _rows(account)) == 3
+
+
+async def test_a_successful_answer_carries_a_state_and_rows_and_no_prose(
+    app_client, db_clean, registered_supabase_user, fake_provider, media_root,
+):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    item = await _supplement(app_client, headers)
+    _say(fake_provider, TRANSCRIPTION)
+    body = ok(await _transcribe(app_client, headers, item, await _upload(app_client, headers)))
+    assert set(body) == {"status", "label_facts"} and body["status"] == "created" and body["label_facts"]
 
 
 # ---------------------------------------------------------------------------

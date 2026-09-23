@@ -31,35 +31,22 @@ from dataclasses import dataclass
 
 from app.domains.routines.hard_handoff import evaluate as evaluate_hard_handoff
 from app.domains.routines.safety import needs_professional
+from app.domains.supplements import strings as copy
 
-# Every word below is GlamGenius's own, so none of it may read as use guidance:
-# no order of use, no timing, no "when to take", no combinations, no food
-# pairing and no effect. The generic routine boundary's alternatives ("the
-# order to use your products in", food ideas) are right for skin care and wrong
-# here, which is why the supplement boundary carries its own.
+# The words are GlamGenius's own and live in ``strings.py`` under their keys,
+# none of it use guidance: no order of use, no timing, no "when to take", no
+# combinations, no food pairing and no effect. The generic routine boundary's
+# alternatives ("the order to use your products in", food ideas) are right for
+# skin care and wrong here, which is why the supplement boundary carries its own.
 
 #: Shown when nothing fired. It answers nothing either; it says what is kept.
-NO_BOUNDARY_MESSAGE = (
-    "We keep a record of the supplements you own: name, brand, the dates you added "
-    "and what the label says."
-)
+NO_BOUNDARY_MESSAGE = copy.text("supplement.boundary.none")
 
 #: The professional boundary in supplement terms.
-SUPPLEMENT_PROFESSIONAL_BOUNDARY = (
-    "This is outside what GlamGenius can help with. We keep a record of the supplements "
-    "you own and what their labels say. We are not able to advise on taking a supplement, "
-    "or look at symptoms, conditions or medicines. Please talk to a doctor or pharmacist "
-    "about this one."
-)
+SUPPLEMENT_PROFESSIONAL_BOUNDARY = copy.text("supplement.boundary.professional")
 
 #: What the supplement surface can do instead: records and labels, nothing about use.
-CAN_HELP_WITH = (
-    "What supplements you recorded",
-    "What the package label says, as you recorded it",
-    "Which of your products list the same component",
-    "Expiry dates you recorded",
-    "Which label details still need your confirmation",
-)
+CAN_HELP_WITH = tuple(copy.text(key) for key in copy.CAN_HELP_WITH_KEYS)
 
 # Question shapes that ask for a supplement health decision. Matched on the
 # person's own words, case-insensitively. Deliberately generous.

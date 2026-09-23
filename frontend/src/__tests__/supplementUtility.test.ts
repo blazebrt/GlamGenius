@@ -38,7 +38,7 @@ describe('VC-07 supplement utility API', () => {
   });
 
   it('reads a label photo into drafts through the item-scoped route', async () => {
-    (api.post as jest.Mock).mockResolvedValue({ data: { status: 'created', label_facts: [], message: 'x' } });
+    (api.post as jest.Mock).mockResolvedValue({ data: { status: 'created', label_facts: [] } });
     await transcribeSupplementLabelPhoto('item-1', 'media-1', 'photo-abc-123');
     expect(api.post).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-photo/transcribe', {
       media_asset_id: 'media-1', client_request_id: 'photo-abc-123',

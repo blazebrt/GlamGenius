@@ -6,6 +6,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.domains.supplements import strings as copy
+
 #: Retry keys under this prefix belong to the photo bridge and are written by
 #: the server only. A manual entry may not borrow one, so a manual row can never
 #: be returned as if it were a photo transcription.
@@ -25,7 +27,7 @@ class LabelComponentCreate(BaseModel):
     @classmethod
     def _not_reserved(cls, value: str | None) -> str | None:
         if value is not None and value.startswith(RESERVED_MUTATION_PREFIX):
-            raise ValueError("this retry key is reserved")
+            raise ValueError(copy.text("supplement.label_fact.reserved_key"))
         return value
 
 

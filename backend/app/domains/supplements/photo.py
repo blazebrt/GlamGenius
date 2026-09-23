@@ -39,8 +39,19 @@ triple (item, photo, request id); its drafts are keyed
 ``photo:<digest>:<index>`` under the existing per-account ``client_mutation_id``
 uniqueness, and the whole operation runs under a transaction-scoped advisory
 lock on that key. A retry of the same operation returns the drafts the first
-one created without calling the model again. An operation that created no
-drafts leaves nothing to replay, so a retry of it reads the photo again.
+one created without calling the model again.
+
+Only an operation that wrote at least one draft is a completed operation. When
+the model's valid answer holds no usable component — an empty list, or names
+that are blank once trimmed — nothing is written and the route answers
+``no_label_details`` (422, retryable), never ``created``: with no durable
+receipt, calling it a success would let a lost response turn into a different
+result on retry. A retry of that attempt reads the photo again, which is one
+more model call and counts against the hourly cap like any other; the gateway's
+run ledger keeps the first call as it happened.
+
+Customer copy comes from ``strings.py``; the prompt below is model-facing and
+never shown to anyone.
 """
 from __future__ import annotations
 
@@ -59,10 +70,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.ai_gateway import gateway
 from app.domains.ai_gateway.models import AIRun
 from app.domains.media import service as media_service
+from app.domains.supplements import strings as copy
 from app.domains.supplements.identity import component_identity
 from app.domains.supplements.models import SupplementLabelComponent
 from app.domains.supplements.service import owned_supplement_item
-from app.shared.errors.exceptions import AnalysisUnavailableError, UnsupportedMediaTypeError, ValidationFailedError
+from app.shared.errors.codes import ErrorCode
+from app.shared.errors.exceptions import (
+    AnalysisUnavailableError,
+    AppError,
+    UnsupportedMediaTypeError,
+    ValidationFailedError,
+)
 from app.shared.validation.media import sniff_mime
 
 FEATURE = "supplement_label_transcribe"
@@ -71,6 +89,8 @@ SCHEMA_VERSION = "supplement-label.v1"
 #: Every draft this bridge writes is keyed under this reserved prefix.
 KEY_PREFIX = "photo:"
 MAX_COMPONENTS = 40
+#: The stable reason for a transcription that found nothing usable.
+NO_LABEL_DETAILS = "no_label_details"
 
 SYSTEM = """You transcribe printed text from one photograph of a dietary supplement label.
 Copy only what is visibly printed. For each listed component return raw_name, amount,
@@ -110,6 +130,24 @@ class SupplementLabelTranscription(BaseModel):
 
     components: list[TranscribedComponent] = Field(default_factory=list, max_length=MAX_COMPONENTS)
     confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+class NoLabelDetailsError(AppError):
+    """The photo was read and held no usable label detail. Not a completed write.
+
+    Retryable: the same photo and request id may be sent again, and that reads
+    the photo again. Nothing was written, so there is nothing to replay.
+    """
+
+    status_code = 422
+    code = ErrorCode.VALIDATION_FAILED
+    retryable = True
+
+    def __init__(self) -> None:
+        super().__init__(
+            copy.text("supplement.photo.no_label_details"),
+            extra={"reason": NO_LABEL_DETAILS, "field": "media_asset_id"},
+        )
 
 
 _PLAIN_DECIMAL = re.compile(r"^\d{1,12}(\.\d{1,6})?$")
@@ -158,10 +196,12 @@ async def transcribe(
 ) -> tuple[str, list[SupplementLabelComponent]]:
     """Transcribe one owned photo onto one owned supplement, as drafts.
 
-    Returns ``("created" | "replayed", rows)``. Raises 404 for an item or photo
-    this account does not own, 415 for bytes that are not an image, and the
-    gateway's own refusal (without its internal run id) when the model's output
-    is unusable — in which case nothing is written.
+    Returns ``("created" | "replayed", rows)`` with at least one row. Raises
+    404 for an item or photo this account does not own, 415 for bytes that are
+    not an image, the gateway's own refusal (without its internal run id) when
+    the model's output is malformed, and ``NoLabelDetailsError`` when it is
+    well-formed but holds no usable component. Nothing is written in any of
+    those cases.
     """
     item = await owned_supplement_item(session, account_id, item_id)
     key = operation_key(item.id, media_asset_id, client_request_id)
@@ -171,16 +211,14 @@ async def transcribe(
     existing = await _existing_drafts(session, account_id, key)
     if existing:
         if any(row.item_id != item.id or row.source != "photo_extracted" for row in existing):
-            raise ValidationFailedError(
-                "This photo request was already used for something else.", field="client_request_id",
-            )
+            raise ValidationFailedError(copy.text("supplement.photo.request_reused"), field="client_request_id")
         return "replayed", existing
 
     asset = await media_service.get_owned_asset(session, account_id=account_id, asset_id=media_asset_id)
     data = await media_service.read_bytes(asset)
     if sniff_mime(data) is None:
         raise UnsupportedMediaTypeError(
-            "That file is not a photo we can read.", allowed=["image/jpeg", "image/png", "image/webp"],
+            copy.text("supplement.photo.not_an_image"), allowed=["image/jpeg", "image/png", "image/webp"],
         )
 
     try:
@@ -205,11 +243,18 @@ async def transcribe(
             ai_run_id=None,
         ) from exc
 
+    usable = [
+        (index, component, component.raw_name.strip())
+        for index, component in enumerate(result.data.components)
+        if component.raw_name.strip()
+    ]
+    if not usable:
+        # A valid answer with nothing usable in it. Not "created": there would be
+        # no receipt, so a lost response and its retry could disagree.
+        raise NoLabelDetailsError()
+
     ai_run_id = result.run_id if await session.get(AIRun, result.run_id) else None
-    for index, component in enumerate(result.data.components):
-        raw_name = component.raw_name.strip()
-        if not raw_name:
-            continue
+    for index, component, raw_name in usable:
         canonical, _display = component_identity(raw_name)
         values: dict[str, Any] = {
             "account_id": account_id,
@@ -244,6 +289,8 @@ __all__ = [
     "FEATURE",
     "KEY_PREFIX",
     "MAX_COMPONENTS",
+    "NO_LABEL_DETAILS",
+    "NoLabelDetailsError",
     "PROMPT_VERSION",
     "SCHEMA_VERSION",
     "SupplementLabelTranscription",

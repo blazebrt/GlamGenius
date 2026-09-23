@@ -7,17 +7,19 @@
  * details. Nothing here confirms anything: every row comes back "Read from your
  * photo · not confirmed yet" and drives nothing until the person confirms it.
  *
- * Two deliberate behaviours:
+ * Three deliberate behaviours:
  * - The camera permission is asked for only when the person chooses the
  *   camera, never on mount, and no other permission is requested.
  * - A retry after a failure reuses the same uploaded photo and the same
  *   request id, so the server replays instead of creating a second set.
+ * - A photo with no readable label detail is not a success: nothing was added,
+ *   the photo and request id are kept, and "try again" reads it again.
  */
 import React, { useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 
-import { transcribeSupplementLabelPhoto, uploadMedia } from '../../services/apiV2';
+import { isNoLabelDetails, transcribeSupplementLabelPhoto, uploadMedia } from '../../services/apiV2';
 import { S } from '../../strings/supplements';
 import { COLORS, FONTS, RADIUS } from '../../theme/colors';
 
@@ -38,14 +40,14 @@ export function SupplementPhotoReader({ itemId, onRead }: {
   const transcribe = async (attempt: Pending) => {
     setBusy(true); setMessage('');
     try {
-      const result = await transcribeSupplementLabelPhoto(itemId, attempt.mediaId, attempt.requestId);
+      await transcribeSupplementLabelPhoto(itemId, attempt.mediaId, attempt.requestId);
       setPending(null);
-      setMessage(result.label_facts.length ? S.photo.done : S.photo.empty);
+      setMessage(S.photo.done);
       onRead();
-    } catch {
+    } catch (err) {
       // Keep the photo and the request id: "try again" must replay, not duplicate.
       setPending(attempt);
-      setMessage(S.photo.failed);
+      setMessage(isNoLabelDetails(err) ? S.photo.empty : S.photo.failed);
     } finally {
       setBusy(false);
     }
