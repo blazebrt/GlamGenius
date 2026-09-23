@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.supplements import boundary as supplement_boundary
-from app.domains.supplements import service
-from app.domains.supplements.schemas import LabelComponentCreate, LabelComponentPatch
+from app.domains.supplements import photo, service
+from app.domains.supplements.schemas import LabelComponentCreate, LabelComponentPatch, LabelPhotoTranscribe
 from app.shared.database.sql import get_session
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag
 
@@ -47,6 +47,38 @@ async def supplement_detail(
 ):
     """Step 13: one owned supplement's label facts, provenance and overlap."""
     return await service.detail(session, current.account_id, item_id)
+
+
+@router.post("/supplements/items/{item_id}/label-photo/transcribe")
+async def transcribe_label_photo(
+    item_id: uuid.UUID,
+    body: LabelPhotoTranscribe,
+    current: CurrentAccount = Depends(get_current_account),
+    session: AsyncSession = Depends(get_session),
+):
+    """Read this supplement's label from the person's own photo, into drafts.
+
+    Every row is ``photo_extracted`` and ``draft``: shown as not confirmed, and
+    driving nothing until the person confirms it. Nothing else is written — no
+    scan, no product record, no decision, no watch.
+    """
+    status, rows = await photo.transcribe(
+        session,
+        account_id=current.account_id,
+        account_id_str=current.account_id_str,
+        item_id=item_id,
+        media_asset_id=body.media_asset_id,
+        client_request_id=body.client_request_id,
+    )
+    await session.commit()
+    return {
+        "status": status,
+        "label_facts": [service.serialize_fact(row) for row in rows],
+        "message": (
+            "Read from your photo. Nothing is compared with your other products until you confirm each detail."
+            if rows else "We could not read any label details from that photo. You can add them yourself."
+        ),
+    }
 
 
 @router.get("/supplements/items/{item_id}/label-facts")

@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.inventory.models import InventoryItem, SupplementDetail
 from app.domains.supplements.detail import build_detail, knowledge_pairs
-from app.domains.supplements.engine import build_utility, component_identity
+from app.domains.supplements.engine import build_utility
+from app.domains.supplements.identity import component_identity
 from app.domains.supplements.knowledge_reader import read_form_knowledge
 from app.domains.supplements.models import SupplementLabelComponent
 from app.domains.supplements.schemas import LabelComponentCreate, LabelComponentPatch

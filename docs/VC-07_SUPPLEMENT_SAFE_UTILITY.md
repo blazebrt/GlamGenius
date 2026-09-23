@@ -45,6 +45,14 @@ overlap, and missing-information states. The professional-boundary route now
 calls the constitutional hard handoff gate first. The `vc-07-v1` summary
 contract is unchanged.
 
+Step 13 also restores "reviewed aliases only" above: the knowledge file's
+unreviewed aliases, which had been folded into overlap identity at import, no
+longer execute, and stored keys are revalidated against the reviewed authority
+before they group anything (normalization version `vc-07-r2`). And the dormant
+`photo_extracted` path now has its one writer: a photo of an owned supplement's
+label becomes draft label facts that drive nothing until the customer confirms
+them.
+
 "Intake calculations, elemental-form conversion" above remain unsupported:
 Step 13's package chemistry is the element's share of a compound's weight, a
 property of the compound, and is never multiplied by a printed amount.

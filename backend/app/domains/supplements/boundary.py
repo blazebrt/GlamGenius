@@ -30,16 +30,35 @@ import re
 from dataclasses import dataclass
 
 from app.domains.routines.hard_handoff import evaluate as evaluate_hard_handoff
-from app.domains.routines.safety import PROFESSIONAL_BOUNDARY, needs_professional
+from app.domains.routines.safety import needs_professional
 
-#: Shown when nothing fired. It answers nothing either; it says what is tracked.
-NO_BOUNDARY_MESSAGE = "We track supplements as inventory — name, brand, dates and how often you take them."
+# Every word below is GlamGenius's own, so none of it may read as use guidance:
+# no order of use, no timing, no "when to take", no combinations, no food
+# pairing and no effect. The generic routine boundary's alternatives ("the
+# order to use your products in", food ideas) are right for skin care and wrong
+# here, which is why the supplement boundary carries its own.
 
+#: Shown when nothing fired. It answers nothing either; it says what is kept.
+NO_BOUNDARY_MESSAGE = (
+    "We keep a record of the supplements you own: name, brand, the dates you added "
+    "and what the label says."
+)
+
+#: The professional boundary in supplement terms.
+SUPPLEMENT_PROFESSIONAL_BOUNDARY = (
+    "This is outside what GlamGenius can help with. We keep a record of the supplements "
+    "you own and what their labels say. We are not able to advise on taking a supplement, "
+    "or look at symptoms, conditions or medicines. Please talk to a doctor or pharmacist "
+    "about this one."
+)
+
+#: What the supplement surface can do instead: records and labels, nothing about use.
 CAN_HELP_WITH = (
-    "What you own, and when it runs out",
-    "The order to use your products in",
-    "Which of your products overlap",
-    "Food ideas related to how skin and hair look",
+    "What supplements you recorded",
+    "What the package label says, as you recorded it",
+    "Which of your products list the same component",
+    "Expiry dates you recorded",
+    "Which label details still need your confirmation",
 )
 
 # Question shapes that ask for a supplement health decision. Matched on the
@@ -126,11 +145,11 @@ def evaluate(
     if handoff.handoff:
         return SupplementBoundary(True, f"hard_handoff:{handoff.reason}", handoff.message)
     if needs_professional(text):
-        return SupplementBoundary(True, "medical_question", PROFESSIONAL_BOUNDARY)
+        return SupplementBoundary(True, "medical_question", SUPPLEMENT_PROFESSIONAL_BOUNDARY)
     if question:
         family = supplement_decision_family(text)
         if family is not None:
-            return SupplementBoundary(True, f"supplement_decision:{family}", PROFESSIONAL_BOUNDARY)
+            return SupplementBoundary(True, f"supplement_decision:{family}", SUPPLEMENT_PROFESSIONAL_BOUNDARY)
     return SupplementBoundary(False)
 
 
@@ -141,6 +160,7 @@ def requires_boundary(text: str | None, *, question: bool = True) -> bool:
 __all__ = [
     "CAN_HELP_WITH",
     "NO_BOUNDARY_MESSAGE",
+    "SUPPLEMENT_PROFESSIONAL_BOUNDARY",
     "SupplementBoundary",
     "evaluate",
     "requires_boundary",

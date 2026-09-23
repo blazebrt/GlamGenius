@@ -607,9 +607,11 @@ def compounds_for(key: str) -> tuple[Compound, ...]:
 def raw_aliases() -> tuple[tuple[str, str, str], ...]:
     """Every label spelling in this file as ``(alias, key, nutrient)``.
 
-    Returned unnormalised so this module never has to import the engine, which
-    would be a cycle: the engine folds these into REVIEWED_ALIASES at import and
-    normalises them with its own function, keeping one normaliser in the system.
+    **Authoring candidates only.** Nothing here has been checked (see the module
+    docstring), so these spellings are for a reviewer to consider, never for a
+    customer decision. No production module imports this function: component
+    identity comes from the reviewed vocabulary in ``names.py`` and the explicit
+    form table in ``forms.py``, and a test asserts that stays true.
     """
     return tuple(
         (alias, compound.key, compound.nutrient)

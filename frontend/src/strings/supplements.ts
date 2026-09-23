@@ -123,6 +123,20 @@ export const S = {
     close: 'Done editing label details',
   },
 
+  photo: {
+    action: 'Read label from photo',
+    camera: 'Take a photo of the label',
+    library: 'Choose a photo of the label',
+    cancel: 'Not now',
+    explain: 'We copy what is printed. Each detail stays unconfirmed until you check it.',
+    busy: 'Reading the label…',
+    done: 'Read from your photo. Confirm each detail before it is compared with your other products.',
+    empty: 'We could not read any label details from that photo. You can add them yourself.',
+    failed: 'We could not read that photo. Nothing was added.',
+    retry: 'Try that photo again',
+    cameraPermission: 'Camera permission is needed to photograph the label.',
+  },
+
   a11y: {
     component: (name: string) => `Label detail: ${name}`,
     confirm: (name: string) => `Confirm ${name}`,

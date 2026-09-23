@@ -2735,6 +2735,20 @@ export const getSupplementUtility = async (): Promise<SupplementUtilitySummary> 
 export const getSupplementDetail = async (itemId: string): Promise<SupplementDetail> =>
   (await api.get<SupplementDetail>(`${V2}/supplements/items/${encodeURIComponent(itemId)}`)).data;
 
+/** Step 13: read an owned supplement's label from the person's own photo, into drafts. */
+export interface SupplementLabelPhotoResult {
+  status: 'created' | 'replayed';
+  label_facts: SupplementLabelFact[];
+  message: string;
+}
+
+export const transcribeSupplementLabelPhoto = async (
+  itemId: string, mediaAssetId: string, clientRequestId: string,
+): Promise<SupplementLabelPhotoResult> => (await api.post<SupplementLabelPhotoResult>(
+  `${V2}/supplements/items/${encodeURIComponent(itemId)}/label-photo/transcribe`,
+  { media_asset_id: mediaAssetId, client_request_id: clientRequestId },
+)).data;
+
 export const getSupplementLabelFacts = async (itemId: string): Promise<{ label_facts: SupplementLabelFact[] }> =>
   (await api.get<{ label_facts: SupplementLabelFact[] }>(`${V2}/supplements/items/${itemId}/label-facts`)).data;
 

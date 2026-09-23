@@ -21,7 +21,7 @@ Step 13 adds **no migration**.
 
 | Loop stage | What Step 13 serves |
 | --- | --- |
-| SCAN | Audited only. No confirmed supplement pack capture exists yet; see [The scan-first question](#the-scan-first-question). |
+| SCAN | A photo of the label of a supplement the customer owns, transcribed into unconfirmed drafts; see [The scan-first question](#the-scan-first-question). No product `LabelSnapshot` is used or created. |
 | UNDERSTAND | What the label lists, as recorded; the exact compound form when the printed name fixes one; calculated package chemistry when the form fixes a formula; published research only through the governed reader. |
 | DECIDE | Nothing. There is no Buy / Wait / Skip for supplements (`supplement_purchase` stays `prohibited`). |
 | REMEMBER | Owned supplements, their printed label facts and who recorded each one. |
@@ -35,9 +35,10 @@ Step 13 adds **no migration**.
   contract (`vc-07-v1`) and adds a governed per-item detail on top.
 - **Step 12** (label change authority, regulatory change authority, Product
   Watch) governs confirmed *food and skin-care* captures. Nothing in Step 13
-  reads or writes those ledgers. There is no supplement capture, so a
-  supplement pack photographed through the food route is treated by those
-  layers as a food pack; Step 13 does not change that (see Known limits).
+  reads or writes those ledgers, and the supplement photo bridge creates no
+  scan event, snapshot or watch. A supplement pack photographed through the
+  *food* route is still treated by those layers as a food pack; Step 13 does not
+  change that (see Known limits).
 - **Step 14** (Full Purchase Operating System) is not started. Step 13 applies
   no purchase decision to supplements; a supplement decision would need its own
   separately governed medical, safety and product authority.
@@ -71,10 +72,11 @@ Answers are from the code at the starting SHA, not assumed.
    (`user_declared` / `photo_extracted`, enforced by a check constraint).
 7. **Which aliases are reviewed authority?** Two: `ascorbic acid` and
    `l ascorbic acid` → Vitamin C, written by VC-07. The other alias spellings in
-   `engine.REVIEWED_ALIASES` are folded in at import from
+   `engine.REVIEWED_ALIASES` were folded in at import from
    `knowledge.Compound.aliases`, which the knowledge file itself says nobody has
-   checked. They set the **nutrient** key used for overlap only. Step 13 does
-   not widen them and does not read them as form identities.
+   checked, and they decided write-time identity and therefore customer-visible
+   overlap. *Correction round:* that fold-in is removed; see
+   [Reviewed identity authority](#reviewed-identity-authority).
 8. **Which compound entries are authored drafts?** Every one. The loader writes
    each entry as a `draft` claim and each row as `unverified`, always.
 9. **Which rows are human-reviewed or published?** None, in any database this
@@ -150,39 +152,39 @@ Further findings:
 
 | Piece | File | Purpose |
 | --- | --- | --- |
-| Form identity | `supplements/forms.py` | Exact printed-name → compound-form table; package chemistry or the reason it is withheld. |
+| Reviewed vocabulary | `supplements/names.py` | Hand-written nutrient spellings, display names and the two VC-07 equivalents. Constants only. |
+| Identity authority | `supplements/identity.py` | The one executable identity map; read-time revalidation of stored keys. |
+| Form identity | `supplements/forms.py` | Explicit printed-name → compound-form table; recognised vs knowledge-eligible; package chemistry or the reason it is withheld. |
 | Governed knowledge reader | `supplements/knowledge_reader.py` | The one path from knowledge to a customer; withholds on any disagreement. |
-| Draft binding | `supplements/knowledge_loader.py` | Each draft records exactly which row values it is evidence for. |
-| Supplement boundary | `supplements/boundary.py` | Gate → narrow check → supplement-decision shapes. |
+| Loader lifecycle | `supplements/knowledge_loader.py` | Binds each pristine draft to its row values; never rewrites reviewed authority; reports drift. |
+| Supplement boundary | `supplements/boundary.py` | Gate → narrow check → supplement-decision shapes; supplement-only alternative copy. |
+| Photo bridge | `supplements/photo.py`, `POST /api/v2/supplements/items/{id}/label-photo/transcribe` | Owned photo → draft label facts, nothing else. |
 | Detail | `supplements/detail.py`, `service.detail`, `GET /api/v2/supplements/items/{id}` | One coherent, code-based customer payload per owned supplement. |
 | Export | `privacy/export.py` | Customer-readable label-fact rows. |
-| App | `components/inventory/SupplementDetail.tsx`, `strings/supplements.ts`, `app/inventory-item.tsx` | The detail on the owned item screen; keyed strings. |
+| App | `components/inventory/SupplementDetail.tsx`, `components/inventory/SupplementPhotoReader.tsx`, `strings/supplements.ts`, `app/inventory-item.tsx` | The detail and "Read label from photo" on the owned item screen; keyed strings. |
 
-Nothing else changed. No schema, no new table, no new provider, no worker.
+Nothing else changed. No schema, no new table, no new provider, no worker, no
+new media store, no second AI client.
 
 ## Label-fact authority and provenance
 
-| `source` | `verification_state` | Customer sees | Drives overlap, form, chemistry, research |
-| --- | --- | --- | --- |
-| `user_declared` | `confirmed` | "You entered this" | Yes |
-| `photo_extracted` | `draft` | "Read from your photo · not confirmed yet" | No |
-| `photo_extracted` | `confirmed` | "Read from your photo · confirmed by you" | Yes |
-| anything else | — | refused by the database check constraint | — |
+| `source` | `verification_state` | Written by | Customer sees | Drives overlap, form, chemistry, research |
+| --- | --- | --- | --- | --- |
+| `user_declared` | `confirmed` | the manual entry route | "You entered this" | Yes |
+| `photo_extracted` | `draft` | the photo bridge, only | "Read from your photo · not confirmed yet" | No |
+| `photo_extracted` | `confirmed` | the customer's confirm action | "Read from your photo · confirmed by you" | Yes |
+| anything else | — | — | refused by the database check constraint | — |
 
 The item must also be confirmed: an AI-drafted inventory item that the customer
 never confirmed drives nothing, whatever its facts say.
 
 No state reads as scanned, manufacturer-supplied, regulator-issued or verified,
-because none of those is true of any supplement fact today. Confirming a fact
-records that the customer confirmed it and nothing grander; confirming a manual
-fact changes nothing.
-
-**The photo path is dormant.** The schema allows `photo_extracted` drafts, but
-no route writes them. Step 13 does not expose it. If a future step does, the
-model may transcribe what is printed; it may not infer a missing amount, a form
-not printed, a more specific compound for an ambiguous name, an instruction
-from serving text, a purpose or an efficacy. Its output lands as a draft and
-drives nothing until the customer confirms it — which the detail enforces today.
+because none of those is true of any supplement fact. Confirming a fact records
+that the customer confirmed it and nothing grander; it never changes `source`.
+An edit keeps the source and the confirmation state: an edited draft is still a
+draft, and an edited confirmed photo fact is still the customer's confirmed
+photo fact. Retry keys under `photo:` are reserved for the bridge; the manual
+route refuses them (422), so a manual row can never be replayed as a photo one.
 
 ## The scan-first question
 
@@ -191,55 +193,149 @@ physical-pack authority (ScanEvent → LabelSnapshot → current-pack resolver �
 Store-B facts → account/device ownership), and to build the smallest safe
 bridge if not.
 
-**Finding: they cannot, and no bridge smaller than a new capture surface is
-safe.** Specifically:
+**Finding: the product `LabelSnapshot` cannot carry supplement components, and
+must not be made to.** No confirmed label schema carries supplement structure
+(mapping food `nutrition_per_100g` onto per-serving components would invent a
+basis the pack does not print; tokenising `ingredients_text` is the implicit
+splitting Step 7A refuses); no confirmation route binds a supplement category;
+Step 10A ownership excludes supplements; and a snapshot feeds food grading and
+Product Watch, so a supplement component array forced into it would put a
+supplement into food decisions under a category it was never confirmed as.
 
-1. No confirmed label schema carries supplement structure. Mapping food
-   `nutrition_per_100g` onto per-serving supplement components would invent a
-   basis the pack does not print; tokenising `ingredients_text` into components
-   is exactly the implicit splitting Step 7A refuses to do.
-2. No confirmation route binds a supplement category, and Step 10A ownership
-   deliberately excludes supplements.
-3. A supplement link to a food-shaped capture would let a supplement pack
-   inherit food grading and Step 12 food ledgers under a category it was never
-   confirmed as.
+**The bridge built instead: supplement label photo → drafts.** The supplement
+schema already had every provenance field a photo path needs
+(`photo_extracted`, `draft`, `confidence`, `source_ai_run_id`,
+`model_version`, `prompt_version`, `schema_version`) and no writer. Step 13
+adds the writer, scoped to an item the customer already owns:
 
-A real bridge therefore needs, together: a supplement transcription schema
-(component, printed amount, printed unit, printed basis, printed serving text,
-all transcribed and never inferred), a supplement confirmation route that binds
-`product_category=supplements` the way Step 11A binds skin care, supplement
-eligibility in Step 10A ownership anchored to the account's own capture (as
-12C does) so lot and pack version are this account's, and one explicit
-deterministic transform from confirmed facts to `SupplementLabelComponent` rows
-under a new provenance value (which needs a migration). That is a new scan
-capture surface — which the brief forbids building here — so Step 13 does not
-pretend: every supplement fact says "You entered this" or "Read from your
-photo", and none claims a scanned pack. This is recorded as the first open
-decision for review.
+- **Route**: `POST /api/v2/supplements/items/{item_id}/label-photo/transcribe`
+  with `{media_asset_id, client_request_id}`, behind the existing
+  `v2_inventory` flag and registered-account dependency.
+- **Ownership**: the item must be this account's active supplement
+  (`owned_supplement_item`, 404 otherwise — another account's, archived or
+  non-supplement items included); the photo must be this account's active
+  media asset (`media_service.get_owned_asset`, the media domain's only
+  ownership check; 404 otherwise, including deleted media); the stored bytes
+  must sniff as JPEG, PNG or WebP (415 otherwise). All three are checked before
+  any model call.
+- **Extraction**: through the existing AI gateway (`run_structured`, its hourly
+  cap, its run ledger). The schema has exactly `raw_name`, `amount`, `unit`,
+  `serving_text` per component, plus `components` and `confidence`, with
+  `extra="forbid"` at both levels: an output carrying a nutrient, compound
+  form, hydration, benefit, dose, use, interaction, purpose, deficiency or
+  safety field is refused whole (503) and nothing is written. The prompt forbids
+  replacing a printed name with a more specific compound. An amount is kept only
+  when the printed text is a plain decimal ("1,000" is recorded as missing);
+  unreadable fields stay missing.
+- **Write**: every row is `photo_extracted` / `draft`, with server-owned
+  provenance (run id when the gateway recorded one, model, prompt and schema
+  versions, the transcription's confidence). The nutrient key is decided by the
+  reviewed identity authority from the printed name — never by the model.
+- **Idempotency**: the logical operation is (item, photo, `client_request_id`),
+  hashed into a `photo:<digest>` key; rows are keyed `photo:<digest>:<index>`
+  under the existing per-account `client_mutation_id` uniqueness, and the
+  operation runs under a transaction-scoped advisory lock on that key. A retry
+  returns the same drafts with `status: replayed` and no second model call;
+  concurrent identical requests create one set. An operation that created no
+  drafts leaves nothing to replay.
+- **Payload**: the drafts through the existing fact serialiser — no media id,
+  storage key, AI run id, model or account id. A gateway refusal is re-raised
+  without its internal run id.
+- **Nothing else**: no `ScanEvent`, `LabelSnapshot`, `ProductRecord`,
+  decision, Product Result grading or Product Watch is created, and the
+  supplement domain imports nothing from the product scan stack or Open Food
+  Facts (both asserted).
+
+Barcode-level supplement pack identity (for a future purchase surface) remains
+a separately reviewed architecture question, and is not started here.
 
 ## Nutrient identity versus form identity
 
-- **Nutrient identity** — `canonical_component_key`, set at write time
-  (`engine.component_identity`). It drives overlap and nothing else.
-- **Form identity** — resolved at read time from the printed name by
-  `forms.resolve_form`, by exact lookup in `forms.EXACT_FORMS`: the knowledge
-  base's own form names, plus British/American spellings and explicitly
-  hydrated names written out one line per spelling.
+### Reviewed identity authority
+
+Nutrient identity — which nutrient a printed name denotes — comes from one map,
+`identity.REVIEWED_IDENTITIES`, composed only of reviewed, hand-written
+spellings:
+
+1. bare nutrient spellings whose identity is inherently explicit
+   (`names.NUTRIENT_SPELLINGS`, e.g. "Magnesium", "Elemental iron", "CoQ10");
+2. reviewed equivalents (`names.REVIEWED_EQUIVALENTS`: the two VC-07
+   ascorbic-acid entries);
+3. the explicit exact-form spellings in `forms.EXACT_FORMS`, each naming a
+   compound of exactly one nutrient.
+
+That is 99 spellings. Anything else keeps its own normalised literal spelling
+as its identity: it overlaps only with a product printing the same words, and
+is never guessed into another nutrient. No fuzzy match, no generated synonym.
+
+**The knowledge file's aliases are authoring candidates only.** Before this
+correction the engine folded all of `knowledge.raw_aliases()` into the identity
+map at import, so unreviewed spellings decided customer-visible overlap —
+"Triglyceride", "Ethyl ester" and "rTG" grouped as omega-3, "Turmeric extract"
+and "Haldi extract" as curcumin, "Fish oil concentrate" as omega-3. That
+fold-in is removed. `raw_aliases()` remains for a future review tool; no
+production module reads it (asserted by an AST test), and each of those
+spellings now keeps its literal identity.
+
+**Legacy stored keys are revalidated, not trusted or repaired.** Rows written
+before the correction may carry a `canonical_component_key` chosen by the old
+alias set. Every customer-facing decision (overlap in the summary and the
+detail, form, chemistry, knowledge) derives identity from the printed
+`raw_name` through the current authority (`identity.effective_key`) and uses
+the stored key only when the two agree. When they disagree the stored grouping
+is not trusted and the row is not rewritten: it has no usable identity, drives
+no overlap, form or knowledge, shows its nutrient as "not enough information",
+and an operator-only reason (`stored_identity_disagrees_with_reviewed_authority`,
+with the fact id and no customer text) is logged.
+
+### Form identity
+
+Form identity — which exact compound the pack prints — is resolved at read time
+by `forms.resolve_form`, by exact lookup in `forms.EXACT_FORMS`. **Every entry
+is written out by hand in `forms.py`** (asserted: the table's keys are exactly
+the string literals in the module). Nothing is synthesised from `COMPOUNDS`:
+the knowledge file is a validation target only — an entry marked
+knowledge-eligible must name a subject it defines — and adding a compound there
+adds no form here (asserted). Its marketing formulations ("liposomal vitamin
+C", "curcumin (plain extract)", "curcumin with piperine", "curcumin
+phospholipid complex", "ethyl ester (EE)", "triglyceride (rTG or natural TG)")
+are not recognised at all and resolve to `not_enough_information`: the words
+describe a preparation, not the compound a study measured.
 
 Three outcomes, and no fourth:
 
 | Status | Meaning | Example |
 | --- | --- | --- |
-| `exact` | The printed name denotes one compound form. | "Magnesium oxide", "Ferrous sulphate" |
+| `exact` | The printed name denotes one recognised compound form. | "Magnesium oxide", "Ferrous sulphate", "Magnesium citrate" |
 | `not_stated` | A bare nutrient name; the label as recorded states no form. | "Magnesium", "Vitamin C", "Elemental iron" |
-| `not_enough_information` | Anything else, including a printed form we do not pin exactly. | "Magnesium glycinate", "Epsom salt", "5 MTHF" |
+| `not_enough_information` | Anything else, including a printed form not pinned exactly, or a row whose identity failed revalidation. | "Magnesium glycinate", "Epsom salt", "5 MTHF", "Liposomal vitamin C" |
 
-The table holds 83 printed spellings: 28 fix one molecular formula, 27 are
-mineral spellings whose formula is withheld (below), and the rest name
-non-mineral forms. Form-specific chemistry and knowledge are looked up by the
-exact `(nutrient, form)` pair and never by nutrient key. A form whose nutrient
-disagrees with the fact's stored key is refused, not re-keyed. There is no
-fuzzy match, no substring search, no "most common form", no model.
+**Recognised is not knowledge-eligible.** A printed name can be specific enough
+to show back as a form and still not fix the compound a study describes.
+"Magnesium citrate" does not say mono- or trimagnesium; a chelate name does not
+fix what a maker chelated; "dried" ferrous sulfate is a range. Those are
+recognised (shown, chemistry withheld with its reason) but not
+knowledge-eligible, so they never become a knowledge join key even when a
+same-named entry is published (asserted with a published "magnesium citrate"
+entry: a label printing "Magnesium citrate" gets nothing, one printing
+"Trimagnesium dicitrate anhydrous" gets it). A hydrate name, or an unstated
+hydrate, is still the same salt, so it is eligible: hydration changes the
+arithmetic, not the compound.
+
+The table today (`forms.py`, `FORM_IDENTITY_VERSION = "step-13-forms-v2"`) holds
+77 printed spellings: 55 mineral spellings (28 with a fixed formula, whose
+chemistry is calculated; 27 whose chemistry is withheld with a reason) and 22
+non-mineral spellings (vitamin, CoQ10, curcumin and omega-3 forms, which have no
+elemental arithmetic). 64 spellings are knowledge-eligible, covering 27 of the
+38 draft knowledge entries; 13 are recognised only (magnesium citrate, magnesium
+malate, the three bisglycinates and their spelling variants, the dried ferrous
+sulfate spellings, carbonyl iron). The other 11 knowledge entries — the
+formulations above and the forms that are recognised only — have no printed
+spelling that reaches them, and stay unreachable until a reviewer adds one.
+
+Form-specific chemistry and knowledge are looked up by the exact
+`(nutrient, form)` pair and never by nutrient key. A form whose nutrient
+disagrees with the fact's revalidated key is refused, not re-keyed.
 
 ## Hydration, salt and composition ambiguity
 
@@ -311,11 +407,34 @@ Genuine disagreements between the two authorities are logged as
 plain unreviewed drafts are the normal dormant state and are not logged.
 Nothing is repaired.
 
-The loader now writes the binding onto each draft it owns, and refreshes it
-only while the claim is still a draft with no recorded verification. Editing a
+The loader writes the binding onto each draft it owns, and refreshes it only
+while the claim is still a draft with no recorded verification. Editing a
 published claim creates a new draft version without a binding, so the entry
 disappears from customers until that version is itself bound, reviewed and
 published.
+
+### Loader lifecycle: reviewed authority is never rewritten
+
+The loader is release-owned: it may keep an **unreviewed draft** in step with
+the knowledge file, and nothing else. A row is rewritten only while it is
+`unverified` **and** both the claim it is linked to and the claim it would be
+linked to are pristine drafts (never approved, rejected, published or
+attested). Anything else — a `confirmed` or `disputed` row, or a claim a person
+has touched — is left exactly as it is: no value, no verification state, no
+claim link and no binding changes.
+
+Before this correction the loader rewrote every row from the file and reset
+`verification` to `unverified` on every run, so a rerun after review silently
+destroyed human-reviewed authority (the reader then failed closed, but the
+review was gone).
+
+Where the file now differs from a preserved row, the difference is **reported,
+not applied**: the loader logs `supplement_knowledge_reviewed_row_drift`
+(reason `reviewed_row_drift`, the row id, the form and the names — not the
+values — of the differing fields) and its summary carries
+`reviewed_rows_preserved` and `reviewed_row_drift` counts for a person to act
+on. Tests prove a confirmed + published row, a disputed row, and a row under an
+approved claim all survive a rerun unchanged, including under a drifted file.
 
 ### How an entry could ever become visible
 
@@ -370,7 +489,16 @@ key.
 ## Professional boundary
 
 `supplements/boundary.evaluate` is the one supplement boundary, used by the
-question route, the VC-07 summary and the detail:
+question route, the VC-07 summary and the detail. Its alternatives are about
+records and labels only — "What supplements you recorded", "What the package
+label says, as you recorded it", "Which of your products list the same
+component", "Expiry dates you recorded", "Which label details still need your
+confirmation" — and it carries its own professional-boundary sentence. The
+generic routine boundary's "The order to use your products in" and food ideas
+are right for skin care and wrong here (they can read as supplement sequencing,
+timing or pairing), and its non-boundary line no longer says "how often you
+take them". Every boundary payload is tested free of order, timing, "take
+first/together", food pairing and "best time" wording. The decision order:
 
 1. the constitutional hard handoff gate (`hard_handoff.evaluate`) — its decision
    and message stand;
@@ -404,7 +532,12 @@ was updated to keep a non-boundary example and to assert the new handoff.
   claim id, reviewer, storage key or confidence.
 - **Item removal / account deletion**: see audit answer 18; account deletion
   cascades through `accounts` and leaves other accounts' facts intact.
-- No label photo is stored by this domain; there is no media linkage to audit.
+- The photo bridge reads only the caller's own active media asset through the
+  media domain's single ownership check; another account's or a deleted photo
+  is a 404 before any model call. Supplement rows store no media id and no
+  storage key; the AI run id stays server-side (never in a payload or export).
+  The photo itself remains an ordinary media asset under the existing media
+  deletion and export rules.
 - No health-profile field is read or added. Age, sex, weight, conditions, lab
   values, medications and pregnancy status play no part in any output.
 
@@ -428,31 +561,41 @@ ingredients produces no fact, no component and no text on the detail.
 | Hydrate/salt/composition not fixed | chemistry withheld with its reason |
 | Fact or item unconfirmed | shown as unconfirmed; drives nothing |
 | Detail request fails in the app | the existing editable label list still works |
+| Stored identity disagrees with the reviewed authority | no overlap, form or knowledge for that row; nothing rewritten; logged |
+| Loader run over reviewed rows | rows, links, claims untouched; drift logged and counted |
+| Photo: item or media not owned, deleted or archived | 404 before any model call; nothing written |
+| Photo: bytes are not an image | 415 before any model call; nothing written |
+| Photo: model output malformed or carries a judgement field | 503 without a run id; nothing written |
+| Photo: retry of the same operation | same drafts returned; no second model call |
 
 ## Proof
 
 - `backend/tests/test_step13_supplements.py` — the brief's matrix A–X against
-  PostgreSQL 16 and the real routes, plus contract hygiene. Where an entry has
-  to be *published* for a test, the test walks the real authoring workflow and
-  performs the two untooled operator acts (grading, source classification) as
-  labelled fixtures. No test claims a real entry was reviewed.
-- `backend/tests/test_vc_07_supplement_api.py` — one expectation made stricter
-  (see Professional boundary).
-- `frontend/src/__tests__/supplementDetail.test.tsx` — provenance, draft vs
-  confirmed, printed units and serving text, chemistry wording, withheld
-  reasons, research only with an openable source, factual overlap, calm
-  missing information, the boundary, accessibility roles, and a sweep of the
-  keyed strings for advice.
-- A mutation pass applied 34 deliberate breaks to the real code (and, for two
-  of them, the real database) one at a time: the brief's eighteen, with second
-  and third variants where a break has more than one home (detail and summary
-  totals, overlap and draft handling; knowledge chosen by nutrient key; a
-  second cross-account read; the hard handoff gate skipped; an answer injected
-  into a boundary response; either `ON DELETE CASCADE` dropped), plus a claim
-  about another form accepted, the reviewed-text check dropped, unclassified
-  sources accepted, the loader rebinding under a recorded verification, a
-  disputed row shown, printed units normalised, and chemistry multiplied into
-  the printed amount. Every one was caught by these suites.
+  PostgreSQL 16 and the real routes, plus the correction round (reviewed
+  identity and legacy revalidation, explicit and eligibility-gated forms, the
+  loader lifecycle, boundary copy). Where an entry has to be *published* for a
+  test, the test walks the real authoring workflow and performs the two
+  untooled operator acts (grading, source classification) as labelled fixtures.
+  No test claims a real entry was reviewed.
+- `backend/tests/test_step13_supplement_photo.py` — the photo bridge: owned
+  photo → drafts with server-owned provenance, ownership and media refusals,
+  malformed and judgemental output refused whole, drafts driving nothing,
+  confirmation and edits keeping the source, replay and concurrency, no scan
+  stack or Store A, export and deletion. The AI provider is stubbed; no live
+  model call.
+- `backend/tests/test_supplement_knowledge.py` — its alias test encoded the
+  defect (unreviewed aliases resolving to nutrients); it now asserts the
+  reviewed spellings resolve and the unreviewed ones keep their literal
+  identity.
+- `backend/tests/test_vc_07_supplement_api.py` — stricter boundary
+  expectations (gate handoff; neutral non-boundary wording).
+- `frontend/src/__tests__/supplementDetail.test.tsx`,
+  `supplementPhotoReader.test.tsx` — provenance, drafts, printed units and
+  serving text, chemistry wording, research only with an openable source,
+  factual overlap, the boundary, the photo action (camera permission only on
+  choice, retry replays), and keyed-string sweeps.
+- A mutation pass applied 53 deliberate breaks to the real code
+  (and two to the real database), one at a time; every one was caught.
 
 ## Rollback
 
@@ -463,16 +606,18 @@ code-only. The VC-07 summary contract is unchanged.
 
 ## Known limits
 
-- No confirmed supplement pack capture (see [The scan-first question](#the-scan-first-question)).
+- Supplement pack identity by barcode is not built: the photo bridge is scoped
+  to an item the customer already owns and carries no pack version or lot.
 - Pre-existing and unchanged: a supplement barcode scanned and confirmed
-  through the food label route is graded and watched as a packaged food. Step
-  13 applies no decision to supplements and does not touch that path; a
-  supplement capture surface would be the place to separate them.
-- 132 nutrient-level alias spellings come from the unverified knowledge file.
-  Some are broad for nutrient identity (`triglyceride`, `ethyl ester`, `rtg` →
-  omega-3; `turmeric extract`, `haldi extract` → curcumin; trade names). They
-  only group overlap, and every overlap line shows each product's printed
-  name, but they deserve their own review.
-- No supplement authoring adapter (source classification and grading).
-- The form table is code authored in this step and awaits independent review
-  like the rest of this change; it is chemistry nomenclature, not evidence.
+  through the *food* label route is graded and watched as a packaged food.
+- The executable identity map is small on purpose (99 spellings). Common
+  printed spellings outside it ("Magnesium glycinate", "Vit D3", "5 MTHF")
+  keep their literal identity until someone reviews and adds them.
+- Rows written before the correction under the old alias set lose their
+  grouping (fail closed) until the customer re-enters or renames them; nothing
+  migrates them.
+- No supplement authoring adapter: source classification and grading have no
+  tooling, so no knowledge entry can become visible without it. All 38 remain
+  dormant.
+- The exact-form table is code authored in this step: chemistry nomenclature,
+  not evidence, awaiting independent review.

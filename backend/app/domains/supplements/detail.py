@@ -32,7 +32,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.domains.supplements import boundary as supplement_boundary
-from app.domains.supplements.engine import REVIEWED_ALIASES, SUPPLEMENT_UTILITY_VERSION, expiry_state
+from app.domains.supplements.engine import SUPPLEMENT_UTILITY_VERSION, expiry_state
 from app.domains.supplements.forms import (
     FORM_IDENTITY_VERSION,
     FormResolution,
@@ -40,24 +40,15 @@ from app.domains.supplements.forms import (
     package_chemistry,
     resolve_form,
 )
-from app.domains.supplements.knowledge import COMPOUNDS
+from app.domains.supplements.identity import IDENTITY_VERSION, effective_key
 from app.domains.supplements.knowledge_reader import READER_VERSION, FormKnowledge, KnowledgeStatus
+from app.domains.supplements.names import NUTRIENT_DISPLAY_NAMES
 
 DETAIL_CONTRACT_VERSION = "step-13-v1"
 
 #: A component counts for overlap, form, chemistry and knowledge only when both
 #: the item and the fact are confirmed. Anything else is awaiting confirmation.
 AWAITING_CONFIRMATION = "awaiting_confirmation"
-
-
-def _nutrient_display_names() -> dict[str, str]:
-    names: dict[str, str] = {compound.key: compound.nutrient for compound in COMPOUNDS}
-    for key, display in REVIEWED_ALIASES.values():
-        names.setdefault(key, display)
-    return names
-
-
-NUTRIENT_DISPLAY_NAMES: dict[str, str] = _nutrient_display_names()
 
 
 def _amount_text(value: Any) -> str | None:
@@ -84,8 +75,9 @@ def provenance(source: str | None, verification_state: str | None) -> str:
     return "unknown_source"
 
 
-def _fact_key(fact: Any) -> str:
-    return fact.canonical_component_key or fact.normalized_name
+def _fact_key(fact: Any) -> str | None:
+    """The revalidated identity, or None when the stored key cannot be trusted."""
+    return effective_key(fact)
 
 
 def counts(item: dict[str, Any], fact: Any) -> bool:
@@ -94,7 +86,7 @@ def counts(item: dict[str, Any], fact: Any) -> bool:
 
 
 def form_for(fact: Any) -> FormResolution:
-    return resolve_form(fact.raw_name, canonical_component_key=fact.canonical_component_key)
+    return resolve_form(fact.raw_name, canonical_component_key=_fact_key(fact))
 
 
 def knowledge_pairs(item: dict[str, Any], facts: list[Any]) -> set[tuple[str, str]]:
@@ -135,11 +127,15 @@ def _component(item: dict[str, Any], fact: Any, knowledge: dict[tuple[str, str],
         return row
 
     key = _fact_key(fact)
-    display = NUTRIENT_DISPLAY_NAMES.get(key)
-    row["nutrient"] = (
-        {"status": "identified", "key": key, "display_name": display}
-        if display else {"status": "not_identified", "key": key, "display_name": None}
-    )
+    display = NUTRIENT_DISPLAY_NAMES.get(key) if key is not None else None
+    if key is None:
+        # The stored identity disagrees with the reviewed authority: nothing
+        # about this row's identity is trusted until it is re-entered.
+        row["nutrient"] = {"status": "not_enough_information", "key": None, "display_name": None}
+    elif display:
+        row["nutrient"] = {"status": "identified", "key": key, "display_name": display}
+    else:
+        row["nutrient"] = {"status": "not_identified", "key": key, "display_name": None}
     resolution = form_for(fact)
     row["form"] = {
         "status": resolution.status.value,
@@ -163,8 +159,9 @@ def _overlaps(item: dict[str, Any], facts: list[Any], others: list[dict[str, Any
     """
     mine: dict[str, list[str]] = {}
     for fact in facts:
-        if counts(item, fact):
-            mine.setdefault(_fact_key(fact), []).append(fact.raw_name)
+        key = _fact_key(fact) if counts(item, fact) else None
+        if key is not None:
+            mine.setdefault(key, []).append(fact.raw_name)
     groups: list[dict[str, Any]] = []
     for key in sorted(mine):
         other_products = []
@@ -216,6 +213,7 @@ def build_detail(
         "utility_version": SUPPLEMENT_UTILITY_VERSION,
         "form_identity_version": FORM_IDENTITY_VERSION,
         "knowledge_reader_version": READER_VERSION,
+        "identity_version": IDENTITY_VERSION,
         "item": {
             "inventory_item_id": item["id"],
             "display_name": item["display_name"],

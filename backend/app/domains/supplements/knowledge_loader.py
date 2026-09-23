@@ -21,8 +21,16 @@ ever written onto a *draft* that has no recorded verification yet; once a
 reviewer has started verifying a draft, or it has moved past draft, the loader
 leaves it alone and any disagreement surfaces as a withheld entry.
 
-Idempotent: running it twice updates the knowledge rows in place and does not
+Idempotent: running it twice updates unreviewed rows in place and does not
 duplicate the drafts.
+
+**Reviewed authority is never rewritten.** A row is updated from the file only
+while it is ``unverified`` and every claim it touches is a pristine draft. Once
+a person has confirmed or disputed a row, or approved, rejected, published or
+started verifying its claim, the loader leaves the row, its verification state,
+its claim link and the claim exactly as they are. If the file has since changed,
+the difference is logged as ``reviewed_row_drift`` and counted in the summary
+(``reviewed_rows_preserved``, ``reviewed_row_drift``) for a person to act on.
 
 Run with ``python -m app.domains.supplements.knowledge_loader`` from ``backend/``.
 """
@@ -90,42 +98,119 @@ def _notes(compound: Compound) -> str:
     return "\n".join(lines)
 
 
+#: Row fields the loader writes from the knowledge file. A reviewed row keeps
+#: every one of them exactly as it was reviewed.
+LOADED_FIELDS: tuple[str, ...] = (
+    "nutrient", "elemental_percent", "percent_kind", "hydration_note",
+    "absorption_summary", "absorption_value", "absorption_unit", "disagreement",
+    "source_name", "source_url", "source_identifier", "confidence", "evidence_tier", "notes",
+)
+
+#: Stable operator-only reason when the file and a reviewed row differ.
+REVIEWED_ROW_DRIFT = "reviewed_row_drift"
+
+
+def _candidate(compound: Compound) -> dict[str, Any]:
+    """What the knowledge file would write for this compound."""
+    absorption = compound.absorption
+    return {
+        "nutrient": compound.nutrient,
+        "elemental_percent": compound.elemental_percent,
+        "percent_kind": compound.percent_kind,
+        "hydration_note": compound.hydration or compound.equivalent_note,
+        "absorption_summary": absorption.summary if absorption else None,
+        "absorption_value": absorption.value_text if absorption else None,
+        "absorption_unit": absorption.unit if absorption else None,
+        "disagreement": absorption.disagreement if absorption else None,
+        "source_name": absorption.source_name if absorption else None,
+        "source_url": absorption.source_url if absorption else None,
+        "source_identifier": absorption.source_identifier if absorption else None,
+        "confidence": str(absorption.confidence) if absorption else None,
+        "evidence_tier": compound.tier,
+        "notes": compound.note,
+    }
+
+
+def claim_is_pristine(claim: Any | None) -> bool:
+    """Has no person touched this claim's review yet?
+
+    A draft that nobody has approved, rejected, published or attested to. A
+    claim that went back to draft after a rejection has been looked at, and is
+    not pristine.
+    """
+    if claim is None:
+        return True
+    return (
+        claim.review_status == ReviewStatus.DRAFT.value
+        and not claim.reviewed_by and claim.reviewed_at is None
+        and not claim.published_by and claim.published_at is None
+        and not (claim.structured_value or {}).get("publication_verification")
+    )
+
+
 async def _upsert_knowledge(
     session: AsyncSession, compound: Compound, claim_id: Any | None,
-) -> SupplementComponentKnowledge:
+) -> tuple[SupplementComponentKnowledge, bool, list[str]]:
+    """Create or update one row, but only while nobody has reviewed anything.
+
+    Returns ``(row, written, drifted_fields)``. The loader is release-owned: it
+    may keep an unreviewed draft in step with the file, and nothing else. A row
+    is rewritten only while it is ``unverified`` *and* both the claim it is
+    linked to and the claim it would be linked to are pristine drafts. Anything
+    else — a ``confirmed`` or ``disputed`` row, or a claim somebody approved,
+    rejected, published or started verifying — is left exactly as it is: no
+    value, no verification state and no claim link changes. Where the file now
+    says something different from such a row, the difference is reported and
+    logged, never applied.
+    """
+    from app.domains.evidence.models import EvidenceClaim
+
+    candidate = _candidate(compound)
     row = (await session.execute(
         select(SupplementComponentKnowledge).where(
             SupplementComponentKnowledge.canonical_component_key == compound.key,
             SupplementComponentKnowledge.compound_form == compound.form,
         )
     )).scalar_one_or_none()
-    if row is None:
+    target = await session.get(EvidenceClaim, claim_id) if claim_id is not None else None
+
+    if row is not None:
+        linked = await session.get(EvidenceClaim, row.evidence_claim_id) if row.evidence_claim_id else None
+        pristine = (
+            row.verification == Verification.UNVERIFIED.value
+            and claim_is_pristine(linked)
+            and claim_is_pristine(target)
+        )
+        if not pristine:
+            drifted = [field for field in LOADED_FIELDS if getattr(row, field) != candidate[field]]
+            if claim_id is not None and row.evidence_claim_id != claim_id:
+                drifted.append("evidence_claim_id")
+            if drifted:
+                logger.warning(
+                    "supplement_knowledge_reviewed_row_drift",
+                    extra={
+                        "reason": REVIEWED_ROW_DRIFT,
+                        "knowledge_row_id": str(row.id),
+                        "compound_form": row.compound_form,
+                        "verification": row.verification,
+                        "fields": ",".join(drifted),
+                    },
+                )
+            return row, False, drifted
+    else:
         row = SupplementComponentKnowledge(
             canonical_component_key=compound.key, compound_form=compound.form,
         )
         session.add(row)
 
-    absorption = compound.absorption
-    row.nutrient = compound.nutrient
-    row.elemental_percent = compound.elemental_percent
-    row.percent_kind = compound.percent_kind
-    row.hydration_note = compound.hydration or compound.equivalent_note
-    row.absorption_summary = absorption.summary if absorption else None
-    row.absorption_value = absorption.value_text if absorption else None
-    row.absorption_unit = absorption.unit if absorption else None
-    row.disagreement = absorption.disagreement if absorption else None
-    row.source_name = absorption.source_name if absorption else None
-    row.source_url = absorption.source_url if absorption else None
-    row.source_identifier = absorption.source_identifier if absorption else None
-    row.confidence = str(absorption.confidence) if absorption else None
-    row.evidence_tier = compound.tier
+    for field, value in candidate.items():
+        setattr(row, field, value)
     # Never anything else on load: no source here has been opened by this system.
     row.verification = Verification.UNVERIFIED.value
-    row.notes = compound.note
     if claim_id is not None:
         row.evidence_claim_id = claim_id
     await session.flush()
-    return row
+    return row, True, []
 
 
 def _bind_draft(claim: Any, row: SupplementComponentKnowledge) -> bool:
@@ -155,6 +240,8 @@ async def load(session: AsyncSession, *, author: str = LOADER_AUTHOR) -> dict[st
     created_drafts = 0
     reused_drafts = 0
     bound_drafts = 0
+    reviewed_rows_preserved = 0
+    reviewed_row_drift = 0
     for compound in COMPOUNDS:
         # One draft per compound form, found by the subject it describes.
         existing = (await session.execute(
@@ -188,7 +275,12 @@ async def load(session: AsyncSession, *, author: str = LOADER_AUTHOR) -> dict[st
             claim_id = existing.id
             reused_drafts += 1
 
-        row = await _upsert_knowledge(session, compound, claim_id)
+        row, written, drifted = await _upsert_knowledge(session, compound, claim_id)
+        if not written:
+            # Reviewed authority: neither the row nor its claim is touched.
+            reviewed_rows_preserved += 1
+            reviewed_row_drift += 1 if drifted else 0
+            continue
         claim = await session.get(EvidenceClaim, row.evidence_claim_id) if row.evidence_claim_id else None
         if claim is not None and _bind_draft(claim, row):
             bound_drafts += 1
@@ -199,6 +291,8 @@ async def load(session: AsyncSession, *, author: str = LOADER_AUTHOR) -> dict[st
         "drafts_created": created_drafts,
         "drafts_reused": reused_drafts,
         "drafts_bound": bound_drafts,
+        "reviewed_rows_preserved": reviewed_rows_preserved,
+        "reviewed_row_drift": reviewed_row_drift,
         "with_absorption": sum(1 for c in COMPOUNDS if c.absorption),
         "not_enough_information": sum(1 for c in COMPOUNDS if not c.absorption),
     }

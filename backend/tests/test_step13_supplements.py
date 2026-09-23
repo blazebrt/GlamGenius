@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import re
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -104,7 +105,7 @@ def _component(detail: dict, printed_name: str) -> dict:
 
 
 async def _photo_draft(account_id, item_id: str, raw_name: str, **values) -> uuid.UUID:
-    """A draft as the dormant photo path would write it. There is no public writer today."""
+    """A draft row shaped as the photo bridge writes it, inserted directly (the route has its own tests)."""
     from app.domains.supplements.engine import component_identity
 
     key, _display = component_identity(raw_name)
@@ -170,6 +171,32 @@ async def _publish_form(
 async def _knowledge(key: str, form: str):
     async with get_sessionmaker()() as session:
         return (await read_form_knowledge(session, [(key, form)]))[(key, form)]
+
+
+#: Keys whose values are identifiers or hashes. Random hex can contain any
+#: digit run, so number checks must never look inside them.
+_IDENTIFIER_KEYS = frozenset({"id", "inventory_item_id", "item_id", "fingerprint"})
+
+
+def _without_identifiers(value):
+    """The payload with every identifier and hash value removed."""
+    if isinstance(value, dict):
+        return {key: _without_identifiers(item) for key, item in value.items() if key not in _IDENTIFIER_KEYS}
+    if isinstance(value, list):
+        return [_without_identifiers(item) for item in value]
+    return value
+
+
+def _mentions_number(payload, number: str) -> bool:
+    """Does ``number`` appear as a whole number anywhere outside identifiers?"""
+    rendered = json.dumps(_without_identifiers(payload))
+    return re.search(rf"(?<![\d.]){re.escape(number)}(?![\d])", rendered) is not None
+
+
+def test_number_checks_ignore_identifiers_and_respect_digit_boundaries():
+    payload = {"id": "a3013017-0000-4000-8000-000000000750", "fingerprint": "301f750", "x": {"amount": "1301"}}
+    assert not _mentions_number(payload, "301") and not _mentions_number(payload, "750")
+    assert _mentions_number({"total": "750"}, "750") and _mentions_number({"v": "301.5 mg"}, "301.5")
 
 
 def _walk_keys(value, found: set[str]) -> set[str]:
@@ -352,7 +379,9 @@ async def test_d_form_knowledge_is_never_transferred_through_a_shared_nutrient_k
 def test_d_every_form_resolves_only_to_itself():
     for spelling, form in forms.EXACT_FORMS.items():
         resolution = forms.resolve_form(spelling, canonical_component_key=form.canonical_component_key)
-        assert resolution.knowledge_key == (form.canonical_component_key, form.compound_form), spelling
+        assert resolution.status is forms.FormStatus.EXACT, spelling
+        expected = (form.canonical_component_key, form.compound_form) if form.knowledge_eligible else None
+        assert resolution.knowledge_key == expected, spelling
         # The same printed name under a different nutrient key is refused, not re-keyed.
         other_key = "iron" if form.canonical_component_key != "iron" else "zinc"
         assert forms.resolve_form(spelling, canonical_component_key=other_key).status is forms.FormStatus.NOT_ENOUGH_INFORMATION
@@ -514,7 +543,7 @@ async def test_g_chemistry_is_never_combined_with_the_printed_amount(
     rendered = json.dumps(detail).lower()
     # 500 mg x 60.3% = 301.5 mg; no product of the two appears anywhere.
     for derived in ("301.5", "301", "302", "603"):
-        assert derived not in rendered
+        assert not _mentions_number(detail, derived), derived
     keys = _walk_keys(detail, set())
     for forbidden in ("absorbed", "absorption_amount", "intake", "daily", "dose", "dosage", "total", "sum", "elemental_amount"):
         assert not any(forbidden in key for key in keys), forbidden
@@ -824,7 +853,7 @@ async def test_n_o_p_overlap_is_factual_per_product_and_never_a_total(
 
     for payload in (detail, summary):
         rendered = json.dumps(payload).lower()
-        assert "750" not in rendered and "1000" not in rendered, "amounts are never added"
+        assert not _mentions_number(payload, "750") and not _mentions_number(payload, "1000"), "amounts are never added"
         for phrase in ADVICE_PHRASES:
             assert phrase not in rendered, phrase
     keys = _walk_keys(detail, set())
@@ -1195,3 +1224,340 @@ async def test_the_detail_carries_no_internal_identifiers(app_client, db_clean, 
                      "reviewed_by", "published_by", "client_mutation_id", "confidence"):
         assert internal not in keys, internal
     assert str(account) not in json.dumps(detail)
+
+
+# ===========================================================================
+# Correction round (independent review of PR #194)
+# ===========================================================================
+# ---------------------------------------------------------------------------
+# D1. Only reviewed identity executes; stored keys are revalidated
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(("label", "old_key"), [
+    ("Triglyceride", "omega 3"),
+    ("Turmeric extract", "curcumin"),
+    ("Fish oil concentrate", "omega 3"),
+    ("Haldi extract", "curcumin"),
+    ("Turmeric with black pepper", "curcumin"),
+    ("Ethyl ester", "omega 3"),
+    ("rTG", "omega 3"),
+    ("Epsom salt", "magnesium"),
+    ("Oyster shell calcium", "calcium"),
+    ("Magtein", "magnesium"),
+])
+def test_d1_unreviewed_knowledge_aliases_never_decide_identity(label, old_key):
+    from app.domains.supplements.identity import component_identity
+    from app.domains.supplements.names import normalize_component
+
+    key, display = component_identity(label)
+    assert key == normalize_component(label) and key != old_key
+    assert display == label
+
+
+def test_d1_the_executable_identity_map_is_exactly_the_reviewed_sources():
+    from app.domains.supplements.identity import REVIEWED_IDENTITIES
+    from app.domains.supplements.names import NUTRIENT_SPELLINGS, REVIEWED_EQUIVALENTS
+
+    expected = {**NUTRIENT_SPELLINGS, **REVIEWED_EQUIVALENTS,
+                **{spelling: form.canonical_component_key for spelling, form in forms.EXACT_FORMS.items()}}
+    assert expected == REVIEWED_IDENTITIES
+
+
+def test_d1_no_production_module_reads_the_knowledge_aliases():
+    root = Path(__file__).resolve().parents[1] / "app"
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        if path.name == "knowledge.py" and path.parent.name == "supplements":
+            continue
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == "raw_aliases":
+                offenders.append(str(path))
+            if isinstance(node, ast.Attribute) and node.attr == "raw_aliases":
+                offenders.append(str(path))
+            if isinstance(node, ast.ImportFrom) and any(alias.name == "raw_aliases" for alias in node.names):
+                offenders.append(str(path))
+    assert offenders == []
+
+
+async def test_d1_an_unreviewed_alias_never_overlaps_a_reviewed_identity(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    pairs = [("Fish oil concentrate", "Omega 3"), ("Turmeric extract", "Curcumin"), ("Triglyceride", "Omega 3 fatty acids")]
+    items = []
+    for loose, reviewed in pairs:
+        first = await _supplement(app_client, headers, f"Loose {loose}")
+        second = await _supplement(app_client, headers, f"Reviewed {reviewed}")
+        await _fact(app_client, headers, first, loose)
+        await _fact(app_client, headers, second, reviewed)
+        items.append(first)
+    summary = ok(await app_client.get("/api/v2/supplements/summary", headers=headers))
+    # "Omega 3" and "Omega 3 fatty acids" are both reviewed omega-3 spellings; nothing else groups.
+    assert [group["component_key"] for group in summary["overlaps"]] == ["omega 3"]
+    assert {row["product_name"] for row in summary["overlaps"][0]["items"]} == {
+        "Reviewed Omega 3", "Reviewed Omega 3 fatty acids",
+    }
+    for item in items:
+        assert (await _detail(app_client, headers, item))["overlaps"] == []
+
+    # The deliberate VC-07 identity still holds.
+    c1 = await _supplement(app_client, headers, "C one")
+    c2 = await _supplement(app_client, headers, "C two")
+    await _fact(app_client, headers, c1, "Vitamin C")
+    await _fact(app_client, headers, c2, "Ascorbic acid")
+    assert [group["component_key"] for group in (await _detail(app_client, headers, c1))["overlaps"]] == ["vitamin c"]
+
+
+async def test_d1_legacy_rows_keyed_by_old_aliases_are_revalidated_not_trusted_and_not_repaired(
+    app_client, db_clean, registered_supabase_user, caplog,
+):
+    token, account = await registered_supabase_user()
+    headers = auth(token)
+    legacy_item = await _supplement(app_client, headers, "Legacy")
+    reviewed_item = await _supplement(app_client, headers, "Reviewed")
+    await _fact(app_client, headers, reviewed_item, "Omega 3")
+    await _fact(app_client, headers, reviewed_item, "Curcumin")
+    # Rows exactly as the pre-correction code wrote them, through the old broad alias set.
+    async with get_sessionmaker()() as session:
+        legacy = [
+            SupplementLabelComponent(
+                account_id=account, item_id=uuid.UUID(legacy_item), raw_name=raw, normalized_name=key,
+                canonical_component_key=key, source="user_declared", verification_state="confirmed", confidence=1.0,
+            )
+            for raw, key in (("Triglyceride", "omega 3"), ("Haldi extract", "curcumin"))
+        ]
+        session.add_all(legacy)
+        await session.commit()
+        legacy_ids = [row.id for row in legacy]
+
+    with caplog.at_level(logging.WARNING, logger="app.domains.supplements.identity"):
+        detail = await _detail(app_client, headers, legacy_item)
+        summary = ok(await app_client.get("/api/v2/supplements/summary", headers=headers))
+    assert detail["overlaps"] == [] and summary["overlaps"] == []
+    for name in ("Triglyceride", "Haldi extract"):
+        row = _component(detail, name)
+        assert row["nutrient"] == {"status": "not_enough_information", "key": None, "display_name": None}
+        assert row["form"]["status"] == "not_enough_information"
+        assert row["published_knowledge"] == {"status": "not_enough_information"}
+    assert any(getattr(record, "reason", None) == "stored_identity_disagrees_with_reviewed_authority"
+               for record in caplog.records)
+    # Nothing was rewritten.
+    async with get_sessionmaker()() as session:
+        stored = {row.raw_name: row.canonical_component_key for row in (await session.execute(
+            select(SupplementLabelComponent).where(SupplementLabelComponent.id.in_(legacy_ids))
+        )).scalars().all()}
+    assert stored == {"Triglyceride": "omega 3", "Haldi extract": "curcumin"}
+
+
+# ---------------------------------------------------------------------------
+# D2. Exact forms are explicit; recognition is not knowledge eligibility
+# ---------------------------------------------------------------------------
+def test_d2_adding_a_compound_to_the_knowledge_file_adds_no_form():
+    from app.domains.supplements.knowledge import Compound
+
+    invented = Compound(
+        key="magnesium", nutrient="Magnesium", form="magnesium unobtainate",
+        aliases=("mg unobtainate",), formula="MgO", element="Mg",
+    )
+    table = forms.build_exact_forms((*COMPOUNDS, invented))
+    assert set(table) == set(forms.EXACT_FORMS)
+    assert "magnesium unobtainate" not in table and "mg unobtainate" not in table
+
+
+@pytest.mark.parametrize("printed", [
+    "liposomal vitamin C", "curcumin (plain extract)", "curcumin with piperine",
+    "curcumin phospholipid complex", "ethyl ester (EE)", "triglyceride (rTG or natural TG)",
+])
+def test_d2_unreviewed_knowledge_form_names_are_not_enough_information(printed):
+    from app.domains.supplements.identity import component_identity
+
+    key, _display = component_identity(printed)
+    resolution = forms.resolve_form(printed, canonical_component_key=key)
+    assert resolution.status is forms.FormStatus.NOT_ENOUGH_INFORMATION
+    assert resolution.knowledge_key is None
+
+
+def test_d2_every_exact_form_spelling_is_written_out_in_the_module():
+    source = ast.parse((Path(forms.__file__)).read_text())
+    literal_keys: set[str] = set()
+    for node in ast.walk(source):
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) \
+                and node.target.id in {"_MINERAL_FORMS", "_OTHER_FORMS"} and isinstance(node.value, ast.Dict):
+            literal_keys |= {key.value for key in node.value.keys if isinstance(key, ast.Constant)}
+    assert literal_keys and set(forms.EXACT_FORMS) == literal_keys
+
+
+def test_d2_recognised_is_not_knowledge_eligible_where_the_name_does_not_fix_the_compound():
+    for spelling in ("magnesium citrate", "magnesium bisglycinate", "ferrous bisglycinate",
+                     "zinc bisglycinate", "magnesium malate", "dried ferrous sulphate", "carbonyl iron"):
+        form = forms.EXACT_FORMS[spelling]
+        resolution = forms.resolve_form(spelling, canonical_component_key=form.canonical_component_key)
+        assert resolution.status is forms.FormStatus.EXACT and resolution.knowledge_key is None, spelling
+
+
+async def test_d2_published_knowledge_needs_an_eligible_exact_form_not_just_the_same_name(
+    app_client, db_clean, registered_supabase_user,
+):
+    await _load_knowledge()
+    await _publish_form("magnesium citrate")
+    token, _account = await registered_supabase_user()
+    headers = auth(token)
+    ambiguous = await _supplement(app_client, headers, "Ambiguous salt")
+    exact = await _supplement(app_client, headers, "Exact salt")
+    await _fact(app_client, headers, ambiguous, "Magnesium citrate")
+    await _fact(app_client, headers, exact, "Trimagnesium dicitrate anhydrous")
+    ambiguous_row = _component(await _detail(app_client, headers, ambiguous), "Magnesium citrate")
+    exact_row = _component(await _detail(app_client, headers, exact), "Trimagnesium dicitrate anhydrous")
+    assert ambiguous_row["form"] == {"status": "exact", "name": "magnesium citrate"}
+    assert ambiguous_row["published_knowledge"] == {"status": "not_enough_information"}
+    assert exact_row["published_knowledge"]["status"] == "published"
+
+
+# ---------------------------------------------------------------------------
+# D3. The loader never rewrites reviewed authority
+# ---------------------------------------------------------------------------
+SNAPSHOT_FIELDS = (
+    "nutrient", "elemental_percent", "percent_kind", "hydration_note", "absorption_summary",
+    "absorption_value", "absorption_unit", "disagreement", "source_name", "source_url",
+    "source_identifier", "confidence", "evidence_tier", "notes", "verification", "evidence_claim_id",
+)
+
+
+async def _row_and_claim(form: str) -> tuple[dict, dict]:
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(select(SupplementComponentKnowledge).where(
+            SupplementComponentKnowledge.compound_form == form,
+        ))).scalar_one()
+        claim = await session.get(EvidenceClaim, row.evidence_claim_id)
+        row_values = {field: getattr(row, field) for field in SNAPSHOT_FIELDS}
+        claim_values = {
+            "id": claim.id, "review_status": claim.review_status, "summary": claim.summary,
+            "notes": claim.notes, "structured_value": json.dumps(claim.structured_value, sort_keys=True),
+            "published_at": claim.published_at, "reviewed_by": claim.reviewed_by,
+        }
+        return row_values, claim_values
+
+
+def _drifted_compounds(form: str, **absorption_changes) -> tuple:
+    import dataclasses
+
+    changed = []
+    for compound in COMPOUNDS:
+        if compound.form == form:
+            compound = dataclasses.replace(
+                compound, absorption=dataclasses.replace(compound.absorption, **absorption_changes),
+            )
+        changed.append(compound)
+    return tuple(changed)
+
+
+async def _reload(monkeypatch=None, compounds=None) -> dict:
+    from app.domains.supplements import knowledge_loader
+
+    if monkeypatch is not None and compounds is not None:
+        monkeypatch.setattr(knowledge_loader, "COMPOUNDS", compounds)
+    async with get_sessionmaker()() as session:
+        summary = await knowledge_loader.load(session)
+        await session.commit()
+    return summary
+
+
+async def test_d3_a_confirmed_published_row_survives_a_loader_rerun_byte_for_byte(db_clean):
+    await _load_knowledge()
+    await _publish_form("magnesium oxide")
+    before = await _row_and_claim("magnesium oxide")
+    summary = await _reload()
+    after = await _row_and_claim("magnesium oxide")
+    assert after == before
+    assert after[0]["verification"] == Verification.CONFIRMED.value
+    assert summary["reviewed_rows_preserved"] == 1 and summary["reviewed_row_drift"] == 0
+    assert (await _knowledge("magnesium", "magnesium oxide")).status is KnowledgeStatus.PUBLISHED
+
+
+async def test_d3_reviewed_drift_is_reported_and_never_applied(db_clean, monkeypatch, caplog):
+    await _load_knowledge()
+    await _publish_form("magnesium oxide")
+    before = await _row_and_claim("magnesium oxide")
+    with caplog.at_level(logging.WARNING, logger="app.domains.supplements.knowledge_loader"):
+        summary = await _reload(monkeypatch, _drifted_compounds("magnesium oxide", value_text="about 40"))
+    after = await _row_and_claim("magnesium oxide")
+    assert after == before
+    assert summary["reviewed_row_drift"] == 1 and summary["reviewed_rows_preserved"] == 1
+    assert any(getattr(record, "reason", None) == "reviewed_row_drift" for record in caplog.records)
+    assert (await _knowledge("magnesium", "magnesium oxide")).status is KnowledgeStatus.PUBLISHED
+
+
+async def test_d3_a_disputed_row_survives_a_loader_rerun(db_clean, monkeypatch):
+    await _load_knowledge()
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(select(SupplementComponentKnowledge).where(
+            SupplementComponentKnowledge.compound_form == "magnesium oxide",
+        ))).scalar_one()
+        row.verification = Verification.DISPUTED.value
+        await session.commit()
+    before = await _row_and_claim("magnesium oxide")
+    summary = await _reload(monkeypatch, _drifted_compounds("magnesium oxide", value_text="about 40", summary="Rewritten."))
+    after = await _row_and_claim("magnesium oxide")
+    assert after == before and after[0]["verification"] == Verification.DISPUTED.value
+    assert summary["reviewed_row_drift"] == 1
+
+
+async def test_d3_an_approved_claim_freezes_an_unconfirmed_row(db_clean, monkeypatch):
+    await _load_knowledge()
+    await _publish_form("magnesium oxide", publish=False, confirm_row=False)
+    before = await _row_and_claim("magnesium oxide")
+    assert before[0]["verification"] == Verification.UNVERIFIED.value
+    await _reload(monkeypatch, _drifted_compounds("magnesium oxide", value_text="about 40"))
+    assert await _row_and_claim("magnesium oxide") == before
+
+
+async def test_d3_unreviewed_draft_rows_still_follow_the_file_idempotently(db_clean, monkeypatch):
+    await _load_knowledge()
+    drifted = _drifted_compounds("magnesium oxide", value_text="about 40")
+    first = await _reload(monkeypatch, drifted)
+    row, claim = await _row_and_claim("magnesium oxide")
+    assert row["absorption_value"] == "about 40" and row["verification"] == Verification.UNVERIFIED.value
+    assert json.loads(claim["structured_value"])[BINDING_KEY]["absorption_value"] == "about 40"
+    assert first["drafts_bound"] == 1 and first["reviewed_rows_preserved"] == 0
+    second = await _reload(monkeypatch, drifted)
+    assert second["drafts_bound"] == 0 and await _row_and_claim("magnesium oxide") == (row, claim)
+
+
+# ---------------------------------------------------------------------------
+# D4. The boundary's alternatives are about records, never use
+# ---------------------------------------------------------------------------
+USE_GUIDANCE = (
+    "order to use", "when to take", "take first", "take together", "with food", "before food",
+    "after food", "best time", "food ideas", "how often you take", "order you use",
+)
+
+
+async def test_d4_no_boundary_payload_offers_use_order_timing_or_food_pairing(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, _account = await registered_supabase_user()
+    questions = [q for items in BOUNDARY_QUESTIONS.values() for q in items] + ORDINARY_QUESTIONS
+    for question in questions:
+        response = ok(await app_client.post(
+            "/api/v2/supplements/professional-boundary", headers=auth(token), json={"question": question},
+        ))
+        rendered = json.dumps(response).lower()
+        for phrase in USE_GUIDANCE:
+            assert phrase not in rendered, (question, phrase)
+
+
+def test_d4_the_supplement_alternatives_are_records_and_labels_only():
+    from app.domains.routines.safety import narrative_is_safe
+
+    assert supplement_boundary.CAN_HELP_WITH == (
+        "What supplements you recorded",
+        "What the package label says, as you recorded it",
+        "Which of your products list the same component",
+        "Expiry dates you recorded",
+        "Which label details still need your confirmation",
+    )
+    for text_value in (*supplement_boundary.CAN_HELP_WITH, supplement_boundary.NO_BOUNDARY_MESSAGE,
+                       supplement_boundary.SUPPLEMENT_PROFESSIONAL_BOUNDARY):
+        assert narrative_is_safe(text_value), text_value
+        assert not any(phrase in text_value.lower() for phrase in USE_GUIDANCE), text_value

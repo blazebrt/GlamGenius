@@ -8,6 +8,7 @@ import {
   getSupplementUtility,
   patchSupplementLabelFact,
   routeSupplementQuestion,
+  transcribeSupplementLabelPhoto,
 } from '../services/apiV2';
 
 jest.mock('../services/api', () => ({ api: { delete: jest.fn(), get: jest.fn(), patch: jest.fn(), post: jest.fn() } }));
@@ -34,6 +35,14 @@ describe('VC-07 supplement utility API', () => {
     expect(api.patch).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-facts/fact-1', { amount: '250', unit: 'mg' });
     expect(api.post).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-facts/fact-1/confirm');
     expect(api.delete).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-facts/fact-1');
+  });
+
+  it('reads a label photo into drafts through the item-scoped route', async () => {
+    (api.post as jest.Mock).mockResolvedValue({ data: { status: 'created', label_facts: [], message: 'x' } });
+    await transcribeSupplementLabelPhoto('item-1', 'media-1', 'photo-abc-123');
+    expect(api.post).toHaveBeenCalledWith('/api/v2/supplements/items/item-1/label-photo/transcribe', {
+      media_asset_id: 'media-1', client_request_id: 'photo-abc-123',
+    });
   });
 
   it('reads the Step 13 detail from the account-scoped item route', async () => {
