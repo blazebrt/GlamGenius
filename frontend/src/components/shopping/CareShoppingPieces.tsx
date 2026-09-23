@@ -21,7 +21,8 @@ export function CareCandidateReview({
 }: {
   inspection: CareCandidateInspection;
   onConfirm: () => void;
-  onCorrect: () => void;
+  /** Optional: a surface that must not offer free-text correction simply omits it. */
+  onCorrect?: () => void;
 }) {
   const candidate = inspection.candidate;
   const details = candidate.details || {};
@@ -45,9 +46,11 @@ export function CareCandidateReview({
       )}
       <Text style={styles.note}>This is something you are considering. It has not been added to your inventory.</Text>
       <View style={styles.row}>
-        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Correct product facts" onPress={onCorrect} style={styles.outline}>
-          <Text style={styles.outlineText}>Correct it</Text>
-        </TouchableOpacity>
+        {onCorrect && (
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Correct product facts" onPress={onCorrect} style={styles.outline}>
+            <Text style={styles.outlineText}>Correct it</Text>
+          </TouchableOpacity>
+        )}
         <TouchableOpacity accessibilityRole="button" accessibilityLabel="Confirm product facts" onPress={onConfirm} style={[styles.primary, { flex: 1, marginTop: 0 }]}>
           <Text style={styles.primaryText}>Looks right</Text>
         </TouchableOpacity>

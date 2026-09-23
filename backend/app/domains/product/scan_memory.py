@@ -358,6 +358,44 @@ async def latest_decision_on_another_version(
     }
 
 
+async def barcode_history_coverage(
+    session: AsyncSession,
+    *,
+    principal_account_id: uuid.UUID,
+    decision_subject: DecisionSubject,
+    barcode: str,
+) -> dict[str, bool]:
+    """Is this subject's scan history for this barcode complete, across every label version?
+
+    :func:`read_scan_memory` answers completeness for the exact current version
+    only, which is right for that envelope. A caller that also reports other
+    versions — :func:`latest_decision_on_another_version` — needs the wider
+    answer: an unattributed decision on an older version belongs to nobody and
+    is excluded from that read, so without this a history that silently lost
+    it would look exactly like a complete one.
+
+    Completeness metadata only. The ambiguous rows are never returned, counted
+    for display, or adopted by anyone.
+
+    Public boundary: the subject is re-derived under the principal first.
+    """
+    decision_subject = await canonicalize_decision_subject(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+    )
+    unattributed = await _unattributed_scan_events_exist(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+        extra=(ScanDecisionEvent.barcode == barcode,),
+    )
+    return {
+        "unattributed_legacy_events_present": unattributed,
+        "complete_for_subject": not unattributed,
+    }
+
+
 async def scan_decision_history(
     session: AsyncSession,
     *,

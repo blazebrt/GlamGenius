@@ -11,7 +11,7 @@ const contextLabel = (context: FragrancePurchaseCheck['collection_context'], dim
 
 export function FragranceCandidateReview({
   inspection, onConfirm, onCorrect,
-}: { inspection: FragrancePurchaseCheck['candidate_truth']; onConfirm: () => void; onCorrect: () => void }) {
+}: { inspection: FragrancePurchaseCheck['candidate_truth']; onConfirm: () => void; onCorrect?: () => void }) {
   const candidate = inspection.candidate;
   return (
     <View style={styles.card} accessibilityLabel="Review Fragrance product facts">
@@ -22,7 +22,7 @@ export function FragranceCandidateReview({
       {!!candidate.details.concentration && <Text style={styles.fact}>Concentration: {candidate.details.concentration}</Text>}
       {candidate.price != null && <Text style={styles.fact}>Price: {candidate.price} {candidate.currency}</Text>}
       <Text style={styles.note}>Check the visible facts before continuing. This candidate is not in your inventory.</Text>
-      {!inspection.facts_trusted && <View style={styles.row}><TouchableOpacity accessibilityRole="button" accessibilityLabel="Confirm Fragrance facts" onPress={onConfirm} style={styles.primary}><Text style={styles.primaryText}>Confirm facts</Text></TouchableOpacity><TouchableOpacity accessibilityRole="button" accessibilityLabel="Correct Fragrance facts" onPress={onCorrect} style={styles.outline}><Text style={styles.outlineText}>Correct</Text></TouchableOpacity></View>}
+      {!inspection.facts_trusted && <View style={styles.row}><TouchableOpacity accessibilityRole="button" accessibilityLabel="Confirm Fragrance facts" onPress={onConfirm} style={styles.primary}><Text style={styles.primaryText}>Confirm facts</Text></TouchableOpacity>{onCorrect && <TouchableOpacity accessibilityRole="button" accessibilityLabel="Correct Fragrance facts" onPress={onCorrect} style={styles.outline}><Text style={styles.outlineText}>Correct</Text></TouchableOpacity>}</View>}
       {inspection.facts_trusted && <TouchableOpacity accessibilityRole="button" accessibilityLabel="Check Fragrance purchase" onPress={onConfirm} style={styles.primary}><Text style={styles.primaryText}>Check it</Text></TouchableOpacity>}
     </View>
   );

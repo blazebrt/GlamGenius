@@ -229,6 +229,31 @@ describe('Step 14 — the purchase context on the Product Result', () => {
       },
     }));
     expect(await screen.findByText('You chose WAIT for this exact version.')).toBeTruthy();
+    expect(screen.queryByText(PURCHASE_OS.context.prior.historyIncomplete)).toBeNull();
+  });
+
+  it('shows an exact decision and incomplete older history together', async () => {
+    await renderWith(check({
+      memory: {
+        kind: 'scan_decision', fidelity: 'user_outcome_only', state: 'prior_exact_decision',
+        current_decision: { decision: 'WAIT', occurred_at: '2026-09-02T00:00:00Z' }, earlier_version_decision: null, history_complete: false,
+      },
+    }));
+    const prior = await screen.findByTestId('purchase-context-prior');
+    expect(within(prior).getByText('You chose WAIT for this exact version.')).toBeTruthy();
+    expect(within(prior).getByText(PURCHASE_OS.context.prior.historyIncomplete)).toBeTruthy();
+  });
+
+  it('says older history is incomplete when there is no exact decision', async () => {
+    await renderWith(check({
+      memory: {
+        kind: 'scan_decision', fidelity: 'user_outcome_only', state: 'history_incomplete',
+        current_decision: null, earlier_version_decision: null, history_complete: false,
+      },
+    }));
+    const prior = await screen.findByTestId('purchase-context-prior');
+    expect(within(prior).getByText(PURCHASE_OS.context.prior.historyIncomplete)).toBeTruthy();
+    expect(within(prior).queryByText(/for this exact version\./)).toBeNull();
   });
 
   it('points at the one comparable option instead of listing candidates', async () => {

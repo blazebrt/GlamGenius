@@ -964,23 +964,6 @@ export interface PackMrpObservationWire {
   source: 'confirmed_pack_label';
 }
 
-/**
- * The graded verdict for one barcode, shaped for the verdict screen.
- *
- * `physicalPackContext: false` is a reference read — the caller is looking at a
- * product it is not holding, which is what opening a comparable alternative is.
- * It only ever removes authority; it never adds any.
- */
-export const readProductVerdict = async (
-  barcode: string,
-  options: { physicalPackContext?: boolean } = {},
-): Promise<ProductVerdictWire> => {
-  const query = options.physicalPackContext === false ? '?physical_pack_context=false' : '';
-  return (await api.get<ProductVerdictWire>(
-    `${V2}/scan/verdict/${encodeURIComponent(barcode)}${query}`,
-  )).data;
-};
-
 export const readInventoryImport = async (jobId: string): Promise<InventoryImport> =>
   (await api.get<InventoryImport>(`${V2}/inventory/imports/${jobId}`)).data;
 

@@ -143,7 +143,9 @@ export function contextRows(check: PurchaseOsCheck): ContextRow[] {
     if (earlier && earlierWord && earlier.applies_to_current_version === false) {
       lines.push(fill(copy.prior.earlierVersion, { decision: earlierWord, version: earlier.label_version }));
     }
-    if (memory.state === 'history_incomplete') lines.push(copy.prior.historyIncomplete);
+    // Completeness is its own fact. A known exact decision and incomplete older
+    // history are both true at once, and both are said.
+    if (memory.history_complete === false) lines.push(copy.prior.historyIncomplete);
     if (lines.length) rows.push({ key: 'prior', title: copy.prior.title, lines });
   }
 

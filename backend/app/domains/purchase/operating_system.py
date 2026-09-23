@@ -308,8 +308,21 @@ async def _scan_memory(
         label_version=version,
         content_fingerprint=fingerprint,
     )
+    # Three separate facts, never folded into one: the exact current decision,
+    # the latest attributable decision on another version, and whether this
+    # subject's history for the whole barcode is complete. An unattributed
+    # decision on an older version is excluded from the second read, so only
+    # the barcode-wide answer can say that something was left out.
+    coverage = await scan_memory.barcode_history_coverage(
+        session,
+        principal_account_id=principal_account_id,
+        decision_subject=decision_subject,
+        barcode=barcode,
+    )
     current = envelope.get("decision")
-    complete = bool(envelope["history_coverage"]["complete_for_subject"])
+    complete = bool(envelope["history_coverage"]["complete_for_subject"]) and bool(coverage["complete_for_subject"])
+    # A known exact decision is kept even when older history is incomplete;
+    # ``history_complete`` then says so alongside it.
     if current:
         state = "prior_exact_decision"
     elif not complete:

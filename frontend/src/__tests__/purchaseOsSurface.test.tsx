@@ -133,7 +133,7 @@ describe('Step 14 — every customer word is keyed', () => {
   });
 
   it('the copy is versioned', () => {
-    expect(PURCHASE_OS_COPY_VERSION).toBe('purchase-os-copy.v1');
+    expect(PURCHASE_OS_COPY_VERSION).toBe('purchase-os-copy.v2');
   });
 });
 

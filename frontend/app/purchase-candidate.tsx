@@ -5,24 +5,35 @@
  * fragrance product they are thinking about buying. Scan stays the primary
  * path; this screen says so first and offers the way back.
  *
- * Nothing here is new judgement. It reuses the existing candidate flow — the
- * inspection, the correction and confirmation, the canonical Care and
- * Fragrance checks and their result cards, the one-tap decision — and asks the
- * Step 14 purchase check only which of them applies. That check routes on the
- * server, so this screen shows a purchase answer only when the server routed
- * the candidate to Care or Fragrance and every fact it uses is confirmed:
+ * No free text, anywhere (PRODUCT_CONSTITUTION.md: structured choices only).
+ * The customer picks a category, gives a photo or screenshot, and reviews what
+ * was read from it. If the read is right they confirm it; if it is wrong they
+ * read another photo. Nothing is ever typed — not a name, a brand, an
+ * ingredient list or a price. Fragrance alone has structured choices (where
+ * and when it would be used), picked from the server's own options.
+ *
+ *   category → photo → extracted facts → confirm OR read another photo
+ *            → canonical Care / Fragrance check
+ *
+ * Nothing here is new judgement. It reuses the existing candidate inspection,
+ * confirmation, canonical checks, result cards and one-tap decision, and asks
+ * the Step 14 purchase check only which of them applies. That check routes on
+ * the server, so this screen shows a purchase answer only when the server
+ * routed the candidate to Care or Fragrance and its facts are confirmed:
  *
  *   decided                 -> the canonical Care or Fragrance result
- *   not_enough_information  -> the existing review, to confirm the facts
+ *   not_enough_information  -> the extracted facts, to confirm or replace
  *   prohibited              -> the supplement boundary, never a purchase UI
  *   unsupported             -> a plain refusal, never Care by default
  *
- * A candidate is not a shelf item: nothing here writes to the inventory.
- * No free-text search, no catalogue, no feed. Every word is keyed in
+ * Confirmation keeps the photo's provenance: a Care read is confirmed as it
+ * is, and a Fragrance read keeps every extracted fact while only its
+ * structured occasions and seasons are set. A candidate is not a shelf item:
+ * nothing here writes to the inventory. Every word is keyed in
  * src/strings/purchaseOs.ts.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -56,26 +67,19 @@ export default function PurchaseCandidateScreen() {
 
   const [registry, setRegistry] = useState<PurchaseStrategiesResponse | null>(null);
   const [category, setCategory] = useState<CategoryKey | null>(null);
-  const [mode, setMode] = useState<'details' | 'photo' | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const retryAction = useRef<(() => Promise<void>) | null>(null);
 
-  const [name, setName] = useState('');
-  const [brand, setBrand] = useState('');
-  const [productType, setProductType] = useState('');
-  const [ingredients, setIngredients] = useState('');
-  const [size, setSize] = useState('');
-  const [concentration, setConcentration] = useState('');
+  // The only customer choices on this screen besides the category: structured
+  // Fragrance context, picked from the server's own options.
   const [occasions, setOccasions] = useState<string[]>([]);
   const [seasons, setSeasons] = useState<string[]>([]);
-  const [price, setPrice] = useState('');
 
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [purchaseCheck, setPurchaseCheck] = useState<PurchaseOsCheck | null>(null);
   const [careCheck, setCareCheck] = useState<CarePurchaseCheck | null>(null);
   const [fragranceCheck, setFragranceCheck] = useState<FragrancePurchaseCheck | null>(null);
-  const [correcting, setCorrecting] = useState(false);
   const [deciding, setDeciding] = useState(false);
 
   // One owner for every request: a failure shows one keyed line and one retry.
@@ -103,13 +107,11 @@ export default function PurchaseCandidateScreen() {
     .flatMap((strategy) => strategy.categories.map((row) => ({ key: row.key as string, state: strategy.state })))
     .filter((row): row is { key: CategoryKey; state: 'active' | 'prohibited' } => isCategoryKey(row.key));
   const selectedState = offered.find((row) => row.key === category)?.state ?? null;
-  const isFragrance = category === 'perfumes';
   const contextOptions = registry?.fragrance_context_options ?? { occasions: [] as ContextOption[], seasons: [] as ContextOption[] };
 
-  const reset = () => {
-    setMode(null); setInspection(null); setPurchaseCheck(null); setCareCheck(null); setFragranceCheck(null);
-    setCorrecting(false); setFailed(false); setName(''); setBrand(''); setProductType(''); setIngredients('');
-    setSize(''); setConcentration(''); setOccasions([]); setSeasons([]); setPrice('');
+  const clearCandidate = () => {
+    setInspection(null); setPurchaseCheck(null); setCareCheck(null); setFragranceCheck(null);
+    setOccasions([]); setSeasons([]); setFailed(false);
   };
 
   /** Ask the Purchase OS which answer applies, then load only that one. */
@@ -123,53 +125,8 @@ export default function PurchaseCandidateScreen() {
     else if (check.context.strategy === 'fragrance_purchase') setFragranceCheck(await getFragrancePurchaseCheck(candidateId));
   };
 
-  const prefill = (result: Inspection) => {
-    const candidate = result.candidate;
-    const details = (candidate.details || {}) as Record<string, unknown>;
-    const text = (value: unknown) => (typeof value === 'string' ? value : '');
-    setName(candidate.display_name);
-    setBrand(candidate.brand || '');
-    setProductType(text(details.product_type ?? details.fragrance_family));
-    setIngredients(text(details.ingredients_text));
-    setSize(text(details.size));
-    setConcentration(text(details.concentration));
-    setOccasions(Array.isArray(details.occasion) ? details.occasion as string[] : []);
-    setSeasons(Array.isArray(details.season) ? details.season as string[] : []);
-    setPrice(candidate.price == null ? '' : String(candidate.price));
-  };
-
-  const inspect = (body: Parameters<typeof inspectPurchaseCandidate>[0]) => run(async () => {
-    const result = await inspectPurchaseCandidate(body);
-    setInspection(result);
-    prefill(result);
-    await route(result.candidate.id);
-  });
-
-  const trimmed = (value: string) => value.trim() || undefined;
-  const amount = (value: string) => (value.trim() ? Number(value) : undefined);
-
-  const checkDetails = () => {
-    if (!category || !name.trim()) return;
-    if (isFragrance) {
-      void inspect({
-        source: 'manual', expected_category: 'perfumes',
-        item: {
-          category: 'perfumes', display_name: name.trim(), brand: trimmed(brand), price: amount(price),
-          details: { fragrance_family: trimmed(productType), concentration: trimmed(concentration), occasion: occasions, season: seasons },
-        },
-      });
-      return;
-    }
-    void inspect({
-      source: 'manual',
-      item: {
-        category: category as 'beauty' | 'hair', display_name: name.trim(), brand: trimmed(brand), price: amount(price),
-        details: { product_type: trimmed(productType), ingredients_text: trimmed(ingredients), size: trimmed(size) },
-      },
-    });
-  };
-
-  const checkPhoto = () => {
+  /** A photo or screenshot, read into a draft candidate. The only way in. */
+  const readPhoto = () => {
     if (!category) return;
     void run(async () => {
       const picked = await ImagePicker.launchImageLibraryAsync({ quality: 0.75, mediaTypes: ['images'] });
@@ -179,29 +136,29 @@ export default function PurchaseCandidateScreen() {
         uri: asset.uri, name: asset.fileName || `candidate-${Date.now()}.jpg`, type: asset.mimeType || 'image/jpeg',
       });
       const result = await inspectPurchaseCandidate({ source: 'screenshot', media_asset_id: uploaded.id, expected_category: category });
+      clearCandidate();
       setInspection(result);
-      prefill(result);
+      const details = (result.candidate.details || {}) as Record<string, unknown>;
+      setOccasions(Array.isArray(details.occasion) ? details.occasion as string[] : []);
+      setSeasons(Array.isArray(details.season) ? details.season as string[] : []);
       await route(result.candidate.id);
     });
   };
 
-  /** The person confirms (or corrects) what was read; only then can it be checked. */
+  /**
+   * The person confirms what was read. Care is confirmed exactly as read; a
+   * Fragrance read keeps every extracted fact and only its structured context
+   * is set. Provenance is untouched: a photo read stays a photo read.
+   */
   const confirm = () => {
     if (!inspection) return;
     const candidate = inspection.candidate;
     void run(async () => {
-      const details = isFragrance
-        ? { fragrance_family: trimmed(productType) ?? null, concentration: trimmed(concentration) ?? null, occasion: occasions, season: seasons }
-        : { product_type: trimmed(productType), size: trimmed(size), ingredients_text: trimmed(ingredients) };
-      const confirmed = await confirmPurchaseCandidate(candidate.id, {
-        display_name: name.trim() || candidate.display_name,
-        brand: brand.trim() || null,
-        details,
-        price: price.trim() ? Number(price) : null,
-        currency: candidate.currency,
-      });
+      const body = candidate.category === 'perfumes'
+        ? { details: { ...(candidate.details as Record<string, unknown>), occasion: occasions, season: seasons } }
+        : {};
+      const confirmed = await confirmPurchaseCandidate(candidate.id, body);
       setInspection(confirmed);
-      setCorrecting(false);
       await route(confirmed.candidate.id);
     });
   };
@@ -241,21 +198,7 @@ export default function PurchaseCandidateScreen() {
 
   const state = purchaseCheck?.decision.state ?? null;
   const showBoundary = selectedState === 'prohibited' || state === 'prohibited';
-  const showForm = !showBoundary && !!category && ((mode === 'details' && !inspection) || correcting);
-
-  const input = (label: string, value: string, onChange: (next: string) => void, options: { multiline?: boolean; numeric?: boolean } = {}) => (
-    <View key={label}>
-      <Text style={styles.label}>{label}</Text>
-      <TextInput
-        accessibilityLabel={label}
-        value={value}
-        onChangeText={onChange}
-        multiline={options.multiline}
-        keyboardType={options.numeric ? 'numeric' : 'default'}
-        style={[styles.input, options.multiline && styles.multiline]}
-      />
-    </View>
-  );
+  const reviewing = !!inspection && state === 'not_enough_information';
 
   const chips = (options: ContextOption[], values: string[], setValues: (next: string[]) => void) => (
     <View style={styles.chipRow}>
@@ -286,9 +229,9 @@ export default function PurchaseCandidateScreen() {
         <Text style={styles.topTitle} accessibilityRole="header">{copy.title}</Text>
         <View style={styles.topSpacer} />
       </View>
-      <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 48 }} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={{ padding: SPACING.lg, paddingBottom: insets.bottom + 48 }}>
         {/* Scan first, always: this entry is for what cannot be scanned. */}
-        <View style={styles.scanFirst}>
+        <View style={styles.scanFirst} testID="scan-first">
           <Text style={styles.body}>{copy.scanFirst}</Text>
           <TouchableOpacity accessibilityRole="button" accessibilityLabel={copy.scanAction} onPress={() => router.replace('/scan-product')}>
             <Text style={styles.link}>{copy.scanAction}</Text>
@@ -319,7 +262,7 @@ export default function PurchaseCandidateScreen() {
                     accessibilityRole="button"
                     accessibilityLabel={copy.category[row.key]}
                     accessibilityState={{ selected }}
-                    onPress={() => { reset(); setCategory(row.key); }}
+                    onPress={() => { clearCandidate(); setCategory(row.key); }}
                     style={[styles.chip, selected && styles.chipSelected]}
                   >
                     <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{copy.category[row.key]}</Text>
@@ -345,87 +288,62 @@ export default function PurchaseCandidateScreen() {
         )}
 
         {!showBoundary && selectedState === 'active' && !inspection && (
-          <View style={styles.chipRow}>
-            <TouchableOpacity
-              accessibilityRole="button" accessibilityLabel={copy.mode.details}
-              accessibilityState={{ selected: mode === 'details' }}
-              onPress={() => setMode('details')} style={[styles.chip, mode === 'details' && styles.chipSelected]}
-            >
-              <Text style={[styles.chipText, mode === 'details' && styles.chipTextSelected]}>{copy.mode.details}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              accessibilityRole="button" accessibilityLabel={copy.mode.photo}
-              accessibilityState={{ disabled: busy }} disabled={busy}
-              onPress={() => { setMode('photo'); checkPhoto(); }} style={styles.chip}
-            >
-              <Text style={styles.chipText}>{copy.mode.photo}</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {showForm && (
           <View style={styles.card}>
-            {input(copy.field.name, name, setName)}
-            {input(copy.field.brand, brand, setBrand)}
-            {isFragrance ? (
-              <>
-                {input(copy.field.family, productType, setProductType)}
-                {input(copy.field.concentration, concentration, setConcentration)}
-                {chips(contextOptions.occasions, occasions, setOccasions)}
-                {chips(contextOptions.seasons, seasons, setSeasons)}
-              </>
-            ) : (
-              <>
-                {input(copy.field.productType, productType, setProductType)}
-                {input(copy.field.ingredients, ingredients, setIngredients, { multiline: true })}
-                {input(copy.field.size, size, setSize)}
-              </>
-            )}
-            {input(copy.field.price, price, setPrice, { numeric: true })}
+            <Text style={styles.body}>{copy.photo.hint}</Text>
             <TouchableOpacity
               accessibilityRole="button"
-              accessibilityLabel={correcting ? copy.confirm : copy.check}
-              accessibilityState={{ disabled: busy || !name.trim() }}
-              disabled={busy || !name.trim()}
-              onPress={correcting ? confirm : checkDetails}
-              style={[styles.primary, (busy || !name.trim()) && styles.disabled]}
+              accessibilityLabel={copy.photo.action}
+              accessibilityState={{ disabled: busy }}
+              disabled={busy}
+              onPress={readPhoto}
+              style={[styles.primary, busy && styles.disabled]}
             >
-              <Text style={styles.primaryText}>{busy ? copy.working : correcting ? copy.confirm : copy.check}</Text>
+              <Text style={styles.primaryText}>{busy ? copy.photo.working : copy.photo.action}</Text>
             </TouchableOpacity>
             <Text style={styles.note}>{copy.notInInventory}</Text>
           </View>
         )}
 
-        {!!inspection && state === 'not_enough_information' && !correcting && (
+        {reviewing && inspection && (
           <>
             <Text style={styles.body}>{copy.confirmationRequired}</Text>
             {CARE_CATEGORIES.includes(inspection.candidate.category) ? (
-              <CareCandidateReview
-                inspection={inspection as CareCandidateInspection}
-                onConfirm={confirm}
-                onCorrect={() => setCorrecting(true)}
-              />
+              <CareCandidateReview inspection={inspection as CareCandidateInspection} onConfirm={confirm} />
             ) : (
-              <FragranceCandidateReview
-                inspection={inspection as FragranceCandidateInspection}
-                onConfirm={confirm}
-                onCorrect={() => setCorrecting(true)}
-              />
+              <>
+                <View style={styles.card} testID="fragrance-context-choices">
+                  <Text style={styles.label}>{copy.context.occasions}</Text>
+                  {chips(contextOptions.occasions, occasions, setOccasions)}
+                  <Text style={styles.label}>{copy.context.seasons}</Text>
+                  {chips(contextOptions.seasons, seasons, setSeasons)}
+                </View>
+                <FragranceCandidateReview inspection={inspection as FragranceCandidateInspection} onConfirm={confirm} />
+              </>
             )}
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={copy.photo.another}
+              accessibilityState={{ disabled: busy }}
+              disabled={busy}
+              onPress={readPhoto}
+              style={styles.outline}
+            >
+              <Text style={styles.outlineText}>{copy.photo.another}</Text>
+            </TouchableOpacity>
           </>
         )}
 
         {state === 'unsupported' && <Text style={styles.body}>{copy.unsupported}</Text>}
 
         {state === 'decided' && careCheck && (
-          <CarePurchaseResult check={careCheck} onReset={reset} busy={deciding} onDecide={decide} purchaseMemory={memoryCard} />
+          <CarePurchaseResult check={careCheck} onReset={clearCandidate} busy={deciding} onDecide={decide} purchaseMemory={memoryCard} />
         )}
         {state === 'decided' && fragranceCheck && (
-          <FragranceShoppingResult check={fragranceCheck} onReset={reset} busy={deciding} onDecide={decide} purchaseMemory={memoryCard} />
+          <FragranceShoppingResult check={fragranceCheck} onReset={clearCandidate} busy={deciding} onDecide={decide} purchaseMemory={memoryCard} />
         )}
 
         {!!inspection && state !== 'decided' && (
-          <TouchableOpacity accessibilityRole="button" accessibilityLabel={copy.startOver} onPress={reset}>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel={copy.startOver} onPress={clearCandidate}>
             <Text style={styles.link}>{copy.startOver}</Text>
           </TouchableOpacity>
         )}
@@ -445,9 +363,7 @@ const styles = StyleSheet.create({
   section: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.textPrimary, marginBottom: SPACING.sm },
   body: { fontFamily: FONTS.family.body, fontSize: 13, lineHeight: 19, color: COLORS.textSecondary, marginTop: 4 },
   note: { fontFamily: FONTS.family.body, fontSize: 11, lineHeight: 16, color: COLORS.textMuted, marginTop: SPACING.sm },
-  label: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.textPrimary, marginTop: SPACING.sm },
-  input: { borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.md, paddingHorizontal: 12, paddingVertical: 10, marginTop: 4, fontFamily: FONTS.family.body, fontSize: 14, color: COLORS.textPrimary },
-  multiline: { minHeight: 80, textAlignVertical: 'top' },
+  label: { fontFamily: FONTS.family.bodySemibold, fontSize: 12, color: COLORS.textPrimary, marginTop: SPACING.sm, marginBottom: SPACING.xs },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: SPACING.md },
   chip: { borderRadius: RADIUS.full, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 14, paddingVertical: 9 },
   chipSelected: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
@@ -455,6 +371,8 @@ const styles = StyleSheet.create({
   chipTextSelected: { color: COLORS.white },
   primary: { alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, borderRadius: RADIUS.full, paddingVertical: 13, marginTop: SPACING.md },
   primaryText: { fontFamily: FONTS.family.bodySemibold, fontSize: 14, color: COLORS.white },
+  outline: { alignItems: 'center', justifyContent: 'center', borderRadius: RADIUS.full, paddingVertical: 11, borderWidth: 1, borderColor: COLORS.border, marginTop: SPACING.sm },
+  outlineText: { fontFamily: FONTS.family.bodySemibold, fontSize: 13, color: COLORS.textPrimary },
   disabled: { opacity: 0.6 },
   link: { fontFamily: FONTS.family.bodySemibold, fontSize: 13, color: COLORS.primary, textAlign: 'center', marginTop: SPACING.sm, paddingVertical: SPACING.xs },
 });

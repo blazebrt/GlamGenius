@@ -21,7 +21,7 @@ import axios from 'axios';
 
 import { getInstallationId } from './deviceIdentity';
 import { api } from './api';
-import type { PurchaseOsCheck } from './apiV2';
+import type { ProductVerdictWire, PurchaseOsCheck } from './apiV2';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
@@ -536,6 +536,41 @@ export async function watchProduct(barcode: string, labelVersion: number): Promi
   const headers = await deviceHeaders();
   if (!headers['X-Device-Token']) throw new Error('no device token');
   return (await api.put<ProductWatchState>(watchPath(barcode), { label_version: labelVersion }, { headers })).data;
+}
+
+// --- Product Result -----------------------------------------------------------
+
+/** No stored device credential, so there is no Product Result to ask for. */
+export class NoDeviceCredentialError extends Error {
+  constructor() {
+    super('no device token');
+    this.name = 'NoDeviceCredentialError';
+  }
+}
+
+/**
+ * The Product Result for one barcode, read as this phone.
+ *
+ * The route requires ``X-Device-Token``: pack authority is this device's own
+ * capture, and there is no anonymous, device-less Product Result to fall back
+ * to. So this sends the device already stored and never registers one —
+ * opening a result must not mint an identity, and without one the screen shows
+ * its ordinary failure state instead of a result nobody's device vouched for.
+ *
+ * ``physicalPackContext: false`` is a reference read (a comparable alternative
+ * opened from another result). It only ever removes authority.
+ */
+export async function readDeviceProductVerdict(
+  barcode: string,
+  options: { physicalPackContext?: boolean } = {},
+): Promise<ProductVerdictWire> {
+  const device = await readStoredDevice();
+  if (!device?.token) throw new NoDeviceCredentialError();
+  const query = options.physicalPackContext === false ? '?physical_pack_context=false' : '';
+  return (await api.get<ProductVerdictWire>(
+    `/api/v2/scan/verdict/${encodeURIComponent(barcode)}${query}`,
+    { headers: { 'X-Device-Token': device.token } },
+  )).data;
 }
 
 // --- Purchase context (Step 14) ----------------------------------------------

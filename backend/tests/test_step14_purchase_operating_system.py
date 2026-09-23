@@ -53,6 +53,7 @@ from tests.test_step6a_comparable_alternative import (
 )
 from tests.test_step11c_subject_scoped_decision_memory import _member
 from tests.test_step12c_product_watch import (
+    OTHER_BARCODE,
     _customer,
     _device,
     _force_label_publication,
@@ -849,6 +850,114 @@ async def test_z_a_decision_on_an_older_version_is_never_presented_as_current(
         "decision": "BUY", "label_version": first["label_version"]["version_number"],
         "occurred_at": memory["earlier_version_decision"]["occurred_at"], "applies_to_current_version": False,
     }
+    # A clean, attributed older decision leaves the barcode's history complete.
+    assert memory["history_complete"] is True
+
+
+# ---------------------------------------------------------------------------
+# W/Z. Unattributed history on an *older* version still makes coverage incomplete
+# ---------------------------------------------------------------------------
+async def _ambiguous_decision_on(verdict: dict, account_id, key: str, decision: str = "SKIP") -> None:
+    """A subject-less decision written after the household existed: it belongs to nobody."""
+    version = verdict["label_version"]
+    async with get_sessionmaker()() as session:
+        session.add(ScanDecisionEvent(
+            account_id=account_id, household_subject_id=None, barcode=verdict["barcode"],
+            label_snapshot_id=uuid.UUID(version["id"]), label_version=version["version_number"],
+            content_fingerprint=version["content_fingerprint"], decision=decision, idempotency_key=key,
+        ))
+        await session.commit()
+
+
+async def _two_versions_with_ambiguous_older(app_client, registered_supabase_user, key: str):
+    """Version 1, then a household, then an ambiguous v1 decision, then version 2 in hand."""
+    token, account_id, device = await _customer(app_client, registered_supabase_user)
+    await _pack(app_client, device, token, account_id, "buy")
+    first = await _verdict(app_client, device, token)
+    member = await _member(app_client, token)
+    await _ambiguous_decision_on(first, account_id, key)
+    await _pack(app_client, device, token, account_id, "buy", ingredients_text="rolled oats, wheat")
+    second = await _verdict(app_client, device, token)
+    assert second["label_version"]["version_number"] != first["label_version"]["version_number"]
+    return token, account_id, device, member, second
+
+
+async def test_w_ambiguous_history_on_an_older_version_makes_coverage_incomplete(
+    app_client, db_clean, off_clean, registered_supabase_user, published_rules, no_off_network,  # noqa: F811
+):
+    token, _account_id, device, _member_id, _second = await _two_versions_with_ambiguous_older(
+        app_client, registered_supabase_user, "w-older",
+    )
+    memory = (await _ok_check(app_client, device, token))["memory"]
+    assert memory["current_decision"] is None
+    assert memory["earlier_version_decision"] is None, "an ambiguous row is nobody's, never the holder's"
+    assert memory["history_complete"] is False
+    assert memory["state"] == "history_incomplete"
+
+
+async def test_w_an_exact_current_decision_coexists_with_incomplete_older_history(
+    app_client, db_clean, off_clean, registered_supabase_user, published_rules, no_off_network,  # noqa: F811
+):
+    token, _account_id, device, _member_id, second = await _two_versions_with_ambiguous_older(
+        app_client, registered_supabase_user, "w-older-exact",
+    )
+    await _scan_decide(app_client, token, second, "WAIT", "w-current")
+    memory = (await _ok_check(app_client, device, token))["memory"]
+    assert memory["state"] == "prior_exact_decision"
+    assert memory["current_decision"]["decision"] == "WAIT", "a known exact decision is never hidden"
+    assert memory["history_complete"] is False, "and older history is still reported incomplete"
+    assert memory["earlier_version_decision"] is None, "the ambiguous older row is still not adopted"
+
+
+async def test_w_ambiguous_older_history_is_incomplete_for_a_named_member_too(
+    app_client, db_clean, off_clean, registered_supabase_user, published_rules, no_off_network,  # noqa: F811
+):
+    token, _account_id, device, member, second = await _two_versions_with_ambiguous_older(
+        app_client, registered_supabase_user, "w-older-member",
+    )
+    before = (await _ok_check(app_client, device, token, subject_id=member))["memory"]
+    assert before["current_decision"] is None
+    assert before["earlier_version_decision"] is None
+    assert before["history_complete"] is False
+    assert before["state"] == "history_incomplete"
+    await _scan_decide(app_client, token, second, "BUY", "w-member-current", subject_id=member)
+    after = (await _ok_check(app_client, device, token, subject_id=member))["memory"]
+    assert after["current_decision"]["decision"] == "BUY"
+    assert after["history_complete"] is False
+    assert after["earlier_version_decision"] is None
+
+
+async def test_w_a_pre_household_decision_on_an_older_version_is_the_holders_and_complete(
+    app_client, db_clean, off_clean, registered_supabase_user, published_rules, no_off_network,  # noqa: F811
+):
+    """The other side of the boundary: before any household there was only one person."""
+    token, account_id, device = await _customer(app_client, registered_supabase_user)
+    await _pack(app_client, device, token, account_id, "buy")
+    first = await _verdict(app_client, device, token)
+    await _ambiguous_decision_on(first, account_id, "w-pre-household", decision="BUY")
+    member = await _member(app_client, token)
+    await _pack(app_client, device, token, account_id, "buy", ingredients_text="rolled oats, wheat")
+    mine = (await _ok_check(app_client, device, token))["memory"]
+    assert mine["earlier_version_decision"]["decision"] == "BUY"
+    assert mine["history_complete"] is True
+    theirs = (await _ok_check(app_client, device, token, subject_id=member))["memory"]
+    assert theirs["earlier_version_decision"] is None, "the holder's legacy decision is not the member's"
+    assert theirs["history_complete"] is True
+
+
+async def test_w_barcode_coverage_is_scoped_to_the_barcode_and_the_account(
+    app_client, db_clean, off_clean, registered_supabase_user, published_rules, no_off_network,  # noqa: F811
+):
+    """An ambiguous decision about another product says nothing about this one."""
+    token, account_id, device = await _customer(app_client, registered_supabase_user)
+    await _pack(app_client, device, token, account_id, "buy")
+    await _pack(app_client, device, token, account_id, "buy", barcode=OTHER_BARCODE)
+    await _member(app_client, token)
+    other = await _verdict(app_client, device, token, barcode=OTHER_BARCODE)
+    await _ambiguous_decision_on(other, account_id, "w-other-barcode")
+    memory = (await _ok_check(app_client, device, token))["memory"]
+    assert memory["history_complete"] is True
+    assert memory["state"] == "no_prior_exact_decision"
 
 
 # ---------------------------------------------------------------------------

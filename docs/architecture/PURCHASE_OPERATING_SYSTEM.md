@@ -3,7 +3,7 @@
 > Contract `step-14-v1`. Module `backend/app/domains/purchase/operating_system.py`.
 > Routes `GET /api/v2/scan/verdict/{barcode}/purchase-check` and
 > `GET /api/v2/shopping/candidates/{candidate_id}/purchase-check`.
-> Copy `frontend/src/strings/purchaseOs.ts` (`purchase-os-copy.v1`).
+> Copy `frontend/src/strings/purchaseOs.ts` (`purchase-os-copy.v2`).
 
 ## 1. Mission
 
@@ -33,7 +33,7 @@ is a read model. It stores nothing.
 | Label change | Step 12A `label_change` | Context only. |
 | Regulatory change | Step 12B `regulatory_change` on a governed record | Context only. |
 | Comparable alternative | Step 6A `alternative` (at most one candidate, ODbL attribution) | Context only. |
-| Scan Decision Memory | `product/scan_memory.py` (`step-11c-v1`) | Subject-scoped, exact-version. User outcome only. |
+| Scan Decision Memory | `product/scan_memory.py` (`step-11c-v1`) | Subject-scoped, exact-version, plus barcode-wide completeness (`barcode_history_coverage`). User outcome only. |
 | Exact shelf ownership | Step 10A `InventoryProductLink` via `scan_ownership.status_from_scan` | Context only. |
 | Care verdict | `check_service.resolve_care_purchase_check` (`v3-05.7`) | **Is** the Care decision. |
 | Fragrance verdict | `check_service.resolve_fragrance_check` (`v3-05.9`) | **Is** the Fragrance decision. |
@@ -83,15 +83,14 @@ honestly. Aligning the two is a Step 10A/8J decision, not a Purchase OS one.
 Option, and the Care/Fragrance components existed. *Gaps found:*
 
 1. `shopping-check.tsx` redirects to Scan, so candidate checks had no entry.
-2. **Pre-existing and not fixed here:** since `27f1df4` the Product Result
-   route requires `X-Device-Token` (`current_device`), but the app's
-   `readProductVerdict` (`frontend/src/services/apiV2.ts`) sends no device
-   header. A real Product Result read from the app is therefore refused with
-   `401 DEVICE_UNKNOWN`. The Step 14 client sends the device token correctly;
-   the Product Result client itself needs the same one-line fix
-   (read through the device-scoped client, as `readProductWatch` does). It is
-   reported rather than silently fixed because it changes a pre-existing
-   surface outside Step 14's scope.
+2. **Fixed in Step 14 (review correction):** since `27f1df4` the Product
+   Result route requires `X-Device-Token` (`current_device`), but the app's
+   `readProductVerdict` (`frontend/src/services/apiV2.ts`) sent no device
+   header, so a real Product Result read from the app was refused with
+   `401 DEVICE_UNKNOWN` — before the Step 14 section could ever mount. The
+   uncredentialed reader is removed; the screen now reads through
+   `productScan.readDeviceProductVerdict` (§18). The backend route is
+   unchanged and still requires the device.
 3. The reused Care/Fragrance result components predate the keyed-copy rule
    and still carry inline English. Step 14 reuses them unchanged and adds no
    words to them; its own files are keyed and guarded.
@@ -244,11 +243,35 @@ account is refused rather than read as the device owner.
 person's BUY/WAIT/SKIP and the exact version it was about. It stores no
 historical recommendation, so none is reported and none is reconstructed from
 today's rules (test X); the app never says "you bought this even though
-GlamGenius said Skip". Legacy unattributed history stays
-`history_incomplete` and is never adopted (test W). A decision about an earlier
-label version is reported separately as `earlier_version_decision` with
-`applies_to_current_version: false`, and is never shown as the current
-decision (test Z; frontend test).
+GlamGenius said Skip". A decision about an earlier label version is reported
+separately as `earlier_version_decision` with `applies_to_current_version:
+false`, and is never shown as the current decision (test Z; frontend test).
+
+**Completeness is barcode-wide and its own fact.** Scan memory reports three
+separate things, and never folds one into another:
+
+1. the exact current decision (`read_scan_memory`, this exact label version);
+2. the latest *attributable* decision on another version
+   (`latest_decision_on_another_version`, under `subject_row_filter`);
+3. whether this subject's history for the whole barcode is complete
+   (`scan_memory.barcode_history_coverage`).
+
+An unattributed legacy decision — subject-less and written after the household
+existed — is nobody's (Step 11C). The exact-version read alone cannot see one
+on an *older* version, and the other-version read correctly excludes it, so
+without (3) a history that silently lost it would look complete. The helper
+re-derives the subject, checks `ambiguous_legacy_filter` for the account and
+barcode across every label version, and returns completeness metadata only; the
+ambiguous row is never returned, counted for display or adopted by anyone
+(tests W: older ambiguous row, named member, pre-household legacy row, other
+barcode).
+
+`history_complete` is false whenever either the exact version or the barcode
+has unattributed history. `state` is `prior_exact_decision` when an exact
+current decision exists — a known decision is never hidden — and
+`history_incomplete` only when there is none; the two can coexist, and the app
+shows the incomplete-history line whenever `history_complete` is false, beside
+the exact decision if there is one.
 
 **Candidate memory fidelity: `recommendation_snapshot`.** Candidate Decision
 Memory stored the recommendation at decision time, so it is reported as
@@ -355,7 +378,7 @@ stale. Subject resolution on this path is the read-side `canonical_subject`.
 | `not_enough_information` / `candidate_confirmation_required` | A candidate's facts are still a draft. |
 | `not_enough_information` / `candidate_details_unsupported` | A fragrance candidate's details fail validation. |
 | `physical_pack_required` | Official/ownership context without a proven capture. |
-| `history_incomplete` | Unattributed legacy history exists for this subject. |
+| `history_incomplete` (and `history_complete: false`) | Unattributed legacy history exists for this subject on any version of the barcode; with an exact current decision, `history_complete` is still false. |
 | `prohibited` / `supplement_purchase_prohibited` | Supplements, with the label-utility redirect. |
 | `unsupported` / `unsupported_strategy` | Any category the registry does not route. |
 
@@ -376,14 +399,32 @@ app, a failed purchase check hides the section and never the verdict.
   shows the ceiling's answer and reason so the screen never shows BUY above
   a section explaining why the answer is not BUY. A check is used only when it
   describes the exact barcode, version, fingerprint and view on screen.
+- **Product Result is read as this phone.** `verdictClient.getProductVerdict`
+  calls `productScan.readDeviceProductVerdict`, which sends the stored
+  `X-Device-Token` and keeps `physical_pack_context=false` for reference views.
+  It reads the stored device and never registers one: opening a result must
+  not mint an identity. With no stored credential no request is sent and the
+  screen shows its ordinary failure state; there is no device-less Product
+  Result to fall back to. The Step 14 purchase check uses the same stored
+  device.
 - **Secondary entry.** On the scanner, below "Point at a barcode", signed-in
   people see "Can't scan it? Check a product you're considering", leading to
   `/purchase-candidate`. That screen says scanning first, offers only the
-  registry's categories, and routes on the server's Purchase OS answer: the
-  existing Care or Fragrance result only when decided, the existing review
-  when facts need confirming, the supplement boundary instead of any purchase
-  UI, and a plain refusal for anything unsupported. No search, catalogue or
-  feed. `shopping-check.tsx` stays the pivot-locked redirect.
+  registry's categories, and routes on the server's Purchase OS answer.
+- **No free text (Constitution: structured dropdowns only).** The candidate
+  screen has no `TextInput` and never sends `source: "manual"`; the legacy
+  manual API stays for compatibility but is not exposed here. The flow is:
+  category → photo or screenshot → the extracted facts → **confirm** or **read
+  another photo** → the canonical Care or Fragrance result. A wrong read is
+  answered with another photo, never an editor: the review cards' correction
+  button is not offered. Care is confirmed exactly as read (an empty
+  confirmation body); a Fragrance read keeps every extracted fact and only its
+  structured occasions and seasons, from the server's own options, are set.
+  Provenance stays photo-extracted. No price is typed; Care already handles a
+  missing candidate spend. Supplements get the prohibited boundary instead of
+  any purchase flow. No search, catalogue or feed. `shopping-check.tsx` stays
+  the pivot-locked redirect. Structural tests fail on any `TextInput`, any
+  `manual` source, or any correction path in this screen.
 - **Accessibility.** The dominant block's label carries the decision word, and
   the "why" row reads "Purchase answer: WAIT. An official record matches this
   exact pack." — decision and reason in words, never colour alone.

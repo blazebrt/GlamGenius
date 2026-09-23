@@ -16,10 +16,12 @@
  *   - "Not enough information" is a truth state, never softened into WAIT.
  *   - A decision about an earlier label version is never worded as current.
  *   - Supplements: never buy, wait or skip, and never advice.
+ *   - No free text. The customer picks; they never type. A wrong photo read is
+ *     answered with another photo, never an editor.
  */
 
 /** Bump whenever any sentence below changes, so a screenshot traces to its wording. */
-export const PURCHASE_OS_COPY_VERSION = 'purchase-os-copy.v1';
+export const PURCHASE_OS_COPY_VERSION = 'purchase-os-copy.v2';
 
 /** Interpolation, the same shape as the verdict strings' `t`. */
 export const fill = (template: string, values: Record<string, string | number> = {}): string =>
@@ -88,25 +90,18 @@ export const PURCHASE_OS = {
       perfumes: 'Fragrance',
       supplements: 'Supplement',
     },
-    mode: {
-      details: 'Enter the details',
-      photo: 'Use a photo',
+    photo: {
+      action: 'Use a photo',
+      hint: 'A photo or screenshot of the product or its label.',
+      another: 'Read another photo',
+      working: 'Reading the photo…',
     },
-    field: {
-      name: 'Product name',
-      brand: 'Brand (optional)',
-      productType: 'Product type (optional)',
-      ingredients: 'Ingredients from the label (optional)',
-      size: 'Size (optional)',
-      family: 'Fragrance family (optional)',
-      concentration: 'Concentration (optional)',
-      price: 'Price in rupees (optional)',
+    context: {
+      occasions: 'Where you would use it (optional)',
+      seasons: 'When you would use it (optional)',
     },
-    check: 'Check this product',
-    confirm: 'Confirm these details',
-    working: 'Checking…',
     notInInventory: 'This is a product you are considering. Checking it does not add it to your shelf.',
-    confirmationRequired: 'Confirm the product details first. We only check details you have confirmed.',
+    confirmationRequired: 'Check what we read from the photo. Confirm it, or read another photo if it is wrong.',
     unsupported: 'GlamGenius cannot check this kind of product before you buy it.',
     failed: 'We could not check that just now.',
     retry: 'Try again',
