@@ -51,6 +51,7 @@ import { markDeviceClaimed, tokenToClaimFor } from '../services/productScan';
 import {
   acceptRegistrationFact,
   authAccountId,
+  beginExplicitSignIn,
   beginRegistrationFact,
   currentAuth,
   enterRegistrationFlow,
@@ -59,6 +60,7 @@ import {
   isCurrentAuth,
   isQuarantinedSession,
   openAuthGeneration,
+  predatesExplicitSignIn,
   quarantineSession,
   registrationFactIsCurrent,
   registrationFlowOwns,
@@ -250,12 +252,19 @@ async function writeStoredChallenge(value: string | null): Promise<void> {
  * registration decision are then replaced with the new account's empty
  * skeleton, built from the new account's own identity, and ``resolving``.
  */
-function adoptSession(session: Session): boolean {
+function adoptSession(session: Session, options: { explicit?: boolean } = {}): boolean {
   // Whatever session is adopted now is not the one the app ended: Supabase
   // holds this one instead, or someone signed in on purpose.
   releaseSessionQuarantine();
   const nextId = session.user.id;
   if (nextId === authAccountId()) {
+    const previous = useUserStore.getState().session;
+    if (options.explicit || isNewSessionOfSameAccount(previous, session)) {
+      // The same person, but a new session: work and responses tied to the
+      // one it replaces lose their authority. The profile and registration
+      // state belong to the account and stay as they are.
+      openAuthGeneration(nextId);
+    }
     useUserStore.setState({ session, userId: nextId });
     return false;
   }
@@ -272,6 +281,44 @@ function adoptSession(session: Session): boolean {
 }
 
 /**
+ * Whether ``next`` is a different Supabase session from ``previous`` for the
+ * same account: their ``session_id`` claims differ. A token refresh keeps the
+ * claim, so it is never a new session.
+ *
+ * When either token cannot be read, an automatic event is treated as the same
+ * session. That fails closed: at worst a stale 401 from before could still end
+ * the session, which signs the person out; it never acts across accounts. A
+ * deliberate sign-in does not depend on this (see ``beginExplicitSignIn``).
+ */
+function isNewSessionOfSameAccount(previous: Session | null, next: Session): boolean {
+  const before = sessionKeyOf(previous?.access_token);
+  const after = sessionKeyOf(next.access_token);
+  return before !== null && after !== null && before !== after;
+}
+
+/**
+ * Whether a 401 rejected the session that is current now, and so may end it.
+ *
+ * A 401 rejects the bearer token its request presented, not whatever session
+ * happens to be current when it lands. It speaks for the current session only
+ * if it is the same account and the same Supabase session: equal
+ * ``session_id``, however the token has been refreshed since. When the
+ * session cannot be read on either side, the session epoch decides: the
+ * request must have been made in the current generation.
+ */
+function rejectsCurrentSession(
+  sent: { accountId: string; accessToken: string },
+  ticket: AuthTicket | null,
+): boolean {
+  const current = useUserStore.getState().session;
+  if (!current || current.user.id !== sent.accountId || authAccountId() !== sent.accountId) return false;
+  const sentKey = sessionKeyOf(sent.accessToken);
+  const currentKey = sessionKeyOf(current.access_token);
+  if (sentKey !== null && currentKey !== null) return sentKey === currentKey;
+  return !ticket || ticket.generation === currentAuth().generation;
+}
+
+/**
  * Whether a session Supabase reports is one the app ended itself (an accepted
  * 401, or sign-out) merely continuing: a token refresh, a recovered or initial
  * session, a user update. Such a session is not taken back automatically.
@@ -284,22 +331,16 @@ function isEndedSession(session: Session): boolean {
  * End the session locally, now: quarantine it, then sign out.
  *
  * ``rejected`` is the credential a request was sent with, when a 401 rejected
- * it; otherwise the store's own session is the one ended. Supabase may keep
- * that session while its own sign-out runs, or for good if the sign-out fails.
- * The quarantine means none of its automatic events can sign it back in.
+ * it; otherwise the store's own session is the one ended. A 401 only gets here
+ * when it rejected the current session (``rejectsCurrentSession``), so both
+ * name the same session. Supabase may keep that session while its own
+ * sign-out runs, or for good if the sign-out fails. The quarantine means none
+ * of its automatic events can sign it back in.
  */
 function endSessionLocally(rejected?: { accountId: string; accessToken: string } | null): void {
   const session = useUserStore.getState().session;
   const ended = rejected ?? (session ? { accountId: session.user.id, accessToken: session.access_token } : null);
-  if (ended) {
-    // If the store holds a different session of the same account than the one
-    // rejected, both are ended: the quarantine then covers the account.
-    const differentSession =
-      !!session
-      && session.user.id === ended.accountId
-      && sessionKeyOf(session.access_token) !== sessionKeyOf(ended.accessToken);
-    quarantineSession(ended.accountId, differentSession ? null : ended.accessToken);
-  }
+  if (ended) quarantineSession(ended.accountId, ended.accessToken);
   clearIdentity();
 }
 
@@ -689,6 +730,11 @@ export const useUserStore = create<UserStore>((set, get) => ({
 
   login: async (email, password) => {
     set({ loading: true });
+    // A deliberate sign-in: from here, nothing sent under the session held
+    // until now has any say over the session this sign-in establishes, even
+    // if their tokens cannot be told apart.
+    beginExplicitSignIn();
+    let adopted = false;
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
@@ -700,9 +746,12 @@ export const useUserStore = create<UserStore>((set, get) => ({
       if (!data.session || !data.user) {
         return { ok: false, code: 'unknown', message: 'Sign-in failed.' };
       }
-      // Supabase has usually delivered SIGNED_IN already; this is the same
-      // identity then, and the check it scheduled is joined, not repeated.
-      adoptSession(data.session);
+      // Supabase has usually delivered SIGNED_IN already. Adopting it here, as
+      // an explicit sign-in, still opens its own session epoch, so a response
+      // to a request made under an earlier session of the same account cannot
+      // end this one.
+      adoptSession(data.session, { explicit: true });
+      adopted = true;
       const ticket = currentAuth();
       await reconcileRegistration();
       if (!isCurrentAuth(ticket)) {
@@ -732,6 +781,12 @@ export const useUserStore = create<UserStore>((set, get) => ({
       console.error('login error:', err);
       return { ok: false, code: 'network', message: 'Network error.' };
     } finally {
+      // A sign-in that established nothing leaves whoever was current as they
+      // were. Starting it opened a new generation, which set aside any check
+      // that identity had in flight, so one still undecided gets it again.
+      if (!adopted && authAccountId() !== '' && get().registrationState === 'resolving') {
+        void reconcileRegistration();
+      }
       set({ loading: false });
     }
   },
@@ -811,10 +866,18 @@ setAuthResponseAuthority({
   // signed out, or not at all (see ``requestDispatch``).
   dispatchAs: (stamp, sessionAccountId) =>
     requestDispatch(isAuthTicket(stamp) ? stamp : BEFORE_ANY_DECISION, sessionAccountId),
-  // A 401 ends the session only if it answered a request made in this
-  // generation; an earlier account's 401 must not sign out the current one.
-  acceptsUnauthorized: (stamp) =>
-    !isAuthTicket(stamp) || stamp.generation === currentAuth().generation,
+  // A 401 ends the session only if it rejected the session that is current
+  // now. A request made before a deliberate sign-in began has no say over what
+  // that sign-in established. A request sent with a credential must have been
+  // sent as the current session (see ``rejectsCurrentSession``). Otherwise the
+  // request must belong to the current generation, so an earlier account's or
+  // an earlier session's 401 cannot sign out the current one.
+  acceptsUnauthorized: (stamp, sentAs) => {
+    const ticket = isAuthTicket(stamp) ? stamp : null;
+    if (ticket && predatesExplicitSignIn(ticket)) return false;
+    if (sentAs) return rejectsCurrentSession(sentAs, ticket);
+    return !ticket || ticket.generation === currentAuth().generation;
+  },
   // REGISTRATION_REQUIRED moves someone to the registration screen only if it
   // is about them, is not older than the last registration fact, and no
   // registration flow owned by that same identity is deciding it right now.

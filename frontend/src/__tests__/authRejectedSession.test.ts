@@ -81,7 +81,7 @@ jest.mock('@supabase/supabase-js', () => {
 
 /* eslint-disable import/first */
 import { router } from 'expo-router';
-import { api } from '../services/api';
+import { AccountMismatchError, api } from '../services/api';
 import { signOut as supabaseSignOut } from '../services/supabase';
 import { useUserStore } from '../store/userStore';
 /* eslint-enable import/first */
@@ -99,8 +99,20 @@ const URL = '/api/v2/notifications';
 let supabaseSession: Session | null = null;
 let signOutGate: Deferred<void> | null = null;
 let signOutFails = false;
+let sessionGate: Deferred<void> | null = null;
 
-mockAuth.getSession.mockImplementation(async () => ({ data: { session: supabaseSession }, error: null }));
+mockAuth.getSession.mockImplementation(async () => {
+  const gate = sessionGate;
+  sessionGate = null;
+  if (gate) await gate.promise;
+  return { data: { session: supabaseSession }, error: null };
+});
+
+/** The next ``getSession`` call waits until the returned gate is opened. */
+function pauseNextGetSession(): Deferred<void> {
+  sessionGate = mockDeferred<void>();
+  return sessionGate;
+}
 mockAuth.signOut.mockImplementation(async () => {
   const gate = signOutGate;
   signOutGate = null;
@@ -199,6 +211,7 @@ async function acceptedUnauthorized(): Promise<{ request: Promise<unknown> }> {
 beforeEach(async () => {
   signOutGate = null;
   signOutFails = false;
+  sessionGate = null;
   supabaseSession = null;
   authCallback('SIGNED_OUT', null);
   await settle();
@@ -278,26 +291,38 @@ describe('an account rejected by an accepted 401 is not re-adopted by its own se
     expect(sentTo(ME)).toHaveLength(meBefore);
   });
 
-  it('a 401 for one of A\'s sessions also holds back the other A session the store had moved to', async () => {
-    await signInRegistered(session('account-a', 'session-a1'));
+  it('an old session\'s 401, landing after the same account moved to a new session, leaves the new session signed in', async () => {
+    await signInRegistered(session('account-a', 'session-a1'), 'Alice');
+    const profile = state().user;
     const request = outcome(api.get(URL));
     await settle();
     const sentWithA1 = only(URL);
+    expect(sentWithA1.authorization).toBe(`Bearer ${session('account-a', 'session-a1').access_token}`);
 
-    // The same account signs in again (a new session) before that answer.
-    supabaseEmits('SIGNED_IN', session('account-a', 'session-a2'));
+    // The same account signs in again: a genuinely new Supabase session.
+    const a2 = session('account-a', 'session-a2');
+    supabaseEmits('SIGNED_IN', a2);
     await settle();
-    signOutFails = true;
+    expect(state().session?.access_token).toBe(a2.access_token);
+    (router.replace as jest.Mock).mockClear();
+
+    // The 401 rejects A1's token. It still reaches its caller...
     sentWithA1.answer(401, { detail: { code: 'ACCOUNT_UNAUTHORIZED' } });
     expect(await request).toBeInstanceOf(AxiosError);
     await settle();
-    expect(state()).toMatchObject(SIGNED_OUT);
 
-    for (const sessionId of ['session-a1', 'session-a2']) {
-      supabaseEmits('TOKEN_REFRESHED', session('account-a', sessionId, 'rotated'));
-      await settle();
-      expect(state()).toMatchObject(SIGNED_OUT);
-    }
+    // ...but has no say over A2.
+    expect(mockAuth.signOut).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(state()).toMatchObject({ userId: 'account-a', registrationState: 'registered' });
+    expect(state().session?.access_token).toBe(a2.access_token);
+    expect(state().user).toBe(profile);
+
+    // A2 was not quarantined: its own refresh is adopted as usual.
+    const rotated = session('account-a', 'session-a2', 'rotated');
+    supabaseEmits('TOKEN_REFRESHED', rotated);
+    await settle();
+    expect(state().session?.access_token).toBe(rotated.access_token);
   });
 
   it('a stale 401 for A after B became current leaves B, and B\'s own token refresh, untouched', async () => {
@@ -393,6 +418,220 @@ describe('an account rejected by an accepted 401 is not re-adopted by its own se
     supabaseEmits('SIGNED_IN', session('account-a', 'session-a4'));
     await settle();
     expect(state()).toMatchObject({ userId: 'account-a', registrationState: 'resolving' });
+  });
+});
+
+describe('a new Supabase session for the same account is a new authority', () => {
+  it('an old session\'s REGISTRATION_REQUIRED neither rewrites nor reroutes the new session', async () => {
+    await signInRegistered(session('account-a', 'session-a1'), 'Alice');
+    const request = outcome(api.get(URL));
+    await settle();
+    const sentWithA1 = only(URL);
+
+    supabaseEmits('SIGNED_IN', session('account-a', 'session-a2'));
+    await settle();
+    (router.replace as jest.Mock).mockClear();
+    sentWithA1.answer(403, { detail: { code: 'REGISTRATION_REQUIRED' } });
+    expect(await request).toBeInstanceOf(AxiosError);
+    await settle();
+
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(state()).toMatchObject({ userId: 'account-a', registrationState: 'registered' });
+  });
+
+  it('a /me the old session sent cannot settle the new one; the new session gets its own check', async () => {
+    supabaseEmits('SIGNED_IN', session('account-a', 'session-a1'));
+    await settle();
+    const meA1 = only(ME);
+
+    const a2 = session('account-a', 'session-a2');
+    supabaseEmits('SIGNED_IN', a2);
+    await settle();
+    const meA2 = sentTo(ME).find((request) => !request.answered && request !== meA1);
+    expect(meA2?.authorization).toBe(`Bearer ${a2.access_token}`);
+
+    meA1.answer(403, { detail: { code: 'REGISTRATION_REQUIRED' } });
+    await settle();
+    expect(state()).toMatchObject({ userId: 'account-a', registrationState: 'resolving' });
+
+    meA2!.answer(200, registered('Alice'));
+    await settle();
+    expect(state()).toMatchObject({ userId: 'account-a', registrationState: 'registered' });
+    expect(state().user?.name).toBe('Alice');
+  });
+
+  it('a request begun under the old session is not sent once the new session is authoritative', async () => {
+    await signInRegistered(session('account-a', 'session-a1'));
+
+    const gate = pauseNextGetSession();
+    const request = outcome(api.get(URL));
+    await settle();
+    supabaseEmits('SIGNED_IN', session('account-a', 'session-a2'));
+    gate.resolve();
+    await settle();
+
+    expect(sentTo(URL)).toHaveLength(0);
+    expect(await request).toBeInstanceOf(AccountMismatchError);
+    expect(state()).toMatchObject({ userId: 'account-a', registrationState: 'registered' });
+  });
+
+  it('a same-session token refresh keeps the same authority', async () => {
+    await signInRegistered(session('account-a', 'session-a1'), 'Alice');
+    const profile = state().user;
+    const checksBefore = sentTo(ME).length;
+
+    // One request already sent with the pre-refresh token...
+    const sentEarlier = outcome(api.get(URL));
+    await settle();
+    const withOldToken = only(URL);
+    // ...and one begun before the refresh whose token is read after it.
+    const gate = pauseNextGetSession();
+    const readsAfter = outcome(api.get('/api/v2/public/after-refresh'));
+    await settle();
+
+    const rotated = session('account-a', 'session-a1', 'rotated');
+    supabaseEmits('TOKEN_REFRESHED', rotated);
+    gate.resolve();
+    await settle();
+
+    // Nothing was invalidated: it goes out with the fresh token, the profile is
+    // the same object, and no /me was needed.
+    const fresh = only('/api/v2/public/after-refresh');
+    expect(fresh.authorization).toBe(`Bearer ${rotated.access_token}`);
+    fresh.answer(200, {});
+    expect(await readsAfter).toMatchObject({ status: 200 });
+    expect(state().user).toBe(profile);
+    expect(sentTo(ME)).toHaveLength(checksBefore);
+
+    // And a 401 for the same session, even for its earlier token, still speaks for it.
+    withOldToken.answer(401, { detail: { code: 'ACCOUNT_UNAUTHORIZED' } });
+    expect(await sentEarlier).toBeInstanceOf(AxiosError);
+    await settle();
+    expect(state()).toMatchObject(SIGNED_OUT);
+    expect(mockAuth.signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('a 401 for the current new session still ends it: locally first, quarantined, signed out, routed', async () => {
+    await signInRegistered(session('account-a', 'session-a1'));
+    const a2 = session('account-a', 'session-a2');
+    supabaseEmits('SIGNED_IN', a2);
+    await settle();
+    signOutGate = mockDeferred<void>();
+    const gate = signOutGate;
+
+    const request = outcome(api.get(URL));
+    await settle();
+    const sentWithA2 = only(URL);
+    expect(sentWithA2.authorization).toBe(`Bearer ${a2.access_token}`);
+    sentWithA2.answer(401, { detail: { code: 'ACCOUNT_UNAUTHORIZED' } });
+    await settle();
+
+    // Supabase's sign-out has started and waits; locally it is already over.
+    expect(mockAuth.signOut).toHaveBeenCalledTimes(1);
+    expect(state()).toMatchObject(SIGNED_OUT);
+    // A2 is quarantined: its own refresh cannot bring it back.
+    supabaseEmits('TOKEN_REFRESHED', session('account-a', 'session-a2', 'rotated'));
+    await settle();
+    expect(state()).toMatchObject(SIGNED_OUT);
+
+    gate.resolve();
+    expect(await request).toBeInstanceOf(AxiosError);
+    await settle();
+    expect(router.replace).toHaveBeenCalledWith('/(auth)/welcome');
+  });
+
+  it.each([
+    ['opaque sessions', null, null],
+    ['readable sessions', 'session-a1', 'session-a2'],
+  ])('an explicit re-login is not undone by a 401 for the earlier session answered after it (%s)', async (_kind, oldId, newId) => {
+    await signInRegistered(session('account-a', oldId, 'old'), 'Alice');
+    const request = outcome(api.get(URL));
+    await settle();
+    const sentWithOld = only(URL);
+
+    const fresh = session('account-a', newId, 'relogin');
+    mockAuth.signInWithPassword.mockImplementationOnce(async () => {
+      supabaseEmits('SIGNED_IN', fresh);
+      return { data: { session: fresh, user: fresh.user }, error: null };
+    });
+    const login = state().login('account-a@example.com', 'secret');
+    await settle();
+    only(ME).answer(200, registered('Alice'));
+    await expect(login).resolves.toEqual({ ok: true });
+    expect(state().session?.access_token).toBe(fresh.access_token);
+
+    (router.replace as jest.Mock).mockClear();
+    sentWithOld.answer(401, { detail: { code: 'ACCOUNT_UNAUTHORIZED' } });
+    expect(await request).toBeInstanceOf(AxiosError);
+    await settle();
+
+    expect(mockAuth.signOut).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(state()).toMatchObject({ userId: 'account-a', registrationState: 'registered' });
+    expect(state().session?.access_token).toBe(fresh.access_token);
+  });
+
+  it.each([
+    ['opaque sessions', null, null],
+    ['readable sessions', 'session-a1', 'session-a2'],
+  ])('nor by one answered while that sign-in is still in progress (%s)', async (_kind, oldId, newId) => {
+    await signInRegistered(session('account-a', oldId, 'old'), 'Alice');
+    const request = outcome(api.get(URL));
+    await settle();
+    const sentWithOld = only(URL);
+
+    const fresh = session('account-a', newId, 'relogin');
+    const signInGate = mockDeferred<void>();
+    mockAuth.signInWithPassword.mockImplementationOnce(async () => {
+      await signInGate.promise;
+      supabaseEmits('SIGNED_IN', fresh);
+      return { data: { session: fresh, user: fresh.user }, error: null };
+    });
+    const login = state().login('account-a@example.com', 'secret');
+    await settle();
+
+    // The old request's 401 lands while Supabase is still signing in.
+    sentWithOld.answer(401, { detail: { code: 'ACCOUNT_UNAUTHORIZED' } });
+    expect(await request).toBeInstanceOf(AxiosError);
+    await settle();
+    expect(mockAuth.signOut).not.toHaveBeenCalled();
+
+    signInGate.resolve();
+    await settle();
+    only(ME).answer(200, registered('Alice'));
+    await expect(login).resolves.toEqual({ ok: true });
+    expect(state()).toMatchObject({ userId: 'account-a', registrationState: 'registered' });
+    expect(state().session?.access_token).toBe(fresh.access_token);
+    expect(mockAuth.signOut).not.toHaveBeenCalled();
+  });
+});
+
+describe('a sign-in that establishes nothing', () => {
+  it('leaves the current identity as it was, and an undecided one still gets its check', async () => {
+    supabaseEmits('SIGNED_IN', session('account-a', 'session-a1'));
+    await settle();
+    const meBefore = only(ME);
+
+    mockAuth.signInWithPassword.mockImplementationOnce(async () => ({
+      data: { session: null, user: null },
+      error: { message: 'Invalid login credentials' },
+    }));
+    await expect(state().login('account-a@example.com', 'wrong')).resolves.toMatchObject({
+      ok: false,
+      code: 'invalid_credentials',
+    });
+    await settle();
+
+    // The check that was out when the sign-in began was set aside; a new one went out.
+    const meAfter = sentTo(ME).find((request) => !request.answered && request !== meBefore);
+    expect(meAfter?.authorization).toBe(`Bearer ${session('account-a', 'session-a1').access_token}`);
+    meBefore.answer(200, registered('Stale'));
+    await settle();
+    expect(state()).toMatchObject({ userId: 'account-a', registrationState: 'resolving' });
+    meAfter!.answer(200, registered('Alice'));
+    await settle();
+    expect(state()).toMatchObject({ userId: 'account-a', registrationState: 'registered' });
+    expect(state().user?.name).toBe('Alice');
   });
 });
 

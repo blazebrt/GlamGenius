@@ -21,7 +21,10 @@
  * stamped when it is prepared, and the auth authority (the user store)
  * decides whether a response still speaks for the current identity. A 401 or
  * REGISTRATION_REQUIRED that belonged to an account which has since signed out
- * or been replaced is passed back to its caller and changes nothing else.
+ * or been replaced, or to an earlier session of the same account, is passed
+ * back to its caller and changes nothing else. A 401 is judged by the
+ * credential it rejected (``authSentAs``), not by whoever is current when it
+ * lands.
  *
  * That is the response side. The request side is separate, and it applies to
  * every request, not only account-specific ones. Checking a response afterwards
@@ -97,7 +100,12 @@ export interface AuthResponseAuthority {
    * use belongs to ``sessionAccountId`` (null: no session).
    */
   dispatchAs: (stamp: unknown, sessionAccountId: string | null) => 'session' | 'anonymous' | 'refuse';
-  acceptsUnauthorized: (stamp: unknown) => boolean;
+  /**
+   * Whether a 401 may end the current session. ``sentAs`` is the credential
+   * the request actually presented, when it carried one: a 401 rejects that
+   * credential, not whichever session happens to be current when it lands.
+   */
+  acceptsUnauthorized: (stamp: unknown, sentAs?: SentCredential | null) => boolean;
   acceptsRegistrationRequired: (stamp: unknown) => boolean;
 }
 
@@ -258,14 +266,15 @@ api.interceptors.response.use(
     }
 
     if (status === 401) {
-      if (!sentAnonymously && (!authAuthority || authAuthority.acceptsUnauthorized(stamp))) {
+      const sentAs = error?.config?.authSentAs ?? null;
+      if (!sentAnonymously && (!authAuthority || authAuthority.acceptsUnauthorized(stamp, sentAs))) {
         // Locally first, and synchronously: the session is over the moment
         // this 401 is accepted, and every result still in flight for it is
         // stale from here. The store also quarantines the rejected session, so
         // Supabase's own events cannot bring it back while (or if) the
         // provider sign-out below is slow or fails. That sign-out is best
         // effort; nothing here depends on it succeeding.
-        onUnauthorized?.(error?.config?.authSentAs ?? null);
+        onUnauthorized?.(sentAs);
         await signOut().catch(() => {});
         try {
           router.replace('/(auth)/welcome');

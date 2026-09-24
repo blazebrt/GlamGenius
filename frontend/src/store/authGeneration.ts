@@ -32,6 +32,14 @@
  * out, or not at all. A later token for the same account is fine; any other
  * account's is not.
  *
+ * A new Supabase session is a new authority, even for the same account. A
+ * token refresh keeps the session's ``session_id`` and changes nothing here.
+ * A genuinely new session for the same person (a new sign-in, a link) opens
+ * a new generation. Work and responses tied to the session it replaced can
+ * then no longer act on it. A deliberate sign-in raises a floor as well
+ * (``beginExplicitSignIn``): nothing sent before it began has any say over
+ * what it establishes, even when sessions cannot be told apart.
+ *
  * A session the app has ended itself stays ended (``quarantineSession``).
  * After an accepted 401 or a sign-out, Supabase can keep that session for a
  * while, or for good if its own sign-out fails. Its automatic events (a token
@@ -55,6 +63,8 @@ let generation = 0;
 let accountId = '';
 let factClock = 0;
 let appliedFact = 0;
+/** The generation the latest deliberate sign-in began in. */
+let signInFloor = 0;
 
 /** The identity a registration flow decides. */
 interface FlowOwner {
@@ -105,6 +115,22 @@ export function openAuthGeneration(nextAccountId: string, email?: string | null)
     }
   }
   return currentAuth();
+}
+
+/**
+ * A deliberate sign-in is starting. It opens a new generation for whoever is
+ * current, before Supabase answers, and records it as a floor. Requests and
+ * work that began before it keep no authority over the session it
+ * establishes, however its tokens compare with the old ones.
+ */
+export function beginExplicitSignIn(): void {
+  openAuthGeneration(accountId);
+  signInFloor = generation;
+}
+
+/** Whether ``ticket`` was issued before the latest deliberate sign-in began. */
+export function predatesExplicitSignIn(ticket: AuthTicket): boolean {
+  return ticket.generation < signInFloor;
 }
 
 /** Same generation and same, signed-in account. */
@@ -227,9 +253,10 @@ export type RequestDispatch = 'session' | 'anonymous' | 'refuse';
  * Supabase holds no session).
  *
  * - Began as an account: it goes out only as that same account, and only if
- *   no identity transition has happened since. A refreshed token for the same
- *   account is fine; another account's token, or none, is refused. Nothing is
- *   ever sent anonymously in its place.
+ *   no identity transition has happened since, a new session for the same
+ *   account included. A refreshed token of the same session is fine; another
+ *   account's token, or none, is refused. Nothing is ever sent anonymously in
+ *   its place.
  * - Began signed out: it stays anonymous. Whoever has signed in since, it
  *   does not take their token.
  * - Began before the app had decided who is signed in (generation 0, while
