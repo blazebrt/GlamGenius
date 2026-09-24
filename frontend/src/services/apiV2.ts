@@ -308,12 +308,15 @@ export const withdrawCommunityObservation = async (reportId: string): Promise<Co
  * the device's.
  */
 export const claimScanDevice = async (
-  deviceToken: string
+  deviceToken: string,
+  options: { expectedAccountId?: string } = {}
 ): Promise<{ claimed: boolean; scans_attached: number }> => {
   const response = await api.post<{ claimed: boolean; scans_attached: number }>(
     `${V2}/scan/device/claim`,
     {},
-    { headers: { 'X-Device-Token': deviceToken } }
+    // With ``expectedAccountId`` the claim goes out as that account or not at
+    // all; it can never attach this phone's scans to whoever signed in since.
+    { headers: { 'X-Device-Token': deviceToken }, expectedAccountId: options.expectedAccountId }
   );
   return response.data;
 };

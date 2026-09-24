@@ -14,10 +14,52 @@
  *
  * A plain 403 without ``code === "REGISTRATION_REQUIRED"`` (e.g. an admin-only
  * route) is left to the calling screen to render, exactly as before.
+ *
+ * Both of those change who the app thinks is signed in, so they must only act
+ * on a response about the identity that is signed in now. Every request is
+ * stamped when it is prepared, and the auth authority (the user store)
+ * decides whether a response still speaks for the current identity. A 401 or
+ * REGISTRATION_REQUIRED that belonged to an account which has since signed out
+ * or been replaced is passed back to its caller and changes nothing else.
  */
 import axios from 'axios';
 import { router } from 'expo-router';
-import { getAccessToken, signOut } from './supabase';
+import { getAccessIdentity, getAccessToken, signOut } from './supabase';
+
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /**
+     * Send this request only with this account's token. If the signed-in
+     * account is anyone else, or no one, the request is not sent at all.
+     */
+    expectedAccountId?: string;
+    /** Opaque auth-generation stamp, taken when the request was prepared. */
+    authStamp?: unknown;
+  }
+}
+
+/** Raised, before anything is sent, when an account-bound request finds another account signed in. */
+export class AccountMismatchError extends Error {
+  readonly code = 'ACCOUNT_MISMATCH';
+
+  constructor() {
+    super('The signed-in account changed before this request was sent.');
+    this.name = 'AccountMismatchError';
+  }
+}
+
+/** Decides whether a response may still change the signed-in state. */
+export interface AuthResponseAuthority {
+  stamp: () => unknown;
+  acceptsUnauthorized: (stamp: unknown) => boolean;
+  acceptsRegistrationRequired: (stamp: unknown) => boolean;
+}
+
+let authAuthority: AuthResponseAuthority | null = null;
+
+export const setAuthResponseAuthority = (authority: AuthResponseAuthority | null) => {
+  authAuthority = authority;
+};
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
@@ -30,14 +72,14 @@ if (!BACKEND_URL) {
 
 // Lets the user store clear its own state when the session ends.
 let onUnauthorized: (() => void) | null = null;
-let onRegistrationRequired: (() => void) | null = null;
+let onRegistrationRequired: ((stamp: unknown) => void) | null = null;
 
 export const setUnauthorizedHandler = (handler: (() => void) | null) => {
   onUnauthorized = handler;
 };
 
 export const setRegistrationRequiredHandler = (
-  handler: (() => void) | null
+  handler: ((stamp: unknown) => void) | null
 ) => {
   onRegistrationRequired = handler;
 };
@@ -83,6 +125,18 @@ export const isRegistrationRequired = (err: unknown): boolean => {
 };
 
 api.interceptors.request.use(async (config) => {
+  // Stamped before the token is read. If the identity changes while it is
+  // read, a response is treated as stale; the other way round would let an old
+  // account's 401 sign out the new one.
+  config.authStamp = authAuthority?.stamp();
+  if (config.expectedAccountId !== undefined) {
+    const identity = await getAccessIdentity();
+    if (!identity || identity.userId !== config.expectedAccountId) {
+      throw new AccountMismatchError();
+    }
+    config.headers.Authorization = `Bearer ${identity.token}`;
+    return config;
+  }
   const token = await getAccessToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -95,15 +149,18 @@ api.interceptors.response.use(
   async (error) => {
     const status = error?.response?.status;
     const code = error?.response?.data?.detail?.code;
+    const stamp = error?.config?.authStamp;
 
     // Registration-incomplete: KEEP the Supabase session — the user is
     // authenticated, just not yet a GlamGenius account.
     if (status === 403 && code === 'REGISTRATION_REQUIRED') {
-      onRegistrationRequired?.();
-      try {
-        router.replace('/(auth)/registration-incomplete');
-      } catch {
-        // Router not mounted yet.
+      if (!authAuthority || authAuthority.acceptsRegistrationRequired(stamp)) {
+        onRegistrationRequired?.(stamp);
+        try {
+          router.replace('/(auth)/registration-incomplete');
+        } catch {
+          // Router not mounted yet.
+        }
       }
       return Promise.reject(error);
     }
@@ -115,12 +172,14 @@ api.interceptors.response.use(
     }
 
     if (status === 401) {
-      await signOut().catch(() => {});
-      onUnauthorized?.();
-      try {
-        router.replace('/(auth)/welcome');
-      } catch {
-        // Router not mounted yet.
+      if (!authAuthority || authAuthority.acceptsUnauthorized(stamp)) {
+        await signOut().catch(() => {});
+        onUnauthorized?.();
+        try {
+          router.replace('/(auth)/welcome');
+        } catch {
+          // Router not mounted yet.
+        }
       }
       return Promise.reject(error);
     }

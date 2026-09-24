@@ -64,6 +64,18 @@ export const getAccessToken = async (): Promise<string | null> => {
   return data.session.access_token ?? null;
 };
 
+/**
+ * The current access token together with the account it belongs to, or null
+ * when signed out. For a request that must go out as one particular account
+ * or not at all.
+ */
+export const getAccessIdentity = async (): Promise<{ token: string; userId: string } | null> => {
+  const { data, error } = await supabase.auth.getSession();
+  const session = data?.session;
+  if (error || !session?.access_token || !session.user?.id) return null;
+  return { token: session.access_token, userId: session.user.id };
+};
+
 /** Sign out of Supabase Auth. Local session state is cleared. */
 export const signOut = async (): Promise<void> => {
   await supabase.auth.signOut();

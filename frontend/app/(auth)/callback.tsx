@@ -6,16 +6,19 @@
  * (``detectSessionInUrl`` on web, ``expo-linking`` on native) and dispatched
  * an ``onAuthStateChange`` event by the time we mount, so this screen's job
  * is simply to route the user to the correct next step based on the
- * resolved ``registrationState``:
+ * resolved ``registrationState`` (``src/navigation/authRoutes.ts``):
  *
- *   registered              → /(tabs)/today
+ *   registered              → /scan-product (the product home)
  *   registration_pending    → /(auth)/registration-incomplete
  *   signed_out              → /(auth)/welcome
+ *   resolving               → stay here, "Finishing sign-in…", until the
+ *                             current identity's answer arrives
  */
 import React, { useEffect } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useUserStore } from '../../src/store/userStore';
+import { routeForRegistrationState } from '../../src/navigation/authRoutes';
 import { COLORS, FONTS, SPACING } from '../../src/theme/colors';
 
 export default function AuthCallback() {
@@ -24,13 +27,8 @@ export default function AuthCallback() {
 
   useEffect(() => {
     if (!initialized) return;
-    if (registrationState === 'registered') {
-      router.replace('/(tabs)/today');
-    } else if (registrationState === 'registration_pending') {
-      router.replace('/(auth)/registration-incomplete');
-    } else {
-      router.replace('/(auth)/welcome');
-    }
+    const destination = routeForRegistrationState(registrationState);
+    if (destination) router.replace(destination);
   }, [initialized, registrationState, router]);
 
   return (

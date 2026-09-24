@@ -5,6 +5,10 @@
  * own is **not** enough to enter the product. The store distinguishes:
  *
  *   'signed_out'             — no Supabase session
+ *   'resolving'              — a Supabase session exists, but GlamGenius has
+ *                              not yet answered for this identity. It is not
+ *                              ``registered`` and not ``registration_pending``;
+ *                              screens wait rather than route on it.
  *   'registration_pending'   — Supabase session exists but /api/v2/me says
  *                              REGISTRATION_REQUIRED (typically because the
  *                              user has not presented a reservation challenge
@@ -13,6 +17,12 @@
  *
  * Screens read ``registrationState`` and route accordingly. Screens must
  * never assume that ``session != null`` implies ``registered``.
+ *
+ * Every write of account-derived state goes through the auth generation
+ * (``authGeneration.ts``). A result that arrives after sign-out, after a 401,
+ * or after a different account signed in is discarded whole. The Supabase
+ * auth callback itself only records the identity and schedules the check;
+ * see ``handleAuthStateChange``.
  *
  * The reservation challenge earned by ``/access/reserve`` is held in
  * AsyncStorage under a namespaced key so it survives an app kill between
@@ -25,6 +35,7 @@ import { secureSessionStorage } from '../services/secureSessionStorage';
 import { supabase } from '../services/supabase';
 import {
   isRegistrationRequired,
+  setAuthResponseAuthority,
   setRegistrationRequiredHandler,
   setUnauthorizedHandler,
 } from '../services/api';
@@ -34,23 +45,44 @@ import {
   reserveInvite,
   getMe,
   patchAppearanceProfile,
+  type MeResponse,
 } from '../services/apiV2';
 import { markDeviceClaimed, tokenToClaimFor } from '../services/productScan';
+import {
+  acceptRegistrationFact,
+  authAccountId,
+  beginRegistrationFact,
+  currentAuth,
+  enterRegistrationFlow,
+  isAuthTicket,
+  isCurrentAuth,
+  openAuthGeneration,
+  registrationFactIsCurrent,
+  registrationFlowActive,
+  type AuthTicket,
+} from './authGeneration';
 
 const CHALLENGE_STORAGE_KEY = '@glamgenius/registration_challenge_v2';
 
 /**
- * Hand this phone's earlier scans to the account that has just signed in.
+ * Hand this phone's earlier scans to the account whose registration was just
+ * accepted, and to no other.
+ *
+ * It starts only from an accepted, current result, and it checks the ticket
+ * again before each step. The claim request itself is bound to the account
+ * (``expectedAccountId``), so it is sent as that account or not at all.
  *
  * Deliberately silent on failure: someone signing in should not be stopped
  * because a scan could not be re-filed. It is retried on the next sign-in.
  */
-async function claimScanDeviceForAccount(accountId: string): Promise<void> {
-  if (!accountId) return;
+async function claimScanDeviceForAccount(ticket: AuthTicket): Promise<void> {
+  const accountId = ticket.accountId;
+  if (!accountId || !isCurrentAuth(ticket)) return;
   try {
     const token = await tokenToClaimFor(accountId);
-    if (!token) return;
-    await claimScanDevice(token);
+    if (!token || !isCurrentAuth(ticket)) return;
+    await claimScanDevice(token, { expectedAccountId: accountId });
+    // The server attached the scans to ``accountId``; record exactly that.
     await markDeviceClaimed(accountId);
   } catch {
     // Best effort.
@@ -59,6 +91,7 @@ async function claimScanDeviceForAccount(accountId: string): Promise<void> {
 
 export type RegistrationState =
   | 'signed_out'
+  | 'resolving'
   | 'registration_pending'
   | 'registered';
 
@@ -195,6 +228,181 @@ async function writeStoredChallenge(value: string | null): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Identity and registration authority
+// ---------------------------------------------------------------------------
+
+/**
+ * Make the store describe ``session``'s account, synchronously. Returns true
+ * when that is a different identity from the one the store held.
+ *
+ * The same account (a rotated token, a repeated event) keeps everything it
+ * had: a token refresh is not a new person. A different account opens a new
+ * auth generation first, so work still in flight for the previous account can
+ * no longer write. The previous account's profile, admin flag and
+ * registration decision are then replaced with the new account's empty
+ * skeleton, built from the new account's own identity, and ``resolving``.
+ */
+function adoptSession(session: Session): boolean {
+  const nextId = session.user.id;
+  if (nextId === authAccountId()) {
+    useUserStore.setState({ session, userId: nextId });
+    return false;
+  }
+  openAuthGeneration(nextId);
+  useUserStore.setState({
+    session,
+    userId: nextId,
+    user: emptyProfile(nextId, session.user.email ?? undefined),
+    isAdmin: false,
+    registrationState: 'resolving',
+  });
+  return true;
+}
+
+/** Signed out, now. Every ticket issued before this call is stale. */
+function clearIdentity(): void {
+  openAuthGeneration('');
+  useUserStore.setState({
+    session: null,
+    user: null,
+    userId: '',
+    registrationState: 'signed_out',
+    isAdmin: false,
+  });
+}
+
+/** Apply an accepted ``/me`` answer to the account in ``ticket``, and only that one. */
+function applyMe(ticket: AuthTicket, res: MeResponse): void {
+  const me = res.profile;
+  // From the server, which is the only thing that decides it. This flag
+  // is a routing convenience so an operator can reach the admin screens;
+  // every admin endpoint still checks the caller itself, so a client that
+  // lied about this would get nothing but 403s.
+  const isAdmin = res.account?.is_admin === true;
+  if (me && typeof me === 'object') {
+    useUserStore.setState({
+      // The initiating account, never whoever happens to be current by now.
+      user: { ...emptyProfile(ticket.accountId), ...me },
+      registrationState: 'registered',
+      isAdmin,
+    });
+  } else {
+    useUserStore.setState({ registrationState: 'registered', isAdmin });
+  }
+}
+
+/** One ``/me`` check for ``ticket``'s account; its answer lands only if it is still current. */
+async function resolveRegistration(ticket: AuthTicket): Promise<void> {
+  let res: MeResponse;
+  try {
+    res = await getMe();
+  } catch (err) {
+    if (isRegistrationRequired(err)) {
+      if (acceptRegistrationFact(ticket)) {
+        useUserStore.setState({ registrationState: 'registration_pending', isAdmin: false });
+      }
+    } else if (isCurrentAuth(ticket)) {
+      // Not an answer: stay ``resolving`` rather than guess either way.
+      console.warn('hydrate registration error', err instanceof Error ? err.message : 'unknown');
+    }
+    return;
+  }
+  // Stale: this account signed out or was replaced while the request was out,
+  // or a later registration fact already landed. Discard it whole.
+  if (!acceptRegistrationFact(ticket)) return;
+  applyMe(ticket, res);
+  // The phone may have been scanning before anyone signed in. Those scans
+  // belong to this person now. Best-effort: a failure here must never stop
+  // someone signing in.
+  void claimScanDeviceForAccount(ticket);
+}
+
+let inflightReconciliation: { generation: number; promise: Promise<void> } | null = null;
+
+/**
+ * The single registration reconciliation for the current identity.
+ *
+ * Callers that ask while a check for the same generation is already out join
+ * it instead of sending another ``/me``. A new generation always starts fresh;
+ * the old check's answer is discarded when it arrives.
+ */
+function reconcileRegistration(): Promise<void> {
+  const ticket = currentAuth();
+  if (!ticket.accountId) return Promise.resolve();
+  if (inflightReconciliation && inflightReconciliation.generation === ticket.generation) {
+    return inflightReconciliation.promise;
+  }
+  const fact = beginRegistrationFact(ticket);
+  const promise: Promise<void> = resolveRegistration(fact).finally(() => {
+    if (inflightReconciliation?.promise === promise) inflightReconciliation = null;
+  });
+  inflightReconciliation = { generation: ticket.generation, promise };
+  return promise;
+}
+
+let scheduledGeneration: number | null = null;
+
+/**
+ * Run the reconciliation after the Supabase auth callback has returned.
+ *
+ * Supabase invokes its subscribers while holding its auth lock, and awaits
+ * them. ``/me`` goes through the API client, whose request interceptor calls
+ * ``supabase.auth.getSession()``, which waits for that same lock. Awaited
+ * from inside the callback, the refresh would wait for the callback and the
+ * callback for the refresh. A macrotask starts only after the callback has
+ * returned, so the check waits for the lock like any other caller instead.
+ *
+ * One timer per generation. By the time it fires the ticket may be stale (a
+ * later event superseded it) or a registration flow may be deciding the
+ * account itself; in both cases it does nothing.
+ */
+function scheduleReconciliation(ticket: AuthTicket): void {
+  if (scheduledGeneration === ticket.generation) return;
+  scheduledGeneration = ticket.generation;
+  setTimeout(() => {
+    if (scheduledGeneration === ticket.generation) scheduledGeneration = null;
+    if (!isCurrentAuth(ticket) || registrationFlowActive()) return;
+    void reconcileRegistration();
+  }, 0);
+}
+
+/**
+ * Once no registration flow is running, an identity still ``resolving`` gets
+ * its ordinary check. This is what happens after a registration that failed
+ * part-way.
+ */
+function reconcileIfUnresolved(): void {
+  if (registrationFlowActive()) return;
+  if (useUserStore.getState().registrationState !== 'resolving') return;
+  void reconcileRegistration();
+}
+
+/**
+ * The Supabase ``onAuthStateChange`` subscriber.
+ *
+ * Deliberately synchronous, and it returns without touching the network.
+ * Supabase awaits its subscribers while holding the auth lock (see
+ * ``scheduleReconciliation``). So this may only record the identity it was
+ * given, invalidate older work and schedule the check for later. It must
+ * never call ``/me``, the API client, ``getAccessToken()``,
+ * ``supabase.auth.getSession()`` or the device claim, directly or through an
+ * async function's synchronous prefix.
+ */
+export function handleAuthStateChange(_event: AuthChangeEvent, session: Session | null): void {
+  if (!session) {
+    if (authAccountId() !== '' || useUserStore.getState().session) clearIdentity();
+    return;
+  }
+  const changed = adoptSession(session);
+  // A new identity, or one whose registration is still undecided, needs the
+  // check. A token refresh for a settled account does not: it is the same
+  // person, and nothing about them has changed.
+  if (changed || useUserStore.getState().registrationState === 'resolving') {
+    scheduleReconciliation(currentAuth());
+  }
+}
+
 export const useUserStore = create<UserStore>((set, get) => ({
   session: null,
   user: null,
@@ -206,27 +414,26 @@ export const useUserStore = create<UserStore>((set, get) => ({
   isAdmin: false,
 
   initializeUser: async () => {
+    const started = currentAuth();
     try {
       const { data } = await supabase.auth.getSession();
       const session = data.session;
       const stored = await readStoredChallenge();
       set({ pendingChallenge: stored });
 
-      if (!session) {
-        set({
-          session: null,
-          user: null,
-          userId: '',
-          registrationState: 'signed_out',
-        });
+      if (currentAuth().generation !== started.generation) {
+        // An auth event decided the identity while this was reading storage,
+        // and it is newer than what was read here. Only finish its check.
+        await reconcileRegistration();
         return;
       }
-      set({
-        session,
-        userId: session.user.id,
-        user: emptyProfile(session.user.id, session.user.email ?? undefined),
-      });
-      await get().hydrateRegistration();
+      if (!session) {
+        if (authAccountId() !== '') clearIdentity();
+        else set({ session: null, user: null, userId: '', registrationState: 'signed_out' });
+        return;
+      }
+      adoptSession(session);
+      await reconcileRegistration();
     } catch (error) {
        
       console.error('Error initializing user:', error);
@@ -236,52 +443,20 @@ export const useUserStore = create<UserStore>((set, get) => ({
   },
 
   hydrateRegistration: async () => {
-    try {
-      const res = await getMe();
-      const me = res.profile;
-      // From the server, which is the only thing that decides it. This flag
-      // is a routing convenience so an operator can reach the admin screens;
-      // every admin endpoint still checks the caller itself, so a client that
-      // lied about this would get nothing but 403s.
-      const isAdmin = res.account?.is_admin === true;
-      if (me && typeof me === 'object') {
-        set({
-          user: { ...emptyProfile(get().userId), ...me },
-          registrationState: 'registered',
-          isAdmin,
-        });
-      } else {
-        set({ registrationState: 'registered', isAdmin });
-      }
-      // The phone may have been scanning before anyone signed in. Those scans
-      // belong to this person now. Best-effort: a failure here must never stop
-      // someone signing in.
-      void claimScanDeviceForAccount(get().userId);
-    } catch (err) {
-      if (isRegistrationRequired(err)) {
-        set({ registrationState: 'registration_pending', isAdmin: false });
-      } else {
-         
-        console.warn('hydrate registration error', err);
-      }
-    }
+    await reconcileRegistration();
   },
 
   fetchUser: async () => {
-    if (!get().userId) return;
+    const ticket = currentAuth();
+    if (!ticket.accountId) return;
     set({ loading: true });
+    const fact = beginRegistrationFact(ticket);
     try {
       const res = await getMe();
-      const me = res.profile;
-      if (me) {
-        set({
-          user: { ...emptyProfile(get().userId), ...me },
-          registrationState: 'registered',
-        });
-      }
+      if (acceptRegistrationFact(fact)) applyMe(fact, res);
     } catch (err) {
-      if (isRegistrationRequired(err)) {
-        set({ registrationState: 'registration_pending' });
+      if (isRegistrationRequired(err) && acceptRegistrationFact(fact)) {
+        set({ registrationState: 'registration_pending', isAdmin: false });
       }
     } finally {
       set({ loading: false });
@@ -290,6 +465,9 @@ export const useUserStore = create<UserStore>((set, get) => ({
 
   reserveAndRegister: async (name, email, password, inviteCode) => {
     set({ loading: true });
+    // From before the Supabase sign-up: its SIGNED_IN event must not start a
+    // competing check while this flow finalises the account.
+    const leaveFlow = enterRegistrationFlow();
     try {
       // Step 1: reserve the invite BEFORE creating a Supabase identity.
       try {
@@ -337,59 +515,78 @@ export const useUserStore = create<UserStore>((set, get) => ({
 
       // Step 3: finalise. Since Supabase returned a session immediately we
       // can call ``/access/register`` right now.
-      set({
-        session: data.session,
-        userId: data.user.id,
-        user: emptyProfile(data.user.id, data.user.email ?? undefined),
-      });
+      adoptSession(data.session);
       return await get().finishPendingRegistration();
     } catch (err) {
        
       console.error('reserveAndRegister error:', err);
       return { ok: false, code: 'network', message: 'Network error.' };
     } finally {
+      leaveFlow();
+      reconcileIfUnresolved();
       set({ loading: false });
     }
   },
 
   finishPendingRegistration: async () => {
-    const challenge =
-      get().pendingChallenge ?? (await readStoredChallenge());
-    if (!challenge) {
-      return {
-        ok: false,
-        code: 'invite_required',
-        message:
-          'Your invite reservation has been lost. Please start again from the sign-up screen.',
-      };
-    }
+    const leaveFlow = enterRegistrationFlow();
     try {
-      // Called for its effect: the account row is created server-side. The
-      // response body carries nothing this screen needs, but a failure must
-      // still reach the catch below, so the await stays.
-      await finalizeRegistration(challenge);
-      await writeStoredChallenge(null);
-      set({ pendingChallenge: null, registrationState: 'registered' });
-      await get().fetchUser();
-      return { ok: true };
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      const code = detail?.code as string | undefined;
-      if (code === 'reservation_expired' || code === 'reservation_invalid') {
-        await writeStoredChallenge(null);
-        set({ pendingChallenge: null });
+      const started = currentAuth();
+      const challenge =
+        get().pendingChallenge ?? (await readStoredChallenge());
+      if (!challenge) {
         return {
           ok: false,
-          code: 'reservation_expired',
+          code: 'invite_required',
           message:
-            'Your invite reservation has expired. Please start again with your invite code.',
+            'Your invite reservation has been lost. Please start again from the sign-up screen.',
         };
       }
-      return {
-        ok: false,
-        code: 'unknown',
-        message: detail?.message ?? 'Could not finish registration.',
-      };
+      try {
+        // Called for its effect: the account row is created server-side. The
+        // response body carries nothing this screen needs, but a failure must
+        // still reach the catch below, so the await stays.
+        await finalizeRegistration(challenge);
+        await writeStoredChallenge(null);
+        // Taken after finalisation completed, so it is newer than any request
+        // that started before the account existed, including a REGISTRATION_REQUIRED
+        // still on its way back.
+        const fact = beginRegistrationFact(started);
+        if (currentAuth().generation !== started.generation) {
+          // The identity changed while the account was being created. Nothing
+          // about that account may land on whoever is signed in now, and the
+          // caller must not take this person to onboarding.
+          set({ pendingChallenge: null });
+          return { ok: false, code: 'unknown' };
+        }
+        // The newest registration fact for this identity, so an older
+        // REGISTRATION_REQUIRED can no longer overwrite it.
+        acceptRegistrationFact(fact);
+        set({ pendingChallenge: null, registrationState: 'registered' });
+        await get().fetchUser();
+        return { ok: true };
+      } catch (err: any) {
+        const detail = err?.response?.data?.detail;
+        const code = detail?.code as string | undefined;
+        if (code === 'reservation_expired' || code === 'reservation_invalid') {
+          await writeStoredChallenge(null);
+          set({ pendingChallenge: null });
+          return {
+            ok: false,
+            code: 'reservation_expired',
+            message:
+              'Your invite reservation has expired. Please start again with your invite code.',
+          };
+        }
+        return {
+          ok: false,
+          code: 'unknown',
+          message: detail?.message ?? 'Could not finish registration.',
+        };
+      }
+    } finally {
+      leaveFlow();
+      reconcileIfUnresolved();
     }
   },
 
@@ -406,17 +603,25 @@ export const useUserStore = create<UserStore>((set, get) => ({
       if (!data.session || !data.user) {
         return { ok: false, code: 'unknown', message: 'Sign-in failed.' };
       }
-      set({
-        session: data.session,
-        userId: data.user.id,
-        user: emptyProfile(data.user.id, data.user.email ?? undefined),
-      });
-      await get().hydrateRegistration();
+      // Supabase has usually delivered SIGNED_IN already; this is the same
+      // identity then, and the check it scheduled is joined, not repeated.
+      adoptSession(data.session);
+      const ticket = currentAuth();
+      await reconcileRegistration();
+      if (!isCurrentAuth(ticket)) {
+        // Signed out, or replaced by another account, while this was checking.
+        return { ok: false, code: 'unknown', message: 'Sign-in failed.' };
+      }
+      const state = get().registrationState;
+      if (state === 'resolving') {
+        // The check did not get an answer; this is not a registration verdict.
+        return { ok: false, code: 'network', message: 'Network error.' };
+      }
       // If the account still isn't registered (rare — a former user who
       // signed up without finishing invite redemption), stay on the
       // registration-pending track. The interceptor already routed the
       // 403 REGISTRATION_REQUIRED response to the correct screen.
-      if (get().registrationState !== 'registered') {
+      if (state !== 'registered') {
         return {
           ok: false,
           code: 'invite_required',
@@ -435,7 +640,8 @@ export const useUserStore = create<UserStore>((set, get) => ({
   },
 
   updateUser: async (data) => {
-    if (!get().userId) return;
+    const ticket = currentAuth();
+    if (!ticket.accountId) return;
     set({ loading: true });
     try {
       const attributes = Object.entries(data).map(([key, value]) => ({
@@ -443,11 +649,8 @@ export const useUserStore = create<UserStore>((set, get) => ({
         value: value as string | number | string[],
       }));
       await patchAppearanceProfile(attributes);
-      // We might need to map it back to user profile
-      // But the previous code just did: const updated = res.data?.profile ?? res.data;
-      // Wait, let's keep the user object updated optimistically, or fetchUser.
-      // AppearanceProfile doesn't strictly match UserProfile, but we can call fetchUser
-      await get().fetchUser();
+      // The refreshed profile is only for the account that made the change.
+      if (isCurrentAuth(ticket)) await get().fetchUser();
     } catch (err) {
        
       console.error('updateUser error:', err);
@@ -462,6 +665,9 @@ export const useUserStore = create<UserStore>((set, get) => ({
   },
 
   logout: async () => {
+    // First, synchronously: every request still out for this account is stale
+    // from here, so none of them can put it back.
+    clearIdentity();
     try {
       await supabase.auth.signOut();
     } catch (err) {
@@ -469,54 +675,37 @@ export const useUserStore = create<UserStore>((set, get) => ({
       console.error('signOut error:', err);
     }
     await writeStoredChallenge(null);
-    set({
-      session: null,
-      user: null,
-      userId: '',
-      pendingChallenge: null,
-      registrationState: 'signed_out',
-      isAdmin: false,
-    });
+    set({ pendingChallenge: null });
   },
 }));
 
-// Sync Zustand with Supabase's own session change events.
-supabase.auth.onAuthStateChange(async (_event: AuthChangeEvent, session) => {
-  if (session) {
-    useUserStore.setState({
-      session,
-      userId: session.user.id,
-      user:
-        useUserStore.getState().user ??
-        emptyProfile(session.user.id, session.user.email ?? undefined),
-    });
-    // Freshly-confirmed email flow: SIGNED_IN fires when Supabase completes
-    // email confirmation. Re-hydrate so we discover ``registered`` vs
-    // ``registration_pending``.
-    await useUserStore.getState().hydrateRegistration();
-  } else {
-    useUserStore.setState({
-      session: null,
-      user: null,
-      userId: '',
-      registrationState: 'signed_out',
-      isAdmin: false,
-    });
-  }
-});
+// Sync Zustand with Supabase's own session change events. The subscriber is
+// synchronous by design; see ``handleAuthStateChange``.
+supabase.auth.onAuthStateChange(handleAuthStateChange);
 
 setUnauthorizedHandler(() => {
-  useUserStore.setState({
-    session: null,
-    user: null,
-    userId: '',
-    registrationState: 'signed_out',
-    pendingChallenge: null,
-    isAdmin: false,
-  });
+  // The same authority as sign-out: a ``/me`` still in flight cannot restore
+  // the session after this.
+  clearIdentity();
+  useUserStore.setState({ pendingChallenge: null });
   void writeStoredChallenge(null);
 });
 
-setRegistrationRequiredHandler(() => {
-  useUserStore.setState({ registrationState: 'registration_pending' });
+setRegistrationRequiredHandler((stamp) => {
+  const ticket = isAuthTicket(stamp) ? stamp : currentAuth();
+  if (!acceptRegistrationFact(ticket)) return;
+  useUserStore.setState({ registrationState: 'registration_pending', isAdmin: false });
+});
+
+setAuthResponseAuthority({
+  stamp: () => currentAuth(),
+  // A 401 ends the session only if it answered a request made in this
+  // generation; an earlier account's 401 must not sign out the current one.
+  acceptsUnauthorized: (stamp) =>
+    !isAuthTicket(stamp) || stamp.generation === currentAuth().generation,
+  // REGISTRATION_REQUIRED moves someone to the registration screen only if it
+  // is about them, is not older than the last registration fact, and no
+  // registration flow is deciding the account right now.
+  acceptsRegistrationRequired: (stamp) =>
+    !registrationFlowActive() && (!isAuthTicket(stamp) || registrationFactIsCurrent(stamp)),
 });

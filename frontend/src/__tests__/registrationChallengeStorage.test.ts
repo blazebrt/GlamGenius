@@ -74,6 +74,7 @@ jest.mock('../services/api', () => ({
   isRegistrationRequired: jest.fn(() => false),
   setRegistrationRequiredHandler: jest.fn(),
   setUnauthorizedHandler: jest.fn(),
+  setAuthResponseAuthority: jest.fn(),
 }));
 
 jest.mock('../services/supabase', () => ({
