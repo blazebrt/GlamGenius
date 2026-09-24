@@ -13,7 +13,10 @@ Guarantees the worker enforces
    database stage removes anything, because a request that was already in
    flight when deletion was asked for can still write an object after the
    first purge. If the second proof cannot be made, the job retries and
-   neither the account row nor the Auth identity is touched.
+   neither the account row nor the Auth identity is touched. Each proof also
+   covers the account's legacy label-report photos, which were written
+   outside its prefix: they are erased and proven absent while the report
+   rows that name them still exist (:func:`_erase_external_report_photos`).
 2. The Supabase Auth identity is deleted **last**. Removing it before
    storage would leave orphan personal bytes with no owning identity.
 3. Every stage is idempotent. A crash between stages resumes at the same
@@ -35,14 +38,19 @@ Guarantees the worker enforces
    account FOR SHARE from immediately before its ``storage.put`` until its
    transaction ends, and those two modes conflict. Every object therefore
    either predates the job, and the purges remove it, or is never written.
+   A label-error report filed from a device the account claimed takes the
+   same FOR SHARE hold before it writes its photo, so the same holds for it.
 
 Lock order
 ----------
 There are two roots, and neither kind of holder waits on the other's root:
 
-* **Account first.** ``request_deletion`` (FOR NO KEY UPDATE) and a media
-  upload (FOR SHARE) lock the accounts row before anything else. While
-  holding it they never wait on a job row. ``request_deletion`` reads the job
+* **Account first.** ``request_deletion`` (FOR NO KEY UPDATE), a media
+  upload (FOR SHARE) and a claimed device's label-error report (FOR SHARE)
+  lock the accounts row before any other row lock. While holding it they
+  never wait on a job row. A report takes its own idempotency advisory lock
+  just before; nothing else takes that lock, and its holder waits on at most
+  the account row, so it adds no edge that could close a cycle. ``request_deletion`` reads the job
   without a lock and inserts one only when none exists, and only a holder of
   that same account lock can insert one.
 * **Job first.** :func:`cancel_deletion` (job FOR UPDATE, then the account
@@ -80,6 +88,7 @@ from app.domains.media.storage.base import (
     StorageTimeout,
     StorageUnauthorized,
     StorageUnavailable,
+    account_prefix,
 )
 from app.domains.privacy.models import (
     DESTRUCTIVE_STATES,
@@ -327,6 +336,14 @@ async def run_job(session: AsyncSession, job: AccountDeletionJob) -> tuple[str, 
                 )
                 _schedule_retry(job, code="storage_incomplete", stage="storage_deleting")
                 return job.state, "storage_incomplete"
+            unresolved = await _erase_external_report_photos(session, job.account_id)
+            if unresolved:
+                logger.warning(
+                    "account_deletion_report_photos_incomplete account=%s remaining=%d",
+                    job.account_id, unresolved,
+                )
+                _schedule_retry(job, code="storage_incomplete", stage="storage_deleting")
+                return job.state, "storage_incomplete"
             job.state = STATE_STORAGE_COMPLETE
             await session.flush()
 
@@ -358,6 +375,18 @@ async def run_job(session: AsyncSession, job: AccountDeletionJob) -> tuple[str, 
                 logger.warning(
                     "account_deletion_final_storage_incomplete account=%s remaining=%d",
                     job.account_id, len(remaining),
+                )
+                _schedule_retry(job, code="storage_incomplete", stage=STATE_DATABASE_DELETING)
+                return job.state, "storage_incomplete"
+            # The other half of the same proof: this account's report evidence
+            # that lives outside its prefix, erased and proven absent while the
+            # report rows that name it still exist. The cascade below removes
+            # those rows, after which the objects could no longer be found.
+            unresolved = await _erase_external_report_photos(session, job.account_id)
+            if unresolved:
+                logger.warning(
+                    "account_deletion_final_report_photos_incomplete account=%s remaining=%d",
+                    job.account_id, unresolved,
                 )
                 _schedule_retry(job, code="storage_incomplete", stage=STATE_DATABASE_DELETING)
                 return job.state, "storage_incomplete"
@@ -443,6 +472,75 @@ def _schedule_retry(job: AccountDeletionJob, *, code: str, stage: str) -> None:
     )
     job.state = STATE_FAILED_RETRYABLE
     job.next_retry_at = utcnow() + timedelta(seconds=backoff)
+
+
+async def _erase_external_report_photos(session: AsyncSession, account_id: uuid.UUID) -> int:
+    """Erase this account's report photos that live outside its storage prefix.
+
+    A label-error report filed from a device the account had claimed carries
+    ``account_id`` and cascades away with the account row. New reports keep
+    their photo under the account's own prefix, which the purges already
+    cover. Reports filed before that change named a global object,
+    ``label-reports/{client_report_id}.jpg``, which no prefix purge reaches, so
+    the row would disappear and the photograph would stay.
+
+    Every such key is deleted and proven absent (:func:`media_service.erase_object`)
+    while the rows that name it still exist, because after the cascade nothing
+    could find it again.
+
+    **A key other reports also name.** The old keys were built from a
+    phone-chosen id, so two different reports — this account's and somebody
+    else's — can name one object, whose bytes are whichever upload came last.
+    Nobody can say whose photograph it is. Privacy wins over ambiguous
+    evidence: the object is erased, never copied into anybody's namespace, and
+    every row that named it, this account's and anybody else's, has its
+    ``photo_key`` cleared. The other report keeps everything else it said; it
+    just stops claiming a photograph that no longer exists. No row is left
+    pointing at a key this function removed.
+
+    **Only a plain legacy key is erased automatically.** The old keys embedded
+    the caller's ``client_report_id`` verbatim, so a row can name something
+    like ``label-reports/../media/<another account>/…``. Deleting that exact
+    key could reach into somebody else's namespace. A key that is not a plain
+    path under the legacy namespace — a ``..`` or empty segment, a backslash,
+    or any other root — is never touched: it counts as unresolved, so the job
+    fails closed and a person looks at it rather than a worker guessing.
+
+    Returns how many keys are still unresolved: readable after their delete, or
+    refused as unsafe. The caller fails closed on anything but zero, and every
+    storage error propagates into the worker's retry. Idempotent: a key whose
+    rows were already cleared is not found again.
+    """
+    from app.domains.product.models import LabelErrorReport
+    from app.domains.product.service import LEGACY_LABEL_REPORT_PREFIX
+
+    own_prefix = f"{account_prefix(account_id)}/"
+    keys = (await session.execute(
+        select(LabelErrorReport.photo_key)
+        .where(LabelErrorReport.account_id == account_id, LabelErrorReport.photo_key.is_not(None))
+        .distinct()
+    )).scalars().all()
+    remaining = 0
+    for key in sorted(k for k in keys if not k.startswith(own_prefix)):
+        if not _is_plain_legacy_report_key(key, LEGACY_LABEL_REPORT_PREFIX):
+            logger.error("account_deletion_report_photo_key_unsafe account=%s", account_id)
+            remaining += 1
+            continue
+        if not await media_service.erase_object(key):
+            remaining += 1
+            continue
+        await session.execute(
+            update(LabelErrorReport).where(LabelErrorReport.photo_key == key).values(photo_key=None)
+        )
+    await session.flush()
+    return remaining
+
+
+def _is_plain_legacy_report_key(key: str, prefix: str) -> bool:
+    """A key under the legacy report namespace with no way out of it."""
+    if not key.startswith(f"{prefix}/") or "\\" in key:
+        return False
+    return all(segment not in ("", ".", "..") for segment in key.split("/"))
 
 
 async def _remove_external_integrations(session: AsyncSession, account_id: uuid.UUID) -> None:

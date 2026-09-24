@@ -286,6 +286,34 @@ async def delete_all_for_account(
     return removed
 
 
+async def erase_object(key: str) -> bool:
+    """Delete one object by its exact key, and prove it is gone.
+
+    For evidence an account owns that lives *outside* its storage prefix, so a
+    prefix purge cannot reach it. Today that is only a legacy label-report
+    photo written under the old global ``label-reports/`` namespace.
+
+    The proof is a fresh read of the same key reporting the object missing.
+    Not ``exists``: an adapter answers that from a directory listing, and a
+    listing of a large shared folder is paginated, so "not in the first page"
+    would pass for "absent". A read of the exact key has no page to fall off.
+
+    Returns ``True`` when the object is proven absent, ``False`` when it can
+    still be read after the delete. Every other storage error propagates, so
+    the deletion worker fails closed into its retry.
+    """
+    storage = get_storage()
+    try:
+        await storage.delete(key)
+    except StorageObjectMissing:
+        pass
+    try:
+        await storage.get(key)
+    except StorageObjectMissing:
+        return True
+    return False
+
+
 async def purge_account_storage(account_id: uuid.UUID) -> tuple[int, list[str]]:
     """Delete every object under an account's storage prefix.
 

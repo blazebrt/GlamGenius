@@ -230,25 +230,26 @@ describe('label confirmation', () => {
       data: { confidence: { level: 'unverified', text: 'Confirmed.' }, confirmations: 0 },
     });
 
-    await expect(confirmLabel(UNKNOWN, 'run-a')).resolves.toEqual({
+    await expect(confirmLabel(UNKNOWN, 'run-a', 'draft-key-a')).resolves.toEqual({
       confidence: { level: 'unverified', text: 'Confirmed.' },
       confirmations: 0,
     });
     const [, body, config] = http.post.mock.calls[1];
     expect(body).toEqual(expect.objectContaining({ barcode: UNKNOWN, ai_run_id: 'run-a' }));
     expect(body).not.toHaveProperty('facts');
-    expect(body.client_scan_id).toEqual(expect.any(String));
+    // The draft's own key, exactly: never one minted per attempt.
+    expect(body.client_scan_id).toBe('draft-key-a');
     expect(config.headers).toEqual({ 'X-Device-Token': 'device-token' });
   });
 
   it('does not pretend an offline confirmation was saved', async () => {
     await registeredDevice();
     http.post.mockRejectedValueOnce(new Error('offline'));
-    await expect(confirmLabel(UNKNOWN, 'run-a')).rejects.toThrow('offline');
+    await expect(confirmLabel(UNKNOWN, 'run-a', 'draft-key-a')).rejects.toThrow('offline');
   });
 
   it('blocks confirmation when the transcription reference is missing', async () => {
-    await expect(confirmLabel(UNKNOWN, '')).rejects.toThrow(/missing its confirmation reference/i);
+    await expect(confirmLabel(UNKNOWN, '', 'draft-key-a')).rejects.toThrow(/missing its confirmation reference/i);
     expect(http.post).not.toHaveBeenCalled();
   });
 
@@ -261,7 +262,7 @@ describe('label confirmation', () => {
       data: { confidence: { level: 'unverified', text: 'Confirmed.' }, confirmations: 0 },
     });
 
-    await expect(confirmLabel(UNKNOWN, 'run-a')).resolves.toEqual({
+    await expect(confirmLabel(UNKNOWN, 'run-a', 'draft-key-a')).resolves.toEqual({
       confidence: { level: 'unverified', text: 'Confirmed.' },
       confirmations: 0,
     });
@@ -279,7 +280,7 @@ describe('label confirmation', () => {
     http.post.mockResolvedValueOnce({ data: { device_id: 'd2', token: 'new-device-token' } });
     http.post.mockRejectedValueOnce(deviceError);
 
-    await expect(confirmLabel(UNKNOWN, 'run-a')).rejects.toBe(deviceError);
+    await expect(confirmLabel(UNKNOWN, 'run-a', 'draft-key-a')).rejects.toBe(deviceError);
     expect(http.post).toHaveBeenCalledTimes(4);
   });
 });
