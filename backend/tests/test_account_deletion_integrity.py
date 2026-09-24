@@ -8,14 +8,25 @@ sessions race on the job row; nothing here mocks ``SELECT … FOR UPDATE``.
 * A — a deletion-requested account is registered but not active
 * N — the notification worker gives a non-active account no new work
 * F — storage is proved empty again before the database and Auth go
+* S — a media write and the deletion request serialise on the account row
+* P — the lock modes that serialisation relies on, checked against PostgreSQL
+* D — no deadlock between request, upload, cancellation and the worker
+* G — the notification worker's final lifecycle gate before the provider
+
+Every pause below is an event the test sets. Every wait is on a condition the
+database reports: ``pg_blocking_pids`` and the waiter's tuple lock. None of
+them is a sleep chosen to be long enough.
 """
 from __future__ import annotations
 
 import asyncio
+import inspect
+import re
 import uuid
 from datetime import timedelta
 
 import pytest
+from app.domains.identity import service as identity_service
 from app.domains.identity.models import (
     ACCOUNT_STATUS_ACTIVE,
     ACCOUNT_STATUS_DELETION_REQUESTED,
@@ -49,14 +60,15 @@ from app.domains.privacy.models import (
     AccountDeletionJob,
 )
 from app.shared.database.base import utcnow
-from app.shared.database.sql import get_sessionmaker
+from app.shared.database.sql import get_engine, get_sessionmaker
 from app.shared.security import deps
 from app.workers import account_deletion
 from app.workers import notifications as notification_worker
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials
-from sqlalchemy import func, select, text, update
+from sqlalchemy import event, func, select, text, update
+from sqlalchemy.exc import DBAPIError
 
 from tests.conftest import auth, png_bytes
 from tests.test_notification_worker_operations import _at_local_hour, _CountingPush, _opt_in
@@ -70,6 +82,26 @@ INACTIVE = "ACCOUNT_INACTIVE"
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
+class _Pause:
+    """A point where one coroutine stops until the test lets it go."""
+
+    def __init__(self) -> None:
+        self.reached = asyncio.Event()
+        self.release = asyncio.Event()
+        #: the backend of the session that paused, when the pause knows it
+        self.pid: int | None = None
+        self.value = None
+
+    async def __call__(self) -> None:
+        self.reached.set()
+        await self.release.wait()
+
+    async def wait_reached(self) -> None:
+        # A ceiling on a broken build, not a pace: it returns the moment the
+        # paused coroutine arrives.
+        await asyncio.wait_for(self.reached.wait(), timeout=30)
+
+
 class _Storage:
     """Object storage with a call log, scripted failures and stuck keys."""
 
@@ -85,9 +117,13 @@ class _Storage:
         #: keys a purge cannot remove (a listing still shows them)
         self.stuck: set[str] = set()
         self.puts: list[str] = []
+        #: when set, put() stops mid-write until the test releases it
+        self.put_pause: _Pause | None = None
 
     async def put(self, key, data, content_type):
         self.puts.append(key)
+        if self.put_pause is not None:
+            await self.put_pause()
         self.objects[key] = data
 
     async def get(self, key):
@@ -813,3 +849,698 @@ def test_f_the_barrier_uses_the_media_authority_before_any_database_deletion():
     # The early purge is kept.
     storage_stage = source[source.index("if job.state == STATE_STORAGE_DELETING:"):]
     assert "purge_account_storage" in storage_stage[:storage_stage.index("STATE_STORAGE_COMPLETE")]
+
+
+# ---------------------------------------------------------------------------
+# S — a media write and the deletion request serialise on the account row
+# ---------------------------------------------------------------------------
+UPLOAD = "/api/v2/media/upload"
+
+#: For a session that is meant to wait for another transaction to commit. It
+#: never fires in a healthy run; a cycle fails the test instead of hanging it.
+PATIENT_LOCK_TIMEOUT = "20s"
+
+#: For a statement that can only succeed if the lock it needs is free. A
+#: conflicting lock is held for the whole statement, so this always fires when
+#: they conflict; when they do not, there is nothing to wait for.
+SHORT_LOCK_TIMEOUT = "300ms"
+
+
+@pytest.fixture
+async def race():
+    """Pauses and tasks for one race, all let go and finished at teardown.
+
+    A failing assertion must not leave a paused coroutine holding a row lock:
+    the next test's truncate would wait on it forever.
+    """
+    class Race:
+        def __init__(self) -> None:
+            self.pauses: list[_Pause] = []
+            self.tasks: list[asyncio.Task] = []
+
+        def pause(self) -> _Pause:
+            pause = _Pause()
+            self.pauses.append(pause)
+            return pause
+
+        def spawn(self, coroutine) -> asyncio.Task:
+            task = asyncio.create_task(coroutine)
+            self.tasks.append(task)
+            return task
+
+    state = Race()
+    yield state
+    for pause in state.pauses:
+        pause.release.set()
+    for task in state.tasks:
+        if not task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=30)
+            except BaseException:  # noqa: BLE001 - teardown: finish, whatever it says
+                task.cancel()
+        elif not task.cancelled():
+            task.exception()  # retrieved, so an expected failure is not reported as unhandled
+
+
+async def _pid(session) -> int:
+    return int(await session.scalar(text("SELECT pg_backend_pid()")))
+
+
+async def _patient(session) -> None:
+    await session.execute(text(f"SET LOCAL lock_timeout = '{PATIENT_LOCK_TIMEOUT}'"))
+
+
+async def _row_lock_wait(pid: int) -> tuple[list[int], set[str]]:
+    """Who ``pid`` is waiting for, and which table's row it is waiting on.
+
+    A row-lock waiter takes a tuple lock that names the relation and then
+    waits on the holder's transaction, so the holders come from
+    ``pg_blocking_pids`` and the table from the tuple lock.
+    """
+    async with _factory()() as watcher:
+        blockers = list(await watcher.scalar(
+            text("SELECT pg_blocking_pids(:pid)"), {"pid": pid},
+        ) or [])
+        relations = set((await watcher.execute(text(
+            "SELECT c.relname FROM pg_locks l JOIN pg_class c ON c.oid = l.relation "
+            "WHERE l.pid = :pid AND l.locktype = 'tuple'"
+        ), {"pid": pid})).scalars().all())
+    return blockers, relations
+
+
+async def _until_waiting_on_an_account(pid: int) -> list[int]:
+    """Poll until ``pid`` waits for an accounts row lock; return the holders."""
+    for _ in range(3000):
+        blockers, relations = await _row_lock_wait(pid)
+        if blockers and "accounts" in relations:
+            return blockers
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"backend {pid} never waited on an accounts row")
+
+
+async def _until_something_waits_on(holder: int) -> int:
+    """Poll until another backend waits on ``holder`` for an accounts row."""
+    for _ in range(3000):
+        async with _factory()() as watcher:
+            waiters = list((await watcher.execute(text(
+                "SELECT pid FROM pg_stat_activity WHERE :holder = ANY(pg_blocking_pids(pid))"
+            ), {"holder": holder})).scalars().all())
+        for waiter in waiters:
+            if "accounts" in (await _row_lock_wait(waiter))[1]:
+                return waiter
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"nothing ever waited on backend {holder}")
+
+
+async def _upload(app_client, token):
+    return await app_client.post(
+        UPLOAD, headers=auth(token), files={"file": ("a.png", png_bytes(), "image/png")},
+    )
+
+
+def _upload_pauses_after_authentication(monkeypatch, race) -> _Pause:
+    """Stop the upload route in its handler: authenticated, bytes read, nothing stored.
+
+    The handler runs only after ``get_current_account`` accepted the account
+    as active, so reaching this pause is the proof that it authenticated as
+    active.
+    """
+    from app.api.v2 import media as media_api
+
+    pause = race.pause()
+    original = media_api._read_capped
+
+    async def read_then_pause(upload):
+        data = await original(upload)
+        await pause()
+        return data
+
+    monkeypatch.setattr(media_api, "_read_capped", read_then_pause)
+    return pause
+
+
+def _worker_pauses(monkeypatch, race, stage: str, *, after: bool = False) -> _Pause:
+    """Stop the deletion worker inside its run transaction, at ``stage``."""
+    pause = race.pause()
+    original = getattr(deletion_service, stage)
+
+    async def paused(session, account_id):
+        pause.pid = await _pid(session)
+        if after:
+            await original(session, account_id)
+            await pause()
+            return None
+        await pause()
+        return await original(session, account_id)
+
+    monkeypatch.setattr(deletion_service, stage, paused)
+    return pause
+
+
+def _under(storage, account_id) -> list[str]:
+    prefix = account_prefix(account_id)
+    return [key for key in storage.objects if key.startswith(prefix)]
+
+
+async def _media_rows(account_id) -> int:
+    async with _factory()() as session:
+        return int(await session.scalar(
+            select(func.count()).select_from(MediaAsset).where(MediaAsset.account_id == account_id)
+        ) or 0)
+
+
+async def test_s_a_an_upload_holding_the_account_makes_the_deletion_request_wait(
+    app_client, db_clean, registered_supabase_user, storage, admin, events, race,
+):
+    """A. Media wins. The request waits for the upload's transaction to end,
+    and the ordinary purge then removes what it wrote."""
+    token, account_id = await registered_supabase_user()
+    storage.put_pause = race.pause()
+    upload = race.spawn(_upload(app_client, token))
+    await storage.put_pause.wait_reached()  # past the gate, mid-write
+
+    requesting = _factory()()
+    try:
+        await _patient(requesting)
+        pid = await _pid(requesting)
+        request = race.spawn(deletion_service.request_deletion(requesting, account_id))
+        await _until_waiting_on_an_account(pid)
+        assert not request.done()
+        assert (await _account(account_id)).status == ACCOUNT_STATUS_ACTIVE
+        assert await _job(account_id) is None
+
+        storage.put_pause.release.set()
+        response = await asyncio.wait_for(upload, timeout=30)
+        assert response.status_code == 200, response.text
+        job = await asyncio.wait_for(request, timeout=30)
+        await requesting.commit()
+    finally:
+        await requesting.close()
+
+    assert job.state == STATE_REQUESTED and job.started_at is None
+    assert (await _account(account_id)).status == ACCOUNT_STATUS_DELETION_REQUESTED
+    assert _under(storage, account_id) == storage.puts and len(storage.puts) == 1
+    assert await _media_rows(account_id) == 1
+
+    summary = await account_deletion.run_cycle()
+    assert summary.ok, summary
+    assert (await _job(account_id)).state == STATE_COMPLETE
+    assert _under(storage, account_id) == []
+    assert await _account(account_id) is None and await _media_rows(account_id) == 0
+    assert admin.deleted == [str(account_id)]
+    assert events == ["storage_purge", "storage_purge", "auth"]
+
+
+async def test_s_b_a_deletion_holding_the_transition_refuses_an_authenticated_upload(
+    app_client, db_clean, registered_supabase_user, storage, race, monkeypatch,
+):
+    """B. Deletion wins. The upload authenticated while the account was still
+    active, reaches the boundary, waits, and is refused before any byte."""
+    token, account_id = await registered_supabase_user()
+    from app.api.v2 import media as media_api
+
+    in_handler = asyncio.Event()
+    original = media_api._read_capped
+
+    async def read(upload):
+        in_handler.set()
+        return await original(upload)
+
+    monkeypatch.setattr(media_api, "_read_capped", read)
+
+    requesting = _factory()()
+    try:
+        holder = await _pid(requesting)
+        # The transition is made and held: status changed, job inserted, not committed.
+        await deletion_service.request_deletion(requesting, account_id)
+        upload = race.spawn(_upload(app_client, token))
+        await _until_something_waits_on(holder)
+        # Authenticated against the committed row, which still says active.
+        assert in_handler.is_set()
+        assert not upload.done() and storage.puts == []
+        await requesting.commit()
+    finally:
+        await requesting.close()
+
+    response = await asyncio.wait_for(upload, timeout=30)
+    assert _inactive(response), response.text
+    assert storage.puts == [], "the storage adapter must not be called"
+    assert _under(storage, account_id) == []
+    assert await _media_rows(account_id) == 0
+    assert (await _job(account_id)).state == STATE_REQUESTED
+    assert (await _account(account_id)).status == ACCOUNT_STATUS_DELETION_REQUESTED
+
+
+async def test_s_c_an_upload_in_flight_across_the_final_proof_cannot_orphan_an_object(
+    app_client, db_clean, registered_supabase_user, storage, admin, events, race, monkeypatch,
+):
+    """C. The race the final barrier alone admitted, built step by step.
+
+    The upload authenticates while the account is active. Deletion is then
+    requested, and the worker runs both storage proofs. Only then does the
+    upload try to write. Before the lifecycle gate it wrote the object after
+    the last proof, the worker completed, and the object outlived the
+    account, its row and its Auth identity.
+    """
+    token, account_id = await registered_supabase_user()
+    in_handler = _upload_pauses_after_authentication(monkeypatch, race)
+    upload = race.spawn(_upload(app_client, token))
+    await in_handler.wait_reached()
+
+    assert (await app_client.delete(DELETE, headers=auth(token))).status_code == 202
+
+    after_final_proof = _worker_pauses(monkeypatch, race, "_delete_ai_outputs")
+    worker = race.spawn(account_deletion.run_cycle())
+    await after_final_proof.wait_reached()
+    assert events == ["storage_purge", "storage_purge"], "both proofs are made"
+    assert storage.puts == []
+
+    in_handler.release.set()
+    response = await asyncio.wait_for(upload, timeout=30)
+    after_final_proof.release.set()
+    summary = await asyncio.wait_for(worker, timeout=30)
+
+    orphans = _under(storage, account_id)
+    assert orphans == [], (
+        f"an object written after the final storage proof survived a completed deletion: {orphans}"
+    )
+    assert storage.puts == []
+    assert _inactive(response), response.text
+    assert summary.ok, summary
+    assert (await _job(account_id)).state == STATE_COMPLETE
+    assert await _account(account_id) is None
+    assert admin.deleted == [str(account_id)]
+    assert events == ["storage_purge", "storage_purge", "auth"]
+
+
+async def test_s_the_ordinary_route_still_refuses_after_the_request(
+    app_client, db_clean, registered_supabase_user, storage,
+):
+    """After the request has committed, the authentication dependency refuses
+    first. The lifecycle gate is a second boundary, not a replacement."""
+    token, account_id = await _requested(registered_supabase_user)
+    refused = await _upload(app_client, token)
+    assert _inactive(refused), refused.text
+    assert storage.puts == [] and await _media_rows(account_id) == 0
+
+
+def test_s_the_gate_is_the_last_step_before_the_bytes():
+    upload = inspect.getsource(media_service.upload)
+    awaits = re.findall(r"await ([\w.]+)\(", upload)
+    assert awaits[:2] == ["identity_service.hold_account_active", "storage.put"], awaits
+    request = inspect.getsource(deletion_service.request_deletion)
+    assert re.findall(r"await ([\w.]+)\(", request)[0] == "identity_service.lock_account_lifecycle"
+    # The request reads the job; it never locks it (see the D tests).
+    assert "with_for_update" not in request
+
+
+# ---------------------------------------------------------------------------
+# P — the lock modes, checked against PostgreSQL rather than assumed
+# ---------------------------------------------------------------------------
+async def test_p_the_helpers_ask_postgres_for_the_intended_modes(db_clean, registered_supabase_user):
+    _, account_id = await registered_supabase_user()
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(" ".join(statement.split()))
+
+    engine = get_engine().sync_engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        async with _factory()() as session:
+            assert await identity_service.hold_account_active(session, account_id) is True
+            assert (await identity_service.lock_account_lifecycle(session, account_id)).id == account_id
+            await session.rollback()
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    gate, transition = (s for s in statements if "FROM accounts" in s)
+    assert gate.endswith(" FOR SHARE"), gate
+    assert transition.endswith(" FOR NO KEY UPDATE"), transition
+
+
+_STATUS_UPDATE = "UPDATE accounts SET status = 'deletion_requested' WHERE id = :id"
+_ACCOUNT_DELETE = "DELETE FROM accounts WHERE id = :id"
+
+
+@pytest.mark.parametrize(("held", "statement", "conflicts"), [
+    # The upload gate stops the lifecycle status change and the worker's DELETE.
+    ("hold_account_active", _STATUS_UPDATE, True),
+    ("hold_account_active", _ACCOUNT_DELETE, True),
+    # The transition lock stops them too.
+    ("lock_account_lifecycle", _STATUS_UPDATE, True),
+    ("lock_account_lifecycle", _ACCOUNT_DELETE, True),
+    # FOR KEY SHARE, the Step 11C decision-append lock, stops the DELETE but
+    # lets an ordinary status UPDATE straight through. That is why the gate
+    # is not built on it.
+    ("lock_account_against_delete", _STATUS_UPDATE, False),
+    ("lock_account_against_delete", _ACCOUNT_DELETE, True),
+])
+async def test_p_which_held_locks_stop_the_lifecycle_statements(
+    db_clean, registered_supabase_user, held, statement, conflicts,
+):
+    """A plain SQL status UPDATE, not the application's helper: even a path
+    that forgot the explicit transition lock is serialised by the gate."""
+    _, account_id = await registered_supabase_user()
+    holder, other = _factory()(), _factory()()
+    try:
+        await getattr(identity_service, held)(holder, account_id)
+        await other.execute(text(f"SET LOCAL lock_timeout = '{SHORT_LOCK_TIMEOUT}'"))
+        if conflicts:
+            with pytest.raises(DBAPIError) as refused:
+                await other.execute(text(statement), {"id": account_id})
+            assert "lock timeout" in str(refused.value).lower()
+        else:
+            await other.execute(text(statement), {"id": account_id})
+        await other.rollback()
+    finally:
+        await holder.rollback()
+        await holder.close()
+        await other.close()
+
+
+@pytest.mark.parametrize(("held", "attempt", "conflicts"), [
+    # A transition in progress keeps new uploads out until it ends.
+    ("lock_account_lifecycle", "hold_account_active", True),
+    ("lock_account_lifecycle", "lock_account_lifecycle", True),
+    # Concurrent uploads share the account; decision appends are not blocked
+    # by an upload or by a transition.
+    ("hold_account_active", "hold_account_active", False),
+    ("hold_account_active", "lock_account_against_delete", False),
+    ("lock_account_lifecycle", "lock_account_against_delete", False),
+])
+async def test_p_the_helpers_against_each_other(
+    db_clean, registered_supabase_user, held, attempt, conflicts,
+):
+    _, account_id = await registered_supabase_user()
+    holder, other = _factory()(), _factory()()
+    try:
+        await getattr(identity_service, held)(holder, account_id)
+        await other.execute(text(f"SET LOCAL lock_timeout = '{SHORT_LOCK_TIMEOUT}'"))
+        if conflicts:
+            with pytest.raises(DBAPIError) as refused:
+                await getattr(identity_service, attempt)(other, account_id)
+            assert "lock timeout" in str(refused.value).lower()
+        else:
+            assert await getattr(identity_service, attempt)(other, account_id)
+        await other.rollback()
+    finally:
+        await holder.rollback()
+        await holder.close()
+        await other.close()
+
+
+async def test_p_a_waiting_gate_reads_the_status_the_transition_committed(
+    db_clean, registered_supabase_user, race,
+):
+    """READ COMMITTED re-reads the newest row version after a locking wait.
+    The gate therefore answers from the committed transition, not from the
+    snapshot it started with."""
+    _, account_id = await registered_supabase_user()
+    requesting, uploading = _factory()(), _factory()()
+    try:
+        await deletion_service.request_deletion(requesting, account_id)
+        await _patient(uploading)
+        pid = await _pid(uploading)
+        gate = race.spawn(identity_service.hold_account_active(uploading, account_id))
+        await _until_waiting_on_an_account(pid)
+        await requesting.commit()
+        assert await asyncio.wait_for(gate, timeout=30) is False
+    finally:
+        await uploading.rollback()
+        await uploading.close()
+        await requesting.close()
+
+
+# ---------------------------------------------------------------------------
+# D — no deadlock across request, upload, cancellation and the worker
+# ---------------------------------------------------------------------------
+async def test_d_a_request_behind_a_cancellation_waits_then_requests_again(
+    db_clean, registered_supabase_user, race,
+):
+    """Cancellation holds the job row and the account; the request waits on
+    the account only, then decides from what cancellation committed."""
+    _, account_id = await _requested(registered_supabase_user)
+    cancelling, requesting = _factory()(), _factory()()
+    try:
+        await deletion_service.cancel_deletion(cancelling, account_id)  # job gone, account active: held
+        await _patient(requesting)
+        pid = await _pid(requesting)
+        request = race.spawn(deletion_service.request_deletion(requesting, account_id))
+        await _until_waiting_on_an_account(pid)
+        await cancelling.commit()
+        job = await asyncio.wait_for(request, timeout=30)
+        await requesting.commit()
+    finally:
+        await cancelling.close()
+        await requesting.close()
+    assert job.state == STATE_REQUESTED and job.started_at is None
+    assert (await _job(account_id)).id == job.id
+    assert (await _account(account_id)).status == ACCOUNT_STATUS_DELETION_REQUESTED
+
+
+async def test_d_a_cancellation_behind_a_request_holding_the_account_does_not_deadlock(
+    db_clean, registered_supabase_user, race, monkeypatch,
+):
+    """The interleaving an inversion would deadlock on.
+
+    The request holds the account and has not yet looked at the job.
+    Cancellation locks the job and waits for the account. If the request then
+    waited for the job row, each would wait for the other. It reads the job
+    without a lock instead, returns, and cancellation completes after it.
+    """
+    _, account_id = await _requested(registered_supabase_user)
+    holding_account = race.pause()
+    original = identity_service.lock_account_lifecycle
+
+    async def lock_then_pause(session, account):
+        row = await original(session, account)
+        await holding_account()
+        return row
+
+    monkeypatch.setattr(identity_service, "lock_account_lifecycle", lock_then_pause)
+    requesting, cancelling = _factory()(), _factory()()
+    try:
+        await _patient(requesting)
+        request = race.spawn(deletion_service.request_deletion(requesting, account_id))
+        await holding_account.wait_reached()
+
+        await _patient(cancelling)
+        cancel_pid = await _pid(cancelling)
+        cancel = race.spawn(deletion_service.cancel_deletion(cancelling, account_id))
+        await _until_waiting_on_an_account(cancel_pid)
+
+        holding_account.release.set()
+        returned = await asyncio.wait_for(request, timeout=30)
+        await requesting.commit()
+        await asyncio.wait_for(cancel, timeout=30)
+        await cancelling.commit()
+    finally:
+        await requesting.close()
+        await cancelling.close()
+    assert returned.state == STATE_REQUESTED
+    # Cancellation was serialised after the request, and nothing was destroyed.
+    assert await _job(account_id) is None
+    assert (await _account(account_id)).status == ACCOUNT_STATUS_ACTIVE
+
+
+async def test_d_a_request_while_the_worker_deletes_the_account_waits_then_reports_it(
+    db_clean, registered_supabase_user, storage, admin, race, monkeypatch,
+):
+    _, account_id = await _requested(registered_supabase_user)
+    deleted = _worker_pauses(monkeypatch, race, "_delete_account_row", after=True)
+    worker = race.spawn(account_deletion.run_cycle())
+    await deleted.wait_reached()  # the worker holds the job row and the account DELETE
+
+    requesting = _factory()()
+    try:
+        await _patient(requesting)
+        pid = await _pid(requesting)
+        request = race.spawn(deletion_service.request_deletion(requesting, account_id))
+        assert deleted.pid in await _until_waiting_on_an_account(pid)
+        deleted.release.set()
+        summary = await asyncio.wait_for(worker, timeout=30)
+        job = await asyncio.wait_for(request, timeout=30)
+        await requesting.commit()
+    finally:
+        await requesting.close()
+    assert summary.ok, summary
+    assert job.state == STATE_COMPLETE
+    assert await _account(account_id) is None
+    assert admin.deleted == [str(account_id)]
+
+
+async def test_d_an_upload_behind_the_worker_account_delete_is_refused(
+    app_client, db_clean, registered_supabase_user, storage, admin, events, race, monkeypatch,
+):
+    """The upload authenticated before the request and reaches the gate while
+    the worker holds the account DELETE. It waits, finds no account, and
+    writes nothing. The worker never waits on it."""
+    token, account_id = await registered_supabase_user()
+    in_handler = _upload_pauses_after_authentication(monkeypatch, race)
+    upload = race.spawn(_upload(app_client, token))
+    await in_handler.wait_reached()
+    assert (await app_client.delete(DELETE, headers=auth(token))).status_code == 202
+
+    deleted = _worker_pauses(monkeypatch, race, "_delete_account_row", after=True)
+    worker = race.spawn(account_deletion.run_cycle())
+    await deleted.wait_reached()
+
+    in_handler.release.set()
+    await _until_something_waits_on(deleted.pid)
+    assert storage.puts == []
+    deleted.release.set()
+    summary = await asyncio.wait_for(worker, timeout=30)
+    response = await asyncio.wait_for(upload, timeout=30)
+
+    assert summary.ok, summary
+    assert _inactive(response), response.text
+    assert storage.puts == [] and _under(storage, account_id) == []
+    assert (await _job(account_id)).state == STATE_COMPLETE
+    assert events == ["storage_purge", "storage_purge", "auth"]
+
+
+# ---------------------------------------------------------------------------
+# G — the notification worker's final lifecycle gate
+# ---------------------------------------------------------------------------
+_GATE_KEY = "agenda:final-gate"
+
+
+def _one_queued_notice(monkeypatch) -> None:
+    """The worker's decision is one real queued delivery, every time.
+
+    Every earlier trigger is quiet, and the agenda queues through the real
+    outbox, so the claim, the dedup and the suppression rules are the real
+    ones.
+    """
+    notifications = notification_worker.notifications
+
+    async def quiet(*args, **kwargs):
+        return None
+
+    for earlier in (
+        "queue_for_product_watch",
+        "queue_for_environment_crossing",
+        "queue_for_protocol_day",
+        "queue_for_running_out",
+        "queue_for_deferred_purchase_relevance",
+    ):
+        monkeypatch.setattr(notifications, earlier, quiet)
+
+    async def agenda(session, *, account_id, plan_date, timezone_name, moment):
+        return await notifications.queue(
+            session, account_id=account_id, plan_date=plan_date, notification_key=_GATE_KEY,
+            title="Today", module="care", topic="care", timezone_name=timezone_name, moment=moment,
+        )
+
+    monkeypatch.setattr(notifications, "queue_for_agenda", agenda)
+
+
+async def _delivery_rows(account_id) -> list[NotificationDelivery]:
+    async with _factory()() as session:
+        return list((await session.execute(
+            select(NotificationDelivery).where(NotificationDelivery.account_id == account_id)
+        )).scalars().all())
+
+
+async def test_g_the_notice_under_test_is_really_sent_to_an_active_account(
+    db_clean, registered_supabase_user, monkeypatch,
+):
+    """The control: without a deletion, this exact set-up reaches the provider."""
+    _, account_id = await registered_supabase_user()
+    moment = _at_local_hour(9)
+    await _opt_in(account_id, hour=9)
+    _one_queued_notice(monkeypatch)
+    sender = _CountingPush()
+    monkeypatch.setattr(notification_worker.push, "send", sender.send)
+    assert await notification_worker.process_once(now=moment) == 1
+    assert sender.messages_sent == 1
+    [row] = await _delivery_rows(account_id)
+    assert row.status == notification_worker.notifications.STATUS_PROVIDER_ACCEPTED
+
+
+async def test_g_a_deletion_between_the_first_gate_and_the_send_sends_nothing(
+    db_clean, registered_supabase_user, monkeypatch, race,
+):
+    _, account_id = await registered_supabase_user()
+    moment = _at_local_hour(9)
+    await _opt_in(account_id, hour=9)
+    _one_queued_notice(monkeypatch)
+    notifications = notification_worker.notifications
+    sender = _CountingPush()
+    monkeypatch.setattr(notification_worker.push, "send", sender.send)
+
+    answers: list[bool] = []
+    is_active = notification_worker._account_is_active
+
+    async def observed(session, account):
+        answers.append(await is_active(session, account))
+        return answers[-1]
+
+    monkeypatch.setattr(notification_worker, "_account_is_active", observed)
+    claimed = race.pause()
+    claim_delivery = notifications.claim_delivery
+
+    async def claim_then_pause(session, delivery_id, **kwargs):
+        claimed.value = await claim_delivery(session, delivery_id, **kwargs)
+        await claimed()
+        return claimed.value
+
+    monkeypatch.setattr(notifications, "claim_delivery", claim_then_pause)
+
+    # 1-2. The run starts while the account is active, passes the first gate,
+    # compiles, queues and claims, and stops before the send boundary.
+    run = race.spawn(notification_worker.process_once(now=moment))
+    await claimed.wait_reached()
+    assert answers == [True] and claimed.value is not None
+    # 3. Deletion is requested and committed.
+    async with _factory()() as session:
+        await deletion_service.request_deletion(session, account_id)
+        await session.commit()
+    # 4. Resume.
+    claimed.release.set()
+    assert await asyncio.wait_for(run, timeout=30) == 0
+
+    # 5. No provider call, and a coherent, terminal, unclaimed row.
+    assert sender.batches == []
+    assert answers == [True, False]
+    [row] = await _delivery_rows(account_id)
+    assert row.status == notifications.STATUS_SUPPRESSED
+    assert row.suppressed_reason == notifications.SUPPRESSED_ACCOUNT_INACTIVE
+    assert row.claim_token is None and row.claimed_at is None and row.sent_at is None
+
+    # No later send: the next cycle, a direct run, a stale-claim sweep, and
+    # even the same account made active again by a pristine cancellation.
+    assert await notification_worker.process_once(now=moment) == 0
+    async with _factory()() as session:
+        preference = await notifications.preferences_for(session, account_id, "Asia/Kolkata")
+        assert await notification_worker.process_account(session, preference, now=moment) == 0
+    async with _factory()() as session:
+        assert await claim_delivery(session, row.id, lease_seconds=0) is None
+        await session.rollback()
+    async with _factory()() as session:
+        await deletion_service.cancel_deletion(session, account_id)
+        await session.commit()
+    assert (await _account(account_id)).status == ACCOUNT_STATUS_ACTIVE
+    assert await notification_worker.process_once(now=moment) == 0
+    assert sender.batches == []
+    [row] = await _delivery_rows(account_id)
+    assert row.status == notifications.STATUS_SUPPRESSED and row.claim_token is None
+
+
+def test_g_the_final_gate_is_the_last_step_before_the_provider():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "workers" / "notifications.py").read_text()
+    body = source[source.index("async def process_account"):source.index("async def process_once")]
+    claim = body.index("await notifications.claim_delivery(")
+    send = body.index("push.send(") + len("push.send(")
+    awaits = re.findall(r"await ([\w.]+)\(", body[claim:send])
+    assert awaits == [
+        "notifications.claim_delivery", "session.rollback", "session.commit",
+        "_settle_if_account_inactive", "push.send",
+    ], awaits
+    # The first gate is kept, before any work.
+    assert body.index("_account_is_active(") < body.index("context_stage.gather")
+    # The final gate's transaction closes before the provider is called.
+    gate = source[source.index("async def _settle_if_account_inactive"):source.index("def _preference_due")]
+    assert "async with session.begin():" in gate and "push.send(" not in gate

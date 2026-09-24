@@ -44,6 +44,10 @@ SUPPRESSED_CAP = "daily_cap_reached"
 SUPPRESSED_QUIET = "quiet_hours"
 SUPPRESSED_DISABLED = "disabled"
 SUPPRESSED_MODULE_OFF = "module_disabled"
+#: Settled by the worker's final lifecycle gate: the account stopped being
+#: active after this delivery was claimed and before the provider was called.
+#: Nothing was sent. The row is terminal, so it is never claimed again.
+SUPPRESSED_ACCOUNT_INACTIVE = "account_inactive"
 STATUS_SUPPRESSED = "suppressed"
 STATUS_QUEUED = "queued"
 STATUS_SENDING = "sending"

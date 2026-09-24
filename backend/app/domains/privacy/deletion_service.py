@@ -29,6 +29,31 @@ Guarantees the worker enforces
    expired lease never returns the job to a cancellable shape.
    :func:`cancel_deletion` decides under the job's row lock, so it serialises
    with a worker's claim and exactly one of them wins.
+7. No media object for the account can be written after the deletion was
+   requested. :func:`request_deletion` takes the account's lifecycle lock
+   (FOR NO KEY UPDATE) before it changes the status. A media upload holds the
+   account FOR SHARE from immediately before its ``storage.put`` until its
+   transaction ends, and those two modes conflict. Every object therefore
+   either predates the job, and the purges remove it, or is never written.
+
+Lock order
+----------
+There are two roots, and neither kind of holder waits on the other's root:
+
+* **Account first.** ``request_deletion`` (FOR NO KEY UPDATE) and a media
+  upload (FOR SHARE) lock the accounts row before anything else. While
+  holding it they never wait on a job row. ``request_deletion`` reads the job
+  without a lock and inserts one only when none exists, and only a holder of
+  that same account lock can insert one.
+* **Job first.** :func:`cancel_deletion` (job FOR UPDATE, then the account
+  status UPDATE) and the worker (the job claim and run lock, then the account
+  DELETE) lock the job row and then the account.
+
+A cycle needs something holding the account to wait for a job row, and
+nothing does. An upload's media row and audit entry are new rows, inserted
+while it already holds the account, so for an upload they come after the
+account too. The worker's DELETE cascades into media rows only after it holds
+the account, by which time no upload can hold it.
 """
 from __future__ import annotations
 
@@ -41,6 +66,7 @@ from datetime import timedelta
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.identity import service as identity_service
 from app.domains.identity.models import (
     ACCOUNT_STATUS_ACTIVE,
     ACCOUNT_STATUS_DELETED,
@@ -98,7 +124,17 @@ async def request_deletion(session: AsyncSession, account_id: uuid.UUID) -> Acco
 
     Marks the account ``deletion_requested`` and, if no active job exists,
     creates one in the ``requested`` state.
+
+    The account's lifecycle lock comes first, before anything is read. It
+    waits for every in-flight media upload that already holds the account
+    active (``identity_service.hold_account_active``), and it keeps new
+    uploads out until this transaction ends. Those uploads then see the new
+    status and write nothing. So the job cannot exist while an object for
+    this account is still being written. The job row is read here but never
+    locked: holding the account and then waiting on a job row would invert
+    the order that cancellation and the worker use.
     """
+    account = await identity_service.lock_account_lifecycle(session, account_id)
     existing = (
         await session.execute(
             select(AccountDeletionJob).where(AccountDeletionJob.account_id == account_id)
@@ -107,9 +143,6 @@ async def request_deletion(session: AsyncSession, account_id: uuid.UUID) -> Acco
     if existing is not None:
         return existing
 
-    account = (await session.execute(
-        select(Account).where(Account.id == account_id)
-    )).scalar_one_or_none()
     if account is not None and account.status != ACCOUNT_STATUS_DELETED:
         account.status = ACCOUNT_STATUS_DELETION_REQUESTED
         account.deletion_requested_at = utcnow()
