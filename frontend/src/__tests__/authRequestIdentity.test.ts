@@ -123,6 +123,8 @@ const DEVICE_KEY = 'glamgenius_scan_device_v1';
 let supabaseSession: Session | null = null;
 const sessionGates: Deferred<void>[] = [];
 const signOutGates: Deferred<void>[] = [];
+// The store's registration state at the moment each Supabase sign-out began.
+const stateWhenSignOutStarted: string[] = [];
 
 mockAuth.getSession.mockImplementation(async () => {
   const gate = sessionGates.shift();
@@ -130,6 +132,7 @@ mockAuth.getSession.mockImplementation(async () => {
   return { data: { session: supabaseSession }, error: null };
 });
 mockAuth.signOut.mockImplementation(async () => {
+  stateWhenSignOutStarted.push(useUserStore.getState().registrationState);
   const gate = signOutGates.shift();
   if (gate) await gate.promise;
   supabaseSession = null;
@@ -213,6 +216,7 @@ beforeEach(async () => {
   supabaseSession = null;
   sessionGates.length = 0;
   signOutGates.length = 0;
+  stateWhenSignOutStarted.length = 0;
   authCallback('SIGNED_OUT', null);
   await settle();
   mockSent.length = 0;
@@ -645,15 +649,7 @@ describe('3. the 401 boundary', () => {
     await settle();
     const meA = only(ME);
 
-    let stateWhenSignOutStarted: string | null = null;
     const signOutGate = pauseNextSignOut();
-    mockAuth.signOut.mockImplementationOnce(async () => {
-      stateWhenSignOutStarted = state().registrationState;
-      await signOutGate.promise;
-      supabaseSession = null;
-      authCallback('SIGNED_OUT', null);
-      return { error: null };
-    });
 
     const other = api.get('/api/v2/notifications');
     await settle();
@@ -662,7 +658,7 @@ describe('3. the 401 boundary', () => {
 
     // Supabase's sign-out has started and is paused; locally it is already over.
     expect(mockAuth.signOut).toHaveBeenCalledTimes(1);
-    expect(stateWhenSignOutStarted).toBe('signed_out');
+    expect(stateWhenSignOutStarted).toEqual(['signed_out']);
     expect(state()).toMatchObject({
       session: null,
       user: null,
