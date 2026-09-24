@@ -39,6 +39,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.identity.models import ACCOUNT_STATUS_ACTIVE, Account
 from app.domains.planning import clock, compiler, notifications, push
 from app.domains.planning import context as context_stage
 from app.domains.planning.models import NotificationDelivery, NotificationPreference
@@ -83,6 +84,63 @@ class RunSummary:
         )
 
 
+def _active_accounts():
+    """The one definition of who may be given new proactive work.
+
+    An account that is not ``active`` — one whose deletion has been requested
+    — gets nothing new: no compiled day, no queued decision, no claimed push.
+    The production cycle selects through it and :func:`process_account`, which
+    the manual path also runs, checks through it, so the two cannot drift.
+    """
+    return select(Account.id).where(Account.status == ACCOUNT_STATUS_ACTIVE)
+
+
+async def _account_is_active(session: AsyncSession, account_id: uuid_module.UUID) -> bool:
+    return bool(await session.scalar(
+        select(_active_accounts().where(Account.id == account_id).exists())
+    ))
+
+
+async def _settle_if_account_inactive(
+    session: AsyncSession, account_id: uuid_module.UUID,
+    delivery_id: uuid_module.UUID, claim: str,
+) -> bool:
+    """The final lifecycle gate, run immediately before the provider is called.
+
+    The first gate in :func:`process_account` runs before the day is compiled.
+    Deletion can be requested after that, while the triggers run or while the
+    claim commits. So the account is checked again here, in a short
+    transaction of its own that ends before ``push.send``. No transaction or
+    lock is held across the provider request.
+
+    If the account is still active, returns ``False`` and the caller sends.
+    A deletion request that commits after this check finds that send already
+    under way, and it is treated as in-flight work, not new work.
+
+    Otherwise returns ``True`` and nothing is sent. The delivery this worker
+    claimed is settled as suppressed, reason ``account_inactive``, with the
+    claim cleared, under the row lock and only if the claim is still ours.
+    It does not stay ``sending``, where a stale-claim sweep could pick it up
+    later. It does not return to ``queued``, where a reactivated account would
+    send it late. ``suppressed`` is never claimed again, and queueing the
+    same notification again returns this row.
+    """
+    async with session.begin():
+        if await _account_is_active(session, account_id):
+            return False
+        row = await session.get(
+            NotificationDelivery, delivery_id,
+            with_for_update=True, populate_existing=True,
+        )
+        if row is not None and row.status == notifications.STATUS_SENDING and row.claim_token == claim:
+            row.status = notifications.STATUS_SUPPRESSED
+            row.suppressed_reason = notifications.SUPPRESSED_ACCOUNT_INACTIVE
+            row.claim_token = None
+            row.claimed_at = None
+    logger.info("notification_withheld_account_inactive delivery=%s", delivery_id)
+    return True
+
+
 def _preference_due(row: NotificationPreference, now: datetime) -> bool:
     local = clock.local_now(row.timezone_name, moment=now)
     # Preferred time is hour precision. Running outside that hour is a miss,
@@ -94,6 +152,9 @@ def _preference_due(row: NotificationPreference, now: datetime) -> bool:
 
 async def process_account(session: AsyncSession, preference: NotificationPreference, *, now: datetime | None = None) -> int:
     now = now or utcnow()
+    # First, before any work is compiled or queued for this account.
+    if not await _account_is_active(session, preference.account_id):
+        return 0
     if not preference.enabled or not preference.native_push_enabled or not _preference_due(preference, now):
         return 0
     devices = await notifications.active_devices(session, preference.account_id)
@@ -144,6 +205,9 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
         data=({"delivery_id": str(decision.id), "destination": decision.deep_link, **(decision.destination_params or {})} if decision.deep_link else None),
         category_id=(decision.destination_params or {}).get("category_id"),
     ) for device in devices]
+    # The last thing before the provider: the account must still be active.
+    if await _settle_if_account_inactive(session, preference.account_id, decision.id, claim):
+        return 0
     result = await push.send(messages)
     async with session.begin():
         row = await session.get(NotificationDelivery, decision.id, with_for_update=True)
@@ -194,6 +258,7 @@ async def process_once(*, now: datetime | None = None, summary: RunSummary | Non
             select(NotificationPreference.account_id).where(
                 NotificationPreference.enabled.is_(True),
                 NotificationPreference.native_push_enabled.is_(True),
+                NotificationPreference.account_id.in_(_active_accounts()),
             )
         )).scalars().all())
         if summary is not None:

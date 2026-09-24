@@ -18,7 +18,85 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.identity.models import Account
+from app.domains.identity.models import ACCOUNT_STATUS_ACTIVE, Account
+
+# Account lifecycle locks
+# -----------------------
+# The accounts row is also the lifecycle lock for the account. Its status
+# changes (active -> deletion_requested, cancellation back to active, the
+# worker's deleted-then-DELETE) are ordinary non-key UPDATEs or a DELETE. So
+# PostgreSQL takes at least FOR NO KEY UPDATE on the row for every one of them,
+# whether or not the application asked first.
+#
+# Two helpers, one per side of that boundary:
+#
+# * :func:`hold_account_active`: FOR SHARE. It is the weakest mode that
+#   conflicts with a non-key UPDATE. Held by work that must not outlive the
+#   account's active life, for the rest of its transaction.
+# * :func:`lock_account_lifecycle`: FOR NO KEY UPDATE. It is the mode the
+#   status UPDATE takes anyway, taken before the status is read, so a request
+#   decides from the row it is about to change.
+#
+# FOR KEY SHARE (:func:`lock_account_against_delete`) is deliberately not
+# reused for either side. It conflicts only with FOR UPDATE, so a status UPDATE
+# goes straight past it.
+#
+# Order: whoever takes one of these takes it before any other row lock for
+# that account, and while holding it never waits on an account-deletion job
+# row. Cancellation and the deletion worker lock the job row first and the
+# account second, which is safe because nothing holding the account ever waits
+# for a job. See ``deletion_service`` for the full order.
+
+
+async def hold_account_active(session: AsyncSession, account_id: uuid.UUID) -> bool:
+    """Whether the account is active, held that way until this transaction ends.
+
+    ``SELECT status ... FOR SHARE``. It conflicts with the FOR NO KEY UPDATE
+    that any status change takes, and with the FOR UPDATE that the deletion
+    worker's DELETE takes. So:
+
+    * a deletion request that commits first is seen here, because a waiting
+      locking read in READ COMMITTED re-reads the newest row version;
+    * a deletion request that comes second waits for this transaction to end.
+
+    Two holders never block each other, and neither blocks the FOR KEY SHARE
+    held by decision appends.
+
+    The status column is read, not the ORM object, so an ``Account`` already
+    in the session's identity map cannot answer from before the wait.
+
+    Returns ``False`` for any status other than active, and for an account
+    that no longer exists.
+    """
+    status = await session.scalar(
+        select(Account.status)
+        .where(Account.id == account_id)
+        .with_for_update(read=True)
+    )
+    return status == ACCOUNT_STATUS_ACTIVE
+
+
+async def lock_account_lifecycle(
+    session: AsyncSession, account_id: uuid.UUID,
+) -> Account | None:
+    """Take the account's lifecycle transition lock and return the fresh row.
+
+    ``SELECT ... FOR NO KEY UPDATE``. It is the lock the status UPDATE would
+    take on its own, taken before the status is read. It waits for every
+    :func:`hold_account_active` holder and keeps new ones out until this
+    transaction ends. It is no stronger than the UPDATE itself, so FOR KEY
+    SHARE holders are not blocked.
+
+    ``populate_existing`` because the request that calls this has usually
+    loaded the account already, through its authentication dependency, before
+    the wait.
+    """
+    return (await session.execute(
+        select(Account)
+        .where(Account.id == account_id)
+        .with_for_update(key_share=True)
+        .execution_options(populate_existing=True)
+    )).scalar_one_or_none()
 
 
 async def lock_account_against_delete(

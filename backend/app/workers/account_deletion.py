@@ -153,11 +153,15 @@ async def run_cycle(
                 # doing it again to an account that no longer has any of it,
                 # against a state machine that thinks it never started.
                 #
-                # After run_job, not before: a commit between claim and run
-                # would persist the claim of a job whose processing then
-                # crashed. A controlled failure result is committed too --
-                # run_job wrote the retry or terminal state into this session,
-                # and that state is the record of the attempt.
+                # The claim itself is already committed: claim_next records
+                # started_at and the lease durably before handing the job
+                # over, so a crash in run_job leaves a job that visibly began
+                # and can no longer be cancelled -- never one that looks
+                # untouched over data that is already gone. This commit
+                # records what run_job did. A controlled failure result is
+                # committed too -- run_job wrote the retry or terminal state
+                # into this session, and that state is the record of the
+                # attempt.
                 await session.commit()
     except Exception as exc:  # noqa: BLE001 - the cycle itself failed
         # A fixed event and nothing else. Not logger.exception, which writes

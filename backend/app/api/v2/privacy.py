@@ -12,6 +12,15 @@ Guarantees the routes give back
   claims cross-system atomicity.
 * Reading another account's deletion status is impossible — the endpoint
   scopes by the caller's account id.
+
+Who may call what
+-----------------
+A deletion-requested account is no longer an active account, and every
+ordinary route refuses it through ``get_current_account``. The three deletion
+lifecycle routes below — request (idempotent), status and cancel — take
+``get_registered_account`` instead: the owner of a pending deletion must still
+be able to see it and, while no worker has touched it, cancel it. Export stays
+on the active-account dependency.
 """
 from __future__ import annotations
 
@@ -27,12 +36,12 @@ from app.domains.audit.models import (
 )
 from app.domains.privacy import deletion_service
 from app.domains.privacy import export as export_service
-from app.domains.privacy.models import DESTRUCTIVE_STATES
 from app.shared.database.sql import get_session
 from app.shared.security.deps import (
     CurrentAccount,
     client_ip,
     get_current_account,
+    get_registered_account,
     require_flag,
 )
 
@@ -74,7 +83,9 @@ async def export_data(
 @router.delete("/privacy/account", status_code=status.HTTP_202_ACCEPTED)
 async def delete_account(
     request: Request,
-    current: CurrentAccount = Depends(get_current_account),
+    # Registered, not active: a repeat request after the first has already
+    # made the account deletion-requested must still return the same job.
+    current: CurrentAccount = Depends(get_registered_account),
     session: AsyncSession = Depends(get_session),
 ):
     """Enqueue an account-deletion job. Idempotent.
@@ -98,7 +109,7 @@ async def delete_account(
 
 @router.get("/privacy/account-deletion")
 async def get_deletion_status(
-    current: CurrentAccount = Depends(get_current_account),
+    current: CurrentAccount = Depends(get_registered_account),
     session: AsyncSession = Depends(get_session),
 ):
     job = await deletion_service.get_job(session, current.account_id)
@@ -115,21 +126,29 @@ async def get_deletion_status(
 
 @router.post("/privacy/account-deletion/cancel")
 async def cancel_deletion(
-    request: Request,
-    current: CurrentAccount = Depends(get_current_account),
+    current: CurrentAccount = Depends(get_registered_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Cancel a pending deletion. Only possible before destructive work begins."""
-    job = await deletion_service.get_job(session, current.account_id)
-    if job is None:
+    """Cancel a pending deletion, only if no worker has ever started it.
+
+    The decision is the deletion service's, made under the job's row lock
+    (:func:`deletion_service.cancel_deletion`). This route only maps its
+    answer; it never inspects the job itself. On success the job row is
+    removed, so a later request creates a fresh job.
+    """
+    try:
+        await deletion_service.cancel_deletion(session, current.account_id)
+    except deletion_service.NoDeletionRequested:
+        await session.rollback()
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "code": "no_deletion_requested",
                 "message": "There is nothing to cancel.",
             },
-        )
-    if job.state in DESTRUCTIVE_STATES:
+        ) from None
+    except deletion_service.DeletionNotCancellable:
+        await session.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -138,20 +157,6 @@ async def cancel_deletion(
                     "Your deletion has already started and cannot be cancelled."
                 ),
             },
-        )
-    # Only the safe, pre-destructive states are cancellable. We drop the row
-    # entirely so a subsequent request creates a fresh job.
-    from sqlalchemy import delete
-
-    from app.domains.identity.models import ACCOUNT_STATUS_ACTIVE, Account
-    from app.domains.privacy.models import AccountDeletionJob
-
-    await session.execute(
-        delete(AccountDeletionJob).where(AccountDeletionJob.id == job.id)
-    )
-    account = await session.get(Account, current.account_id)
-    if account is not None:
-        account.status = ACCOUNT_STATUS_ACTIVE
-        account.deletion_requested_at = None
+        ) from None
     await session.commit()
     return {"status": "cancelled"}

@@ -8,7 +8,12 @@ work happen without holding a request open.
 Guarantees the worker enforces
 ------------------------------
 1. Storage is emptied *before* the account row is deleted. The listing has
-   to come back empty; a "delete may have succeeded" is not enough.
+   to come back empty; a "delete may have succeeded" is not enough. It is
+   proved twice: once at the start, and again immediately before the
+   database stage removes anything, because a request that was already in
+   flight when deletion was asked for can still write an object after the
+   first purge. If the second proof cannot be made, the job retries and
+   neither the account row nor the Auth identity is touched.
 2. The Supabase Auth identity is deleted **last**. Removing it before
    storage would leave orphan personal bytes with no owning identity.
 3. Every stage is idempotent. A crash between stages resumes at the same
@@ -18,6 +23,37 @@ Guarantees the worker enforces
    ``failed_terminal`` and is left for a human. No auto-escalation.
 5. Nothing personal is written to the job. The tombstone that remains after
    completion contains only the account UUID and timestamps.
+6. Once processing has begun it cannot be undone. The claim — ``started_at``
+   and the lease — is committed before the first destructive stage, and
+   ``started_at`` is never cleared, so a crash, a retryable failure or an
+   expired lease never returns the job to a cancellable shape.
+   :func:`cancel_deletion` decides under the job's row lock, so it serialises
+   with a worker's claim and exactly one of them wins.
+7. No media object for the account can be written after the deletion was
+   requested. :func:`request_deletion` takes the account's lifecycle lock
+   (FOR NO KEY UPDATE) before it changes the status. A media upload holds the
+   account FOR SHARE from immediately before its ``storage.put`` until its
+   transaction ends, and those two modes conflict. Every object therefore
+   either predates the job, and the purges remove it, or is never written.
+
+Lock order
+----------
+There are two roots, and neither kind of holder waits on the other's root:
+
+* **Account first.** ``request_deletion`` (FOR NO KEY UPDATE) and a media
+  upload (FOR SHARE) lock the accounts row before anything else. While
+  holding it they never wait on a job row. ``request_deletion`` reads the job
+  without a lock and inserts one only when none exists, and only a holder of
+  that same account lock can insert one.
+* **Job first.** :func:`cancel_deletion` (job FOR UPDATE, then the account
+  status UPDATE) and the worker (the job claim and run lock, then the account
+  DELETE) lock the job row and then the account.
+
+A cycle needs something holding the account to wait for a job row, and
+nothing does. An upload's media row and audit entry are new rows, inserted
+while it already holds the account, so for an upload they come after the
+account too. The worker's DELETE cascades into media rows only after it holds
+the account, by which time no upload can hold it.
 """
 from __future__ import annotations
 
@@ -30,7 +66,9 @@ from datetime import timedelta
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.identity import service as identity_service
 from app.domains.identity.models import (
+    ACCOUNT_STATUS_ACTIVE,
     ACCOUNT_STATUS_DELETED,
     ACCOUNT_STATUS_DELETION_REQUESTED,
     Account,
@@ -86,7 +124,17 @@ async def request_deletion(session: AsyncSession, account_id: uuid.UUID) -> Acco
 
     Marks the account ``deletion_requested`` and, if no active job exists,
     creates one in the ``requested`` state.
+
+    The account's lifecycle lock comes first, before anything is read. It
+    waits for every in-flight media upload that already holds the account
+    active (``identity_service.hold_account_active``), and it keeps new
+    uploads out until this transaction ends. Those uploads then see the new
+    status and write nothing. So the job cannot exist while an object for
+    this account is still being written. The job row is read here but never
+    locked: holding the account and then waiting on a job row would invert
+    the order that cancellation and the worker use.
     """
+    account = await identity_service.lock_account_lifecycle(session, account_id)
     existing = (
         await session.execute(
             select(AccountDeletionJob).where(AccountDeletionJob.account_id == account_id)
@@ -95,9 +143,6 @@ async def request_deletion(session: AsyncSession, account_id: uuid.UUID) -> Acco
     if existing is not None:
         return existing
 
-    account = (await session.execute(
-        select(Account).where(Account.id == account_id)
-    )).scalar_one_or_none()
     if account is not None and account.status != ACCOUNT_STATUS_DELETED:
         account.status = ACCOUNT_STATUS_DELETION_REQUESTED
         account.deletion_requested_at = utcnow()
@@ -110,6 +155,46 @@ async def request_deletion(session: AsyncSession, account_id: uuid.UUID) -> Acco
     session.add(job)
     await session.flush()
     return job
+
+
+class NoDeletionRequested(Exception):
+    """There is no deletion job for this account."""
+
+
+class DeletionNotCancellable(Exception):
+    """Destructive processing has begun; the deletion can no longer be undone."""
+
+
+async def cancel_deletion(session: AsyncSession, account_id: uuid.UUID) -> None:
+    """Cancel this account's deletion, only if no worker has ever touched it.
+
+    The authority for cancellation. It locks the job row ``FOR UPDATE`` —
+    without ``SKIP LOCKED`` — so it queues behind a worker that is claiming
+    the same row, and it re-reads the row it locked rather than anything read
+    earlier. Only then does it apply :meth:`AccountDeletionJob.can_cancel`,
+    which is decided from ``started_at`` and the lease as well as the state:
+    a job that has been claimed even once, whatever its visible state now, is
+    never cancellable again.
+
+    On success the job row is removed and the account is active again, in the
+    caller's transaction. Lock order is the worker's: job row, then account.
+    """
+    job = (await session.execute(
+        select(AccountDeletionJob)
+        .where(AccountDeletionJob.account_id == account_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if job is None:
+        raise NoDeletionRequested()
+    if not job.can_cancel():
+        raise DeletionNotCancellable()
+    await session.execute(delete(AccountDeletionJob).where(AccountDeletionJob.id == job.id))
+    account = await session.get(Account, account_id)
+    if account is not None and account.status == ACCOUNT_STATUS_DELETION_REQUESTED:
+        account.status = ACCOUNT_STATUS_ACTIVE
+        account.deletion_requested_at = None
+    await session.flush()
 
 
 async def get_job(session: AsyncSession, account_id: uuid.UUID) -> AccountDeletionJob | None:
@@ -159,7 +244,38 @@ async def claim_next(session: AsyncSession) -> AccountDeletionJob | None:
 
     Uses ``SELECT … FOR UPDATE SKIP LOCKED`` so two workers can safely poll
     the same table without stepping on each other's toes.
+
+    The claim is **committed** before this returns, and the row is locked
+    again for the caller. Everything :func:`run_job` does after this point may
+    be irreversible — storage purged, an integration revoked — so the record
+    that processing began must not live only in the transaction that does it:
+    a crash, or a database error that poisons that transaction, would roll the
+    claim back and leave a job that looks untouched and cancellable over an
+    account that has already lost data. With the claim committed, the lease
+    keeps other workers off the job in the moment between the commit and the
+    re-lock, a cancellation arriving then sees ``started_at`` and refuses, and
+    the re-lock holds the row for the rest of the run exactly as before.
     """
+    job = await _claim_locked(session)
+    if job is None:
+        return None
+    job_id, owner, lease = job.id, job.lease_owner, job.lease_expires_at
+    await session.commit()
+    job = (await session.execute(
+        select(AccountDeletionJob)
+        .where(AccountDeletionJob.id == job_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if job is None or job.lease_owner != owner or job.lease_expires_at != lease:
+        # Not ours any more. Cannot happen inside a live lease; refuse rather
+        # than run a job somebody else holds.
+        return None
+    return job
+
+
+async def _claim_locked(session: AsyncSession) -> AccountDeletionJob | None:
+    """The claim itself, under ``FOR UPDATE SKIP LOCKED``, not yet committed."""
     now = utcnow()
     stmt = (
         select(AccountDeletionJob)
@@ -228,6 +344,23 @@ async def run_job(session: AsyncSession, job: AccountDeletionJob) -> tuple[str, 
             await session.flush()
 
         if job.state == STATE_DATABASE_DELETING:
+            # Final storage barrier, before anything irreversible in the
+            # database and so before the Auth identity. The purge at the start
+            # proved the prefix empty *then*; a request already in flight when
+            # deletion was asked for can have written an object since. Purge
+            # the same prefix again through the same authority and continue
+            # only when a fresh listing is empty. Remaining keys, or any
+            # storage error below, fail closed through the retry path with the
+            # account row and the Auth identity untouched, and the retry
+            # resumes here.
+            _removed, remaining = await media_service.purge_account_storage(job.account_id)
+            if remaining:
+                logger.warning(
+                    "account_deletion_final_storage_incomplete account=%s remaining=%d",
+                    job.account_id, len(remaining),
+                )
+                _schedule_retry(job, code="storage_incomplete", stage=STATE_DATABASE_DELETING)
+                return job.state, "storage_incomplete"
             # Before the cascade: rows the cascade will not reach, and which
             # could not be found by account afterwards.
             await _delete_ai_outputs(session, job.account_id)
@@ -522,6 +655,9 @@ async def drain_all(session: AsyncSession, *, max_iterations: int = 100) -> int:
 __all__ = [
     "AccountDeletionJob",
     "DESTRUCTIVE_STATES",
+    "DeletionNotCancellable",
+    "NoDeletionRequested",
+    "cancel_deletion",
     "claim_next",
     "drain_all",
     "get_job",

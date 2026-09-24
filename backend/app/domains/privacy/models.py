@@ -99,8 +99,22 @@ class AccountDeletionJob(UUIDPrimaryKey, TimestampMixin, Base):
         return self.state in TERMINAL_STATES
 
     def can_cancel(self) -> bool:
-        """True while the job has not yet begun destructive work."""
-        return self.state == STATE_REQUESTED
+        """True only while no worker has ever touched this job.
+
+        Decided from durable facts, not from the visible state alone. A worker
+        sets ``started_at`` and a lease when it claims the job, before any
+        destructive stage, and ``started_at`` is never cleared. A failure that
+        moves the visible state to ``failed_retryable`` or ``failed_terminal``,
+        or a lease that has since expired, therefore never makes a deletion
+        that has begun cancellable again. Callers must hold the row lock
+        (``deletion_service.cancel_deletion``) when they act on this.
+        """
+        return (
+            self.state == STATE_REQUESTED
+            and self.started_at is None
+            and self.lease_owner is None
+            and self.lease_expires_at is None
+        )
 
     __table_args__ = (
         Index("ix_account_deletion_jobs_state", "state", "next_retry_at"),

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.audit import service as audit
 from app.domains.audit.models import ACTION_MEDIA_DELETED, ACTION_MEDIA_UPLOADED
+from app.domains.identity import service as identity_service
 from app.domains.media.models import (
     MEDIA_STATUS_ACTIVE,
     MEDIA_STATUS_DELETED,
@@ -47,6 +48,14 @@ from app.shared.errors.exceptions import (
 from app.shared.validation.media import read_dimensions, validate_upload
 
 logger = logging.getLogger(__name__)
+
+
+class AccountNotActive(Exception):
+    """The account may not store anything new: its deletion has been asked for.
+
+    Raised before any byte is written. The route turns it into the same 403
+    ``ACCOUNT_INACTIVE`` the authentication dependency gives.
+    """
 
 
 def to_public_dict(asset: MediaAsset) -> dict[str, Any]:
@@ -109,6 +118,20 @@ async def upload(
     asset_id = new_uuid()
     key = build_key(account_id, asset_id, content_type)
     storage = get_storage()
+
+    # The account lifecycle boundary, immediately before the bytes. The request
+    # authenticated earlier as active, but that proves nothing about now. This
+    # holds the account row FOR SHARE until the caller's transaction ends:
+    # - if a deletion request committed first, the account is seen as not
+    #   active and nothing is written;
+    # - otherwise the request waits, and the object, the row and the audit
+    #   entry below all exist before the deletion job does. The job's purges
+    #   then remove the object.
+    # No object under an account prefix can be written after that account's
+    # deletion was requested, which is what the final storage barrier relies
+    # on.
+    if not await identity_service.hold_account_active(session, account_id):
+        raise AccountNotActive()
 
     # Bytes first. A storage failure must not leave a database row pointing at
     # an object that was never written.
