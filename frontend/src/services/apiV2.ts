@@ -134,13 +134,21 @@ export interface FinalizeRegistrationResponse {
   invite_redeemed: boolean;
 }
 
-/** Step 3: finalise registration for the currently-authenticated Supabase user. */
+/**
+ * Step 3: finalise registration for the currently-authenticated Supabase user.
+ *
+ * With ``expectedAccountId`` it is sent as that account or not at all, so a
+ * finalisation started for one account can never create another.
+ */
 export const finalizeRegistration = async (
-  registration_challenge?: string
+  registration_challenge?: string,
+  options: { expectedAccountId?: string } = {}
 ): Promise<FinalizeRegistrationResponse> =>
-  (await api.post<FinalizeRegistrationResponse>(`${V2}/access/register`, {
-    registration_challenge,
-  })).data;
+  (await api.post<FinalizeRegistrationResponse>(
+    `${V2}/access/register`,
+    { registration_challenge },
+    { expectedAccountId: options.expectedAccountId }
+  )).data;
 
 // --- Admin: reservation metrics -------------------------------------------
 
@@ -534,10 +542,16 @@ export interface AppearanceProfile {
 export const getAppearanceProfile = async (): Promise<AppearanceProfile> =>
   (await api.get<AppearanceProfile>(`${V2}/profile`)).data;
 
+/** With ``expectedAccountId`` the change is sent as that account or not at all. */
 export const patchAppearanceProfile = async (
-  attributes: { key: string; value: string | number | string[] }[]
+  attributes: { key: string; value: string | number | string[] }[],
+  options: { expectedAccountId?: string } = {}
 ): Promise<AppearanceProfile> =>
-  (await api.patch<AppearanceProfile>(`${V2}/profile`, { attributes })).data;
+  (await api.patch<AppearanceProfile>(
+    `${V2}/profile`,
+    { attributes },
+    { expectedAccountId: options.expectedAccountId }
+  )).data;
 
 export const getProfileObservations = async (): Promise<ProfileObservation[]> =>
   (await api.get<{ observations: ProfileObservation[] }>(`${V2}/profile/observations`)).data.observations;

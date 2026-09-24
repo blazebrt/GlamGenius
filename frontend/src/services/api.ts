@@ -7,7 +7,8 @@
  *
  * Two response codes trigger client-side navigation (§2 hardening spec):
  *
- *   401 Unauthorized              → sign out of Supabase, go to /(auth)/welcome
+ *   401 Unauthorized              → end the session locally at once, then sign
+ *                                    out of Supabase, go to /(auth)/welcome
  *   403 REGISTRATION_REQUIRED     → keep the Supabase session, route to
  *                                    /(auth)/registration-incomplete so the
  *                                    user can finish invite redemption.
@@ -21,6 +22,12 @@
  * decides whether a response still speaks for the current identity. A 401 or
  * REGISTRATION_REQUIRED that belonged to an account which has since signed out
  * or been replaced is passed back to its caller and changes nothing else.
+ *
+ * That is the response side. The request side is separate: a request that
+ * belongs to one particular account carries ``expectedAccountId`` and is sent
+ * with that account's own token or not at all. Checking a response afterwards
+ * can protect local state, but it cannot take back a change the server has
+ * already made as the wrong account.
  */
 import axios from 'axios';
 import { router } from 'expo-router';
@@ -173,8 +180,12 @@ api.interceptors.response.use(
 
     if (status === 401) {
       if (!authAuthority || authAuthority.acceptsUnauthorized(stamp)) {
-        await signOut().catch(() => {});
+        // Locally first, and synchronously: the session is over the moment
+        // this 401 is accepted, and every result still in flight for it is
+        // stale from here. Waiting for Supabase first would leave that window
+        // open for as long as the sign-out takes.
         onUnauthorized?.();
+        await signOut().catch(() => {});
         try {
           router.replace('/(auth)/welcome');
         } catch {

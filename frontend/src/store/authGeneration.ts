@@ -20,6 +20,12 @@
  * ordered by when their request started, and a fact from an older request
  * never overwrites one from a newer request.
  *
+ * An invite registration in progress decides its own account's registration
+ * state, so it holds back that account's background check and routing while
+ * it runs. That authority belongs to one identity, never to the app: a flow is
+ * owned by the generation and account it started for, and it has no say over
+ * any other identity, including one that signs in while it is still running.
+ *
  * This module holds no React or Zustand state; the user store is its only
  * writer.
  */
@@ -37,7 +43,24 @@ let generation = 0;
 let accountId = '';
 let factClock = 0;
 let appliedFact = 0;
-let registrationFlows = 0;
+
+/** The identity a registration flow decides. */
+interface FlowOwner {
+  readonly generation: number;
+  readonly accountId: string;
+}
+
+interface FlowRecord {
+  owner: FlowOwner | null;
+  /** A sign-up flow started before its account existed: the email it is creating. */
+  readonly signUpEmail: string | null;
+}
+
+let nextFlowId = 0;
+const liveFlows = new Map<number, FlowRecord>();
+
+const normalizeEmail = (email: string | null | undefined): string =>
+  (email ?? '').trim().toLowerCase();
 
 /** The identity that is current right now, as a ticket. */
 export function currentAuth(): AuthTicket {
@@ -52,10 +75,23 @@ export function authAccountId(): string {
 /**
  * A new identity, or none. Every ticket issued before this call is stale from
  * the moment it returns, so work still in flight can no longer write.
+ *
+ * ``email`` is the new identity's own address. A sign-up flow waiting for the
+ * account it is creating binds to it here, in the same synchronous step that
+ * opens the generation. So no check scheduled for that identity can ever see
+ * it unowned, whatever order timers and promises then run in.
  */
-export function openAuthGeneration(nextAccountId: string): AuthTicket {
+export function openAuthGeneration(nextAccountId: string, email?: string | null): AuthTicket {
   generation += 1;
   accountId = nextAccountId;
+  const address = normalizeEmail(email);
+  if (nextAccountId && address) {
+    for (const flow of liveFlows.values()) {
+      if (flow.owner === null && flow.signUpEmail === address) {
+        flow.owner = { generation, accountId: nextAccountId };
+      }
+    }
+  }
   return currentAuth();
 }
 
@@ -94,27 +130,76 @@ export function registrationFactIsCurrent(ticket: AuthTicket): boolean {
   return isCurrentAuth(ticket) && ticket.fact >= appliedFact;
 }
 
-/**
- * Mark an invite registration as in progress until the returned function is
- * called.
- *
- * While one is running, that flow alone decides the new account's
- * registration state. A background check does not start, and a
- * REGISTRATION_REQUIRED from a request that raced the finalisation cannot
- * move the person off the path to onboarding.
- */
-export function enterRegistrationFlow(): () => void {
-  registrationFlows += 1;
-  let left = false;
-  return () => {
-    if (left) return;
-    left = true;
-    registrationFlows -= 1;
+/** One invite registration in progress, and the identity it holds authority over. */
+export interface RegistrationFlow {
+  /**
+   * Bind a flow that has no owner yet to ``ticket``'s identity. A flow that is
+   * already bound keeps its owner: it is never moved to another identity.
+   */
+  bind(ticket: AuthTicket): void;
+  /**
+   * The identity this flow decides, or null while it has none. Its ``fact`` is
+   * 0: it identifies the identity and is not a registration fact.
+   */
+  owner(): AuthTicket | null;
+  /** Give up the flow's authority. Idempotent, and it affects this flow only. */
+  leave(): void;
+}
+
+function openFlow(record: FlowRecord): RegistrationFlow {
+  nextFlowId += 1;
+  const id = nextFlowId;
+  liveFlows.set(id, record);
+  return {
+    bind(ticket) {
+      if (record.owner !== null || !ticket.accountId) return;
+      record.owner = { generation: ticket.generation, accountId: ticket.accountId };
+    },
+    owner() {
+      return record.owner ? { ...record.owner, fact: 0 } : null;
+    },
+    leave() {
+      liveFlows.delete(id);
+    },
   };
 }
 
-export function registrationFlowActive(): boolean {
-  return registrationFlows > 0;
+/**
+ * An invite registration for ``ticket``'s identity, bound from the start.
+ *
+ * While it runs, that flow alone decides that identity's registration state.
+ * Its background check does not start, and a REGISTRATION_REQUIRED from a
+ * request that raced the finalisation cannot move the person off the path to
+ * onboarding. It holds no authority over any other identity: once another
+ * account signs in, or this one signs out, it is simply stale.
+ */
+export function enterRegistrationFlow(ticket: AuthTicket): RegistrationFlow {
+  const flow = openFlow({ owner: null, signUpEmail: null });
+  flow.bind(ticket);
+  return flow;
+}
+
+/**
+ * A sign-up that starts before its account exists.
+ *
+ * It owns nothing until the identity for ``email`` is opened, and binds to that
+ * identity alone, synchronously, as it is opened (see ``openAuthGeneration``).
+ * Unbound, it holds nothing back for anyone.
+ */
+export function enterSignUpRegistrationFlow(email: string): RegistrationFlow {
+  return openFlow({ owner: null, signUpEmail: normalizeEmail(email) || null });
+}
+
+/** Whether a live registration flow owns exactly ``ticket``'s generation and account. */
+export function registrationFlowOwns(ticket: AuthTicket): boolean {
+  if (!ticket.accountId) return false;
+  for (const flow of liveFlows.values()) {
+    const owner = flow.owner;
+    if (owner && owner.generation === ticket.generation && owner.accountId === ticket.accountId) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Type guard for a ticket carried through code that only sees `unknown`. */

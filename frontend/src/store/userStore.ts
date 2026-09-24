@@ -54,12 +54,14 @@ import {
   beginRegistrationFact,
   currentAuth,
   enterRegistrationFlow,
+  enterSignUpRegistrationFlow,
   isAuthTicket,
   isCurrentAuth,
   openAuthGeneration,
   registrationFactIsCurrent,
-  registrationFlowActive,
+  registrationFlowOwns,
   type AuthTicket,
+  type RegistrationFlow,
 } from './authGeneration';
 
 const CHALLENGE_STORAGE_KEY = '@glamgenius/registration_challenge_v2';
@@ -249,7 +251,8 @@ function adoptSession(session: Session): boolean {
     useUserStore.setState({ session, userId: nextId });
     return false;
   }
-  openAuthGeneration(nextId);
+  // The email lets a sign-up flow waiting for this account bind to it now.
+  openAuthGeneration(nextId, session.user.email);
   useUserStore.setState({
     session,
     userId: nextId,
@@ -354,28 +357,58 @@ let scheduledGeneration: number | null = null;
  * returned, so the check waits for the lock like any other caller instead.
  *
  * One timer per generation. By the time it fires the ticket may be stale (a
- * later event superseded it) or a registration flow may be deciding the
- * account itself; in both cases it does nothing.
+ * later event superseded it), or a registration flow owned by this same
+ * identity may be deciding the account itself; in both cases it does nothing.
+ * A flow owned by any other identity, current or stale, does not hold it back.
  */
 function scheduleReconciliation(ticket: AuthTicket): void {
   if (scheduledGeneration === ticket.generation) return;
   scheduledGeneration = ticket.generation;
   setTimeout(() => {
     if (scheduledGeneration === ticket.generation) scheduledGeneration = null;
-    if (!isCurrentAuth(ticket) || registrationFlowActive()) return;
+    if (!isCurrentAuth(ticket) || registrationFlowOwns(ticket)) return;
     void reconcileRegistration();
   }, 0);
 }
 
 /**
- * Once no registration flow is running, an identity still ``resolving`` gets
- * its ordinary check. This is what happens after a registration that failed
- * part-way.
+ * End a registration flow. If the identity it owned is still current, no other
+ * flow owns it, and it is still ``resolving``, that identity now gets the check
+ * its own flow held back. This is what happens after a registration that
+ * failed part-way.
+ *
+ * A flow that has gone stale ends without touching anything: the identity
+ * that replaced its owner was never held back by it and reconciles on its own.
  */
-function reconcileIfUnresolved(): void {
-  if (registrationFlowActive()) return;
+function endRegistrationFlow(flow: RegistrationFlow): void {
+  flow.leave();
+  const owner = flow.owner();
+  if (!owner || !isCurrentAuth(owner) || registrationFlowOwns(owner)) return;
   if (useUserStore.getState().registrationState !== 'resolving') return;
   void reconcileRegistration();
+}
+
+/** The answer to a registration whose identity changed while it was out. */
+const staleRegistration = (): AuthResult => ({ ok: false, code: 'unknown' });
+
+/**
+ * Forget a reservation challenge, but only if it is still ``challenge``.
+ *
+ * The challenge storage is one slot per phone. A registration that finishes
+ * after another identity has taken over may only clear the challenge it spent
+ * itself, never one the newer identity has put there since.
+ */
+async function clearChallengeIfStill(challenge: string): Promise<void> {
+  if (useUserStore.getState().pendingChallenge === challenge) {
+    useUserStore.setState({ pendingChallenge: null });
+  }
+  let stored: string | null = null;
+  try {
+    stored = await secureSessionStorage.getItem(CHALLENGE_STORAGE_KEY);
+  } catch {
+    stored = null;
+  }
+  if (stored === null || stored === challenge) await writeStoredChallenge(null);
 }
 
 /**
@@ -466,8 +499,10 @@ export const useUserStore = create<UserStore>((set, get) => ({
   reserveAndRegister: async (name, email, password, inviteCode) => {
     set({ loading: true });
     // From before the Supabase sign-up: its SIGNED_IN event must not start a
-    // competing check while this flow finalises the account.
-    const leaveFlow = enterRegistrationFlow();
+    // competing check while this flow finalises the account. The flow owns
+    // nothing yet. It binds to the identity Supabase opens for this email,
+    // synchronously, inside that SIGNED_IN, and holds back nobody else.
+    const flow = enterSignUpRegistrationFlow(email);
     try {
       // Step 1: reserve the invite BEFORE creating a Supabase identity.
       try {
@@ -516,22 +551,26 @@ export const useUserStore = create<UserStore>((set, get) => ({
       // Step 3: finalise. Since Supabase returned a session immediately we
       // can call ``/access/register`` right now.
       adoptSession(data.session);
+      // Normally already bound, by the SIGNED_IN event. If Supabase announced
+      // nothing, or kept the same account, bind to the identity it returned.
+      flow.bind(currentAuth());
       return await get().finishPendingRegistration();
     } catch (err) {
        
       console.error('reserveAndRegister error:', err);
       return { ok: false, code: 'network', message: 'Network error.' };
     } finally {
-      leaveFlow();
-      reconcileIfUnresolved();
+      endRegistrationFlow(flow);
       set({ loading: false });
     }
   },
 
   finishPendingRegistration: async () => {
-    const leaveFlow = enterRegistrationFlow();
+    // The account this finalisation is for. It is fixed here, and nothing
+    // below may land on, or be sent as, any other account.
+    const owner = currentAuth();
+    const flow = owner.accountId ? enterRegistrationFlow(owner) : null;
     try {
-      const started = currentAuth();
       const challenge =
         get().pendingChallenge ?? (await readStoredChallenge());
       if (!challenge) {
@@ -542,35 +581,25 @@ export const useUserStore = create<UserStore>((set, get) => ({
             'Your invite reservation has been lost. Please start again from the sign-up screen.',
         };
       }
+      if (!flow || !isCurrentAuth(owner)) {
+        // No signed-in account started this, or it has already been replaced.
+        // Nothing is sent: finalisation is only ever made as its own account.
+        return owner.accountId
+          ? staleRegistration()
+          : { ok: false, code: 'unknown', message: 'Could not finish registration.' };
+      }
       try {
         // Called for its effect: the account row is created server-side. The
         // response body carries nothing this screen needs, but a failure must
-        // still reach the catch below, so the await stays.
-        await finalizeRegistration(challenge);
-        await writeStoredChallenge(null);
-        // Taken after finalisation completed, so it is newer than any request
-        // that started before the account existed, including a REGISTRATION_REQUIRED
-        // still on its way back.
-        const fact = beginRegistrationFact(started);
-        if (currentAuth().generation !== started.generation) {
-          // The identity changed while the account was being created. Nothing
-          // about that account may land on whoever is signed in now, and the
-          // caller must not take this person to onboarding.
-          set({ pendingChallenge: null });
-          return { ok: false, code: 'unknown' };
-        }
-        // The newest registration fact for this identity, so an older
-        // REGISTRATION_REQUIRED can no longer overwrite it.
-        acceptRegistrationFact(fact);
-        set({ pendingChallenge: null, registrationState: 'registered' });
-        await get().fetchUser();
-        return { ok: true };
+        // still reach the catch below, so the await stays. Account-bound: it is
+        // sent with the owner's own token or not at all.
+        await finalizeRegistration(challenge, { expectedAccountId: owner.accountId });
       } catch (err: any) {
+        if (!isCurrentAuth(owner)) return staleRegistration();
         const detail = err?.response?.data?.detail;
         const code = detail?.code as string | undefined;
         if (code === 'reservation_expired' || code === 'reservation_invalid') {
-          await writeStoredChallenge(null);
-          set({ pendingChallenge: null });
+          await clearChallengeIfStill(challenge);
           return {
             ok: false,
             code: 'reservation_expired',
@@ -584,9 +613,27 @@ export const useUserStore = create<UserStore>((set, get) => ({
           message: detail?.message ?? 'Could not finish registration.',
         };
       }
+      // The owner's account now exists and its challenge is spent. Clear that
+      // challenge, and only that one, whoever is signed in by now.
+      await clearChallengeIfStill(challenge);
+      // Taken after finalisation completed, so it is newer than any request
+      // that started before the account existed, including a REGISTRATION_REQUIRED
+      // still on its way back.
+      const fact = beginRegistrationFact(owner);
+      if (!isCurrentAuth(owner)) {
+        // The identity changed while the account was being created. Nothing
+        // about that account may land on whoever is signed in now, and the
+        // caller must not take this person to onboarding.
+        return staleRegistration();
+      }
+      // The newest registration fact for this identity, so an older
+      // REGISTRATION_REQUIRED can no longer overwrite it.
+      acceptRegistrationFact(fact);
+      set({ registrationState: 'registered' });
+      await get().fetchUser();
+      return { ok: true };
     } finally {
-      leaveFlow();
-      reconcileIfUnresolved();
+      if (flow) endRegistrationFlow(flow);
     }
   },
 
@@ -648,7 +695,9 @@ export const useUserStore = create<UserStore>((set, get) => ({
         key,
         value: value as string | number | string[],
       }));
-      await patchAppearanceProfile(attributes);
+      // Account-bound: this person's attributes are sent as this person or
+      // not at all, never as whoever has signed in since.
+      await patchAppearanceProfile(attributes, { expectedAccountId: ticket.accountId });
       // The refreshed profile is only for the account that made the change.
       if (isCurrentAuth(ticket)) await get().fetchUser();
     } catch (err) {
@@ -705,7 +754,10 @@ setAuthResponseAuthority({
     !isAuthTicket(stamp) || stamp.generation === currentAuth().generation,
   // REGISTRATION_REQUIRED moves someone to the registration screen only if it
   // is about them, is not older than the last registration fact, and no
-  // registration flow is deciding the account right now.
+  // registration flow owned by that same identity is deciding it right now.
+  // A flow that belongs to any other identity has no say.
   acceptsRegistrationRequired: (stamp) =>
-    !registrationFlowActive() && (!isAuthTicket(stamp) || registrationFactIsCurrent(stamp)),
+    isAuthTicket(stamp)
+      ? registrationFactIsCurrent(stamp) && !registrationFlowOwns(stamp)
+      : !registrationFlowOwns(currentAuth()),
 });
