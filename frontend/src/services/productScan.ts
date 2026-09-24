@@ -21,7 +21,7 @@ import axios from 'axios';
 
 import { getInstallationId } from './deviceIdentity';
 import { api } from './api';
-import type { ProductVerdictWire, PurchaseOsCheck } from './apiV2';
+import { claimScanDevice, type ProductVerdictWire, type PurchaseOsCheck } from './apiV2';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
@@ -739,19 +739,29 @@ export const REASON_KEY_PERSONAL_CONTEXT = 'for_you.not_enough.personal_context'
  * model call is spent before that refusal would otherwise be discovered. So
  * ownership is settled first: registering costs nothing, and a wasted
  * transcription costs the person a photograph and us a model call.
+ *
+ * ``accountId`` is the account the caller is acting for. Every claim, the
+ * first and the one after a stale-device recovery, is account-bound through
+ * ``claimScanDevice``: it is sent with that account's own token or not at all.
+ * If someone else is signed in by the time it would go out, nothing is sent,
+ * nothing is recorded, and the answer is false.
  */
 export async function ensureDeviceClaimed(accountId: string): Promise<boolean> {
+  if (!accountId) return false;
   const device = await ensureDevice();
   if (!device?.token) return false;
   const token = await tokenToClaimFor(accountId);
   if (!token) return true;
   try {
-    await api.post('/api/v2/scan/device/claim', {}, { headers: { 'X-Device-Token': token } });
+    await claimScanDevice(token, { expectedAccountId: accountId });
+    // Only reached when the server accepted a claim made as ``accountId``.
     await markDeviceClaimed(accountId);
     return true;
   } catch (error) {
     const code = (error as { response?: { data?: { detail?: { code?: string } } } })
       ?.response?.data?.detail?.code;
+    // Anything else, including a claim refused before it was sent because
+    // another account is signed in, is a plain no.
     if (code !== 'DEVICE_UNKNOWN') return false;
     // The stored credential is stale, not the account. Re-register once and
     // claim the fresh one. Exactly once: a loop here would spin forever.
@@ -759,7 +769,7 @@ export async function ensureDeviceClaimed(accountId: string): Promise<boolean> {
     const fresh = await ensureDevice();
     if (!fresh?.token) return false;
     try {
-      await api.post('/api/v2/scan/device/claim', {}, { headers: { 'X-Device-Token': fresh.token } });
+      await claimScanDevice(fresh.token, { expectedAccountId: accountId });
       await markDeviceClaimed(accountId);
       return true;
     } catch {

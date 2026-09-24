@@ -27,6 +27,7 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useUserStore } from '../src/store/userStore';
+import { PRODUCT_HOME_ROUTE, SIGNED_OUT_ROUTE } from '../src/navigation/authRoutes';
 import { getReservationStats, ReservationStats } from '../src/services/apiV2';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../src/theme/colors';
 
@@ -61,12 +62,14 @@ export default function AdminDashboard() {
     // Route guard runs after userStore is hydrated so we don't redirect a
     // legitimate admin while the /me response is still in flight.
     if (!initialized) return;
+    // A signed-in identity whose account is still being checked: wait.
+    if (registrationState === 'resolving') return;
     if (registrationState !== 'registered') {
-      router.replace('/(auth)/welcome');
+      router.replace(SIGNED_OUT_ROUTE);
       return;
     }
     if (!isAdmin) {
-      router.replace('/(tabs)/today');
+      router.replace(PRODUCT_HOME_ROUTE);
       return;
     }
     void load();
@@ -91,9 +94,9 @@ export default function AdminDashboard() {
           onPress={() => {
             try {
               if (router.canGoBack()) router.back();
-              else router.replace('/(tabs)/today');
+              else router.replace(PRODUCT_HOME_ROUTE);
             } catch {
-              router.replace('/(tabs)/today');
+              router.replace(PRODUCT_HOME_ROUTE);
             }
           }}
           style={styles.backButton}

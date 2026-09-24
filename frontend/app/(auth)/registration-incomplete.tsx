@@ -12,8 +12,14 @@
  * 2. The user signed in but had never completed invite redemption. Their
  *    reservation challenge is not in storage; they must sign out and start
  *    again with an invite code.
+ *
+ * Navigation (``src/navigation/authRoutes.ts``): an account that turns out to
+ * be registered already goes to the product home. One that this screen has
+ * just finished registering goes to onboarding instead, exactly once. While
+ * that finish is running, the "registered" effect does not route at all, so it
+ * cannot race the onboarding navigation.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -27,6 +33,11 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useUserStore } from '../../src/store/userStore';
+import {
+  FIRST_REGISTRATION_ROUTE,
+  PRODUCT_HOME_ROUTE,
+  SIGNED_OUT_ROUTE,
+} from '../../src/navigation/authRoutes';
 import { COLORS, FONTS, SPACING, RADIUS } from '../../src/theme/colors';
 
 function notify(title: string, message: string) {
@@ -45,23 +56,37 @@ export default function RegistrationIncomplete() {
     registrationState,
   } = useUserStore();
   const [busy, setBusy] = useState(false);
+  // True from the moment this screen starts finishing a registration. The
+  // finish owns the navigation from then on: onboarding when it succeeds.
+  const finishing = useRef(false);
 
   const hasChallenge = !!pendingChallenge;
 
   useEffect(() => {
     if (registrationState === 'registered') {
-      router.replace('/(tabs)/today');
+      // Registered by the finish below: that path goes to onboarding itself.
+      if (finishing.current) return;
+      // Already registered when this screen was reached: the product home.
+      router.replace(PRODUCT_HOME_ROUTE);
     } else if (!session) {
-      router.replace('/(auth)/welcome');
+      router.replace(SIGNED_OUT_ROUTE);
     }
   }, [registrationState, session, router]);
 
   const handleFinish = async () => {
+    finishing.current = true;
     setBusy(true);
     try {
       const result = await finishPendingRegistration();
       if (result.ok) {
-        router.replace('/onboarding');
+        // The only navigation for a newly created account, and it happens once.
+        router.replace(FIRST_REGISTRATION_ROUTE);
+        return;
+      }
+      finishing.current = false;
+      if (useUserStore.getState().registrationState === 'registered') {
+        // Not created here (it already existed): an ordinary registered account.
+        router.replace(PRODUCT_HOME_ROUTE);
       } else if (result.code === 'reservation_expired') {
         notify(
           'Reservation expired',
@@ -69,10 +94,13 @@ export default function RegistrationIncomplete() {
             'Your invite reservation expired. Please start again with your invite code.'
         );
         await logout();
-        router.replace('/(auth)/welcome');
+        router.replace(SIGNED_OUT_ROUTE);
       } else {
         notify('Could not finish', result.message ?? 'Please try again.');
       }
+    } catch (error) {
+      finishing.current = false;
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -80,7 +108,7 @@ export default function RegistrationIncomplete() {
 
   const handleStartOver = async () => {
     await logout();
-    router.replace('/(auth)/welcome');
+    router.replace(SIGNED_OUT_ROUTE);
   };
 
   return (
