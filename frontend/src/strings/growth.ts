@@ -23,7 +23,7 @@
 import { ODBL_ATTRIBUTION_TEXT, ODBL_LICENSE_URL, OFF_SOURCE_URL } from '../components/common/OpenFoodFactsAttribution';
 
 /** Bump whenever any sentence below changes, so a shared message traces to its wording. */
-export const GROWTH_COPY_VERSION = 'growth-copy.v1';
+export const GROWTH_COPY_VERSION = 'growth-copy.v2';
 
 /** Interpolation, the same shape as the verdict strings' `t`. */
 export const fill = (template: string, values: Record<string, string | number> = {}): string =>
@@ -32,7 +32,11 @@ export const fill = (template: string, values: Record<string, string | number> =
 export const GROWTH = {
   share: {
     intro: 'I checked this with GlamGenius before buying.',
-    unnamedProduct: 'A product without a recorded name',
+    // The product name is untrusted text, so it only ever sits inside this line.
+    product: 'Product: {name}',
+    unnamedProduct: 'name not recorded',
+    // Marks a product or source name cut to length.
+    truncated: '…',
     decision: 'GlamGenius result: {decision}',
     decisionWord: {
       buy: 'BUY',

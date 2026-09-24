@@ -27,7 +27,9 @@ describe('ensureShareReferralCode', () => {
   });
 
   it.each([
-    ['not_activated', null], ['ready', null], ['exhausted', null], ['withdrawn', null], ['unavailable', null],
+    ['not_activated', null], ['ready', null], ['capacity_reserved', null], ['exhausted', null], ['withdrawn', null], ['unavailable', null],
+    // A held-capacity answer never yields a code, even from a server that sent one.
+    ['capacity_reserved', 'ABCDEFGH23'],
     ['available', 'abc'], ['available', 'ABC DEF 123'], ['available', 'ABCDEFGH23\nhttps://x'],
   ])('returns nothing for %s / %s', async (state, code) => {
     postSpy.mockResolvedValueOnce(referral(state, code));

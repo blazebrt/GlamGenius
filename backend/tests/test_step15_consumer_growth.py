@@ -7,8 +7,10 @@ endpoint. Letters group the suite:
 
 * A — activation and referral eligibility
 * R — referral issuance, ceiling, replacement, concurrency
+* C — a shareable code is a reservable code: live reservations hold places
 * S — the referral code inside the unchanged invite security protocol
 * D — account deletion and the referral capability
+* K — rollback: the downgrade switches every referral capability off
 * E — growth telemetry: whitelist, idempotency, failure, retention
 * P — privacy export and erasure
 * M — admin growth metrics and their definitions
@@ -20,6 +22,7 @@ import ast
 import asyncio
 import json
 import re
+import sys
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -37,6 +40,7 @@ from app.domains.identity.models import Account
 from app.domains.privacy import REGISTRY, Classification, deletion_service
 from app.domains.privacy import export as export_service
 from app.domains.product.models import LabelSnapshot, ProductWatch, ScanEvent
+from app.shared.database import sql
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select, text, update
 
@@ -469,6 +473,256 @@ async def test_r_a_code_collision_is_retried_not_surfaced(monkeypatch, db_clean,
 
 
 # ---------------------------------------------------------------------------
+# C — a shareable code is a reservable code: live reservations hold places
+# ---------------------------------------------------------------------------
+CAPACITY_RESERVED = {"program_version": PROGRAM_VERSION, "state": "capacity_reserved", "referral": None}
+
+
+async def _lapse_holds(code: str, *, limit: int | None = None) -> None:
+    """Move live holds past their time without the sweep: status stays active."""
+    async with _factory()() as session:
+        invite_id = await session.scalar(select(Invite.id).where(Invite.code == code))
+        ids = list((await session.execute(
+            select(InviteRegistrationReservation.id)
+            .where(InviteRegistrationReservation.invite_id == invite_id,
+                   InviteRegistrationReservation.status == "active")
+            .order_by(InviteRegistrationReservation.created_at)
+        )).scalars().all())[:limit]
+        await session.execute(
+            update(InviteRegistrationReservation)
+            .where(InviteRegistrationReservation.id.in_(ids))
+            .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+        )
+        await session.commit()
+
+
+async def _register(app_client, fake_supabase_user, email: str, challenge: str):
+    token, uid = fake_supabase_user(email=email)
+    response = await app_client.post(
+        "/api/v2/access/register", headers=auth(token), json={"registration_challenge": challenge},
+    )
+    return response, uid
+
+
+@pytest.mark.asyncio
+async def test_c_one_live_reservation_takes_one_place(app_client, db_clean, registered_supabase_user):
+    token, account_id = await _activated(registered_supabase_user)
+    issued = (await _ensure(app_client, token))["referral"]
+    assert issued["remaining_uses"] == 3
+    assert (await _reserve(app_client, issued["code"], "one@example.com")).status_code == 200
+    for answer in (await _get(app_client, token), await _ensure(app_client, token)):
+        assert answer["state"] == "available"
+        assert answer["referral"]["code"] == issued["code"]
+        assert answer["referral"]["remaining_uses"] == 2
+    [invite] = await _bound_invites(account_id)
+    # The invite's own counter is unchanged: a hold is not an admission.
+    assert invite.uses_count == 0 and invite.max_uses == 3
+
+
+@pytest.mark.asyncio
+async def test_c_every_place_held_is_capacity_reserved_with_no_code(
+    app_client, db_clean, registered_supabase_user,
+):
+    token, account_id = await _activated(registered_supabase_user)
+    code = (await _ensure(app_client, token))["referral"]["code"]
+    for i in range(3):
+        assert (await _reserve(app_client, code, f"held{i}@example.com")).status_code == 200
+    # The admission service agrees nobody else can reserve with it now ...
+    crowded = await _reserve(app_client, code, "fourth@example.com")
+    assert crowded.status_code == 400 and crowded.json()["detail"]["code"] == "invite_invalid"
+    # ... so the inviter is not handed it as shareable.
+    got = await app_client.get("/api/v2/growth/referral", headers=auth(token))
+    ensured = await app_client.post("/api/v2/growth/referral", headers=auth(token))
+    for response in (got, ensured):
+        assert response.json() == CAPACITY_RESERVED
+        assert code not in response.text
+        for secret in ("held0@example.com", "reservation", "challenge", "email"):
+            assert secret not in response.text
+    # Not exhausted and not a new opportunity: nothing was minted.
+    assert len(await _bound_invites(account_id)) == 1
+    assert await _count(Invite) == 1
+
+
+@pytest.mark.asyncio
+async def test_c_held_capacity_never_mints_a_second_invite(app_client, db_clean, registered_supabase_user):
+    token, account_id = await _activated(registered_supabase_user)
+    code = (await _ensure(app_client, token))["referral"]["code"]
+    for i in range(3):
+        assert (await _reserve(app_client, code, f"held{i}@example.com")).status_code == 200
+    responses = await asyncio.gather(*[
+        app_client.post("/api/v2/growth/referral", headers=auth(token)) for _ in range(6)
+    ])
+    assert all(response.json() == CAPACITY_RESERVED for response in responses)
+    [invite] = await _bound_invites(account_id)
+    assert invite.code == code and invite.active is True
+    assert await _count(Invite) == 1 and await _count(ConsumerReferralInvite) == 1
+
+
+@pytest.mark.asyncio
+async def test_c_admissions_and_holds_together(
+    app_client, db_clean, registered_supabase_user, fake_supabase_user,
+):
+    token, _ = await _activated(registered_supabase_user)
+    code = (await _ensure(app_client, token))["referral"]["code"]
+    await _admit(app_client, fake_supabase_user, code)
+    assert (await _reserve(app_client, code, "held@example.com")).status_code == 200
+    # max 3, used 1, held 1: one place can still be reserved.
+    assert (await _get(app_client, token))["referral"]["remaining_uses"] == 1
+    assert (await _reserve(app_client, code, "last@example.com")).status_code == 200
+    assert await _get(app_client, token) == CAPACITY_RESERVED
+
+
+@pytest.mark.asyncio
+async def test_c_a_lapsed_hold_frees_the_same_code(app_client, db_clean, registered_supabase_user):
+    token, account_id = await _activated(registered_supabase_user)
+    code = (await _ensure(app_client, token))["referral"]["code"]
+    for i in range(3):
+        assert (await _reserve(app_client, code, f"held{i}@example.com")).status_code == 200
+    assert await _get(app_client, token) == CAPACITY_RESERVED
+    # Past its time, a hold holds nothing, even before the sweep marks it.
+    await _lapse_holds(code, limit=1)
+    async with _factory()() as session:
+        statuses = set((await session.execute(select(InviteRegistrationReservation.status))).scalars())
+    assert statuses == {"active"}
+    freed = await _get(app_client, token)
+    assert freed["state"] == "available"
+    assert freed["referral"]["code"] == code and freed["referral"]["remaining_uses"] == 1
+    await _lapse_holds(code)
+    ensured = await _ensure(app_client, token)
+    assert ensured["referral"]["code"] == code and ensured["referral"]["remaining_uses"] == 3
+    # The same invite again — no replacement.
+    [invite] = await _bound_invites(account_id)
+    assert invite.code == code and await _count(Invite) == 1
+    # And the admission service agrees the place is free again.
+    assert (await _reserve(app_client, code, "fresh@example.com")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_c_a_consumed_hold_becomes_an_admission(
+    app_client, db_clean, registered_supabase_user, fake_supabase_user,
+):
+    token, account_id = await _activated(registered_supabase_user)
+    code = (await _ensure(app_client, token))["referral"]["code"]
+    challenges = {}
+    for i in range(3):
+        email = f"held{i}@example.com"
+        reserved = await _reserve(app_client, code, email)
+        assert reserved.status_code == 200
+        challenges[email] = reserved.json()["challenge"]
+    registered, _ = await _register(app_client, fake_supabase_user, "held0@example.com", challenges["held0@example.com"])
+    assert registered.status_code == 200 and registered.json()["invite_redeemed"] is True
+    [invite] = await _bound_invites(account_id)
+    assert invite.uses_count == 1
+    # One admitted and two still holding: every place is still spoken for.
+    assert await _get(app_client, token) == CAPACITY_RESERVED
+    async with _factory()() as session:
+        exported = await referral.referral_export(session, account_id)
+    assert exported["lifetime_successful_admissions"] == 1
+    # The other two lapse: two places are left, not three — the admission counts.
+    await _lapse_holds(code)
+    answer = await _get(app_client, token)
+    assert answer["state"] == "available" and answer["referral"]["code"] == code
+    assert answer["referral"]["remaining_uses"] == 2
+    # Holds on a code do not survive into lifetime capacity either way.
+    await _admit(app_client, fake_supabase_user, code)
+    await _admit(app_client, fake_supabase_user, code)
+    assert (await _get(app_client, token))["state"] == "exhausted"
+    assert await _count(Invite) == 1
+
+
+@pytest.mark.asyncio
+async def test_c_a_hold_on_an_expired_code_holds_nothing(
+    app_client, db_clean, registered_supabase_user, fake_supabase_user,
+):
+    """Only the current code's holds count: one on a code past its date can
+    never finalise, so it does not shrink the replacement."""
+    token, account_id = await _activated(registered_supabase_user)
+    code = (await _ensure(app_client, token))["referral"]["code"]
+    reserved = await _reserve(app_client, code, "stranded@example.com")
+    await _expire(code)
+    replacement = (await _ensure(app_client, token))["referral"]
+    assert replacement["code"] != code and replacement["remaining_uses"] == 3
+    stranded, _ = await _register(app_client, fake_supabase_user, "stranded@example.com", reserved.json()["challenge"])
+    assert stranded.status_code == 400
+    assert [invite.uses_count for invite in await _bound_invites(account_id)] == [0, 0]
+
+
+@pytest.mark.asyncio
+async def test_c_issuance_and_finalisation_cannot_deadlock(
+    app_client, db_clean, registered_supabase_user, fake_supabase_user,
+):
+    """Both interleavings of ensure (account -> invite -> plain count) and
+    registration (reservation -> invite) finish, and the count is conservative."""
+    from app.domains.identity import service as identity
+
+    token, account_id = await _activated(registered_supabase_user)
+    code = (await _ensure(app_client, token))["referral"]["code"]
+    first = (await _reserve(app_client, code, "first@example.com")).json()["challenge"]
+    second = (await _reserve(app_client, code, "second@example.com")).json()["challenge"]
+    factory = _factory()
+
+    # 1. Issuance holds the invite; a finalisation queues behind it.
+    issuing = factory()
+    try:
+        state = await referral.ensure_referral(issuing, account_id=account_id)
+        # The finalisation below has not happened: its hold is still a hold.
+        assert state.state == "available" and state.remaining_uses == 1
+        finalising = asyncio.create_task(
+            _register(app_client, fake_supabase_user, "first@example.com", first)
+        )
+        await asyncio.sleep(0.3)
+        assert not finalising.done(), "registration must wait behind the invite row"
+        await issuing.commit()
+        registered, _ = await asyncio.wait_for(finalising, timeout=10)
+        assert registered.status_code == 200, registered.text
+    finally:
+        await issuing.close()
+
+    # 2. A finalisation holds reservation and invite; issuance queues behind it.
+    finalising_session = factory()
+    try:
+        _, uid = fake_supabase_user(email="second@example.com")
+        await identity.register_account(finalising_session, uid)
+        await beta.consume_reservation(
+            finalising_session, challenge=second, email="second@example.com", supabase_user_id=uid,
+        )
+        issuing_session = factory()
+        issuing = asyncio.create_task(referral.ensure_referral(issuing_session, account_id=account_id))
+        await asyncio.sleep(0.3)
+        assert not issuing.done(), "issuance must wait behind the finalisation's invite update"
+        await finalising_session.commit()
+        state = await asyncio.wait_for(issuing, timeout=10)
+        await issuing_session.commit()
+        await issuing_session.close()
+    finally:
+        await finalising_session.close()
+    assert state.state == "available" and state.code == code and state.remaining_uses == 1
+    [invite] = await _bound_invites(account_id)
+    assert invite.uses_count == 2
+
+
+def test_c_reservations_are_counted_never_locked():
+    """No Account -> Invite -> Reservation lock chain against registration's
+    Reservation -> Invite."""
+    source = (GROWTH_DIR / "referral.py").read_text()
+    held = source[source.index("async def _held_places"):]
+    held = held[:held.index("\nasync def ") if "\nasync def " in held else len(held)]
+    assert "with_for_update" not in held
+    assert "RESERVATION_STATUS_ACTIVE" in held and "expires_at > now" in held
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "with_for_update":
+            segment = ast.get_source_segment(source, node) or ""
+            assert "Reservation" not in segment, segment
+    ensure = source[source.index("async def ensure_referral"):source.index("async def deactivate_referral")]
+    assert (
+        ensure.index(".with_for_update()")
+        < ensure.index("_bound_invites(session, account_id, lock=True)")
+        < ensure.index("_held_places(")
+    )
+
+
+# ---------------------------------------------------------------------------
 # S — the code inside the unchanged invite security protocol
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
@@ -706,6 +960,138 @@ def test_d_deletion_takes_the_account_before_the_invites():
     worker = (BACKEND / "app" / "domains" / "privacy" / "deletion_service.py").read_text()
     stage = worker[worker.index("if job.state == STATE_DATABASE_DELETING"):]
     assert stage.index("_deactivate_referral_invites") < stage.index("_delete_account_row")
+
+
+# ---------------------------------------------------------------------------
+# K — rollback: the downgrade switches every referral capability off
+# ---------------------------------------------------------------------------
+STEP_14_REVISION = "k9l0m1n2o3"
+
+
+async def _alembic(*arguments: str) -> tuple[int, str]:
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "alembic", *arguments,
+        cwd=BACKEND,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    output, _ = await process.communicate()
+    return process.returncode, output.decode(errors="replace")
+
+
+@pytest.mark.asyncio
+async def test_k_downgrade_disables_bound_referral_invites_before_dropping_the_binding(
+    app_client, db_clean, registered_supabase_user, fake_supabase_user,
+):
+    """Live Step 15 data, a real downgrade, then the unchanged admission
+    protocol against the rolled-back schema."""
+    token, _account_id = await _activated(registered_supabase_user)
+    code = (await _ensure(app_client, token))["referral"]["code"]
+    invitee = await _admit(app_client, fake_supabase_user, code)
+    held_email = "held-across-rollback@example.com"
+    held = await _reserve(app_client, code, held_email)
+    assert held.status_code == 200, held.text
+    challenge = held.json()["challenge"]
+    async with _factory()() as session:
+        # An operator's invite and an operator invite that is already off:
+        # neither is a referral, and the downgrade must leave both exactly.
+        admin = await beta.create_invite(session, label="operator", max_uses=5)
+        admin_off = await beta.create_invite(session, label="operator-off", max_uses=5)
+        admin_off.active = False
+        await session.commit()
+        admin_code, admin_off_code = admin.code, admin_off.code
+    redemptions = await _count(InviteRedemption)
+    reservations = await _count(InviteRegistrationReservation)
+    assert await _count(Invite, Invite.code == code, Invite.active.is_(True)) == 1
+
+    await sql.dispose_engine()
+    upgraded = False
+    try:
+        returncode, output = await _alembic("downgrade", STEP_14_REVISION)
+        assert returncode == 0, output
+        async with sql.get_engine().connect() as connection:
+            assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == STEP_14_REVISION
+            assert await connection.scalar(text("SELECT to_regclass('consumer_referral_invites')")) is None
+            rows = {
+                row.code: (row.active, row.uses_count, row.max_uses)
+                for row in (await connection.execute(text(
+                    "SELECT code, active, uses_count, max_uses FROM invites"
+                ))).all()
+            }
+            # The referral invite survives, switched off, with its history.
+            assert rows[code] == (False, 1, 3)
+            # Nothing that was not bound was touched.
+            assert rows[admin_code] == (True, 0, 5)
+            assert rows[admin_off_code] == (False, 0, 5)
+            assert len(rows) == 3
+            # Nothing was deleted to get there.
+            assert await connection.scalar(text("SELECT count(*) FROM invite_redemptions")) == redemptions
+            assert await connection.scalar(
+                text("SELECT count(*) FROM invite_registration_reservations")
+            ) == reservations
+        await sql.dispose_engine()
+
+        # The unchanged reserve refuses the code with the uniform answer.
+        refused = await _reserve(app_client, code, "after-rollback@example.com")
+        assert refused.status_code == 400 and refused.json()["detail"]["code"] == "invite_invalid"
+        # The place held before the rollback cannot finalise a new account:
+        # the conditional use-count increment needs an active invite, and the
+        # whole registration rolls back.
+        held_token, held_id = fake_supabase_user(email=held_email)
+        finalised = await app_client.post(
+            "/api/v2/access/register", headers=auth(held_token),
+            json={"registration_challenge": challenge},
+        )
+        assert finalised.status_code == 400, finalised.text
+        assert finalised.json()["detail"]["code"] == "invite_invalid"
+        async with sql.get_engine().connect() as connection:
+            assert await connection.scalar(
+                text("SELECT count(*) FROM accounts WHERE id = :id"), {"id": held_id}
+            ) == 0
+            assert await connection.scalar(
+                text("SELECT count(*) FROM invite_redemptions WHERE account_id = :id"), {"id": held_id}
+            ) == 0
+            # Rolled back with it: the reservation was not consumed.
+            assert await connection.scalar(text(
+                "SELECT status FROM invite_registration_reservations WHERE email_normalised = :email"
+            ), {"email": held_email}) == "active"
+            assert await connection.scalar(
+                text("SELECT uses_count FROM invites WHERE code = :code"), {"code": code}
+            ) == 1
+            # The invitee admitted before the rollback keeps their admission.
+            assert await connection.scalar(
+                text("SELECT count(*) FROM invite_redemptions WHERE account_id = :id"), {"id": invitee}
+            ) == 1
+        await sql.dispose_engine()
+
+        returncode, output = await _alembic("upgrade", "head")
+        assert returncode == 0, output
+        upgraded = True
+        returncode, output = await _alembic("check")
+        assert returncode == 0, output
+        async with sql.get_engine().connect() as connection:
+            assert await connection.scalar(text("SELECT count(*) FROM consumer_referral_invites")) == 0
+            # Re-upgrading does not resurrect the capability.
+            assert await connection.scalar(
+                text("SELECT active FROM invites WHERE code = :code"), {"code": code}
+            ) is False
+    finally:
+        await sql.dispose_engine()
+        if not upgraded:
+            await _alembic("upgrade", "head")
+            await sql.dispose_engine()
+
+
+def test_k_the_downgrade_switches_invites_off_before_it_drops_the_binding():
+    source = (BACKEND / "migrations" / "versions" / "l0m1n2o3p4_step15_consumer_growth.py").read_text()
+    body = source[source.index("def downgrade"):]
+    update_at = body.index("UPDATE invites")
+    assert update_at < body.index('op.drop_table("consumer_referral_invites")')
+    statement = body[update_at:body.index('"""', update_at)]
+    assert "SET active = false" in statement
+    assert "id IN (SELECT invite_id FROM consumer_referral_invites)" in statement
+    # Never a delete of anybody's invite, redemption or reservation.
+    assert not re.search(r"\bdelete\s+from\b", body, re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------

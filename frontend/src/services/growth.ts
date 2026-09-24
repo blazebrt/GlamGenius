@@ -2,9 +2,9 @@
  * Step 15's two calls, both of which may fail without anybody noticing.
  *
  * - `ensureShareReferralCode` asks for the inviter's own usable referral code
- *   so a share can carry it. Anonymous, not yet activated, exhausted, slow or
- *   broken: every one of those is `null`, and the share goes out without a
- *   code. Sharing a Product Result never waits on growth for long and never
+ *   so a share can carry it. Anonymous, not yet activated, every place held
+ *   by sign-ups in progress, exhausted, slow or broken: every one of those is
+ *   `null`, and the share goes out without a code. Sharing a Product Result never waits on growth for long and never
  *   fails because of it.
  * - `recordGrowthEvent` sends one whitelisted event. Fire and forget: its
  *   types admit only the enums the server accepts, it carries a random
@@ -21,7 +21,19 @@ export const REFERRAL_TIMEOUT_MS = 4000;
 const EVENT_TIMEOUT_MS = 4000;
 const REFERRAL_CODE = /^[A-Z0-9]{6,64}$/;
 
-export type ReferralState = 'not_activated' | 'ready' | 'available' | 'exhausted' | 'withdrawn' | 'unavailable';
+/**
+ * `capacity_reserved`: the inviter's code is live, but sign-ups already in
+ * progress hold every place it has left. It carries no code, so a share made
+ * meanwhile simply goes out without one.
+ */
+export type ReferralState =
+  | 'not_activated'
+  | 'ready'
+  | 'available'
+  | 'capacity_reserved'
+  | 'exhausted'
+  | 'withdrawn'
+  | 'unavailable';
 
 export interface ReferralWire {
   program_version: string;

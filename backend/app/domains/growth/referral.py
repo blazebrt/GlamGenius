@@ -23,13 +23,22 @@ ever admit:
   invite is still usable, and it carries ``max_uses`` = the capacity that
   remains. An expired, partly used code may be replaced; the replacement can
   only ever admit what is left.
+* **Shareable means reservable.** A code is handed out only while
+  ``/access/reserve`` would accept one more person with it, by the admission
+  service's own rule: its places are ``max_uses`` minus ``uses_count`` minus
+  the reservations still holding one (``active`` and ``expires_at`` after
+  now). When sign-ups in progress hold every remaining place, the answer is
+  ``capacity_reserved`` with no code, and nothing new is minted: the held
+  places either finalise, and count against the ceiling, or lapse, and the
+  same code is shareable again.
 * **No reward.** Nothing is paid, credited, counted publicly or ranked.
 
 Lock order
 ----------
 ::
 
-    Account FOR UPDATE -> bound Invite rows FOR UPDATE -> insert
+    Account FOR UPDATE -> bound Invite rows FOR UPDATE -> count reservations
+    (plain MVCC read, no lock) -> insert
 
 The account row is the serialisation point: two simultaneous requests to
 ensure a code queue on it, and the second one reads the invite the first one
@@ -47,6 +56,14 @@ Account deletion takes the same account row first and the invites second
 the pair in opposite orders. Whichever commits first wins cleanly: a code
 issued first is switched off by the deletion that follows it; a deletion that
 started first leaves an account this module refuses to issue for.
+
+Reservations are counted, never locked. Registration locks a reservation and
+then the invite; locking reservations after the invite here would be the
+opposite order. The count needs no lock: ``/access/reserve`` must take the
+invite row before it can add a reservation, and this path already holds it, so
+none can appear before commit. A registration finalising at the same moment is
+still seen as a held place until it commits — a code withheld for a moment,
+never a place sold twice.
 """
 from __future__ import annotations
 
@@ -55,13 +72,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import config
 from app.domains.beta_access import service as beta
-from app.domains.beta_access.models import Invite
+from app.domains.beta_access.models import Invite, InviteRegistrationReservation
 from app.domains.growth.activation import has_useful_scan
 from app.domains.growth.models import PROGRAM_VERSION, ConsumerReferralInvite
 from app.domains.identity.models import ACCOUNT_STATUS_ACTIVE, Account
@@ -81,8 +98,13 @@ STATE_NOT_ACTIVATED = "not_activated"
 #: Eligible, with capacity, and no code issued yet. Read-only answer; ensuring
 #: moves it to ``available``.
 STATE_READY = "ready"
-#: A usable code exists and is returned.
+#: A usable code exists, somebody could reserve a place with it now, and it
+#: is returned.
 STATE_AVAILABLE = "available"
+#: The current code is live, but sign-ups already in progress hold every place
+#: it has left. No code is returned and none is minted: when a held place lapses
+#: the same code is shareable again; when it finalises it counts.
+STATE_CAPACITY_RESERVED = "capacity_reserved"
 #: Three people have been admitted. There will never be another code.
 STATE_EXHAUSTED = "exhausted"
 #: An operator switched the live code off before it expired. It is not
@@ -95,7 +117,7 @@ STATE_WITHDRAWN = "withdrawn"
 STATE_UNAVAILABLE = "unavailable"
 
 STATES: tuple[str, ...] = (
-    STATE_NOT_ACTIVATED, STATE_READY, STATE_AVAILABLE,
+    STATE_NOT_ACTIVATED, STATE_READY, STATE_AVAILABLE, STATE_CAPACITY_RESERVED,
     STATE_EXHAUSTED, STATE_WITHDRAWN, STATE_UNAVAILABLE,
 )
 
@@ -153,34 +175,73 @@ def lifetime_admissions(invites: list[Invite]) -> int:
     return sum(int(invite.uses_count or 0) for invite in invites)
 
 
-def _available(invite: Invite, used: int) -> ReferralState:
+def reservable_places(invite: Invite, *, used: int, held: int) -> int:
+    """Admissions somebody could reserve with ``invite`` right now.
+
+    The admission service's own rule — ``max_uses - uses_count`` less the
+    places live reservations hold — bounded by what the program has left.
+    Never negative.
+    """
     remaining = min(
         invite.max_uses - invite.uses_count,
         LIFETIME_SUCCESSFUL_REFERRALS - used,
     )
+    return max(0, remaining - held)
+
+
+def _available(invite: Invite, used: int, held: int) -> ReferralState:
+    places = reservable_places(invite, used=used, held=held)
+    if places == 0:
+        return ReferralState(state=STATE_CAPACITY_RESERVED)
     return ReferralState(
         state=STATE_AVAILABLE, code=invite.code,
-        expires_at=invite.expires_at, remaining_uses=max(0, remaining),
+        expires_at=invite.expires_at, remaining_uses=places,
     )
 
 
-def _decide(invites: list[Invite], now: datetime) -> ReferralState | None:
+def _current(invites: list[Invite], now: datetime) -> Invite | None:
+    """The usable code, if any. One at a time is enforced at issue; the oldest
+    usable one is the authority should that ever have been broken."""
+    return next((invite for invite in invites if _usable(invite, now)), None)
+
+
+def _decide(invites: list[Invite], now: datetime, *, held: int) -> ReferralState | None:
     """The answer the bound invites already determine, or ``None`` for "issue".
 
+    ``held`` is the number of live reservations against :func:`_current`.
     Shared by the read and the write so the two cannot disagree about what a
     set of invites means.
     """
     used = lifetime_admissions(invites)
     if used >= LIFETIME_SUCCESSFUL_REFERRALS:
         return ReferralState(state=STATE_EXHAUSTED)
-    usable = [invite for invite in invites if _usable(invite, now)]
-    if usable:
-        # One at a time is enforced at issue; the oldest usable one is the
-        # authority should that ever have been broken.
-        return _available(usable[0], used)
+    current = _current(invites, now)
+    if current is not None:
+        return _available(current, used, held)
     if any(_withdrawn(invite, now) for invite in invites):
         return ReferralState(state=STATE_WITHDRAWN)
     return None
+
+
+async def _held_places(
+    session: AsyncSession, invite: Invite | None, now: datetime,
+) -> int:
+    """Places on ``invite`` held by sign-ups in progress.
+
+    Exactly the reservations ``beta.reserve_invite`` counts: still ``active``
+    and not yet past ``expires_at``. A reservation past its time holds nothing
+    even before the sweep marks it expired. A plain read — see the lock order
+    in the module docstring for why it takes no lock.
+    """
+    if invite is None:
+        return 0
+    return int(await session.scalar(
+        select(func.count(InviteRegistrationReservation.id)).where(
+            InviteRegistrationReservation.invite_id == invite.id,
+            InviteRegistrationReservation.status == beta.RESERVATION_STATUS_ACTIVE,
+            InviteRegistrationReservation.expires_at > now,
+        )
+    ) or 0)
 
 
 async def _bound_invites(
@@ -209,7 +270,9 @@ async def read_referral(
         return ReferralState(state=STATE_UNAVAILABLE)
     if not await has_useful_scan(session, account_id):
         return ReferralState(state=STATE_NOT_ACTIVATED)
-    decided = _decide(await _bound_invites(session, account_id, lock=False), ts)
+    invites = await _bound_invites(session, account_id, lock=False)
+    held = await _held_places(session, _current(invites, ts), ts)
+    decided = _decide(invites, ts, held=held)
     return decided if decided is not None else ReferralState(state=STATE_READY)
 
 
@@ -260,8 +323,13 @@ async def ensure_referral(
         return ReferralState(state=STATE_NOT_ACTIVATED)
 
     invites = await _bound_invites(session, account_id, lock=True)
-    decided = _decide(invites, ts)
+    # Counted after the invite rows are held, so no reservation can be added
+    # between this count and the commit.
+    held = await _held_places(session, _current(invites, ts), ts)
+    decided = _decide(invites, ts, held=held)
     if decided is not None:
+        # Including ``capacity_reserved``: a live code whose places are only
+        # held is not replaced.
         return decided
 
     remaining = LIFETIME_SUCCESSFUL_REFERRALS - lifetime_admissions(invites)
@@ -281,7 +349,8 @@ async def ensure_referral(
         program_version=PROGRAM_VERSION,
     ))
     await session.flush()
-    return _available(invite, lifetime_admissions(invites))
+    # Nobody can hold a place on a code that did not exist until now.
+    return _available(invite, lifetime_admissions(invites), 0)
 
 
 async def deactivate_referral_invites_for_account(
@@ -355,6 +424,7 @@ __all__ = [
     "PROGRAM_VERSION",
     "STATES",
     "STATE_AVAILABLE",
+    "STATE_CAPACITY_RESERVED",
     "STATE_EXHAUSTED",
     "STATE_NOT_ACTIVATED",
     "STATE_READY",
@@ -367,4 +437,5 @@ __all__ = [
     "lifetime_admissions",
     "read_referral",
     "referral_export",
+    "reservable_places",
 ]

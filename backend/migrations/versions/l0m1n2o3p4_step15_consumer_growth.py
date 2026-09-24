@@ -25,6 +25,10 @@ Two narrow changes and nothing else.
    a retried telemetry write is recognised rather than counted twice. Existing
    rows keep ``NULL`` and are unaffected. It is never a device or advertising
    identifier.
+
+Downgrade first switches off every invite the binding names, then drops the
+binding. A rollback must not leave behind an admission capability whose owning
+feature, and whose record of being a referral, has just been removed.
 """
 from __future__ import annotations
 
@@ -76,6 +80,22 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # A referral code is an ordinary live invite, and ``/access/reserve`` below
+    # this revision would keep admitting people with it. The binding is the
+    # only record of which invites were referrals, so switch every one of them
+    # off while it still exists — in the same transaction that then drops it.
+    # Only bound invites are touched; no invite, redemption or reservation row
+    # is deleted. A reservation already held against one stays, and can no
+    # longer finalise: ``consume_reservation`` only counts a use on an active
+    # invite, and rolls the registration back otherwise.
+    op.execute(
+        """
+        UPDATE invites
+        SET active = false, updated_at = now()
+        WHERE active IS TRUE
+          AND id IN (SELECT invite_id FROM consumer_referral_invites)
+        """
+    )
     op.drop_index("uq_app_events_account_name_client_event", table_name="app_events")
     op.drop_column("app_events", "client_event_id")
     op.drop_index("ix_consumer_referral_invites_inviter", table_name="consumer_referral_invites")

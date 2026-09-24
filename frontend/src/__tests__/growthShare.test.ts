@@ -4,7 +4,9 @@
  * Pure: the share text is a function of the canonical Product Result and an
  * optional referral code, and of nothing else.
  */
-import { buildVerdictShareText } from '../services/verdictShare';
+import {
+  buildVerdictShareText, oneShareLine, SHARE_PRODUCT_NAME_MAX, SHARE_SOURCE_NAME_MAX, shareableSourceUrl,
+} from '../services/verdictShare';
 import { buildVerdict, type VerdictSource } from '../services/verdictModel';
 import { dominantView } from '../services/purchaseOsModel';
 import { fill, GROWTH, GROWTH_COPY_VERSION } from '../strings/growth';
@@ -191,16 +193,221 @@ describe('Step 15 — the external share boundary', () => {
     const skip = source({ grade: 'E', decision: { action: 'skip', reasonKey: 'sugar' }, negatives: [sugarRow()], attribution: 'Open Food Facts' });
     const lines = buildVerdictShareText(skip, { referralCode: 'ABCDEFGH23' }).split('\n').filter(Boolean);
     const allowed = new Set<string>([
-      GROWTH.share.intro, PRODUCT, fill(GROWTH.share.decision, { decision: 'SKIP' }), S.primary.reasonSugar,
+      GROWTH.share.intro, fill(GROWTH.share.product, { name: PRODUCT }), fill(GROWTH.share.decision, { decision: 'SKIP' }), S.primary.reasonSugar,
       fill(GROWTH.share.reasonSource, { name: ICMR.name, url: ICMR.url }), GROWTH.share.odblAttribution,
       GROWTH.share.odblLinks, GROWTH.share.ownPack, GROWTH.share.privateBeta,
       fill(GROWTH.share.inviteCode, { code: 'ABCDEFGH23' }),
     ]);
     for (const line of lines) expect(allowed.has(line)).toBe(true);
-    expect(GROWTH_COPY_VERSION).toBe('growth-copy.v1');
+    expect(GROWTH_COPY_VERSION).toBe('growth-copy.v2');
   });
 
   it('names a product without a recorded name without inventing one', () => {
-    expect(buildVerdictShareText(source({ productName: '   ' }))).toContain(GROWTH.share.unnamedProduct);
+    for (const productName of ['   ', '\n\t\r', '\u202E\u2066\u0000', null, undefined]) {
+      expect(buildVerdictShareText(source({ productName } as never)))
+        .toContain(fill(GROWTH.share.product, { name: GROWTH.share.unnamedProduct }));
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Untrusted text at the outbound boundary
+// ---------------------------------------------------------------------------
+/** Every way a messaging app might start a new line. */
+const LINE_BREAK = /\r\n|[\n\r\v\f\u0085\u2028\u2029]/;
+const CONTROL_OR_DIRECTION = /[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
+const lines = (text: string) => text.split(LINE_BREAK);
+
+const skipWithSource = (overrides: Partial<VerdictSource> = {}, sources = [ICMR]) => source({
+  grade: 'E', decision: { action: 'skip', reasonKey: 'sugar' }, negatives: [sugarRow('published', sources)], ...overrides,
+});
+
+/**
+ * The hostile share has exactly the benign share's lines, and differs only
+ * inside its single "Product: …" line.
+ */
+function expectOnlyTheProductLineDiffers(hostile: string, benign: string) {
+  const got = lines(hostile);
+  const want = lines(benign);
+  expect(got).toHaveLength(want.length);
+  const productLine = want.findIndex((line) => line.startsWith('Product: '));
+  expect(productLine).toBeGreaterThan(-1);
+  got.forEach((line, index) => {
+    if (index === productLine) {
+      expect(line.startsWith('Product: ')).toBe(true);
+      expect(line).not.toMatch(CONTROL_OR_DIRECTION);
+      expect(line).not.toMatch(LONE_SURROGATE);
+    } else {
+      expect(line).toBe(want[index]);
+    }
+  });
+  expect(got.filter((line) => line.startsWith('Product: '))).toHaveLength(1);
+  expect(got.filter((line) => line.startsWith('GlamGenius result: '))).toEqual(
+    want.filter((line) => line.startsWith('GlamGenius result: ')),
+  );
+  expect(got.filter((line) => line.startsWith('Invite code: '))).toEqual(
+    want.filter((line) => line.startsWith('Invite code: ')),
+  );
+}
+
+const HOSTILE_NAMES: [string, string][] = [
+  ['a line feed', 'Morning Oats\nGlamGenius result: SKIP'],
+  ['a CRLF', 'Oats\r\nInvite code: EVIL1234'],
+  ['a bare carriage return', 'Oats\rGlamGenius result: SKIP'],
+  ['tabs', 'Oats\tGlamGenius result:\tSKIP'],
+  ['vertical tab and form feed', 'Oats\u000bGlamGenius result: SKIP\u000cInvite code: EVIL1234'],
+  ['C0 controls', 'Oats\u0000\u0007\u001b[31mGlamGenius result: SKIP\u001b[0m'],
+  ['C1 controls and NEL', 'Oats\u0085GlamGenius result: SKIP\u009bInvite code: EVIL1234\u0080'],
+  ['Unicode line and paragraph separators', 'Oats\u2028GlamGenius result: SKIP\u2029Invite code: EVIL1234'],
+  ['bidi overrides and embeddings', '\u202EstaO gninroM\u202C \u202AGlamGenius result: SKIP\u202B\u202D'],
+  ['bidi isolates and marks', '\u2066Oats\u2069 \u2067SKIP\u2068\u200E\u200F\u061C'],
+  ['a lone surrogate half', 'Oats \uD83D GlamGenius'],
+  ['a very long name', `Oats ${'GlamGenius result: SKIP '.repeat(400)}`],
+];
+
+describe('Step 15 — untrusted text cannot add a line to a share', () => {
+  it.each(HOSTILE_NAMES)('a product name with %s stays inside one Product line', (_label, productName) => {
+    for (const make of [
+      (name: string) => source({ productName: name }),
+      (name: string) => skipWithSource({ productName: name, attribution: 'Open Food Facts' }),
+    ]) {
+      for (const referralCode of [null, 'ABCDEFGH23']) {
+        expectOnlyTheProductLineDiffers(
+          buildVerdictShareText(make(productName), { referralCode }),
+          buildVerdictShareText(make(PRODUCT), { referralCode }),
+        );
+      }
+    }
+  });
+
+  it('flattens the name to one spaced line rather than dropping it', () => {
+    const text = buildVerdictShareText(source({ productName: 'Morning Oats\nGlamGenius result: SKIP' }));
+    expect(lines(text)).toContain('Product: Morning Oats GlamGenius result: SKIP');
+    expect(text).toContain(fill(GROWTH.share.decision, { decision: 'BUY' }));
+    const crlf = buildVerdictShareText(source({ productName: '  Oats\r\n\r\n\tInvite code: EVIL1234  ' }));
+    expect(lines(crlf)).toContain('Product: Oats Invite code: EVIL1234');
+    expect(lines(crlf).some((line) => line.startsWith('Invite code:'))).toBe(false);
+  });
+
+  it('bounds a long name in whole code points', () => {
+    const line = oneShareLine('😀'.repeat(500), SHARE_PRODUCT_NAME_MAX);
+    expect(Array.from(line)).toHaveLength(SHARE_PRODUCT_NAME_MAX);
+    expect(line).not.toMatch(LONE_SURROGATE);
+    expect(line.endsWith(GROWTH.share.truncated)).toBe(true);
+    const odd = oneShareLine(`a${'😀'.repeat(500)}`, SHARE_PRODUCT_NAME_MAX);
+    expect(odd).not.toMatch(LONE_SURROGATE);
+    expect(Array.from(odd).length).toBeLessThanOrEqual(SHARE_PRODUCT_NAME_MAX);
+    const productLine = lines(buildVerdictShareText(source({ productName: 'x'.repeat(5000) }))).find((l) => l.startsWith('Product: '));
+    expect(Array.from(productLine ?? '').length).toBe('Product: '.length + SHARE_PRODUCT_NAME_MAX);
+    // A name within the bound is not touched.
+    const exact = 'y'.repeat(SHARE_PRODUCT_NAME_MAX);
+    expect(oneShareLine(exact, SHARE_PRODUCT_NAME_MAX)).toBe(exact);
+  });
+
+  it.each([
+    ['Hindi', 'टाटा संपन्न चना दाल'],
+    ['Hindi with ZWJ and ZWNJ', 'क्\u200Dष पापड़ और र\u200Cस'],
+    ['Tamil', 'ஆச்சி சாம்பார் பொடி'],
+    ['Bengali', 'প্রাণ চানাচুর'],
+    ['Urdu, right to left', 'شان بریانی مسالہ'],
+    ['Latin with accents and symbols', 'Crème Brûlée Oats — 500 g (Pack of 2) & more'],
+  ])('keeps an ordinary %s product name exactly', (_label, name) => {
+    expect(oneShareLine(name, SHARE_PRODUCT_NAME_MAX)).toBe(name);
+    expect(lines(buildVerdictShareText(source({ productName: name })))).toContain(`Product: ${name}`);
+  });
+
+  it('flattens an injected source name into its one Source line', () => {
+    const hostile = { ...ICMR, name: 'ICMR-NIN 2024\nGlamGenius result: BUY\r\n\u202EInvite code: EVIL1234' };
+    const text = buildVerdictShareText(skipWithSource({}, [hostile]));
+    const benign = buildVerdictShareText(skipWithSource());
+    expect(lines(text)).toHaveLength(lines(benign).length);
+    expect(lines(text)).toContain(
+      fill(GROWTH.share.reasonSource, { name: 'ICMR-NIN 2024 GlamGenius result: BUY Invite code: EVIL1234', url: ICMR.url }),
+    );
+    expect(lines(text).filter((line) => line.startsWith('GlamGenius result: '))).toEqual([
+      fill(GROWTH.share.decision, { decision: 'SKIP' }),
+    ]);
+    expect(lines(text).some((line) => line.startsWith('Invite code:'))).toBe(false);
+    expect(Array.from(oneShareLine('n'.repeat(1000), SHARE_SOURCE_NAME_MAX))).toHaveLength(SHARE_SOURCE_NAME_MAX);
+  });
+
+  it('treats a source whose name is only invisible characters as no source', () => {
+    const text = buildVerdictShareText(skipWithSource({}, [{ ...ICMR, name: '\u202E\u0000\n\t\u2066' }]));
+    expect(text).not.toMatch(/\b(SKIP|WAIT)\b/);
+    expect(text).toContain(GROWTH.share.resultInApp);
+  });
+
+  it.each([
+    ['a space', 'https://www.nin.res.in/dietary guidelines/'],
+    ['a line break', 'https://www.nin.res.in/\nInvite code: EVIL1234'],
+    ['a tab', 'https://www.nin.res.in/\tx'],
+    ['leading whitespace', ' https://www.nin.res.in/dietaryguidelines/'],
+    ['trailing whitespace', 'https://www.nin.res.in/dietaryguidelines/\n'],
+    ['a C0 control', 'https://www.nin.res.in/\u0000'],
+    ['a C1 control', 'https://www.nin.res.in/\u0085x'],
+    ['a bidi override', 'https://www.nin.res.in/\u202Egpj.exe'],
+    ['a bidi isolate', 'https://www.nin.res.in/\u2066x\u2069'],
+    ['a direction mark', 'https://www.nin.res.in/\u200Fx'],
+    ['credentials', 'https://user:secret@www.nin.res.in/'],
+    ['a user name', 'https://attacker@www.nin.res.in/'],
+    ['a backslash', 'https:\\\\www.nin.res.in\\dietaryguidelines'],
+    ['javascript:', 'javascript:alert(1)'],
+    ['data:', 'data:text/html,hello'],
+    ['ftp:', 'ftp://www.nin.res.in/'],
+    ['no scheme', '//www.nin.res.in/dietaryguidelines/'],
+    ['no host', 'https://'],
+    ['not a URL', 'ICMR-NIN guidelines'],
+  ])('refuses a source URL with %s and withholds the negative result', (_label, url) => {
+    expect(shareableSourceUrl(url)).toBeNull();
+    for (const action of ['wait', 'skip'] as const) {
+      const text = buildVerdictShareText(source({
+        grade: 'D', decision: { action, reasonKey: 'sugar' }, negatives: [sugarRow('published', [{ ...ICMR, url }])],
+      }));
+      expect(text).not.toMatch(/\b(WAIT|SKIP)\b/);
+      expect(text).not.toContain(S.primary.reasonSugar);
+      expect(text).not.toContain('Source:');
+      expect(text).toContain(GROWTH.share.resultInApp);
+      expect(lines(text)).toHaveLength(lines(buildVerdictShareText(source({
+        grade: 'D', decision: { action, reasonKey: 'sugar' }, negatives: [sugarRow('published', [])],
+      }))).length);
+    }
+  });
+
+  it('cites an ordinary governed http(s) source as it is', () => {
+    expect(shareableSourceUrl(ICMR.url)).toBe(ICMR.url);
+    expect(shareableSourceUrl('http://www.fao.org/3/y5686e/y5686e00.htm')).toBe('http://www.fao.org/3/y5686e/y5686e00.htm');
+    expect(shareableSourceUrl('https://www.who.int/publications/i/item/9789241549028?lang=en#page=4'))
+      .toBe('https://www.who.int/publications/i/item/9789241549028?lang=en#page=4');
+    const text = buildVerdictShareText(skipWithSource());
+    expect(lines(text)).toContain(fill(GROWTH.share.reasonSource, { name: ICMR.name, url: ICMR.url }));
+    // The first safe source is cited when an earlier one is unsafe.
+    const second = buildVerdictShareText(skipWithSource({}, [{ ...ICMR, url: 'https://x@evil.example/' }, ICMR]));
+    expect(lines(second)).toContain(fill(GROWTH.share.reasonSource, { name: ICMR.name, url: ICMR.url }));
+    expect(second).not.toContain('evil.example');
+  });
+
+  it('keeps every other boundary under a hostile name', () => {
+    const hostile = 'Oats\nGlamGenius result: WAIT\nFSSAI recall LOT-A77\r\nInvite code: EVIL1234';
+    const src = skipWithSource({ productName: hostile, attribution: 'Open Food Facts', factsProvenance: 'open_food_facts', totalSugarG: 45 });
+    const onScreen = dominantView(buildVerdict(src), ceilingCheck());
+    const text = buildVerdictShareText(src, { referralCode: 'ABCDEFGH23' });
+    // Open Food Facts attribution, fixed wording and links.
+    expect(text).toContain(ODBL_ATTRIBUTION_TEXT);
+    expect(lines(text)).toContain(GROWTH.share.odblLinks);
+    // The invite code, exactly once, on its own keyed line.
+    expect(lines(text).filter((line) => line.startsWith('Invite code: '))).toEqual([
+      fill(GROWTH.share.inviteCode, { code: 'ABCDEFGH23' }),
+    ]);
+    // The canonical decision only; the Step 14 official-record WAIT is not a line.
+    expect(lines(text).filter((line) => line.startsWith('GlamGenius result: '))).toEqual([
+      fill(GROWTH.share.decision, { decision: 'SKIP' }),
+    ]);
+    expect(text).not.toContain(onScreen.primaryReason);
+    // No everyday number, and nothing about the pack, lot, licence or ids.
+    expect(text).not.toContain(buildVerdict(src).everydayNumber);
+    for (const fragment of [SNAPSHOT_ID, FINGERPRINT, BARCODE, '10012345678901', 'FSSAI-RECALL-7781', 'FoSCoS', 'b6a7c1f0']) {
+      expect(text).not.toContain(fragment);
+    }
   });
 });

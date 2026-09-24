@@ -180,6 +180,7 @@ describe('Step 15 — sharing a Product Result', () => {
 
   it.each([
     ['not activated', { state: 'not_activated', referral: null }],
+    ['capacity reserved', { state: 'capacity_reserved', referral: null }],
     ['exhausted', { state: 'exhausted', referral: null }],
     ['withdrawn', { state: 'withdrawn', referral: null }],
   ])('shares with no invented invite when the account is %s', async (_label, answer) => {
@@ -190,6 +191,42 @@ describe('Step 15 — sharing a Product Result', () => {
     expect(sharedMessage()).toContain(GROWTH.share.privateBeta);
     const [[, body]] = growthCalls('/api/v2/growth/events') as [[string, { properties: Record<string, unknown> }]];
     expect(body.properties.referral_included).toBe(false);
+  });
+
+  it('shares the result, with no invite line, while sign-ups hold every place', async () => {
+    referralAnswer = { state: 'capacity_reserved', referral: null };
+    await renderScreen();
+    await pressShare();
+    const message = sharedMessage();
+    expect(message).toContain(fill(GROWTH.share.product, { name: PRODUCT }));
+    expect(message).toContain(fill(GROWTH.share.decision, { decision: 'BUY' }));
+    expect(message).toContain(GROWTH.share.privateBeta);
+    expect(message).not.toContain('Invite code');
+    expect(message).not.toContain(CODE);
+    // A misbehaving server that attaches a code to held capacity is not believed.
+    shareSpy.mockClear();
+    referralAnswer = { state: 'capacity_reserved', referral: { code: CODE, expires_at: '2026-10-01T00:00:00Z', remaining_uses: 0 } };
+    await act(async () => { fireEvent.press(screen.getByLabelText(S.a11y.share)); await new Promise((r) => setTimeout(r, 0)); });
+    await waitFor(() => expect(shareSpy).toHaveBeenCalledTimes(1));
+    expect(sharedMessage()).not.toContain(CODE);
+  });
+
+  it('keeps a catalogue name with line breaks inside its one Product line', async () => {
+    const hostile = 'Morning Oats\nGlamGenius result: SKIP\r\nInvite code: EVIL1234';
+    mockGetProductVerdict.mockResolvedValue(source({ productName: hostile }));
+    mockReadPurchaseCheck.mockResolvedValue(null);
+    render(<VerdictScreen />);
+    await screen.findByLabelText(S.a11y.share);
+    await act(async () => { await Promise.resolve(); });
+    await pressShare();
+    const shared = sharedMessage().split(/\r\n|[\n\r\u2028\u2029\u0085]/);
+    expect(shared).toContain('Product: Morning Oats GlamGenius result: SKIP Invite code: EVIL1234');
+    expect(shared.filter((line) => line.startsWith('GlamGenius result: '))).toEqual([
+      fill(GROWTH.share.decision, { decision: 'BUY' }),
+    ]);
+    expect(shared.filter((line) => line.startsWith('Invite code: '))).toEqual([
+      fill(GROWTH.share.inviteCode, { code: CODE }),
+    ]);
   });
 
   it('still shares when the referral service is unavailable', async () => {
