@@ -57,9 +57,14 @@ import {
   enterSignUpRegistrationFlow,
   isAuthTicket,
   isCurrentAuth,
+  isQuarantinedSession,
   openAuthGeneration,
+  quarantineSession,
   registrationFactIsCurrent,
   registrationFlowOwns,
+  releaseSessionQuarantine,
+  requestDispatch,
+  sessionKeyOf,
   type AuthTicket,
   type RegistrationFlow,
 } from './authGeneration';
@@ -246,6 +251,9 @@ async function writeStoredChallenge(value: string | null): Promise<void> {
  * skeleton, built from the new account's own identity, and ``resolving``.
  */
 function adoptSession(session: Session): boolean {
+  // Whatever session is adopted now is not the one the app ended: Supabase
+  // holds this one instead, or someone signed in on purpose.
+  releaseSessionQuarantine();
   const nextId = session.user.id;
   if (nextId === authAccountId()) {
     useUserStore.setState({ session, userId: nextId });
@@ -261,6 +269,38 @@ function adoptSession(session: Session): boolean {
     registrationState: 'resolving',
   });
   return true;
+}
+
+/**
+ * Whether a session Supabase reports is one the app ended itself (an accepted
+ * 401, or sign-out) merely continuing: a token refresh, a recovered or initial
+ * session, a user update. Such a session is not taken back automatically.
+ */
+function isEndedSession(session: Session): boolean {
+  return isQuarantinedSession(session.user.id, session.access_token);
+}
+
+/**
+ * End the session locally, now: quarantine it, then sign out.
+ *
+ * ``rejected`` is the credential a request was sent with, when a 401 rejected
+ * it; otherwise the store's own session is the one ended. Supabase may keep
+ * that session while its own sign-out runs, or for good if the sign-out fails.
+ * The quarantine means none of its automatic events can sign it back in.
+ */
+function endSessionLocally(rejected?: { accountId: string; accessToken: string } | null): void {
+  const session = useUserStore.getState().session;
+  const ended = rejected ?? (session ? { accountId: session.user.id, accessToken: session.access_token } : null);
+  if (ended) {
+    // If the store holds a different session of the same account than the one
+    // rejected, both are ended: the quarantine then covers the account.
+    const differentSession =
+      !!session
+      && session.user.id === ended.accountId
+      && sessionKeyOf(session.access_token) !== sessionKeyOf(ended.accessToken);
+    quarantineSession(ended.accountId, differentSession ? null : ended.accessToken);
+  }
+  clearIdentity();
 }
 
 /** Signed out, now. Every ticket issued before this call is stale. */
@@ -424,9 +464,19 @@ async function clearChallengeIfStill(challenge: string): Promise<void> {
  */
 export function handleAuthStateChange(_event: AuthChangeEvent, session: Session | null): void {
   if (!session) {
-    if (authAccountId() !== '' || useUserStore.getState().session) clearIdentity();
+    // Supabase holds no session any more, so the one ended locally cannot
+    // continue. Signed out is also a decision: at start-up it settles who
+    // requests made before it belong to.
+    releaseSessionQuarantine();
+    if (authAccountId() !== '' || useUserStore.getState().session || currentAuth().generation === 0) {
+      clearIdentity();
+    }
     return;
   }
+  // The event name cannot tell a new sign-in from a continuation: Supabase
+  // sends SIGNED_IN when it recovers a stored session too. The session can: a
+  // refresh keeps its session_id, and a new sign-in gets a new one.
+  if (isEndedSession(session)) return;
   const changed = adoptSession(session);
   // A new identity, or one whose registration is still undecided, needs the
   // check. A token refresh for a settled account does not: it is the same
@@ -460,8 +510,8 @@ export const useUserStore = create<UserStore>((set, get) => ({
         await reconcileRegistration();
         return;
       }
-      if (!session) {
-        if (authAccountId() !== '') clearIdentity();
+      if (!session || isEndedSession(session)) {
+        if (authAccountId() !== '' || currentAuth().generation === 0) clearIdentity();
         else set({ session: null, user: null, userId: '', registrationState: 'signed_out' });
         return;
       }
@@ -715,10 +765,15 @@ export const useUserStore = create<UserStore>((set, get) => ({
 
   logout: async () => {
     // First, synchronously: every request still out for this account is stale
-    // from here, so none of them can put it back.
-    clearIdentity();
+    // from here, so none of them can put it back. The session is quarantined
+    // as well, so if Supabase's sign-out below is slow or fails, its own token
+    // refresh cannot sign this account back in.
+    endSessionLocally();
     try {
-      await supabase.auth.signOut();
+      // Supabase reports some failures as ``{ error }`` rather than throwing.
+      // Either way the local sign-out stands; nothing here waits on it.
+      const result = await supabase.auth.signOut();
+      if (result?.error) console.error('signOut error:', result.error.message ?? result.error);
     } catch (err) {
        
       console.error('signOut error:', err);
@@ -732,10 +787,11 @@ export const useUserStore = create<UserStore>((set, get) => ({
 // synchronous by design; see ``handleAuthStateChange``.
 supabase.auth.onAuthStateChange(handleAuthStateChange);
 
-setUnauthorizedHandler(() => {
+setUnauthorizedHandler((rejected) => {
   // The same authority as sign-out: a ``/me`` still in flight cannot restore
-  // the session after this.
-  clearIdentity();
+  // the session after this, and neither can Supabase's own events for the
+  // session the server just rejected.
+  endSessionLocally(rejected);
   useUserStore.setState({ pendingChallenge: null });
   void writeStoredChallenge(null);
 });
@@ -746,8 +802,15 @@ setRegistrationRequiredHandler((stamp) => {
   useUserStore.setState({ registrationState: 'registration_pending', isAdmin: false });
 });
 
+/** A request made before the store existed began before anything was decided. */
+const BEFORE_ANY_DECISION: AuthTicket = { generation: 0, accountId: '', fact: 0 };
+
 setAuthResponseAuthority({
   stamp: () => currentAuth(),
+  // A request goes out as the identity it began under, anonymously if it began
+  // signed out, or not at all (see ``requestDispatch``).
+  dispatchAs: (stamp, sessionAccountId) =>
+    requestDispatch(isAuthTicket(stamp) ? stamp : BEFORE_ANY_DECISION, sessionAccountId),
   // A 401 ends the session only if it answered a request made in this
   // generation; an earlier account's 401 must not sign out the current one.
   acceptsUnauthorized: (stamp) =>

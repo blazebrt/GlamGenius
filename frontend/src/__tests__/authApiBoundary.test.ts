@@ -61,6 +61,10 @@ beforeEach(() => {
   setRegistrationRequiredHandler(onRegistrationRequired);
   setAuthResponseAuthority({
     stamp: () => generation,
+    // The stand-in identity is always signed in: a request still in its own
+    // generation goes out with the session's token, any other is refused.
+    dispatchAs: (stamp, sessionAccountId) =>
+      stamp !== generation ? 'refuse' : sessionAccountId ? 'session' : 'anonymous',
     acceptsUnauthorized: (stamp) => stamp === generation,
     acceptsRegistrationRequired: (stamp) => stamp === generation,
   });

@@ -49,12 +49,16 @@ jest.mock('../services/supabase', () => {
     },
   });
   memory.set(storageKey, JSON.stringify(sessionFor('initial')));
+  // What the auth server does, adjustable per case. The defaults are the
+  // behaviour the refresh cases above were written against.
+  const server = { refreshTag: 'rotated', logoutFails: false };
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   const refreshFetch = async (url: string) => {
-    if (String(url).includes('grant_type=refresh_token')) {
-      return new Response(JSON.stringify(sessionFor('rotated')), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
+    if (String(url).includes('grant_type=refresh_token')) return json(sessionFor(server.refreshTag));
+    if (String(url).includes('grant_type=password')) return json(sessionFor('relogin'));
+    if (String(url).includes('/logout') && server.logoutFails) {
+      return json({ message: 'auth server unavailable' }, 500);
     }
     return new Response(JSON.stringify({ message: 'not handled' }), { status: 404 });
   };
@@ -77,9 +81,12 @@ jest.mock('../services/supabase', () => {
       const { data } = await client.getSession();
       return data.session ? { token: data.session.access_token, userId: data.session.user.id } : null;
     },
+    // As the real wrapper: Supabase's returned { error } is not a sign-out.
     signOut: async () => {
-      await client.signOut();
+      const result = await client.signOut();
+      if (result?.error) throw result.error;
     },
+    __server: server,
   };
 });
 
@@ -99,6 +106,16 @@ const meAuthorizations: string[] = [];
 let meAnswers: 'offline' | 'registered' = 'offline';
 
 api.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
+  if (config.url === '/api/v2/notifications') {
+    // The backend rejects the session this request was sent with.
+    throw new AxiosError('unauthorized', 'ERR_BAD_REQUEST', config, null, {
+      data: { detail: { code: 'ACCOUNT_UNAUTHORIZED' } },
+      status: 401,
+      statusText: 'Unauthorized',
+      headers: {},
+      config,
+    } as never);
+  }
   if (config.url === '/api/v2/me') {
     meAuthorizations.push(String(config.headers.Authorization));
     if (meAnswers === 'offline') {
@@ -183,5 +200,43 @@ describe('D. TOKEN_REFRESHED against the real Supabase auth client', () => {
     expect(meAuthorizations.length).toBe(before);
     expect(useUserStore.getState().user).toBe(profile);
     expect(useUserStore.getState().registrationState).toBe('registered');
+  });
+});
+
+describe('an account whose 401 was accepted, against the real Supabase auth client', () => {
+  it('stays signed out through a failed Supabase sign-out and a real token refresh, until an explicit sign-in', async () => {
+    const server = jest.requireMock('../services/supabase').__server as {
+      refreshTag: string;
+      logoutFails: boolean;
+    };
+    expect(useUserStore.getState()).toMatchObject({ userId: 'account-a', registrationState: 'registered' });
+    server.logoutFails = true;
+    server.refreshTag = 'after-401';
+
+    // The backend rejects the current session. The app accepts that 401 and
+    // asks Supabase to sign out, which fails and keeps the session.
+    await expect(api.get('/api/v2/notifications')).rejects.toMatchObject({ response: { status: 401 } });
+    expect(useUserStore.getState()).toMatchObject({ session: null, userId: '', registrationState: 'signed_out' });
+    const held = await client.getSession();
+    expect(held.data.session?.user.id).toBe('account-a');
+
+    // Supabase's own refresh of that session completes and announces
+    // TOKEN_REFRESHED through the real client. It must not sign A back in.
+    const checksBefore = meAuthorizations.length;
+    const refresh = client.refreshSession();
+    expect(await settlesWithin(refresh)).toBe(true);
+    expect((await refresh).data.session?.access_token).toBe('access-after-401');
+    // Any reconciliation the event had wrongly scheduled would run within these turns.
+    for (let turn = 0; turn < 10; turn += 1) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(useUserStore.getState()).toMatchObject({ session: null, userId: '', registrationState: 'signed_out' });
+    expect(meAuthorizations.length).toBe(checksBefore);
+
+    // A sign-in the person makes is adopted, through the real client.
+    const login = useUserStore.getState().login('account-a@example.com', 'secret');
+    expect(await settlesWithin(login)).toBe(true);
+    await expect(login).resolves.toEqual({ ok: true });
+    expect(useUserStore.getState()).toMatchObject({ userId: 'account-a', registrationState: 'registered' });
+    expect(useUserStore.getState().session?.access_token).toBe('access-relogin');
+    expect(meAuthorizations[meAuthorizations.length - 1]).toBe('Bearer access-relogin');
   });
 });

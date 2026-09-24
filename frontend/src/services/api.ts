@@ -23,11 +23,26 @@
  * REGISTRATION_REQUIRED that belonged to an account which has since signed out
  * or been replaced is passed back to its caller and changes nothing else.
  *
- * That is the response side. The request side is separate: a request that
- * belongs to one particular account carries ``expectedAccountId`` and is sent
- * with that account's own token or not at all. Checking a response afterwards
- * can protect local state, but it cannot take back a change the server has
- * already made as the wrong account.
+ * That is the response side. The request side is separate, and it applies to
+ * every request, not only account-specific ones. Checking a response afterwards
+ * can protect local state. It cannot take back a GET, PATCH or POST the server
+ * has already served, or applied, as the wrong account.
+ *
+ * - Each request is stamped with the identity it began under at the moment it
+ *   is made (the ``runWhen`` hook runs synchronously inside the axios call,
+ *   before any await).
+ * - When its token is ready, the auth authority decides how it may go out
+ *   (``dispatchAs``):
+ *   - with the session's token, when that session still belongs to the
+ *     account it began as (a refreshed token for the same account is fine);
+ *   - anonymously, when it began signed out;
+ *   - or not at all, when the identity changed in between: AccountMismatchError,
+ *     and nothing reaches the network.
+ * - ``expectedAccountId`` adds an explicit contract on top: this account's
+ *   token, or nothing.
+ *
+ * A request sent anonymously presented no credentials, so its 401 says nothing
+ * about any session and has no auth side effects.
  */
 import axios from 'axios';
 import { router } from 'expo-router';
@@ -40,12 +55,26 @@ declare module 'axios' {
      * account is anyone else, or no one, the request is not sent at all.
      */
     expectedAccountId?: string;
-    /** Opaque auth-generation stamp, taken when the request was prepared. */
+    /** Opaque auth-generation stamp, taken the moment the request was made. */
     authStamp?: unknown;
+    /** How the request actually went out: with the session's token, or anonymously. */
+    authDispatch?: 'session' | 'anonymous';
+    /** The account and token a ``session`` request was sent with. */
+    authSentAs?: SentCredential;
   }
 }
 
-/** Raised, before anything is sent, when an account-bound request finds another account signed in. */
+/** The credential a request was sent with, handed to the unauthorized handler. */
+export interface SentCredential {
+  accountId: string;
+  accessToken: string;
+}
+
+/**
+ * Raised, before anything is sent, when a request would otherwise go out as an
+ * identity other than the one it began under, or for an account-bound request,
+ * as anyone but its account.
+ */
 export class AccountMismatchError extends Error {
   readonly code = 'ACCOUNT_MISMATCH';
 
@@ -55,9 +84,19 @@ export class AccountMismatchError extends Error {
   }
 }
 
-/** Decides whether a response may still change the signed-in state. */
+/**
+ * The auth authority (the user store). It stamps requests with an opaque
+ * identity snapshot and interprets those stamps. The API client never looks
+ * inside a stamp, so it does not depend on the store.
+ */
 export interface AuthResponseAuthority {
+  /** The current identity, as an opaque stamp. */
   stamp: () => unknown;
+  /**
+   * How a request stamped ``stamp`` may be sent, now that the session it would
+   * use belongs to ``sessionAccountId`` (null: no session).
+   */
+  dispatchAs: (stamp: unknown, sessionAccountId: string | null) => 'session' | 'anonymous' | 'refuse';
   acceptsUnauthorized: (stamp: unknown) => boolean;
   acceptsRegistrationRequired: (stamp: unknown) => boolean;
 }
@@ -77,11 +116,13 @@ if (!BACKEND_URL) {
   );
 }
 
-// Lets the user store clear its own state when the session ends.
-let onUnauthorized: (() => void) | null = null;
+// Lets the user store clear its own state when the session ends. It is told
+// which credential the server rejected, when the request carried one.
+type UnauthorizedHandler = (rejected?: SentCredential | null) => void;
+let onUnauthorized: UnauthorizedHandler | null = null;
 let onRegistrationRequired: ((stamp: unknown) => void) | null = null;
 
-export const setUnauthorizedHandler = (handler: (() => void) | null) => {
+export const setUnauthorizedHandler = (handler: UnauthorizedHandler | null) => {
   onUnauthorized = handler;
 };
 
@@ -131,25 +172,61 @@ export const isRegistrationRequired = (err: unknown): boolean => {
   );
 };
 
-api.interceptors.request.use(async (config) => {
-  // Stamped before the token is read. If the identity changes while it is
-  // read, a response is treated as stale; the other way round would let an old
-  // account's 401 sign out the new one.
-  config.authStamp = authAuthority?.stamp();
-  if (config.expectedAccountId !== undefined) {
+/**
+ * Stamp a request with the identity it begins under.
+ *
+ * axios calls ``runWhen`` synchronously inside ``api.get()``, ``api.post()`` and
+ * the rest, before its own promise chain starts. So the stamp is taken while
+ * the caller's code is still running, not after some other event has had a
+ * chance to change who is signed in. It always lets the interceptor run.
+ */
+function stampWhenMade(config: { authStamp?: unknown }): boolean {
+  if (config.authStamp === undefined) config.authStamp = authAuthority?.stamp();
+  return true;
+}
+
+api.interceptors.request.use(
+  async (config) => {
+    if (!authAuthority) {
+      // No auth authority is registered (only in tests that exercise the
+      // client on its own): the plain token lookup, as before.
+      if (config.expectedAccountId !== undefined) {
+        const identity = await getAccessIdentity();
+        if (!identity || identity.userId !== config.expectedAccountId) {
+          throw new AccountMismatchError();
+        }
+        config.headers.Authorization = `Bearer ${identity.token}`;
+        return config;
+      }
+      const token = await getAccessToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+      return config;
+    }
+    // The token together with the account it belongs to, read now. It may be a
+    // refreshed token; what matters is whose it is.
     const identity = await getAccessIdentity();
-    if (!identity || identity.userId !== config.expectedAccountId) {
+    const route = authAuthority.dispatchAs(config.authStamp, identity?.userId ?? null);
+    if (route === 'refuse') throw new AccountMismatchError();
+    if (
+      config.expectedAccountId !== undefined
+      && (route !== 'session' || identity?.userId !== config.expectedAccountId)
+    ) {
       throw new AccountMismatchError();
     }
-    config.headers.Authorization = `Bearer ${identity.token}`;
+    if (route === 'session' && identity) {
+      config.headers.Authorization = `Bearer ${identity.token}`;
+      config.authDispatch = 'session';
+      config.authSentAs = { accountId: identity.userId, accessToken: identity.token };
+    } else {
+      config.authDispatch = 'anonymous';
+    }
     return config;
-  }
-  const token = await getAccessToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+  },
+  undefined,
+  { runWhen: stampWhenMade },
+);
 
 api.interceptors.response.use(
   (response) => response,
@@ -157,11 +234,13 @@ api.interceptors.response.use(
     const status = error?.response?.status;
     const code = error?.response?.data?.detail?.code;
     const stamp = error?.config?.authStamp;
+    // Sent without credentials: its answer says nothing about any session.
+    const sentAnonymously = error?.config?.authDispatch === 'anonymous';
 
     // Registration-incomplete: KEEP the Supabase session — the user is
     // authenticated, just not yet a GlamGenius account.
     if (status === 403 && code === 'REGISTRATION_REQUIRED') {
-      if (!authAuthority || authAuthority.acceptsRegistrationRequired(stamp)) {
+      if (!sentAnonymously && (!authAuthority || authAuthority.acceptsRegistrationRequired(stamp))) {
         onRegistrationRequired?.(stamp);
         try {
           router.replace('/(auth)/registration-incomplete');
@@ -179,12 +258,14 @@ api.interceptors.response.use(
     }
 
     if (status === 401) {
-      if (!authAuthority || authAuthority.acceptsUnauthorized(stamp)) {
+      if (!sentAnonymously && (!authAuthority || authAuthority.acceptsUnauthorized(stamp))) {
         // Locally first, and synchronously: the session is over the moment
         // this 401 is accepted, and every result still in flight for it is
-        // stale from here. Waiting for Supabase first would leave that window
-        // open for as long as the sign-out takes.
-        onUnauthorized?.();
+        // stale from here. The store also quarantines the rejected session, so
+        // Supabase's own events cannot bring it back while (or if) the
+        // provider sign-out below is slow or fails. That sign-out is best
+        // effort; nothing here depends on it succeeding.
+        onUnauthorized?.(error?.config?.authSentAs ?? null);
         await signOut().catch(() => {});
         try {
           router.replace('/(auth)/welcome');

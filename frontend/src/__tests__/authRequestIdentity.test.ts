@@ -96,8 +96,11 @@ jest.mock('@supabase/supabase-js', () => {
 });
 
 /* eslint-disable import/first */
+import React from 'react';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { router } from 'expo-router';
-import { api } from '../services/api';
+import ForYouProfileScreen from '../../app/for-you-profile';
+import { AccountMismatchError, api } from '../services/api';
 import { ensureDeviceClaimed } from '../services/productScan';
 import { secureSessionStorage } from '../services/secureSessionStorage';
 import { useUserStore } from '../store/userStore';
@@ -184,6 +187,14 @@ function only(url: string): MockSent {
 }
 
 const state = () => useUserStore.getState();
+
+/**
+ * Observe how a request settles, from the moment it is made. A refused request
+ * rejects before anything is sent, so the observer must already be attached.
+ */
+function outcome<T>(request: Promise<T>): Promise<T | unknown> {
+  return request.then((value) => value, (error: unknown) => error);
+}
 const registered = (name: string, isAdmin = false) => ({ profile: { name }, account: { is_admin: isAdmin } });
 const REGISTRATION_REQUIRED = { detail: { code: 'REGISTRATION_REQUIRED' } };
 
@@ -747,5 +758,224 @@ describe('4. the response race: a request that really went out as A answers afte
 
     expect(router.replace).not.toHaveBeenCalled();
     expect(state()).toMatchObject({ userId: 'account-b', registrationState: 'registered' });
+  });
+});
+
+// ===========================================================================
+// 5. Every request keeps the identity it began under, not only account-bound ones
+// ===========================================================================
+describe('5. a generic request goes out as the identity it began under, or not at all', () => {
+  const URL = '/api/v2/notifications';
+
+  it('the stamp is taken when the call is made, before anything else can run', async () => {
+    await signInRegistered('account-a');
+
+    // B signs in in the same synchronous turn as the call, before axios has
+    // run a single interceptor.
+    const request = outcome(api.get(URL));
+    signIn('account-b');
+    await settle();
+
+    expect(sentTo(URL)).toHaveLength(0);
+    expect(await request).toBeInstanceOf(AccountMismatchError);
+  });
+
+  it('a GET begun as A, whose token read is paused while B signs in, is never sent', async () => {
+    await signInRegistered('account-a');
+
+    const gate = pauseNextGetSession();
+    const request = outcome(api.get(URL));
+    await settle();
+    expect(sentTo(URL)).toHaveLength(0);
+
+    signIn('account-b');
+    gate.resolve();
+    await settle();
+
+    expect(sentTo(URL)).toHaveLength(0);
+    expect(await request).toBeInstanceOf(AccountMismatchError);
+    // B is untouched: its own check went out as B.
+    expect(only(ME).authorization).toBe('Bearer token-account-b');
+  });
+
+  it('a PATCH begun as A is never sent when B wins before dispatch', async () => {
+    await signInRegistered('account-a');
+
+    const gate = pauseNextGetSession();
+    const mutation = outcome(api.patch('/api/v2/memory/entry-1', { note: 'A wrote this' }));
+    await settle();
+
+    signIn('account-b');
+    gate.resolve();
+    await settle();
+
+    expect(mockSent.filter((request) => request.method === 'PATCH')).toHaveLength(0);
+    expect(await mutation).toBeInstanceOf(AccountMismatchError);
+  });
+
+  it('a request begun as A goes out with A\'s refreshed token when only the token changed', async () => {
+    await signInRegistered('account-a');
+    const profile = state().user;
+
+    const gate = pauseNextGetSession();
+    const request = outcome(api.get(URL));
+    await settle();
+
+    supabaseSession = { ...session('account-a'), access_token: 'token-account-a-rotated' } as Session;
+    authCallback('TOKEN_REFRESHED', supabaseSession);
+    gate.resolve();
+    await settle();
+
+    const sent = only(URL);
+    expect(sent.authorization).toBe('Bearer token-account-a-rotated');
+    sent.answer(200, { items: [] });
+    expect(await request).toMatchObject({ status: 200 });
+    expect(state().user).toBe(profile);
+  });
+
+  it('a request begun signed out stays anonymous when B signs in before it is sent, and its 401 leaves B alone', async () => {
+    const gate = pauseNextGetSession();
+    const request = outcome(api.get(URL));
+    await settle();
+
+    signIn('account-b');
+    gate.resolve();
+    await settle();
+
+    const sent = only(URL);
+    expect(sent.authorization).toBeUndefined();
+    (router.replace as jest.Mock).mockClear();
+    sent.answer(401, { detail: { code: 'NOT_AUTHENTICATED' } });
+    expect(await request).toBeInstanceOf(AxiosError);
+    await settle();
+
+    // It presented no credentials, so its 401 says nothing about B's session.
+    expect(mockAuth.signOut).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(state()).toMatchObject({ userId: 'account-b', registrationState: 'resolving' });
+    expect(only(ME).authorization).toBe('Bearer token-account-b');
+  });
+
+  it('a request begun as A is refused, not sent anonymously, when A signs out before it is sent', async () => {
+    await signInRegistered('account-a');
+
+    const gate = pauseNextGetSession();
+    const request = outcome(api.get(URL));
+    await settle();
+
+    await state().logout();
+    gate.resolve();
+    await settle();
+
+    expect(sentTo(URL)).toHaveLength(0);
+    expect(await request).toBeInstanceOf(AccountMismatchError);
+  });
+
+  it('it is refused too while Supabase still holds A\'s session after A was signed out locally', async () => {
+    await signInRegistered('account-a');
+
+    const gate = pauseNextGetSession();
+    const request = outcome(api.get(URL));
+    await settle();
+
+    const signOutGate = pauseNextSignOut();
+    const logout = state().logout();
+    expect(supabaseSession?.user.id).toBe('account-a');
+    gate.resolve();
+    await settle();
+
+    expect(sentTo(URL)).toHaveLength(0);
+    expect(await request).toBeInstanceOf(AccountMismatchError);
+    signOutGate.resolve();
+    await logout;
+  });
+});
+
+// ===========================================================================
+// 6. The FOR YOU profile screen, which uses the generic client directly
+// ===========================================================================
+describe('6. the FOR YOU profile screen cannot read or write as B what A started', () => {
+  const answered = {
+    id: 'profile-a',
+    version: 1,
+    baseline_status: 'complete',
+    attributes: [
+      { key: 'care_skin_usual_feel', value: 'often_dry_or_tight' },
+      { key: 'care_skin_sensitivity', value: 'rarely_reactive' },
+    ],
+    readiness: [],
+  };
+
+  async function openScreen() {
+    render(React.createElement(ForYouProfileScreen));
+    await act(async () => {
+      await settle();
+    });
+  }
+
+  it('reads and saves as A while A is signed in', async () => {
+    await signInRegistered('account-a');
+    await openScreen();
+    const read = only(PROFILE);
+    expect(read.method).toBe('GET');
+    expect(read.authorization).toBe('Bearer token-account-a');
+    await act(async () => {
+      read.answer(200, answered);
+      await settle();
+    });
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('for-you-profile-save'));
+      await settle();
+    });
+    const write = only(PROFILE);
+    expect(write.method).toBe('PATCH');
+    expect(write.authorization).toBe('Bearer token-account-a');
+    expect(write.body).toEqual({
+      attributes: [
+        { key: 'care_skin_usual_feel', value: 'often_dry_or_tight' },
+        { key: 'care_skin_sensitivity', value: 'rarely_reactive' },
+      ],
+    });
+  });
+
+  it('its GET, begun as A, is not sent when B signs in before dispatch', async () => {
+    await signInRegistered('account-a');
+
+    const gate = pauseNextGetSession();
+    await openScreen();
+    expect(sentTo(PROFILE)).toHaveLength(0);
+
+    await act(async () => {
+      signIn('account-b');
+      gate.resolve();
+      await settle();
+    });
+
+    expect(sentTo(PROFILE)).toHaveLength(0);
+    expect(only(ME).authorization).toBe('Bearer token-account-b');
+  });
+
+  it('its PATCH, begun as A, is not sent when B signs in before dispatch', async () => {
+    await signInRegistered('account-a');
+    await openScreen();
+    await act(async () => {
+      only(PROFILE).answer(200, answered);
+      await settle();
+    });
+
+    const gate = pauseNextGetSession();
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('for-you-profile-save'));
+      await settle();
+    });
+    await act(async () => {
+      signIn('account-b');
+      gate.resolve();
+      await settle();
+    });
+
+    expect(mockSent.filter((request) => request.method === 'PATCH')).toHaveLength(0);
+    expect(screen.getByText('We could not save that just now. Try again in a moment.')).toBeTruthy();
   });
 });
