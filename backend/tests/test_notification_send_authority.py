@@ -37,9 +37,10 @@ import pytest
 from app.domains.planning import notifications, push
 from app.domains.planning.models import NotificationDelivery
 from app.domains.product import watch as product_watch
+from app.domains.product.models import ProductWatch
 from app.shared.database.base import utcnow
 from app.workers import notifications as worker
-from sqlalchemy import text
+from sqlalchemy import text, update
 
 from tests.conftest import auth
 from tests.test_notification_delivery_integrity import (
@@ -558,9 +559,10 @@ async def test_the_gate_refuses_a_product_watch_topic_switched_off_even_where_no
 
 
 @pytest.mark.asyncio
-async def test_the_gate_refuses_a_watch_stopped_after_the_claim(
+async def test_a_watch_stopped_after_the_claim_is_not_sent(
     db_clean, off_clean, app_client, registered_supabase_user, tmp_path, monkeypatch, race,  # noqa: F811
 ):
+    """The stop itself settles the claim (the watch lifecycle); the gate then finds nothing to attempt."""
     async def stopped(*, token, **_):
         assert (await _delete_watch(app_client, token)).status_code == 200
 
@@ -571,7 +573,7 @@ async def test_the_gate_refuses_a_watch_stopped_after_the_claim(
 
 
 @pytest.mark.asyncio
-async def test_the_gate_refuses_a_notice_from_an_epoch_the_watch_has_since_left(
+async def test_a_notice_from_an_epoch_the_watch_has_since_left_is_not_sent(
     db_clean, off_clean, app_client, registered_supabase_user, tmp_path, monkeypatch, race,  # noqa: F811
 ):
     async def restarted(*, token, device, account_id):
@@ -581,6 +583,40 @@ async def test_the_gate_refuses_a_notice_from_an_epoch_the_watch_has_since_left(
 
     _, row = await _changed_after_the_claim(
         app_client, registered_supabase_user, tmp_path, monkeypatch, race, restarted,
+    )
+    _withdrawn(row, notifications.SUPPRESSED_WATCH_ENDED)
+
+
+async def _write_the_watch_directly(account_id, **values):
+    """Change the watch row without the lifecycle, so nothing settles the claim: the gate decides alone."""
+    async with _factory()() as session:
+        await session.execute(update(ProductWatch).where(ProductWatch.account_id == account_id).values(**values))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_the_gate_refuses_a_stopped_watch_even_where_nothing_settled_the_row(
+    db_clean, off_clean, app_client, registered_supabase_user, tmp_path, monkeypatch, race,  # noqa: F811
+):
+    async def stopped_directly(*, account_id, **_):
+        await _write_the_watch_directly(account_id, active=False, stopped_at=utcnow())
+
+    _, row = await _changed_after_the_claim(
+        app_client, registered_supabase_user, tmp_path, monkeypatch, race, stopped_directly,
+    )
+    _withdrawn(row, notifications.SUPPRESSED_WATCH_ENDED)
+
+
+@pytest.mark.asyncio
+async def test_the_gate_refuses_a_restarted_epoch_even_where_nothing_settled_the_row(
+    db_clean, off_clean, app_client, registered_supabase_user, tmp_path, monkeypatch, race,  # noqa: F811
+):
+    """Defence in depth only: honest timestamps, and a restart the lifecycle did not see."""
+    async def restarted_directly(*, account_id, **_):
+        await _write_the_watch_directly(account_id, started_at=utcnow())
+
+    _, row = await _changed_after_the_claim(
+        app_client, registered_supabase_user, tmp_path, monkeypatch, race, restarted_directly,
     )
     _withdrawn(row, notifications.SUPPRESSED_WATCH_ENDED)
 

@@ -48,9 +48,11 @@ SUPPRESSED_MODULE_OFF = "module_disabled"
 #: active after this delivery was claimed and before the provider was called.
 #: Nothing was sent. The row is terminal, so it is never claimed again.
 SUPPRESSED_ACCOUNT_INACTIVE = "account_inactive"
-#: Settled when an abandoned Product Watch claim is re-proved and the watch it
-#: was decided for has since been stopped, re-anchored or restarted. Nothing
-#: was sent, and the row is terminal.
+#: A Product Watch delivery whose watch epoch ended before it reached the
+#: provider: the customer stopped, restarted or re-anchored the watch. The
+#: watch lifecycle settles it in that same transaction; recovery and the final
+#: gate settle it too, if they find one. Nothing was sent, and the row is
+#: terminal.
 SUPPRESSED_WATCH_ENDED = "watch_ended"
 STATUS_SUPPRESSED = "suppressed"
 STATUS_QUEUED = "queued"
@@ -725,29 +727,41 @@ async def settle_abandoned_claim(
 
 async def withdraw_unattempted(
     session: AsyncSession, account_id: uuid.UUID, *, source_kind: str, reason: str,
+    source_id: str | None = None,
 ) -> int:
     """Settle, as not sent, every delivery of one source that has not reached the provider.
 
-    For an explicit opt-out, in the same transaction as the preference change,
-    with the caller already holding the preference lock. A row is withdrawn
-    only while nothing can have been sent: ``queued``, or ``sending`` with no
-    attempt recorded. Its claim lease does not matter — a claim made a moment
-    ago is withdrawn too, because once this commits the worker's final gate
-    finds the row no longer its own and does not reach the provider. It
-    becomes terminal, unclaimed, with the reason written down, so turning the
-    opt-out back off can never revive it.
+    For a customer decision that takes away the authority to send, in the same
+    transaction as that decision and with the caller already holding the lock
+    that decision is made under:
 
-    An attempted row (``attempted_at IS NOT NULL``) is never touched. The
-    provider may already have it; an opt-out after that moment can stop what
-    comes next, but it cannot prove this one was not sent.
+    * an opt-out, under the preference lock — every delivery of the source;
+    * a watch leaving its epoch (stopped, reactivated, re-anchored), under the
+      watch row's lock — only the deliveries for that one ``source_id``.
+
+    A row is withdrawn only while nothing can have been sent: ``queued``, or
+    ``sending`` with no attempt recorded. Its claim lease does not matter — a
+    claim made a moment ago is withdrawn too, because once this commits the
+    worker's final gate finds the row no longer its own and does not reach the
+    provider. It becomes terminal, unclaimed, with the reason written down, so
+    nothing that happens afterwards can revive it.
+
+    An attempted row (``attempted_at IS NOT NULL``) is never touched, nor is
+    any row the provider already answered for. The provider may already have
+    it; a decision after that moment can stop what comes next, but it cannot
+    prove this one was not sent.
     """
+    conditions = [
+        NotificationDelivery.account_id == account_id,
+        NotificationDelivery.source_kind == source_kind,
+        NotificationDelivery.status.in_((STATUS_QUEUED, STATUS_SENDING)),
+        NotificationDelivery.attempted_at.is_(None),
+    ]
+    if source_id is not None:
+        conditions.append(NotificationDelivery.source_id == source_id)
     result = await session.execute(
-        update(NotificationDelivery).where(
-            NotificationDelivery.account_id == account_id,
-            NotificationDelivery.source_kind == source_kind,
-            NotificationDelivery.status.in_((STATUS_QUEUED, STATUS_SENDING)),
-            NotificationDelivery.attempted_at.is_(None),
-        ).values(status=STATUS_SUPPRESSED, suppressed_reason=reason, claim_token=None, claimed_at=None)
+        update(NotificationDelivery).where(*conditions)
+        .values(status=STATUS_SUPPRESSED, suppressed_reason=reason, claim_token=None, claimed_at=None)
         .execution_options(synchronize_session=False)
     )
     return int(result.rowcount or 0)

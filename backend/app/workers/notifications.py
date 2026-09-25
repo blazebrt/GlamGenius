@@ -120,9 +120,11 @@ async def _authorize_provider_attempt(
     * the account is still active (the lifecycle gate of Lane A), checked
       first and once;
     * then, with the preference row locked: notifications on, and — for a
-      Product Watch delivery — the topic on and the watch still active and in
-      the epoch the notice was decided in (:func:`product_watch.attempt_refusal`,
-      which locks the watch next);
+      Product Watch delivery — the topic on and the watch still present and
+      active (:func:`product_watch.attempt_refusal`, which locks the watch
+      next). A notice from an ended watch epoch cannot pass: the stop,
+      reactivation or re-anchor that ended it settled it under that same
+      watch lock, so the attempt marker below finds it no longer claimable;
     * native push on, not quiet hours, the daily cap not exceeded by this row;
     * the devices to send to, read now and held ``FOR SHARE``
       (:func:`notifications.devices_for_attempt`) — never the list the cycle
@@ -144,6 +146,10 @@ async def _authorize_provider_attempt(
       so the marker below can no longer succeed.
     * another account taking over this phone's push token disables the device
       row, which the ``FOR SHARE`` read either sees or makes wait.
+    * a watch stop, reactivation or re-anchor holds the watch row. If it
+      commits first, it has already settled this delivery; if this gate holds
+      the watch first, the lifecycle change waits, and finds the attempt in
+      flight, which it leaves alone.
 
     Returns ``None`` and sends nothing otherwise. A refusal that is the
     customer's or the account's lasting state — account inactive, master

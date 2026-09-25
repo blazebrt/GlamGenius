@@ -136,8 +136,8 @@ Each run ends with one log line and one database heartbeat.
   own short transaction, and records `attempted_at` in it: the account is
   still active; notifications and native push are on; it is not quiet hours;
   the daily cap has room; for Product Watch, the topic is on and the watch is
-  still active and in the same epoch; and the devices to send to are read then,
-  not taken from the start of the cycle. Only those devices are sent to. A row
+  still active; and the devices to send to are read then, not taken from the
+  start of the cycle. Only those devices are sent to. A row
   with `attempted_at` set may have reached Expo, so it is never sent again,
   however old its claim. A Product Watch delivery claimed and then abandoned
   *before* that mark (the process died) is found again once its 5-minute lease
@@ -154,6 +154,16 @@ Each run ends with one log line and one database heartbeat.
   on later can never deliver a notice decided before the opt-out, even if no
   worker cycle ran in between. No lock is held while Expo is called. Proven by
   `backend/tests/test_notification_send_authority.py`.
+* **Stopping, restarting or re-anchoring a watch ends its pending notices.** The
+  same transaction that changes the watch, holding the watch row's lock,
+  settles that barcode's Product Watch deliveries that have not been attempted
+  (`watch_ended`). The final gate locks the same watch row before it records an
+  attempt, so either the watch change commits first and there is nothing left
+  to send, or the attempt commits first and is in flight, and the watch change
+  leaves it alone. This does not depend on server clocks agreeing: which watch
+  period a notice belongs to is decided by the database's lock order, not by
+  comparing timestamps written on different hosts. Proven by
+  `backend/tests/test_notification_watch_epoch.py`.
 * **Isolated per account.** Account discovery is one short read. Each account is
   then processed in its own database session and transaction, which commits
   that account's decisions whether or not it sends. One account's failure is

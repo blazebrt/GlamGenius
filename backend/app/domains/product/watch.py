@@ -645,6 +645,33 @@ async def watch_state(
     )
 
 
+async def _end_epoch_deliveries(session: AsyncSession, *, account_id: uuid.UUID, barcode: str) -> int:
+    """Settle this watch's deliveries that have not reached the provider: its epoch is over.
+
+    Called with the watch row locked, in the same transaction as the lifecycle
+    change that ends the epoch — a stop, a reactivation, a re-anchor. That
+    lock is what orders it against the worker: the worker's trigger holds the
+    watch from evaluation until its claim commits, and its final gate locks
+    the watch again before recording the attempt. So either this commits
+    first, and those deliveries are terminal before the gate can mark one, or
+    the gate commits its attempt first, and that delivery is in flight and not
+    touched here (:func:`notifications.withdraw_unattempted` never withdraws
+    an attempted row). No clock is compared: which epoch a delivery belongs to
+    is decided by the order PostgreSQL grants this lock, not by timestamps
+    written on different hosts.
+
+    Narrow by construction: this account, Product Watch deliveries, this
+    barcode only; ``queued``, or ``sending`` with no attempt recorded.
+    """
+    ended = await notifications.withdraw_unattempted(
+        session, account_id, source_kind=SOURCE_KIND, source_id=barcode,
+        reason=notifications.SUPPRESSED_WATCH_ENDED,
+    )
+    if ended:
+        logger.info("product_watch_epoch_deliveries_ended count=%s", ended)
+    return ended
+
+
 async def start_watch(
     session: AsyncSession, *, account_id: uuid.UUID, barcode: str, label_version: int,
     device: ScanDevice | None, now: datetime | None = None,
@@ -655,6 +682,19 @@ async def start_watch(
     matching official records, their current revisions, existing label
     versions — becomes the baseline, and only what becomes available after it
     can ever produce a notice.
+
+    Four cases, and only two of them end an epoch:
+
+    * no watch yet: a new watch and a new epoch, with nothing to end;
+    * already active on this exact pack: unchanged, and its current epoch's
+      deliveries are left alone — calling this again is not a transition;
+    * stopped: reactivated;
+    * active on a different pack: re-anchored.
+
+    Reactivating and re-anchoring end the old epoch before the new one starts,
+    with the watch row locked and in this same transaction: every delivery of
+    this barcode that has not reached the provider is settled as
+    ``watch_ended`` (:func:`_end_epoch_deliveries`).
     """
     if not watchable_barcode(barcode):
         raise WatchRefused(
@@ -706,7 +746,12 @@ async def start_watch(
     ):
         # A different pack, or a stopped watch: an explicit customer action
         # re-anchors it, and the baseline is rebuilt for the new context so
-        # nothing already known is replayed as news.
+        # nothing already known is replayed as news. The old epoch ends here,
+        # with the watch still locked: whatever it decided and has not yet
+        # sent is withdrawn in this same transaction. A watch that is already
+        # active on this exact pack never reaches this branch, so an
+        # idempotent start leaves the current epoch's deliveries alone.
+        await _end_epoch_deliveries(session, account_id=account_id, barcode=barcode)
         cursor = await _fresh_baseline(
             session, barcode=barcode, facts=dict(pack.scan_event.label_facts or {}),
             anchor_version=pack.snapshot.version_number,
@@ -727,11 +772,20 @@ async def start_watch(
 async def stop_watch(
     session: AsyncSession, *, account_id: uuid.UUID, barcode: str, now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Stop watching. Idempotent, and it erases no delivery history."""
+    """Stop watching. Idempotent, and it erases no delivery history.
+
+    Stopping ends the watch's epoch. With the watch row locked, in this same
+    transaction, every delivery of this barcode that has not reached the
+    provider is settled as ``watch_ended`` (:func:`_end_epoch_deliveries`).
+    Attempted and provider-answered rows are history and stay as they are.
+    A second stop finds nothing left to settle.
+    """
     watch = await _watch_row(session, account_id=account_id, barcode=barcode, lock=True)
-    if watch is not None and watch.active:
-        watch.active = False
-        watch.stopped_at = now or utcnow()
+    if watch is not None:
+        await _end_epoch_deliveries(session, account_id=account_id, barcode=barcode)
+        if watch.active:
+            watch.active = False
+            watch.stopped_at = now or utcnow()
         await session.flush()
     return _public_state(
         barcode=barcode, watch=watch, pack=None, delivery=await _delivery_state(session, account_id),
@@ -846,9 +900,16 @@ async def attempt_refusal(session: AsyncSession, *, preference: Any, delivery: A
     * the watch the notice was decided for still exists and is active, locked
       here (preference, then watch, as everywhere else) so a stop or restart
       either commits before this read or waits for the gate to finish;
-    * the notice still belongs to the watch's current epoch: the watch began
-      no later than the claim. Stopping, re-anchoring or restarting resets
-      ``started_at``, so a notice from an earlier epoch is refused.
+    * as a second line only, the watch did not start after the claim.
+
+    Which epoch a notice belongs to is not decided by timestamps. ``started_at``
+    and ``claimed_at`` are written by different processes, possibly on
+    different hosts, so their order is not the order things happened. The
+    authority is the watch lifecycle: a stop, reactivation or re-anchor
+    settles every unattempted delivery of the old epoch in its own
+    transaction, under this same watch lock (:func:`_end_epoch_deliveries`),
+    so the attempt marker can no longer succeed for one. The timestamp
+    comparison is kept only as defence in depth for rows that path never saw.
 
     The reason returned is the terminal suppression the gate records.
     """
@@ -890,9 +951,12 @@ async def _recover_abandoned_delivery(
       preference lock: notifications and native push on, the Product Watch
       topic on, not in quiet hours, an active device, and a daily cap with
       room for it that does not count the row itself;
-    * the watch it was decided for is still the same watch: present, active,
-      and begun no later than the claim. Stopping, re-anchoring or restarting
-      the watch starts a new epoch, and a notice from the old one is not sent.
+    * the watch it was decided for is still present and active. A notice from
+      an earlier epoch never reaches here as ``sending``: stopping,
+      reactivating or re-anchoring the watch settles it in that same
+      transaction (:func:`_end_epoch_deliveries`). The "begun no later than
+      the claim" comparison below is defence in depth only; it compares
+      timestamps from different hosts and is not the epoch authority.
 
     A recoverable row goes back to ``queued`` and is returned; the worker then
     claims it and sends it through the same final send-authority gate and

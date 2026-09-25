@@ -1166,8 +1166,24 @@ async def _recovery_decides(account_id, moment):
         return decision
 
 
-async def _stop_the_watch(app_client, token, account_id):
-    assert (await _delete_watch(app_client, token)).status_code == 200
+async def _stop_the_watch_directly(app_client, token, account_id):
+    # Straight to the row: the stop route would settle the claim itself (the
+    # watch lifecycle), and recovery's own check is what is under test.
+    async with _factory()() as session:
+        await session.execute(update(ProductWatch).where(ProductWatch.account_id == account_id).values(
+            active=False, stopped_at=utcnow(),
+        ))
+        await session.commit()
+
+
+async def _restart_the_epoch_directly(app_client, token, account_id):
+    # Honest timestamps, and a restart the lifecycle never saw: the "begun no
+    # later than the claim" comparison is defence in depth, tested on its own.
+    async with _factory()() as session:
+        await session.execute(update(ProductWatch).where(ProductWatch.account_id == account_id).values(
+            started_at=utcnow(),
+        ))
+        await session.commit()
 
 
 async def _switch_the_topic_off(app_client, token, account_id):
@@ -1187,7 +1203,8 @@ async def _lose_every_device(app_client, token, account_id):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("change", "expected"), [
-    (_stop_the_watch, (notifications.STATUS_SUPPRESSED, notifications.SUPPRESSED_WATCH_ENDED)),
+    (_stop_the_watch_directly, (notifications.STATUS_SUPPRESSED, notifications.SUPPRESSED_WATCH_ENDED)),
+    (_restart_the_epoch_directly, (notifications.STATUS_SUPPRESSED, notifications.SUPPRESSED_WATCH_ENDED)),
     (_switch_the_topic_off, (notifications.STATUS_SUPPRESSED, notifications.SUPPRESSED_MODULE_OFF)),
     (_lose_every_device, (notifications.STATUS_SENDING, None)),
 ])
@@ -1197,9 +1214,10 @@ async def test_r_recovery_itself_refuses_what_current_authority_rules_out_and_ha
     """Recovery re-proves before it requeues; the final gate is a second line, not the first.
 
     Recovery's own decision, taken before anything is claimed again: a row a
-    stopped watch or a switched-off topic rules out is settled, and a row with
-    no device to go to is left as it was. None of them is handed back to be
-    claimed.
+    stopped or restarted watch or a switched-off topic rules out is settled,
+    and a row with no device to go to is left as it was. None of them is
+    handed back to be claimed. Each change is written straight to its row, so
+    no route settles the claim first and recovery alone decides.
     """
     moment = _at_local_hour(9)
     token, account_id, _ = await _watched_customer(app_client, registered_supabase_user, tmp_path)

@@ -227,10 +227,11 @@ that is still `sending`, whose claim lease has expired and that has no recorded
 provider attempt (`attempted_at` empty) is re-checked against current authority:
 the master switch, the `product_watch` topic, native push, quiet hours, an active
 device, and a daily cap that leaves room for it without counting the row itself.
-The watch must still be active and must not have started after the claim:
-stopping, re-anchoring or restarting a watch begins a new epoch, and a notice from
-the old one is not sent. A recoverable row goes back through the ordinary claim,
-final gate and attempt marker. One the customer's current choices rule out
+The watch must still be active. A notice from an earlier watch epoch is never
+found here as `sending`: stopping, restarting or re-anchoring a watch settles it
+in that same transaction (see "A watch epoch ends by lock order" below). A
+recoverable row goes back through the ordinary claim, final gate and attempt
+marker. One the customer's current choices rule out
 is settled as suppressed (`module_disabled`, `daily_cap_reached` or
 `watch_ended`). A row whose provider attempt was recorded is never sent again,
 and an abandoned claim from an earlier day is never sent late.
@@ -238,10 +239,40 @@ and an abandoned claim from an earlier day is never sent late.
 Every Product Watch delivery, recovered or new, passes the worker's final gate
 immediately before Expo. With the preference row locked, it re-proves that the
 master switch and the `product_watch` topic are on and that the watch — locked
-next — still exists, is active, and did not start after the claim; it settles
-the claim as `disabled`, `module_disabled` or `watch_ended` if not. Only then is
-the attempt recorded and committed, and only the devices read in that same
-transaction are sent to.
+next — still exists and is active; it settles the claim as `disabled`,
+`module_disabled` or `watch_ended` if not. Only then is the attempt recorded and
+committed, and only the devices read in that same transaction are sent to.
+
+## A watch epoch ends by lock order, not by clock order
+
+A watch epoch begins when a watch is created, reactivated after a stop, or
+re-anchored to a different confirmed pack, and ends when the watch is stopped,
+reactivated or re-anchored. A notice decided in one epoch must never be sent in
+a later one.
+
+That used to be decided by comparing `watch.started_at` with the delivery's
+`claimed_at`. Those two timestamps are written by different processes — the API
+and the worker — possibly on different hosts, so their order is not the order
+things happened. With the API host's clock behind the worker's, a restart made
+after a claim could carry an earlier `started_at`, and the old notice passed as
+current.
+
+The authority is now the watch lifecycle itself. `stop_watch`, and the branch of
+`start_watch` that reactivates or re-anchors, settle — with the watch row locked
+and in that same transaction — every delivery of this account and this barcode
+that has not reached the provider: `queued`, or `sending` with no `attempted_at`.
+Each becomes `suppressed`, reason `watch_ended`, claim cleared, `attempted_at`
+left empty. Attempted and provider-answered rows are history and are never
+touched. An idempotent start of the same active watch on the same pack is not a
+transition and leaves the current epoch's deliveries alone.
+
+The worker's final gate locks the same watch row before it records an attempt,
+so PostgreSQL orders the two. If the watch change commits first, the old
+epoch's deliveries are terminal and the attempt marker cannot succeed. If the
+gate commits its attempt first, that one delivery is in flight, and the watch
+change — which waited for the lock — leaves it as it is. The `started_at` versus
+`claimed_at` comparison is kept in recovery and in the gate only as defence in
+depth, for a row the lifecycle never saw; it is not the epoch authority.
 
 ## Explicit opt-out
 
@@ -310,10 +341,13 @@ worker and in the preferences route — so the two cannot deadlock.
 - **Watch disabled while a cycle is running.** The cycle holds the active watch
   rows `FOR UPDATE` from evaluation until the caller commits. A stop that arrives
   mid-evaluation waits; a stop committed first means the cycle does not see the
-  watch. No notice is ever committed for a watch whose stop had already committed.
+  watch. No notice is ever committed for a watch whose stop had already committed,
+  and a notice the cycle committed just before the stop is settled as
+  `watch_ended` by the stop, unless its attempt was already recorded.
 - **Re-anchor while a cycle is running.** The re-anchor locks the same row, so it
   waits, then rebuilds the baseline from the state as it now is — including a
-  notice the cycle just decided.
+  notice the cycle just decided. That notice, if it has not been attempted, is
+  settled as `watch_ended` by the re-anchor itself.
 - **Watch created while a cycle is running.** Not in the cycle's locked set; it
   starts from its own baseline and is evaluated next cycle.
 - **Two scheduler calls overlapping / duplicate evaluation.** The preference lock
