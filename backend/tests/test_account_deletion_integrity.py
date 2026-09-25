@@ -1537,10 +1537,10 @@ def test_g_the_final_gate_is_the_last_step_before_the_provider():
     awaits = re.findall(r"await ([\w.]+)\(", body[claim:send])
     assert awaits == [
         "notifications.claim_delivery", "session.rollback", "session.commit",
-        "_settle_if_account_inactive", "push.send",
+        "_authorize_provider_attempt", "push.send",
     ], awaits
     # The first gate is kept, before any work.
     assert body.index("_account_is_active(") < body.index("context_stage.gather")
     # The final gate's transaction closes before the provider is called.
-    gate = source[source.index("async def _settle_if_account_inactive"):source.index("def _preference_due")]
+    gate = source[source.index("async def _authorize_provider_attempt"):source.index("def _preference_due")]
     assert "async with session.begin():" in gate and "push.send(" not in gate

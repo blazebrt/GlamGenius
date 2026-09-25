@@ -42,7 +42,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.identity.models import ACCOUNT_STATUS_ACTIVE, Account
 from app.domains.planning import clock, compiler, notifications, push
 from app.domains.planning import context as context_stage
-from app.domains.planning.models import NotificationDelivery, NotificationPreference
+from app.domains.planning.models import NotificationDelivery, NotificationDevice, NotificationPreference
+from app.domains.product import watch as product_watch
 from app.domains.system.models import WorkerStatus
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_sessionmaker
@@ -101,44 +102,123 @@ async def _account_is_active(session: AsyncSession, account_id: uuid_module.UUID
     ))
 
 
-async def _settle_if_account_inactive(
+async def _authorize_provider_attempt(
     session: AsyncSession, account_id: uuid_module.UUID,
-    delivery_id: uuid_module.UUID, claim: str,
-) -> bool:
-    """The final lifecycle gate, run immediately before the provider is called.
+    delivery_id: uuid_module.UUID, claim: str, *, moment: datetime,
+) -> list[NotificationDevice] | None:
+    """The final send-authority gate and the provider-attempt marker.
 
-    The first gate in :func:`process_account` runs before the day is compiled.
-    Deletion can be requested after that, while the triggers run or while the
-    claim commits. So the account is checked again here, in a short
-    transaction of its own that ends before ``push.send``. No transaction or
-    lock is held across the provider request.
+    The last step before ``push.send``, in one short transaction of its own
+    that commits before the provider is called. No transaction or lock is held
+    across the provider request.
 
-    If the account is still active, returns ``False`` and the caller sends.
-    A deletion request that commits after this check finds that send already
-    under way, and it is treated as in-flight work, not new work.
+    The claim was committed earlier, and anything may have changed since: the
+    account's deletion requested, notifications or Product Watch switched off,
+    native push disabled, this phone unregistered, the watch stopped. So the
+    authority to cross the provider boundary is re-proved here, as of now:
 
-    Otherwise returns ``True`` and nothing is sent. The delivery this worker
-    claimed is settled as suppressed, reason ``account_inactive``, with the
-    claim cleared, under the row lock and only if the claim is still ours.
-    It does not stay ``sending``, where a stale-claim sweep could pick it up
-    later. It does not return to ``queued``, where a reactivated account would
-    send it late. ``suppressed`` is never claimed again, and queueing the
-    same notification again returns this row.
+    * the account is still active (the lifecycle gate of Lane A), checked
+      first and once;
+    * then, with the preference row locked: notifications on, and — for a
+      Product Watch delivery — the topic on and the watch still present and
+      active (:func:`product_watch.attempt_refusal`, which locks the watch
+      next). A notice from an ended watch epoch cannot pass: the stop,
+      reactivation or re-anchor that ended it settled it under that same
+      watch lock, so the attempt marker below finds it no longer claimable;
+    * native push on, not quiet hours, the daily cap not exceeded by this row;
+    * the devices to send to, read now and held ``FOR SHARE``
+      (:func:`notifications.devices_for_attempt`) — never the list the cycle
+      began with.
+
+    If all of that holds, the same transaction records the attempt
+    (:func:`notifications.mark_attempt_started`) and commits it, and the
+    devices it read are returned: the caller sends to exactly those. From that
+    commit on the notice is in flight, and a later opt-out, unregister or
+    deletion request cannot make it provably unsent. Before it, it was not
+    sent. That is the one linearization point, and it is PostgreSQL's:
+
+    * an opt-out, native-push change or unregister takes the same preference
+      lock first. If it commits before this gate takes the lock, the gate sees
+      it and does not send. If this gate holds the lock first, the change
+      waits until the attempt marker is committed, and then finds the attempt
+      in flight. A Product Watch opt-out also settles the delivery itself, in
+      its own transaction (:func:`product_watch.withdraw_unsent_after_opt_out`),
+      so the marker below can no longer succeed.
+    * another account taking over this phone's push token disables the device
+      row, which the ``FOR SHARE`` read either sees or makes wait.
+    * a watch stop, reactivation or re-anchor holds the watch row. If it
+      commits first, it has already settled this delivery; if this gate holds
+      the watch first, the lifecycle change waits, and finds the attempt in
+      flight, which it leaves alone.
+
+    Returns ``None`` and sends nothing otherwise. A refusal that is the
+    customer's or the account's lasting state — account inactive, master
+    switch off, Product Watch topic off, watch ended — settles the claim as
+    suppressed with that reason, cleared and terminal, so it is never claimed
+    again and never sent late. A temporary state — native push off, quiet
+    hours, the daily cap, no active device — leaves the claim as it is, never
+    attempted, for the same same-day recovery as a claim whose worker died.
+    A claim that is no longer this worker's, or already attempted, is left
+    alone.
     """
     async with session.begin():
-        if await _account_is_active(session, account_id):
-            return False
-        row = await session.get(
-            NotificationDelivery, delivery_id,
-            with_for_update=True, populate_existing=True,
-        )
-        if row is not None and row.status == notifications.STATUS_SENDING and row.claim_token == claim:
-            row.status = notifications.STATUS_SUPPRESSED
-            row.suppressed_reason = notifications.SUPPRESSED_ACCOUNT_INACTIVE
-            row.claim_token = None
-            row.claimed_at = None
-    logger.info("notification_withheld_account_inactive delivery=%s", delivery_id)
-    return True
+        if not await _account_is_active(session, account_id):
+            refusal = notifications.SUPPRESSED_ACCOUNT_INACTIVE
+            await notifications.withdraw_claim(session, delivery_id, claim, refusal)
+        else:
+            refusal, devices = await _current_send_authority(
+                session, account_id, delivery_id, claim, moment=moment,
+            )
+            if refusal is None:
+                if await notifications.mark_attempt_started(session, delivery_id, claim):
+                    return devices
+                refusal = "claim_not_held"
+    # A claim this worker no longer holds, or one already attempted, is a
+    # warning: something else acted on the row in between. Every other refusal
+    # is the gate doing its job.
+    logger.log(
+        logging.WARNING if refusal == "claim_not_held" else logging.INFO,
+        "notification_withheld reason=%s delivery=%s", refusal, delivery_id,
+    )
+    return None
+
+
+async def _current_send_authority(
+    session: AsyncSession, account_id: uuid_module.UUID,
+    delivery_id: uuid_module.UUID, claim: str, *, moment: datetime,
+) -> tuple[str | None, list[NotificationDevice]]:
+    """``(None, devices)`` if this claim may be attempted now, else ``(reason, [])``.
+
+    Lock order: the preference, then (Product Watch) the watch, then the
+    devices, then — in the caller — the delivery row. The same order as every
+    other notification path, so none of them can wait on each other in a cycle.
+    """
+    preference = await notifications.locked_preference(session, account_id)
+    if preference is None or not preference.enabled:
+        await notifications.withdraw_claim(session, delivery_id, claim, notifications.SUPPRESSED_DISABLED)
+        return notifications.SUPPRESSED_DISABLED, []
+    delivery = (await session.execute(
+        select(NotificationDelivery).where(NotificationDelivery.id == delivery_id)
+        .execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+    if delivery is None:
+        return "delivery_missing", []
+    if delivery.source_kind == product_watch.SOURCE_KIND:
+        refused = await product_watch.attempt_refusal(session, preference=preference, delivery=delivery)
+        if refused is not None:
+            await notifications.withdraw_claim(session, delivery_id, claim, refused)
+            return refused, []
+    if not preference.native_push_enabled:
+        return "native_push_disabled", []
+    local_hour = clock.local_now(preference.timezone_name, moment=moment).hour
+    if notifications.in_quiet_hours(local_hour, preference.quiet_hours_start, preference.quiet_hours_end):
+        return notifications.SUPPRESSED_QUIET, []
+    if not await notifications.cap_permits(session, preference, delivery.plan_date, excluding=delivery.id):
+        return notifications.SUPPRESSED_CAP, []
+    devices = await notifications.devices_for_attempt(session, account_id)
+    if not devices:
+        return "no_active_device", []
+    return None, devices
 
 
 def _preference_due(row: NotificationPreference, now: datetime) -> bool:
@@ -169,7 +249,15 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
     # delivery, quiet hours and repeat safety no matter which condition wins.
     # A material notice about a product the customer explicitly chose to watch
     # is considered first; it returns nothing unless one is actually waiting,
-    # so an ordinary reminder keeps the slot on every other day.
+    # so an ordinary reminder keeps the slot on every other day. It is also
+    # where a Product Watch delivery abandoned before the provider was reached
+    # is re-proved and recovered (``product_watch.queue_material_notice``).
+    #
+    # A candidate the customer switched off for its own topic is recorded as
+    # suppressed and the walk continues: turning off Care does not turn off
+    # Maintenance. Every other decision ends it. An actual delivery owns the
+    # day's one slot, and the master switch, quiet hours, the daily cap and an
+    # inactive account apply to every candidate after it too.
     decision = None
     for trigger in (
         notifications.queue_for_product_watch,
@@ -179,19 +267,22 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
         notifications.queue_for_deferred_purchase_relevance,
         notifications.queue_for_agenda,
     ):
-        decision = await trigger(
+        candidate = await trigger(
             session, account_id=preference.account_id, plan_date=plan_date,
             timezone_name=preference.timezone_name, moment=now,
         )
-        if decision is not None:
-            break
+        if candidate is None or notifications.is_candidate_opt_out(candidate):
+            continue
+        decision = candidate
+        break
     if decision is None or decision.status not in {
         notifications.STATUS_QUEUED, notifications.STATUS_SENDING,
     }:
-        # queue_for_agenda records suppression decisions durably.  Commit them
-        # before returning so the account can explain why nothing was sent.
-        if decision is not None and decision.status == notifications.STATUS_SUPPRESSED:
-            await session.commit()
+        # Nothing to send. Everything this account decided — the compiled day,
+        # suppression decisions recorded so the account can explain why nothing
+        # was sent, any watch cursor that moved — is committed here, inside this
+        # account's own boundary, so no lock or unsaved row outlives it.
+        await session.commit()
         return 0
     claim = await notifications.claim_delivery(session, decision.id)
     if claim is None:
@@ -200,24 +291,30 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
     # Commit the claim before calling Expo. This is the duplicate-prevention
     # boundary; no transaction remains open across the network request.
     await session.commit()
+    # The last thing before the provider: the current authority to send,
+    # re-proved and recorded as an attempt in one short committed transaction.
+    # It returns the devices it read, and only those are sent to.
+    authorized = await _authorize_provider_attempt(
+        session, preference.account_id, decision.id, claim, moment=now,
+    )
+    if authorized is None:
+        return 0
     messages = [push.PushMessage(
         to=device.expo_push_token, title=decision.title, body=decision.body,
         data=({"delivery_id": str(decision.id), "destination": decision.deep_link, **(decision.destination_params or {})} if decision.deep_link else None),
         category_id=(decision.destination_params or {}).get("category_id"),
-    ) for device in devices]
-    # The last thing before the provider: the account must still be active.
-    if await _settle_if_account_inactive(session, preference.account_id, decision.id, claim):
-        return 0
+    ) for device in authorized]
     result = await push.send(messages)
     async with session.begin():
         row = await session.get(NotificationDelivery, decision.id, with_for_update=True)
         if row is None or row.status != notifications.STATUS_SENDING or row.claim_token != claim:
             return 0
-        row.attempted_at = utcnow()
+        # ``attempted_at`` was committed before the provider was called. It is
+        # the marker, and settling leaves it as it was.
         outcomes = result.outcomes or []
         if result.sent:
             row.status = notifications.STATUS_PROVIDER_ACCEPTED
-            row.sent_at = row.attempted_at
+            row.sent_at = utcnow()
             accepted = next((item for item in outcomes if item.accepted), None)
             row.provider_ticket_id = accepted.ticket_id if accepted else (result.receipts[0] if result.receipts else None)
         else:
@@ -226,7 +323,7 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
             row.provider_error_code = errors[0][:80] if errors else "transport_failed"
         # Provider errors belong to the exact token that produced them.
         by_token = {item.token: item for item in outcomes}
-        for device in devices:
+        for device in authorized:
             outcome = by_token.get(device.expo_push_token)
             if outcome and outcome.error == "DeviceNotRegistered":
                 device.status = "disabled"
@@ -244,45 +341,58 @@ async def process_once(*, now: datetime | None = None, summary: RunSummary | Non
     """
     factory = get_sessionmaker()
     total = 0
+    # Discovery is one short read, and its session is closed before any account
+    # is processed. Only plain identifiers leave it, never ORM rows, so no
+    # object, lock or transaction from here reaches an account's work. The
+    # order is fixed, so a batch always visits accounts the same way.
     async with factory() as session:
-        # Hold plain identifiers, not ORM rows. A rollback expires every object
-        # in the session's identity map, so reading an attribute off one
-        # afterwards needs fresh IO from a synchronous attribute access and
-        # raises MissingGreenlet — inside the very handler meant to contain the
-        # failure. The rows still queued behind it are expired too, so a single
-        # bad account would cost every later account its notification for that
-        # hour, and the batch would look like "nothing was due" rather than an
-        # error. Re-reading each account after the rollback keeps the failure
-        # confined to the account that caused it.
         account_ids = list((await session.execute(
             select(NotificationPreference.account_id).where(
                 NotificationPreference.enabled.is_(True),
                 NotificationPreference.native_push_enabled.is_(True),
                 NotificationPreference.account_id.in_(_active_accounts()),
-            )
+            ).order_by(NotificationPreference.account_id)
         )).scalars().all())
-        if summary is not None:
-            summary.accounts_considered = len(account_ids)
-        for account_id in account_ids:
-            try:
-                preference = (await session.execute(
-                    select(NotificationPreference).where(
-                        NotificationPreference.account_id == account_id,
-                    )
-                )).scalar_one_or_none()
-                if preference is None:
-                    # Withdrawn between the two reads; nothing to send.
-                    continue
-                total += await process_account(session, preference, now=now)
-            except Exception:  # noqa: BLE001 - one account must not stop the batch
-                await session.rollback()
-                if summary is not None:
-                    summary.accounts_failed += 1
-                    summary.failed_account_ids.append(str(account_id))
-                logger.exception("notification_account_failed account=%s", account_id)
+    if summary is not None:
+        summary.accounts_considered = len(account_ids)
+    for account_id in account_ids:
+        try:
+            total += await _process_in_own_session(factory, account_id, now=now)
+        except Exception:  # noqa: BLE001 - one account must not stop the batch
+            if summary is not None:
+                summary.accounts_failed += 1
+                summary.failed_account_ids.append(str(account_id))
+            logger.exception("notification_account_failed account=%s", account_id)
     if summary is not None:
         summary.notifications_sent = total
     return total
+
+
+async def _process_in_own_session(factory, account_id: uuid_module.UUID, *, now: datetime | None) -> int:
+    """One account, in a session of its own that ends before the next account starts.
+
+    Every account gets a fresh session: its own transaction, its own identity
+    map, its own row locks. :func:`process_account` commits what the account
+    decided before it returns, whether or not it sends. A failure rolls back
+    this account's work, and only this account's. Leaving the block closes the
+    session, which ends any transaction still open, so nothing this account
+    locked or left unsaved can be committed, rolled back or waited on by the
+    account after it.
+    """
+    async with factory() as session:
+        try:
+            preference = (await session.execute(
+                select(NotificationPreference).where(
+                    NotificationPreference.account_id == account_id,
+                )
+            )).scalar_one_or_none()
+            if preference is None:
+                # Withdrawn between discovery and now; nothing to send.
+                return 0
+            return await process_account(session, preference, now=now)
+        except Exception:
+            await session.rollback()
+            raise
 
 
 # ---------------------------------------------------------------------------

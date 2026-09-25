@@ -9,6 +9,7 @@
  * are shared. Only the path prefix differs.
  */
 import { api } from './api';
+import { notificationDevicePath } from './notificationRoutes';
 import type { ChemistryWithheldReason, SupplementExpiryState, SupplementProvenance } from '../strings/supplements';
 
 // Every V2 call is prefixed with `/api/v2`. The shared axios instance in
@@ -2220,7 +2221,7 @@ export const registerNotificationDevice = async (body: {
   (await api.post(`${V2}/today/notifications/devices`, body)).data;
 
 export const unregisterNotificationDevice = async (deviceKey: string): Promise<{ device_key: string; removed: boolean; active_devices_remaining: boolean; native_push_enabled: boolean; current_device_registered: boolean }> =>
-  (await api.delete(`${V2}/today/notifications/devices/${encodeURIComponent(deviceKey)}`)).data;
+  (await api.delete(notificationDevicePath(deviceKey))).data;
 
 // --- Phase 6: routines, shelf, perfume, supplements, food context -----------
 // Every warning carries the id of a reviewed rule. The client never invents
