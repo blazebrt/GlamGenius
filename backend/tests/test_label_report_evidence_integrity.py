@@ -839,3 +839,76 @@ async def test_c_a_commit_failure_after_the_bytes_removes_them(app_client, db_cl
     assert failed["done"] and len(storage.puts) == 1
     assert storage.objects == {}, "the written object outlived a report that never committed"
     assert await _rows(client_report_id="commit-fails") == []
+
+
+async def test_c_committed_report_survives_lost_ack_and_retry(app_client, db_clean, storage, monkeypatch):
+    phone = await _phone(app_client)
+    original_commit = AsyncSession.commit
+    failed = False
+
+    async def lost_ack(self):
+        nonlocal failed
+        is_report = any(isinstance(obj, LabelErrorReport) for obj in self.identity_map.values())
+        await original_commit(self)
+        if is_report and not failed:
+            failed = True
+            raise RuntimeError("commit acknowledgement lost")
+
+    monkeypatch.setattr(AsyncSession, "commit", lost_ack)
+    response = await _report(app_client, phone, "ack-lost")
+    assert failed and response.status_code == 201, response.text
+    assert response.json()["created"] is False
+    row = await _row(response.json()["report_id"])
+    assert storage.objects[row.photo_key] == PHOTO_A
+    assert not any(event.startswith("delete:") for event in storage.events)
+    original = (row.id, row.photo_key, row.subject, row.reason, row.barcode)
+    retry = await _report(app_client, phone, "ack-lost", PHOTO_B, subject="Different")
+    assert retry.status_code == 201 and retry.json() == response.json()
+    row = await _row(retry.json()["report_id"])
+    assert (row.id, row.photo_key, row.subject, row.reason, row.barcode) == original
+    assert storage.objects[row.photo_key] == PHOTO_A and len(storage.puts) == 1
+
+
+async def test_c_unknown_commit_lookup_preserves_evidence(app_client, db_clean, storage, monkeypatch):
+    phone = await _phone(app_client)
+    original_commit = AsyncSession.commit
+
+    async def lost_ack(self):
+        is_report = any(isinstance(obj, LabelErrorReport) for obj in self.identity_map.values())
+        await original_commit(self)
+        if is_report:
+            raise RuntimeError("commit acknowledgement lost")
+
+    def unavailable_verification():
+        raise RuntimeError("verification unavailable")
+
+    monkeypatch.setattr(AsyncSession, "commit", lost_ack)
+    monkeypatch.setattr(product_service, "get_sessionmaker", unavailable_verification)
+    with pytest.raises(RuntimeError, match="commit acknowledgement lost"):
+        await _report(app_client, phone, "unknown-commit")
+    [row] = await _rows(client_report_id="unknown-commit")
+    assert storage.objects[row.photo_key] == PHOTO_A
+    assert len(storage.puts) == 1
+    assert not any(event.startswith("delete:") for event in storage.events)
+
+
+async def test_c_cleanup_failure_keeps_original_failure_and_logs_no_evidence(
+    app_client, db_clean, storage, monkeypatch, caplog,
+):
+    phone = await _phone(app_client)
+    original_commit = AsyncSession.commit
+
+    async def failing_commit(self):
+        reports = [obj for obj in self.identity_map.values() if isinstance(obj, LabelErrorReport)]
+        if reports:
+            storage.delete_failures[reports[0].photo_key] = StorageUnavailable("delete unavailable")
+            raise RuntimeError("original commit failure")
+        return await original_commit(self)
+
+    monkeypatch.setattr(AsyncSession, "commit", failing_commit)
+    with pytest.raises(RuntimeError, match="original commit failure"):
+        await _report(app_client, phone, "cleanup-failure")
+    assert await _rows(client_report_id="cleanup-failure") == []
+    assert len(storage.objects) == 1
+    assert "label_report_photo_compensation_failed" in caplog.text
+    assert all(key not in caplog.text for key in storage.objects)

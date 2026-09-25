@@ -721,15 +721,21 @@ async def report_label_error(
     except StorageError as exc:
         # Before any row: the report is simply not filed, and the phone retries.
         raise StorageUnavailableError() from exc
+    report_id = report.id
+    report_device_id = report.device_id
+    report_photo_key = report.photo_key
     try:
         # Ends the idempotency lock and, for a claimed device, the account
         # hold. A deletion request that arrived meanwhile has been waiting.
         await session.commit()
-    except BaseException:
-        if written_key is not None:
-            await service.discard_unfiled_report_photo(written_key)
+    except Exception:
+        if written_key is not None and await service.reconcile_label_report_commit(
+            session, report_id=report_id, device_id=report_device_id,
+            client_report_id=client_report_id, photo_key=report_photo_key,
+        ):
+            return {"report_id": str(report_id), "created": False}
         raise
-    return {"report_id": str(report.id), "created": created}
+    return {"report_id": str(report_id), "created": created}
 
 class ScanDecisionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")

@@ -9,6 +9,7 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
+import { secureSessionStorage } from '../services/secureSessionStorage';
 
 import {
   confirmLabel,
@@ -332,6 +333,27 @@ describe('settlement over the coordinated queue', () => {
 });
 
 describe('the read-only refresh', () => {
+  it('does nothing when no device is stored, without registering or writing identity', async () => {
+    await secureSessionStorage.removeItem('glamgenius_scan_device_v1');
+    delete store.glamgenius_scan_device_v1;
+    const before = { ...store };
+    const secureWrite = jest.spyOn(secureSessionStorage, 'setItem');
+    const secureRemove = jest.spyOn(secureSessionStorage, 'removeItem');
+    const random = jest.spyOn(Math, 'random');
+    http.post.mockClear();
+    http.get.mockClear();
+    await expect(refreshBarcodeResult(BARCODE)).resolves.toBeNull();
+    expect(http.post).not.toHaveBeenCalled();
+    expect(http.get).not.toHaveBeenCalled();
+    expect(secureWrite).not.toHaveBeenCalled();
+    expect(secureRemove).not.toHaveBeenCalled();
+    expect(random).not.toHaveBeenCalled();
+    expect(store).toEqual(before);
+    secureWrite.mockRestore();
+    secureRemove.mockRestore();
+    random.mockRestore();
+  });
+
   it('reads the result and refreshes the cache without writing, queueing or minting anything', async () => {
     const random = jest.spyOn(Math, 'random');
     http.get.mockResolvedValueOnce({ status: 200, data: { barcode: BARCODE, found: true, outcome: 'label_captured',
@@ -350,10 +372,27 @@ describe('the read-only refresh', () => {
   });
 
   it('answers null instead of an offline stand-in, and never re-registers the device', async () => {
+    const storedDevice = await secureSessionStorage.getItem('glamgenius_scan_device_v1');
     http.get.mockRejectedValueOnce({ response: { status: 401 } });
     const registrations = http.post.mock.calls.filter(([path]) => path === '/api/v2/scan/device').length;
     await expect(refreshBarcodeResult(BARCODE)).resolves.toBeNull();
     expect(http.post.mock.calls.filter(([path]) => path === '/api/v2/scan/device').length).toBe(registrations);
+    expect(await secureSessionStorage.getItem('glamgenius_scan_device_v1')).toBe(storedDevice);
     expect(await readQueue()).toEqual([]);
+  });
+
+  it('can read a legacy token without migrating or replacing device identity', async () => {
+    await secureSessionStorage.removeItem('glamgenius_scan_device_v1');
+    const legacy = JSON.stringify({ token: 'legacy-token', device_key: 'legacy-key' });
+    store.glamgenius_scan_device_v1 = legacy;
+    http.get.mockResolvedValueOnce({ data: { barcode: BARCODE, found: true } });
+    http.post.mockClear();
+    await expect(refreshBarcodeResult(BARCODE)).resolves.not.toBeNull();
+    expect(http.get).toHaveBeenCalledWith(`/api/v2/scan/lookup/${BARCODE}`, {
+      headers: { 'X-Device-Token': 'legacy-token' },
+    });
+    expect(http.post).not.toHaveBeenCalled();
+    expect(await secureSessionStorage.getItem('glamgenius_scan_device_v1')).toBeNull();
+    expect(store.glamgenius_scan_device_v1).toBe(legacy);
   });
 });

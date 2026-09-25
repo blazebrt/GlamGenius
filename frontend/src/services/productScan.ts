@@ -194,7 +194,7 @@ let devicePromise: Promise<StoredDevice | null> | null = null;
  * orphan every scan it had already made. So the old location is read once, its
  * contents moved, and only then cleared.
  */
-async function readStoredDevice(): Promise<StoredDevice | null> {
+async function readStoredDevice(migrateLegacy = true): Promise<StoredDevice | null> {
   const secure = await secureSessionStorage.getItem(DEVICE_KEY);
   if (secure) {
     try {
@@ -204,7 +204,7 @@ async function readStoredDevice(): Promise<StoredDevice | null> {
     }
   }
   const legacy = await readJson<StoredDevice | null>(DEVICE_KEY, null);
-  if (legacy?.token) {
+  if (legacy?.token && migrateLegacy) {
     await writeStoredDevice(legacy);
     try {
       await AsyncStorage.removeItem(DEVICE_KEY);
@@ -600,9 +600,11 @@ export async function scanBarcode(barcode: string): Promise<ScanResult> {
  */
 export async function refreshBarcodeResult(barcode: string): Promise<ScanResult | null> {
   const clean = (barcode || '').trim();
-  const headers = await deviceHeaders();
-  if (!headers['X-Device-Token']) return null;
   try {
+    // Read only: even a legacy token must not be migrated during this lookup.
+    const device = await readStoredDevice(false);
+    if (!device?.token) return null;
+    const headers = { 'X-Device-Token': device.token };
     const response = await scanApi.get(`/api/v2/scan/lookup/${encodeURIComponent(clean)}`, { headers });
     const result = withConfidence({ ...response.data, barcode: clean });
     await cacheResult(result);

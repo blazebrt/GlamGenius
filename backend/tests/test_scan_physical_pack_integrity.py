@@ -20,20 +20,127 @@ import uuid
 
 import pytest
 from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, AIRun, AIRunOutput
+from app.domains.identity.models import Account
 from app.domains.inventory.models import InventoryItem, InventoryProductLink
 from app.domains.product import service as product_service
 from app.domains.product.devices import _hash
 from app.domains.product.models import LabelSnapshot, ProductRecord, ScanDevice, ScanEvent
 from app.domains.product.service import label_content_fingerprint
 from app.shared.database.sql import get_sessionmaker
+from app.workers import account_deletion
 from httpx import AsyncClient
 from sqlalchemy import select
 
 from tests.conftest import auth
+from tests.test_label_report_evidence_integrity import _Admin, _EvidenceStorage
 
 pytestmark = pytest.mark.asyncio
 
 BARCODE = "8904000000017"
+
+
+@pytest.fixture(autouse=True)
+def no_external_product_data(monkeypatch):
+    """Plain scan routes stay real; Store A and provider I/O are out of scope."""
+    async def absent(*args, **kwargs):
+        return None, False
+
+    monkeypatch.setattr(product_service, "_off_half", absent)
+
+
+@pytest.fixture
+def deletion_boundaries(monkeypatch):
+    from app.domains.media.storage import factory
+    from app.domains.privacy import deletion_service
+
+    calls = []
+    factory.set_storage(_EvidenceStorage(calls))
+    monkeypatch.setattr(deletion_service, "get_supabase_admin", lambda: _Admin(calls))
+    yield
+    factory.set_storage(None)
+
+
+async def test_shared_snapshot_survives_original_confirmers_real_deletion(
+    app_client, db_clean, registered_supabase_user, deletion_boundaries,
+):
+    token_a, account_a = await registered_supabase_user()
+    token_b, account_b = await registered_supabase_user()
+    phone_a, phone_b = await _device(app_client, token_a), await _device(app_client, token_b)
+    a1, s1 = await _capture(phone_a, account_a, _facts())
+    b1, reused = await _capture(phone_b, account_b, _facts())
+    assert s1.id == reused.id and s1.scan_event_id == a1.id and b1.id != a1.id
+    assert (await _status(app_client, token_b, phone_b, s1)).json()["status"] == "eligible_not_owned"
+    deleted = await app_client.delete("/api/v2/privacy/account", headers=auth(token_a))
+    assert deleted.status_code == 202, deleted.text
+    summary = await account_deletion.run_cycle()
+    assert summary.ok, summary
+    async with get_sessionmaker()() as session:
+        assert await session.get(Account, account_a) is None
+        erased = await session.get(ScanEvent, a1.id)
+        retained = await session.get(LabelSnapshot, s1.id)
+        current = await session.get(ScanEvent, b1.id)
+        run = await session.get(AIRun, a1.ai_run_id)
+        assert erased.label_facts is None and erased.account_id is None
+        assert run.account_id is None and run.validation_passed is True
+        assert retained.scan_event_id == a1.id and retained.facts == s1.facts
+        assert current.account_id == account_b and current.label_facts == b1.label_facts
+    status = await _status(app_client, token_b, phone_b, s1)
+    assert status.status_code == 200 and status.json()["status"] == "eligible_not_owned", status.text
+    added = await _add(app_client, token_b, phone_b, s1, "shared-after-erasure")
+    assert added.status_code == 200 and added.json()["status"] == "owned", added.text
+    watch = await app_client.put(
+        f"/api/v2/scan/verdict/{BARCODE}/watch", headers={**phone_b, **auth(token_b)},
+        json={"label_version": s1.version_number},
+    )
+    assert watch.status_code == 200, watch.text
+    async with get_sessionmaker()() as session:
+        from app.domains.product.models import ProductWatch
+        row = (await session.execute(select(ProductWatch).where(ProductWatch.account_id == account_b))).scalar_one()
+        assert row.anchor_scan_event_id == b1.id
+        assert (await session.get(LabelSnapshot, s1.id)).scan_event_id == a1.id
+        assert (await session.get(ScanEvent, a1.id)).label_facts is None
+        assert (await session.get(ScanEvent, b1.id)).label_facts == b1.label_facts
+        assert list((await session.execute(
+            select(LabelSnapshot.id).where(LabelSnapshot.barcode == BARCODE)
+        )).scalars()) == [s1.id]
+        assert (await session.execute(
+            select(AIRunOutput.id).where(AIRunOutput.ai_run_id == a1.ai_run_id)
+        )).scalar_one_or_none() is None
+
+
+@pytest.mark.parametrize("defect", ["no_run", "failed", "unvalidated", "wrong_feature", "wrong_schema"])
+async def test_erased_looking_source_without_valid_label_ledger_is_refused(
+    app_client, db_clean, registered_supabase_user, defect,
+):
+    from app.domains.product import pack_context
+    from app.domains.product.personal_decision import CurrentPackSnapshotUnresolved, resolve_current_pack_label_snapshot
+
+    token, account = await registered_supabase_user()
+    first = await _device(app_client, token)
+    a1, _ = await _capture(first, account, _facts())
+    second = await _device(app_client, token)
+    b1, _ = await _capture(second, account, _facts())
+    async with get_sessionmaker()() as session:
+        source = await session.get(ScanEvent, a1.id)
+        run = await session.get(AIRun, a1.ai_run_id)
+        source.account_id = None
+        source.label_facts = None
+        run.account_id = None
+        if defect == "no_run":
+            source.ai_run_id = None
+        elif defect == "failed":
+            run.status = "failed"
+        elif defect == "unvalidated":
+            run.validation_passed = False
+        elif defect == "wrong_feature":
+            run.feature = "scan_analyse"
+        else:
+            run.schema_version = "unrecognised"
+        await session.commit()
+        current = await session.get(ScanEvent, b1.id)
+        pack = pack_context.CurrentPack(scan_event=current, label_facts=current.label_facts)
+        with pytest.raises(CurrentPackSnapshotUnresolved):
+            await resolve_current_pack_label_snapshot(session, pack=pack)
 
 
 def _facts(name: str = "Pack Cleanser", **extra) -> dict:

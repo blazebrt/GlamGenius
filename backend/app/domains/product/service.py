@@ -22,7 +22,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, text, update
+from sqlalchemy import or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +41,7 @@ from app.domains.product.formula_projection import LINE_BOUNDARIES, boundary_sig
 from app.domains.product.fssai import find_licence, is_valid_licence
 from app.domains.product.models import LabelErrorReport, LabelSnapshot, ProductRecord, ScanEvent
 from app.shared.database.base import new_uuid, utcnow
+from app.shared.database.sql import get_sessionmaker
 
 logger = logging.getLogger(__name__)
 
@@ -745,6 +746,45 @@ async def discard_unfiled_report_photo(key: str) -> None:
         logger.warning("label_report_photo_compensation_failed")
 
 
+async def reconcile_label_report_commit(
+    session: AsyncSession, *, report_id: uuid.UUID, device_id: uuid.UUID,
+    client_report_id: str, photo_key: str | None,
+) -> bool:
+    """Recover an acknowledged-by-neither-side commit without destroying evidence.
+
+    True means a fresh transaction proved this exact report durable. False
+    means the caller must propagate its original commit error, not success.
+    Only a proved absence permits compensation. Unknown outcomes retain bytes.
+    The identity lock waits out any original transaction still completing on
+    the server; a plain unlocked SELECT could race that commit.
+    """
+    try:
+        await session.rollback()
+        async with get_sessionmaker()() as verification:
+            await lock_label_report_identity(
+                verification, device_id=device_id, client_report_id=client_report_id,
+            )
+            rows = (await verification.execute(
+                select(LabelErrorReport).where(or_(
+                    LabelErrorReport.id == report_id,
+                    (LabelErrorReport.device_id == device_id)
+                    & (LabelErrorReport.client_report_id == client_report_id),
+                ))
+            )).scalars().all()
+            if rows:
+                return len(rows) == 1 and (
+                    rows[0].id == report_id
+                    and rows[0].device_id == device_id
+                    and rows[0].client_report_id == client_report_id
+                    and rows[0].photo_key == photo_key
+                )
+            if photo_key is not None:
+                await discard_unfiled_report_photo(photo_key)
+    except Exception:  # noqa: BLE001 - unknown outcome: retain bytes, caller raises original error
+        logger.warning("label_report_commit_reconciliation_unavailable")
+    return False
+
+
 async def file_label_error_report(
     session: AsyncSession,
     *,
@@ -760,8 +800,9 @@ async def file_label_error_report(
     """File one report, once, and write its photo at most once, under its own key.
 
     Returns ``(report, created, written_key)``. ``written_key`` is the object
-    this call wrote, if any, so the caller can compensate should its commit
-    fail. It is ``None`` for a replay, which writes nothing.
+    this call wrote, if any. A commit exception requires fresh reconciliation
+    before compensation: an exception can mean a lost acknowledgement of a
+    durable commit. It is ``None`` for a replay, which writes nothing.
 
     The order is the whole contract:
 
