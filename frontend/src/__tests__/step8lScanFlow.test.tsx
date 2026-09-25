@@ -271,7 +271,12 @@ describe('the plain scan must settle before a capture', () => {
     expect(screen.getByTestId('label-kind-skin-care')).toBeTruthy();
   });
 
-  it('does not gate the packaged-food path', async () => {
+  it('gates the packaged-food path too, before its model call', async () => {
+    // Lane C. This used to assert the opposite — that food was never settled —
+    // which is exactly the race: a food lookup's plain event still in flight
+    // lands after the confirmation, becomes the newest event, and withdraws
+    // the pack the person just confirmed. Food needs the same proof as skin
+    // care, and gets it before the photograph is spent.
     mockTranscribeFood.mockResolvedValue({
       barcode: BARCODE, facts: { product_name: 'Noodles' }, fssai_licence: null,
       stored: false, confidence: { level: 'unverified', text: 'x' },
@@ -287,8 +292,13 @@ describe('the plain scan must settle before a capture', () => {
     await screen.findByLabelText('Take the label photo');
     await act(async () => { fireEvent.press(screen.getByLabelText('Take the label photo')); });
 
-    expect(mockSettleScanEvents).not.toHaveBeenCalled();
+    expect(mockSettleScanEvents).toHaveBeenCalledWith(BARCODE);
     expect(mockTranscribeFood).toHaveBeenCalled();
+    const settleOrder = mockSettleScanEvents.mock.invocationCallOrder[0];
+    const transcribeOrder = mockTranscribeFood.mock.invocationCallOrder[0];
+    expect(settleOrder).toBeLessThan(transcribeOrder);
+    // Food still claims nothing: settling is not ownership.
+    expect(mockEnsureClaimed).not.toHaveBeenCalled();
   });
 
   it('never turns a settlement failure into a confirmed pack, even on retry', async () => {

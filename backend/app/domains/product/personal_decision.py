@@ -44,6 +44,15 @@ version and validating the winner afterwards is a different rule: a forged
 high-version row would take the ORDER BY, fail validation, and hide the
 legitimate older version behind it. Eligibility is part of the choice.
 
+**A source whose observation erasure withdrew is still a source.** When the
+first confirmer erases their account, their capture keeps its row but loses
+its ``label_facts`` and its account, deliberately. Everybody who later
+captured the same label independently must not lose the version with it, so
+a candidate whose source fails the live-capture test may instead be proven by
+:mod:`withdrawn_confirmation` — from the non-personal retained ledger, never
+from restored facts, and never as a current pack. The content proof stays the
+current capture's own facts against the snapshot's stored content.
+
 **And why the global newest is never consulted at all.** ``latest_label_snapshot``
 answers "what is the newest thing anybody published about this barcode", which
 is the right question for product science and the wrong one here. This module
@@ -61,7 +70,7 @@ from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.domains.product import pack_context
+from app.domains.product import pack_context, withdrawn_confirmation
 from app.domains.product.models import LabelSnapshot, ScanEvent
 from app.domains.product.pack_context import CurrentPack
 from app.domains.product.service import canonical_label_facts, label_content_fingerprint
@@ -169,8 +178,22 @@ async def resolve_current_pack_label_snapshot(
         .order_by(LabelSnapshot.version_number.desc())
     )).all()
 
+    # A source erasure withdrew is proven from its retained ledger instead of
+    # its facts. The ledger is read only for sources that fail the live-capture
+    # test: one more statement at most, and none on the ordinary path.
+    retained = await withdrawn_confirmation.retained_runs(session, [
+        source_event.ai_run_id for _, source_event in rows
+        if not _eligible_source(source_event, barcode=event.barcode, facts=facts)
+    ])
+
     for candidate, source_event in rows:
-        if not _eligible_source(source_event, barcode=event.barcode, facts=facts):
+        if not (
+            _eligible_source(source_event, barcode=event.barcode, facts=facts)
+            or withdrawn_confirmation.proves_withdrawn_confirmation(
+                snapshot=candidate, source=source_event,
+                retained=retained.get(source_event.ai_run_id), barcode=event.barcode,
+            )
+        ):
             continue
         if not _matches(candidate, barcode=event.barcode, facts=facts, fingerprint=fingerprint):
             continue

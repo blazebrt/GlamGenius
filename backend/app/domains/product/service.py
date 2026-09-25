@@ -16,15 +16,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.identity import service as identity_service
+from app.domains.media.storage import factory as storage_factory
+from app.domains.media.storage.base import account_prefix
 from app.domains.nutrition.grading import from_scan, required_grading_data_missing
 from app.domains.off import client as off_client
 from app.domains.off import freshness as off_freshness
@@ -36,7 +41,10 @@ from app.domains.product.confidence import CONFIDENCE_TEXT, ProductConfidence
 from app.domains.product.formula_projection import LINE_BOUNDARIES, boundary_significance
 from app.domains.product.fssai import find_licence, is_valid_licence
 from app.domains.product.models import LabelErrorReport, LabelSnapshot, ProductRecord, ScanEvent
-from app.shared.database.base import utcnow
+from app.shared.database.base import new_uuid, utcnow
+from app.shared.database.sql import get_sessionmaker
+
+logger = logging.getLogger(__name__)
 
 OUTCOME_LOCAL = "found_local"
 OUTCOME_OFF = "found_off"
@@ -627,9 +635,43 @@ async def apply_confirmed_label(
     return record
 
 
-#: Where a report photo lives. Not under an account prefix: the person who
-#: notices a wrong number is often not signed in.
-LABEL_REPORT_PREFIX = "label-reports"
+# ---------------------------------------------------------------------------
+# Label-error reports and their photo evidence
+# ---------------------------------------------------------------------------
+#
+# ``client_report_id`` is an idempotency key, chosen by the phone and unique
+# only per device (``uq_label_report_device_client_id``). It is never a storage
+# identity. Before this, every photo was written to
+# ``label-reports/{client_report_id}.jpg``: two phones that picked the same id
+# wrote the same object, the second upload overwrote the first, and the first
+# report then pointed at somebody else's photograph. A replay also wrote its
+# bytes before discovering the report already existed, so an idempotent retry
+# could replace evidence that had already been filed. And the global namespace
+# sat outside every account's storage prefix, so account erasure proved the
+# prefix empty while the account's report photos stayed behind.
+#
+# Now the object key is built by the server from the report's own UUID, which
+# the server generates, inside a namespace the server chooses:
+#
+# * a device claimed by an account files under that account's canonical prefix
+#   (``media.storage.base.account_prefix``), so the deletion worker's prefix
+#   purges and its final storage proof cover it with no new convention;
+# * an unclaimed device files under a device-scoped namespace, because an
+#   anonymous report belongs to no account and must not be made to look as if
+#   it did.
+#
+# Objects are written once, under a fresh key, after idempotency is resolved,
+# and are never overwritten.
+
+#: Legacy global namespace, keyed by the caller's ``client_report_id``. Nothing
+#: writes here any more; account erasure still finds and removes what is left.
+LEGACY_LABEL_REPORT_PREFIX = "label-reports"
+#: Unclaimed devices: ``label-reports/devices/{device_id}/{report_id}.jpg``.
+#: A ``client_report_id`` is at most 64 characters, so no legacy key
+#: ``label-reports/{client_report_id}.jpg`` can ever equal one of these.
+ANONYMOUS_LABEL_REPORT_PREFIX = f"{LEGACY_LABEL_REPORT_PREFIX}/devices"
+#: The child folder under an account's canonical storage prefix.
+ACCOUNT_LABEL_REPORT_FOLDER = "label-reports"
 
 REPORT_REASONS = (
     "wrong_number", "wrong_ingredient", "wrong_product",
@@ -637,31 +679,237 @@ REPORT_REASONS = (
 )
 
 
-async def record_label_error(
-    session: AsyncSession,
-    *,
-    client_report_id: str,
-    subject: str,
-    reason: str,
-    barcode: str | None = None,
-    photo_key: str | None = None,
-    device_id: uuid.UUID | None = None,
-    account_id: uuid.UUID | None = None,
-) -> tuple[LabelErrorReport, bool]:
-    """File one report, once. A replayed offline queue gets the original back."""
-    existing = (await session.execute(
+class ReportAccountNotActive(Exception):
+    """The device's account may not file anything new: its deletion was asked for.
+
+    Raised before any byte is written and before any report row exists. The
+    route answers it with the same 403 ``ACCOUNT_INACTIVE`` a media upload
+    gives.
+    """
+
+
+def label_report_photo_key(
+    *, report_id: uuid.UUID, device_id: uuid.UUID, account_id: uuid.UUID | None,
+) -> str:
+    """The one place a report photo's object key is built. Server-owned parts only.
+
+    Both namespaces end in the server-generated report UUID, so two reports can
+    never share an object, whatever ids their phones chose.
+    """
+    if account_id is not None:
+        return f"{account_prefix(account_id)}/{ACCOUNT_LABEL_REPORT_FOLDER}/{report_id}.jpg"
+    return f"{ANONYMOUS_LABEL_REPORT_PREFIX}/{device_id}/{report_id}.jpg"
+
+
+async def lock_label_report_identity(
+    session: AsyncSession, *, device_id: uuid.UUID, client_report_id: str,
+) -> None:
+    """Serialise every request carrying one ``(device_id, client_report_id)``.
+
+    A transaction-scoped PostgreSQL advisory lock on the idempotency identity,
+    so two concurrent retries of one report cannot both find nothing and both
+    upload: the second waits, then finds the first one's report and writes no
+    bytes at all. It releases on commit or rollback. The unique constraint
+    stays the final invariant for any writer that does not take it.
+
+    Nothing else takes this lock, and a holder of it waits on at most the
+    account row (``hold_account_active``) — never a job row — so it adds no
+    edge to the account-deletion lock order.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"label-report:{device_id}:{client_report_id}"},
+    )
+
+
+async def _existing_label_report(
+    session: AsyncSession, *, device_id: uuid.UUID, client_report_id: str,
+) -> LabelErrorReport | None:
+    return (await session.execute(
         select(LabelErrorReport).where(
             LabelErrorReport.device_id == device_id,
             LabelErrorReport.client_report_id == client_report_id,
         )
     )).scalar_one_or_none()
+
+
+async def discard_unfiled_report_photo(key: str) -> bool:
+    """Compensation: remove an object whose report is proven never to have committed.
+
+    Best effort by design. It runs on a failure path that is already raising,
+    and a second error here must not replace the first. What it cannot remove
+    is an object no report names; it can reveal nothing, and if it sits under
+    an account prefix the deletion worker's purge still removes it.
+
+    Returns whether the delete went through, so a caller never reports a
+    compensation that did not happen.
+    """
+    try:
+        await storage_factory.get_storage().delete(key)
+    except Exception:  # noqa: BLE001 - never mask the failure being compensated
+        logger.warning("label_report_photo_compensation_failed")
+        return False
+    return True
+
+
+class ReportCommitOutcome(StrEnum):
+    """What a fresh transaction can prove about a report whose ``commit()`` raised."""
+
+    #: The report's own row is durable, naming the photo this request wrote.
+    COMMITTED = "committed"
+    #: The report's own row is proven absent: its transaction ended without it.
+    NOT_COMMITTED = "not_committed"
+    #: Nothing could be proven either way.
+    UNKNOWN = "unknown"
+
+
+#: The longest the check waits for the original transaction to finish before
+#: calling the outcome unknown, in milliseconds.
+REPORT_COMMIT_CHECK_LOCK_TIMEOUT_MS = 5000
+
+
+async def label_report_commit_outcome(
+    session: AsyncSession, *, report_id: uuid.UUID, device_id: uuid.UUID,
+    client_report_id: str, photo_key: str | None,
+) -> ReportCommitOutcome:
+    """After ``commit()`` raised: did this exact report become durable?
+
+    An exception from ``commit()`` is not a rollback. PostgreSQL can accept the
+    COMMIT and the connection can then fail before the acknowledgement reaches
+    us, so "commit raised, delete the photo" would turn a lost acknowledgement
+    into a durable report naming a photo that no longer exists. The answer
+    comes from the database, in a fresh transaction, or not at all:
+
+    1. The request's failed transaction is ended first. Best effort: a
+       connection that is already gone can be neither rolled back nor needs
+       to be.
+    2. The fresh transaction takes this report's own identity lock. The
+       original transaction took it before filing, and holds it until it ends,
+       so the check waits out a COMMIT that is still completing on the server
+       — an unlocked read could run in the middle of one and see nothing. The
+       wait is bounded; running out of time is an unknown outcome.
+    3. It reads the report's *own* row, by the server-generated id. Only this
+       request could ever write that id, so once its transaction has ended the
+       row either exists or never will. The idempotency identity is no proof
+       either way: a retry filed after this attempt failed has its own id and
+       its own object, and it is not this report.
+
+    Only :attr:`ReportCommitOutcome.NOT_COMMITTED` licenses deleting what this
+    request wrote. Anything this cannot prove is
+    :attr:`ReportCommitOutcome.UNKNOWN`, and evidence that may have a durable
+    row is never deleted on a guess.
+    """
+    try:
+        await session.rollback()
+    except Exception:  # noqa: BLE001 - finding out what the failure did is the point
+        pass
+    try:
+        async with get_sessionmaker()() as verification:
+            await verification.execute(
+                text("SELECT set_config('lock_timeout', :timeout, true)"),
+                {"timeout": f"{int(REPORT_COMMIT_CHECK_LOCK_TIMEOUT_MS)}ms"},
+            )
+            await lock_label_report_identity(
+                verification, device_id=device_id, client_report_id=client_report_id,
+            )
+            row = await verification.get(LabelErrorReport, report_id)
+            if row is None:
+                return ReportCommitOutcome.NOT_COMMITTED
+            if (
+                row.device_id == device_id
+                and row.client_report_id == client_report_id
+                and row.photo_key == photo_key
+            ):
+                return ReportCommitOutcome.COMMITTED
+            return ReportCommitOutcome.UNKNOWN
+    except Exception:  # noqa: BLE001 - a check that cannot run proves nothing
+        return ReportCommitOutcome.UNKNOWN
+
+
+async def file_label_error_report(
+    session: AsyncSession,
+    *,
+    device_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    client_report_id: str,
+    subject: str,
+    reason: str,
+    barcode: str | None = None,
+    photo: bytes | None = None,
+    photo_content_type: str | None = None,
+) -> tuple[LabelErrorReport, bool, str | None]:
+    """File one report, once, and write its photo at most once, under its own key.
+
+    Returns ``(report, created, written_key)``. ``written_key`` is the object
+    this call wrote, if any, and ``None`` for a replay, which writes nothing.
+    If the caller's commit then raises, the object may be deleted only once
+    :func:`label_report_commit_outcome` has proven the report absent: a
+    commit exception can be a lost acknowledgement of a durable commit.
+
+    The order is the whole contract:
+
+    1. **Idempotency first.** :func:`lock_label_report_identity`, then the
+       lookup. A replay returns the original report before any byte is
+       touched, so filed evidence is never overwritten.
+    2. **Account lifecycle.** A device claimed by an account files evidence
+       that account owns, so it takes the same boundary as a media upload:
+       :func:`identity_service.hold_account_active`, FOR SHARE on the account
+       row until this transaction ends. If deletion was requested first, the
+       account is not active and nothing is written, not a byte and not a
+       row. If the report got there first, the deletion request waits for it
+       to commit, and the deletion worker's purges then remove what it wrote.
+       An unclaimed device's report belongs to no account and takes no
+       account lock.
+    3. **Bytes, then the row.** A storage failure leaves no row pointing at
+       nothing. A row that fails to flush deletes them again
+       (:func:`discard_unfiled_report_photo`): nothing was committed, so an
+       ordinary failure does not orphan evidence.
+
+    **No row lock before the account's, so nothing is flushed before step 2.**
+    Resolving the device token marks ``last_seen_at``; that UPDATE locks the
+    device row when it is flushed. The session does not autoflush, so it is
+    written with the report row, after the account hold. Flushing it earlier
+    would close a cycle: the deletion worker's account DELETE holds the account
+    and cascades into this very device row (``claimed_by_account_id`` SET
+    NULL), while this request would hold the device row and wait for the
+    account. Account first, then the device — the order the deletion service
+    documents.
+    """
+    await lock_label_report_identity(session, device_id=device_id, client_report_id=client_report_id)
+    existing = await _existing_label_report(session, device_id=device_id, client_report_id=client_report_id)
     if existing is not None:
-        return existing, False
+        return existing, False, None
+
+    if account_id is not None and not await identity_service.hold_account_active(session, account_id):
+        raise ReportAccountNotActive()
+
+    report_id = new_uuid()
+    key: str | None = None
+    if photo:
+        key = label_report_photo_key(report_id=report_id, device_id=device_id, account_id=account_id)
+        # Storage errors propagate to the route before any row exists.
+        await storage_factory.get_storage().put(key, photo, photo_content_type or "image/jpeg")
+
     row = LabelErrorReport(
-        device_id=device_id, account_id=account_id, client_report_id=client_report_id,
-        barcode=barcode, subject=subject[:200], reason=reason,
-        photo_key=photo_key,
+        id=report_id, device_id=device_id, account_id=account_id,
+        client_report_id=client_report_id, barcode=barcode, subject=subject[:200],
+        reason=reason, photo_key=key,
     )
-    session.add(row)
-    await session.flush()
-    return row, True
+    try:
+        async with session.begin_nested():
+            session.add(row)
+            await session.flush()
+    except IntegrityError:
+        # Only a writer that skipped the advisory lock can get here. Our object
+        # goes; the report that won is the answer.
+        if key is not None:
+            await discard_unfiled_report_photo(key)
+        winner = await _existing_label_report(session, device_id=device_id, client_report_id=client_report_id)
+        if winner is None:
+            raise
+        return winner, False, None
+    except BaseException:
+        if key is not None:
+            await discard_unfiled_report_photo(key)
+        raise
+    return row, True, key

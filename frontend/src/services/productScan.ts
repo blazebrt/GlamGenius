@@ -194,7 +194,7 @@ let devicePromise: Promise<StoredDevice | null> | null = null;
  * orphan every scan it had already made. So the old location is read once, its
  * contents moved, and only then cleared.
  */
-async function readStoredDevice(): Promise<StoredDevice | null> {
+async function readStoredDevice(migrateLegacy = true): Promise<StoredDevice | null> {
   const secure = await secureSessionStorage.getItem(DEVICE_KEY);
   if (secure) {
     try {
@@ -204,7 +204,7 @@ async function readStoredDevice(): Promise<StoredDevice | null> {
     }
   }
   const legacy = await readJson<StoredDevice | null>(DEVICE_KEY, null);
-  if (legacy?.token) {
+  if (legacy?.token && migrateLegacy) {
     await writeStoredDevice(legacy);
     try {
       await AsyncStorage.removeItem(DEVICE_KEY);
@@ -312,9 +312,77 @@ export async function cacheResult(result: ScanResult): Promise<void> {
 }
 
 // --- The offline queue ------------------------------------------------------
+//
+// One coordination authority for the stored queue, because it is shared by
+// everything that scans:
+//
+// * **Every read-modify-write of the stored queue runs in one lane**, one at a
+//   time (`withQueueLane`). `enqueueScan` used to read, append and write with
+//   nothing ordering it against another write, so two scans could each append
+//   to the same old list and the second write would drop the first scan.
+// * **A flush never writes back what it read.** It takes a snapshot, sends it
+//   with no lane held (the network can take seconds, and a scan made meanwhile
+//   must still be able to queue), collects exactly the ids the server
+//   acknowledged, and then, back in the lane, reopens the *latest* queue and
+//   removes those ids alone. A scan queued while the flush was waiting, an
+//   entry that failed, and an entry the snapshot never held all survive.
+//   Writing the snapshot's leftovers back was how a scan made mid-flush
+//   vanished.
+// * **One flush at a time** (`syncQueue`). A caller that arrives while a flush
+//   is running gets the flush that starts after it, never a second one racing
+//   it, so no two final writes compete and the caller's own entries are in the
+//   snapshot it waits on.
+//
+// Storage trouble is handled two ways, on purpose. Ordinary scanning degrades:
+// an unreadable store never stops a lookup, and `readQueue` still reports it
+// as empty for display. A mutation, though, never treats "the store would not
+// answer" as "the queue is empty" — writing then would erase whatever it
+// failed to read — so it writes nothing instead. And settlement, a proof, uses
+// `readQueueForProof`, which refuses outright.
 
 export async function readQueue(): Promise<QueuedScan[]> {
   return readJson<QueuedScan[]>(QUEUE_KEY, []);
+}
+
+/** The tail of the queue lane: the last read-modify-write, settled or not. */
+let queueLane: Promise<unknown> = Promise.resolve();
+
+/**
+ * Run one read-modify-write of the stored queue, after every earlier one.
+ *
+ * Hold it only across storage calls, never across the network: a flush that
+ * held it while sending would make every scan wait on a slow connection.
+ */
+function withQueueLane<T>(work: () => Promise<T>): Promise<T> {
+  const run = queueLane.then(work, work);
+  queueLane = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+function isQueuedScan(entry: unknown): entry is QueuedScan {
+  if (typeof entry !== 'object' || entry === null) return false;
+  const candidate = entry as Partial<QueuedScan>;
+  return typeof candidate.client_scan_id === 'string' && typeof candidate.barcode === 'string';
+}
+
+/**
+ * Read the queue for a write that is about to replace it.
+ *
+ * A storage failure propagates: the caller must not write over data it could
+ * not read. Stored text that is not a readable queue can never be sent, so it
+ * reads as empty and the write replaces it, dropping only unreadable entries.
+ */
+async function readQueueForMutation(): Promise<QueuedScan[]> {
+  const raw: unknown = await AsyncStorage.getItem(QUEUE_KEY);
+  if (raw === null || raw === undefined) return [];
+  if (typeof raw !== 'string') return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  return Array.isArray(parsed) ? parsed.filter(isQueuedScan) : [];
 }
 
 /**
@@ -354,28 +422,72 @@ async function readQueueForProof(): Promise<QueuedScan[]> {
   return parsed as QueuedScan[];
 }
 
+/**
+ * Add one scan to the queue. One logical entry per `client_scan_id`.
+ *
+ * Never throws: a scan must answer even when the phone cannot store it. If
+ * the queue cannot be read, nothing is written, because writing then would
+ * replace entries this call never saw.
+ */
 export async function enqueueScan(entry: QueuedScan): Promise<void> {
-  const queue = await readQueue();
-  if (queue.some((q) => q.client_scan_id === entry.client_scan_id)) return;
-  queue.push(entry);
-  await writeJson(QUEUE_KEY, queue);
+  await withQueueLane(async () => {
+    const queue = await readQueueForMutation();
+    if (queue.some((q) => q.client_scan_id === entry.client_scan_id)) return;
+    await writeJson(QUEUE_KEY, [...queue, entry]);
+  }).catch(() => undefined);
 }
+
+export interface SyncResult {
+  sent: number;
+  remaining: number;
+}
+
+/** The flush in progress, if any. */
+let activeSync: Promise<SyncResult> | null = null;
+/** The one flush waiting to start after it, shared by everyone who asked meanwhile. */
+let nextSync: Promise<SyncResult> | null = null;
 
 /**
  * Send everything the phone has been holding.
  *
- * An entry is only dropped once the server has accepted it. A replay is safe:
- * the same `client_scan_id` is recognised rather than counted twice.
+ * An entry is only dropped once the server has acknowledged it. A replay is
+ * safe: the same `client_scan_id` is recognised rather than counted twice.
+ *
+ * Single-flight: while a flush is running, every caller gets the one flush
+ * that starts after it, so its snapshot includes whatever those callers had
+ * queued, and two flushes never write over each other.
  */
-export async function syncQueue(): Promise<{ sent: number; remaining: number }> {
-  const queue = await readQueue();
-  if (queue.length === 0) return { sent: 0, remaining: 0 };
-  const headers = await deviceHeaders();
-  if (!headers['X-Device-Token']) return { sent: 0, remaining: queue.length };
+export function syncQueue(): Promise<SyncResult> {
+  if (!activeSync) {
+    activeSync = flushQueueOnce().finally(() => {
+      activeSync = null;
+    });
+    return activeSync;
+  }
+  if (!nextSync) {
+    nextSync = activeSync
+      .catch(() => undefined)
+      .then(() => {
+        nextSync = null;
+        return syncQueue();
+      });
+  }
+  return nextSync;
+}
 
-  const left: QueuedScan[] = [];
-  let sent = 0;
-  for (const entry of queue) {
+/**
+ * One flush: snapshot, send, then remove exactly what was acknowledged from
+ * the latest queue.
+ */
+async function flushQueueOnce(): Promise<SyncResult> {
+  const snapshot = await withQueueLane(readQueueForMutation);
+  if (snapshot.length === 0) return { sent: 0, remaining: 0 };
+  const headers = await deviceHeaders();
+  if (!headers['X-Device-Token']) return { sent: 0, remaining: snapshot.length };
+
+  // No lane held here: a scan made while these requests wait must still queue.
+  const acknowledged = new Set<string>();
+  for (const entry of snapshot) {
     try {
       await scanApi.post('/api/v2/scan/events', {
         barcode: entry.barcode,
@@ -383,13 +495,20 @@ export async function syncQueue(): Promise<{ sent: number; remaining: number }> 
         scanned_at: entry.scanned_at,
         queued_offline: entry.queued_offline,
       }, { headers });
-      sent += 1;
+      acknowledged.add(entry.client_scan_id);
     } catch {
-      left.push(entry);
+      // Stays queued. It was never acknowledged, so it is never removed.
     }
   }
-  await writeJson(QUEUE_KEY, left);
-  return { sent, remaining: left.length };
+
+  const remaining = await withQueueLane(async () => {
+    const latest = await readQueueForMutation();
+    if (acknowledged.size === 0) return latest.length;
+    const left = latest.filter((q) => !acknowledged.has(q.client_scan_id));
+    await writeJson(QUEUE_KEY, left);
+    return left.length;
+  });
+  return { sent: acknowledged.size, remaining };
 }
 
 // --- Looking one barcode up -------------------------------------------------
@@ -462,19 +581,64 @@ export async function scanBarcode(barcode: string): Promise<ScanResult> {
   }
 }
 
+/**
+ * Read one barcode's result again without scanning it.
+ *
+ * `scanBarcode` is a customer scan: it records a ScanEvent (through the
+ * queue), and the server reads the device's *newest* event as the physical
+ * pack in hand. This is the other thing — a UI refresh — and it must never be
+ * replaced by `scanBarcode`. After a confirmation, a plain event written by a
+ * "refresh" becomes the newest event and withdraws the pack that was just
+ * confirmed: Add to Shelf, pack-specific recall context and Product Watch all
+ * go quiet seconds after the person confirmed the label.
+ *
+ * So this writes zero ScanEvents, queues nothing and mints no
+ * `client_scan_id`. It performs the same read-only lookup and refreshes the
+ * local cache. It answers `null` rather than an offline stand-in when it
+ * cannot read, so the caller keeps what it already shows, and it never
+ * re-registers the device: a new device would hold no confirmed pack at all.
+ */
+export async function refreshBarcodeResult(barcode: string): Promise<ScanResult | null> {
+  const clean = (barcode || '').trim();
+  try {
+    // Read only: even a legacy token must not be migrated during this lookup.
+    const device = await readStoredDevice(false);
+    if (!device?.token) return null;
+    const headers = { 'X-Device-Token': device.token };
+    const response = await scanApi.get(`/api/v2/scan/lookup/${encodeURIComponent(clean)}`, { headers });
+    const result = withConfidence({ ...response.data, barcode: clean });
+    await cacheResult(result);
+    return result;
+  } catch {
+    return null;
+  }
+}
+
 // --- Reading a label --------------------------------------------------------
 
-/** Confirm a label a person has checked. The VC-07 shape: one tap, then it counts. */
+/**
+ * Confirm a label a person has checked. The VC-07 shape: one tap, then it counts.
+ *
+ * `clientScanId` belongs to the draft, not to the attempt: the caller mints it
+ * once when the label is transcribed and passes the same one to every
+ * confirmation of that draft — the first, a stale-device retry, and a person
+ * pressing Confirm again after a response that never arrived. A fresh id per
+ * attempt would turn one physical capture into two when the server had in fact
+ * accepted the first. Retaking the photograph is what deserves a new id.
+ */
 export async function confirmLabel(
   barcode: string,
   aiRunId: string,
+  clientScanId: string,
 ): Promise<{ confidence: Confidence; fssai_licence?: string | null; confirmations: number } | null> {
   if (typeof aiRunId !== 'string' || !aiRunId.trim()) {
     throw new Error('The label read is missing its confirmation reference. Please try again.');
   }
+  if (typeof clientScanId !== 'string' || !clientScanId.trim()) {
+    throw new Error('The label read is missing its confirmation reference. Please try again.');
+  }
   const headers = await deviceHeaders();
   if (!headers['X-Device-Token']) return null;
-  const clientScanId = newScanId();
   const body = {
     barcode,
     ai_run_id: aiRunId,
@@ -605,9 +769,10 @@ export async function unwatchProduct(barcode: string): Promise<ProductWatchState
 // --- Settling the generic scan ledger ---------------------------------------
 //
 // ``scanBarcode`` records its event in the background so a lookup can answer
-// at shop speed. That is fine on its own and wrong the moment a skin-care
-// capture follows, because Step 8K resolves the current physical pack from the
-// device's *newest* ScanEvent by server ordering.
+// at shop speed. That is fine on its own and wrong the moment a label capture
+// follows — skin care or packaged food — because the server resolves the
+// current physical pack from the device's *newest* ScanEvent by server
+// ordering.
 //
 // The race, in order: the lookup answers, its plain event is still in flight,
 // the person chooses Skin care, photographs the label and confirms it — and
@@ -650,7 +815,9 @@ export async function settleScanEvents(barcode: string): Promise<boolean> {
   // 1. Whatever this barcode already started.
   const inFlight = pendingScanEvents.get(clean);
   if (inFlight) await inFlight;
-  // 2. Push anything the phone is still holding.
+  // 2. Push anything the phone is still holding. `syncQueue` is single-flight:
+  //    if a flush is already running, this waits for the one that starts after
+  //    it, so an entry queued during that flush is in the snapshot sent here.
   await syncQueue().catch(() => undefined);
   // 3. Read the queue back for proof and check *this* barcode specifically.
   //    Somebody else's stuck entry is their problem, not a reason to block

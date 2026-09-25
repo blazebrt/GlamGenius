@@ -18,6 +18,11 @@ from app.domains.inventory.models import InventoryItem, InventoryProductLink
 from app.domains.inventory.schemas import ItemCreate, ScanOwnershipCreate
 from app.domains.product import pack_context
 from app.domains.product.models import LabelSnapshot, ProductRecord, ScanDevice
+from app.domains.product.personal_decision import (
+    CurrentPackSnapshotUnresolved,
+    resolve_current_pack_label_snapshot,
+)
+from app.domains.product.service import label_content_fingerprint
 
 CONTRACT_VERSION = "step-10a-v1"
 ELIGIBLE_CATEGORIES = frozenset({"beauty", "hair", "perfumes"})
@@ -65,15 +70,55 @@ async def _resolve_exact(
 async def _assert_pack_authority(
     session: AsyncSession, *, account_id: uuid.UUID, device: ScanDevice, snapshot: LabelSnapshot,
 ) -> dict[str, Any]:
-    """The stored device's newest proven capture, never a client boolean."""
+    """Prove this account's device is holding the pack the snapshot describes.
+
+    Two different things are being matched, and they must not be confused:
+
+    * A ``LabelSnapshot`` is semantic label *content*. Identical confirmed
+      content is deduplicated into one snapshot, and that row names the first
+      capture that produced it (``scan_event_id``). That name is historical
+      provenance for the content. It never becomes the owner of every later
+      capture of the same label.
+    * A ``ScanEvent`` is *this* device capturing *this* physical pack.
+
+    So the proof is built from the current capture, never from the snapshot's
+    provenance event:
+
+    1. the device is claimed by this account;
+    2. this device's newest scan of the barcode is a confirmed label capture
+       (:func:`pack_context.current_pack` — newest event only, never an older
+       capture, so a later plain scan still withdraws the proof);
+    3. that capture belongs to this account;
+    4. the server fingerprints the capture's own stored ``label_facts`` with
+       the one canonical authority, :func:`label_content_fingerprint`, and it
+       equals the requested snapshot's ``content_fingerprint``;
+    5. the requested snapshot is exactly the semantic version that capture
+       resolves to (:func:`resolve_current_pack_label_snapshot`: its own row,
+       or, when the content was deduplicated, the version that already held it
+       when the capture was confirmed). A historic version of the same
+       content is a different version, and is refused.
+
+    ``_resolve_exact`` has already matched the snapshot's barcode, version and
+    fingerprint to the submitted identity. Nothing here reads the client's
+    facts, and nothing falls back to the snapshot's facts: the facts returned
+    are the current capture's.
+    """
     if device.claimed_by_account_id != account_id:
         raise OwnershipConflict("This device is not connected to your account.")
     pack = await pack_context.current_pack(session, barcode=snapshot.barcode, device_id=device.id)
-    if not pack.is_proven or pack.scan_event is None or pack.scan_event.id != snapshot.scan_event_id:
+    if not pack.is_proven or pack.scan_event is None or pack.label_facts is None:
         raise OwnershipConflict("We cannot verify this exact physical pack for your account.")
     if pack.scan_event.account_id != account_id:
         raise OwnershipConflict("We cannot verify this exact physical pack for your account.")
-    return pack.label_facts or {}
+    if label_content_fingerprint(pack.label_facts) != snapshot.content_fingerprint:
+        raise OwnershipConflict("We cannot verify this exact physical pack for your account.")
+    try:
+        resolved = await resolve_current_pack_label_snapshot(session, pack=pack)
+    except CurrentPackSnapshotUnresolved as exc:
+        raise OwnershipConflict("We cannot verify this exact physical pack for your account.") from exc
+    if resolved.id != snapshot.id:
+        raise OwnershipConflict("We cannot verify this exact physical pack for your account.")
+    return pack.label_facts
 
 
 def _same_identity(link: InventoryProductLink, body: ScanOwnershipCreate) -> bool:
