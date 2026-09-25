@@ -21,6 +21,12 @@ metadata and fails if a new table is introduced without a classification.
 Adding a table without deciding whether it goes into the export is exactly
 the kind of silent omission a periodic audit is meant to catch.
 
+A classification is not an export. ``INCLUDED`` is a promise the account
+holder can read the table back, and :data:`.coverage.EXPORT_COVERAGE` is where
+that promise is kept: exactly one export contract per ``INCLUDED`` table,
+enforced by ``tests/test_privacy_export_completeness.py`` and by the exporter
+itself, which refuses to return a file it cannot show is complete.
+
 The export shape
 ----------------
 ::
@@ -58,7 +64,13 @@ from enum import StrEnum
 # decisions a person took.
 # 1.3 — Step 11D. Care preference and Shelf Manager identity are subject-aware.
 # 1.4 — Step 11E. Persisted Care routine execution/history is grouped by human.
-EXPORT_SCHEMA_VERSION = "1.4"
+# 1.5 — Lane E. The export is complete: the 33 tables the registry had
+# classified INCLUDED and nothing exported are exported, each through its
+# entry in ``coverage.EXPORT_COVERAGE``; no collection is cut at a row limit;
+# ``registry_summary`` gains ``exported_tables`` and ``export_locations``,
+# derived from that contract; and a label-error report states
+# ``photo_attached`` instead of carrying its internal ``photo_key``.
+EXPORT_SCHEMA_VERSION = "1.5"
 
 
 class Classification(StrEnum):

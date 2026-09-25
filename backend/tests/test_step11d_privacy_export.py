@@ -292,12 +292,14 @@ async def test_care_preference_events_are_grouped_by_the_person_who_made_them(
 async def test_the_export_schema_version_still_says_what_this_shape_is(
     app_client, db_clean, registered_supabase_user,
 ):
-    """Step 11E moves the export to 1.4 for subject-owned routine history."""
+    """Step 11E moved the export to 1.4 for subject-owned routine history;
+    Lane E moves it to 1.5 for the completed export coverage. The Step 11D
+    shape is unchanged inside it."""
     token, account_id = await registered_supabase_user()
     await _seed(app_client)
     async with get_sessionmaker()() as session:
         export = await build_export(session, account_id)
-    assert export["schema_version"] == EXPORT_SCHEMA_VERSION == "1.4"
+    assert export["schema_version"] == EXPORT_SCHEMA_VERSION == "1.5"
 
 
 async def test_erasure_leaves_no_preference_and_no_subject_behind(
