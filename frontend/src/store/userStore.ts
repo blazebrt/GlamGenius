@@ -48,6 +48,7 @@ import {
   type MeResponse,
 } from '../services/apiV2';
 import { markDeviceClaimed, tokenToClaimFor } from '../services/productScan';
+import { beginDeviceRemovalForEndedSession } from '../services/logoutDeviceCleanup';
 import {
   acceptRegistrationFact,
   authAccountId,
@@ -819,11 +820,24 @@ export const useUserStore = create<UserStore>((set, get) => ({
   },
 
   logout: async () => {
+    // The one credential that may still remove this phone's notification
+    // device for the account signing out, read before anything changes. It
+    // lives only in this call: never stored, queued or logged.
+    const signingOut = get().session?.access_token ?? null;
     // First, synchronously: every request still out for this account is stale
     // from here, so none of them can put it back. The session is quarantined
     // as well, so if Supabase's sign-out below is slow or fails, its own token
     // refresh cannot sign this account back in.
     endSessionLocally();
+    // Then, best effort, ask the server to remove this installation's device
+    // for that account only. Only a local read happens before the request is
+    // handed to the network; nothing below waits for its answer, so a slow,
+    // failing or offline cleanup never delays or undoes the sign-out.
+    try {
+      void (await beginDeviceRemovalForEndedSession(signingOut)).settled;
+    } catch {
+      // Never fatal: logout has already happened.
+    }
     try {
       // Supabase reports some failures as ``{ error }`` rather than throwing.
       // Either way the local sign-out stands; nothing here waits on it.

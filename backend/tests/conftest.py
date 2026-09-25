@@ -328,8 +328,39 @@ def bypass_profile_allowlist_for_test_setup(monkeypatch):
     monkeypatch.setattr("app.api.v2.profile.ALLOWED_KEYS", set(ATTRIBUTE_REGISTRY.keys()))
 
 
+def refuse_retained_routes_in_legacy_routers(routers) -> None:
+    """A retired router mounted for its own tests may not carry a production route.
+
+    The retired routers below are mounted into the test app only. A production
+    route living in one of them answers every test while the real production
+    router returns 404, which is how the notification settings and device
+    routes went missing in production unnoticed. So a legacy router that
+    defines any retained notification path stops the whole session here.
+    """
+    from app.api.v2.notification_settings import NOTIFICATION_ROUTES
+
+    retained_paths = {path for _method, path in NOTIFICATION_ROUTES}
+    for router in routers:
+        for route in router.routes:
+            path = getattr(route, "path", "")
+            if path in retained_paths or path.startswith("/today/notifications"):
+                raise RuntimeError(
+                    f"{path} is a production notification route and must not be defined in a "
+                    "retired router that is mounted only for tests"
+                )
+
+
 @pytest.fixture(autouse=True, scope="session")
 def mount_legacy_routers_for_tests():
+    # Outside the tolerant block below on purpose: this must fail loudly.
+    import app.api.v2.onboarding as onboarding_legacy
+    import app.api.v2.planner as planner_legacy
+    import app.api.v2.progress as progress_legacy
+    import app.api.v2.today as today_legacy
+
+    refuse_retained_routes_in_legacy_routers(
+        (onboarding_legacy.router, planner_legacy.router, progress_legacy.router, today_legacy.router)
+    )
     try:
         import app.api.v2.onboarding as onboarding_router
         import app.api.v2.planner as planner_router

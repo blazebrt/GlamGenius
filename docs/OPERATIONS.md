@@ -131,10 +131,25 @@ Each run ends with one log line and one database heartbeat.
   the Expo call, so a second run in the same hour cannot send it twice. No
   transaction is held open across the network request. Proven by
   `backend/tests/test_notification_worker_operations.py`.
-* **Isolated per account.** One account's failure is caught, rolled back and
-  logged as `notification_account_failed`, and the batch continues. The loop
-  works from plain account identifiers rather than ORM rows precisely so a
-  rollback cannot poison the accounts still queued behind it.
+* **Claimed is not attempted.** The claim records only ownership. Immediately
+  before Expo is called, `attempted_at` is committed in its own short
+  transaction, together with the final account-lifecycle check. A row with
+  `attempted_at` set may have reached Expo, so it is never sent again, however
+  old its claim. A Product Watch delivery claimed and then abandoned *before*
+  that mark (the process died) is found again once its 5-minute lease expires,
+  within the same local day, and re-checked against the customer's current
+  watch, topic, quiet hours, daily cap and devices before it is sent. Proven by
+  `backend/tests/test_notification_delivery_integrity.py`.
+* **Isolated per account.** Account discovery is one short read. Each account is
+  then processed in its own database session and transaction, which commits
+  that account's decisions whether or not it sends. One account's failure is
+  rolled back, logged as `notification_account_failed`, and the batch
+  continues. No account's locks, unsaved rows or failure can reach another's.
+* **One notification, and opt-outs do not consume it.** A reminder suppressed
+  because its own topic is switched off (for example Care) is recorded, and the
+  next candidate (for example Maintenance) may still use the day's slot. The
+  master switch, quiet hours, the daily cap and an inactive account stop the
+  walk.
 * **No late catch-up.** A run outside an account's preferred local hour does not
   fire a backdated notification. A missed hour is simply a missed hour.
 * **Disabled devices self-heal.** An Expo `DeviceNotRegistered` outcome disables

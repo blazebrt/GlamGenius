@@ -52,8 +52,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.official_records import service as official_records_service
 from app.domains.official_records.source import SOURCE_URL as OFFICIAL_CURRENT_SOURCE_URL
+from app.domains.planning import clock, notifications
 from app.domains.planning import notification_strings as strings
-from app.domains.planning import notifications
 from app.domains.product import change_projection as label_projection
 from app.domains.product import label_evidence, pack_context
 from app.domains.product import service as product_service
@@ -793,6 +793,84 @@ def _consumes_event(delivery: Any) -> bool:
     return delivery.suppressed_reason in _OPT_OUT_REASONS
 
 
+async def _recover_abandoned_delivery(
+    session: AsyncSession, *, preference: Any, plan_date: date, moment: datetime | None,
+) -> Any:
+    """Re-prove and return today's abandoned, never-attempted notice, or ``None``.
+
+    A Product Watch delivery can be claimed and committed and then abandoned
+    before the provider is called — the process dies in between. Its event is
+    already consumed by the cursor, which is correct and is never rolled back,
+    so the outbox row is the only thing that can still deliver it. Such a row
+    is recoverable only if all of this holds:
+
+    * it is this account's, a Product Watch delivery, still ``sending``, for
+      today's local plan date (never an earlier day: no late catch-up), with
+      an expired claim lease;
+    * no provider attempt was ever recorded (``attempted_at IS NULL``). A row
+      whose attempt was recorded may have been delivered; it is never sent
+      again, whatever its age, and is only logged;
+    * the customer's current authority still allows it, re-read now under the
+      preference lock: notifications and native push on, the Product Watch
+      topic on, not in quiet hours, an active device, and a daily cap with
+      room for it that does not count the row itself;
+    * the watch it was decided for is still the same watch: present, active,
+      and begun no later than the claim. Stopping, re-anchoring or restarting
+      the watch starts a new epoch, and a notice from the old one is not sent.
+
+    A recoverable row goes back to ``queued`` and is returned; the worker then
+    claims it and sends it through the same final lifecycle gate and attempt
+    marker as any new delivery. A row the customer's current choices rule out
+    — topic or master switch off, cap taken by another delivery, watch ended —
+    is settled as suppressed with that reason, so it stops holding the day's
+    cap. A temporary state (quiet hours, no device, native push off) leaves it
+    untouched for a later cycle today. Lock order is the preference (held by
+    the caller), then the watch, then the delivery row, as everywhere else.
+    """
+    account_id = preference.account_id
+    rows = await notifications.abandoned_claims(
+        session, account_id=account_id, plan_date=plan_date, source_kind=SOURCE_KIND,
+    )
+    for row in rows:
+        if row.attempted_at is not None:
+            # The provider may have accepted it. No ticket is not proof it did
+            # not, so it is never sent again.
+            logger.warning("product_watch_delivery_outcome_unknown delivery=%s", row.id)
+            continue
+        if not preference.enabled:
+            await notifications.settle_abandoned_claim(session, row, notifications.SUPPRESSED_DISABLED)
+            continue
+        if not _topic_enabled(preference):
+            await notifications.settle_abandoned_claim(session, row, notifications.SUPPRESSED_MODULE_OFF)
+            continue
+        if not preference.native_push_enabled:
+            continue
+        local_hour = clock.local_now(preference.timezone_name, moment=moment).hour
+        if notifications.in_quiet_hours(local_hour, preference.quiet_hours_start, preference.quiet_hours_end):
+            continue
+        if not await notifications.active_devices(session, account_id):
+            continue
+        watch = (
+            await _watch_row(session, account_id=account_id, barcode=row.source_id, lock=True)
+            if isinstance(row.source_id, str) else None
+        )
+        if (
+            watch is None
+            or not watch.active
+            or row.claimed_at is None
+            or watch.started_at > row.claimed_at
+        ):
+            await notifications.settle_abandoned_claim(session, row, notifications.SUPPRESSED_WATCH_ENDED)
+            continue
+        if not await notifications.cap_permits(session, preference, plan_date, excluding=row.id):
+            await notifications.settle_abandoned_claim(session, row, notifications.SUPPRESSED_CAP)
+            continue
+        if await notifications.requeue_abandoned_claim(session, row):
+            logger.info("product_watch_delivery_recovered delivery=%s", row.id)
+            return row
+    return None
+
+
 async def queue_material_notice(
     session: AsyncSession, *, account_id: uuid.UUID, plan_date: date,
     timezone_name: str, moment: datetime | None = None,
@@ -814,6 +892,15 @@ async def queue_material_notice(
     # With the lock now held, re-read it: an opt-out committed in between must
     # win, and nobody can change it again until this decision is committed.
     await session.refresh(preference)
+    # Before anything is recomputed: a notice already decided today whose
+    # delivery was claimed and then abandoned before the provider was reached.
+    # The cursor has already consumed its event, so recomputing would never
+    # find it again; the outbox row is the only thing left to deliver it.
+    recovered = await _recover_abandoned_delivery(
+        session, preference=preference, plan_date=plan_date, moment=moment,
+    )
+    if recovered is not None:
+        return recovered
     if not listening(preference):
         # An explicit opt-out: nothing is evaluated, nothing is queued, and the
         # day's single slot is left to the ordinary reminders. Re-enabling

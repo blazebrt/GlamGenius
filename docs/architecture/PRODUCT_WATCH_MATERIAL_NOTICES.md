@@ -217,6 +217,24 @@ never becomes infinite rows. A provider failure is final for that event: the
 existing worker contract governs provider failures and Product Watch adds no
 second retry system.
 
+## An abandoned delivery
+
+The cursor has already consumed an event once its delivery is queued, so if the
+worker claims that delivery and then dies before Expo is reached, recomputing
+from the cursor can never produce it again. The outbox row is what is recovered,
+never the cursor. At the start of the Product Watch trigger, a delivery of today
+that is still `sending`, whose claim lease has expired and that has no recorded
+provider attempt (`attempted_at` empty) is re-checked against current authority:
+the master switch, the `product_watch` topic, native push, quiet hours, an active
+device, and a daily cap that leaves room for it without counting the row itself.
+The watch must still be active and must not have started after the claim:
+stopping, re-anchoring or restarting a watch begins a new epoch, and a notice from
+the old one is not sent. A recoverable row goes back through the ordinary claim,
+lifecycle gate and attempt marker. One the customer's current choices rule out
+is settled as suppressed (`module_disabled`, `daily_cap_reached` or
+`watch_ended`). A row whose provider attempt was recorded is never sent again,
+and an abandoned claim from an earlier day is never sent late.
+
 ## Explicit opt-out
 
 When the master switch or the `product_watch` topic is off, Product Watch

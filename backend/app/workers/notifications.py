@@ -105,7 +105,7 @@ async def _settle_if_account_inactive(
     session: AsyncSession, account_id: uuid_module.UUID,
     delivery_id: uuid_module.UUID, claim: str,
 ) -> bool:
-    """The final lifecycle gate, run immediately before the provider is called.
+    """The final lifecycle gate and the provider-attempt marker, just before the provider.
 
     The first gate in :func:`process_account` runs before the day is compiled.
     Deletion can be requested after that, while the triggers run or while the
@@ -113,9 +113,15 @@ async def _settle_if_account_inactive(
     transaction of its own that ends before ``push.send``. No transaction or
     lock is held across the provider request.
 
-    If the account is still active, returns ``False`` and the caller sends.
-    A deletion request that commits after this check finds that send already
-    under way, and it is treated as in-flight work, not new work.
+    If the account is still active, the same transaction records the attempt
+    (:func:`notifications.mark_attempt_started`) and commits it, and only then
+    returns ``False`` so the caller sends. From that commit on, ``attempted_at``
+    says the provider may have been reached, and the row is never claimed
+    again. A crash before it leaves ``attempted_at`` empty: provably unsent,
+    and recoverable once its lease expires. A deletion request that commits
+    after this check finds that send already under way, and it is treated as
+    in-flight work, not new work. If the claim is no longer this worker's, or
+    an attempt was already recorded, nothing is sent (``True``).
 
     Otherwise returns ``True`` and nothing is sent. The delivery this worker
     claimed is settled as suppressed, reason ``account_inactive``, with the
@@ -127,7 +133,10 @@ async def _settle_if_account_inactive(
     """
     async with session.begin():
         if await _account_is_active(session, account_id):
-            return False
+            if await notifications.mark_attempt_started(session, delivery_id, claim):
+                return False
+            logger.warning("notification_attempt_not_marked delivery=%s", delivery_id)
+            return True
         row = await session.get(
             NotificationDelivery, delivery_id,
             with_for_update=True, populate_existing=True,
@@ -169,7 +178,15 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
     # delivery, quiet hours and repeat safety no matter which condition wins.
     # A material notice about a product the customer explicitly chose to watch
     # is considered first; it returns nothing unless one is actually waiting,
-    # so an ordinary reminder keeps the slot on every other day.
+    # so an ordinary reminder keeps the slot on every other day. It is also
+    # where a Product Watch delivery abandoned before the provider was reached
+    # is re-proved and recovered (``product_watch.queue_material_notice``).
+    #
+    # A candidate the customer switched off for its own topic is recorded as
+    # suppressed and the walk continues: turning off Care does not turn off
+    # Maintenance. Every other decision ends it. An actual delivery owns the
+    # day's one slot, and the master switch, quiet hours, the daily cap and an
+    # inactive account apply to every candidate after it too.
     decision = None
     for trigger in (
         notifications.queue_for_product_watch,
@@ -179,19 +196,22 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
         notifications.queue_for_deferred_purchase_relevance,
         notifications.queue_for_agenda,
     ):
-        decision = await trigger(
+        candidate = await trigger(
             session, account_id=preference.account_id, plan_date=plan_date,
             timezone_name=preference.timezone_name, moment=now,
         )
-        if decision is not None:
-            break
+        if candidate is None or notifications.is_candidate_opt_out(candidate):
+            continue
+        decision = candidate
+        break
     if decision is None or decision.status not in {
         notifications.STATUS_QUEUED, notifications.STATUS_SENDING,
     }:
-        # queue_for_agenda records suppression decisions durably.  Commit them
-        # before returning so the account can explain why nothing was sent.
-        if decision is not None and decision.status == notifications.STATUS_SUPPRESSED:
-            await session.commit()
+        # Nothing to send. Everything this account decided — the compiled day,
+        # suppression decisions recorded so the account can explain why nothing
+        # was sent, any watch cursor that moved — is committed here, inside this
+        # account's own boundary, so no lock or unsaved row outlives it.
+        await session.commit()
         return 0
     claim = await notifications.claim_delivery(session, decision.id)
     if claim is None:
@@ -213,11 +233,12 @@ async def process_account(session: AsyncSession, preference: NotificationPrefere
         row = await session.get(NotificationDelivery, decision.id, with_for_update=True)
         if row is None or row.status != notifications.STATUS_SENDING or row.claim_token != claim:
             return 0
-        row.attempted_at = utcnow()
+        # ``attempted_at`` was committed before the provider was called. It is
+        # the marker, and settling leaves it as it was.
         outcomes = result.outcomes or []
         if result.sent:
             row.status = notifications.STATUS_PROVIDER_ACCEPTED
-            row.sent_at = row.attempted_at
+            row.sent_at = utcnow()
             accepted = next((item for item in outcomes if item.accepted), None)
             row.provider_ticket_id = accepted.ticket_id if accepted else (result.receipts[0] if result.receipts else None)
         else:
@@ -244,45 +265,58 @@ async def process_once(*, now: datetime | None = None, summary: RunSummary | Non
     """
     factory = get_sessionmaker()
     total = 0
+    # Discovery is one short read, and its session is closed before any account
+    # is processed. Only plain identifiers leave it, never ORM rows, so no
+    # object, lock or transaction from here reaches an account's work. The
+    # order is fixed, so a batch always visits accounts the same way.
     async with factory() as session:
-        # Hold plain identifiers, not ORM rows. A rollback expires every object
-        # in the session's identity map, so reading an attribute off one
-        # afterwards needs fresh IO from a synchronous attribute access and
-        # raises MissingGreenlet — inside the very handler meant to contain the
-        # failure. The rows still queued behind it are expired too, so a single
-        # bad account would cost every later account its notification for that
-        # hour, and the batch would look like "nothing was due" rather than an
-        # error. Re-reading each account after the rollback keeps the failure
-        # confined to the account that caused it.
         account_ids = list((await session.execute(
             select(NotificationPreference.account_id).where(
                 NotificationPreference.enabled.is_(True),
                 NotificationPreference.native_push_enabled.is_(True),
                 NotificationPreference.account_id.in_(_active_accounts()),
-            )
+            ).order_by(NotificationPreference.account_id)
         )).scalars().all())
-        if summary is not None:
-            summary.accounts_considered = len(account_ids)
-        for account_id in account_ids:
-            try:
-                preference = (await session.execute(
-                    select(NotificationPreference).where(
-                        NotificationPreference.account_id == account_id,
-                    )
-                )).scalar_one_or_none()
-                if preference is None:
-                    # Withdrawn between the two reads; nothing to send.
-                    continue
-                total += await process_account(session, preference, now=now)
-            except Exception:  # noqa: BLE001 - one account must not stop the batch
-                await session.rollback()
-                if summary is not None:
-                    summary.accounts_failed += 1
-                    summary.failed_account_ids.append(str(account_id))
-                logger.exception("notification_account_failed account=%s", account_id)
+    if summary is not None:
+        summary.accounts_considered = len(account_ids)
+    for account_id in account_ids:
+        try:
+            total += await _process_in_own_session(factory, account_id, now=now)
+        except Exception:  # noqa: BLE001 - one account must not stop the batch
+            if summary is not None:
+                summary.accounts_failed += 1
+                summary.failed_account_ids.append(str(account_id))
+            logger.exception("notification_account_failed account=%s", account_id)
     if summary is not None:
         summary.notifications_sent = total
     return total
+
+
+async def _process_in_own_session(factory, account_id: uuid_module.UUID, *, now: datetime | None) -> int:
+    """One account, in a session of its own that ends before the next account starts.
+
+    Every account gets a fresh session: its own transaction, its own identity
+    map, its own row locks. :func:`process_account` commits what the account
+    decided before it returns, whether or not it sends. A failure rolls back
+    this account's work, and only this account's. Leaving the block closes the
+    session, which ends any transaction still open, so nothing this account
+    locked or left unsaved can be committed, rolled back or waited on by the
+    account after it.
+    """
+    async with factory() as session:
+        try:
+            preference = (await session.execute(
+                select(NotificationPreference).where(
+                    NotificationPreference.account_id == account_id,
+                )
+            )).scalar_one_or_none()
+            if preference is None:
+                # Withdrawn between discovery and now; nothing to send.
+                return 0
+            return await process_account(session, preference, now=now)
+        except Exception:
+            await session.rollback()
+            raise
 
 
 # ---------------------------------------------------------------------------
