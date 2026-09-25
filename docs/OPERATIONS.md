@@ -132,14 +132,28 @@ Each run ends with one log line and one database heartbeat.
   transaction is held open across the network request. Proven by
   `backend/tests/test_notification_worker_operations.py`.
 * **Claimed is not attempted.** The claim records only ownership. Immediately
-  before Expo is called, `attempted_at` is committed in its own short
-  transaction, together with the final account-lifecycle check. A row with
-  `attempted_at` set may have reached Expo, so it is never sent again, however
-  old its claim. A Product Watch delivery claimed and then abandoned *before*
-  that mark (the process died) is found again once its 5-minute lease expires,
-  within the same local day, and re-checked against the customer's current
-  watch, topic, quiet hours, daily cap and devices before it is sent. Proven by
-  `backend/tests/test_notification_delivery_integrity.py`.
+  before Expo is called, a final gate re-proves the authority to send in its
+  own short transaction, and records `attempted_at` in it: the account is
+  still active; notifications and native push are on; it is not quiet hours;
+  the daily cap has room; for Product Watch, the topic is on and the watch is
+  still active and in the same epoch; and the devices to send to are read then,
+  not taken from the start of the cycle. Only those devices are sent to. A row
+  with `attempted_at` set may have reached Expo, so it is never sent again,
+  however old its claim. A Product Watch delivery claimed and then abandoned
+  *before* that mark (the process died) is found again once its 5-minute lease
+  expires, within the same local day, and re-checked the same way before it is
+  sent. Proven by `backend/tests/test_notification_delivery_integrity.py`.
+* **An opt-out that commits first is obeyed; an attempt that commits first is in
+  flight.** Changing notification settings, registering and unregistering a
+  device all lock the account's preference row first, and the final gate
+  holds that same lock while it decides. So a change either commits before the
+  gate — and nothing is sent that it rules out — or waits a moment for the gate
+  and then finds the attempt already recorded, which it leaves alone. Switching
+  notifications or Product Watch off also settles, in the same transaction,
+  every Product Watch delivery that has not been attempted, so switching back
+  on later can never deliver a notice decided before the opt-out, even if no
+  worker cycle ran in between. No lock is held while Expo is called. Proven by
+  `backend/tests/test_notification_send_authority.py`.
 * **Isolated per account.** Account discovery is one short read. Each account is
   then processed in its own database session and transaction, which commits
   that account's decisions whether or not it sends. One account's failure is

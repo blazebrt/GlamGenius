@@ -44,7 +44,7 @@ SUPPRESSED_CAP = "daily_cap_reached"
 SUPPRESSED_QUIET = "quiet_hours"
 SUPPRESSED_DISABLED = "disabled"
 SUPPRESSED_MODULE_OFF = "module_disabled"
-#: Settled by the worker's final lifecycle gate: the account stopped being
+#: Settled by the worker's final send-authority gate: the account stopped being
 #: active after this delivery was claimed and before the provider was called.
 #: Nothing was sent. The row is terminal, so it is never claimed again.
 SUPPRESSED_ACCOUNT_INACTIVE = "account_inactive"
@@ -721,6 +721,86 @@ async def settle_abandoned_claim(
         return False
     await session.refresh(row)
     return True
+
+
+async def withdraw_unattempted(
+    session: AsyncSession, account_id: uuid.UUID, *, source_kind: str, reason: str,
+) -> int:
+    """Settle, as not sent, every delivery of one source that has not reached the provider.
+
+    For an explicit opt-out, in the same transaction as the preference change,
+    with the caller already holding the preference lock. A row is withdrawn
+    only while nothing can have been sent: ``queued``, or ``sending`` with no
+    attempt recorded. Its claim lease does not matter — a claim made a moment
+    ago is withdrawn too, because once this commits the worker's final gate
+    finds the row no longer its own and does not reach the provider. It
+    becomes terminal, unclaimed, with the reason written down, so turning the
+    opt-out back off can never revive it.
+
+    An attempted row (``attempted_at IS NOT NULL``) is never touched. The
+    provider may already have it; an opt-out after that moment can stop what
+    comes next, but it cannot prove this one was not sent.
+    """
+    result = await session.execute(
+        update(NotificationDelivery).where(
+            NotificationDelivery.account_id == account_id,
+            NotificationDelivery.source_kind == source_kind,
+            NotificationDelivery.status.in_((STATUS_QUEUED, STATUS_SENDING)),
+            NotificationDelivery.attempted_at.is_(None),
+        ).values(status=STATUS_SUPPRESSED, suppressed_reason=reason, claim_token=None, claimed_at=None)
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0)
+
+
+async def withdraw_claim(
+    session: AsyncSession, delivery_id: uuid.UUID, claim_token: str, reason: str,
+) -> bool:
+    """Settle one claim, before its attempt, as not sent.
+
+    Only the exact claim that owns the row, still ``sending`` and never
+    attempted. Terminal and unclaimed, so it is never claimed again.
+    """
+    result = await session.execute(
+        update(NotificationDelivery).where(
+            NotificationDelivery.id == delivery_id,
+            NotificationDelivery.status == STATUS_SENDING,
+            NotificationDelivery.claim_token == claim_token,
+            NotificationDelivery.attempted_at.is_(None),
+        ).values(status=STATUS_SUPPRESSED, suppressed_reason=reason, claim_token=None, claimed_at=None)
+        .execution_options(synchronize_session=False)
+    )
+    return bool(result.rowcount)
+
+
+async def locked_preference(session: AsyncSession, account_id: uuid.UUID) -> NotificationPreference | None:
+    """This account's preference row, locked, as committed now. Never creates one.
+
+    ``populate_existing``: a row this session loaded earlier is overwritten
+    with what the lock returned, so a change committed in between is what the
+    caller decides on.
+    """
+    return (await session.execute(
+        select(NotificationPreference).where(NotificationPreference.account_id == account_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+
+
+async def devices_for_attempt(session: AsyncSession, account_id: uuid.UUID) -> list[NotificationDevice]:
+    """This account's active devices as they are now, held until the caller commits.
+
+    ``FOR SHARE``: removing a device — an unregister, or another account taking
+    over the same push token — either commits before this read, and is seen,
+    or waits until the caller's transaction ends. ``populate_existing``, so a
+    token rotated since this session first loaded the row is the token used.
+    """
+    return list((await session.execute(
+        select(NotificationDevice).where(
+            NotificationDevice.account_id == account_id, NotificationDevice.status == "active",
+            NotificationDevice.disabled_at.is_(None),
+        ).order_by(NotificationDevice.id)
+        .with_for_update(read=True).execution_options(populate_existing=True)
+    )).scalars().all())
 
 
 async def register_device(

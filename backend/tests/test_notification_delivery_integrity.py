@@ -709,15 +709,15 @@ async def _dies(monkeypatch, name: str, target=worker) -> None:
 async def _strand(monkeypatch, moment, *, where: str = "before_marker"):
     """Run one real cycle that dies at ``where``, then restore the worker."""
     if where == "before_marker":
-        original = worker._settle_if_account_inactive
-        await _dies(monkeypatch, "_settle_if_account_inactive")
+        original = worker._authorize_provider_attempt
+        await _dies(monkeypatch, "_authorize_provider_attempt")
     else:
         original = worker.push.send
         await _dies(monkeypatch, "send", target=worker.push)
     with pytest.raises(ProcessDied):
         await worker.process_once(now=moment)
     if where == "before_marker":
-        monkeypatch.setattr(worker, "_settle_if_account_inactive", original)
+        monkeypatch.setattr(worker, "_authorize_provider_attempt", original)
     else:
         monkeypatch.setattr(worker.push, "send", original)
 
@@ -1151,3 +1151,66 @@ async def test_r_i_a_deletion_requested_before_the_recovered_send_sends_nothing(
         notifications.STATUS_SUPPRESSED, notifications.SUPPRESSED_ACCOUNT_INACTIVE,
     )
     assert row.attempted_at is None and row.claim_token is None
+
+
+async def _recovery_decides(account_id, moment):
+    """The Product Watch trigger alone, committed: what recovery decides before any claim or gate."""
+    async with _factory()() as session:
+        preference = await notifications.preferences_for(session, account_id, TZ)
+        decision = await product_watch.queue_material_notice(
+            session, account_id=account_id,
+            plan_date=clock.local_today(preference.timezone_name, moment=moment),
+            timezone_name=preference.timezone_name, moment=moment,
+        )
+        await session.commit()
+        return decision
+
+
+async def _stop_the_watch(app_client, token, account_id):
+    assert (await _delete_watch(app_client, token)).status_code == 200
+
+
+async def _switch_the_topic_off(app_client, token, account_id):
+    # Straight to the row, so no settlement runs: recovery is what is under test.
+    await _set_preferences(account_id, topics={
+        "product_watch": False, "today_style": False, "care": False, "event_preparation": False, "maintenance": False,
+    })
+
+
+async def _lose_every_device(app_client, token, account_id):
+    async with _factory()() as session:
+        await session.execute(update(NotificationDevice).where(NotificationDevice.account_id == account_id).values(
+            status="disabled", disabled_at=utcnow(),
+        ))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("change", "expected"), [
+    (_stop_the_watch, (notifications.STATUS_SUPPRESSED, notifications.SUPPRESSED_WATCH_ENDED)),
+    (_switch_the_topic_off, (notifications.STATUS_SUPPRESSED, notifications.SUPPRESSED_MODULE_OFF)),
+    (_lose_every_device, (notifications.STATUS_SENDING, None)),
+])
+async def test_r_recovery_itself_refuses_what_current_authority_rules_out_and_hands_nothing_to_claim(
+    db_clean, off_clean, app_client, registered_supabase_user, tmp_path, monkeypatch, change, expected,  # noqa: F811
+):
+    """Recovery re-proves before it requeues; the final gate is a second line, not the first.
+
+    Recovery's own decision, taken before anything is claimed again: a row a
+    stopped watch or a switched-off topic rules out is settled, and a row with
+    no device to go to is left as it was. None of them is handed back to be
+    claimed.
+    """
+    moment = _at_local_hour(9)
+    token, account_id, _ = await _watched_customer(app_client, registered_supabase_user, tmp_path)
+    await _strand(monkeypatch, moment)
+    [stranded] = await _watch_deliveries(account_id)
+    await change(app_client, token, account_id)
+    await _let_the_lease_expire(account_id)
+
+    assert await _recovery_decides(account_id, moment) is None, "nothing handed back to be claimed"
+    [row] = await _watch_deliveries(account_id)
+    assert (row.status, row.suppressed_reason) == expected
+    assert row.attempted_at is None
+    if row.status == notifications.STATUS_SENDING:
+        assert row.claim_token == stranded.claim_token, "left exactly as it was"

@@ -66,11 +66,16 @@ async def register_notification_device(
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
+    # The preference lock first, as in every notification mutation and in the
+    # worker's final gate, so registering, unregistering and the gate cannot
+    # wait on each other in a cycle.
+    preference = await notifications.preferences_for(
+        session, current.account_id, clock.DEFAULT_TIMEZONE, lock=True,
+    )
     device = await notifications.register_device(
         session, current.account_id, device_key=body.device_key,
         platform=body.platform, expo_push_token=body.expo_push_token,
     )
-    preference = await notifications.preferences_for(session, current.account_id, clock.DEFAULT_TIMEZONE)
     preference.native_push_enabled = True
     await session.commit()
     return {
@@ -86,11 +91,19 @@ async def unregister_notification_device(
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
+    # The preference lock first. The worker's final gate holds the same lock
+    # while it reads this account's devices and records its attempt, so a
+    # removal either commits before the gate — and the gate does not send to
+    # this device — or waits until the gate has committed, when that one
+    # attempt is already in flight. It never waits for the provider: the gate
+    # commits before the provider is called.
+    preference = await notifications.preferences_for(
+        session, current.account_id, clock.DEFAULT_TIMEZONE, lock=True,
+    )
     removed = await notifications.unregister_device(session, current.account_id, device_key)
     if not removed:
         raise HTTPException(status_code=404, detail={"code": "device_not_found", "message": "That device is not registered."})
     active_remaining = bool(await notifications.active_devices(session, current.account_id))
-    preference = await notifications.preferences_for(session, current.account_id, clock.DEFAULT_TIMEZONE)
     if not active_remaining:
         preference.native_push_enabled = False
     await session.commit()
@@ -125,6 +138,12 @@ async def patch_notification_preferences(
     for key, value in fields.items():
         if value is not None:
             setattr(row, key, value)
+    # An opt-out settles, in this transaction, every Product Watch delivery
+    # that has not reached the provider: queued, or claimed with no attempt
+    # recorded. No worker cycle has to observe the opt-out for it to hold, so
+    # switching back on later cannot revive a notice decided before it. A
+    # delivery whose attempt is already recorded is in flight and untouched.
+    await product_watch.withdraw_unsent_after_opt_out(session, row)
     if not was_listening and product_watch.listening(row):
         # Nothing was evaluated for this account's watched products while it
         # had asked not to hear about them. Whatever became true meanwhile is

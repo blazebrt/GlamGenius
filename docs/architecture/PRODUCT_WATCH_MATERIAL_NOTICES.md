@@ -230,10 +230,18 @@ device, and a daily cap that leaves room for it without counting the row itself.
 The watch must still be active and must not have started after the claim:
 stopping, re-anchoring or restarting a watch begins a new epoch, and a notice from
 the old one is not sent. A recoverable row goes back through the ordinary claim,
-lifecycle gate and attempt marker. One the customer's current choices rule out
+final gate and attempt marker. One the customer's current choices rule out
 is settled as suppressed (`module_disabled`, `daily_cap_reached` or
 `watch_ended`). A row whose provider attempt was recorded is never sent again,
 and an abandoned claim from an earlier day is never sent late.
+
+Every Product Watch delivery, recovered or new, passes the worker's final gate
+immediately before Expo. With the preference row locked, it re-proves that the
+master switch and the `product_watch` topic are on and that the watch — locked
+next — still exists, is active, and did not start after the claim; it settles
+the claim as `disabled`, `module_disabled` or `watch_ended` if not. Only then is
+the attempt recorded and committed, and only the devices read in that same
+transaction are sent to.
 
 ## Explicit opt-out
 
@@ -243,6 +251,19 @@ reminders. When the customer turns either back on (`PATCH
 /api/v2/today/notifications`, off→on only), every active watch is re-baselined,
 so switching back on does not deliver a backlog of facts that became true while
 they had asked not to hear. An unrelated preference change does not re-baseline.
+
+The opt-out also settles the outbox, in the same transaction and without
+waiting for any worker cycle. Every Product Watch delivery of the account that
+has not reached the provider — `queued`, or `sending` with no `attempted_at` —
+is settled as suppressed (`disabled` for the master switch, `module_disabled`
+for the topic) with its claim cleared, however recent the claim. The event was
+consumed by the cursor when the notice was decided and the re-enable
+re-baselines the cursor, so with the outbox row terminal too, nothing decided
+before the opt-out can be delivered after switching back on — even when the
+customer turns it off and on again with no worker cycle in between. A delivery
+whose attempt is already recorded is left exactly as it is: it may have reached
+Expo, it is never sent again, and an opt-out after that moment cannot make it
+provably unsent.
 
 ## Notification topic
 
@@ -304,6 +325,16 @@ worker and in the preferences route — so the two cannot deadlock.
   reason.
 - **Two creates at once.** The `(account_id, barcode)` unique constraint is the
   final authority; the insert runs in a savepoint and the loser reads the winner.
+- **Opt-out, native push off, unregister or watch stop after the claim.** The
+  worker's final gate takes the preference lock, then the watch, then the
+  account's devices (`FOR SHARE`), and records the attempt last, all in one short
+  transaction committed before Expo is called. A change committed before the gate
+  takes those locks is obeyed and nothing it rules out is sent; one arriving
+  while the gate holds them waits, and then finds the attempt in flight, which it
+  does not rewrite. Registering and unregistering a device lock the preference
+  first too, so none of these can wait on each other in a cycle. Another account
+  taking over this phone's push token disables the device row, which the gate's
+  `FOR SHARE` read either sees or makes wait.
 
 ## API
 
