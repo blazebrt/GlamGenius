@@ -841,60 +841,217 @@ async def test_c_a_commit_failure_after_the_bytes_removes_them(app_client, db_cl
     assert await _rows(client_report_id="commit-fails") == []
 
 
-async def test_c_committed_report_survives_lost_ack_and_retry(app_client, db_clean, storage, monkeypatch):
-    phone = await _phone(app_client)
+# ---------------------------------------------------------------------------
+# C, continued: a raised commit is not a rolled-back one
+# ---------------------------------------------------------------------------
+# PostgreSQL can accept a COMMIT and the connection can then fail before the
+# acknowledgement arrives. Deleting the photo on every commit exception turns
+# that into a durable report naming a photo that is gone. The route asks the
+# database afresh and acts only on what it proves.
+
+def _files_a_report(session) -> bool:
+    return any(isinstance(obj, LabelErrorReport) for obj in session.identity_map.values())
+
+
+def _lose_one_acknowledgement(monkeypatch) -> dict:
+    """The first report commit reaches PostgreSQL and succeeds; its reply is lost."""
     original_commit = AsyncSession.commit
-    failed = False
+    state = {"done": False}
 
-    async def lost_ack(self):
-        nonlocal failed
-        is_report = any(isinstance(obj, LabelErrorReport) for obj in self.identity_map.values())
+    async def commit_then_lose_the_reply(self):
+        if state["done"] or not _files_a_report(self):
+            return await original_commit(self)
         await original_commit(self)
-        if is_report and not failed:
-            failed = True
-            raise RuntimeError("commit acknowledgement lost")
+        state["done"] = True
+        raise ConnectionResetError("the acknowledgement of a successful COMMIT was lost")
 
-    monkeypatch.setattr(AsyncSession, "commit", lost_ack)
-    response = await _report(app_client, phone, "ack-lost")
-    assert failed and response.status_code == 201, response.text
-    assert response.json()["created"] is False
-    row = await _row(response.json()["report_id"])
-    assert storage.objects[row.photo_key] == PHOTO_A
-    assert not any(event.startswith("delete:") for event in storage.events)
-    original = (row.id, row.photo_key, row.subject, row.reason, row.barcode)
-    retry = await _report(app_client, phone, "ack-lost", PHOTO_B, subject="Different")
-    assert retry.status_code == 201 and retry.json() == response.json()
-    row = await _row(retry.json()["report_id"])
-    assert (row.id, row.photo_key, row.subject, row.reason, row.barcode) == original
-    assert storage.objects[row.photo_key] == PHOTO_A and len(storage.puts) == 1
+    monkeypatch.setattr(AsyncSession, "commit", commit_then_lose_the_reply)
+    return state
 
 
-async def test_c_unknown_commit_lookup_preserves_evidence(app_client, db_clean, storage, monkeypatch):
-    phone = await _phone(app_client)
+def _fail_before_commit(monkeypatch) -> None:
+    """Report commits fail before PostgreSQL is asked to commit anything."""
     original_commit = AsyncSession.commit
 
-    async def lost_ack(self):
-        is_report = any(isinstance(obj, LabelErrorReport) for obj in self.identity_map.values())
-        await original_commit(self)
-        if is_report:
-            raise RuntimeError("commit acknowledgement lost")
+    async def failing_commit(self):
+        if _files_a_report(self):
+            raise ConnectionResetError("the connection failed before COMMIT was sent")
+        return await original_commit(self)
 
-    def unavailable_verification():
-        raise RuntimeError("verification unavailable")
-
-    monkeypatch.setattr(AsyncSession, "commit", lost_ack)
-    monkeypatch.setattr(product_service, "get_sessionmaker", unavailable_verification)
-    with pytest.raises(RuntimeError, match="commit acknowledgement lost"):
-        await _report(app_client, phone, "unknown-commit")
-    [row] = await _rows(client_report_id="unknown-commit")
-    assert storage.objects[row.photo_key] == PHOTO_A
-    assert len(storage.puts) == 1
-    assert not any(event.startswith("delete:") for event in storage.events)
+    monkeypatch.setattr(AsyncSession, "commit", failing_commit)
 
 
-async def test_c_cleanup_failure_keeps_original_failure_and_logs_no_evidence(
+def _deletes(storage) -> list[str]:
+    return [event for event in storage.events if event.startswith("delete:")]
+
+
+async def test_c_a_a_definite_failure_is_proven_absent_before_its_photo_is_removed(
+    app_client, db_clean, storage, events, monkeypatch, caplog,
+):
+    """A — the commit never ran. A fresh transaction proves the row absent; only then does the photo go."""
+    phone = await _phone(app_client)
+    real_outcome = product_service.label_report_commit_outcome
+    decided: list = []
+
+    async def recording_outcome(*args, **kwargs):
+        outcome = await real_outcome(*args, **kwargs)
+        decided.append(outcome)
+        events.append(f"outcome:{outcome.value}")
+        return outcome
+
+    monkeypatch.setattr(product_service, "label_report_commit_outcome", recording_outcome)
+    _fail_before_commit(monkeypatch)
+    with pytest.raises(ConnectionResetError):
+        await _report(app_client, phone, "definite-failure")
+    [written] = storage.puts
+    assert decided == [product_service.ReportCommitOutcome.NOT_COMMITTED]
+    assert events.index("outcome:not_committed") < events.index(f"delete:{written}")
+    assert storage.objects == {} and await _rows(client_report_id="definite-failure") == []
+    assert "outcome=not_committed photo_written=True photo_removed=True" in caplog.text
+
+
+async def test_c_b_a_commit_that_reached_postgres_but_lost_its_reply_keeps_its_photo(
     app_client, db_clean, storage, monkeypatch, caplog,
 ):
+    """B — mandatory: the COMMIT succeeded and only the acknowledgement was lost."""
+    phone = await _phone(app_client)
+    lost = _lose_one_acknowledgement(monkeypatch)
+    response = await _report(app_client, phone, "ack-lost")
+    assert lost["done"], "the acknowledgement was never lost"
+    # The durable report comes back: this request filed it.
+    assert response.status_code == 201, response.text
+    assert response.json()["created"] is True
+    row = await _row(response.json()["report_id"])
+    assert row is not None and row.client_report_id == "ack-lost"
+    [written] = storage.puts
+    assert row.photo_key == written and storage.objects[written] == PHOTO_A
+    assert _deletes(storage) == [], "a committed report's photo was compensated away"
+    assert "label_report_commit_failed" not in caplog.text
+
+
+async def test_c_b_a_report_without_a_photo_is_reconciled_the_same_way(
+    app_client, db_clean, storage, monkeypatch,
+):
+    phone = await _phone(app_client)
+    _lose_one_acknowledgement(monkeypatch)
+    response = await _report(app_client, phone, "ack-lost-no-photo", photo=None)
+    assert response.status_code == 201 and response.json()["created"] is True, response.text
+    [row] = await _rows(client_report_id="ack-lost-no-photo")
+    assert str(row.id) == response.json()["report_id"] and row.photo_key is None
+    assert storage.puts == [] and _deletes(storage) == []
+
+
+async def test_c_c_an_outcome_that_cannot_be_checked_deletes_nothing(
+    app_client, db_clean, storage, monkeypatch, caplog,
+):
+    """C — the fresh check itself is unavailable. Nothing is claimed; nothing is deleted."""
+    phone = await _phone(app_client)
+    _lose_one_acknowledgement(monkeypatch)
+    real_sessionmaker = product_service.get_sessionmaker
+
+    def unavailable_check():
+        raise ConnectionRefusedError("the database cannot be reached for the check")
+
+    monkeypatch.setattr(product_service, "get_sessionmaker", unavailable_check)
+    with pytest.raises(ConnectionResetError):
+        await _report(app_client, phone, "unknown-commit")
+    # It had in fact committed, and its photo is still there.
+    [row] = await _rows(client_report_id="unknown-commit")
+    [written] = storage.puts
+    assert row.photo_key == written and storage.objects[written] == PHOTO_A
+    assert _deletes(storage) == []
+    assert "outcome=unknown photo_written=True photo_removed=False" in caplog.text
+    # D, after an unknown outcome: the phone's retry reconciles to the durable report.
+    monkeypatch.setattr(product_service, "get_sessionmaker", real_sessionmaker)
+    retry = await _report(app_client, phone, "unknown-commit", PHOTO_B)
+    assert retry.status_code == 201, retry.text
+    assert retry.json() == {"report_id": str(row.id), "created": False}
+    assert storage.puts == [written] and storage.objects[written] == PHOTO_A
+
+
+async def test_c_c_a_transaction_that_may_still_be_completing_is_an_unknown_outcome(
+    app_client, db_clean, storage, monkeypatch, caplog,
+):
+    """C — the original transaction still holds the report's lock, so nothing can be proven.
+
+    The rollback cannot reach the server, and the transaction stays open. An
+    unlocked read would see no row and delete the photo; the check waits on the
+    report's own lock instead, gives up after its bound, and deletes nothing.
+    """
+    phone = await _phone(app_client)
+    monkeypatch.setattr(product_service, "REPORT_COMMIT_CHECK_LOCK_TIMEOUT_MS", 200)
+    _fail_before_commit(monkeypatch)
+    original_rollback = AsyncSession.rollback
+
+    async def rollback_that_cannot_reach_the_server(self):
+        if _files_a_report(self):
+            raise ConnectionResetError("the connection is gone")
+        return await original_rollback(self)
+
+    monkeypatch.setattr(AsyncSession, "rollback", rollback_that_cannot_reach_the_server)
+    with pytest.raises(ConnectionResetError):
+        await _report(app_client, phone, "still-open")
+    [written] = storage.puts
+    assert storage.objects[written] == PHOTO_A and _deletes(storage) == []
+    assert "outcome=unknown photo_written=True photo_removed=False" in caplog.text
+    # Once the request had ended its session, the transaction was gone and filed nothing;
+    # the photo it may have been filing was kept rather than guessed about.
+    assert await _rows(client_report_id="still-open") == []
+
+
+async def test_c_d_a_retry_after_a_lost_reply_replays_the_durable_report(
+    app_client, db_clean, storage, monkeypatch,
+):
+    """D — the same (device, client_report_id) again: the same report, nothing written."""
+    phone = await _phone(app_client)
+    _lose_one_acknowledgement(monkeypatch)
+    first = await _report(app_client, phone, "ack-lost-retry")
+    assert first.status_code == 201, first.text
+    row = await _row(first.json()["report_id"])
+    original = (row.id, row.photo_key, row.subject, row.reason, row.barcode)
+    retry = await _report(app_client, phone, "ack-lost-retry", PHOTO_B, subject="Different")
+    assert retry.status_code == 201, retry.text
+    assert retry.json() == {"report_id": first.json()["report_id"], "created": False}
+    again = await _row(retry.json()["report_id"])
+    assert (again.id, again.photo_key, again.subject, again.reason, again.barcode) == original
+    assert storage.puts == [row.photo_key] and storage.objects[row.photo_key] == PHOTO_A
+    assert [r.id for r in await _rows(client_report_id="ack-lost-retry")] == [row.id]
+    assert _deletes(storage) == []
+
+
+async def test_c_the_outcome_is_this_reports_own_row_never_the_idempotency_identity(
+    app_client, db_clean, storage,
+):
+    """A retry filed after an attempt failed has its own id and its own photo. It is
+    not proof that the failed attempt committed, and the failed attempt's photo is
+    not protected by it."""
+    phone = await _phone(app_client)
+    device_id = await _device_id(phone)
+    filed = await _report(app_client, phone, "own-row")
+    assert filed.status_code == 201, filed.text
+    row = await _row(filed.json()["report_id"])
+    outcome = product_service.ReportCommitOutcome
+
+    async def check(report_id, photo_key):
+        async with _factory()() as session:
+            return await product_service.label_report_commit_outcome(
+                session, report_id=report_id, device_id=device_id,
+                client_report_id="own-row", photo_key=photo_key,
+            )
+
+    # The failed attempt: its own id is absent, whatever else shares the identity.
+    assert await check(uuid.uuid4(), f"label-reports/devices/{device_id}/{uuid.uuid4()}.jpg") is outcome.NOT_COMMITTED
+    # The durable report, by its own id and photo.
+    assert await check(row.id, row.photo_key) is outcome.COMMITTED
+    # A row with this id naming some other photo proves nothing either way.
+    assert await check(row.id, "label-reports/some-other-object.jpg") is outcome.UNKNOWN
+
+
+async def test_c_a_a_failed_compensation_is_reported_never_claimed(
+    app_client, db_clean, storage, monkeypatch, caplog,
+):
+    """Proven absent, but the delete itself fails: the original failure stands and
+    the log says what happened — with no key, token or byte in it."""
     phone = await _phone(app_client)
     original_commit = AsyncSession.commit
 
@@ -902,13 +1059,15 @@ async def test_c_cleanup_failure_keeps_original_failure_and_logs_no_evidence(
         reports = [obj for obj in self.identity_map.values() if isinstance(obj, LabelErrorReport)]
         if reports:
             storage.delete_failures[reports[0].photo_key] = StorageUnavailable("delete unavailable")
-            raise RuntimeError("original commit failure")
+            raise ConnectionResetError("original commit failure")
         return await original_commit(self)
 
     monkeypatch.setattr(AsyncSession, "commit", failing_commit)
-    with pytest.raises(RuntimeError, match="original commit failure"):
+    with pytest.raises(ConnectionResetError, match="original commit failure"):
         await _report(app_client, phone, "cleanup-failure")
     assert await _rows(client_report_id="cleanup-failure") == []
     assert len(storage.objects) == 1
     assert "label_report_photo_compensation_failed" in caplog.text
+    assert "outcome=not_committed photo_written=True photo_removed=False" in caplog.text
     assert all(key not in caplog.text for key in storage.objects)
+    assert all(token not in caplog.text for token in phone.values())

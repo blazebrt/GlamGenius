@@ -396,3 +396,99 @@ describe('the read-only refresh', () => {
     expect(store.glamgenius_scan_device_v1).toBe(legacy);
   });
 });
+
+describe('the read-only refresh never touches device identity', () => {
+  const DEVICE_KEY = 'glamgenius_scan_device_v1';
+  const INSTALLATION_KEY = 'glamgenius_installation_id_v1';
+  const secureStore = (): Map<string, string> =>
+    jest.requireMock('expo-secure-store').__store as Map<string, string>;
+
+  /** Everything that could mint, rotate or forget an identity, watched at once. */
+  function watchIdentity() {
+    const spies = {
+      secureWrite: jest.spyOn(secureSessionStorage, 'setItem'),
+      secureRemove: jest.spyOn(secureSessionStorage, 'removeItem'),
+      random: jest.spyOn(Math, 'random'),
+    };
+    const restore = () => Object.values(spies).forEach((spy) => spy.mockRestore());
+    return { spies, restore };
+  }
+
+  it('1. uses exactly the stored credential for its one GET', async () => {
+    const stored = await secureSessionStorage.getItem(DEVICE_KEY);
+    expect(stored).not.toBeNull();
+    http.post.mockClear();
+    http.get.mockClear();
+    http.get.mockResolvedValueOnce({ status: 200, data: { barcode: BARCODE, found: true } });
+    const { spies, restore } = watchIdentity();
+    try {
+      await expect(refreshBarcodeResult(BARCODE)).resolves.not.toBeNull();
+      expect(http.get).toHaveBeenCalledTimes(1);
+      expect(http.get).toHaveBeenCalledWith(`/api/v2/scan/lookup/${BARCODE}`, {
+        headers: { 'X-Device-Token': 'device-token' },
+      });
+      expect(http.post).not.toHaveBeenCalled();
+      expect(spies.secureWrite).not.toHaveBeenCalled();
+      expect(spies.secureRemove).not.toHaveBeenCalled();
+      expect(spies.random).not.toHaveBeenCalled();
+      expect(await secureSessionStorage.getItem(DEVICE_KEY)).toBe(stored);
+    } finally {
+      restore();
+    }
+  });
+
+  it('2. with no credential on a fresh install: null, and no identity of any kind is created', async () => {
+    // A phone that has never registered: no keychain entry, no legacy copy, no installation id.
+    secureStore().clear();
+    Object.keys(store).forEach((key) => delete store[key]);
+    http.post.mockClear();
+    http.get.mockClear();
+    const { spies, restore } = watchIdentity();
+    try {
+      await expect(refreshBarcodeResult(BARCODE)).resolves.toBeNull();
+      await settle();
+      // No /scan/device, no /scan/events, no lookup without a credential.
+      expect(http.post).not.toHaveBeenCalled();
+      expect(http.get).not.toHaveBeenCalled();
+      // No device minted, no installation id minted, no client_scan_id minted.
+      expect(spies.secureWrite).not.toHaveBeenCalled();
+      expect(spies.secureRemove).not.toHaveBeenCalled();
+      expect(spies.random).not.toHaveBeenCalled();
+      expect(secureStore().size).toBe(0);
+      expect(store[INSTALLATION_KEY]).toBeUndefined();
+      // No queue write, and nothing else written either.
+      expect(store).toEqual({});
+      await expect(readQueue()).resolves.toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it('3. a stored credential answered 401: null, and no forget, re-register or recovery', async () => {
+    const stored = await secureSessionStorage.getItem(DEVICE_KEY);
+    const installation = store[INSTALLATION_KEY];
+    expect(stored).not.toBeNull();
+    expect(installation).toBeDefined();
+    const before = { ...store };
+    http.post.mockClear();
+    http.get.mockClear();
+    http.get.mockRejectedValueOnce({ response: { status: 401, data: { detail: { code: 'DEVICE_UNKNOWN' } } } });
+    const { spies, restore } = watchIdentity();
+    try {
+      await expect(refreshBarcodeResult(BARCODE)).resolves.toBeNull();
+      await settle();
+      // One GET with the stored token, and no retry of any kind.
+      expect(http.get).toHaveBeenCalledTimes(1);
+      expect(http.post).not.toHaveBeenCalled();
+      expect(spies.secureWrite).not.toHaveBeenCalled();
+      expect(spies.secureRemove).not.toHaveBeenCalled();
+      expect(spies.random).not.toHaveBeenCalled();
+      expect(await secureSessionStorage.getItem(DEVICE_KEY)).toBe(stored);
+      expect(store[INSTALLATION_KEY]).toBe(installation);
+      // No queue write and no cache write: nothing in storage moved.
+      expect(store).toEqual(before);
+    } finally {
+      restore();
+    }
+  });
+});

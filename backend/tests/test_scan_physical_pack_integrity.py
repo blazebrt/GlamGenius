@@ -16,20 +16,31 @@ claimed through the real API. Plain scans go through ``/scan/events``.
 """
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import uuid
+from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, AIRun, AIRunOutput
 from app.domains.identity.models import Account
 from app.domains.inventory.models import InventoryItem, InventoryProductLink
+from app.domains.privacy import deletion_service
+from app.domains.product import pack_context, withdrawn_confirmation
 from app.domains.product import service as product_service
 from app.domains.product.devices import _hash
-from app.domains.product.models import LabelSnapshot, ProductRecord, ScanDevice, ScanEvent
+from app.domains.product.models import LabelSnapshot, ProductRecord, ProductWatch, ScanDevice, ScanEvent
+from app.domains.product.personal_decision import (
+    CurrentPackSnapshotUnresolved,
+    resolve_current_pack_label_snapshot,
+)
 from app.domains.product.service import label_content_fingerprint
 from app.shared.database.sql import get_sessionmaker
 from app.workers import account_deletion
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from tests.conftest import auth
 from tests.test_label_report_evidence_integrity import _Admin, _EvidenceStorage
@@ -59,88 +70,6 @@ def deletion_boundaries(monkeypatch):
     yield
     factory.set_storage(None)
 
-
-async def test_shared_snapshot_survives_original_confirmers_real_deletion(
-    app_client, db_clean, registered_supabase_user, deletion_boundaries,
-):
-    token_a, account_a = await registered_supabase_user()
-    token_b, account_b = await registered_supabase_user()
-    phone_a, phone_b = await _device(app_client, token_a), await _device(app_client, token_b)
-    a1, s1 = await _capture(phone_a, account_a, _facts())
-    b1, reused = await _capture(phone_b, account_b, _facts())
-    assert s1.id == reused.id and s1.scan_event_id == a1.id and b1.id != a1.id
-    assert (await _status(app_client, token_b, phone_b, s1)).json()["status"] == "eligible_not_owned"
-    deleted = await app_client.delete("/api/v2/privacy/account", headers=auth(token_a))
-    assert deleted.status_code == 202, deleted.text
-    summary = await account_deletion.run_cycle()
-    assert summary.ok, summary
-    async with get_sessionmaker()() as session:
-        assert await session.get(Account, account_a) is None
-        erased = await session.get(ScanEvent, a1.id)
-        retained = await session.get(LabelSnapshot, s1.id)
-        current = await session.get(ScanEvent, b1.id)
-        run = await session.get(AIRun, a1.ai_run_id)
-        assert erased.label_facts is None and erased.account_id is None
-        assert run.account_id is None and run.validation_passed is True
-        assert retained.scan_event_id == a1.id and retained.facts == s1.facts
-        assert current.account_id == account_b and current.label_facts == b1.label_facts
-    status = await _status(app_client, token_b, phone_b, s1)
-    assert status.status_code == 200 and status.json()["status"] == "eligible_not_owned", status.text
-    added = await _add(app_client, token_b, phone_b, s1, "shared-after-erasure")
-    assert added.status_code == 200 and added.json()["status"] == "owned", added.text
-    watch = await app_client.put(
-        f"/api/v2/scan/verdict/{BARCODE}/watch", headers={**phone_b, **auth(token_b)},
-        json={"label_version": s1.version_number},
-    )
-    assert watch.status_code == 200, watch.text
-    async with get_sessionmaker()() as session:
-        from app.domains.product.models import ProductWatch
-        row = (await session.execute(select(ProductWatch).where(ProductWatch.account_id == account_b))).scalar_one()
-        assert row.anchor_scan_event_id == b1.id
-        assert (await session.get(LabelSnapshot, s1.id)).scan_event_id == a1.id
-        assert (await session.get(ScanEvent, a1.id)).label_facts is None
-        assert (await session.get(ScanEvent, b1.id)).label_facts == b1.label_facts
-        assert list((await session.execute(
-            select(LabelSnapshot.id).where(LabelSnapshot.barcode == BARCODE)
-        )).scalars()) == [s1.id]
-        assert (await session.execute(
-            select(AIRunOutput.id).where(AIRunOutput.ai_run_id == a1.ai_run_id)
-        )).scalar_one_or_none() is None
-
-
-@pytest.mark.parametrize("defect", ["no_run", "failed", "unvalidated", "wrong_feature", "wrong_schema"])
-async def test_erased_looking_source_without_valid_label_ledger_is_refused(
-    app_client, db_clean, registered_supabase_user, defect,
-):
-    from app.domains.product import pack_context
-    from app.domains.product.personal_decision import CurrentPackSnapshotUnresolved, resolve_current_pack_label_snapshot
-
-    token, account = await registered_supabase_user()
-    first = await _device(app_client, token)
-    a1, _ = await _capture(first, account, _facts())
-    second = await _device(app_client, token)
-    b1, _ = await _capture(second, account, _facts())
-    async with get_sessionmaker()() as session:
-        source = await session.get(ScanEvent, a1.id)
-        run = await session.get(AIRun, a1.ai_run_id)
-        source.account_id = None
-        source.label_facts = None
-        run.account_id = None
-        if defect == "no_run":
-            source.ai_run_id = None
-        elif defect == "failed":
-            run.status = "failed"
-        elif defect == "unvalidated":
-            run.validation_passed = False
-        elif defect == "wrong_feature":
-            run.feature = "scan_analyse"
-        else:
-            run.schema_version = "unrecognised"
-        await session.commit()
-        current = await session.get(ScanEvent, b1.id)
-        pack = pack_context.CurrentPack(scan_event=current, label_facts=current.label_facts)
-        with pytest.raises(CurrentPackSnapshotUnresolved):
-            await resolve_current_pack_label_snapshot(session, pack=pack)
 
 
 def _facts(name: str = "Pack Cleanser", **extra) -> dict:
@@ -580,3 +509,306 @@ async def test_a_lost_food_confirmation_retried_under_the_same_key_is_one_captur
     assert [event.client_scan_id for event in events] == [draft_key]
     assert len(snapshots) == 1 and snapshots[0].scan_event_id == events[0].id
     assert record.confirmation_count == first.json()["confirmations"]
+
+
+# ---------------------------------------------------------------------------
+# W. An original confirmer's erasure never breaks another account's capture
+# ---------------------------------------------------------------------------
+#
+# S1 keeps its first capture, A1, as provenance for good. When A erases their
+# account, A1 loses its facts and its account on purpose, and that must stay
+# true. What must not follow is that B, who confirmed the same label on their
+# own phone, loses the version. The proof for A1 is then the retained,
+# non-personal ledger (``withdrawn_confirmation``), never A's erased facts, and
+# never A1 as anybody's current pack.
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+
+
+async def _watch(app_client, token, headers, label_version):
+    return await app_client.put(
+        f"/api/v2/scan/verdict/{BARCODE}/watch", headers={**headers, **auth(token)},
+        json={"label_version": label_version},
+    )
+
+
+async def _output_count(session, run_id) -> int:
+    return int(await session.scalar(
+        select(func.count()).select_from(AIRunOutput).where(AIRunOutput.ai_run_id == run_id)
+    ))
+
+
+async def test_w_the_original_confirmers_real_erasure_leaves_another_accounts_capture_proven(
+    app_client, db_clean, registered_supabase_user, deletion_boundaries,
+):
+    token_a, account_a = await registered_supabase_user()
+    token_b, account_b = await registered_supabase_user()
+    phone_a, phone_b = await _device(app_client, token_a), await _device(app_client, token_b)
+    device_a, device_b = (await _device_row(phone_a)).id, (await _device_row(phone_b)).id
+    a1, s1 = await _capture(phone_a, account_a, _facts())
+    b1, reused = await _capture(phone_b, account_b, _facts())
+    assert reused.id == s1.id and s1.scan_event_id == a1.id and b1.id != a1.id
+    # B watches its own pack while A still exists.
+    watched = await _watch(app_client, token_b, phone_b, s1.version_number)
+    assert watched.status_code == 200, watched.text
+
+    # A erases their account through the real route and the real worker.
+    deleted = await app_client.delete("/api/v2/privacy/account", headers=auth(token_a))
+    assert deleted.status_code == 202, deleted.text
+    summary = await account_deletion.run_cycle()
+    assert summary.ok, summary
+
+    # Erasure did exactly its job: A's observation is gone and stays gone.
+    async with get_sessionmaker()() as session:
+        assert await session.get(Account, account_a) is None
+        erased = await session.get(ScanEvent, a1.id)
+        run = await session.get(AIRun, a1.ai_run_id)
+        snapshot = await session.get(LabelSnapshot, s1.id)
+        current = await session.get(ScanEvent, b1.id)
+        assert erased is not None and erased.label_facts is None and erased.account_id is None
+        assert run is not None and run.account_id is None
+        assert await _output_count(session, a1.ai_run_id) == 0
+        assert snapshot.scan_event_id == a1.id and snapshot.facts == s1.facts
+        assert current.account_id == account_b and current.label_facts == b1.label_facts
+
+    async with get_sessionmaker()() as session:
+        # A's erased capture proves nothing current: A's phone holds no pack.
+        pack_a = await pack_context.current_pack(session, barcode=BARCODE, device_id=device_a)
+        assert pack_a.scan_event is not None and pack_a.scan_event.id == a1.id
+        assert pack_a.is_proven is False
+        with pytest.raises(CurrentPackSnapshotUnresolved):
+            await resolve_current_pack_label_snapshot(session, pack=pack_a)
+        # B's own capture is still the proven pack, and it still resolves S1.
+        pack_b = await pack_context.current_pack(session, barcode=BARCODE, device_id=device_b)
+        assert pack_b.is_proven and pack_b.scan_event.id == b1.id
+        assert (await resolve_current_pack_label_snapshot(session, pack=pack_b)).id == s1.id
+
+    # Shelf: status, then add.
+    status = await _status(app_client, token_b, phone_b, s1)
+    assert status.status_code == 200 and status.json()["status"] == "eligible_not_owned", status.text
+    added = await _add(app_client, token_b, phone_b, s1, "shared-after-erasure")
+    assert added.status_code == 200 and added.json()["status"] == "owned", added.text
+
+    # Product Watch: the watch B already had still sees its pack, and B can re-anchor.
+    state = await app_client.get(f"/api/v2/scan/verdict/{BARCODE}/watch", headers={**phone_b, **auth(token_b)})
+    assert state.status_code == 200, state.text
+    body = state.json()
+    assert body["watching"] is True and body["watchable"] is True, body
+    assert body["watching_this_pack"] is True and body["reason"] is None, body
+    assert body["anchorable_label_version"] == s1.version_number
+    again = await _watch(app_client, token_b, phone_b, s1.version_number)
+    assert again.status_code == 200, again.text
+
+    # Nothing was restored, rewritten or minted to get here.
+    async with get_sessionmaker()() as session:
+        assert (await session.get(ScanEvent, a1.id)).label_facts is None
+        assert (await session.get(ScanEvent, a1.id)).account_id is None
+        assert (await session.get(LabelSnapshot, s1.id)).scan_event_id == a1.id
+        assert await _output_count(session, a1.ai_run_id) == 0
+        assert list((await session.execute(
+            select(LabelSnapshot.id).where(LabelSnapshot.barcode == BARCODE)
+        )).scalars()) == [s1.id]
+        watch = (await session.execute(
+            select(ProductWatch).where(ProductWatch.account_id == account_b)
+        )).scalar_one()
+        assert watch.anchor_scan_event_id == b1.id and watch.anchor_label_snapshot_id == s1.id
+
+
+async def test_w_for_you_still_answers_from_the_shared_version_after_the_original_confirmer_is_erased(
+    app_client, db_clean, registered_supabase_user, deletion_boundaries,
+):
+    """The same through FOR YOU and the real skin-care confirmation route."""
+    from tests.test_step8k_current_pack_personal_decision_api import (
+        _claim,
+        _confirm,
+        _confirmed_device,
+        _for_you,
+        _register_device,
+    )
+
+    original = await _confirmed_device(app_client, registered_supabase_user)
+    s1_id = original["capture"]["label_snapshot"]["id"]
+    a1_id = original["capture"]["scan_id"]
+    token_b, account_b = await registered_supabase_user()
+    phone_b, _ = await _register_device(app_client)
+    await _claim(app_client, phone_b, token_b)
+    b1 = await _confirm(app_client, phone_b, token_b, account_id=account_b)
+    assert b1["label_snapshot"]["id"] == s1_id
+    before = await _for_you(app_client, phone_b, token_b)
+    assert before.status_code == 200 and before.json()["pack"]["label_snapshot_id"] == s1_id, before.text
+
+    deleted = await app_client.delete("/api/v2/privacy/account", headers=auth(original["token"]))
+    assert deleted.status_code == 202, deleted.text
+    summary = await account_deletion.run_cycle()
+    assert summary.ok, summary
+
+    after = await _for_you(app_client, phone_b, token_b)
+    assert after.status_code == 200, after.text
+    pack = after.json()["pack"]
+    assert pack["is_proven"] is True
+    assert pack["label_snapshot_id"] == s1_id
+    assert pack["current_pack_scan_id"] == b1["scan_id"]
+    # Provenance is still A1's, and A1 is still erased.
+    assert pack["label_snapshot_source_scan_id"] == a1_id
+    async with get_sessionmaker()() as session:
+        erased = await session.get(ScanEvent, uuid.UUID(a1_id))
+        assert erased.label_facts is None and erased.account_id is None
+        assert (await session.get(LabelSnapshot, uuid.UUID(s1_id))).scan_event_id == erased.id
+
+
+async def _erased_original(app_client, registered_supabase_user) -> dict:
+    """A1 by A wrote S1; B1 by B reused it; then A's side is erased by erasure's
+    own statements, and the account cascade's SET NULL is applied to the two
+    rows it reaches. A's account row itself is kept, so that single rows can then
+    be made to deviate from what erasure leaves."""
+    token_a, account_a = await registered_supabase_user()
+    token_b, account_b = await registered_supabase_user()
+    phone_a, phone_b = await _device(app_client, token_a), await _device(app_client, token_b)
+    a1, s1 = await _capture(phone_a, account_a, _facts())
+    b1, reused = await _capture(phone_b, account_b, _facts())
+    assert reused.id == s1.id and b1.created_at > a1.created_at
+    async with get_sessionmaker()() as session:
+        await deletion_service._delete_ai_outputs(session, account_a)
+        await deletion_service._withdraw_scan_observations(session, account_a)
+        await session.execute(
+            update(ScanEvent).where(ScanEvent.account_id == account_a).values(account_id=None)
+        )
+        await session.execute(update(AIRun).where(AIRun.account_id == account_a).values(account_id=None))
+        await session.commit()
+    return {
+        "a1": a1, "s1": s1, "b1": b1, "account_a": account_a,
+        "device_a": (await _device_row(phone_a)).id, "device_b": (await _device_row(phone_b)).id,
+    }
+
+
+async def _resolve_b(world) -> LabelSnapshot:
+    async with get_sessionmaker()() as session:
+        pack = await pack_context.current_pack(session, barcode=BARCODE, device_id=world["device_b"])
+        assert pack.is_proven and pack.scan_event.id == world["b1"].id
+        return await resolve_current_pack_label_snapshot(session, pack=pack)
+
+
+async def test_w_exactly_what_erasure_leaves_is_accepted(app_client, db_clean, registered_supabase_user):
+    world = await _erased_original(app_client, registered_supabase_user)
+    async with get_sessionmaker()() as session:
+        source = await session.get(ScanEvent, world["a1"].id)
+        run = await session.get(AIRun, world["a1"].ai_run_id)
+        assert source.label_facts is None and source.account_id is None
+        assert run.account_id is None and await _output_count(session, run.id) == 0
+        assert pack_context.is_confirmed_label_capture(source) is False
+    assert (await _resolve_b(world)).id == world["s1"].id
+
+
+def _later(moment, other):
+    """A moment strictly between two ordered timestamps."""
+    return moment + (other - moment) / 2
+
+
+#: Each one row that merely *looks* withdrawn, missing one piece of the
+#: retained provenance only a genuine confirmation plus a genuine erasure leave.
+_NOT_WITHDRAWN = {
+    "the_output_was_never_erased": "output",
+    "the_run_still_names_an_account": "run.account_id",
+    "the_capture_still_names_an_account": "source.account_id",
+    "the_facts_are_an_empty_object_not_withdrawn": "source.label_facts",
+    "no_ai_run_at_all": "source.ai_run_id",
+    "the_run_failed": "run.status",
+    "the_run_was_never_validated": "run.validation_passed",
+    "not_a_label_transcription_workflow": "run.feature",
+    "an_unrecognised_schema": "run.schema_version",
+    "the_skin_care_workflow_behind_a_food_label": "run.workflow",
+    "the_run_postdates_the_capture": "run.created_at",
+    "the_snapshot_was_not_written_by_that_confirmation": "snapshot.created_at",
+    "the_snapshot_names_another_device": "snapshot.device_id",
+    "not_a_label_capture": "source.outcome",
+}
+
+
+@pytest.mark.parametrize("defect", sorted(_NOT_WITHDRAWN))
+async def test_w_a_source_that_only_looks_withdrawn_is_refused(
+    app_client, db_clean, registered_supabase_user, defect,
+):
+    world = await _erased_original(app_client, registered_supabase_user)
+    async with get_sessionmaker()() as session:
+        source = await session.get(ScanEvent, world["a1"].id)
+        run = await session.get(AIRun, world["a1"].ai_run_id)
+        snapshot = await session.get(LabelSnapshot, world["s1"].id)
+        current = await session.get(ScanEvent, world["b1"].id)
+        field = _NOT_WITHDRAWN[defect]
+        if field == "output":
+            session.add(AIRunOutput(ai_run_id=run.id, schema_version=run.schema_version, payload=_facts()))
+        elif field == "run.account_id":
+            run.account_id = world["account_a"]
+        elif field == "source.account_id":
+            source.account_id = world["account_a"]
+        elif field == "source.label_facts":
+            source.label_facts = {}
+        elif field == "source.ai_run_id":
+            source.ai_run_id = None
+        elif field == "run.status":
+            run.status = "failed"
+        elif field == "run.validation_passed":
+            run.validation_passed = False
+        elif field == "run.feature":
+            run.feature = "scan_analyse"
+        elif field == "run.schema_version":
+            run.schema_version = "unrecognised"
+        elif field == "run.workflow":
+            run.feature = withdrawn_confirmation.SKIN_CARE_LABEL_WORKFLOW
+            run.schema_version = "skin-care-label.v1"
+        elif field == "run.created_at":
+            run.created_at = source.created_at + timedelta(seconds=1)
+        elif field == "snapshot.created_at":
+            snapshot.created_at = _later(source.created_at, current.created_at)
+        elif field == "snapshot.device_id":
+            snapshot.device_id = world["device_b"]
+        elif field == "source.outcome":
+            source.outcome = product_service.OUTCOME_NOT_FOUND
+        await session.commit()
+    with pytest.raises(CurrentPackSnapshotUnresolved):
+        await _resolve_b(world)
+    # Refusing is all it does: the snapshot and its provenance are untouched.
+    assert (await _snapshot(world["s1"].id)).scan_event_id == world["a1"].id
+
+
+async def test_w_the_workflow_table_is_the_confirmation_routes_own():
+    """Restated so the resolver's path imports no model client — and pinned here."""
+    from app.domains.product import care_capture, care_extraction, extraction
+
+    table = withdrawn_confirmation.CONFIRMATION_WORKFLOW_SCHEMAS
+    assert extraction.FEATURE == withdrawn_confirmation.FOOD_LABEL_WORKFLOW
+    assert care_extraction.FEATURE == withdrawn_confirmation.SKIN_CARE_LABEL_WORKFLOW
+    # Every schema a route accepts today is one it is recorded as accepting.
+    assert extraction.CONFIRMABLE_SCHEMA_VERSIONS.issubset(table[extraction.FEATURE])
+    assert care_extraction.CONFIRMABLE_SCHEMA_VERSIONS.issubset(table[care_extraction.FEATURE])
+    # Append-only: a version is added here only once a confirmation route
+    # accepts it, and is never removed when a route stops accepting it.
+    assert dict(table) == {
+        "product_label_transcribe": frozenset({"scan-label.v1", "scan-label.v2"}),
+        "skin_care_label_transcribe": frozenset({"skin-care-label.v1"}),
+    }
+    assert withdrawn_confirmation.CATEGORY_FACT_KEY == care_capture.CATEGORY_FACT_KEY
+    assert withdrawn_confirmation.SKIN_CARE_CATEGORY == care_capture.SKIN_CARE_CATEGORY
+
+
+async def test_w_the_resolver_never_loads_a_model_client_even_indirectly():
+    """Stronger than the Step 8K static guard, which reads only direct imports.
+
+    A fresh interpreter imports the resolver and reports every provider,
+    network-client or transcription module that came with it. The retained
+    ledger is read through its ORM models only.
+    """
+    code = (
+        "import importlib, sys\n"
+        "importlib.import_module('app.domains.product.personal_decision')\n"
+        "banned = ('app.domains.ai_gateway.gateway', 'app.domains.ai_gateway.providers',\n"
+        "          'app.domains.product.extraction', 'app.domains.product.care_extraction',\n"
+        "          'google', 'httpx', 'requests')\n"
+        "print('\\n'.join(sorted(m for m in sys.modules if m.startswith(banned))))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=BACKEND_ROOT, env=os.environ.copy(),
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "", result.stdout

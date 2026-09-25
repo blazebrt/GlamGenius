@@ -721,19 +721,35 @@ async def report_label_error(
     except StorageError as exc:
         # Before any row: the report is simply not filed, and the phone retries.
         raise StorageUnavailableError() from exc
+    # Read before the commit: after a failed one, the session's rows may be
+    # expired, and reloading them is not something a failure path should do.
     report_id = report.id
-    report_device_id = report.device_id
+    report_device_id = device.id
     report_photo_key = report.photo_key
     try:
         # Ends the idempotency lock and, for a claimed device, the account
         # hold. A deletion request that arrived meanwhile has been waiting.
         await session.commit()
     except Exception:
-        if written_key is not None and await service.reconcile_label_report_commit(
+        # A raised commit is not a rolled-back one. Ask the database, then act
+        # only on what it proves. See service.label_report_commit_outcome.
+        outcome = await service.label_report_commit_outcome(
             session, report_id=report_id, device_id=report_device_id,
             client_report_id=client_report_id, photo_key=report_photo_key,
-        ):
-            return {"report_id": str(report_id), "created": False}
+        )
+        if outcome is service.ReportCommitOutcome.COMMITTED:
+            # Only the acknowledgement was lost. The report, and its photo, are
+            # durable: this is the report this request filed.
+            return {"report_id": str(report_id), "created": created}
+        compensated = False
+        if outcome is service.ReportCommitOutcome.NOT_COMMITTED and written_key is not None:
+            compensated = await service.discard_unfiled_report_photo(written_key)
+        logger.warning(
+            "label_report_commit_failed outcome=%s photo_written=%s photo_removed=%s",
+            outcome.value, written_key is not None, compensated,
+        )
+        # The original failure, unchanged: a retryable error, and a retry with
+        # the same client_report_id reconciles to whatever is durable.
         raise
     return {"report_id": str(report_id), "created": created}
 

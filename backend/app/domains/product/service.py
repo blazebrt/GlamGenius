@@ -20,9 +20,10 @@ import logging
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import or_, select, text, update
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -732,57 +733,97 @@ async def _existing_label_report(
     )).scalar_one_or_none()
 
 
-async def discard_unfiled_report_photo(key: str) -> None:
-    """Compensation: remove an object whose report never committed.
+async def discard_unfiled_report_photo(key: str) -> bool:
+    """Compensation: remove an object whose report is proven never to have committed.
 
     Best effort by design. It runs on a failure path that is already raising,
     and a second error here must not replace the first. What it cannot remove
     is an object no report names; it can reveal nothing, and if it sits under
     an account prefix the deletion worker's purge still removes it.
+
+    Returns whether the delete went through, so a caller never reports a
+    compensation that did not happen.
     """
     try:
         await storage_factory.get_storage().delete(key)
     except Exception:  # noqa: BLE001 - never mask the failure being compensated
         logger.warning("label_report_photo_compensation_failed")
+        return False
+    return True
 
 
-async def reconcile_label_report_commit(
+class ReportCommitOutcome(StrEnum):
+    """What a fresh transaction can prove about a report whose ``commit()`` raised."""
+
+    #: The report's own row is durable, naming the photo this request wrote.
+    COMMITTED = "committed"
+    #: The report's own row is proven absent: its transaction ended without it.
+    NOT_COMMITTED = "not_committed"
+    #: Nothing could be proven either way.
+    UNKNOWN = "unknown"
+
+
+#: The longest the check waits for the original transaction to finish before
+#: calling the outcome unknown, in milliseconds.
+REPORT_COMMIT_CHECK_LOCK_TIMEOUT_MS = 5000
+
+
+async def label_report_commit_outcome(
     session: AsyncSession, *, report_id: uuid.UUID, device_id: uuid.UUID,
     client_report_id: str, photo_key: str | None,
-) -> bool:
-    """Recover an acknowledged-by-neither-side commit without destroying evidence.
+) -> ReportCommitOutcome:
+    """After ``commit()`` raised: did this exact report become durable?
 
-    True means a fresh transaction proved this exact report durable. False
-    means the caller must propagate its original commit error, not success.
-    Only a proved absence permits compensation. Unknown outcomes retain bytes.
-    The identity lock waits out any original transaction still completing on
-    the server; a plain unlocked SELECT could race that commit.
+    An exception from ``commit()`` is not a rollback. PostgreSQL can accept the
+    COMMIT and the connection can then fail before the acknowledgement reaches
+    us, so "commit raised, delete the photo" would turn a lost acknowledgement
+    into a durable report naming a photo that no longer exists. The answer
+    comes from the database, in a fresh transaction, or not at all:
+
+    1. The request's failed transaction is ended first. Best effort: a
+       connection that is already gone can be neither rolled back nor needs
+       to be.
+    2. The fresh transaction takes this report's own identity lock. The
+       original transaction took it before filing, and holds it until it ends,
+       so the check waits out a COMMIT that is still completing on the server
+       — an unlocked read could run in the middle of one and see nothing. The
+       wait is bounded; running out of time is an unknown outcome.
+    3. It reads the report's *own* row, by the server-generated id. Only this
+       request could ever write that id, so once its transaction has ended the
+       row either exists or never will. The idempotency identity is no proof
+       either way: a retry filed after this attempt failed has its own id and
+       its own object, and it is not this report.
+
+    Only :attr:`ReportCommitOutcome.NOT_COMMITTED` licenses deleting what this
+    request wrote. Anything this cannot prove is
+    :attr:`ReportCommitOutcome.UNKNOWN`, and evidence that may have a durable
+    row is never deleted on a guess.
     """
     try:
         await session.rollback()
+    except Exception:  # noqa: BLE001 - finding out what the failure did is the point
+        pass
+    try:
         async with get_sessionmaker()() as verification:
+            await verification.execute(
+                text("SELECT set_config('lock_timeout', :timeout, true)"),
+                {"timeout": f"{int(REPORT_COMMIT_CHECK_LOCK_TIMEOUT_MS)}ms"},
+            )
             await lock_label_report_identity(
                 verification, device_id=device_id, client_report_id=client_report_id,
             )
-            rows = (await verification.execute(
-                select(LabelErrorReport).where(or_(
-                    LabelErrorReport.id == report_id,
-                    (LabelErrorReport.device_id == device_id)
-                    & (LabelErrorReport.client_report_id == client_report_id),
-                ))
-            )).scalars().all()
-            if rows:
-                return len(rows) == 1 and (
-                    rows[0].id == report_id
-                    and rows[0].device_id == device_id
-                    and rows[0].client_report_id == client_report_id
-                    and rows[0].photo_key == photo_key
-                )
-            if photo_key is not None:
-                await discard_unfiled_report_photo(photo_key)
-    except Exception:  # noqa: BLE001 - unknown outcome: retain bytes, caller raises original error
-        logger.warning("label_report_commit_reconciliation_unavailable")
-    return False
+            row = await verification.get(LabelErrorReport, report_id)
+            if row is None:
+                return ReportCommitOutcome.NOT_COMMITTED
+            if (
+                row.device_id == device_id
+                and row.client_report_id == client_report_id
+                and row.photo_key == photo_key
+            ):
+                return ReportCommitOutcome.COMMITTED
+            return ReportCommitOutcome.UNKNOWN
+    except Exception:  # noqa: BLE001 - a check that cannot run proves nothing
+        return ReportCommitOutcome.UNKNOWN
 
 
 async def file_label_error_report(
@@ -800,9 +841,10 @@ async def file_label_error_report(
     """File one report, once, and write its photo at most once, under its own key.
 
     Returns ``(report, created, written_key)``. ``written_key`` is the object
-    this call wrote, if any. A commit exception requires fresh reconciliation
-    before compensation: an exception can mean a lost acknowledgement of a
-    durable commit. It is ``None`` for a replay, which writes nothing.
+    this call wrote, if any, and ``None`` for a replay, which writes nothing.
+    If the caller's commit then raises, the object may be deleted only once
+    :func:`label_report_commit_outcome` has proven the report absent: a
+    commit exception can be a lost acknowledgement of a durable commit.
 
     The order is the whole contract:
 
@@ -819,9 +861,9 @@ async def file_label_error_report(
        An unclaimed device's report belongs to no account and takes no
        account lock.
     3. **Bytes, then the row.** A storage failure leaves no row pointing at
-       nothing. A database failure after the bytes deletes them again
-       (:func:`discard_unfiled_report_photo`), so an ordinary failure does
-       not orphan evidence.
+       nothing. A row that fails to flush deletes them again
+       (:func:`discard_unfiled_report_photo`): nothing was committed, so an
+       ordinary failure does not orphan evidence.
 
     **No row lock before the account's, so nothing is flushed before step 2.**
     Resolving the device token marks ``last_seen_at``; that UPDATE locks the
