@@ -2,22 +2,30 @@
 
 Consent is enforced server-side. Failed AI runs do not consume the beta
 allowance. Image base64 is never stored.
+
+An ``idempotency_key`` names one logical photo check. The first request with it
+reserves the allowance for that key and is the only one that reaches the
+provider; a duplicate while it runs is told it is in progress; a retry after
+it succeeded replays the stored result. A known failure leaves the key free to
+try again. The key is the client's identifier, never derived from the image.
 """
 from __future__ import annotations
 
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import MAX_IMAGE_BASE64_CHARS, REQUIRE_ANALYSIS_CONSENT
 from app.domains.beta_access import service as beta
+from app.domains.beta_access.models import IDEMPOTENCY_KEY_MAX_LENGTH
 from app.domains.consent import service as consent_service
 from app.domains.consent.models import CONSENT_PHOTO_ANALYSIS
-from app.domains.scan.models import Scan
+from app.domains.scan import strings as scan_copy
+from app.domains.scan.models import SCAN_STATUS_OK, Scan
 from app.shared.database.sql import get_session
 from app.shared.security.deps import (
     CurrentAccount,
@@ -28,10 +36,32 @@ from app.shared.security.deps import (
 router = APIRouter(dependencies=[Depends(require_flag("v2_scan"))])
 
 
+#: A usable idempotency key: visible ASCII, no spaces, nothing empty.
+IDEMPOTENCY_KEY_PATTERN = r"^[!-~]+$"
+#: Set on a response that replays an earlier successful result.
+REPLAYED_HEADER = "Idempotent-Replayed"
+
+
 class ScanAnalyseRequest(BaseModel):
     image_base64: str
     scan_type: str = Field(default="face", pattern="^(face|hair|hands|full)$")
-    idempotency_key: str | None = None
+    # Validated here, before anything is reserved, sent or stored: a key the
+    # usage and scan tables cannot hold is refused as a request error, never
+    # discovered by PostgreSQL after the provider has been paid.
+    idempotency_key: str | None = Field(
+        default=None, min_length=1, max_length=IDEMPOTENCY_KEY_MAX_LENGTH, pattern=IDEMPOTENCY_KEY_PATTERN,
+    )
+
+
+async def _completed_scan(session: AsyncSession, account_id: uuid.UUID, key: str) -> Scan | None:
+    """The successful result this account stored under ``key``, if it still exists."""
+    return (await session.execute(
+        select(Scan).where(
+            Scan.account_id == account_id,
+            Scan.idempotency_key == key,
+            Scan.status == SCAN_STATUS_OK,
+        )
+    )).scalar_one_or_none()
 
 
 def _serialise_scan(scan: Scan) -> dict[str, Any]:
@@ -51,6 +81,7 @@ def _serialise_scan(scan: Scan) -> dict[str, Any]:
 @router.post("/scan/analyse", status_code=status.HTTP_201_CREATED)
 async def analyse_scan(
     body: ScanAnalyseRequest,
+    response: Response,
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
@@ -58,8 +89,15 @@ async def analyse_scan(
 
     - 400 when the image is missing or too large.
     - 403 when photo-analysis consent has not been given.
+    - 409 ``scan_in_progress`` when a request with the same idempotency key is
+      still running; ``scan_already_completed`` when that key's check was
+      counted but its result is no longer stored. Neither reaches the provider.
+    - 422 when the idempotency key is empty, too long or not visible ASCII.
     - 429 when the beta scan limit for the month is reached.
     - 502 when the AI provider fails — the beta allowance is **not** consumed.
+
+    A retry with the key of a check that succeeded answers with that stored
+    result, unchanged, and the ``Idempotent-Replayed: true`` header.
     """
     if not body.image_base64:
         raise HTTPException(
@@ -102,7 +140,40 @@ async def analyse_scan(
             session,
             account_id=current.account_id,
             feature=beta.FEATURE_SCAN,
+            idempotency_key=body.idempotency_key,
         )
+    except beta.UsageOperationCompleted as exc:
+        # The key's check already succeeded and was counted: replay it. The
+        # key names that one operation, so a new photo under it is not
+        # analysed, and nothing is reserved, sent or counted.
+        replayed = await _completed_scan(session, current.account_id, exc.idempotency_key)
+        # Serialised before the rollback, which expires every loaded row.
+        replay_body = None if replayed is None else _serialise_scan(replayed)
+        await session.rollback()
+        if replay_body is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "scan_already_completed",
+                    "allowance_consumed": False,
+                    "message": scan_copy.text("scan.idempotency.result_unavailable"),
+                },
+            ) from exc
+        response.headers[REPLAYED_HEADER] = "true"
+        return replay_body
+    except beta.UsageOperationInProgress as exc:
+        # A live reservation holds the key: the first request is still
+        # running, or died less than a reservation lifetime ago with an
+        # unknown outcome. Either way this one never reaches the provider.
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "scan_in_progress",
+                "allowance_consumed": False,
+                "message": scan_copy.text("scan.idempotency.in_progress"),
+            },
+        ) from exc
     except beta.UsageExceeded as exc:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -240,24 +311,29 @@ async def analyse_scan(
             },
         ) from exc
 
+    # The one successful result, carrying the key a retry replays it by. A
+    # failed row above never carries the key, so a known failure leaves the
+    # key free for a retry.
     scan = Scan(
         account_id=current.account_id,
         scan_type=body.scan_type,
-        status="ok",
+        status=SCAN_STATUS_OK,
         provider=ai_provider.PROVIDER_NAME,
         model=provider_response.model,
         prompt_version="scan.v1",
         schema_version="scan.v1",
         latency_ms=int((__import__("time").monotonic() - started) * 1000),
         analysis=analysis,
+        idempotency_key=body.idempotency_key,
     )
     session.add(scan)
     await session.flush()
 
-    # Only successful runs consume the beta allowance: the reserved unit
-    # becomes one usage event, and the hold goes, in this one commit.
+    # Only successful runs consume the beta allowance. One commit establishes
+    # all three: the replayable result, the usage event under the same key,
+    # and the reservation gone. There is no state with one and not the others.
     if reservation is not None:
-        await beta.settle_usage(session, reservation, idempotency_key=body.idempotency_key)
+        await beta.settle_usage(session, reservation)
     else:
         await beta.record_usage(
             session,

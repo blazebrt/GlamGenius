@@ -213,7 +213,12 @@ EXPORT_COVERAGE: dict[str, ExportCoverage] = {
         note="The public media fields (media.service.to_public_dict); never a storage path.",
     ),
     # --- scans + product scans ----------------------------------------------
-    "scans": _domain("scans", "scans", _ACCOUNT),
+    # The idempotency key is the client's request-control identifier for one
+    # photo check, not the person's data.
+    "scans": _domain(
+        "scans", "scans", _ACCOUNT, withheld=("idempotency_key",),
+        note="Every photo analysis; not the request's idempotency key.",
+    ),
     # Whether a device claim may still move an anonymous row is internal
     # control state, not the person's data.
     "scan_events": _domain(

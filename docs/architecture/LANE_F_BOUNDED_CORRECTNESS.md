@@ -5,8 +5,10 @@ independently reproduced defects and adds no product. Nothing here restores a
 retired surface, changes a user-facing string beyond one validation sentence,
 or changes the privacy export's shape (it stays at schema `1.5`).
 
-One Alembic revision, `lf1a2b3c4d` (revises `k9l0m1n2o3`), carries the only two
-facts the schema could not already state.
+One Alembic revision, `lf1a2b3c4d` (revises `k9l0m1n2o3`), carries the only
+facts the schema could not already state: scan attachment eligibility, the
+allowance reservation, and the idempotency key a reservation and its
+successful scan carry.
 
 ## 1. Erased scan history belongs to nobody
 
@@ -98,6 +100,75 @@ budget are tidied opportunistically under the same lock.
 which no mounted route calls: the retired Style surface. None of them is a
 live check-then-record path, so none was changed.
 
+### One logical operation, paid for once
+
+**The defect.** `POST /api/v2/scan/analyse` accepted an `idempotency_key` but
+reserved its allowance without it, and the key reached the database only when
+the usage event was written — after the provider had answered. Reproduced on
+the reviewed head: the same key sent twice paid Gemini twice (two successful
+scans, one usage row), and two simultaneous requests with one key were both
+inside the provider at once.
+
+**The authority.** A reservation now carries the caller's nullable
+`idempotency_key`. `reserve_usage` takes a second transaction lock, keyed by
+account, feature and key — with no period in it, so two requests for one key
+serialise even either side of an hour or month boundary — and decides before
+any budget is read:
+
+| The key's state | Outcome | Provider |
+| --- | --- | --- |
+| A usage event carries it (any period) | `UsageOperationCompleted` → the stored result is replayed | not called |
+| A live reservation carries it | `UsageOperationInProgress` → `409 scan_in_progress` | not called |
+| An expired reservation carries it | the stale hold is removed; this attempt reserves | called once |
+| Nothing carries it | reserve as normal | called once |
+
+A partial unique index (`uq_beta_usage_reservations_operation`) allows one
+reservation row per account, feature and key; `NULL` keys stay ordinary
+independent requests. A completed operation is recognised first, so it
+replays even when the budget is now exhausted.
+
+**Replay.** `scans.idempotency_key` is set on the successful row only (a check
+constraint keeps it off failed rows, so a known failure never uses a key up),
+with a partial unique index on account and key. A retry with the key of a
+successful check answers `201` with that stored body, unchanged, and
+`Idempotent-Replayed: true`; a new photo sent under an old key is not
+analysed. If the key was counted but its result is no longer stored (a usage
+event from before this change), the answer is `409 scan_already_completed`,
+still without calling the provider. The key is the client's identifier: no
+image, hash or fingerprint is stored. It is withheld from the privacy export.
+
+**Settlement.** One transaction writes the successful scan with its key, the
+usage event under the same key and deletes the reservation. There is no state
+with a replayable result and no counted event, or the reverse.
+
+**The request contract.** The key is 1–128 visible ASCII characters (the width
+of every column that stores it). Anything else is `422` at request
+validation, before anything is reserved, sent or stored.
+
+**Unknown outcomes.** If a process dies after reserving, the provider may or
+may not have answered; nothing was counted and no result stored. The live
+reservation blocks the key until it expires; after that a retry may run once.
+Paying twice in that window is possible only when the first call's outcome was
+genuinely lost, and never while it could still be running (next section).
+
+### No provider call outlives its reservation
+
+The invariant, checked in code rather than assumed:
+
+    AI_TIMEOUT_SECONDS × models in the fallback chain + 60 s  <  600 s (RESERVATION_TTL)
+
+- `gemini.generate` tries each model at most once and bounds every attempt by
+  `AI_TIMEOUT_SECONDS` twice: `asyncio.wait_for` around it, and the SDK's own
+  HTTP timeout (`HttpOptions.timeout`, milliseconds) on the request, so the
+  worker thread cannot keep a request open after the wait gives up. Before
+  this change the SDK request had no timeout at all.
+- `config.usage_reservation_errors()` states the invariant;
+  `validate_production_configuration()` refuses to start, in every
+  environment, if it does not hold; and `gemini.generate` refuses to send
+  anything (`ProviderNotConfigured`, released as a known failure) if it does
+  not hold at the moment of the call.
+- The defaults: 45 s × 2 models = 90 s; with the 60 s margin, 150 s < 600 s.
+
 ## 3. "Today" is the customer's date
 
 **The defect.** Account-facing helpers fell back to the server's
@@ -154,6 +225,7 @@ calendar helpers elsewhere are not banned.
 ## Rollback
 
 `git revert` the merge, then `alembic downgrade k9l0m1n2o3`. The downgrade drops
-the reservation table and the attachment column. It cannot keep what the column
+the reservation table, the attachment column and `scans.idempotency_key` with
+its index and check. It cannot keep what the column
 knew: after it, the pre-Lane-F claim code once more treats erased history as
 anonymous. Re-upgrading writes every row `false` again, which is privacy-safe.

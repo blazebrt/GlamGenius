@@ -491,7 +491,10 @@ async def test_f_g_a_reservation_is_operational_state_that_leaves_with_its_accou
     assert REGISTRY["beta_usage_reservations"] == Classification.OPERATIONAL
     columns = {column.name for column in BetaUsageReservation.__table__.columns}
     # Cost control only: no prompt, output, provider data or customer text.
-    assert columns == {"id", "account_id", "feature", "period_key", "quantity", "created_at", "expires_at"}
+    # ``idempotency_key`` is the caller's logical-operation identifier.
+    assert columns == {
+        "id", "account_id", "feature", "period_key", "quantity", "idempotency_key", "created_at", "expires_at",
+    }
 
     account_id = await _account()
     async with _factory()() as session:

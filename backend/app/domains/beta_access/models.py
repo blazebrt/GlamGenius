@@ -13,11 +13,17 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.database.base import Base, TimestampMixin, UUIDPrimaryKey, new_uuid
+
+#: The widest idempotency key any cost-bearing operation stores: the usage
+#: event, the reservation that precedes it, and a scan it produced. A request
+#: validates against this before anything is reserved or paid for.
+IDEMPOTENCY_KEY_MAX_LENGTH = 128
 
 
 class Invite(UUIDPrimaryKey, TimestampMixin, Base):
@@ -145,7 +151,7 @@ class BetaUsageEvent(Base):
     # An opaque key the caller supplies so the same logical operation retried
     # twice does not count twice. NULL is allowed for events without a
     # deduplication key.
-    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(IDEMPOTENCY_KEY_MAX_LENGTH), nullable=True)
     # YYYY-MM for month buckets, YYYY-MM-DD HH for hour buckets. Duplicated
     # from ``created_at`` so a plain COUNT(*) with a WHERE key match is a
     # cheap indexed scan.
@@ -179,6 +185,13 @@ class BetaUsageReservation(Base):
     transaction; a known failure removes it; a process that dies in between
     leaves a reservation that stops counting at ``expires_at``.
 
+    ``idempotency_key`` names the one logical operation a reservation is for,
+    when the caller has one. At most one reservation row exists per account,
+    feature and key (a partial unique index; ``NULL`` keys stay independent),
+    so while one is live no second request for the same operation can reach
+    the provider — and a completed operation is recognised from its usage
+    event before any reservation is taken at all.
+
     Operational cost control only: no prompt, output or customer text.
     """
 
@@ -193,6 +206,9 @@ class BetaUsageReservation(Base):
     # settles after the hour or month has turned still counts where it began.
     period_key: Mapped[str] = mapped_column(String(20), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    # The caller's logical-operation identity, or NULL for an ordinary
+    # independent request. Never shown to anyone; not exported.
+    idempotency_key: Mapped[str | None] = mapped_column(String(IDEMPOTENCY_KEY_MAX_LENGTH), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -202,5 +218,13 @@ class BetaUsageReservation(Base):
         Index(
             "ix_beta_usage_reservations_account_feature_period",
             "account_id", "feature", "period_key", "expires_at",
+        ),
+        # One reservation per logical operation, live or expired: an expired
+        # one is removed, under the operation's lock, before a retry reserves.
+        Index(
+            "uq_beta_usage_reservations_operation",
+            "account_id", "feature", "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
     )

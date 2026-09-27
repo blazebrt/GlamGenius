@@ -3,7 +3,7 @@
 Revision ID: lf1a2b3c4d
 Revises: k9l0m1n2o3
 
-Two durable facts the repository could not state, in one revision.
+Three durable facts the repository could not state, in one revision.
 
 **``scan_events.account_attachment_allowed``.** Account erasure keeps a scan
 row (a confirmed capture is shared Product Truth provenance) and severs it from
@@ -35,7 +35,16 @@ and deletes it; a known failure deletes it; ``expires_at`` bounds a crash.
 Operational only — no prompt, output or customer text — and it cascades with
 the account.
 
-Downgrade reverses both. It cannot keep what the column knew: after a
+**One logical operation, paid for once.** ``beta_usage_reservations`` carries
+the caller's nullable ``idempotency_key``, with a partial unique index allowing
+one reservation per account, feature and key (``NULL`` keys stay independent
+requests). ``scans.idempotency_key`` marks the one successful photo check a
+retry with that key replays: a partial unique index allows one per account and
+key, and a check constraint keeps the key off failed rows, so a known failure
+never uses a key up. The key is the client's identifier — no image, hash or
+fingerprint is stored. Existing rows have no key; nothing is backfilled.
+
+Downgrade reverses all three. It cannot keep what the column knew: after a
 downgrade, erased history is once more indistinguishable from an anonymous
 scan to the pre-Lane-F claim code. Re-upgrading writes every row ``false``
 again, which is privacy-safe.
@@ -75,6 +84,7 @@ def upgrade() -> None:
         sa.Column("feature", sa.String(64), nullable=False),
         sa.Column("period_key", sa.String(20), nullable=False),
         sa.Column("quantity", sa.Integer(), nullable=False, server_default=sa.text("1")),
+        sa.Column("idempotency_key", sa.String(128), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="CASCADE"),
@@ -89,9 +99,35 @@ def upgrade() -> None:
         "beta_usage_reservations",
         ["account_id", "feature", "period_key", "expires_at"],
     )
+    op.create_index(
+        "uq_beta_usage_reservations_operation",
+        "beta_usage_reservations",
+        ["account_id", "feature", "idempotency_key"],
+        unique=True,
+        postgresql_where=sa.text("idempotency_key IS NOT NULL"),
+    )
+
+    op.add_column("scans", sa.Column("idempotency_key", sa.String(128), nullable=True))
+    op.create_index(
+        "uq_scans_account_idempotency_key",
+        "scans",
+        ["account_id", "idempotency_key"],
+        unique=True,
+        postgresql_where=sa.text("idempotency_key IS NOT NULL"),
+    )
+    op.create_check_constraint(
+        "ck_scans_idempotency_key_successful_only",
+        "scans",
+        "idempotency_key IS NULL OR status = 'ok'",
+    )
 
 
 def downgrade() -> None:
+    op.drop_constraint("ck_scans_idempotency_key_successful_only", "scans", type_="check")
+    op.drop_index("uq_scans_account_idempotency_key", table_name="scans")
+    op.drop_column("scans", "idempotency_key")
+
+    op.drop_index("uq_beta_usage_reservations_operation", table_name="beta_usage_reservations")
     op.drop_index(
         "ix_beta_usage_reservations_account_feature_period", table_name="beta_usage_reservations",
     )

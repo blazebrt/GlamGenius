@@ -11,7 +11,9 @@ outside the scope of the current architecture.
 from __future__ import annotations
 
 import ipaddress
+import math
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -516,6 +518,75 @@ AI_TIMEOUT_SECONDS = _env_float("AI_TIMEOUT_SECONDS", 45.0)
 AI_COST_PER_1K_INPUT_USD = _env_float("AI_COST_PER_1K_INPUT_USD", 0.0003)
 AI_COST_PER_1K_OUTPUT_USD = _env_float("AI_COST_PER_1K_OUTPUT_USD", 0.0025)
 
+#: How long a reserved unit of beta allowance stays held when nothing settles
+#: or releases it — a process that died mid-call. Fixed on purpose: the
+#: provider's execution window below is checked against it, never the other
+#: way round, so a crash always costs a bounded, known number of minutes.
+USAGE_RESERVATION_TTL_SECONDS = 600
+#: Room inside a reservation for the database work either side of the provider
+#: call: reserving and committing before it, persisting and settling after.
+USAGE_RESERVATION_MARGIN_SECONDS = 60
+
+
+def ai_model_chain(
+    primary: str | None = None, fallbacks: Sequence[str] | None = None,
+) -> tuple[str, ...]:
+    """Every model one provider call may try, in order, each at most once."""
+    ordered: list[str] = []
+    for name in [GEMINI_MODEL if primary is None else primary,
+                 *(GEMINI_FALLBACK_MODELS if fallbacks is None else fallbacks)]:
+        if name and name not in ordered:
+            ordered.append(name)
+    return tuple(ordered)
+
+
+def ai_provider_window_seconds(
+    timeout_seconds: float | None = None, models: Sequence[str] | None = None,
+) -> float:
+    """The longest one provider call may legitimately run.
+
+    ``gemini.generate`` tries each model of the chain at most once, and bounds
+    every attempt by ``AI_TIMEOUT_SECONDS`` twice over: ``asyncio.wait_for``
+    around the attempt, and the SDK's own HTTP timeout on the request itself,
+    so the worker thread cannot keep a request open after the wait gives up.
+    No provider request outlives ``timeout × models``.
+    """
+    timeout = AI_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    chain = ai_model_chain() if models is None else tuple(models)
+    return timeout * len(chain)
+
+
+def usage_reservation_errors(
+    *,
+    timeout_seconds: float | None = None,
+    models: Sequence[str] | None = None,
+    ttl_seconds: float = USAGE_RESERVATION_TTL_SECONDS,
+    margin_seconds: float = USAGE_RESERVATION_MARGIN_SECONDS,
+) -> list[str]:
+    """Why this provider configuration could outlive an allowance reservation.
+
+    The invariant: ``provider window + margin < reservation lifetime``. A
+    reservation is the only authority over a unit of allowance, and over an
+    idempotency key; if a provider call could still be running when its
+    reservation expired, a retry could take the key and pay a second time for
+    the same operation. Empty means the configuration is safe.
+    """
+    timeout = AI_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    chain = ai_model_chain() if models is None else tuple(models)
+    if not math.isfinite(timeout) or timeout <= 0:
+        return ["AI_TIMEOUT_SECONDS must be a positive, finite number of seconds."]
+    if not chain:
+        return ["GEMINI_MODEL or GEMINI_FALLBACK_MODELS must name at least one model."]
+    window = ai_provider_window_seconds(timeout, chain)
+    if window + margin_seconds >= ttl_seconds:
+        return [
+            f"AI_TIMEOUT_SECONDS ({timeout:g}s) across {len(chain)} model(s) allows a provider call "
+            f"of {window:g}s, which with {margin_seconds:g}s of database work does not finish before "
+            f"an allowance reservation expires ({ttl_seconds:g}s). Lower AI_TIMEOUT_SECONDS or "
+            "shorten GEMINI_FALLBACK_MODELS."
+        ]
+    return []
+
 
 # ---------------------------------------------------------------------------
 # Request limits
@@ -558,6 +629,11 @@ def validate_production_configuration() -> None:
     
     Raises RuntimeError if a critical production invariant is missing or unsafe.
     """
+    # In every environment: a provider call that could outlive its allowance
+    # reservation is a double-spend waiting to happen, wherever it runs.
+    reservation_errors = usage_reservation_errors()
+    if reservation_errors:
+        raise RuntimeError("CRITICAL: " + " ".join(reservation_errors))
     if PUSH_DELIVERY_MODE not in ("live", "dry_run"):
         raise RuntimeError("CRITICAL: PUSH_DELIVERY_MODE must be live or dry_run.")
     if OPEN_METEO_MODE not in ("disabled", "evaluation", "commercial"):

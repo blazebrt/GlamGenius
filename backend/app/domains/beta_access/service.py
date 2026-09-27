@@ -21,6 +21,7 @@ from app.config import (
     BETA_SCAN_LIMIT_PER_MONTH,
     BETA_SHOPPING_CHECK_LIMIT_PER_MONTH,
     BETA_STYLE_LIMIT_PER_MONTH,
+    USAGE_RESERVATION_TTL_SECONDS,
 )
 from app.domains.beta_access.models import (
     BetaUsageEvent,
@@ -548,12 +549,41 @@ async def check_limit(
 # ---------------------------------------------------------------------------
 
 #: How long an unsettled reservation keeps its unit — the case where a process
-#: died between reserving and settling. Long enough for the slowest normal
-#: request (the provider timeout, ``AI_TIMEOUT_SECONDS``, plus the database
-#: work either side); short enough that a crash costs one unit for minutes,
-#: never for the rest of the hour or month. Nothing needs to sweep: every
-#: count ignores an expired reservation.
-RESERVATION_TTL = timedelta(minutes=10)
+#: died between reserving and settling. Longer than any provider call can run:
+#: ``config.usage_reservation_errors`` refuses a timeout and fallback chain
+#: whose window, plus the database work either side, would reach it, and the
+#: provider itself refuses to start one. Short enough that a crash costs one
+#: unit for minutes, never for the rest of the hour or month. Nothing needs to
+#: sweep: every count ignores an expired reservation.
+RESERVATION_TTL = timedelta(seconds=USAGE_RESERVATION_TTL_SECONDS)
+
+
+class UsageOperationCompleted(Exception):
+    """This idempotency key's operation already succeeded and was counted.
+
+    The caller replays that result. Nothing is reserved, and no provider is
+    called: an idempotency key names one logical operation, not a period, so
+    this holds in every later hour and month too.
+    """
+
+    def __init__(self, feature: str, idempotency_key: str) -> None:
+        super().__init__(f"operation already completed: {feature}")
+        self.feature = feature
+        self.idempotency_key = idempotency_key
+
+
+class UsageOperationInProgress(Exception):
+    """A live reservation already holds this idempotency key.
+
+    The first request is still running (or died less than
+    ``RESERVATION_TTL`` ago, with an unknown outcome). A duplicate never
+    reaches the provider; it is told the operation is in progress.
+    """
+
+    def __init__(self, feature: str, idempotency_key: str) -> None:
+        super().__init__(f"operation in progress: {feature}")
+        self.feature = feature
+        self.idempotency_key = idempotency_key
 
 
 @dataclass(frozen=True)
@@ -565,6 +595,54 @@ class UsageReservation:
     feature: str
     period_key: str
     quantity: int
+    idempotency_key: str | None = None
+
+
+async def _advisory_xact_lock(session: AsyncSession, key: str) -> None:
+    await session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": key})
+
+
+async def _claim_operation(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    feature: str,
+    idempotency_key: str,
+    now: datetime,
+) -> None:
+    """Decide what an idempotency key's operation is, under its own lock.
+
+    * **Completed** — a usage event carries the key, in any period: raise
+      :class:`UsageOperationCompleted`. This is read first, so a completed
+      operation is replayed even when the budget is now exhausted.
+    * **In progress** — a live reservation carries the key: raise
+      :class:`UsageOperationInProgress`.
+    * **Retryable** — an expired reservation carries the key and nothing was
+      counted: the attempt that took it never settled (a process died, or the
+      outcome is unknown). It is removed so this attempt can reserve.
+    * **New** — nothing carries the key.
+    """
+    completed = await session.scalar(
+        select(BetaUsageEvent.id).where(
+            BetaUsageEvent.account_id == account_id,
+            BetaUsageEvent.feature == feature,
+            BetaUsageEvent.idempotency_key == idempotency_key,
+        ).limit(1)
+    )
+    if completed is not None:
+        raise UsageOperationCompleted(feature, idempotency_key)
+    held = (await session.execute(
+        select(BetaUsageReservation.id, BetaUsageReservation.expires_at).where(
+            BetaUsageReservation.account_id == account_id,
+            BetaUsageReservation.feature == feature,
+            BetaUsageReservation.idempotency_key == idempotency_key,
+        )
+    )).first()
+    if held is None:
+        return
+    if held.expires_at > now:
+        raise UsageOperationInProgress(feature, idempotency_key)
+    await session.execute(delete(BetaUsageReservation).where(BetaUsageReservation.id == held.id))
 
 
 async def reserve_usage(
@@ -573,6 +651,7 @@ async def reserve_usage(
     account_id: uuid.UUID,
     feature: str,
     quantity: int = 1,
+    idempotency_key: str | None = None,
     now: datetime | None = None,
 ) -> UsageReservation | None:
     """Take ``quantity`` units of ``feature`` now, or raise ``UsageExceeded``.
@@ -582,6 +661,15 @@ async def reserve_usage(
     budget, and under it successful usage plus live reservations plus this one
     must fit the limit — so of any number of simultaneous requests for the last
     unit, exactly one gets it. Returns ``None`` for an untracked feature.
+
+    **One logical operation, once.** With an ``idempotency_key``, a second lock
+    keyed by account, feature and key is taken first — period-free, so two
+    requests for the same operation serialise even either side of an hour or
+    month boundary — and :func:`_claim_operation` decides, before any budget
+    is read, whether the operation already completed
+    (:class:`UsageOperationCompleted`), is in progress
+    (:class:`UsageOperationInProgress`) or may run. The reservation carries the
+    key, and the partial unique index allows one per operation.
 
     **The caller commits before spending.** The lock ends with that commit, and
     the unit stays held by the row, not by a transaction: nothing is locked or
@@ -594,10 +682,12 @@ async def reserve_usage(
         return None
     limit, period, period_key = tracked
 
-    await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-        {"key": f"beta-usage:{account_id}:{feature}:{period_key}"},
-    )
+    if idempotency_key is not None:
+        await _advisory_xact_lock(session, f"beta-usage-operation:{account_id}:{feature}:{idempotency_key}")
+        await _claim_operation(
+            session, account_id=account_id, feature=feature, idempotency_key=idempotency_key, now=now,
+        )
+    await _advisory_xact_lock(session, f"beta-usage:{account_id}:{feature}:{period_key}")
     used = await _current_usage(
         session, account_id=account_id, feature=feature, period_key=period_key
     )
@@ -617,13 +707,14 @@ async def reserve_usage(
     )
     row = BetaUsageReservation(
         account_id=account_id, feature=feature, period_key=period_key,
-        quantity=quantity, created_at=now, expires_at=now + RESERVATION_TTL,
+        quantity=quantity, idempotency_key=idempotency_key,
+        created_at=now, expires_at=now + RESERVATION_TTL,
     )
     session.add(row)
     await session.flush()
     return UsageReservation(
         id=row.id, account_id=account_id, feature=feature,
-        period_key=period_key, quantity=quantity,
+        period_key=period_key, quantity=quantity, idempotency_key=idempotency_key,
     )
 
 
@@ -637,17 +728,28 @@ async def settle_usage(
 
     The event is written to the period the unit was reserved from, and keeps
     ``record_usage``'s idempotency: a key already counted is not counted twice,
-    and the reservation is released either way. The caller commits.
+    and the reservation is released either way. The caller commits — in the
+    same transaction as whatever durable result the work produced, so a
+    counted success and its result exist together or not at all.
+
+    A reservation taken for an operation settles under that operation's key;
+    ``idempotency_key`` is for one that was not (the gateway keys by run id,
+    which exists only after the call).
     """
+    key = reservation.idempotency_key
+    if key is None:
+        key = idempotency_key
+    elif idempotency_key is not None and idempotency_key != key:
+        raise ValueError("a reservation settles under the operation key it was taken for")
     stmt = pg_insert(BetaUsageEvent).values(
         account_id=reservation.account_id,
         feature=reservation.feature,
-        idempotency_key=idempotency_key,
+        idempotency_key=key,
         period_key=reservation.period_key,
         quantity=reservation.quantity,
         created_at=_now(),
     )
-    if idempotency_key is not None:
+    if key is not None:
         stmt = stmt.on_conflict_do_nothing(
             index_elements=["account_id", "feature", "idempotency_key"]
         )
