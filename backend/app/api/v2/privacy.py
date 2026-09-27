@@ -6,8 +6,10 @@ deletion state machine.
 
 Guarantees the routes give back
 -------------------------------
-* Export includes every domain the registry marks ``INCLUDED`` and never any
-  secret, credential, raw storage path or raw face-image byte.
+* Export includes every table the registry marks ``INCLUDED`` — each through
+  its entry in ``app.domains.privacy.coverage.EXPORT_COVERAGE`` — or it is
+  not returned at all; and it never carries any secret, credential, raw
+  storage path or raw face-image byte.
 * Deletion is idempotent, returns ``202 Accepted`` while it runs, and never
   claims cross-system atomicity.
 * Reading another account's deletion status is impossible — the endpoint
@@ -60,8 +62,18 @@ async def export_data(
 
     Shape::
 
-        {"schema_version": "1.0", "generated_at": "...", "account": {...},
-         "domains": {...}}
+        {"schema_version": "1.5", "generated_at": "...", "account": {...},
+         "domains": {...}, "registry_summary": {...}}
+
+    ``200`` means complete: every table the registry classifies ``INCLUDED``
+    is in the file, with every row this account owns. When that cannot be
+    shown — a domain failed, or a covered table was not delivered — the
+    exporter raises ``PrivacyExportIncomplete`` and this answers ``503
+    PRIVACY_EXPORT_INCOMPLETE`` with a fixed message, before anything is
+    recorded. The successful-export audit event is written only after a
+    complete payload exists, so a failed attempt leaves no trace that says
+    the person received their data. Retrying is safe: building the export
+    reads and never writes.
     """
     payload = await export_service.build_export(session, current.account_id)
     await audit.record(

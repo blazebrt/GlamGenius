@@ -25,6 +25,11 @@ class ErrorCode(StrEnum):
     # --- Product state ---
     FEATURE_UNAVAILABLE = "FEATURE_UNAVAILABLE"
 
+    # --- Privacy ---
+    # The account export could not be proven complete, so none of it was
+    # returned and no successful export was recorded. Safe to retry.
+    PRIVACY_EXPORT_INCOMPLETE = "PRIVACY_EXPORT_INCOMPLETE"
+
     # --- Input ---
     VALIDATION_FAILED = "VALIDATION_FAILED"
     CONFLICT = "CONFLICT"

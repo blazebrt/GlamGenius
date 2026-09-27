@@ -17,17 +17,34 @@ Boundaries this service enforces
   ``storage_key`` and ``storage_backend``.
 * Face/hair/hand image bytes are transient request data and never enter the
   export.
-* Large collections are capped (``_MAX_ROWS``) so a runaway export cannot OOM
-  the server; the cap is generous enough to cover a full beta account.
+
+Complete, or not at all
+-----------------------
+A successful export is the whole of this account's data, or it is not
+returned. There is no row ceiling on any collection: a per-collection cap used
+to cut every collection at 20 000 rows and still answer 200, which is a
+successful-looking export that silently withheld the rest. The response is the
+account's data, so its size is the size of that data; a hidden limit did not
+make it smaller, only untrue.
+
+Every ``INCLUDED`` table has one entry in
+:data:`app.domains.privacy.coverage.EXPORT_COVERAGE`, and :func:`build_export`
+holds the result to it: the entries must match the registry, every covered
+table must have been read by its declared domain, and every declared path
+must be in the output. A domain that fails, or a covered table that was not
+proven, raises :class:`PrivacyExportIncomplete` instead of returning a partial
+file — the API answers 503 and records no successful export.
 """
 from __future__ import annotations
 
 import logging
 import uuid
 from collections.abc import Callable, Iterator
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
+from functools import cache
 from typing import Any
 
 from sqlalchemy import select
@@ -70,6 +87,13 @@ from app.domains.planning.models import (
     WeeklyPlan,
 )
 from app.domains.privacy import EXPORT_SCHEMA_VERSION, REGISTRY, Classification
+from app.domains.privacy.coverage import (
+    EXPORT_COVERAGE,
+    Scope,
+    contract_tables,
+    coverage_drift,
+    export_locations,
+)
 from app.domains.product.models import LabelErrorReport, ProductWatch, ScanDecisionEvent, ScanEvent
 from app.domains.profile.models import (
     AppearanceGoal,
@@ -123,13 +147,45 @@ from app.domains.routines.models import (
 from app.domains.scan.models import Scan
 from app.domains.supplements.models import SupplementLabelComponent
 from app.shared.database.base import utcnow
+from app.shared.errors.codes import ErrorCode
+from app.shared.errors.exceptions import AppError
 
 logger = logging.getLogger(__name__)
 
-# Generous per-collection cap. A beta account with heavy use has been observed
-# at ~3.5k inventory events and ~1.6k routine adherence rows; 20 000 covers
-# well above that and keeps the export bounded.
-_MAX_ROWS = 20_000
+
+#: The one message a caller sees when the export could not be completed. It
+#: states what happened and what to do; it never names a domain, a table or a
+#: value, because every value here is one person's data.
+PRIVACY_EXPORT_INCOMPLETE_MESSAGE = (
+    "Your data export could not be completed, so nothing was sent. Please try again later."
+)
+
+
+class PrivacyExportIncomplete(AppError):
+    """The export could not be proven complete, so none of it is returned.
+
+    ``failed_domains`` and ``unproven`` are for the log line only — domain and
+    table names, never an exception's text or a row's value. The response body
+    is the fixed :data:`PRIVACY_EXPORT_INCOMPLETE_MESSAGE`.
+    """
+
+    status_code = 503
+    code = ErrorCode.PRIVACY_EXPORT_INCOMPLETE
+    retryable = True
+
+    def __init__(
+        self, *, failed_domains: tuple[str, ...] = (), unproven: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(PRIVACY_EXPORT_INCOMPLETE_MESSAGE)
+        self.failed_domains = tuple(failed_domains)
+        self.unproven = tuple(unproven)
+
+
+#: ``(domain, table)`` for every full-row read made while an export is built.
+#: :func:`build_export` compares it with :data:`EXPORT_COVERAGE`: a covered
+#: table its domain never read is a table the file silently left out.
+_READS: ContextVar[set[tuple[str | None, str]] | None] = ContextVar("privacy_export_reads", default=None)
+_DOMAIN: ContextVar[str | None] = ContextVar("privacy_export_domain", default=None)
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -170,8 +226,137 @@ def _row_dict(row: Any, fields: list[str]) -> dict[str, Any]:
 
 
 async def _fetch(session: AsyncSession, stmt) -> list[Any]:
-    stmt = stmt.limit(_MAX_ROWS)
-    return list((await session.execute(stmt)).scalars().all())
+    """Every row the statement selects. There is no row limit.
+
+    The statement is already scoped to the account in SQL; this only runs it
+    and notes which table was read, so :func:`build_export` can prove that
+    every covered table was.
+    """
+    rows = list((await session.execute(stmt)).scalars().all())
+    reads = _READS.get()
+    if reads is not None:
+        descriptions = stmt.column_descriptions
+        entity = descriptions[0].get("entity") if descriptions else None
+        table = getattr(entity, "__tablename__", None)
+        if table is not None:
+            reads.add((_DOMAIN.get(), table))
+    return rows
+
+
+def _chronological(model: Any) -> tuple[Any, Any]:
+    """Oldest first, with the primary key as the tie-break.
+
+    ``created_at`` is the database's ``now()``, which is the same for every row
+    written in one transaction, so it cannot order those rows on its own.
+    Ordering is for reading history; it never limits anything.
+    """
+    return model.created_at, model.id
+
+
+def _account_rows(model: Any, account_id: uuid.UUID):
+    """Every row of ``model`` with this ``account_id``, oldest first."""
+    return select(model).where(model.account_id == account_id).order_by(*_chronological(model))
+
+
+@cache
+def _model_for(table: str) -> Any:
+    """The ORM class mapped to ``table``."""
+    from app.shared.database.registry import Base
+
+    for mapper in Base.registry.mappers:
+        if mapper.local_table.name == table:
+            return mapper.class_
+    raise LookupError(f"no ORM model is mapped to {table}")
+
+
+def _owned_ids(table: str, account_id: uuid.UUID):
+    """A subquery of the ids of ``table`` rows this account owns.
+
+    Built from the table's coverage entry, so ownership is decided in SQL the
+    same way everywhere: by the row's own ``account_id``, or by an owned parent.
+    Never by an id supplied from outside, and never by filtering in Python.
+    """
+    entry = EXPORT_COVERAGE[table]
+    model = _model_for(table)
+    if entry.scope == Scope.ACCOUNT_ROW:
+        return select(model.id).where(model.id == account_id)
+    if entry.scope == Scope.ACCOUNT:
+        return select(model.id).where(model.account_id == account_id)
+    fk, parent = entry.parent
+    return select(model.id).where(getattr(model, fk).in_(_owned_ids(parent, account_id)))
+
+
+def _owned_rows(table: str, account_id: uuid.UUID):
+    """Every row of ``table`` this account owns, in the entry's order."""
+    entry = EXPORT_COVERAGE[table]
+    model = _model_for(table)
+    if entry.scope == Scope.ACCOUNT:
+        stmt = select(model).where(model.account_id == account_id)
+    elif entry.scope == Scope.PARENT:
+        fk, parent = entry.parent
+        stmt = select(model).where(getattr(model, fk).in_(_owned_ids(parent, account_id)))
+    else:  # pragma: no cover - guarded by the coverage contract test
+        raise ValueError(f"{table} cannot be exported by the contract")
+    return stmt.order_by(*(getattr(model, column) for column in entry.order_by))
+
+
+def _as_uuid(value: Any) -> uuid.UUID | None:
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _contract_collections(
+    session: AsyncSession, account_id: uuid.UUID, domain: str,
+) -> dict[str, list[dict[str, Any]]]:
+    """Every table this domain exports straight from :data:`EXPORT_COVERAGE`.
+
+    Each row is selected by the SQL scope its entry declares. A reference from
+    it to another account-owned row — an item, a photo, a plan — is kept only
+    when that row is this account's too. A reference that is not is the
+    signature of a broken invariant, and the id it carries names something in
+    somebody else's account, so it is replaced with ``None`` and the row is
+    marked, rather than echoed into this person's file. The row itself is
+    this account's and stays in.
+    """
+    owned: dict[str, set[uuid.UUID]] = {}
+
+    async def owned_ids(table: str) -> set[uuid.UUID]:
+        if table not in owned:
+            owned[table] = set((await session.execute(_owned_ids(table, account_id))).scalars().all())
+        return owned[table]
+
+    collections: dict[str, list[dict[str, Any]]] = {}
+    for table in contract_tables(domain):
+        entry = EXPORT_COVERAGE[table]
+        model = _model_for(table)
+        fields = [c.name for c in model.__table__.columns if c.name not in entry.withheld]
+        payloads: list[dict[str, Any]] = []
+        for row in await _fetch(session, _owned_rows(table, account_id)):
+            payload = _row_dict(row, fields)
+            invalid: list[str] = []
+            for column, target in entry.references:
+                value = getattr(row, column)
+                if value is not None and value not in await owned_ids(target):
+                    payload[column] = None
+                    invalid.append(column)
+            for column, target in entry.reference_lists:
+                values = getattr(row, column)
+                if isinstance(values, list):
+                    mine = await owned_ids(target)
+                    kept = [value for value in values if _as_uuid(value) in mine]
+                    if len(kept) != len(values):
+                        payload[column] = kept
+                        invalid.append(column)
+            if invalid:
+                payload["invariant"] = "reference_ownership_invalid"
+                payload["invalid_references"] = invalid
+            payloads.append(payload)
+        collections[entry.key] = payloads
+    return collections
 
 
 # ---------------------------------------------------------------------------
@@ -179,15 +364,19 @@ async def _fetch(session: AsyncSession, stmt) -> list[Any]:
 # ---------------------------------------------------------------------------
 
 async def _identity(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
-    account = (await session.execute(
-        select(Account).where(Account.id == account_id)
-    )).scalar_one_or_none()
-    if account is None:
-        return {}
+    accounts = await _fetch(session, select(Account).where(Account.id == account_id))
     redemptions = await _fetch(
         session,
-        select(InviteRedemption).where(InviteRedemption.account_id == account_id),
+        select(InviteRedemption)
+        .where(InviteRedemption.account_id == account_id)
+        .order_by(*_chronological(InviteRedemption)),
     )
+    if not accounts:
+        # No account row, so there is no identity to state. Returned empty
+        # rather than invented; ``build_export`` then refuses to call the file
+        # complete, because the account section it promises is not there.
+        return {}
+    account = accounts[0]
     # Join through invite table to expose the code (safe to show to the owner)
     invites = await _fetch(
         session,
@@ -233,13 +422,38 @@ _PROFILE_CHILD_TABLES: tuple[tuple[str, Any], ...] = (
 )
 
 
-async def _profile_payload(session: AsyncSession, profile: AppearanceProfile) -> dict[str, Any]:
+_ProfileChildren = dict[str, dict[uuid.UUID, list[Any]]]
+
+
+async def _profile_children(session: AsyncSession, account_id: uuid.UUID) -> _ProfileChildren:
+    """Every child row of every profile this account owns, by label then profile.
+
+    One statement per child table, scoped in SQL to this account's profiles,
+    rather than one per profile: a child table is read whether or not any
+    profile exists, so the export can prove it was read, and nothing depends
+    on how many profiles there are.
+    """
+    owned_profiles = select(AppearanceProfile.id).where(AppearanceProfile.account_id == account_id)
+    children: _ProfileChildren = {}
+    for label, model in _PROFILE_CHILD_TABLES:
+        rows = await _fetch(
+            session,
+            select(model).where(model.profile_id.in_(owned_profiles)).order_by(*_chronological(model)),
+        )
+        by_profile: dict[uuid.UUID, list[Any]] = {}
+        for row in rows:
+            by_profile.setdefault(row.profile_id, []).append(row)
+        children[label] = by_profile
+    return children
+
+
+def _profile_payload(profile: AppearanceProfile, children: _ProfileChildren) -> dict[str, Any]:
     """One profile and everything attached to it, by ``profile_id``."""
     payload: dict[str, Any] = {
         "profile": _row_dict(profile, [c.name for c in AppearanceProfile.__table__.columns]),
     }
     for label, model in _PROFILE_CHILD_TABLES:
-        rows = await _fetch(session, select(model).where(model.profile_id == profile.id))
+        rows = children[label].get(profile.id, [])
         payload[label] = [_row_dict(r, [c.name for c in model.__table__.columns]) for r in rows]
     return payload
 
@@ -429,8 +643,11 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
     """
     profiles = await _fetch(
         session,
-        select(AppearanceProfile).where(AppearanceProfile.account_id == account_id),
+        select(AppearanceProfile)
+        .where(AppearanceProfile.account_id == account_id)
+        .order_by(*_chronological(AppearanceProfile)),
     )
+    children = await _profile_children(session, account_id)
     # Whether a household exists is a fact about the circle, not about how many
     # members happen to be in it; and the account holder is the one active
     # ``self`` row or nobody, never the first of two. Both rules live in
@@ -469,7 +686,7 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
             "adopted": profile is not None and profile.household_subject_id is not None,
         }
         entry.update(
-            await _profile_payload(session, profile) if profile is not None
+            _profile_payload(profile, children) if profile is not None
             else _empty_profile_payload()
         )
         subjects.append(entry)
@@ -491,7 +708,7 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
             "active": True,
             "is_account_holder": not unattributed,
             "adopted": False,
-            **await _profile_payload(session, legacy),
+            **_profile_payload(legacy, children),
         })
 
     # A profile bound to a subject this account does not own is a broken
@@ -520,7 +737,7 @@ async def _profile(session: AsyncSession, account_id: uuid.UUID) -> dict[str, An
         invariant_errors.append(
             {"profile_id": str(profile.id), "error": "profile_subject_ownership_invalid"}
         )
-        payload = await _profile_payload(session, profile)
+        payload = _profile_payload(profile, children)
         # The corrupt link is the one field that names somebody outside this
         # account. It is replaced rather than echoed.
         payload["profile"]["household_subject_id"] = None
@@ -590,35 +807,57 @@ async def _household(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
 async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     items = await _fetch(
         session,
-        select(InventoryItem).where(InventoryItem.account_id == account_id),
+        select(InventoryItem)
+        .where(InventoryItem.account_id == account_id)
+        .order_by(*_chronological(InventoryItem)),
     )
-    item_ids = [i.id for i in items]
+    # Child rows are reached through the account's own items in SQL. A list of
+    # ids bound as parameters would stop working past the driver's parameter
+    # limit, which is exactly the size of account the export must not fail.
+    owned_items = _owned_ids("inventory_items", account_id)
     attrs = await _fetch(
         session,
-        select(InventoryAttribute).where(InventoryAttribute.item_id.in_(item_ids)),
-    ) if item_ids else []
+        select(InventoryAttribute)
+        .where(InventoryAttribute.item_id.in_(owned_items))
+        .order_by(*_chronological(InventoryAttribute)),
+    )
     events = await _fetch(
         session,
-        select(InventoryEvent).where(InventoryEvent.account_id == account_id),
+        select(InventoryEvent)
+        .where(InventoryEvent.account_id == account_id)
+        .order_by(*_chronological(InventoryEvent)),
     )
     supplement_details = await _fetch(
         session,
-        select(SupplementDetail).where(SupplementDetail.item_id.in_(item_ids)),
-    ) if item_ids else []
+        select(SupplementDetail)
+        .where(SupplementDetail.item_id.in_(owned_items))
+        .order_by(*_chronological(SupplementDetail)),
+    )
     # Photo captures and what each one offered. A rejected candidate stays in
     # the export: it is a record of a guess made about this person.
     imports = await _fetch(
         session,
-        select(InventoryImportJob).where(InventoryImportJob.account_id == account_id),
+        select(InventoryImportJob)
+        .where(InventoryImportJob.account_id == account_id)
+        .order_by(*_chronological(InventoryImportJob)),
     )
     candidates = await _fetch(
         session,
-        select(InventoryImportCandidate).where(InventoryImportCandidate.account_id == account_id),
+        select(InventoryImportCandidate)
+        .where(InventoryImportCandidate.account_id == account_id)
+        .order_by(*_chronological(InventoryImportCandidate)),
     )
     product_links = await _fetch(
         session,
-        select(InventoryProductLink).where(InventoryProductLink.account_id == account_id),
+        select(InventoryProductLink)
+        .where(InventoryProductLink.account_id == account_id)
+        .order_by(*_chronological(InventoryProductLink)),
     )
+    # Category details, photos, value, condition, expiry and usage history,
+    # relationships, duplicate candidates and laundry state: exported from the
+    # coverage contract, each reached through the account's own items or its
+    # own account_id.
+    history = await _contract_collections(session, account_id, "inventory")
     household = await _household_identity(session, account_id)
     member_ids = household.member_ids
     event_fields = [c.name for c in InventoryEvent.__table__.columns]
@@ -721,13 +960,16 @@ async def _inventory(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
             _row_dict(row, [c.name for c in InventoryProductLink.__table__.columns])
             for row in product_links
         ],
+        **history,
     }
 
 
 async def _media(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     assets = await _fetch(
         session,
-        select(MediaAsset).where(MediaAsset.account_id == account_id),
+        select(MediaAsset)
+        .where(MediaAsset.account_id == account_id)
+        .order_by(*_chronological(MediaAsset)),
     )
     # ``to_public_dict`` already strips storage_key / storage_backend and
     # returns only safe fields.
@@ -750,8 +992,9 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
     Only rows linked to the account. A scan or report made before signing up
     carries no account and belongs to nobody, so it is in nobody's export.
 
-    The report photo is referenced by its storage key, never inlined — the
-    same rule the rest of this module follows for media.
+    A report's photo is stated, never located: ``photo_attached`` says whether
+    one was sent, and the internal storage key it lives under is not exported
+    (:func:`_label_error_report_row`). This JSON export carries no photo bytes.
     """
     rows = await _fetch(
         session,
@@ -766,7 +1009,6 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
         .where(LabelErrorReport.account_id == account_id)
         .order_by(LabelErrorReport.created_at.desc()),
     )
-    report_fields = [c.name for c in LabelErrorReport.__table__.columns]
     memory_rows = list(await _fetch(
         session,
         select(ScanDecisionEvent)
@@ -823,10 +1065,13 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
             "scan_decision_events": [_row_dict(r, memory_fields) for r in safe],
         })
 
+    handoffs = await _contract_collections(session, account_id, "product_scans")
+
     return {
         "scans": [_row_dict(r, fields) for r in rows],
-        "label_error_reports": [_row_dict(r, report_fields) for r in reports],
+        "label_error_reports": [_label_error_report_row(r) for r in reports],
         "product_watches": [_product_watch_row(r) for r in watches],
+        **handoffs,
         "subjects": subjects,
         "unattributed_scan_decision_events": (
             [_row_dict(r, memory_fields) for r in ambiguous]
@@ -851,6 +1096,20 @@ def _supplement_label_component_row(row: SupplementLabelComponent) -> dict[str, 
         "amount", "unit", "serving_text", "source", "verification_state", "confidence",
         "schema_version", "created_at", "updated_at",
     ])
+
+
+def _label_error_report_row(row: LabelErrorReport) -> dict[str, Any]:
+    """A report somebody filed, with its photo stated rather than located.
+
+    ``photo_key`` is the object-storage path the photo lives under — an
+    account prefix and an internal object name. It tells the person nothing
+    ``photo_attached`` does not, and it is exactly the kind of internal path
+    this export promises to leave out.
+    """
+    withheld = set(EXPORT_COVERAGE["label_error_reports"].withheld)
+    payload = _row_dict(row, [c.name for c in LabelErrorReport.__table__.columns if c.name not in withheld])
+    payload["photo_attached"] = row.photo_key is not None
+    return payload
 
 
 def _product_watch_row(row: ProductWatch) -> dict[str, Any]:
@@ -894,31 +1153,31 @@ async def _community(session: AsyncSession, account_id: uuid.UUID) -> dict[str, 
 async def _quiz_and_styling(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
     submissions = await _fetch(
         session,
-        select(QuizSubmission).where(QuizSubmission.account_id == account_id),
+        select(QuizSubmission).where(QuizSubmission.account_id == account_id).order_by(*_chronological(QuizSubmission)),
     )
     occasions = await _fetch(
         session,
-        select(Occasion).where(Occasion.account_id == account_id),
+        select(Occasion).where(Occasion.account_id == account_id).order_by(*_chronological(Occasion)),
     )
     style_requests = await _fetch(
         session,
-        select(StyleRequest).where(StyleRequest.account_id == account_id),
+        select(StyleRequest).where(StyleRequest.account_id == account_id).order_by(*_chronological(StyleRequest)),
     )
     runs = await _fetch(
         session,
-        select(RecommendationRun).where(RecommendationRun.account_id == account_id),
+        select(RecommendationRun).where(RecommendationRun.account_id == account_id).order_by(*_chronological(RecommendationRun)),
     )
     looks = await _fetch(
         session,
-        select(Look).where(Look.account_id == account_id),
+        select(Look).where(Look.account_id == account_id).order_by(*_chronological(Look)),
     )
     adjustments = await _fetch(
         session,
-        select(LookAdjustment).where(LookAdjustment.account_id == account_id),
+        select(LookAdjustment).where(LookAdjustment.account_id == account_id).order_by(*_chronological(LookAdjustment)),
     )
     feedback = await _fetch(
         session,
-        select(LookFeedback).where(LookFeedback.account_id == account_id),
+        select(LookFeedback).where(LookFeedback.account_id == account_id).order_by(*_chronological(LookFeedback)),
     )
     return {
         "quiz_submissions": [_row_dict(r, [c.name for c in QuizSubmission.__table__.columns]) for r in submissions],
@@ -928,6 +1187,9 @@ async def _quiz_and_styling(session: AsyncSession, account_id: uuid.UUID) -> dic
         "looks": [_row_dict(r, [c.name for c in Look.__table__.columns]) for r in looks],
         "look_adjustments": [_row_dict(r, [c.name for c in LookAdjustment.__table__.columns]) for r in adjustments],
         "look_feedback": [_row_dict(r, [c.name for c in LookFeedback.__table__.columns]) for r in feedback],
+        # Run inputs, entitlements, look items, the outfit schedule and item
+        # compatibility, straight from the coverage contract.
+        **await _contract_collections(session, account_id, "quiz_and_styling"),
     }
 
 
@@ -945,10 +1207,10 @@ async def _shopping(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
     malformed one, or writes anything at all: downloading your data must not
     change it.
     """
-    candidates = await _fetch(session, select(ShoppingCandidate).where(ShoppingCandidate.account_id == account_id))
-    evaluations = await _fetch(session, select(PurchaseEvaluation).where(PurchaseEvaluation.account_id == account_id))
-    decisions = list(await _fetch(session, select(PurchaseDecision).where(PurchaseDecision.account_id == account_id)))
-    decision_events = list(await _fetch(session, select(PurchaseDecisionEvent).where(PurchaseDecisionEvent.account_id == account_id)))
+    candidates = await _fetch(session, _account_rows(ShoppingCandidate, account_id))
+    evaluations = await _fetch(session, _account_rows(PurchaseEvaluation, account_id))
+    decisions = list(await _fetch(session, _account_rows(PurchaseDecision, account_id)))
+    decision_events = list(await _fetch(session, _account_rows(PurchaseDecisionEvent, account_id)))
 
     # The household posture is read once, here, and the "nobody to attribute
     # them to, so nobody gets them" rule lives inside ``_safe_legacy_split``.
@@ -1020,6 +1282,8 @@ async def _shopping(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
     return {
         "candidates": [_row_dict(r, [c.name for c in ShoppingCandidate.__table__.columns]) for r in candidates],
         "evaluations": [_row_dict(r, [c.name for c in PurchaseEvaluation.__table__.columns]) for r in evaluations],
+        # Each evaluation's factors, through the account's own evaluations.
+        **await _contract_collections(session, account_id, "shopping"),
         "subjects": subjects,
         # Owned rows that no subject of this account explains: decisions made
         # before anybody was named, and rows pointing at somebody else's
@@ -1038,18 +1302,23 @@ async def _shopping(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
 
 
 async def _planning(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
-    daily = await _fetch(session, select(DailyPlan).where(DailyPlan.account_id == account_id))
-    weekly = await _fetch(session, select(WeeklyPlan).where(WeeklyPlan.account_id == account_id))
-    calendar = await _fetch(session, select(CalendarEvent).where(CalendarEvent.account_id == account_id))
-    integrations = await _fetch(session, select(ExternalIntegration).where(ExternalIntegration.account_id == account_id))
-    weather = await _fetch(session, select(WeatherSnapshot).where(WeatherSnapshot.account_id == account_id))
-    event_ready_plans = await _fetch(session, select(EventReadyPlan).where(EventReadyPlan.account_id == account_id))
+    daily = await _fetch(session, _account_rows(DailyPlan, account_id))
+    weekly = await _fetch(session, _account_rows(WeeklyPlan, account_id))
+    calendar = await _fetch(session, _account_rows(CalendarEvent, account_id))
+    integrations = await _fetch(session, _account_rows(ExternalIntegration, account_id))
+    weather = await _fetch(session, _account_rows(WeatherSnapshot, account_id))
+    event_ready_plans = await _fetch(session, _account_rows(EventReadyPlan, account_id))
     event_ready_actions = await _fetch(
         session,
-        select(EventReadyAction).where(EventReadyAction.event_ready_plan_id.in_([row.id for row in event_ready_plans])),
-    ) if event_ready_plans else []
-    notification_preferences = await _fetch(session, select(NotificationPreference).where(NotificationPreference.account_id == account_id))
-    notification_deliveries = await _fetch(session, select(NotificationDelivery).where(NotificationDelivery.account_id == account_id))
+        select(EventReadyAction)
+        .where(EventReadyAction.event_ready_plan_id.in_(_owned_ids("event_ready_plans", account_id)))
+        .order_by(*_chronological(EventReadyAction)),
+    )
+    notification_preferences = await _fetch(session, _account_rows(NotificationPreference, account_id))
+    notification_deliveries = await _fetch(session, _account_rows(NotificationDelivery, account_id))
+    # Plan actions and inputs, weekly days, air quality and recalculation
+    # history, straight from the coverage contract.
+    plan_history = await _contract_collections(session, account_id, "planning")
     return {
         "daily_plans": [_row_dict(r, [c.name for c in DailyPlan.__table__.columns]) for r in daily],
         "weekly_plans": [_row_dict(r, [c.name for c in WeeklyPlan.__table__.columns]) for r in weekly],
@@ -1064,79 +1333,67 @@ async def _planning(session: AsyncSession, account_id: uuid.UUID) -> dict[str, A
         # Delivery history is useful to the customer; provider token/error
         # internals are intentionally reduced to truthful status metadata.
         "notification_deliveries": [_row_dict(r, ["id", "plan_date", "notification_key", "channel", "status", "suppressed_reason", "scheduled_for", "attempted_at", "sent_at", "created_at"]) for r in notification_deliveries],
+        **plan_history,
     }
 
 
 async def _routines(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
-    routines = await _fetch(
-        session, select(Routine).where(Routine.account_id == account_id),
-    )
-    routine_ids = {row.id for row in routines}
+    routines = await _fetch(session, _account_rows(Routine, account_id))
     steps = await _fetch(
         session,
-        select(RoutineStep).where(RoutineStep.routine_id.in_(routine_ids)),
-    ) if routine_ids else []
-    adherence = await _fetch(
-        session,
-        select(RoutineAdherence).where(RoutineAdherence.account_id == account_id),
+        select(RoutineStep)
+        .where(RoutineStep.routine_id.in_(_owned_ids("routines", account_id)))
+        .order_by(*_chronological(RoutineStep)),
     )
-    recommendation_runs = await _fetch(
-        session,
-        select(RoutineRecommendationRun).where(
-            RoutineRecommendationRun.account_id == account_id,
-        ),
-    )
+    adherence = await _fetch(session, _account_rows(RoutineAdherence, account_id))
+    recommendation_runs = await _fetch(session, _account_rows(RoutineRecommendationRun, account_id))
     product_ingredients = await _fetch(
         session,
-        select(ProductIngredient).where(ProductIngredient.account_id == account_id),
+        _account_rows(ProductIngredient, account_id),
     )
     observations = await _fetch(
         session,
-        select(UserReportedObservation).where(UserReportedObservation.account_id == account_id),
+        _account_rows(UserReportedObservation, account_id),
     )
     product_expiry_events = await _fetch(
         session,
-        select(ProductExpiryEvent).where(ProductExpiryEvent.account_id == account_id),
+        _account_rows(ProductExpiryEvent, account_id),
     )
     supplement_safety_flags = await _fetch(
         session,
-        select(SupplementSafetyFlag).where(SupplementSafetyFlag.account_id == account_id),
+        _account_rows(SupplementSafetyFlag, account_id),
     )
     label_components = await _fetch(
         session,
-        select(SupplementLabelComponent).where(
-            SupplementLabelComponent.account_id == account_id,
-        ),
+        _account_rows(SupplementLabelComponent, account_id),
     )
     nutrition_preferences = await _fetch(
         session,
-        select(NutritionPreference).where(NutritionPreference.account_id == account_id),
+        _account_rows(NutritionPreference, account_id),
     )
     hydration_preferences = await _fetch(
         session,
-        select(HydrationPreference).where(HydrationPreference.account_id == account_id),
+        _account_rows(HydrationPreference, account_id),
     )
     experience_feedback = await _fetch(
         session,
-        select(CareExperienceFeedback).where(CareExperienceFeedback.account_id == account_id),
+        _account_rows(CareExperienceFeedback, account_id),
     )
     manager_decision_events = await _fetch(
         session,
-        select(ShelfManagerDecisionEvent).where(
-            ShelfManagerDecisionEvent.account_id == account_id,
-        ),
+        _account_rows(ShelfManagerDecisionEvent, account_id),
     )
     care_preferences = await _fetch(
         session,
-        select(CareProductPreference).where(CareProductPreference.account_id == account_id),
+        _account_rows(CareProductPreference, account_id),
     )
     maintenance_preferences = await _fetch(
         session,
-        select(MaintenancePreference).where(MaintenancePreference.account_id == account_id),
+        _account_rows(MaintenancePreference, account_id),
     )
     maintenance_events = await _fetch(
         session,
-        select(MaintenanceEvent).where(MaintenanceEvent.account_id == account_id),
+        _account_rows(MaintenanceEvent, account_id),
     )
 
     household = await _household_identity(session, account_id)
@@ -1391,11 +1648,11 @@ async def _progress_and_memory(session: AsyncSession, account_id: uuid.UUID) -> 
         MemorySource,
     )
 
-    events = await _fetch(session, select(MetricEvent).where(MetricEvent.account_id == account_id))
-    goals = await _fetch(session, select(ProgressGoal).where(ProgressGoal.account_id == account_id))
-    milestones = await _fetch(session, select(Milestone).where(Milestone.account_id == account_id))
-    photos = await _fetch(session, select(ProgressPhoto).where(ProgressPhoto.account_id == account_id))
-    facts = await _fetch(session, select(MemoryFact).where(MemoryFact.account_id == account_id))
+    events = await _fetch(session, _account_rows(MetricEvent, account_id))
+    goals = await _fetch(session, _account_rows(ProgressGoal, account_id))
+    milestones = await _fetch(session, _account_rows(Milestone, account_id))
+    photos = await _fetch(session, _account_rows(ProgressPhoto, account_id))
+    facts = await _fetch(session, _account_rows(MemoryFact, account_id))
 
     # Revisions and sources hang off the fact, not the account, so they are
     # fetched through the account's facts. Corrections and tombstones are the
@@ -1403,17 +1660,19 @@ async def _progress_and_memory(session: AsyncSession, account_id: uuid.UUID) -> 
     # current wording hides what was remembered before, and what was deleted.
     fact_ids = select(MemoryFact.id).where(MemoryFact.account_id == account_id)
     revisions = await _fetch(
-        session, select(MemoryRevision).where(MemoryRevision.fact_id.in_(fact_ids))
+        session,
+        select(MemoryRevision)
+        .where(MemoryRevision.fact_id.in_(fact_ids))
+        .order_by(*_chronological(MemoryRevision)),
     )
     sources = await _fetch(
-        session, select(MemorySource).where(MemorySource.fact_id.in_(fact_ids))
+        session,
+        select(MemorySource)
+        .where(MemorySource.fact_id.in_(fact_ids))
+        .order_by(*_chronological(MemorySource)),
     )
-    feedback = await _fetch(
-        session, select(FeedbackEvent).where(FeedbackEvent.account_id == account_id)
-    )
-    behaviours = await _fetch(
-        session, select(GamificationEvent).where(GamificationEvent.account_id == account_id)
-    )
+    feedback = await _fetch(session, _account_rows(FeedbackEvent, account_id))
+    behaviours = await _fetch(session, _account_rows(GamificationEvent, account_id))
 
     return {
         "metric_events": [_row_dict(r, [c.name for c in MetricEvent.__table__.columns]) for r in events],
@@ -1425,6 +1684,9 @@ async def _progress_and_memory(session: AsyncSession, account_id: uuid.UUID) -> 
         "memory_sources": [_row_dict(r, [c.name for c in MemorySource.__table__.columns]) for r in sources],
         "feedback_events": [_row_dict(r, [c.name for c in FeedbackEvent.__table__.columns]) for r in feedback],
         "behaviour_events": [_row_dict(r, [c.name for c in GamificationEvent.__table__.columns]) for r in behaviours],
+        # Goal updates, snapshots, comparisons, score explanations, streaks
+        # and memory category choices, straight from the coverage contract.
+        **await _contract_collections(session, account_id, "progress_and_memory"),
     }
 
 
@@ -1435,16 +1697,15 @@ async def _ai_and_ops(session: AsyncSession, account_id: uuid.UUID) -> dict[str,
     )
     outputs = await _fetch(
         session,
-        select(AIRunOutput).where(AIRunOutput.ai_run_id.in_([r.id for r in runs])),
-    ) if runs else []
+        select(AIRunOutput)
+        .where(AIRunOutput.ai_run_id.in_(_owned_ids("ai_runs", account_id)))
+        .order_by(*_chronological(AIRunOutput)),
+    )
     audit = await _fetch(
         session,
         select(AuditEvent).where(AuditEvent.account_id == account_id).order_by(AuditEvent.created_at.desc()),
     )
-    beta = await _fetch(
-        session,
-        select(BetaUsageEvent).where(BetaUsageEvent.account_id == account_id),
-    )
+    beta = await _fetch(session, _account_rows(BetaUsageEvent, account_id))
     return {
         # What an AI provider returned about this account, as recorded. Some of
         # it is wording the app refused to show — the language boundary runs on
@@ -1458,6 +1719,8 @@ async def _ai_and_ops(session: AsyncSession, account_id: uuid.UUID) -> dict[str,
         "ai_run_outputs": [_ai_output_dict(r) for r in outputs],
         "audit_events": [_row_dict(r, [c.name for c in AuditEvent.__table__.columns]) for r in audit],
         "beta_usage_events": [_row_dict(r, [c.name for c in BetaUsageEvent.__table__.columns]) for r in beta],
+        # Product analytics this account generated.
+        **await _contract_collections(session, account_id, "ai_and_ops"),
     }
 
 
@@ -1523,37 +1786,113 @@ DOMAIN_HANDLERS: dict[str, DomainHandler] = {
 }
 
 
+def _path_present(node: Any, segments: list[str]) -> bool:
+    """Whether a coverage path exists in a domain's payload.
+
+    ``name[*]`` is a list whose every element must carry the rest of the path.
+    An empty list carries it trivially: there is nothing in it to be missing.
+    """
+    if not segments:
+        return True
+    head, rest = segments[0], segments[1:]
+    if not isinstance(node, dict):
+        return False
+    if head.endswith("[*]"):
+        items = node.get(head[:-3])
+        return isinstance(items, list) and all(_path_present(item, rest) for item in items)
+    return head in node and _path_present(node[head], rest)
+
+
+def _unproven_coverage(
+    domains: dict[str, Any], reads: set[tuple[str | None, str]],
+) -> list[str]:
+    """Covered tables this export cannot show it delivered, as ``table:reason``.
+
+    A table its declared domain never read, or a declared path missing from
+    that domain's payload, is a table the file would silently leave out.
+    Table names and reasons only: nothing here is a customer's value.
+    """
+    problems: list[str] = []
+    for table, entry in sorted(EXPORT_COVERAGE.items()):
+        if (entry.domain, table) not in reads:
+            problems.append(f"{table}:not_read")
+        payload = domains.get(entry.domain)
+        for path in entry.paths:
+            if not _path_present(payload, path.split(".")):
+                problems.append(f"{table}:path_missing")
+    return problems
+
+
 async def build_export(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
-    """Build the complete privacy-export payload for ``account_id``."""
+    """Build the complete privacy-export payload for ``account_id``.
+
+    Complete or not at all. Every domain is tried, even after one fails, so
+    the log names every domain that could not be exported — but if any did,
+    or if any covered table cannot be shown to be in the file, this raises
+    :class:`PrivacyExportIncomplete` and returns nothing. A payload with a
+    domain replaced by a failure marker is not somebody's data; it is part of
+    it, and it used to be returned with 200 and recorded as a completed
+    export.
+
+    A pure read. Nothing here adopts, repairs, attaches or updates anything,
+    whether it succeeds or fails.
+    """
+    missing, stale = coverage_drift()
+    if missing or stale:
+        # A table classified INCLUDED with no export contract, or a contract
+        # for a table that is not INCLUDED. Either way the file cannot be
+        # called complete, so it is not returned at all.
+        unproven = tuple(
+            [f"{table}:no_export_contract" for table in sorted(missing)]
+            + [f"{table}:not_included" for table in sorted(stale)]
+        )
+        logger.error("privacy_export_coverage_drift tables=%s", ",".join(unproven))
+        raise PrivacyExportIncomplete(unproven=unproven)
+
     domains: dict[str, Any] = {}
-    for name, handler in DOMAIN_HANDLERS.items():
-        try:
-            domains[name] = await handler(session, account_id)
-        except Exception as exc:  # noqa: BLE001 — one domain must not sink the export
-            # The domain and the exception type, never the exception text.
-            # A database error's message carries the driver's rendering of the
-            # failing value, and every value in this file is one person's own
-            # data. ``hide_parameters=True`` on the engine removes SQLAlchemy's
-            # parameter list; the driver's own wording is why this is not
-            # ``logger.exception``.
-            logger.error(
-                "privacy_export_domain_failed domain=%s type=%s",
-                name,
-                type(exc).__name__,
-            )
-            # Every handler shares this session. A failed statement leaves its
-            # transaction unusable, and PostgreSQL then refuses everything that
-            # follows — so without this the first domain to fail took all the
-            # domains after it down with it, each carrying the same marker and
-            # none of them actually tried. Nothing here writes, so there is
-            # nothing to lose by rolling back.
+    failed: list[str] = []
+    reads: set[tuple[str | None, str]] = set()
+    reads_token = _READS.set(reads)
+    try:
+        for name, handler in DOMAIN_HANDLERS.items():
+            domain_token = _DOMAIN.set(name)
             try:
-                await session.rollback()
-            except Exception:  # noqa: BLE001 — a session we cannot reset is already lost
-                logger.error("privacy_export_rollback_failed domain=%s", name)
-            # Emit an explicit failure marker so the user can see something
-            # went wrong for that domain rather than silently missing it.
-            domains[name] = {"error": "domain_export_failed"}
+                domains[name] = await handler(session, account_id)
+            except Exception as exc:  # noqa: BLE001 — every domain is tried before the export is refused
+                # The domain and the exception type, never the exception text.
+                # A database error's message carries the driver's rendering of
+                # the failing value, and every value in this file is one
+                # person's own data. ``hide_parameters=True`` on the engine
+                # removes SQLAlchemy's parameter list; the driver's own wording
+                # is why this is not ``logger.exception``.
+                logger.error(
+                    "privacy_export_domain_failed domain=%s type=%s",
+                    name,
+                    type(exc).__name__,
+                )
+                # Every handler shares this session. A failed statement leaves
+                # its transaction unusable, and PostgreSQL then refuses
+                # everything that follows — so without this the first domain to
+                # fail took every domain after it down too, and the log could
+                # not say which ones had really failed. Nothing here writes, so
+                # there is nothing to lose by rolling back.
+                try:
+                    await session.rollback()
+                except Exception:  # noqa: BLE001 — a session we cannot reset is already lost
+                    logger.error("privacy_export_rollback_failed domain=%s", name)
+                failed.append(name)
+            finally:
+                _DOMAIN.reset(domain_token)
+    finally:
+        _READS.reset(reads_token)
+
+    if failed:
+        raise PrivacyExportIncomplete(failed_domains=tuple(failed))
+
+    unproven = _unproven_coverage(domains, reads)
+    if unproven:
+        logger.error("privacy_export_coverage_unproven tables=%s", ",".join(unproven))
+        raise PrivacyExportIncomplete(unproven=tuple(unproven))
 
     return {
         "schema_version": EXPORT_SCHEMA_VERSION,
@@ -1566,6 +1905,12 @@ async def build_export(session: AsyncSession, account_id: uuid.UUID) -> dict[str
                 name for name, kind in REGISTRY.items()
                 if kind == Classification.INCLUDED
             ),
+            # Derived from the coverage contract this export was just held to,
+            # never a second hand-written list: equal to ``included_tables``,
+            # because a file where they differ is refused above.
+            "exported_tables": sorted(EXPORT_COVERAGE),
+            # Where in this file each exported table's rows are.
+            "export_locations": export_locations(),
             "not_user_owned": sorted(
                 name for name, kind in REGISTRY.items()
                 if kind == Classification.NOT_USER_OWNED

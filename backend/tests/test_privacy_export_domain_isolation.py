@@ -1,19 +1,20 @@
 """One failing domain must not take the rest of the export with it.
 
-``build_export`` walks fourteen domain handlers and wraps each in its own
-``try``/``except`` so that, as the comment there says, "one domain must not sink
-the export". The wrapping is real, but the isolation was not: every handler
-shares one ``AsyncSession``, and a failed statement leaves that session's
-transaction in a failed state. PostgreSQL then refuses every statement that
-follows until somebody rolls back — so the first domain to hit a database error
-took all the domains after it down too, each with the same marker.
+``build_export`` walks every domain handler and wraps each in its own
+``try``/``except``. The wrapping is real, but the isolation was not: every
+handler shares one ``AsyncSession``, and a failed statement leaves that
+session's transaction in a failed state. PostgreSQL then refuses every
+statement that follows until somebody rolls back — so the first domain to hit
+a database error took all the domains after it down too.
 
-The user's copy of their own data is what is at stake. An export missing
-thirteen of fourteen domains still answers 200, and the markers do not say the
-other domains were never really tried.
-
-This file forces a database error inside one handler and asserts the domains
-after it still come back with their data.
+The user's copy of their own data is what is at stake, and Lane E changed what
+a failure means for it. The export used to answer 200 with the failed domain
+replaced by a marker, and the route recorded that as a completed export. An
+export missing a domain is not the person's data; it is part of it. So a
+failed domain now fails the whole export with ``PrivacyExportIncomplete`` —
+and the isolation still matters, because every domain is still tried: the
+error must name exactly the domain that failed, and the domains after it must
+really have run rather than inherited its broken transaction.
 """
 from __future__ import annotations
 
@@ -40,63 +41,87 @@ async def _account_id() -> uuid.UUID:
 
 @pytest.fixture
 def one_broken_domain(monkeypatch):
-    """Make one handler fail the way a real database error would."""
+    """Make one handler fail the way a real database error would.
+
+    Every other handler is wrapped so the test can see what it returned.
+    """
 
     async def _broken(session, account_id):
         # Not ``raise``: the point is a failed *statement*, which is what puts
         # the shared transaction into the state the later domains inherit.
         await session.execute(text("SELECT 1 / 0"))
 
-    handlers = dict(export_mod.DOMAIN_HANDLERS)
+    returned: dict[str, object] = {}
+
+    def _watched(name, handler):
+        async def _handler(session, account_id):
+            payload = await handler(session, account_id)
+            returned[name] = payload
+            return payload
+        return _handler
+
+    handlers = {
+        name: _watched(name, handler) for name, handler in export_mod.DOMAIN_HANDLERS.items()
+    }
     handlers[FAILING_DOMAIN] = _broken
     monkeypatch.setattr(export_mod, "DOMAIN_HANDLERS", handlers)
-    return FAILING_DOMAIN
+    return FAILING_DOMAIN, returned
 
 
 async def test_only_the_broken_domain_reports_a_failure(db_clean, one_broken_domain):
+    broken, _ = one_broken_domain
     account_id = await _account_id()
     factory = get_sessionmaker()
     async with factory() as session:
-        payload = await export_mod.build_export(session, account_id)
+        with pytest.raises(export_mod.PrivacyExportIncomplete) as refused:
+            await export_mod.build_export(session, account_id)
 
-    failed = [
-        name for name, value in payload["domains"].items()
-        if isinstance(value, dict) and value.get("error") == "domain_export_failed"
-    ]
-    assert failed == [one_broken_domain], (
+    assert refused.value.failed_domains == (broken,), (
         "a database error in one domain must not fail the domains after it; "
-        f"these failed: {failed}"
+        f"these failed: {refused.value.failed_domains}"
     )
 
 
 async def test_the_domains_after_the_broken_one_still_carry_their_data(
     db_clean, one_broken_domain
 ):
+    broken, returned = one_broken_domain
     account_id = await _account_id()
     factory = get_sessionmaker()
     async with factory() as session:
-        payload = await export_mod.build_export(session, account_id)
+        with pytest.raises(export_mod.PrivacyExportIncomplete):
+            await export_mod.build_export(session, account_id)
 
     names = list(export_mod.DOMAIN_HANDLERS)
-    after = names[names.index(one_broken_domain) + 1:]
+    after = names[names.index(broken) + 1:]
     assert after, "the broken domain must not be the last one, or this proves nothing"
     for name in after:
-        assert payload["domains"][name].get("error") != "domain_export_failed", (
+        assert isinstance(returned.get(name), dict), (
             f"{name} runs after the broken domain and inherited its failure"
         )
+    # A real read, not an empty shell: the identity domain ran before the
+    # failure and still names the account.
+    assert returned["identity"]["id"] == str(account_id)
 
 
-async def test_the_export_is_still_well_formed_after_a_domain_fails(
-    db_clean, one_broken_domain
-):
+async def test_a_domain_failure_returns_no_partial_export(db_clean, one_broken_domain):
+    """Not a 200 with a marker in it: nothing, and a fixed, non-sensitive refusal."""
     account_id = await _account_id()
     factory = get_sessionmaker()
     async with factory() as session:
-        payload = await export_mod.build_export(session, account_id)
+        with pytest.raises(export_mod.PrivacyExportIncomplete) as refused:
+            await export_mod.build_export(session, account_id)
 
-    assert payload["schema_version"]
-    assert payload["account"]["id"] == str(account_id)
-    assert set(payload["domains"]) == set(export_mod.DOMAIN_HANDLERS)
+    error = refused.value
+    assert error.status_code == 503
+    assert error.retryable is True
+    assert error.to_detail() == {
+        "code": "PRIVACY_EXPORT_INCOMPLETE",
+        "message": export_mod.PRIVACY_EXPORT_INCOMPLETE_MESSAGE,
+        "retryable": True,
+    }
+    # The domain name is for the log line, never the response.
+    assert FAILING_DOMAIN not in str(error.to_detail())
 
 
 # ---------------------------------------------------------------------------
