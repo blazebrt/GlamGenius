@@ -727,7 +727,9 @@ async def _module_material(
 ) -> dict[str, list[dict[str, Any]]]:
     """Read the inventory facts the optional modules need, once."""
     account_id = context.account_id
-    low_use = await inventory_service.low_use_items(session, account_id)
+    # The day being compiled is the date every module reasons about, the
+    # same one Care uses for expiry — never the server's own date.
+    low_use = await inventory_service.low_use_items(session, account_id, today=context.plan_date)
     available = {item.id for item in context.available_owned()}
 
     def owned_rows(category: str) -> list[dict[str, Any]]:

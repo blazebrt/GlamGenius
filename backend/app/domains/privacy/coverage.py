@@ -214,7 +214,12 @@ EXPORT_COVERAGE: dict[str, ExportCoverage] = {
     ),
     # --- scans + product scans ----------------------------------------------
     "scans": _domain("scans", "scans", _ACCOUNT),
-    "scan_events": _domain("product_scans", "scans", _ACCOUNT),
+    # Whether a device claim may still move an anonymous row is internal
+    # control state, not the person's data.
+    "scan_events": _domain(
+        "product_scans", "scans", _ACCOUNT, withheld=("account_attachment_allowed",),
+        note="Every scan linked to the account; not the internal attachment flag.",
+    ),
     # The photo lives in object storage under an internal key. The export says
     # whether one was attached; the key itself never leaves.
     "label_error_reports": _domain(

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.planning import context as planning_context
 from app.domains.supplements import boundary as supplement_boundary
 from app.domains.supplements import photo, service
 from app.domains.supplements.schemas import LabelComponentCreate, LabelComponentPatch, LabelPhotoTranscribe
@@ -27,7 +28,9 @@ async def supplement_summary(
     current: CurrentAccount = Depends(get_current_account),
     session: AsyncSession = Depends(get_session),
 ):
-    return await service.summary(session, current.account_id)
+    # The customer's date, resolved once here and passed down.
+    today = await planning_context.account_today(session, current.account_id)
+    return await service.summary(session, current.account_id, today=today)
 
 
 @router.post("/supplements/professional-boundary")
@@ -46,7 +49,8 @@ async def supplement_detail(
     session: AsyncSession = Depends(get_session),
 ):
     """Step 13: one owned supplement's label facts, provenance and overlap."""
-    return await service.detail(session, current.account_id, item_id)
+    today = await planning_context.account_today(session, current.account_id)
+    return await service.detail(session, current.account_id, item_id, today=today)
 
 
 @router.post("/supplements/items/{item_id}/label-photo/transcribe")

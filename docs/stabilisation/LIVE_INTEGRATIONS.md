@@ -28,9 +28,9 @@ If a provider is not on this list, the app does not call it.
 | **Docs URL + access date** | https://open-meteo.com/en/docs — accessed 2026-08-03. |
 | **Retention** | Open-Meteo publishes no per-caller retention policy; the endpoint is stateless. |
 | **Business contact** | https://open-meteo.com/en/contact |
-| **Live workflow** | `.github/workflows/live-weather.yml` (manual dispatch). |
-| **User consent** | Coarse location is user-provided. `WEATHER_PROVIDER=null` disables all outbound calls. |
-| **Fallback** | `NullWeatherProvider` returns `unknown`, and the routine engine treats "no weather" as neutral. |
+| **Live workflow** | None. The manual probe (`live-weather.yml`) exercised `backend/app/domains/planning/weather.py`, a module no production path used; both were removed in the Lane F cleanup. The live adapter is `backend/app/domains/planning/providers/open_meteo.py`, gated by `OPEN_METEO_MODE` (off by default). |
+| **User consent** | Coarse location is user-provided. `OPEN_METEO_MODE=disabled` (the default) makes no outbound call. |
+| **Fallback** | No reading is recorded, and the day treats "no weather" as missing information rather than guessing. |
 
 ## 2. Weather — paid providers (documented alternative, not shipped)
 
@@ -39,7 +39,7 @@ If a provider is not on this list, the app does not call it.
 | **Purpose** | Higher-resolution current weather; commercial SLA. |
 | **Credential** | `WEATHER_API_KEY` (would-be — no such adapter ships yet). |
 | **Adapter** | Not shipped. The `WeatherProvider` protocol accepts a second class implementing `.fetch(lat, lon)`; a paid provider lands as `<Provider>WeatherProvider` selected via `WEATHER_PROVIDER=<name>`. |
-| **Live workflow** | Reuses `.github/workflows/live-weather.yml`. |
+| **Live workflow** | None (see §1). |
 | **When to add** | If Open-Meteo's rate limit becomes a real production constraint (unlikely at the beta scale). Track under WP7+. |
 
 ## 3. Push notifications — Expo Push
@@ -94,7 +94,6 @@ If a provider is not on this list, the app does not call it.
 | `live-monitoring.yml` | `SENTRY_LOOKUP_TOKEN` | Sentry → User Settings → Auth Tokens → create with `event:read` scope on the project |
 | `live-monitoring.yml` | `SENTRY_ORG` | Sentry organisation slug |
 | `live-monitoring.yml` | `SENTRY_PROJECT` | Sentry project slug |
-| `live-weather.yml` | *(none needed)* | Open-Meteo is keyless. |
 
 ## Change control
 

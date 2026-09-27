@@ -16,6 +16,7 @@ suppressed ones, so "why didn't I hear about X" is answerable:
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import uuid
 from collections.abc import Sequence
@@ -38,6 +39,9 @@ from app.domains.planning.models import (
     NotificationPreference,
 )
 from app.shared.database.base import utcnow
+from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
+
+logger = logging.getLogger(__name__)
 
 SUPPRESSED_DUPLICATE = "duplicate"
 SUPPRESSED_CAP = "daily_cap_reached"
@@ -508,8 +512,21 @@ async def queue_for_deferred_purchase_relevance(
                 session, account_id=account_id, account_id_str=str(account_id),
                 candidate_id=row.candidate_id, plan_date=plan_date,
             )
-        except Exception:  # A removed/untrusted candidate is never a prompt.
+        except (NotFoundError, ValidationFailedError):
+            # The two governed refusals that mean "this candidate cannot be
+            # revisited": it is gone (``NotFoundError``), or it is no longer a
+            # trusted Care candidate — unconfirmed label facts, a category
+            # outside Care (``ValidationFailedError``). Neither is ever a
+            # prompt, and the next waiting decision may still be.
             continue
+        except Exception as exc:
+            # Anything else — a database failure, a broken invariant, a bug —
+            # is not a reason to stay quiet. One generic line, with the type
+            # only: no candidate, snapshot or exception text, which can carry
+            # the customer's own words. Re-raised so the worker fails this
+            # account's cycle and records it.
+            logger.error("deferred_purchase_relevance_failed error_type=%s", type(exc).__name__)
+            raise
         current_environment = (current.get("verdict") or {}).get("environment") or {}
         if current_environment.get("currently_deferred"):
             continue

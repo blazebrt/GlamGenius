@@ -960,7 +960,7 @@ async def test_the_give_back_log_is_read_per_account_even_when_asked_wrongly(
     await _set_expiry(app_client, token_a, item_id, TODAY + timedelta(days=400))
 
     async with get_sessionmaker()() as session:
-        context = await shelf.gather(session, account_id=account_a)
+        context = await shelf.gather(session, account_id=account_a, today=TODAY)
         products = {
             product.id: product
             for category in manager.MANAGER_CATEGORIES
@@ -1038,7 +1038,7 @@ async def test_a_low_use_group_naming_an_unplaceable_product_never_asks_for_its_
     async with get_sessionmaker()() as session:
         built = {
             product.id: product.slot
-            for product in shelf.build(await shelf.gather(session, account_id=account_id), "beauty")
+            for product in shelf.build(await shelf.gather(session, account_id=account_id, today=TODAY), "beauty")
         }
     assert built == {placed: "toner", unplaceable: None}
 

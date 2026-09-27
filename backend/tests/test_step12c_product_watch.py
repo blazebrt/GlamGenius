@@ -294,7 +294,7 @@ def test_a_only_the_watch_service_constructs_a_watch_row():
             if isinstance(node, ast.Call):
                 name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
                 if name == "ProductWatch":
-                    builders.append(str(path.relative_to(backend_app)))
+                    builders.append(path.relative_to(backend_app).as_posix())
     assert builders == ["domains/product/watch.py"], builders
 
 

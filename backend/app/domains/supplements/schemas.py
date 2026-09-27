@@ -34,10 +34,22 @@ class LabelComponentCreate(BaseModel):
 class LabelComponentPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    #: Omitted keeps the recorded name. ``null`` is refused here: the name is
+    #: required and cannot be cleared, and before this check an explicit null
+    #: reached name normalisation and became a server error.
     raw_name: str | None = Field(default=None, min_length=1, max_length=160)
     amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
     unit: str | None = Field(default=None, max_length=32)
     serving_text: str | None = Field(default=None, max_length=160)
+
+    @field_validator("raw_name")
+    @classmethod
+    def _name_cannot_be_cleared(cls, value: str | None) -> str:
+        # Runs only for a value actually sent: pydantic does not validate the
+        # default, so an omitted name never reaches here.
+        if value is None:
+            raise ValueError(copy.text("supplement.label_fact.name_required"))
+        return value
 
 
 class LabelComponentConfirm(BaseModel):

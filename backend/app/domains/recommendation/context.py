@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryItem
+from app.domains.inventory.taxonomy import CATEGORIES
 from app.domains.profile import service as profile_service
 from app.domains.profile.identity import resolve_self_profile_for_read
 from app.domains.recommendation.models import Look, LookFeedback, LookItem, OccasionRecord
@@ -114,10 +115,14 @@ async def confirmed_attributes(session: AsyncSession, account_id: uuid.UUID) -> 
 
 
 async def confirmed_inventory(session: AsyncSession, account_id: uuid.UUID) -> tuple[list[OwnedItem], int]:
+    # Governed categories only. A row kept from the retired wardrobe, shoe and
+    # accessory surfaces has no current detail model; one of them used to raise
+    # a ``KeyError`` here on every Today compile and notification cycle.
     rows = (await session.execute(
         select(InventoryItem).where(
             InventoryItem.account_id == account_id,
             InventoryItem.status == "active",
+            InventoryItem.category.in_(CATEGORIES),
         )
     )).scalars().all()
     owned: list[OwnedItem] = []

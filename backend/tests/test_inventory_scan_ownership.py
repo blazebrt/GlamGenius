@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import date
 
 import pytest
 from app.domains.ai_gateway.models import AIRun
@@ -318,7 +319,7 @@ async def test_manual_inventory_remains_valid_without_product_link(db_clean, reg
     async with get_sessionmaker()() as session:
         item = await create_item(session, account, ItemCreate(category="beauty", display_name="Manual cleanser", client_mutation_id="manual-without-link"))
         await session.commit()
-        payload = await serialize_item(session, item)
+        payload = await serialize_item(session, item, today=date.today())
     items, links = await _rows(account)
     assert payload["id"] == str(item.id) and len(items) == 1 and links == []
 

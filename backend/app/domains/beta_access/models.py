@@ -6,6 +6,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -163,4 +164,43 @@ class BetaUsageEvent(Base):
         ),
         Index("ix_beta_usage_account_feature_period", "account_id", "feature", "period_key"),
         Index("ix_beta_usage_created_at", "created_at"),
+    )
+
+
+class BetaUsageReservation(Base):
+    """A hold on allowance, taken atomically before anything is spent.
+
+    ``BetaUsageEvent`` records spending that happened; on its own it cannot
+    stop two requests from both reading "one left" and both calling the
+    provider. So cost-bearing work first reserves here, under a transaction
+    lock keyed by account, feature and period, and that transaction commits
+    before the provider is called — no lock or transaction is held across it.
+    Success turns the reservation into one usage event and removes it, in one
+    transaction; a known failure removes it; a process that dies in between
+    leaves a reservation that stops counting at ``expires_at``.
+
+    Operational cost control only: no prompt, output or customer text.
+    """
+
+    __tablename__ = "beta_usage_reservations"
+
+    id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=new_uuid)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    feature: Mapped[str] = mapped_column(String(64), nullable=False)
+    # The period the unit was taken from, fixed at reservation: a success that
+    # settles after the hour or month has turned still counts where it began.
+    period_key: Mapped[str] = mapped_column(String(20), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_beta_usage_reservations_quantity_positive"),
+        CheckConstraint("expires_at > created_at", name="ck_beta_usage_reservations_expiry_after_creation"),
+        Index(
+            "ix_beta_usage_reservations_account_feature_period",
+            "account_id", "feature", "period_key", "expires_at",
+        ),
     )

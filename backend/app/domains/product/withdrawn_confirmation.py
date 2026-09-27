@@ -18,9 +18,11 @@ four things the genuine path writes do, and together they are a signature no
 other path produces:
 
 * the capture row itself: the confirmed-label outcome, its barcode, its device
-  and its ``ai_run_id``, with ``label_facts`` and ``account_id`` now empty.
-  Both confirmation routes are signed in and always write an account, so an
-  empty account on a label capture means the account is gone;
+  and its ``ai_run_id``, with ``label_facts`` and ``account_id`` now empty and
+  ``account_attachment_allowed`` false. Both confirmation routes are signed in
+  and always write an account, so an empty account on a label capture means
+  the account is gone — and erasure marks every row it withdraws as never
+  attachable to anyone again;
 * the AI run ledger row (``ai_runs``), which erasure keeps deliberately as the
   non-personal cost and provenance record: a successful, schema-validated run
   of a label transcription workflow, created before the capture. The
@@ -134,6 +136,10 @@ def proves_withdrawn_confirmation(
         or snapshot.scan_event_id != source.id
         or source.label_facts is not None
         or source.account_id is not None
+        # Erasure marks every row it withdraws non-attachable, and a signed-in
+        # confirmation never was attachable; a row still open to a device
+        # claim is anonymous history, not a withdrawn confirmation.
+        or source.account_attachment_allowed is not False
         or source.ai_run_id is None
         or source.device_id is None
     ):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -191,14 +192,14 @@ async def _owned_payloads(session: AsyncSession, account_id: uuid.UUID) -> list[
     return payload_items
 
 
-async def summary(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
-    return build_utility(await _owned_payloads(session, account_id))
+async def summary(session: AsyncSession, account_id: uuid.UUID, *, today: date) -> dict[str, Any]:
+    return build_utility(await _owned_payloads(session, account_id), today=today)
 
 
-async def detail(session: AsyncSession, account_id: uuid.UUID, item_id: uuid.UUID) -> dict[str, Any]:
+async def detail(session: AsyncSession, account_id: uuid.UUID, item_id: uuid.UUID, *, today: date) -> dict[str, Any]:
     """Step 13: the customer detail for one owned supplement."""
     item = await owned_supplement_item(session, account_id, item_id)
     payloads = await _owned_payloads(session, account_id)
     this = next(row for row in payloads if row["id"] == str(item.id))
     knowledge = await read_form_knowledge(session, knowledge_pairs(this, this["facts"]))
-    return build_detail(this, others=payloads, knowledge=knowledge)
+    return build_detail(this, others=payloads, knowledge=knowledge, today=today)

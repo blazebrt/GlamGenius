@@ -93,9 +93,12 @@ async def analyse_scan(
                 },
             )
 
-    # Beta cost/abuse limit — fail closed *before* the AI call.
+    # Beta cost/abuse limit — fail closed *before* the AI call. One unit is
+    # reserved atomically (a check followed later by a record let parallel
+    # requests all see "one left" and all spend it), and committed before the
+    # provider is called, so no lock or transaction is held across that call.
     try:
-        await beta.check_limit(
+        reservation = await beta.reserve_usage(
             session,
             account_id=current.account_id,
             feature=beta.FEATURE_SCAN,
@@ -114,6 +117,12 @@ async def analyse_scan(
                 ),
             },
         ) from exc
+    await session.commit()
+
+    async def give_back() -> None:
+        """A known failure delivered nothing: the reserved unit goes back."""
+        if reservation is not None:
+            await beta.release_usage(session, reservation)
 
     # ---- Run the analysis via the AI provider. ----------------------------
     # A provider failure surfaces cleanly here. A failure does NOT record
@@ -123,6 +132,8 @@ async def analyse_scan(
     from app.domains.ai_gateway.providers import gemini as ai_provider
 
     if not ai_provider.is_configured():
+        await give_back()
+        await session.commit()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
@@ -153,11 +164,15 @@ async def analyse_scan(
         provider_failure_reason = f"{type(exc).__name__}: {exc}"
     except ai_provider.ImageRejected as exc:
         # Bad image is a client error — do not persist an analysis row.
+        await give_back()
+        await session.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "image_invalid", "message": str(exc)},
         ) from exc
     except ai_provider.ProviderNotConfigured as exc:
+        await give_back()
+        await session.commit()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "provider_not_configured", "message": str(exc)},
@@ -173,6 +188,7 @@ async def analyse_scan(
             analysis={},
         )
         session.add(scan)
+        await give_back()
         await session.commit()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -211,6 +227,7 @@ async def analyse_scan(
             analysis={},
         )
         session.add(scan)
+        await give_back()
         await session.commit()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -237,13 +254,17 @@ async def analyse_scan(
     session.add(scan)
     await session.flush()
 
-    # Only successful runs consume the beta allowance.
-    await beta.record_usage(
-        session,
-        account_id=current.account_id,
-        feature=beta.FEATURE_SCAN,
-        idempotency_key=body.idempotency_key,
-    )
+    # Only successful runs consume the beta allowance: the reserved unit
+    # becomes one usage event, and the hold goes, in this one commit.
+    if reservation is not None:
+        await beta.settle_usage(session, reservation, idempotency_key=body.idempotency_key)
+    else:
+        await beta.record_usage(
+            session,
+            account_id=current.account_id,
+            feature=beta.FEATURE_SCAN,
+            idempotency_key=body.idempotency_key,
+        )
     await session.commit()
 
     return _serialise_scan(scan)

@@ -91,6 +91,10 @@ class ComparisonQuery(BaseModel):
 # --- Goals ---------------------------------------------------------------------------
 
 
+#: The one sentence for a target set before the goal begins, wherever it is caught.
+TARGET_BEFORE_START = "The target date cannot be before the goal starts."
+
+
 class GoalCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -113,9 +117,12 @@ class GoalCreate(BaseModel):
 
     @model_validator(mode="after")
     def _target_after_start(self):
-        start = self.starts_on or date.today()
-        if self.target_date and self.target_date < start:
-            raise ValueError("The target date cannot be before the goal starts.")
+        # Only against a start the request states. With no ``starts_on`` the
+        # goal starts on the customer's today, which a schema cannot know
+        # without guessing the server's date; ``service.create_goal`` checks
+        # that case against the date it resolves.
+        if self.starts_on and self.target_date and self.target_date < self.starts_on:
+            raise ValueError(TARGET_BEFORE_START)
         return self
 
 

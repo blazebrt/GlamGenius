@@ -7,10 +7,11 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,7 @@ from app.config import (
 )
 from app.domains.beta_access.models import (
     BetaUsageEvent,
+    BetaUsageReservation,
     Invite,
     InviteRedemption,
     InviteRegistrationReservation,
@@ -474,6 +476,35 @@ async def _current_usage(
     return int(row.scalar_one() or 0)
 
 
+def _tracked(feature: str, now: datetime) -> tuple[int, str, str] | None:
+    """``(limit, period, period_key)`` for a tracked feature, else ``None``."""
+    if feature in _MONTH_FEATURES:
+        return _MONTH_FEATURES[feature], "month", _month_key(now)
+    if feature in _HOUR_FEATURES:
+        return _HOUR_FEATURES[feature], "hour", _hour_key(now)
+    return None
+
+
+async def _held_quantity(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    feature: str,
+    period_key: str,
+    now: datetime,
+) -> int:
+    """Units held by live reservations. An expired one holds nothing."""
+    row = await session.execute(
+        select(func.coalesce(func.sum(BetaUsageReservation.quantity), 0)).where(
+            BetaUsageReservation.account_id == account_id,
+            BetaUsageReservation.feature == feature,
+            BetaUsageReservation.period_key == period_key,
+            BetaUsageReservation.expires_at > now,
+        )
+    )
+    return int(row.scalar_one() or 0)
+
+
 async def check_limit(
     session: AsyncSession,
     *,
@@ -482,22 +513,23 @@ async def check_limit(
 ) -> dict[str, Any]:
     """Raise ``UsageExceeded`` if the account is at or above the limit for
     ``feature``. Returns the summary otherwise.
+
+    A read, not an authority: two callers can both pass it. Cost-bearing work
+    takes a unit with :func:`reserve_usage` instead. Live reservations count
+    here too, so this and a reservation never disagree about what is left.
     """
-    if feature in _MONTH_FEATURES:
-        limit = _MONTH_FEATURES[feature]
-        period_key = _month_key()
-        period = "month"
-    elif feature in _HOUR_FEATURES:
-        limit = _HOUR_FEATURES[feature]
-        period_key = _hour_key()
-        period = "hour"
-    else:
+    now = _now()
+    tracked = _tracked(feature, now)
+    if tracked is None:
         # An untracked feature has no limit. Log-shape parity with tracked
         # features so the caller can render the same UI.
         return {"feature": feature, "used": 0, "limit": None, "period_key": None}
+    limit, period, period_key = tracked
 
     used = await _current_usage(
         session, account_id=account_id, feature=feature, period_key=period_key
+    ) + await _held_quantity(
+        session, account_id=account_id, feature=feature, period_key=period_key, now=now,
     )
     if used >= limit:
         raise UsageExceeded(feature=feature, limit=limit, period=period)
@@ -509,6 +541,131 @@ async def check_limit(
         "period_key": period_key,
         "remaining": max(0, limit - used),
     }
+
+
+# ---------------------------------------------------------------------------
+# Reservations: take the unit before spending it
+# ---------------------------------------------------------------------------
+
+#: How long an unsettled reservation keeps its unit — the case where a process
+#: died between reserving and settling. Long enough for the slowest normal
+#: request (the provider timeout, ``AI_TIMEOUT_SECONDS``, plus the database
+#: work either side); short enough that a crash costs one unit for minutes,
+#: never for the rest of the hour or month. Nothing needs to sweep: every
+#: count ignores an expired reservation.
+RESERVATION_TTL = timedelta(minutes=10)
+
+
+@dataclass(frozen=True)
+class UsageReservation:
+    """One held unit of allowance: plain values, safe past the session that took it."""
+
+    id: uuid.UUID
+    account_id: uuid.UUID
+    feature: str
+    period_key: str
+    quantity: int
+
+
+async def reserve_usage(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    feature: str,
+    quantity: int = 1,
+    now: datetime | None = None,
+) -> UsageReservation | None:
+    """Take ``quantity`` units of ``feature`` now, or raise ``UsageExceeded``.
+
+    The check and the take are one step. A transaction-scoped advisory lock
+    keyed by account, feature and period serialises every reservation for that
+    budget, and under it successful usage plus live reservations plus this one
+    must fit the limit — so of any number of simultaneous requests for the last
+    unit, exactly one gets it. Returns ``None`` for an untracked feature.
+
+    **The caller commits before spending.** The lock ends with that commit, and
+    the unit stays held by the row, not by a transaction: nothing is locked or
+    left open while a provider is called. A database failure raises here, so
+    no provider is ever called without a reservation — the budget fails closed.
+    """
+    now = now or _now()
+    tracked = _tracked(feature, now)
+    if tracked is None:
+        return None
+    limit, period, period_key = tracked
+
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"beta-usage:{account_id}:{feature}:{period_key}"},
+    )
+    used = await _current_usage(
+        session, account_id=account_id, feature=feature, period_key=period_key
+    )
+    held = await _held_quantity(
+        session, account_id=account_id, feature=feature, period_key=period_key, now=now,
+    )
+    if used + held + quantity > limit:
+        raise UsageExceeded(feature=feature, limit=limit, period=period)
+
+    # Opportunistic tidy-up, under the same lock: this budget's expired holds.
+    await session.execute(
+        delete(BetaUsageReservation).where(
+            BetaUsageReservation.account_id == account_id,
+            BetaUsageReservation.feature == feature,
+            BetaUsageReservation.expires_at <= now,
+        )
+    )
+    row = BetaUsageReservation(
+        account_id=account_id, feature=feature, period_key=period_key,
+        quantity=quantity, created_at=now, expires_at=now + RESERVATION_TTL,
+    )
+    session.add(row)
+    await session.flush()
+    return UsageReservation(
+        id=row.id, account_id=account_id, feature=feature,
+        period_key=period_key, quantity=quantity,
+    )
+
+
+async def settle_usage(
+    session: AsyncSession,
+    reservation: UsageReservation,
+    *,
+    idempotency_key: str | None = None,
+) -> None:
+    """The work succeeded: count it, and let go of the hold, in one transaction.
+
+    The event is written to the period the unit was reserved from, and keeps
+    ``record_usage``'s idempotency: a key already counted is not counted twice,
+    and the reservation is released either way. The caller commits.
+    """
+    stmt = pg_insert(BetaUsageEvent).values(
+        account_id=reservation.account_id,
+        feature=reservation.feature,
+        idempotency_key=idempotency_key,
+        period_key=reservation.period_key,
+        quantity=reservation.quantity,
+        created_at=_now(),
+    )
+    if idempotency_key is not None:
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["account_id", "feature", "idempotency_key"]
+        )
+    await session.execute(stmt)
+    await session.execute(
+        delete(BetaUsageReservation).where(BetaUsageReservation.id == reservation.id)
+    )
+
+
+async def release_usage(session: AsyncSession, reservation: UsageReservation) -> None:
+    """The work failed without a result: give the unit back. The caller commits.
+
+    A failed run never consumes an allowance, and nothing is counted here. A
+    release that itself fails leaves the reservation to expire.
+    """
+    await session.execute(
+        delete(BetaUsageReservation).where(BetaUsageReservation.id == reservation.id)
+    )
 
 
 async def record_usage(

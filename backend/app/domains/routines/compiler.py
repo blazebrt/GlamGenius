@@ -170,7 +170,7 @@ def compile_routine(
     *,
     allergies: Sequence[str] = (),
     climate: str | None = None,
-    today: date | None = None,
+    today: date,
     eligibility: RoutineEligibility | None = None,
     selection_plan: RoutineSelectionPlan | None = None,
 ) -> CompiledRoutine:
@@ -320,7 +320,7 @@ def compile_all(
     *,
     allergies: Sequence[str] = (),
     climate: str | None = None,
-    today: date | None = None,
+    today: date,
     eligibility: RoutineEligibility | None = None,
     selection_plan: RoutineSelectionPlan | None = None,
 ) -> list[CompiledRoutine]:

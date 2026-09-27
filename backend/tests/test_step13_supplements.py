@@ -346,10 +346,10 @@ async def test_c_an_unconfirmed_inventory_item_drives_nothing_either():
 
     drafted = {"id": "a", "display_name": "A", "verification_state": "draft", "facts": [Fact("Magnesium oxide")]}
     other = {"id": "b", "display_name": "B", "verification_state": "confirmed", "facts": [Fact("Magnesium oxide")]}
-    detail = build_detail(drafted, others=[drafted, other], knowledge={})
+    detail = build_detail(drafted, others=[drafted, other], knowledge={}, today=date(2026, 8, 1))
     assert detail["overlaps"] == []
     assert detail["components"][0]["form"] == {"status": "awaiting_confirmation"}
-    assert build_utility([drafted, other])["overlaps"] == []
+    assert build_utility([drafted, other], today=date(2026, 8, 1))["overlaps"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -1149,7 +1149,7 @@ async def test_w_open_food_facts_can_never_become_a_confirmed_supplement_label_f
 def test_w_the_supplement_domain_never_imports_store_a():
     root = Path(__file__).resolve().parents[1] / "app" / "domains" / "supplements"
     for path in sorted(root.glob("*.py")):
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module:
                 assert not node.module.startswith("app.domains.off"), f"{path.name} imports {node.module}"
@@ -1270,7 +1270,7 @@ def test_d1_no_production_module_reads_the_knowledge_aliases():
     for path in sorted(root.rglob("*.py")):
         if path.name == "knowledge.py" and path.parent.name == "supplements":
             continue
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Name) and node.id == "raw_aliases":
                 offenders.append(str(path))
@@ -1381,7 +1381,7 @@ def test_d2_unreviewed_knowledge_form_names_are_not_enough_information(printed):
 
 
 def test_d2_every_exact_form_spelling_is_written_out_in_the_module():
-    source = ast.parse((Path(forms.__file__)).read_text())
+    source = ast.parse((Path(forms.__file__)).read_text(encoding="utf-8"))
     literal_keys: set[str] = set()
     for node in ast.walk(source):
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) \
@@ -1799,7 +1799,7 @@ class _CopyScanner(ast.NodeVisitor):
 
 def _scan(path: Path) -> _CopyScanner:
     scanner = _CopyScanner()
-    scanner.visit(ast.parse(path.read_text()))
+    scanner.visit(ast.parse(path.read_text(encoding="utf-8")))
     return scanner
 
 

@@ -64,6 +64,7 @@ from app.domains.care.subject_preferences import (
 )
 from app.domains.family.decision_subject import DecisionSubject, canonicalize_decision_subject
 from app.domains.inventory.models import InventoryAttribute, InventoryEvent
+from app.domains.planning import context as planning_context
 from app.domains.routines import rules as rules_engine
 from app.domains.routines import shelf
 from app.domains.routines.models import ShelfManagerDecisionEvent
@@ -1004,10 +1005,16 @@ async def build_queue(
     session: AsyncSession, *, account_id: uuid.UUID, today: date | None = None,
     decision_subject: DecisionSubject | None = None,
 ) -> ManagerQueue:
-    """Read everything the manager is allowed to see, then compile."""
+    """Read everything the manager is allowed to see, then compile.
+
+    This is the manager's account-facing entry point, so it is where the
+    customer's date is resolved when the caller did not pass one.
+    """
     checked = await canonicalize_decision_subject(
         session, principal_account_id=account_id, decision_subject=decision_subject,
     )
+    if today is None:
+        today = await planning_context.account_today(session, account_id)
     context = await shelf.gather(session, account_id=account_id, today=today, decision_subject=checked)
     products: dict[str, ShelfProduct] = {}
     for category in MANAGER_CATEGORIES:

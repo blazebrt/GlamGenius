@@ -724,15 +724,15 @@ if _missing or _extra:
 
 
 async def compute(
-    session: AsyncSession, account_id: uuid.UUID, key: str, *, today: date | None = None, **kwargs: Any
+    session: AsyncSession, account_id: uuid.UUID, key: str, *, today: date, **kwargs: Any
 ) -> MetricResult:
+    """One metric as of the customer's ``today``, which the caller resolves."""
     if key not in COMPUTERS:
         raise ValueError(f"'{key}' is not a metric we compute.")
-    return await COMPUTERS[key](session, account_id, today=today or date.today(), **kwargs)
+    return await COMPUTERS[key](session, account_id, today=today, **kwargs)
 
 
 async def compute_all(
-    session: AsyncSession, account_id: uuid.UUID, *, today: date | None = None
+    session: AsyncSession, account_id: uuid.UUID, *, today: date
 ) -> list[MetricResult]:
-    day = today or date.today()
-    return [await COMPUTERS[key](session, account_id, today=day) for key in registry.METRIC_KEYS]
+    return [await COMPUTERS[key](session, account_id, today=today) for key in registry.METRIC_KEYS]

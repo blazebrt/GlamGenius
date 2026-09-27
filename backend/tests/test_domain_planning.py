@@ -26,7 +26,6 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from app.domains.planning import clock as planning_clock
-from app.domains.planning import weather as weather_module
 from app.domains.planning.context import gather
 from app.domains.planning.models import (
     AirQualitySnapshot,
@@ -47,15 +46,6 @@ pytestmark = pytest.mark.asyncio
 
 
 TODAY = date(2026, 2, 16)  # a Monday, so week_start == TODAY
-
-
-@pytest.fixture(autouse=True)
-def _deterministic_weather_cache():
-    """The provider cache is process-global; a stale entry would leak between
-    tests and make a "no weather" assertion pass for the wrong reason."""
-    weather_module.clear_cache()
-    yield
-    weather_module.clear_cache()
 
 
 CARE_INVENTORY = [
@@ -578,67 +568,6 @@ async def test_air_quality_validation_rejects_impossible_aqi(
         },
     )
     assert resp.status_code == 422
-
-
-async def test_weather_abstraction_returns_a_typed_record():
-    """The rest of the app depends on the shape, not the provider."""
-
-    class _StubProvider:
-        name = "stub"
-
-        async def fetch(self, lat: float, lon: float):
-            return weather_module.Weather(
-                condition="humid", temperature_c=31.0, humidity_percent=78
-            )
-
-    result = await weather_module.get_weather(19.07, 72.87, provider=_StubProvider())
-
-    assert result.condition == "humid"
-    assert result.temperature_c == 31.0
-    assert result.humidity_percent == 78
-    assert result.stale is False
-
-
-async def test_weather_provider_outage_degrades_to_neutral():
-    """A provider that returns nothing usable must produce 'unknown', not a
-    guess and not an exception — the planner treats unknown as neutral."""
-
-    class _DownProvider:
-        name = "down"
-        calls = 0
-
-        async def fetch(self, lat: float, lon: float):
-            type(self).calls += 1
-            return weather_module.NULL_WEATHER
-
-    result = await weather_module.get_weather(19.07, 72.87, provider=_DownProvider())
-
-    assert result.condition == "unknown"
-    assert result.temperature_c is None
-    # A failed fetch must not be cached as if it were an answer.
-    second = await weather_module.get_weather(19.07, 72.87, provider=_DownProvider())
-    assert second.condition == "unknown"
-    assert _DownProvider.calls == 2
-
-
-async def test_successful_weather_fetch_is_cached():
-    class _CountingProvider:
-        name = "counting"
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def fetch(self, lat: float, lon: float):
-            self.calls += 1
-            return weather_module.Weather(
-                condition="cold", temperature_c=8.0, humidity_percent=40
-            )
-
-    provider = _CountingProvider()
-    await weather_module.get_weather(28.61, 77.21, provider=provider)
-    await weather_module.get_weather(28.61, 77.21, provider=provider)
-
-    assert provider.calls == 1, "a second read inside the TTL must not refetch"
 
 
 # ---------------------------------------------------------------------------

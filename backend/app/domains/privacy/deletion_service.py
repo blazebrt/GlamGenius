@@ -396,6 +396,7 @@ async def run_job(session: AsyncSession, job: AccountDeletionJob) -> tuple[str, 
             await _delete_analytics_events(session, job.account_id)
             await _scrub_audit_events(session, job.account_id)
             await _withdraw_scan_observations(session, job.account_id)
+            await _minimise_invite_reservations(session, job.account_id)
             await _delete_account_row(session, job.account_id)
             job.state = STATE_DATABASE_COMPLETE
             await session.flush()
@@ -691,6 +692,14 @@ async def _withdraw_scan_observations(session: AsyncSession, account_id: uuid.UU
     lost: confirming a label also writes the snapshot and raises the
     ``product_records`` confidence, and both are untouched here.
 
+    The same statement makes every one of these rows permanently
+    non-attachable (``account_attachment_allowed``). The cascade is about to
+    leave them accountless on this person's device, where a later claim of the
+    same phone would otherwise take them as its own anonymous history. The
+    rows stay for provenance — ``device_id`` and ``ai_run_id`` included, which
+    :mod:`app.domains.product.withdrawn_confirmation` reads — and belong to
+    nobody, for good.
+
     Runs before the account row goes, because afterwards ``account_id`` is
     already NULL and these rows can no longer be told apart from the captures
     of people who are still here. Idempotent.
@@ -700,7 +709,38 @@ async def _withdraw_scan_observations(session: AsyncSession, account_id: uuid.UU
     await session.execute(
         update(ScanEvent)
         .where(ScanEvent.account_id == account_id)
-        .values(label_facts=None)
+        .values(label_facts=None, account_attachment_allowed=False)
+    )
+    await session.flush()
+
+
+#: What a minimised reservation carries instead of the address it was bound to.
+#: A constant, so it says nothing about who the person was — not the address,
+#: not the account id, and no encoding of either.
+ERASED_RESERVATION_EMAIL = "erased"
+
+
+async def _minimise_invite_reservations(session: AsyncSession, account_id: uuid.UUID) -> None:
+    """Strip this person's identity from the invite reservations they consumed.
+
+    ``invite_registration_reservations`` has no account foreign key by design
+    (a reservation exists before any account does), so the cascade never
+    reaches it, and a consumed row kept the deleted person's normalised email
+    and Supabase user id for good. The Supabase user id *is* the account id,
+    so the rows are found by it here, before the account row goes. What stays
+    is operational history only: which invite, its status, when it was
+    consumed and when it expired, and the hash of a random challenge. The
+    governed deletion tombstone is ``account_deletion_jobs``, not this table.
+
+    Scoped to rows naming this account, so nobody else's reservation changes.
+    Idempotent: a retry finds none left to minimise.
+    """
+    from app.domains.beta_access.models import InviteRegistrationReservation
+
+    await session.execute(
+        update(InviteRegistrationReservation)
+        .where(InviteRegistrationReservation.supabase_user_id == account_id)
+        .values(supabase_user_id=None, email_normalised=ERASED_RESERVATION_EMAIL)
     )
     await session.flush()
 
