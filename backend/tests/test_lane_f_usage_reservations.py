@@ -137,9 +137,16 @@ class _GatedProvider:
         self.entered = asyncio.Event()
         self.gate = asyncio.Event()
         self.raises: BaseException | None = None
+        self.systems: list[str] = []
+        self.prompts: list[str] = []
 
-    async def generate(self, prompt, system=None, image_base64=None, **kwargs):
+    # The adapter's own contract (``gemini.generate``): ``system`` is required
+    # and nothing else is accepted, so a caller that forgets it fails here
+    # exactly as it would in production.
+    async def generate(self, prompt, system, image_base64=None):
         self.calls += 1
+        self.systems.append(system)
+        self.prompts.append(prompt)
         self.entered.set()
         await self.gate.wait()
         if self.raises is not None:

@@ -169,6 +169,36 @@ The invariant, checked in code rather than assumed:
   not hold at the moment of the call.
 - The defaults: 45 s × 2 models = 90 s; with the 60 s margin, 150 s < 600 s.
 
+### The photo check reaches the adapter it really has
+
+**The defect.** `POST /api/v2/scan/analyse` called
+`gemini.generate(prompt=…, image_base64=…)`, but the adapter is
+`generate(prompt, system, image_base64=None)`. Every real request raised
+`TypeError: generate() missing 1 required positional argument: 'system'` before
+anything was sent, answered 500, and left its reservation held until expiry.
+The suite never saw it: both test fakes declared `system=None`.
+
+**The repair — a runtime contract, not new AI behaviour.**
+
+- `SCAN_SYSTEM` is the sentence that used to open the prompt, moved verbatim:
+  "You are a considerate, evidence-first appearance coach." The task prompt
+  keeps everything else, word for word. System plus task equals the old
+  single prompt exactly; no persona, inference or instruction was added.
+- The call passes `prompt=`, `system=` and `image_base64=` by keyword.
+- New successful scans record `prompt_version = "scan.v2"` (the prompt moved
+  channel) and `schema_version = "scan.v1"` (the JSON asked for is unchanged).
+  Stored rows are not rewritten; a replay returns the stored row as it was.
+- The fakes now carry the adapter's exact contract — `system` required, no
+  `**kwargs` — and a static test binds every adapter call site in `app/`
+  against the real signature, so the two cannot drift apart again unseen.
+
+**Follow-up, not addressed here.** `ai_gateway/gateway.py` describes
+`run_structured` as the path every model call takes, but this route calls the
+Gemini adapter directly: its calls are not recorded as AI runs and do not count
+against the hourly `ai.request` budget (the monthly `scan.analyse` allowance
+governs it). Routing it through the gateway would change charging, run
+recording, failure semantics and provenance, so it needs its own change.
+
 ## 3. "Today" is the customer's date
 
 **The defect.** Account-facing helpers fell back to the server's

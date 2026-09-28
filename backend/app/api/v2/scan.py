@@ -41,6 +41,16 @@ IDEMPOTENCY_KEY_PATTERN = r"^[!-~]+$"
 #: Set on a response that replays an earlier successful result.
 REPLAYED_HEADER = "Idempotent-Replayed"
 
+#: The system instruction for a photo check. It is the role sentence that used
+#: to open the task prompt, moved verbatim into the channel the provider
+#: adapter requires — not a new persona, and no new instruction.
+SCAN_SYSTEM = "You are a considerate, evidence-first appearance coach."
+#: ``scan.v2``: the role sentence moved from the task prompt to ``system``.
+#: The task itself is unchanged.
+SCAN_PROMPT_VERSION = "scan.v2"
+#: The JSON the model is asked for is unchanged.
+SCAN_SCHEMA_VERSION = "scan.v1"
+
 
 class ScanAnalyseRequest(BaseModel):
     image_base64: str
@@ -216,9 +226,9 @@ async def analyse_scan(
             },
         )
 
+    # The task only; the role sentence travels as ``system`` (SCAN_SYSTEM).
     prompt = (
-        "You are a considerate, evidence-first appearance coach. Analyse the "
-        f"attached {body.scan_type} photo and return a compact JSON object with "
+        f"Analyse the attached {body.scan_type} photo and return a compact JSON object with "
         'these keys: {"observations": [string], "colour_palette": [string], '
         '"recommended_next_steps": [string], "confidence": number between 0 and 1}.\n'
         "Use premium, constructive language. Never use judgmental terms."
@@ -228,8 +238,12 @@ async def analyse_scan(
     provider_response = None
     started = __import__("time").monotonic()
     try:
+        # Keyword arguments against the adapter's own contract: ``system`` is
+        # required, and omitting it was a TypeError before anything was sent.
         provider_response = await ai_provider.generate(
-            prompt=prompt, image_base64=body.image_base64
+            prompt=prompt,
+            system=SCAN_SYSTEM,
+            image_base64=body.image_base64,
         )
     except (ai_provider.ProviderTimeout, ai_provider.ProviderCallFailed) as exc:
         provider_failure_reason = f"{type(exc).__name__}: {exc}"
@@ -320,8 +334,8 @@ async def analyse_scan(
         status=SCAN_STATUS_OK,
         provider=ai_provider.PROVIDER_NAME,
         model=provider_response.model,
-        prompt_version="scan.v1",
-        schema_version="scan.v1",
+        prompt_version=SCAN_PROMPT_VERSION,
+        schema_version=SCAN_SCHEMA_VERSION,
         latency_ms=int((__import__("time").monotonic() - started) * 1000),
         analysis=analysis,
         idempotency_key=body.idempotency_key,

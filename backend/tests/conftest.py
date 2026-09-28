@@ -230,16 +230,19 @@ class FakeProvider:
         self.calls: int = 0
         self.model: str = "fake-model"
         self.last_system: str | None = None
+        self.last_prompt: str | None = None
 
+    # The adapter's own contract: ``system`` is required and nothing else is
+    # accepted. A lenient fake here once hid a route that never passed it.
     async def generate(
         self,
         prompt: str,
-        system: str | None = None,
+        system: str,
         image_base64: str | None = None,
-        **kwargs: Any,
     ) -> gemini.ProviderResponse:
         self.calls += 1
         self.last_system = system
+        self.last_prompt = prompt
         if self.raises is not None:
             raise self.raises
         return gemini.ProviderResponse(
