@@ -561,6 +561,9 @@ async def record_scan(
         device_id=device_id, account_id=account_id, barcode=barcode, outcome=outcome,
         client_scan_id=client_scan_id, queued_offline=queued_offline,
         scanned_at=scanned_at or utcnow(), label_facts=label_facts, ai_run_id=ai_run_id,
+        # Only a scan made signed out may later follow its phone into an
+        # account. One recorded for an account never becomes attachable again.
+        account_attachment_allowed=account_id is None,
     )
     try:
         async with session.begin_nested():
@@ -582,15 +585,23 @@ async def record_scan(
 async def attach_scans_to_account(
     session: AsyncSession, *, device_id: uuid.UUID, account_id: uuid.UUID,
 ) -> int:
-    """Give this device's earlier scans to the account that just claimed it.
+    """Give this device's earlier anonymous scans to the account that just claimed it.
 
-    Only scans that belong to nobody are moved. A scan already attached to
-    someone stays with them.
+    Only scans that belong to nobody *and have never belonged to anybody* are
+    moved — ``account_attachment_allowed``. An accountless row is not enough:
+    account erasure leaves its scans accountless too, on this same device, and
+    those are a deleted person's history, never the next claimant's. A scan
+    already attached to someone stays with them. Attaching clears the flag in
+    the same statement, so a row is given away at most once.
     """
     result = await session.execute(
         update(ScanEvent)
-        .where(ScanEvent.device_id == device_id, ScanEvent.account_id.is_(None))
-        .values(account_id=account_id)
+        .where(
+            ScanEvent.device_id == device_id,
+            ScanEvent.account_id.is_(None),
+            ScanEvent.account_attachment_allowed.is_(True),
+        )
+        .values(account_id=account_id, account_attachment_allowed=False)
     )
     return result.rowcount or 0
 

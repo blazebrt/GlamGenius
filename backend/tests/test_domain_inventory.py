@@ -151,7 +151,7 @@ async def test_lifecycle_create_read_update_archive(db_clean, category):
         assert fetched.category == category
         assert fetched.status == "active"
         assert fetched.version == 1
-        payload = await inv.serialize_item(session, fetched, include_history=True)
+        payload = await inv.serialize_item(session, fetched, today=date.today(), include_history=True)
         assert payload["display_name"] == CATEGORY_TEMPLATES[category]["display_name"]
         assert payload["details"], "detail row must be created for every category"
         # Every ``created`` event must be persisted.
@@ -243,7 +243,7 @@ async def test_condition_event_persists_and_updates_item(db_clean):
     async with factory() as session:
         item = await inv.owned_item(session, account_id, item_id)
         assert item.condition == "worn"
-        payload = await inv.serialize_item(session, item, include_history=True)
+        payload = await inv.serialize_item(session, item, today=date.today(), include_history=True)
         assert any(
             e["event_type"] == "condition_changed"
             and e["payload"]["condition"] == "worn"
@@ -366,14 +366,14 @@ async def test_list_items_filters_by_category_and_paginates(db_clean):
 
     async with factory() as session:
         result = await inv.list_items(
-            session, account_id, page=1, page_size=2, category="beauty"
+            session, account_id, today=date.today(), page=1, page_size=2, category="beauty"
         )
     assert result["pagination"]["total"] == 1
     assert result["items"][0]["category"] == "beauty"
 
     async with factory() as session:
-        page1 = await inv.list_items(session, account_id, page=1, page_size=2)
-        page2 = await inv.list_items(session, account_id, page=2, page_size=2)
+        page1 = await inv.list_items(session, account_id, today=date.today(), page=1, page_size=2)
+        page2 = await inv.list_items(session, account_id, today=date.today(), page=2, page_size=2)
     assert page1["pagination"]["total"] == 3
     assert len(page1["items"]) == 2
     assert len(page2["items"]) == 1
@@ -418,7 +418,7 @@ async def test_archived_item_hidden_from_default_listing(db_clean):
         await session.commit()
 
     async with factory() as session:
-        result = await inv.list_items(session, account_id, page=1, page_size=10)
+        result = await inv.list_items(session, account_id, today=date.today(), page=1, page_size=10)
     assert result["pagination"]["total"] == 0
 
 
@@ -495,7 +495,7 @@ async def test_inventory_summary_counts_every_category(db_clean):
         await session.commit()
 
     async with factory() as session:
-        summary = await inv.summary(session, account_id)
+        summary = await inv.summary(session, account_id, today=date.today())
 
     assert summary["total_items"] == 2
     assert set(summary["categories"].keys()) == {

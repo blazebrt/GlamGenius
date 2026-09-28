@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -201,10 +202,30 @@ class ScanEvent(UUIDPrimaryKey, TimestampMixin, Base):
     queued_offline: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
     label_facts: Mapped[dict | None] = mapped_column(JSONB)
     ai_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ai_runs.id", ondelete="SET NULL"))
+    #: May a device claim still give this row to an account?
+    #:
+    #: ``true`` only for a genuinely anonymous scan that has never belonged to
+    #: anyone. A scan recorded for a signed-in account starts ``false``;
+    #: attaching one sets it ``false`` in the same statement; account erasure
+    #: sets it ``false`` before the account relation is severed. It never goes
+    #: back to ``true``. Without it, an accountless row was either an anonymous
+    #: scan or history detached by somebody's erasure, and a device claim could
+    #: not tell them apart — so the next account to claim the phone was given
+    #: the deleted person's scans. Internal control state: never exported.
+    account_attachment_allowed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+    )
 
     __table_args__ = (
         UniqueConstraint("device_id", "client_scan_id", name="uq_scan_event_device_client_id"),
         Index("ix_scan_events_barcode", "barcode"),
+        # An owned row is never attachable, so however an account goes — the
+        # erasure path, or the ``ON DELETE SET NULL`` cascade on its own — the
+        # row it leaves behind cannot become somebody else's.
+        CheckConstraint(
+            "account_id IS NULL OR NOT account_attachment_allowed",
+            name="ck_scan_events_owned_not_attachable",
+        ),
     )
 
 

@@ -17,12 +17,14 @@ import logging
 import uuid
 from typing import Any
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.audit import service as audit
 from app.domains.audit.models import ACTION_MEDIA_DELETED, ACTION_MEDIA_UPLOADED
 from app.domains.identity import service as identity_service
+from app.domains.inventory.models import InventoryItem, InventoryItemImage
 from app.domains.media.models import (
     MEDIA_STATUS_ACTIVE,
     MEDIA_STATUS_DELETED,
@@ -235,6 +237,7 @@ async def delete(
 
     asset.status = MEDIA_STATUS_DELETED
     asset.deleted_at = utcnow()
+    await _unlink_inventory_images(session, account_id=account_id, asset_id=asset.id)
     await session.flush()
 
     await audit.record(
@@ -247,6 +250,26 @@ async def delete(
         client_ip=client_ip,
     )
     return asset
+
+
+async def _unlink_inventory_images(
+    session: AsyncSession, *, account_id: uuid.UUID, asset_id: uuid.UUID,
+) -> None:
+    """Take a deleted photo off this account's own items, in the same transaction.
+
+    The row stays (``deleted``) for history, so nothing cascaded, and an item
+    went on naming a photo that no longer resolves: the next update carrying
+    its own image ids was refused. Only links from items this account owns are
+    removed, chosen in SQL. A malformed link from somebody else's item is not
+    this deletion's to touch, and neither item nor bytes are recreated.
+    """
+    owned_items = select(InventoryItem.id).where(InventoryItem.account_id == account_id)
+    await session.execute(
+        sql_delete(InventoryItemImage).where(
+            InventoryItemImage.media_asset_id == asset_id,
+            InventoryItemImage.item_id.in_(owned_items),
+        )
+    )
 
 
 async def list_for_account(

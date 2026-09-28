@@ -396,8 +396,9 @@ def missing_slot_findings(products: Sequence[ShelfProduct], category: str) -> li
 # --- Expiry ------------------------------------------------------------------
 
 
-def expiry_findings(products: Sequence[ShelfProduct], today: date | None = None) -> list[Finding]:
-    now = today or date.today()
+def expiry_findings(products: Sequence[ShelfProduct], today: date) -> list[Finding]:
+    # ``today`` is the customer's date, passed down from the shelf context.
+    now = today
     findings: list[Finding] = []
     for product in products:
         days = product.days_to_expiry(now)
@@ -459,14 +460,15 @@ def climate_notes(condition: str | None, slots_present: Iterable[str]) -> list[d
 # --- Ranking -----------------------------------------------------------------
 
 
-def rank_for_slot(products: Sequence[ShelfProduct], slot: str, today: date | None = None) -> list[ShelfProduct]:
+def rank_for_slot(products: Sequence[ShelfProduct], slot: str, today: date) -> list[ShelfProduct]:
     """Which owned product should fill a step.
 
     Owned-first is the whole premise, so this only ever ranks things the user
     has. Expired products drop to the bottom rather than being hidden, and
     something running out soon is *preferred* — using it up is the point.
+    ``today`` is the customer's date, never the server's.
     """
-    now = today or date.today()
+    now = today
     rows = [product for product in products if product.slot == slot]
 
     def score(product: ShelfProduct) -> tuple:

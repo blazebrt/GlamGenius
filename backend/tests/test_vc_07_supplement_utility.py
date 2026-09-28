@@ -53,17 +53,17 @@ def test_exact_overlap_and_reviewed_alias_are_deterministic():
 def test_unconfirmed_facts_and_drafts_do_not_drive_overlap():
     a = Fact("Vitamin D", "vitamin d", uuid4(), verification_state="draft")
     b = Fact("Vitamin D", "vitamin d", uuid4())
-    result = build_utility([item("A", [a]), item("B", [b])])
+    result = build_utility([item("A", [a]), item("B", [b])], today=date(2026, 8, 1))
     assert result["overlaps"] == []
     assert result["confirmation_needed"]
-    draft_item = build_utility([item("Draft", [b], confirmed="draft")])
+    draft_item = build_utility([item("Draft", [b], confirmed="draft")], today=date(2026, 8, 1))
     assert draft_item["overlaps"] == []
 
 
 def test_amounts_units_and_missing_fields_are_preserved_without_totals():
     first = Fact("Vitamin C", "vitamin c", uuid4(), amount=Decimal("500"), unit="mg", serving_text="Per tablet", canonical_component_key="vitamin c")
     second = Fact("Vitamin C", "vitamin c", uuid4(), amount=Decimal("250"), unit="mcg", canonical_component_key="vitamin c")
-    result = build_utility([item("A", [first]), item("B", [second])])
+    result = build_utility([item("A", [first]), item("B", [second])], today=date(2026, 8, 1))
     amounts = {row["fact"]["amount"] for row in result["overlaps"][0]["items"]}
     assert amounts == {"500", "250"}
     assert all("total" not in str(result[key]).lower() for key in ("supplements", "overlaps"))
@@ -73,10 +73,10 @@ def test_amounts_units_and_missing_fields_are_preserved_without_totals():
 def test_same_item_alias_rows_never_inflate_cross_product_overlap():
     first = Fact("Vitamin C", "vitamin c", uuid4(), canonical_component_key="vitamin c")
     alias = Fact("ascorbic acid", "ascorbic acid", uuid4(), canonical_component_key="vitamin c")
-    assert build_utility([item("One bottle", [first, alias])])["overlaps"] == []
+    assert build_utility([item("One bottle", [first, alias])], today=date(2026, 8, 1))["overlaps"] == []
 
     second = Fact("ascorbic acid", "ascorbic acid", uuid4(), canonical_component_key="vitamin c")
-    overlap = build_utility([item("One bottle", [first, alias]), item("Second bottle", [second])])["overlaps"]
+    overlap = build_utility([item("One bottle", [first, alias]), item("Second bottle", [second])], today=date(2026, 8, 1))["overlaps"]
     assert len(overlap) == 1 and overlap[0]["product_count"] == 2
     assert len(overlap[0]["items"][0]["facts"]) in {1, 2}
 

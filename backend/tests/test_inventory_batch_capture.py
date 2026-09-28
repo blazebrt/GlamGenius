@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from datetime import date
 
 import pytest
 from app.domains.inventory import batch
@@ -179,7 +180,7 @@ async def test_an_unconfirmed_candidate_does_not_reach_the_routines_shelf(
 
     factory = get_sessionmaker()
     async with factory() as session:
-        context = await shelf.gather(session, account_id=account_id)
+        context = await shelf.gather(session, account_id=account_id, today=date.today())
     assert context.owned == []
     assert context.draft_count == 0
 
@@ -351,7 +352,7 @@ async def test_fifteen_items_captured_one_tap_each(
 
     factory = get_sessionmaker()
     async with factory() as session:
-        context = await shelf.gather(session, account_id=account_id)
+        context = await shelf.gather(session, account_id=account_id, today=date.today())
     # Everything kept is usable by the engines immediately; nothing is a draft.
     assert len(context.owned) == 12
     assert context.draft_count == 0

@@ -230,6 +230,11 @@ REGISTRY: dict[str, Classification] = {
     # --- Audit + beta usage ---
     "audit_events": Classification.INCLUDED,
     "beta_usage_events": Classification.INCLUDED,
+    # A short-lived hold on one unit of allowance, taken before a provider is
+    # paid and settled into ``beta_usage_events`` (or released) right after.
+    # System cost control, never customer content: no prompt, output or text.
+    # It expires on its own and cascades with the account.
+    "beta_usage_reservations": Classification.OPERATIONAL,
     "app_events": Classification.INCLUDED,
     # --- Feature flags (global) ---
     "feature_flags": Classification.NOT_USER_OWNED,

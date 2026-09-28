@@ -391,8 +391,9 @@ async def analyse_shelf(
     decision_subject: DecisionSubject | None = None,
 ) -> dict[str, Any]:
     """Re-read the shelf, store what the engine concluded, return the summary."""
+    today = body.as_of or await planning_context.account_today(session, account_id)
     context = await shelf.gather(
-        session, account_id=account_id, climate=body.climate, today=body.as_of,
+        session, account_id=account_id, climate=body.climate, today=today,
         decision_subject=decision_subject,
     )
 
@@ -404,7 +405,7 @@ async def analyse_shelf(
 
     await session.flush()
     refreshed = await shelf.gather(
-        session, account_id=account_id, climate=body.climate, today=body.as_of,
+        session, account_id=account_id, climate=body.climate, today=today,
         decision_subject=decision_subject,
     )
     result = shelf.summary(refreshed)
@@ -422,7 +423,10 @@ async def shelf_summary(
     session: AsyncSession, *, account_id: uuid.UUID, climate: str | None = None,
     decision_subject: DecisionSubject | None = None,
 ) -> dict[str, Any]:
-    context = await shelf.gather(session, account_id=account_id, climate=climate, decision_subject=decision_subject)
+    context = await shelf.gather(
+        session, account_id=account_id, climate=climate, decision_subject=decision_subject,
+        today=await planning_context.account_today(session, account_id),
+    )
     result = shelf.summary(context)
     result["knowledge_version"] = ONTOLOGY_VERSION
     if decision_subject is not None:
@@ -439,17 +443,23 @@ async def shelf_summary(
 async def shelf_expiring(
     session: AsyncSession, *, account_id: uuid.UUID, days: int = 60
 ) -> dict[str, Any]:
-    context = await shelf.gather(session, account_id=account_id)
+    context = await shelf.gather(
+        session, account_id=account_id, today=await planning_context.account_today(session, account_id),
+    )
     return shelf.expiring(context, days)
 
 
 async def shelf_low_use(session: AsyncSession, *, account_id: uuid.UUID) -> dict[str, Any]:
-    context = await shelf.gather(session, account_id=account_id)
+    context = await shelf.gather(
+        session, account_id=account_id, today=await planning_context.account_today(session, account_id),
+    )
     return shelf.low_use(context)
 
 
 async def shelf_value_to_recover(session: AsyncSession, *, account_id: uuid.UUID) -> dict[str, Any]:
-    context = await shelf.gather(session, account_id=account_id)
+    context = await shelf.gather(
+        session, account_id=account_id, today=await planning_context.account_today(session, account_id),
+    )
     items = (await session.execute(
         select(InventoryItem).where(
             InventoryItem.account_id == account_id,
@@ -1879,7 +1889,9 @@ async def check_ingredients(
             field="label_text",
         )
 
-    context = await shelf.gather(session, account_id=account_id)
+    context = await shelf.gather(
+        session, account_id=account_id, today=await planning_context.account_today(session, account_id),
+    )
     owned_by_id = {str(item.id): item for item in context.owned}
 
     checked: list[ShelfProduct] = []
@@ -2032,7 +2044,9 @@ async def perfume_recommendation(
     occasion_key: str | None = None, weather: str | None = None,
     time_of_day: str | None = None, season: str | None = None,
 ) -> dict[str, Any]:
-    context = await shelf.gather(session, account_id=account_id)
+    context = await shelf.gather(
+        session, account_id=account_id, today=await planning_context.account_today(session, account_id),
+    )
     perfumes = context.by_category("perfumes")
 
     recent = [
@@ -2258,8 +2272,11 @@ async def improve_overview(
         decision_subject=decision_subject,
     )
     _enforce_subject_handoff(checked)
+    # One date for the shelf and for Care below. The shelf used to take the
+    # server's, so at midnight IST the two halves of this page disagreed.
+    plan_date = await planning_context.account_today(session, account_id)
     context = await shelf.gather(
-        session, account_id=account_id, decision_subject=checked,
+        session, account_id=account_id, decision_subject=checked, today=plan_date,
     )
     summary = shelf.summary(context)
 
@@ -2270,7 +2287,6 @@ async def improve_overview(
         status="active",
     )
     routines = [await _serialize_routine(session, row) for row in rows]
-    plan_date = clock.local_today(clock.DEFAULT_TIMEZONE)
     _, care_context, care_decisions_set = await _current_care_decisions(
         session, account_id, plan_date, decision_subject=checked,
     )

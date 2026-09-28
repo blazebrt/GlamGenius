@@ -114,8 +114,8 @@ async def test_the_batched_path_returns_exactly_what_the_loop_returned(db_clean)
 
     async with get_sessionmaker()() as session:
         items = await _load(session, account_id)
-        one_at_a_time = [await inv.serialize_item(session, item) for item in items]
-        batched = await inv.serialize_items(session, items)
+        one_at_a_time = [await inv.serialize_item(session, item, today=date.today()) for item in items]
+        batched = await inv.serialize_items(session, items, today=date.today())
 
     assert batched == one_at_a_time
 
@@ -149,8 +149,8 @@ async def test_an_item_with_no_detail_row_still_appears(db_clean):
 
     async with get_sessionmaker()() as session:
         items = await _load(session, account_id)
-        batched = await inv.serialize_items(session, items)
-        looped = [await inv.serialize_item(session, row) for row in items]
+        batched = await inv.serialize_items(session, items, today=date.today())
+        looped = [await inv.serialize_item(session, row, today=date.today()) for row in items]
 
     assert len(batched) == 1
     assert batched == looped
@@ -161,7 +161,7 @@ async def test_no_items_is_not_a_query(db_clean):
     account_id = await _account()
     async with get_sessionmaker()() as session:
         with _QueryCounter() as counter:
-            assert await inv.serialize_items(session, []) == []
+            assert await inv.serialize_items(session, [], today=date.today()) == []
             assert await inv.details_for_many(session, []) == {}
     assert counter.count == 0
 
@@ -173,7 +173,7 @@ async def test_items_keep_the_order_they_were_given_in(db_clean):
     async with get_sessionmaker()() as session:
         items = await _load(session, account_id)
         reversed_items = list(reversed(items))
-        batched = await inv.serialize_items(session, reversed_items)
+        batched = await inv.serialize_items(session, reversed_items, today=date.today())
 
     assert [body["id"] for body in batched] == [str(item.id) for item in reversed_items]
 
@@ -205,12 +205,12 @@ async def test_serialising_more_items_does_not_mean_more_queries(db_clean):
     async with get_sessionmaker()() as session:
         items = await _load(session, small)
         with _QueryCounter() as few:
-            await inv.serialize_items(session, items)
+            await inv.serialize_items(session, items, today=date.today())
 
     async with get_sessionmaker()() as session:
         items = await _load(session, large)
         with _QueryCounter() as many:
-            await inv.serialize_items(session, items)
+            await inv.serialize_items(session, items, today=date.today())
 
     assert few.count == many.count, (
         f"{few.count} queries for 3 items but {many.count} for 60 — the batch "
@@ -226,13 +226,13 @@ async def test_the_whole_inventory_reports_stay_flat(db_clean):
 
     async with get_sessionmaker()() as session:
         with _QueryCounter() as expiring:
-            await inv.expiring_items(session, account_id)
+            await inv.expiring_items(session, account_id, today=date.today())
         with _QueryCounter() as low_use:
-            await inv.low_use_items(session, account_id)
+            await inv.low_use_items(session, account_id, today=date.today())
         with _QueryCounter() as value:
-            await inv.value_report(session, account_id)
+            await inv.value_report(session, account_id, today=date.today())
         with _QueryCounter() as summary:
-            await inv.summary(session, account_id)
+            await inv.summary(session, account_id, today=date.today())
 
     # Generous ceilings: the numbers before this change were 61, 61, 61 and 184
     # on this fixture, and a regression would land back in that range.
@@ -248,7 +248,7 @@ async def test_one_page_of_a_large_inventory_stays_flat(db_clean):
 
     async with get_sessionmaker()() as session:
         with _QueryCounter() as counter:
-            page = await inv.list_items(session, account_id, page=1, page_size=24)
+            page = await inv.list_items(session, account_id, today=date.today(), page=1, page_size=24)
 
     assert len(page["items"]) == 24
     assert page["pagination"]["total"] == 120
@@ -263,7 +263,7 @@ async def test_filtering_by_expiry_does_not_query_per_item(db_clean):
     async with get_sessionmaker()() as session:
         with _QueryCounter() as counter:
             await inv.list_items(
-                session, account_id, page=1, page_size=24, expiry_status="missing",
+                session, account_id, today=date.today(), page=1, page_size=24, expiry_status="missing",
             )
 
     assert counter.count <= 8, counter.count
@@ -289,11 +289,21 @@ async def test_duplicate_pairs_are_still_scoped_to_the_account(db_clean):
         ))
         await session.commit()
 
-    from app.shared.errors.exceptions import NotFoundError
-
+    # Lane F: this pair used to raise, which took the whole inventory summary
+    # down. It is still never served and still leaks nothing of theirs; it is
+    # now retired instead of failing the account's list.
     async with get_sessionmaker()() as session:
-        with pytest.raises(NotFoundError):
-            await inv.duplicates(session, mine)
+        served = await inv.duplicates(session, mine, today=date.today())
+        await session.commit()
+
+    assert served == []
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(
+            select(DuplicateCandidate).where(DuplicateCandidate.account_id == mine)
+        )).scalar_one()
+        their_item = await session.get(InventoryItem, their_ids[0])
+    assert (row.status, row.resolution) == ("resolved", inv.DUPLICATE_RESOLUTION_ITEM_UNAVAILABLE)
+    assert their_item.status == "active", "another account's item is never touched"
 
 
 async def test_duplicate_pairs_serialise_the_same_as_before(db_clean):
@@ -308,11 +318,11 @@ async def test_duplicate_pairs_serialise_the_same_as_before(db_clean):
         await session.commit()
 
     async with get_sessionmaker()() as session:
-        pairs = await inv.duplicates(session, account_id)
+        pairs = await inv.duplicates(session, account_id, today=date.today())
         a = await inv.owned_item(session, account_id, ids[0])
         b = await inv.owned_item(session, account_id, ids[1])
-        expected_a = await inv.serialize_item(session, a)
-        expected_b = await inv.serialize_item(session, b)
+        expected_a = await inv.serialize_item(session, a, today=date.today())
+        expected_b = await inv.serialize_item(session, b, today=date.today())
 
     assert len(pairs) == 1
     assert pairs[0]["item_a"] == expected_a
@@ -434,8 +444,6 @@ async def test_a_duplicate_pair_naming_an_archived_item_is_not_served(db_clean):
     account filter is the obvious one to carry over, the ``status`` filter is
     the one that gets forgotten.
     """
-    from app.shared.errors.exceptions import NotFoundError
-
     account_id = await _account()
     ids = await _seed_one_of_each(account_id)
 
@@ -448,6 +456,15 @@ async def test_a_duplicate_pair_naming_an_archived_item_is_not_served(db_clean):
         archived.status = "archived"
         await session.commit()
 
+    # Lane F: still not served, but no longer an error that takes the whole
+    # summary down — the pair is retired, deterministically.
     async with get_sessionmaker()() as session:
-        with pytest.raises(NotFoundError):
-            await inv.duplicates(session, account_id)
+        served = await inv.duplicates(session, account_id, today=date.today())
+        await session.commit()
+
+    assert served == []
+    async with get_sessionmaker()() as session:
+        row = (await session.execute(
+            select(DuplicateCandidate).where(DuplicateCandidate.account_id == account_id)
+        )).scalar_one()
+    assert (row.status, row.resolution) == ("resolved", inv.DUPLICATE_RESOLUTION_ITEM_UNAVAILABLE)

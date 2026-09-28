@@ -49,6 +49,9 @@ SUPPLEMENT_COPY: dict[str, str] = {
     ),
     # --- Label facts -------------------------------------------------------
     "supplement.label_fact.reserved_key": "This retry key is reserved.",
+    "supplement.label_fact.name_required": (
+        "A label fact needs its name. Send a new name, or leave the name out to keep the one recorded."
+    ),
 }
 
 #: The boundary's alternatives, in the order shown.

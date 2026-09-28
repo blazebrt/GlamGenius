@@ -152,6 +152,11 @@ from app.shared.errors.exceptions import AppError
 
 logger = logging.getLogger(__name__)
 
+#: Scan-event columns the export leaves out, from the table's coverage entry.
+SCAN_EVENT_WITHHELD = frozenset(EXPORT_COVERAGE["scan_events"].withheld)
+#: Photo-analysis columns the export leaves out, from the table's coverage entry.
+SCAN_WITHHELD = frozenset(EXPORT_COVERAGE["scans"].withheld)
+
 
 #: The one message a caller sees when the export could not be completed. It
 #: states what happened and what to do; it never names a domain, a table or a
@@ -983,7 +988,8 @@ async def _scans(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]
     )
     # Scan rows never contain raw image bytes — face/hair/hand photos are
     # transient request data. We keep the analysis result reference.
-    return {"scans": [_row_dict(r, [c.name for c in Scan.__table__.columns]) for r in rows]}
+    # ``idempotency_key`` is request-control metadata, withheld (coverage).
+    return {"scans": [_row_dict(r, [c.name for c in Scan.__table__.columns if c.name not in SCAN_WITHHELD]) for r in rows]}
 
 
 async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
@@ -1002,7 +1008,9 @@ async def _product_scans(session: AsyncSession, account_id: uuid.UUID) -> dict[s
         .where(ScanEvent.account_id == account_id)
         .order_by(ScanEvent.created_at.desc()),
     )
-    fields = [c.name for c in ScanEvent.__table__.columns]
+    # ``account_attachment_allowed`` is internal control state — whether a
+    # device claim may still move an anonymous row — and is not exported.
+    fields = [c.name for c in ScanEvent.__table__.columns if c.name not in SCAN_EVENT_WITHHELD]
     reports = await _fetch(
         session,
         select(LabelErrorReport)

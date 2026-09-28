@@ -512,7 +512,7 @@ def test_the_supplement_domain_imports_nothing_from_the_product_scan_stack():
 
     root = Path(__file__).resolve().parents[1] / "app" / "domains" / "supplements"
     for path in sorted(root.glob("*.py")):
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             modules = [node.module] if isinstance(node, ast.ImportFrom) and node.module else (
                 [alias.name for alias in node.names] if isinstance(node, ast.Import) else []
             )

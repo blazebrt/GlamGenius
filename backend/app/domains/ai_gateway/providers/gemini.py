@@ -3,7 +3,9 @@
 Moved verbatim in behaviour from the old ``ai.py`` — same model fallback chain,
 same JSON response mode, same "never expose the key" rule. Three things are new:
 
-* a hard timeout, so a hanging provider fails instead of holding a request open
+* a hard timeout, so a hanging provider fails instead of holding a request open —
+  on the awaited attempt and on the SDK's HTTP request itself, so the worker
+  thread cannot keep a request open after the wait gives up
 * token counts returned for cost estimation
 * a typed result object instead of a bare string
 
@@ -16,10 +18,19 @@ import asyncio
 import base64
 import binascii
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any
 
-from app.config import AI_TIMEOUT_SECONDS, GEMINI_API_KEY, GEMINI_FALLBACK_MODELS, GEMINI_MODEL
+from app.config import (
+    AI_TIMEOUT_SECONDS,
+    GEMINI_API_KEY,
+    GEMINI_FALLBACK_MODELS,
+    GEMINI_MODEL,
+    ai_model_chain,
+    ai_provider_window_seconds,
+    usage_reservation_errors,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +83,24 @@ def get_client() -> Any:
     if not is_configured():
         return None
     if _client is None:
-        _client = google_genai.Client(api_key=GEMINI_API_KEY)
+        # ``HttpOptions.timeout`` is in milliseconds (google-genai
+        # ``types.HttpOptions``). Without it the SDK's request has no timeout,
+        # and ``asyncio.wait_for`` below only stops *waiting*: the thread's
+        # request would stay open, and billable, after the call "timed out".
+        _client = google_genai.Client(
+            api_key=GEMINI_API_KEY,
+            http_options=google_genai_types.HttpOptions(timeout=_http_timeout_ms()),
+        )
     return _client
+
+
+def _http_timeout_ms() -> int:
+    return max(1, math.ceil(AI_TIMEOUT_SECONDS * 1000))
+
+
+def max_execution_seconds() -> float:
+    """The longest one :func:`generate` call may run: every model, each bounded."""
+    return ai_provider_window_seconds(AI_TIMEOUT_SECONDS, _models_to_try())
 
 
 def reset_client() -> None:
@@ -102,11 +129,12 @@ def _decode_image(image_base64: str) -> tuple[bytes, str]:
 
 
 def _models_to_try() -> list[str]:
-    ordered: list[str] = []
-    for name in [GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]:
-        if name and name not in ordered:
-            ordered.append(name)
-    return ordered
+    return list(ai_model_chain(GEMINI_MODEL, GEMINI_FALLBACK_MODELS))
+
+
+async def _attempt(run: Any, timeout: float) -> Any:
+    """One model attempt, bounded. The one place a provider call is awaited."""
+    return await asyncio.wait_for(asyncio.to_thread(run), timeout=timeout)
 
 
 def _extract_text(response: Any) -> str:
@@ -132,7 +160,16 @@ def _extract_tokens(response: Any) -> tuple[int | None, int | None]:
 async def generate(
     prompt: str, system: str, image_base64: str | None = None
 ) -> ProviderResponse:
-    """One call to Gemini, with the configured model fallback chain."""
+    """One call to Gemini, with the configured model fallback chain.
+
+    Refuses before anything is sent if the configured window could outlive an
+    allowance reservation: the caller reserved a unit (and possibly an
+    idempotency key) for this call, and that reservation must still be live
+    for as long as the call can run.
+    """
+    window_errors = usage_reservation_errors(timeout_seconds=AI_TIMEOUT_SECONDS, models=_models_to_try())
+    if window_errors:
+        raise ProviderNotConfigured("; ".join(window_errors))
     client = get_client()
     if client is None:
         raise ProviderNotConfigured(
@@ -162,9 +199,7 @@ async def generate(
             )
 
         try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(_run), timeout=AI_TIMEOUT_SECONDS
-            )
+            response = await _attempt(_run, AI_TIMEOUT_SECONDS)
         except TimeoutError as exc:
             # A timeout is not a "try the next model" situation — the next one
             # would take just as long and the caller is already waiting.
