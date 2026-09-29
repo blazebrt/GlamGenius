@@ -177,7 +177,7 @@ async def test_a_not_found_alone_does_not_activate(app_client, db_clean, registe
 
 @pytest.mark.asyncio
 async def test_a_a_not_found_scan_through_the_real_route_does_not_activate(
-    app_client, db_clean, registered_supabase_user,
+    app_client, db_clean, off_clean, registered_supabase_user,
 ):
     from tests.test_step12c_product_watch import _customer
 
@@ -616,7 +616,7 @@ async def test_c_a_consumed_hold_becomes_an_admission(
     # One admitted and two still holding: every place is still spoken for.
     assert await _get(app_client, token) == CAPACITY_RESERVED
     async with _factory()() as session:
-        exported = await referral.referral_export(session, account_id)
+        exported = (await export_service.build_export(session, account_id))["domains"]["growth"]["referral"]
     assert exported["lifetime_successful_admissions"] == 1
     # The other two lapse: two places are left, not three — the admission counts.
     await _lapse_holds(code)
@@ -896,8 +896,19 @@ async def test_d_a_deletion_requested_account_is_issued_nothing(
     async with _factory()() as session:
         await deletion_service.request_deletion(session, account_id)
         await session.commit()
-    assert (await _ensure(app_client, token))["state"] == "unavailable"
-    assert (await _get(app_client, token))["state"] == "unavailable"
+    # Lane A (#197): an account whose deletion was requested is refused at
+    # the door, before any product route runs, including this one.
+    for method in (app_client.post, app_client.get):
+        refused = await method("/api/v2/growth/referral", headers=auth(token))
+        assert refused.status_code == 403, refused.text
+        assert refused.json()["detail"]["code"] == "ACCOUNT_INACTIVE"
+    # And Step 15's own guard behind it still issues nothing to such an
+    # account, whoever calls the service.
+    async with _factory()() as session:
+        assert (await referral.ensure_referral(session, account_id=account_id)).state == "unavailable"
+        await session.commit()
+    async with _factory()() as session:
+        assert (await referral.read_referral(session, account_id=account_id)).state == "unavailable"
     assert await _count(Invite) == 0
 
 
@@ -955,6 +966,10 @@ def test_d_deletion_takes_the_account_before_the_invites():
     source = (GROWTH_DIR / "referral.py").read_text()
     body = source[source.index("async def deactivate_referral_invites_for_account"):]
     assert body.index("select(Account.id)") < body.index("update(Invite)")
+    # FOR SHARE: it still conflicts with issuance's FOR UPDATE, and it does not
+    # queue Lane A's lifecycle-gate holders behind the deletion.
+    lock = body[body.index("select(Account.id)"):body.index("update(Invite)")]
+    assert ".with_for_update(read=True)" in lock
     ensure = source[source.index("async def ensure_referral"):source.index("async def deactivate_referral")]
     assert ensure.index(".with_for_update()") < ensure.index("_bound_invites(session, account_id, lock=True)")
     worker = (BACKEND / "app" / "domains" / "privacy" / "deletion_service.py").read_text()
@@ -965,7 +980,10 @@ def test_d_deletion_takes_the_account_before_the_invites():
 # ---------------------------------------------------------------------------
 # K — rollback: the downgrade switches every referral capability off
 # ---------------------------------------------------------------------------
-STEP_14_REVISION = "k9l0m1n2o3"
+#: The revision this one follows: Lane F's head on ``main``. Step 15 was
+#: written on Step 14's ``k9l0m1n2o3`` and re-parented in place when it was
+#: requalified on top of Lanes A-F, so a rollback now lands on Lane F's schema.
+PREVIOUS_HEAD = "lf1a2b3c4d"
 
 
 async def _alembic(*arguments: str) -> tuple[int, str]:
@@ -1007,10 +1025,10 @@ async def test_k_downgrade_disables_bound_referral_invites_before_dropping_the_b
     await sql.dispose_engine()
     upgraded = False
     try:
-        returncode, output = await _alembic("downgrade", STEP_14_REVISION)
+        returncode, output = await _alembic("downgrade", PREVIOUS_HEAD)
         assert returncode == 0, output
         async with sql.get_engine().connect() as connection:
-            assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == STEP_14_REVISION
+            assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == PREVIOUS_HEAD
             assert await connection.scalar(text("SELECT to_regclass('consumer_referral_invites')")) is None
             rows = {
                 row.code: (row.active, row.uses_count, row.max_uses)
@@ -1317,12 +1335,28 @@ def test_e_retention_names_only_app_events():
 # P — privacy export and erasure
 # ---------------------------------------------------------------------------
 def test_p_the_registry_classifies_the_binding_as_account_owned():
+    from app.domains.privacy import EXPORT_SCHEMA_VERSION
+    from app.domains.privacy.coverage import EXPORT_COVERAGE, Handler, Scope, export_locations
+
     assert REGISTRY["consumer_referral_invites"] == Classification.INCLUDED
     assert REGISTRY["app_events"] == Classification.INCLUDED
     assert "growth" in export_service.DOMAIN_HANDLERS
-    from app.domains.privacy import EXPORT_SCHEMA_VERSION
-
-    assert EXPORT_SCHEMA_VERSION == "1.5"
+    # 1.5 is Lane E's completed export; 1.6 is this step's growth domain.
+    assert EXPORT_SCHEMA_VERSION == "1.6"
+    # The binding is exported by its own coverage entry, scoped in SQL through
+    # the account it was issued to.
+    binding = EXPORT_COVERAGE["consumer_referral_invites"]
+    assert (binding.domain, binding.scope, binding.parent) == (
+        "growth", Scope.PARENT, ("inviter_account_id", "accounts"),
+    )
+    assert binding.handler == Handler.DOMAIN
+    assert export_locations()["consumer_referral_invites"] == ["growth.referral.issued_codes"]
+    # Telemetry stays where Lane E put it, through the generic contract, and
+    # the retry id stays out.
+    events = EXPORT_COVERAGE["app_events"]
+    assert (events.domain, events.handler) == ("ai_and_ops", Handler.CONTRACT)
+    assert export_locations()["app_events"] == ["ai_and_ops.app_events"]
+    assert events.withheld == ("client_event_id",)
 
 
 @pytest.mark.asyncio
@@ -1337,19 +1371,33 @@ async def test_p_the_export_carries_the_accounts_own_growth_history(
     other, _ = await registered_supabase_user()
     await _event(app_client, other, "growth.scan_again", {"surface": "product_result"})
 
-    export = (await app_client.get("/api/v2/privacy/export", headers=auth(token))).json()
-    assert export["schema_version"] == "1.5"
+    response = await app_client.get("/api/v2/privacy/export", headers=auth(token))
+    assert response.status_code == 200, response.text
+    export = response.json()
+    assert export["schema_version"] == "1.6"
+    # Telemetry is where Lane E put it — the generic, uncapped contract — and
+    # only this account's, without the client's retry id.
+    events = export["domains"]["ai_and_ops"]["app_events"]
+    assert [event["name"] for event in events] == ["growth.product_result_share"]
+    [event] = events
+    assert event["properties"] == SHARE and event["account_id"] == str(account_id)
+    assert "client_event_id" not in event
+    # The growth domain is the referral history, and nothing else.
     growth = export["domains"]["growth"]
-    assert [event["name"] for event in growth["analytics_events"]] == ["growth.product_result_share"]
-    [event] = growth["analytics_events"]
-    assert set(event) == {"name", "properties", "created_at"} and event["properties"] == SHARE
+    assert set(growth) == {"referral"}
     assert growth["referral"]["lifetime_limit"] == 3
     assert growth["referral"]["lifetime_successful_admissions"] == 1
     [issued] = growth["referral"]["issued_codes"]
+    assert set(issued) == {"issued_at", "expires_at", "max_admissions", "successful_admissions", "active"}
     assert issued["successful_admissions"] == 1 and issued["active"] is True
-    serialised = json.dumps(growth)
-    for secret in (code, str(invitee), str(client_event_id), "@example.com"):
+    async with _factory()() as session:
+        [binding] = (await session.execute(
+            select(ConsumerReferralInvite).where(ConsumerReferralInvite.inviter_account_id == account_id)
+        )).scalars().all()
+    serialised = json.dumps(export)
+    for secret in (code, str(invitee), str(client_event_id), str(binding.id), str(binding.invite_id)):
         assert secret not in serialised
+    assert "@example.com" not in json.dumps(growth)
 
 
 @pytest.mark.asyncio
@@ -1717,10 +1765,11 @@ def test_g_growth_does_not_import_decision_authorities():
                 assert authority not in module, (path, module)
 
 
-def test_g_one_step15_migration_from_the_step14_head():
+def test_g_one_step15_migration_from_the_lane_f_head():
     assert alembic_head_revision() == "l0m1n2o3p4"
     source = (BACKEND / "migrations" / "versions" / "l0m1n2o3p4_step15_consumer_growth.py").read_text()
-    assert 'down_revision = "k9l0m1n2o3"' in source
+    assert 'down_revision = "lf1a2b3c4d"' in source
+    assert "k9l0m1n2o3" not in source.split("down_revision", 1)[1].splitlines()[0]
     created = re.findall(r'create_table\(\s*"([a-z_]+)"', source)
     added = re.findall(r'add_column\(\s*"([a-z_]+)"', source)
     assert created == ["consumer_referral_invites"] and added == ["app_events"]

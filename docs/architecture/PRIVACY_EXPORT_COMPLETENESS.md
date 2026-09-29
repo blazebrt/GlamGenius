@@ -157,6 +157,11 @@ adds no archive or file-bundle download.
 and `export_locations`, both derived from `EXPORT_COVERAGE`. Nothing
 previously exported moved.
 
+Lane E set `1.5`. Step 15 later set `1.6` for its `growth` domain
+(`consumer_referral_invites` at `growth.referral.issued_codes`, the 112th
+`INCLUDED` table) and withheld `app_events.client_event_id`; `app_events` stays
+at `ai_and_ops.app_events`. See `CONSUMER_GROWTH.md` §6.
+
 ## Known limits
 
 - Hand-written domain handlers that existed before Lane E still export their

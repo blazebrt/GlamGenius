@@ -1,7 +1,12 @@
 """consumer growth for Step 15
 
 Revision ID: l0m1n2o3p4
-Revises: k9l0m1n2o3
+Revises: lf1a2b3c4d
+
+Re-parented in place during Step 15 requalification: this revision was written
+on ``k9l0m1n2o3`` and is unmerged and undeployed, so it now follows Lane F's
+``lf1a2b3c4d`` (current ``main``) directly rather than through a repair
+migration. Its schema changes and its downgrade are unchanged.
 
 Two narrow changes and nothing else.
 
@@ -37,7 +42,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "l0m1n2o3p4"
-down_revision = "k9l0m1n2o3"
+down_revision = "lf1a2b3c4d"
 branch_labels = None
 depends_on = None
 

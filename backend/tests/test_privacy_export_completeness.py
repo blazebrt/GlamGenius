@@ -22,6 +22,11 @@ This file holds the repaired contract against a real PostgreSQL database:
 * no storage path, credential or token appears anywhere in the file, and the
   whole file serialises with the standard JSON encoder;
 * building the export changes nothing.
+
+Step 15 adds one ``INCLUDED`` table, ``consumer_referral_invites`` (exported as
+``growth.referral.issued_codes``, scoped through the inviting account), and one
+withheld column, ``app_events.client_event_id``; the proofs for both are at the
+end of this file.
 """
 from __future__ import annotations
 
@@ -166,7 +171,9 @@ async def test_every_included_table_has_exactly_one_export_contract():
     """``set(EXPORT_COVERAGE) == included_tables()``, both ways."""
     assert set(EXPORT_COVERAGE) == included_tables()
     assert coverage_drift() == (set(), set())
-    assert len(EXPORT_COVERAGE) == 111
+    # Lane E's 111, plus Step 15's ``consumer_referral_invites``. Nothing was
+    # reclassified to keep the old count.
+    assert len(EXPORT_COVERAGE) == 112
 
 
 async def test_the_lane_e_gap_is_closed_by_real_contracts():
@@ -489,7 +496,8 @@ async def test_a_parent_owned_child_is_scoped_by_its_parent_in_sql(two_graphs):
 
 
 async def test_a_withheld_column_never_leaves_through_the_contract_exporter(db_clean, monkeypatch):
-    """No contract table withholds a column today; the day one does, it holds.
+    """Withholding a column holds for any contract table, not only the one
+    that does it today (``app_events.client_event_id``, proven below).
 
     The contract is widened here, for this test only, to withhold one
     column, and the column must be absent from every row while the rest of
@@ -873,6 +881,9 @@ async def test_the_registry_summary_states_exactly_what_was_exported(two_graphs)
     assert locations["purchase_decisions"] == [
         "shopping.subjects[*].decisions", "shopping.unattributed_decisions",
     ]
+    # Step 15: the referral history has its own place; telemetry keeps Lane E's.
+    assert locations["consumer_referral_invites"] == ["growth.referral.issued_codes"]
+    assert locations["app_events"] == ["ai_and_ops.app_events"]
 
 
 async def test_two_exports_of_the_same_data_are_identical_and_change_nothing(two_graphs):
@@ -884,3 +895,140 @@ async def test_two_exports_of_the_same_data_are_identical_and_change_nothing(two
     first = {**first, "generated_at": None}
     second = {**second, "generated_at": None}
     assert first == second
+
+
+# ---------------------------------------------------------------------------
+# Step 15: consumer referral history and the telemetry retry id
+# ---------------------------------------------------------------------------
+
+async def _referral(session, account_id: uuid.UUID, *, uses: int, active: bool, days: int) -> tuple:
+    """One referral capability issued to ``account_id``, as Step 15 issues it:
+    an ordinary invite plus the binding that says whose it was to share."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.domains.beta_access import service as beta
+    from app.domains.growth.models import PROGRAM_VERSION, ConsumerReferralInvite
+
+    invite = await beta.create_invite(
+        session, label=PROGRAM_VERSION, max_uses=3,
+        expires_at=datetime(2026, 10, 1, tzinfo=UTC) + timedelta(days=days),
+    )
+    invite.uses_count = uses
+    invite.active = active
+    binding = ConsumerReferralInvite(
+        inviter_account_id=account_id, invite_id=invite.id, program_version=PROGRAM_VERSION,
+    )
+    session.add(binding)
+    await session.flush()
+    return invite, binding
+
+
+async def test_step15_referral_history_is_in_its_inviters_export_and_nobody_elses(db_clean):
+    """A's referral history is in A's file; B's binding, B's invite and every
+    identifier of either never are. No code, invite id or binding id leaves."""
+    account_a, account_b = uuid.uuid4(), uuid.uuid4()
+    async with get_sessionmaker()() as session:
+        await _register(session, account_a)
+        await _register(session, account_b)
+        a_old, a_old_binding = await _referral(session, account_a, uses=2, active=False, days=-40)
+        a_new, a_new_binding = await _referral(session, account_a, uses=1, active=True, days=20)
+        b_invite, b_binding = await _referral(session, account_b, uses=3, active=True, days=10)
+        await session.commit()
+        expected = [
+            (a_old.expires_at.isoformat(), 3, 2, False),
+            (a_new.expires_at.isoformat(), 3, 1, True),
+        ]
+        a_codes = (a_old.code, a_new.code)
+        a_ids = (a_old.id, a_new.id, a_old_binding.id, a_new_binding.id)
+        b_ids = (b_invite.id, b_binding.id, account_b)
+        b_code, b_expiry = b_invite.code, b_invite.expires_at.isoformat()
+
+    async with get_sessionmaker()() as session:
+        export_a = await export_mod.build_export(session, account_a)
+
+    history = export_a["domains"]["growth"]["referral"]
+    assert history["program_version"] == "consumer-referral-v1"
+    assert history["lifetime_limit"] == 3
+    assert history["lifetime_successful_admissions"] == 3
+    issued = history["issued_codes"]
+    # Both bindings were written in one transaction, so they share a
+    # ``created_at`` and the order falls to the id tie-break: compare as a set.
+    assert sorted(
+        (row["expires_at"], row["max_admissions"], row["successful_admissions"], row["active"])
+        for row in issued
+    ) == sorted(expected)
+    for row in issued:
+        assert set(row) == {"issued_at", "expires_at", "max_admissions", "successful_admissions", "active"}
+
+    dumped = json.dumps(export_a)
+    for code in (*a_codes, b_code):
+        assert code not in dumped, "a referral code is a live capability and never leaves"
+    for identifier in (*a_ids, *b_ids):
+        assert str(identifier) not in dumped
+    assert b_expiry not in json.dumps(history)
+    assert not (_keys(export_a["domains"]["growth"]) & {"code", "invite_id", "inviter_account_id", "id"})
+
+
+async def test_step15_the_referral_read_is_what_proves_the_table_was_exported(db_clean, monkeypatch):
+    """The coverage proof is the real, SQL-scoped read: a growth handler that
+    returns the right shape without reading the binding is refused."""
+    account_id = uuid.uuid4()
+    async with get_sessionmaker()() as session:
+        await _register(session, account_id)
+        await session.commit()
+
+    async def _shape_without_reading(session, account_id):
+        return {"referral": {"issued_codes": []}}
+
+    monkeypatch.setitem(export_mod.DOMAIN_HANDLERS, "growth", _shape_without_reading)
+    async with get_sessionmaker()() as session:
+        with pytest.raises(export_mod.PrivacyExportIncomplete) as refused:
+            await export_mod.build_export(session, account_id)
+    assert refused.value.unproven == ("consumer_referral_invites:not_read",)
+
+
+async def test_step15_app_events_keep_lane_e_authority_and_withhold_the_retry_id(db_clean):
+    """``app_events`` is exported once, by Lane E's generic contract at
+    ``ai_and_ops.app_events``, and ``client_event_id`` never leaves."""
+    account_a, account_b = uuid.uuid4(), uuid.uuid4()
+    retry_a, retry_b = uuid.uuid4(), uuid.uuid4()
+    async with get_sessionmaker()() as session:
+        await _register(session, account_a)
+        await _register(session, account_b)
+        mine = AppEvent(
+            account_id=account_a, name="growth.scan_again",
+            properties={"surface": "product_result"}, client_event_id=retry_a,
+        )
+        theirs = AppEvent(
+            account_id=account_b, name="growth.scan_again",
+            properties={"surface": "product_result"}, client_event_id=retry_b,
+        )
+        session.add_all([mine, theirs])
+        await session.commit()
+        mine_id, theirs_id = mine.id, theirs.id
+
+    async with get_sessionmaker()() as session:
+        export_a = await export_mod.build_export(session, account_a)
+
+    (row,) = export_a["domains"]["ai_and_ops"]["app_events"]
+    assert row["id"] == str(mine_id) and row["name"] == "growth.scan_again"
+    assert "client_event_id" not in row
+    assert set(row) == {c.name for c in AppEvent.__table__.columns} - {"client_event_id"}
+    assert set(export_a["domains"]["growth"]) == {"referral"}, "telemetry is not exported a second time"
+    dumped = json.dumps(export_a)
+    for leaked in (retry_a, retry_b, theirs_id, account_b):
+        assert str(leaked) not in dumped
+
+
+async def test_step15_no_privacy_export_path_is_capped():
+    """The frozen Step 15 telemetry exporter cut the export at 10 000 rows.
+    It is gone; the growth domain reads through the same uncapped reads as
+    every other domain, and ``app_events`` stays on Lane E's uncapped path."""
+    import inspect
+
+    from app.domains.growth import analytics, referral
+
+    assert not hasattr(analytics, "analytics_export")
+    assert not hasattr(referral, "referral_export")
+    for source in (inspect.getsource(export_mod._growth), inspect.getsource(referral.referral_history)):
+        assert ".limit(" not in source and "10_000" not in source and "10000" not in source

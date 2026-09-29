@@ -1774,21 +1774,35 @@ def _ai_output_dict(row: AIRunOutput) -> dict[str, Any]:
 
 
 async def _growth(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
-    """Step 15. The account's own growth telemetry and referral history.
+    """Step 15. The account's consumer referral history.
 
-    ``app_events`` was classified INCLUDED and exported by nothing; this is
-    where it is kept. Each event is its name, its whitelisted properties and
-    when — no row id and no client operation id. The referral history states
-    what this account was issued and how many people it admitted, never a
-    code (a live code is an access capability) and never who was admitted.
+    ``consumer_referral_invites`` carries no ``account_id``; it is this
+    account's through ``inviter_account_id``, and its rows are selected by that
+    scope in SQL (:data:`EXPORT_COVERAGE`), like every other covered table.
+    The invites those rows name are global capability rows (``invites`` is
+    ``NOT_USER_OWNED``) and are read only for the ids this account's own
+    bindings name. What a person reads back is
+    :func:`app.domains.growth.referral.referral_history`: never the code (a
+    live code is an access capability), an invite or binding id, or who was
+    admitted.
+
+    ``app_events`` is not here. Lane E exports it as ``ai_and_ops.app_events``
+    through the generic contract, uncapped, with Step 15's retry id withheld.
     """
-    from app.domains.growth.analytics import analytics_export
-    from app.domains.growth.referral import referral_export
+    from app.domains.growth.models import ConsumerReferralInvite
+    from app.domains.growth.referral import referral_history
 
-    return {
-        "analytics_events": await analytics_export(session, account_id),
-        "referral": await referral_export(session, account_id),
-    }
+    bindings = await _fetch(session, _owned_rows("consumer_referral_invites", account_id))
+    invites = await _fetch(
+        session,
+        select(Invite)
+        .where(Invite.id.in_(
+            select(ConsumerReferralInvite.invite_id)
+            .where(ConsumerReferralInvite.id.in_(_owned_ids("consumer_referral_invites", account_id)))
+        ))
+        .order_by(Invite.id),
+    )
+    return {"referral": referral_history(bindings, invites)}
 
 
 DomainHandler = Callable[[AsyncSession, uuid.UUID], Any]

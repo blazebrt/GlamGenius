@@ -363,11 +363,21 @@ async def deactivate_referral_invites_for_account(
     invites were this person's. Takes the account row first — the order
     :func:`ensure_referral` takes — and only then the invites.
 
+    The account lock is ``FOR SHARE``: the weakest mode that still conflicts
+    with issuance's ``FOR UPDATE``, so the two serialise in one direction and
+    never hold account and invite in opposite orders. It is also the mode of
+    Lane A's lifecycle gate (``identity.service.hold_account_active``), so an
+    upload or scan already past authentication is not queued behind the rest
+    of the deletion: it reads a status that is no longer active and refuses at
+    once. ``FOR UPDATE`` here made such a request wait for the whole database
+    stage. The account row's ``DELETE`` later in the same transaction still
+    waits for any holder, exactly as before Step 15.
+
     Returns how many invites were switched off. The invite rows themselves
     stay: other people's redemptions point at them.
     """
     await session.execute(
-        select(Account.id).where(Account.id == account_id).with_for_update()
+        select(Account.id).where(Account.id == account_id).with_for_update(read=True)
     )
     result = await session.execute(
         update(Invite)
@@ -387,24 +397,31 @@ async def deactivate_referral_invites_for_account(
     return count
 
 
-async def referral_export(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
-    """This account's own referral history, for its privacy export.
+def referral_history(
+    bindings: list[ConsumerReferralInvite], invites: list[Invite],
+) -> dict[str, Any]:
+    """This account's own referral history, as its privacy export states it.
+
+    ``bindings`` are this account's ``consumer_referral_invites`` rows and
+    ``invites`` the invites they name, both already selected in SQL by the
+    privacy exporter (``app.domains.privacy.export._growth``) under the
+    account's own scope — the read that the export's coverage proof checks.
+    This decides only what a person reads back.
 
     No code — a live code is an access capability, and the owner can read it
-    in the app — no invite id, and nothing about who was admitted: another
-    person's registration is theirs, not the inviter's.
+    in the app — no invite id, no binding id, and nothing about who was
+    admitted: another person's registration is theirs, not the inviter's.
+
+    Every binding names an invite (``invite_id`` is ``NOT NULL`` and
+    ``RESTRICT``). One that is missing from ``invites`` is a broken read, and
+    the ``KeyError`` fails the export as incomplete rather than dropping a row.
     """
-    rows = (await session.execute(
-        select(ConsumerReferralInvite, Invite)
-        .join(Invite, Invite.id == ConsumerReferralInvite.invite_id)
-        .where(ConsumerReferralInvite.inviter_account_id == account_id)
-        .order_by(ConsumerReferralInvite.created_at, Invite.id)
-    )).all()
-    invites = [invite for _binding, invite in rows]
+    by_id = {invite.id: invite for invite in invites}
+    pairs = [(binding, by_id[binding.invite_id]) for binding in bindings]
     return {
         "program_version": PROGRAM_VERSION,
         "lifetime_limit": LIFETIME_SUCCESSFUL_REFERRALS,
-        "lifetime_successful_admissions": lifetime_admissions(invites),
+        "lifetime_successful_admissions": lifetime_admissions([invite for _binding, invite in pairs]),
         "issued_codes": [
             {
                 "issued_at": binding.created_at.isoformat() if binding.created_at else None,
@@ -413,7 +430,7 @@ async def referral_export(session: AsyncSession, account_id: uuid.UUID) -> dict[
                 "successful_admissions": invite.uses_count,
                 "active": bool(invite.active),
             }
-            for binding, invite in rows
+            for binding, invite in pairs
         ],
     }
 
@@ -436,6 +453,6 @@ __all__ = [
     "ensure_referral",
     "lifetime_admissions",
     "read_referral",
-    "referral_export",
+    "referral_history",
     "reservable_places",
 ]

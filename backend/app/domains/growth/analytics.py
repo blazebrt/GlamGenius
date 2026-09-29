@@ -215,27 +215,6 @@ async def prune_opportunistically(session: AsyncSession) -> int:
         return 0
 
 
-async def analytics_export(session: AsyncSession, account_id: uuid.UUID) -> list[dict[str, Any]]:
-    """This account's own telemetry, for its privacy export.
-
-    The name, the whitelisted properties and when. No row id, no operation id.
-    """
-    rows = (await session.execute(
-        select(AppEvent.name, AppEvent.properties, AppEvent.created_at)
-        .where(AppEvent.account_id == account_id)
-        .order_by(AppEvent.created_at.desc(), AppEvent.id)
-        .limit(10_000)
-    )).all()
-    return [
-        {
-            "name": name,
-            "properties": dict(properties or {}),
-            "created_at": created_at.isoformat() if created_at else None,
-        }
-        for name, properties, created_at in rows
-    ]
-
-
 __all__ = [
     "EVENT_NAMES",
     "EVENT_PRODUCT_RESULT_SHARE",
@@ -245,7 +224,6 @@ __all__ = [
     "PRUNE_BATCH",
     "PRUNE_INTERVAL_SECONDS",
     "RETENTION",
-    "analytics_export",
     "prune_expired_events",
     "prune_opportunistically",
     "record_event",

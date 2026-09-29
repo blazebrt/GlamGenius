@@ -381,7 +381,22 @@ EXPORT_COVERAGE: dict[str, ExportCoverage] = {
     "beta_usage_events": _domain("ai_and_ops", "beta_usage_events", _ACCOUNT),
     # Product analytics this account generated. A row whose account was
     # detached (``SET NULL``) belongs to nobody and is in nobody's export.
-    "app_events": _contract("ai_and_ops", "app_events", _ACCOUNT),
+    # Step 15's ``client_event_id`` is a random operation id the app mints so a
+    # retried telemetry write is recognised rather than counted twice — retry
+    # control, not the person's data — so it stays out.
+    "app_events": _contract("ai_and_ops", "app_events", _ACCOUNT, withheld=("client_event_id",)),
+    # --- growth (Step 15) ---------------------------------------------------
+    # Which invites this account was issued to share. The binding carries no
+    # ``account_id`` of its own; it is the account's through
+    # ``inviter_account_id``, and it is selected by that scope in SQL.
+    "consumer_referral_invites": _domain(
+        "growth", "referral.issued_codes", _PARENT, parent=("inviter_account_id", "accounts"),
+        withheld=("id", "inviter_account_id", "invite_id"),
+        note=(
+            "When each referral code was issued, when it expires, how many admissions it allows and has "
+            "had, and whether it is switched on; never the code, an invite or binding id, or who was admitted."
+        ),
+    ),
 }
 
 

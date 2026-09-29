@@ -27,7 +27,7 @@ contains no paid marketing and no Commerce (Step 16).
 | Product Result share | `verdictShare.ts` built plain text from `(source, view)` | **The view carries Step 14's official-record WAIT ceiling**, so a share could tell a recipient their pack matches a record matched to the sender's lot and licence. It also exported `view.everydayNumber` without its source or label version, and the not-graded quantity guidance without a source. It said "invite-only" with no way to share access. |
 | Beta admission | invite → unauthenticated reservation → Supabase sign-up → authenticated finalisation | Kept byte-for-byte. Referral codes are ordinary invites through it. |
 | `Invite.created_by` | Admin issuer provenance | Not overloaded; the inviter is recorded by a separate binding row. |
-| `AppEvent` | Table, classified `INCLUDED`, deleted at erasure | **No writer, no export handler, no retention, no idempotency.** |
+| `AppEvent` | Table, classified `INCLUDED`, deleted at erasure | **No writer, no retention, no idempotency.** It had no export handler either when Step 15 was written; Lane E (#201) has since exported it as `ai_and_ops.app_events` (§6). |
 | Sentry scrubbing | Keyed redaction on both sides | Neither side redacted `invite`/`referral` keys. |
 
 ## 2. Activation
@@ -234,7 +234,11 @@ Never exposed: the invite id, redemption account ids, reservation ids or
 emails, registration challenges. The code sits inside `referral` so the Sentry
 scrubbers, which redact `referral`/`invite` containers by name, cover it.
 
-### Schema — migration `l0m1n2o3p4` (from `k9l0m1n2o3`)
+### Schema — migration `l0m1n2o3p4` (from `lf1a2b3c4d`)
+
+Written on Step 14's `k9l0m1n2o3`; re-parented in place onto Lane F's
+`lf1a2b3c4d` when Step 15 was requalified on current `main` (§14). It is
+unmerged and undeployed, so there is no repair migration.
 
 ```text
 consumer_referral_invites
@@ -253,7 +257,7 @@ inviter are allowed (expired codes are replaced). No old migration is edited;
 
 ```text
 ensure:    Account FOR UPDATE        → bound Invite rows FOR UPDATE → COUNT live reservations (no lock) → insert
-deletion:  Account FOR UPDATE        → bound Invite rows (UPDATE active=false) → DELETE account
+deletion:  Account FOR SHARE         → bound Invite rows (UPDATE active=false) → … → DELETE account
 reserve:   Invite FOR UPDATE         → reservation (existing code, unchanged)
 register:  Reservation FOR UPDATE    → Invite UPDATE             (existing code, unchanged)
 ```
@@ -276,14 +280,31 @@ existing identity-transition lock on the account row; the weaker
 `FOR KEY SHARE` protection stays emitted in exactly one place
 (`identity.service.lock_account_against_delete`), as the Step 11C guard
 requires. Deletion takes the same row first, so neither path can hold account
-and invite in opposite orders. A code collision is
+and invite in opposite orders. Deletion's lock is `FOR SHARE`: it still
+conflicts with issuance's `FOR UPDATE`, and it is the mode of Lane A's
+lifecycle gate (`hold_account_active`), so an upload or scan already past
+authentication is refused at once rather than queued behind the deletion
+(`FOR UPDATE` made it wait for the whole database stage; Lane A's
+`test_s_c_an_upload_in_flight_across_the_final_proof_cannot_orphan_an_object`
+caught it during requalification). A code collision is
 retried inside a savepoint, never surfaced.
 
 ### Account deletion
 
-The deletion worker's database stage first calls
-`_deactivate_referral_invites` (before the cascade removes the binding and
-with it the knowledge of which invites were this person's). If issuance
+The deletion worker's database stage calls `_deactivate_referral_invites`
+before the cascade removes the binding and with it the knowledge of which
+invites were this person's. It runs inside Lane A's repaired state machine,
+after that stage's final storage barrier and external report-photo proof, and
+before the existing AI-output, analytics, audit, scan-observation and
+invite-reservation cleanup (`_minimise_invite_reservations`), the account row
+and — last, in its own stage — the Supabase Auth identity:
+
+```text
+final storage proof → report-photo proof → _deactivate_referral_invites
+→ AI outputs → analytics events → audit scrub → scan observations
+→ invite-reservation minimisation → account row → (later stage) Auth identity
+```
+ If issuance
 commits first, deletion finds and switches off its invite; if deletion starts
 first, issuance finds an account that is not `active` (or is gone) and issues
 nothing. After deletion no active invite issued to that account remains, the
@@ -343,17 +364,31 @@ events, decision memory, official records and evidence are untouched (tested).
 
 ## 6. Privacy, export and erasure
 
-* `consumer_referral_invites` is classified `INCLUDED`; `app_events` was
-  already `INCLUDED`.
-* The export gains a `growth` domain and `EXPORT_SCHEMA_VERSION` becomes
-  **1.5**:
-  * `analytics_events`: `name`, `properties`, `created_at` — no row id, no
-    operation id;
+The export is held to Lane E's coverage contract
+(`app/domains/privacy/coverage.py`, `PRIVACY_EXPORT_COMPLETENESS.md`): every
+`INCLUDED` table has exactly one `EXPORT_COVERAGE` entry, is read under its
+declared SQL scope, and appears at its declared path, or the export is refused.
+
+* `consumer_referral_invites` is classified `INCLUDED` and has its own
+  coverage entry: domain `growth`, path `referral.issued_codes`
+  (`growth.referral.issued_codes`), scope `PARENT` through
+  `inviter_account_id → accounts`. `privacy.export._growth` selects the
+  account's bindings with that scope in SQL, then the invites they name;
+  `growth.referral.referral_history` decides what is written:
   * `referral`: program version, lifetime limit, lifetime successful
     admissions, and per issued code its issue and expiry dates, ceiling,
     admissions and whether it is active — **never the code** (a live access
-    capability) and never who was admitted.
-* Erasure: `_deactivate_referral_invites` (above), the existing
+    capability), never an invite or binding id, and never who was admitted.
+* `app_events` stays where Lane E put it: `ai_and_ops.app_events`, through
+  the generic, uncapped contract. It is not exported a second time under
+  `growth`. Its Step 15 column `client_event_id` — the app's retry operation
+  id — is **withheld** by that entry.
+* There is no capped exporter. The first Step 15 draft read telemetry through
+  its own helper with a 10 000-row limit; that helper is gone, and no
+  successful export can be silently cut short.
+* `EXPORT_SCHEMA_VERSION` is **1.6**: 1.5 is Lane E's completed export; 1.6 is
+  this step's `growth` domain.
+* Erasure: `_deactivate_referral_invites` (§4), the existing
   `_delete_analytics_events`, then the account cascade removes the binding.
 
 ## 7. Admin growth metrics
@@ -476,7 +511,8 @@ scan-session services, or the Step 15 blocks of `verdict.tsx` and
 
 ## 13. Rollback
 
-Revert the Step 15 commit and `alembic downgrade k9l0m1n2o3`.
+Revert the Step 15 commit and `alembic downgrade lf1a2b3c4d` (Lane F's head,
+which this revision now follows).
 
 A referral code is an ordinary live invite, and `/access/reserve` below this
 revision would keep accepting it — while the binding that says it was a
@@ -506,6 +542,22 @@ No manual step is needed. The admin invite endpoint (label
 `consumer-referral-v1`) remains available as an emergency operator option,
 not a rollback requirement. Growth `app_events` rows are disposable. The share
 falls back to the previous build's text.
+
+## 14. Requalification on Lanes A–F
+
+Step 15 was written on `ef743ec` (Step 14). Before review it was requalified
+on `main` at `f4671dcd` (Lanes A–F, #197–#202) by merging `main` into the
+branch — the three reviewed Step 15 commits are unchanged — and reconciling
+where both had moved:
+
+| Area | Current `main` (kept) | Step 15 (reapplied on it) |
+| --- | --- | --- |
+| API router | Lane D's dedicated `notification_settings` router, independent of retired Today | `growth.router` mounted beside it |
+| Privacy export | Lane E's coverage contract, uncapped, fail-closed; `app_events` at `ai_and_ops.app_events`; schema 1.5 | a real `consumer_referral_invites` entry at `growth.referral.issued_codes`; `client_event_id` withheld; schema 1.6 |
+| Account deletion | Lane A/F state machine, final storage barrier, report-photo proof, invite-reservation minimisation, Auth last | `_deactivate_referral_invites` before the cleanup and the account row |
+| Migrations | Lane F head `lf1a2b3c4d` | `l0m1n2o3p4` re-parented onto it; one head |
+| Test provider fake | Lane F's strict `generate(prompt, system, image_base64=None)` | unchanged; only the growth rate-limiter resets are added |
+| Scanner | Lane C's read-only refresh, settled scan events, physical-pack authority | the one-shot "scan another product" focus hook |
 
 ## Related
 
