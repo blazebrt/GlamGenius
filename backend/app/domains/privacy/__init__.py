@@ -21,6 +21,12 @@ metadata and fails if a new table is introduced without a classification.
 Adding a table without deciding whether it goes into the export is exactly
 the kind of silent omission a periodic audit is meant to catch.
 
+A classification is not an export. ``INCLUDED`` is a promise the account
+holder can read the table back, and :data:`.coverage.EXPORT_COVERAGE` is where
+that promise is kept: exactly one export contract per ``INCLUDED`` table,
+enforced by ``tests/test_privacy_export_completeness.py`` and by the exporter
+itself, which refuses to return a file it cannot show is complete.
+
 The export shape
 ----------------
 ::
@@ -58,10 +64,18 @@ from enum import StrEnum
 # decisions a person took.
 # 1.3 — Step 11D. Care preference and Shelf Manager identity are subject-aware.
 # 1.4 — Step 11E. Persisted Care routine execution/history is grouped by human.
-# 1.5 — Step 15. A ``growth`` domain: the account's own whitelisted telemetry
-# (``app_events``, INCLUDED since before this and exported by nothing until
-# now) and its consumer referral history, without codes or invitee identity.
-EXPORT_SCHEMA_VERSION = "1.5"
+# 1.5 — Lane E. The export is complete: the 33 tables the registry had
+# classified INCLUDED and nothing exported are exported, each through its
+# entry in ``coverage.EXPORT_COVERAGE``; no collection is cut at a row limit;
+# ``registry_summary`` gains ``exported_tables`` and ``export_locations``,
+# derived from that contract; and a label-error report states
+# ``photo_attached`` instead of carrying its internal ``photo_key``.
+# 1.6 — Step 15. A ``growth`` domain with the account's consumer referral
+# history (``growth.referral``, from ``consumer_referral_invites``), without
+# codes, invite ids or invitee identity. ``app_events`` stays where Lane E put
+# it (``ai_and_ops.app_events``); its new ``client_event_id`` retry id is
+# withheld there.
+EXPORT_SCHEMA_VERSION = "1.6"
 
 
 class Classification(StrEnum):
@@ -86,7 +100,7 @@ REGISTRY: dict[str, Classification] = {
     "invite_redemptions": Classification.INCLUDED,
     "invite_registration_reservations": Classification.OPERATIONAL,
     # Step 15. Which invites this account was issued to share. Theirs: exported
-    # under the ``growth`` domain (without the code, which is a live access
+    # as ``growth.referral`` (without the code, which is a live access
     # capability), and cascaded away with the account after every invite it
     # names has been switched off.
     "consumer_referral_invites": Classification.INCLUDED,
@@ -226,6 +240,11 @@ REGISTRY: dict[str, Classification] = {
     # --- Audit + beta usage ---
     "audit_events": Classification.INCLUDED,
     "beta_usage_events": Classification.INCLUDED,
+    # A short-lived hold on one unit of allowance, taken before a provider is
+    # paid and settled into ``beta_usage_events`` (or released) right after.
+    # System cost control, never customer content: no prompt, output or text.
+    # It expires on its own and cascades with the account.
+    "beta_usage_reservations": Classification.OPERATIONAL,
     "app_events": Classification.INCLUDED,
     # --- Feature flags (global) ---
     "feature_flags": Classification.NOT_USER_OWNED,

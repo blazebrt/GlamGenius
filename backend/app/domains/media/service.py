@@ -17,11 +17,14 @@ import logging
 import uuid
 from typing import Any
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.audit import service as audit
 from app.domains.audit.models import ACTION_MEDIA_DELETED, ACTION_MEDIA_UPLOADED
+from app.domains.identity import service as identity_service
+from app.domains.inventory.models import InventoryItem, InventoryItemImage
 from app.domains.media.models import (
     MEDIA_STATUS_ACTIVE,
     MEDIA_STATUS_DELETED,
@@ -47,6 +50,14 @@ from app.shared.errors.exceptions import (
 from app.shared.validation.media import read_dimensions, validate_upload
 
 logger = logging.getLogger(__name__)
+
+
+class AccountNotActive(Exception):
+    """The account may not store anything new: its deletion has been asked for.
+
+    Raised before any byte is written. The route turns it into the same 403
+    ``ACCOUNT_INACTIVE`` the authentication dependency gives.
+    """
 
 
 def to_public_dict(asset: MediaAsset) -> dict[str, Any]:
@@ -109,6 +120,20 @@ async def upload(
     asset_id = new_uuid()
     key = build_key(account_id, asset_id, content_type)
     storage = get_storage()
+
+    # The account lifecycle boundary, immediately before the bytes. The request
+    # authenticated earlier as active, but that proves nothing about now. This
+    # holds the account row FOR SHARE until the caller's transaction ends:
+    # - if a deletion request committed first, the account is seen as not
+    #   active and nothing is written;
+    # - otherwise the request waits, and the object, the row and the audit
+    #   entry below all exist before the deletion job does. The job's purges
+    #   then remove the object.
+    # No object under an account prefix can be written after that account's
+    # deletion was requested, which is what the final storage barrier relies
+    # on.
+    if not await identity_service.hold_account_active(session, account_id):
+        raise AccountNotActive()
 
     # Bytes first. A storage failure must not leave a database row pointing at
     # an object that was never written.
@@ -212,6 +237,7 @@ async def delete(
 
     asset.status = MEDIA_STATUS_DELETED
     asset.deleted_at = utcnow()
+    await _unlink_inventory_images(session, account_id=account_id, asset_id=asset.id)
     await session.flush()
 
     await audit.record(
@@ -224,6 +250,26 @@ async def delete(
         client_ip=client_ip,
     )
     return asset
+
+
+async def _unlink_inventory_images(
+    session: AsyncSession, *, account_id: uuid.UUID, asset_id: uuid.UUID,
+) -> None:
+    """Take a deleted photo off this account's own items, in the same transaction.
+
+    The row stays (``deleted``) for history, so nothing cascaded, and an item
+    went on naming a photo that no longer resolves: the next update carrying
+    its own image ids was refused. Only links from items this account owns are
+    removed, chosen in SQL. A malformed link from somebody else's item is not
+    this deletion's to touch, and neither item nor bytes are recreated.
+    """
+    owned_items = select(InventoryItem.id).where(InventoryItem.account_id == account_id)
+    await session.execute(
+        sql_delete(InventoryItemImage).where(
+            InventoryItemImage.media_asset_id == asset_id,
+            InventoryItemImage.item_id.in_(owned_items),
+        )
+    )
 
 
 async def list_for_account(
@@ -261,6 +307,34 @@ async def delete_all_for_account(
         removed += 1
     await session.flush()
     return removed
+
+
+async def erase_object(key: str) -> bool:
+    """Delete one object by its exact key, and prove it is gone.
+
+    For evidence an account owns that lives *outside* its storage prefix, so a
+    prefix purge cannot reach it. Today that is only a legacy label-report
+    photo written under the old global ``label-reports/`` namespace.
+
+    The proof is a fresh read of the same key reporting the object missing.
+    Not ``exists``: an adapter answers that from a directory listing, and a
+    listing of a large shared folder is paginated, so "not in the first page"
+    would pass for "absent". A read of the exact key has no page to fall off.
+
+    Returns ``True`` when the object is proven absent, ``False`` when it can
+    still be read after the delete. Every other storage error propagates, so
+    the deletion worker fails closed into its retry.
+    """
+    storage = get_storage()
+    try:
+        await storage.delete(key)
+    except StorageObjectMissing:
+        pass
+    try:
+        await storage.get(key)
+    except StorageObjectMissing:
+        return True
+    return False
 
 
 async def purge_account_storage(account_id: uuid.UUID) -> tuple[int, list[str]]:

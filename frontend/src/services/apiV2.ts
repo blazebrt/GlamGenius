@@ -9,6 +9,7 @@
  * are shared. Only the path prefix differs.
  */
 import { api } from './api';
+import { notificationDevicePath } from './notificationRoutes';
 import type { ChemistryWithheldReason, SupplementExpiryState, SupplementProvenance } from '../strings/supplements';
 
 // Every V2 call is prefixed with `/api/v2`. The shared axios instance in
@@ -134,13 +135,21 @@ export interface FinalizeRegistrationResponse {
   invite_redeemed: boolean;
 }
 
-/** Step 3: finalise registration for the currently-authenticated Supabase user. */
+/**
+ * Step 3: finalise registration for the currently-authenticated Supabase user.
+ *
+ * With ``expectedAccountId`` it is sent as that account or not at all, so a
+ * finalisation started for one account can never create another.
+ */
 export const finalizeRegistration = async (
-  registration_challenge?: string
+  registration_challenge?: string,
+  options: { expectedAccountId?: string } = {}
 ): Promise<FinalizeRegistrationResponse> =>
-  (await api.post<FinalizeRegistrationResponse>(`${V2}/access/register`, {
-    registration_challenge,
-  })).data;
+  (await api.post<FinalizeRegistrationResponse>(
+    `${V2}/access/register`,
+    { registration_challenge },
+    { expectedAccountId: options.expectedAccountId }
+  )).data;
 
 // --- Admin: reservation metrics -------------------------------------------
 
@@ -308,12 +317,15 @@ export const withdrawCommunityObservation = async (reportId: string): Promise<Co
  * the device's.
  */
 export const claimScanDevice = async (
-  deviceToken: string
+  deviceToken: string,
+  options: { expectedAccountId?: string } = {}
 ): Promise<{ claimed: boolean; scans_attached: number }> => {
   const response = await api.post<{ claimed: boolean; scans_attached: number }>(
     `${V2}/scan/device/claim`,
     {},
-    { headers: { 'X-Device-Token': deviceToken } }
+    // With ``expectedAccountId`` the claim goes out as that account or not at
+    // all; it can never attach this phone's scans to whoever signed in since.
+    { headers: { 'X-Device-Token': deviceToken }, expectedAccountId: options.expectedAccountId }
   );
   return response.data;
 };
@@ -531,10 +543,16 @@ export interface AppearanceProfile {
 export const getAppearanceProfile = async (): Promise<AppearanceProfile> =>
   (await api.get<AppearanceProfile>(`${V2}/profile`)).data;
 
+/** With ``expectedAccountId`` the change is sent as that account or not at all. */
 export const patchAppearanceProfile = async (
-  attributes: { key: string; value: string | number | string[] }[]
+  attributes: { key: string; value: string | number | string[] }[],
+  options: { expectedAccountId?: string } = {}
 ): Promise<AppearanceProfile> =>
-  (await api.patch<AppearanceProfile>(`${V2}/profile`, { attributes })).data;
+  (await api.patch<AppearanceProfile>(
+    `${V2}/profile`,
+    { attributes },
+    { expectedAccountId: options.expectedAccountId }
+  )).data;
 
 export const getProfileObservations = async (): Promise<ProfileObservation[]> =>
   (await api.get<{ observations: ProfileObservation[] }>(`${V2}/profile/observations`)).data.observations;
@@ -2203,7 +2221,7 @@ export const registerNotificationDevice = async (body: {
   (await api.post(`${V2}/today/notifications/devices`, body)).data;
 
 export const unregisterNotificationDevice = async (deviceKey: string): Promise<{ device_key: string; removed: boolean; active_devices_remaining: boolean; native_push_enabled: boolean; current_device_registered: boolean }> =>
-  (await api.delete(`${V2}/today/notifications/devices/${encodeURIComponent(deviceKey)}`)).data;
+  (await api.delete(notificationDevicePath(deviceKey))).data;
 
 // --- Phase 6: routines, shelf, perfume, supplements, food context -----------
 // Every warning carries the id of a reviewed rule. The client never invents

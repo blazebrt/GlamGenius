@@ -70,10 +70,13 @@ def recommend(
     season: str | None = None,
     preferred_style: str | None = None,
     recently_used_item_ids: Sequence[str] = (),
-    today: date | None = None,
+    today: date,
 ) -> dict[str, Any]:
-    """Rank owned perfumes for a context. Never invents a bottle."""
-    _now = today or date.today()
+    """Rank owned perfumes for a context. Never invents a bottle.
+
+    ``today`` is the customer's date, passed by the caller.
+    """
+    _now = today
     bucket = OCCASION_BUCKET.get(occasion_key or "")
 
     candidates: list[PerfumeCandidate] = []

@@ -28,7 +28,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -52,6 +52,9 @@ from app.shared.errors.exceptions import (
     AnalysisUnavailableError,
 )
 from app.shared.observability.request_id import get_request_id
+
+if TYPE_CHECKING:
+    from app.domains.beta_access.service import UsageReservation
 
 logger = logging.getLogger(__name__)
 
@@ -197,8 +200,8 @@ async def _record_run(**fields: Any) -> uuid.UUID | None:
         return None
 
 
-async def _assert_within_hourly_cap(account_id_str: str | None) -> None:
-    """Refuse the call if this account has used its hourly AI budget.
+async def _reserve_hourly_slot(account_id_str: str | None) -> UsageReservation | None:
+    """Take one unit of this account's hourly AI budget, or refuse the call.
 
     Every route that reaches a provider costs real money per call. Only
     ``scan.analyse`` carried a cap; the twelve other paths into
@@ -216,15 +219,22 @@ async def _assert_within_hourly_cap(account_id_str: str | None) -> None:
     Signed-out previews pass through. They are capped by the anonymous device
     limits at the routes that allow them, and there is no account to meter.
 
-    Fails **closed**: if the cap cannot be read, the call does not happen. That
-    is the opposite of :func:`_record_run`, which swallows its errors — a
-    ledger that breaks the feature it measures is worse than no ledger, but a
-    cost control that fails open is not a cost control. It costs nothing in
-    practice, because every authenticated route already needs the database to
-    resolve the caller at all.
+    Fails **closed**: if the budget cannot be established, the call does not
+    happen. That is the opposite of :func:`_record_run`, which swallows its
+    errors — a ledger that breaks the feature it measures is worse than no
+    ledger, but a cost control that fails open is not a cost control. It costs
+    nothing in practice, because every authenticated route already needs the
+    database to resolve the caller at all.
+
+    **A reservation, not a check.** Checking usage, calling the provider and
+    recording afterwards let every parallel request read "one left" and all of
+    them spend. :func:`beta.reserve_usage` takes the unit atomically, and this
+    session commits before the provider is called, so no lock or transaction
+    is held across it. The caller settles it on success and releases it on a
+    known failure; a crash leaves it to expire.
     """
     if not account_id_str:
-        return
+        return None
 
     from app.domains.beta_access import service as beta
 
@@ -234,9 +244,9 @@ async def _assert_within_hourly_cap(account_id_str: str | None) -> None:
         if account is None:
             # No account row, so no per-account budget to charge. The route's
             # own authorisation decides whether this caller may be here.
-            return
+            return None
         try:
-            await beta.check_limit(
+            reservation = await beta.reserve_usage(
                 session, account_id=account.id, feature=beta.FEATURE_AI_REQUEST
             )
         except beta.UsageExceeded as exc:
@@ -250,20 +260,26 @@ async def _assert_within_hourly_cap(account_id_str: str | None) -> None:
                     "allowance_consumed": False,
                 },
             ) from exc
+        # Committed here, before any provider call: the unit is now held by a
+        # row, and the lock that made taking it atomic is already released.
+        await session.commit()
+        return reservation
 
 
-async def _record_hourly_usage(account_id_str: str | None, run_id: uuid.UUID | None) -> None:
-    """Count one successful, cost-bearing call against the hourly budget.
+async def _settle_hourly_usage(reservation: UsageReservation | None, run_id: uuid.UUID | None) -> None:
+    """Count one successful, cost-bearing call and let go of its hold.
 
     After success only: a failed run must not consume an allowance, which is
-    the same rule ``record_usage`` documents and the scan route follows. Keyed
-    by the run id so a repeat cannot double-count.
+    the same rule ``record_usage`` documents and the scan route follows. The
+    usage event and the reservation's removal are one transaction. Keyed by
+    the run id so a repeat cannot double-count — or by the reservation when the
+    run ledger itself could not be written, so the call is still counted.
 
     Never raises. At this point the provider has already been paid and the
     caller is holding a good result; losing a counter is not worth turning that
-    into an error.
+    into an error, and an unsettled reservation still expires on its own.
     """
-    if not account_id_str or run_id is None:
+    if reservation is None:
         return
 
     from app.domains.beta_access import service as beta
@@ -271,18 +287,33 @@ async def _record_hourly_usage(account_id_str: str | None, run_id: uuid.UUID | N
     try:
         factory = get_sessionmaker()
         async with factory() as session:
-            account = await identity.get_account(session, account_id_str)
-            if account is None:
-                return
-            await beta.record_usage(
-                session,
-                account_id=account.id,
-                feature=beta.FEATURE_AI_REQUEST,
-                idempotency_key=str(run_id),
+            await beta.settle_usage(
+                session, reservation,
+                idempotency_key=str(run_id) if run_id is not None else f"reservation:{reservation.id}",
             )
             await session.commit()
     except Exception:  # noqa: BLE001 - see docstring
-        logger.exception("ai_hourly_usage_recording_failed run_id=%s", run_id)
+        logger.exception("ai_hourly_usage_recording_failed reservation=%s", reservation.id)
+
+
+async def _release_hourly_usage(reservation: UsageReservation | None) -> None:
+    """A known failure delivered nothing: give the unit back. Never raises.
+
+    If the release itself fails the reservation still expires, so the worst
+    case is a unit held for ``RESERVATION_TTL``, never a wrong count.
+    """
+    if reservation is None:
+        return
+
+    from app.domains.beta_access import service as beta
+
+    try:
+        factory = get_sessionmaker()
+        async with factory() as session:
+            await beta.release_usage(session, reservation)
+            await session.commit()
+    except Exception:  # noqa: BLE001 - see docstring
+        logger.exception("ai_hourly_usage_release_failed reservation=%s", reservation.id)
 
 
 def _fail(
@@ -315,95 +346,103 @@ async def run_structured(
         AnalysisUnavailableError: for every failure mode. The error carries the
             failure type, user-facing guidance, and ``allowance_consumed: False``.
     """
-    # Before anything is spent: the hourly ceiling for this account.
-    await _assert_within_hourly_cap(account_id_str)
+    # Before anything is spent: one unit of the hourly ceiling, reserved and
+    # committed. Everything from here to a validated result either settles
+    # that unit (success, below) or gives it back (a known failure).
+    reservation = await _reserve_hourly_slot(account_id_str)
 
-    started = time.perf_counter()
-
-    base_record: dict[str, Any] = {
-        "account_id_str": account_id_str,
-        "feature": feature,
-        "provider": gemini.PROVIDER_NAME,
-        "model": gemini.GEMINI_MODEL or "unknown",
-        "prompt_version": prompt_version,
-        "schema_version": schema_version,
-        "allowance_consumed": False,
-    }
-
-    async def record_failure(
-        failure_type: AIFailureType, detail: str, model: str | None = None
-    ) -> uuid.UUID | None:
-        elapsed = int((time.perf_counter() - started) * 1000)
-        return await _record_run(
-            **{
-                **base_record,
-                "model": model or base_record["model"],
-                "status": AI_STATUS_FAILED,
-                "failure_type": failure_type.value,
-                # Type and short message only — never a stack trace, never a key.
-                "failure_detail": detail[:2000],
-                "latency_ms": elapsed,
-                "validation_passed": False,
-                "completed_at": utcnow(),
-            }
-        )
-
-    # --- 1. Call the provider -------------------------------------------------
     try:
-        response = await gemini.generate(prompt, system, image_base64=image_base64)
-    except gemini.ProviderNotConfigured as exc:
-        run_id = await record_failure(AIFailureType.PROVIDER_NOT_CONFIGURED, str(exc))
-        logger.warning("ai_provider_not_configured feature=%s", feature)
-        raise _fail(AIFailureType.PROVIDER_NOT_CONFIGURED, run_id) from exc
-    except gemini.ProviderTimeout as exc:
-        run_id = await record_failure(AIFailureType.PROVIDER_TIMEOUT, str(exc))
-        logger.warning("ai_provider_timeout feature=%s", feature)
-        raise _fail(AIFailureType.PROVIDER_TIMEOUT, run_id) from exc
-    except gemini.ImageRejected as exc:
-        run_id = await record_failure(AIFailureType.IMAGE_REJECTED, str(exc))
-        raise _fail(AIFailureType.IMAGE_REJECTED, run_id) from exc
-    except Exception as exc:  # noqa: BLE001 - anything else is a provider error
-        run_id = await record_failure(
-            AIFailureType.PROVIDER_ERROR, f"{type(exc).__name__}: {exc}"
-        )
-        logger.warning(
-            "ai_provider_error feature=%s type=%s", feature, type(exc).__name__
-        )
-        raise _fail(AIFailureType.PROVIDER_ERROR, run_id) from exc
+        started = time.perf_counter()
 
-    if not response.text.strip():
-        run_id = await record_failure(
-            AIFailureType.EMPTY_RESPONSE, "Provider returned no text", response.model
-        )
-        raise _fail(AIFailureType.EMPTY_RESPONSE, run_id)
+        base_record: dict[str, Any] = {
+            "account_id_str": account_id_str,
+            "feature": feature,
+            "provider": gemini.PROVIDER_NAME,
+            "model": gemini.GEMINI_MODEL or "unknown",
+            "prompt_version": prompt_version,
+            "schema_version": schema_version,
+            "allowance_consumed": False,
+        }
 
-    # --- 2. Parse -------------------------------------------------------------
-    try:
-        payload = parse_json(response.text)
-    except (json.JSONDecodeError, ValueError) as exc:
-        run_id = await record_failure(
-            AIFailureType.INVALID_JSON, f"{type(exc).__name__}: {exc}", response.model
-        )
-        logger.warning("ai_invalid_json feature=%s", feature)
-        raise _fail(AIFailureType.INVALID_JSON, run_id) from exc
+        async def record_failure(
+            failure_type: AIFailureType, detail: str, model: str | None = None
+        ) -> uuid.UUID | None:
+            elapsed = int((time.perf_counter() - started) * 1000)
+            return await _record_run(
+                **{
+                    **base_record,
+                    "model": model or base_record["model"],
+                    "status": AI_STATUS_FAILED,
+                    "failure_type": failure_type.value,
+                    # Type and short message only — never a stack trace, never a key.
+                    "failure_detail": detail[:2000],
+                    "latency_ms": elapsed,
+                    "validation_passed": False,
+                    "completed_at": utcnow(),
+                }
+            )
 
-    # --- 3. Validate ----------------------------------------------------------
-    try:
-        validated = schema.model_validate(payload)
-    except ValidationError as exc:
-        # Log which fields failed, not the payload — it can contain the user's
-        # own details echoed back.
-        problems = "; ".join(
-            f"{'.'.join(str(p) for p in err['loc'])}: {err['type']}"
-            for err in exc.errors()[:10]
-        )
-        run_id = await record_failure(
-            AIFailureType.SCHEMA_VALIDATION_FAILED, problems, response.model
-        )
-        logger.warning(
-            "ai_schema_validation_failed feature=%s problems=%s", feature, problems
-        )
-        raise _fail(AIFailureType.SCHEMA_VALIDATION_FAILED, run_id) from exc
+        # --- 1. Call the provider -------------------------------------------------
+        try:
+            response = await gemini.generate(prompt, system, image_base64=image_base64)
+        except gemini.ProviderNotConfigured as exc:
+            run_id = await record_failure(AIFailureType.PROVIDER_NOT_CONFIGURED, str(exc))
+            logger.warning("ai_provider_not_configured feature=%s", feature)
+            raise _fail(AIFailureType.PROVIDER_NOT_CONFIGURED, run_id) from exc
+        except gemini.ProviderTimeout as exc:
+            run_id = await record_failure(AIFailureType.PROVIDER_TIMEOUT, str(exc))
+            logger.warning("ai_provider_timeout feature=%s", feature)
+            raise _fail(AIFailureType.PROVIDER_TIMEOUT, run_id) from exc
+        except gemini.ImageRejected as exc:
+            run_id = await record_failure(AIFailureType.IMAGE_REJECTED, str(exc))
+            raise _fail(AIFailureType.IMAGE_REJECTED, run_id) from exc
+        except Exception as exc:  # noqa: BLE001 - anything else is a provider error
+            run_id = await record_failure(
+                AIFailureType.PROVIDER_ERROR, f"{type(exc).__name__}: {exc}"
+            )
+            logger.warning(
+                "ai_provider_error feature=%s type=%s", feature, type(exc).__name__
+            )
+            raise _fail(AIFailureType.PROVIDER_ERROR, run_id) from exc
+
+        if not response.text.strip():
+            run_id = await record_failure(
+                AIFailureType.EMPTY_RESPONSE, "Provider returned no text", response.model
+            )
+            raise _fail(AIFailureType.EMPTY_RESPONSE, run_id)
+
+        # --- 2. Parse -------------------------------------------------------------
+        try:
+            payload = parse_json(response.text)
+        except (json.JSONDecodeError, ValueError) as exc:
+            run_id = await record_failure(
+                AIFailureType.INVALID_JSON, f"{type(exc).__name__}: {exc}", response.model
+            )
+            logger.warning("ai_invalid_json feature=%s", feature)
+            raise _fail(AIFailureType.INVALID_JSON, run_id) from exc
+
+        # --- 3. Validate ----------------------------------------------------------
+        try:
+            validated = schema.model_validate(payload)
+        except ValidationError as exc:
+            # Log which fields failed, not the payload — it can contain the user's
+            # own details echoed back.
+            problems = "; ".join(
+                f"{'.'.join(str(p) for p in err['loc'])}: {err['type']}"
+                for err in exc.errors()[:10]
+            )
+            run_id = await record_failure(
+                AIFailureType.SCHEMA_VALIDATION_FAILED, problems, response.model
+            )
+            logger.warning(
+                "ai_schema_validation_failed feature=%s problems=%s", feature, problems
+            )
+            raise _fail(AIFailureType.SCHEMA_VALIDATION_FAILED, run_id) from exc
+    except AnalysisUnavailableError:
+        # Every failure above is this error, raised after its run was
+        # recorded as failed: nothing was delivered, so nothing is spent.
+        await _release_hourly_usage(reservation)
+        raise
 
     # --- 4. Record the success ------------------------------------------------
     latency_ms = int((time.perf_counter() - started) * 1000)
@@ -426,7 +465,7 @@ async def run_structured(
         }
     )
 
-    await _record_hourly_usage(account_id_str, run_id)
+    await _settle_hourly_usage(reservation, run_id)
 
     logger.info(
         "ai_run_succeeded feature=%s model=%s latency_ms=%s cost_usd=%s",

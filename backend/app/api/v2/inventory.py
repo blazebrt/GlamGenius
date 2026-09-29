@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,7 @@ from app.domains.inventory.schemas import (
     ScanOwnershipCreate,
     UsageCreate,
 )
+from app.domains.planning import context as planning_context
 from app.domains.product.models import ScanDevice
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import FeatureUnavailableError, ValidationFailedError
@@ -26,6 +28,15 @@ from app.shared.flags import service as flag_service
 from app.shared.security.deps import CurrentAccount, get_current_account, require_flag
 
 router = APIRouter(dependencies=[Depends(require_flag("v2_inventory"))])
+
+
+async def _today(session: AsyncSession, current: CurrentAccount) -> date:
+    """The customer's calendar date, resolved once per request and passed down.
+
+    Low use, expiry and value to recover all compare against "today", and
+    every one of them reads it from here — never the server's own date.
+    """
+    return await planning_context.account_today(session, current.account_id)
 
 
 @router.post("/inventory/from-scan")
@@ -74,7 +85,7 @@ async def extract_inventory_item(body: ExtractRequest, current: CurrentAccount =
         raise FeatureUnavailableError("v2_inventory_batch")
     job, item, extracted = await extraction.analyse(session, account_id=current.account_id, account_id_str=current.account_id_str, media_asset_id=body.media_asset_id, category_hint=body.category_hint, capture_type=body.capture_type)
     await session.commit()
-    return extraction.serialize_result(job, await service.serialize_item(session, item, include_history=True), extracted)
+    return extraction.serialize_result(job, await service.serialize_item(session, item, today=await _today(session, current), include_history=True), extracted)
 
 
 @router.post("/inventory/extract/batch")
@@ -172,7 +183,7 @@ async def create_inventory_item(body: ItemCreate, current: CurrentAccount = Depe
     except ValueError as exc:
         raise ValidationFailedError(str(exc)) from exc
     await session.commit()
-    return await service.serialize_item(session, item, include_history=True)
+    return await service.serialize_item(session, item, today=await _today(session, current), include_history=True)
 
 
 @router.get("/inventory/items")
@@ -183,7 +194,7 @@ async def get_inventory_items(
     condition: str | None = Query(None, max_length=24), expiry_status: str | None = None, usage_level: str | None = None, verification_state: str | None = None, sort: str = "newest",
     current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session),
 ):
-    return await service.list_items(session, current.account_id, page=page, page_size=page_size, q=q, category=category, brand=brand, colour=colour, ingredient=ingredient, occasion=occasion, season=season, condition=condition, expiry_status=expiry_status, usage_level=usage_level, verification_state=verification_state, sort=sort)
+    return await service.list_items(session, current.account_id, today=await _today(session, current), page=page, page_size=page_size, q=q, category=category, brand=brand, colour=colour, ingredient=ingredient, occasion=occasion, season=season, condition=condition, expiry_status=expiry_status, usage_level=usage_level, verification_state=verification_state, sort=sort)
 
 
 @router.get("/inventory/search")
@@ -193,12 +204,12 @@ async def search_inventory(
     condition: str | None = None, expiry_status: str | None = None, usage_level: str | None = None, verification_state: str | None = None, sort: str = "newest",
     current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session),
 ):
-    return await service.list_items(session, current.account_id, page=page, page_size=page_size, q=q or None, category=category, brand=brand, colour=colour, ingredient=ingredient, occasion=occasion, season=season, condition=condition, expiry_status=expiry_status, usage_level=usage_level, verification_state=verification_state, sort=sort)
+    return await service.list_items(session, current.account_id, today=await _today(session, current), page=page, page_size=page_size, q=q or None, category=category, brand=brand, colour=colour, ingredient=ingredient, occasion=occasion, season=season, condition=condition, expiry_status=expiry_status, usage_level=usage_level, verification_state=verification_state, sort=sort)
 
 
 @router.get("/inventory/items/{item_id}")
 async def get_inventory_item(item_id: uuid.UUID, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    return await service.serialize_item(session, await service.owned_item(session, current.account_id, item_id), include_history=True)
+    return await service.serialize_item(session, await service.owned_item(session, current.account_id, item_id), today=await _today(session, current), include_history=True)
 
 
 @router.patch("/inventory/items/{item_id}")
@@ -211,7 +222,7 @@ async def patch_inventory_item(item_id: uuid.UUID, body: ItemPatch, current: Cur
     except ValueError as exc:
         raise ValidationFailedError(str(exc)) from exc
     await session.commit()
-    return await service.serialize_item(session, item, include_history=True)
+    return await service.serialize_item(session, item, today=await _today(session, current), include_history=True)
 
 
 @router.delete("/inventory/items/{item_id}")
@@ -224,24 +235,30 @@ async def delete_inventory_item(item_id: uuid.UUID, current: CurrentAccount = De
 @router.post("/inventory/items/{item_id}/confirm")
 async def confirm_inventory_item(item_id: uuid.UUID, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
     item = await service.owned_item(session, current.account_id, item_id, for_update=True); await service.confirm_item(session, item); await session.commit()
-    return await service.serialize_item(session, item, include_history=True)
+    return await service.serialize_item(session, item, today=await _today(session, current), include_history=True)
 
 
 @router.post("/inventory/items/{item_id}/usage")
 async def log_item_usage(item_id: uuid.UUID, body: UsageCreate, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    item = await service.owned_item(session, current.account_id, item_id, for_update=True); await service.log_usage(session, item, body.used_on, body.quantity, body.note); await session.commit()
-    return await service.serialize_item(session, item, include_history=True)
+    today = await _today(session, current)
+    # Omitted means the customer's today, not the server's.
+    used_on = body.used_on or today
+    item = await service.owned_item(session, current.account_id, item_id, for_update=True); await service.log_usage(session, item, used_on, body.quantity, body.note); await session.commit()
+    return await service.serialize_item(session, item, today=today, include_history=True)
 
 
 @router.post("/inventory/items/{item_id}/condition")
 async def log_item_condition(item_id: uuid.UUID, body: ConditionCreate, current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
     item = await service.owned_item(session, current.account_id, item_id, for_update=True); await service.log_condition(session, item, body.condition, body.note); await session.commit()
-    return await service.serialize_item(session, item, include_history=True)
+    return await service.serialize_item(session, item, today=await _today(session, current), include_history=True)
 
 
 @router.get("/inventory/duplicates")
 async def get_duplicate_candidates(current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    return {"label": "Duplicate Candidates", "candidates": await service.duplicates(session, current.account_id)}
+    candidates = await service.duplicates(session, current.account_id, today=await _today(session, current))
+    # Committed: reading the list retires any pair that can no longer be shown.
+    await session.commit()
+    return {"label": "Duplicate Candidates", "candidates": candidates}
 
 
 @router.post("/inventory/duplicates/{candidate_id}/resolve")
@@ -252,19 +269,22 @@ async def resolve_duplicate_candidate(candidate_id: uuid.UUID, body: DuplicateRe
 
 @router.get("/inventory/expiring")
 async def get_expiring_inventory(days: int = Query(90, ge=1, le=365), current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    return {"label": "Products Expiring Soon", "days": days, "items": await service.expiring_items(session, current.account_id, days)}
+    return {"label": "Products Expiring Soon", "days": days, "items": await service.expiring_items(session, current.account_id, days, today=await _today(session, current))}
 
 
 @router.get("/inventory/low-use")
 async def get_low_use_inventory(current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    return {"label": "Low-Use Products", "definition": "Active items at least 30 days old, used no more than twice and not used in the last 30 days.", "items": await service.low_use_items(session, current.account_id)}
+    return {"label": "Low-Use Products", "definition": "Active items at least 30 days old, used no more than twice and not used in the last 30 days.", "items": await service.low_use_items(session, current.account_id, today=await _today(session, current))}
 
 
 @router.get("/inventory/value-to-recover")
 async def get_value_to_recover(current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    return await service.value_report(session, current.account_id)
+    return await service.value_report(session, current.account_id, today=await _today(session, current))
 
 
 @router.get("/inventory/summary")
 async def get_inventory_summary(current: CurrentAccount = Depends(get_current_account), session: AsyncSession = Depends(get_session)):
-    return await service.summary(session, current.account_id)
+    result = await service.summary(session, current.account_id, today=await _today(session, current))
+    # Committed: the summary reads the duplicate list, which retires stale pairs.
+    await session.commit()
+    return result

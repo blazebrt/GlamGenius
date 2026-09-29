@@ -34,6 +34,7 @@ import {
   fetchSkinCareForYou,
   newScanId,
   readQueue,
+  refreshBarcodeResult,
   settleScanEvents,
   scanBarcode,
   syncQueue,
@@ -68,9 +69,18 @@ const BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'itf14'] as
 
 type Stage = 'camera' | 'looking' | 'result' | 'label-kind' | 'label' | 'skin-care-confirmed';
 
+/**
+ * One packaged-food draft, with the idempotency key it will be confirmed under.
+ *
+ * The same rule as skin care: the key is minted once per transcription and
+ * reused for every attempt to confirm that draft, including a retry after a
+ * response that never arrived. Retaking the photograph is what deserves a new
+ * key.
+ */
 type LabelDraft = {
   facts: Record<string, unknown>;
   aiRunId: string;
+  clientScanId: string;
 };
 
 /**
@@ -174,34 +184,37 @@ export default function ScanProductScreen() {
   }, [router, userId]);
 
   /**
-   * Settle the category, and for skin care settle device ownership too.
+   * Settle the category, the device's ownership for skin care, and for both
+   * kinds this barcode's plain scan event.
    *
-   * Step 8J refuses a confirmation on a device this account does not own, and
-   * that refusal would otherwise arrive *after* a model call had been spent on
-   * the photograph. Claiming first costs a cheap request; getting it wrong
-   * costs the person a wasted capture.
+   * Step 8J refuses a skin-care confirmation on a device this account does not
+   * own, and that refusal would otherwise arrive *after* a model call had been
+   * spent on the photograph. Claiming first costs a cheap request; getting it
+   * wrong costs the person a wasted capture. Packaged food has no such rule
+   * and claims nothing.
    */
   const chooseLabelKind = useCallback(async (kind: LabelKind) => {
     setLabelError(null);
+    if (!result) return;
     if (kind === 'skin_care') {
       if (!userId) { router.push('/(auth)/welcome'); return; }
-      if (!result) return;
       const owned = await ensureDeviceClaimed(userId);
       if (!owned) {
         setLabelError('This phone is not linked to your account yet. Try again in a moment.');
         return;
       }
-      // The plain scan event for this barcode must be on the server before a
-      // model call is spent. If it arrived afterwards it would become the
-      // newest event and silently supersede the confirmation the person is
-      // about to make. Refusing to start is the honest answer; capturing a
-      // pack whose confirmation may not hold is not.
-      setLabelBusy(true);
-      const settled = await settleScanEvents(result.barcode).finally(() => setLabelBusy(false));
-      if (!settled) {
-        setLabelError(SCAN_NOT_SETTLED_MESSAGE);
-        return;
-      }
+    }
+    // The plain scan event for this barcode must be on the server before a
+    // model call is spent — for food exactly as for skin care. If it arrived
+    // afterwards it would become the newest event and silently supersede the
+    // confirmation the person is about to make. Refusing to start is the
+    // honest answer; asking someone to photograph a pack whose confirmation
+    // may not hold is not.
+    setLabelBusy(true);
+    const settled = await settleScanEvents(result.barcode).finally(() => setLabelBusy(false));
+    if (!settled) {
+      setLabelError(SCAN_NOT_SETTLED_MESSAGE);
+      return;
     }
     setLabelKind(kind);
     setStage('label');
@@ -243,7 +256,8 @@ export default function ScanProductScreen() {
         setLabelError(S.labelReview.missingConfirmationReference);
         return;
       }
-      setLabelDraft({ facts: read.facts, aiRunId });
+      // One key per transcription, reused for every confirmation attempt.
+      setLabelDraft({ facts: read.facts, aiRunId, clientScanId: newScanId() });
     } catch (err) {
       setLabelError(errorMessage(err, 'We could not read that photo. Try again with more light.'));
     } finally {
@@ -254,29 +268,46 @@ export default function ScanProductScreen() {
   /**
    * The VC-07 confirm: the person says it is right, and only then it counts.
    *
-   * The record is read back afterwards so they see the confidence their
-   * confirmation actually produced, rather than being told it worked.
+   * Two rules keep the pack the person just confirmed as the current pack:
+   *
+   * 1. **Settled first.** This barcode's plain event is proven landed before
+   *    the confirmation is sent, so it cannot arrive afterwards and become the
+   *    newest event. If that cannot be proven, nothing is sent and the draft
+   *    stays for a retry.
+   * 2. **Read back, never rescanned.** The result is refreshed through the
+   *    read-only `refreshBarcodeResult`. `scanBarcode` would record a new plain
+   *    event, and that event — not the confirmation — would then be the pack
+   *    in hand.
+   *
+   * Every attempt confirms under the draft's own key, so pressing Confirm
+   * again after a lost response is a replay, not a second capture.
    */
   const acceptLabel = useCallback(async () => {
-    if (!result || !labelDraft) return;
+    if (!result || !labelDraft || labelBusy) return;
     setLabelBusy(true);
     setLabelError(null);
     try {
-      const saved = await confirmLabel(result.barcode, labelDraft.aiRunId);
+      const settled = await settleScanEvents(result.barcode);
+      if (!settled) {
+        setLabelError(SCAN_NOT_SETTLED_MESSAGE);
+        return;
+      }
+      const saved = await confirmLabel(result.barcode, labelDraft.aiRunId, labelDraft.clientScanId);
       if (!saved) {
         setLabelError(S.labelReview.saveFailed);
         return;
       }
       setConfirmed(`Saved. ${saved.confidence.text}`);
       setLabelDraft(null);
-      setResult(await scanBarcode(result.barcode));
+      const refreshed = await refreshBarcodeResult(result.barcode);
+      if (refreshed) setResult(refreshed);
       setStage('result');
     } catch (err) {
       setLabelError(errorMessage(err, 'We could not save that just now. Try again in a moment.'));
     } finally {
       setLabelBusy(false);
     }
-  }, [labelDraft, result]);
+  }, [labelBusy, labelDraft, result]);
 
   /**
    * Ask Step 8K about the confirmed pack.
@@ -319,8 +350,8 @@ export default function ScanProductScreen() {
    * The one thing this must never do afterwards is scan the barcode again.
    * Step 8K reads the device's *newest* scan event as the current physical
    * pack, so a plain lookup here would replace the confirmation and Step 8K
-   * would correctly answer that no pack has been confirmed. The generic food
-   * path re-scans; this one must not.
+   * would correctly answer that no pack has been confirmed. The packaged-food
+   * path follows the same rule and reads its result back read-only.
    */
   const acceptSkinCareLabel = useCallback(async () => {
     if (!result || !skinDraft || labelBusy) return;
@@ -539,12 +570,25 @@ export default function ScanProductScreen() {
       )}
 
       {stage === 'label' && labelDraft && (
-        <LabelReview
-          facts={labelDraft.facts}
-          busy={labelBusy}
-          onConfirm={acceptLabel}
-          onRetake={() => { setLabelDraft(null); setLabelError(null); }}
-        />
+        <>
+          <LabelReview
+            facts={labelDraft.facts}
+            busy={labelBusy}
+            onConfirm={acceptLabel}
+            onRetake={() => { setLabelDraft(null); setLabelError(null); }}
+          />
+          {!!labelError && (
+            // The draft stays on screen, so pressing Confirm again retries it
+            // under the same key.
+            <Text
+              style={styles.error}
+              testID={labelError === SCAN_NOT_SETTLED_MESSAGE ? 'scan-settlement-failed' : 'label-confirm-error'}
+              accessibilityRole="alert"
+            >
+              {labelError}
+            </Text>
+          )}
+        </>
       )}
 
       {stage === 'label' && !labelDraft && !skinDraft && (

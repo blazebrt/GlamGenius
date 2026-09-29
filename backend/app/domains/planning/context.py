@@ -219,6 +219,26 @@ async def resolve_timezone_for(session: AsyncSession, account_id: uuid.UUID) -> 
     return clock.resolve_timezone(None, city=attributes.get("city"))
 
 
+async def account_today(
+    session: AsyncSession, account_id: uuid.UUID, *,
+    timezone_name: str | None = None, moment: datetime | None = None,
+) -> date:
+    """The customer's calendar date: the one "today" for an account-owned decision.
+
+    Resolved once, at an account-facing boundary — a route or a service entry
+    point — and passed down to every helper that compares against today. Low
+    level helpers never work it out themselves: a server on UTC is still on
+    yesterday for the first five and a half hours of every Indian day, and two
+    helpers disagreeing about the date is how the Care and Routines screens
+    came to disagree about the same product at midnight.
+
+    An explicit ``timezone_name`` is honoured; otherwise the account's own
+    (:func:`resolve_timezone_for`, India by default).
+    """
+    resolved = timezone_name or await resolve_timezone_for(session, account_id)
+    return clock.local_today(resolved, moment=moment)
+
+
 async def unavailable_items(session: AsyncSession, account_id: uuid.UUID, plan_date: date) -> list[uuid.UUID]:
     """Items that cannot be worn on this date.
 

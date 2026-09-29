@@ -189,10 +189,10 @@ def build_detail(
     *,
     others: list[dict[str, Any]],
     knowledge: dict[tuple[str, str], FormKnowledge],
-    today: date | None = None,
+    today: date,
 ) -> dict[str, Any]:
-    """The customer detail for one owned supplement."""
-    now = today or date.today()
+    """The customer detail for one owned supplement, as of the customer's ``today``."""
+    now = today
     expiry = item.get("expiry_date")
     if isinstance(expiry, str):
         expiry = date.fromisoformat(expiry)

@@ -193,6 +193,11 @@ async def test_worker_commits_suppressed_decision(monkeypatch):
     preference = SimpleNamespace(account_id=account_id, enabled=True, native_push_enabled=True, timezone_name="Asia/Kolkata")
     decision = SimpleNamespace(status=notifications.STATUS_SUPPRESSED)
     monkeypatch.setattr(worker, "_preference_due", lambda *args, **kwargs: True)
+    # The account under test is an active one. The lifecycle gate itself is
+    # covered against the database in test_account_deletion_integrity.py.
+    async def active(*args, **kwargs):
+        return True
+    monkeypatch.setattr(worker, "_account_is_active", active)
     async def devices(*args, **kwargs):
         return [object()]
     monkeypatch.setattr(notifications, "active_devices", devices)

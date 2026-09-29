@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, VERIFICATION_USER_CONFIRMED, AIRun, AIRunOutput
 from app.domains.alternatives import service as alternatives_service
 from app.domains.community import service as community_service
-from app.domains.media.storage import factory as storage_factory
+from app.domains.media.storage.base import StorageError, StorageMisconfigured
 from app.domains.nutrition.grading import from_scan, grade_product, presentation
 from app.domains.nutrition.grading.production_rules import (
     enforce_published_required_rules,
@@ -54,8 +54,17 @@ from app.domains.product.fssai import find_licence, is_valid_licence
 from app.domains.product.models import FssaiComplaintHandoff, LabelSnapshot, ScanDevice
 from app.domains.value import service as value_service
 from app.shared.database.sql import get_session
-from app.shared.errors.exceptions import ValidationFailedError
-from app.shared.security.deps import CurrentAccount, get_current_account, get_optional_account
+from app.shared.errors.exceptions import (
+    StorageMisconfiguredError,
+    StorageUnavailableError,
+    ValidationFailedError,
+)
+from app.shared.security.deps import (
+    AccountInactiveError,
+    CurrentAccount,
+    get_current_account,
+    get_optional_account,
+)
 from app.shared.security.network import client_ip
 from app.shared.security.rate_limit import FixedWindowLimiter
 
@@ -677,31 +686,72 @@ async def report_label_error(
     Reachable with a device token and no account. The person best placed to
     notice a wrong number is somebody standing in a shop who has never signed
     up, and an email address would simply mean never hearing from them.
+
+    The photo is read here, before any lock, so a slow upload holds nothing.
+    Where it is stored, and whether it is stored at all, is decided by
+    :func:`service.file_label_error_report`: idempotency first, the account's
+    lifecycle next, then one write under a key the server builds. The caller's
+    ``client_report_id`` never names an object.
     """
     if reason not in service.REPORT_REASONS:
         raise ValidationFailedError("That is not a reason we recognise.", field="reason")
 
-    photo_key: str | None = None
+    data: bytes | None = None
+    content_type: str | None = None
     if photo is not None:
         data = await photo.read()
-        if data:
-            if len(data) > MAX_REPORT_PHOTO_BYTES:
-                raise ValidationFailedError(
-                    "That photo is too large. Take it again at a smaller size.", field="photo",
-                )
-            photo_key = f"{service.LABEL_REPORT_PREFIX}/{client_report_id}.jpg"
-            await storage_factory.get_storage().put(
-                photo_key, data, photo.content_type or "image/jpeg",
+        if data and len(data) > MAX_REPORT_PHOTO_BYTES:
+            raise ValidationFailedError(
+                "That photo is too large. Take it again at a smaller size.", field="photo",
             )
+        content_type = photo.content_type
 
-    report, created = await service.record_label_error(
-        session,
-        client_report_id=client_report_id, subject=subject, reason=reason,
-        barcode=barcode, photo_key=photo_key,
-        device_id=device.id, account_id=device.claimed_by_account_id,
-    )
-    await session.commit()
-    return {"report_id": str(report.id), "created": created}
+    try:
+        report, created, written_key = await service.file_label_error_report(
+            session,
+            device_id=device.id, account_id=device.claimed_by_account_id,
+            client_report_id=client_report_id, subject=subject, reason=reason,
+            barcode=barcode, photo=data or None, photo_content_type=content_type,
+        )
+    except service.ReportAccountNotActive:
+        # The device's account asked to be deleted first. Nothing was stored.
+        raise AccountInactiveError() from None
+    except StorageMisconfigured as exc:
+        raise StorageMisconfiguredError() from exc
+    except StorageError as exc:
+        # Before any row: the report is simply not filed, and the phone retries.
+        raise StorageUnavailableError() from exc
+    # Read before the commit: after a failed one, the session's rows may be
+    # expired, and reloading them is not something a failure path should do.
+    report_id = report.id
+    report_device_id = device.id
+    report_photo_key = report.photo_key
+    try:
+        # Ends the idempotency lock and, for a claimed device, the account
+        # hold. A deletion request that arrived meanwhile has been waiting.
+        await session.commit()
+    except Exception:
+        # A raised commit is not a rolled-back one. Ask the database, then act
+        # only on what it proves. See service.label_report_commit_outcome.
+        outcome = await service.label_report_commit_outcome(
+            session, report_id=report_id, device_id=report_device_id,
+            client_report_id=client_report_id, photo_key=report_photo_key,
+        )
+        if outcome is service.ReportCommitOutcome.COMMITTED:
+            # Only the acknowledgement was lost. The report, and its photo, are
+            # durable: this is the report this request filed.
+            return {"report_id": str(report_id), "created": created}
+        compensated = False
+        if outcome is service.ReportCommitOutcome.NOT_COMMITTED and written_key is not None:
+            compensated = await service.discard_unfiled_report_photo(written_key)
+        logger.warning(
+            "label_report_commit_failed outcome=%s photo_written=%s photo_removed=%s",
+            outcome.value, written_key is not None, compensated,
+        )
+        # The original failure, unchanged: a retryable error, and a retry with
+        # the same client_report_id reconciles to whatever is durable.
+        raise
+    return {"report_id": str(report_id), "created": created}
 
 class ScanDecisionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")

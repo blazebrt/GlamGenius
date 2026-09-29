@@ -69,9 +69,13 @@ def _purpose_needs_professional(purpose: str | None) -> bool:
     return requires_boundary(purpose, question=False)
 
 
-def build_utility(items: list[dict[str, Any]], *, today: date | None = None) -> dict[str, Any]:
-    """Build stable customer-safe utility output from owned item facts."""
-    now = today or date.today()
+def build_utility(items: list[dict[str, Any]], *, today: date) -> dict[str, Any]:
+    """Build stable customer-safe utility output from owned item facts.
+
+    ``today`` is the customer's date, resolved by the caller; expiry status is
+    only as right as the date it is measured from.
+    """
+    now = today
     summaries: list[dict[str, Any]] = []
     confirmed_groups: dict[str, dict[str, Any]] = {}
     for item in sorted(items, key=lambda row: (row["display_name"].casefold(), row["id"])):

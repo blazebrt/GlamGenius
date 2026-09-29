@@ -15,7 +15,7 @@
  * the challenge is in the old place, and dropping it would cost the invite.
  */
 
-import { useUserStore } from '../store/userStore';
+import { handleAuthStateChange, useUserStore } from '../store/userStore';
 import { secureSessionStorage } from '../services/secureSessionStorage';
 import { finalizeRegistration } from '../services/apiV2';
 
@@ -74,6 +74,7 @@ jest.mock('../services/api', () => ({
   isRegistrationRequired: jest.fn(() => false),
   setRegistrationRequiredHandler: jest.fn(),
   setUnauthorizedHandler: jest.fn(),
+  setAuthResponseAuthority: jest.fn(),
 }));
 
 jest.mock('../services/supabase', () => ({
@@ -96,7 +97,15 @@ beforeEach(() => {
   keychain.clear();
   jest.clearAllMocks();
   useUserStore.setState({ pendingChallenge: null });
+  // Finalisation is only ever made as the signed-in account that started it,
+  // so every case runs signed in, through the store's own auth subscriber.
+  handleAuthStateChange('SIGNED_IN', {
+    access_token: 'token-1',
+    user: { id: 'account-1', email: 'account-1@example.com' },
+  } as never);
 });
+
+const asAccount = { expectedAccountId: 'account-1' };
 
 describe('the reservation challenge is kept in the keychain', () => {
   it('is read from the keychain when it is already there', async () => {
@@ -104,7 +113,7 @@ describe('the reservation challenge is kept in the keychain', () => {
 
     await useUserStore.getState().finishPendingRegistration();
 
-    expect(finalizeRegistration).toHaveBeenCalledWith('challenge-from-keychain');
+    expect(finalizeRegistration).toHaveBeenCalledWith('challenge-from-keychain', asAccount);
   });
 
   it('is migrated out of the old unencrypted store rather than dropped', async () => {
@@ -113,7 +122,7 @@ describe('the reservation challenge is kept in the keychain', () => {
     const result = await useUserStore.getState().finishPendingRegistration();
 
     expect(result.ok).toBe(true);
-    expect(finalizeRegistration).toHaveBeenCalledWith('challenge-from-asyncstorage');
+    expect(finalizeRegistration).toHaveBeenCalledWith('challenge-from-asyncstorage', asAccount);
   });
 
   it('actually writes the secret into the keychain, not just the old store', async () => {
@@ -169,6 +178,6 @@ describe('the reservation challenge is kept in the keychain', () => {
     const result = await useUserStore.getState().finishPendingRegistration();
 
     expect(result.ok).toBe(true);
-    expect(finalizeRegistration).toHaveBeenCalledWith('challenge-to-move');
+    expect(finalizeRegistration).toHaveBeenCalledWith('challenge-to-move', asAccount);
   });
 });

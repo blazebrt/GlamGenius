@@ -7,10 +7,11 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,9 +21,11 @@ from app.config import (
     BETA_SCAN_LIMIT_PER_MONTH,
     BETA_SHOPPING_CHECK_LIMIT_PER_MONTH,
     BETA_STYLE_LIMIT_PER_MONTH,
+    USAGE_RESERVATION_TTL_SECONDS,
 )
 from app.domains.beta_access.models import (
     BetaUsageEvent,
+    BetaUsageReservation,
     Invite,
     InviteRedemption,
     InviteRegistrationReservation,
@@ -474,6 +477,35 @@ async def _current_usage(
     return int(row.scalar_one() or 0)
 
 
+def _tracked(feature: str, now: datetime) -> tuple[int, str, str] | None:
+    """``(limit, period, period_key)`` for a tracked feature, else ``None``."""
+    if feature in _MONTH_FEATURES:
+        return _MONTH_FEATURES[feature], "month", _month_key(now)
+    if feature in _HOUR_FEATURES:
+        return _HOUR_FEATURES[feature], "hour", _hour_key(now)
+    return None
+
+
+async def _held_quantity(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    feature: str,
+    period_key: str,
+    now: datetime,
+) -> int:
+    """Units held by live reservations. An expired one holds nothing."""
+    row = await session.execute(
+        select(func.coalesce(func.sum(BetaUsageReservation.quantity), 0)).where(
+            BetaUsageReservation.account_id == account_id,
+            BetaUsageReservation.feature == feature,
+            BetaUsageReservation.period_key == period_key,
+            BetaUsageReservation.expires_at > now,
+        )
+    )
+    return int(row.scalar_one() or 0)
+
+
 async def check_limit(
     session: AsyncSession,
     *,
@@ -482,22 +514,23 @@ async def check_limit(
 ) -> dict[str, Any]:
     """Raise ``UsageExceeded`` if the account is at or above the limit for
     ``feature``. Returns the summary otherwise.
+
+    A read, not an authority: two callers can both pass it. Cost-bearing work
+    takes a unit with :func:`reserve_usage` instead. Live reservations count
+    here too, so this and a reservation never disagree about what is left.
     """
-    if feature in _MONTH_FEATURES:
-        limit = _MONTH_FEATURES[feature]
-        period_key = _month_key()
-        period = "month"
-    elif feature in _HOUR_FEATURES:
-        limit = _HOUR_FEATURES[feature]
-        period_key = _hour_key()
-        period = "hour"
-    else:
+    now = _now()
+    tracked = _tracked(feature, now)
+    if tracked is None:
         # An untracked feature has no limit. Log-shape parity with tracked
         # features so the caller can render the same UI.
         return {"feature": feature, "used": 0, "limit": None, "period_key": None}
+    limit, period, period_key = tracked
 
     used = await _current_usage(
         session, account_id=account_id, feature=feature, period_key=period_key
+    ) + await _held_quantity(
+        session, account_id=account_id, feature=feature, period_key=period_key, now=now,
     )
     if used >= limit:
         raise UsageExceeded(feature=feature, limit=limit, period=period)
@@ -509,6 +542,232 @@ async def check_limit(
         "period_key": period_key,
         "remaining": max(0, limit - used),
     }
+
+
+# ---------------------------------------------------------------------------
+# Reservations: take the unit before spending it
+# ---------------------------------------------------------------------------
+
+#: How long an unsettled reservation keeps its unit — the case where a process
+#: died between reserving and settling. Longer than any provider call can run:
+#: ``config.usage_reservation_errors`` refuses a timeout and fallback chain
+#: whose window, plus the database work either side, would reach it, and the
+#: provider itself refuses to start one. Short enough that a crash costs one
+#: unit for minutes, never for the rest of the hour or month. Nothing needs to
+#: sweep: every count ignores an expired reservation.
+RESERVATION_TTL = timedelta(seconds=USAGE_RESERVATION_TTL_SECONDS)
+
+
+class UsageOperationCompleted(Exception):
+    """This idempotency key's operation already succeeded and was counted.
+
+    The caller replays that result. Nothing is reserved, and no provider is
+    called: an idempotency key names one logical operation, not a period, so
+    this holds in every later hour and month too.
+    """
+
+    def __init__(self, feature: str, idempotency_key: str) -> None:
+        super().__init__(f"operation already completed: {feature}")
+        self.feature = feature
+        self.idempotency_key = idempotency_key
+
+
+class UsageOperationInProgress(Exception):
+    """A live reservation already holds this idempotency key.
+
+    The first request is still running (or died less than
+    ``RESERVATION_TTL`` ago, with an unknown outcome). A duplicate never
+    reaches the provider; it is told the operation is in progress.
+    """
+
+    def __init__(self, feature: str, idempotency_key: str) -> None:
+        super().__init__(f"operation in progress: {feature}")
+        self.feature = feature
+        self.idempotency_key = idempotency_key
+
+
+@dataclass(frozen=True)
+class UsageReservation:
+    """One held unit of allowance: plain values, safe past the session that took it."""
+
+    id: uuid.UUID
+    account_id: uuid.UUID
+    feature: str
+    period_key: str
+    quantity: int
+    idempotency_key: str | None = None
+
+
+async def _advisory_xact_lock(session: AsyncSession, key: str) -> None:
+    await session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": key})
+
+
+async def _claim_operation(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    feature: str,
+    idempotency_key: str,
+    now: datetime,
+) -> None:
+    """Decide what an idempotency key's operation is, under its own lock.
+
+    * **Completed** — a usage event carries the key, in any period: raise
+      :class:`UsageOperationCompleted`. This is read first, so a completed
+      operation is replayed even when the budget is now exhausted.
+    * **In progress** — a live reservation carries the key: raise
+      :class:`UsageOperationInProgress`.
+    * **Retryable** — an expired reservation carries the key and nothing was
+      counted: the attempt that took it never settled (a process died, or the
+      outcome is unknown). It is removed so this attempt can reserve.
+    * **New** — nothing carries the key.
+    """
+    completed = await session.scalar(
+        select(BetaUsageEvent.id).where(
+            BetaUsageEvent.account_id == account_id,
+            BetaUsageEvent.feature == feature,
+            BetaUsageEvent.idempotency_key == idempotency_key,
+        ).limit(1)
+    )
+    if completed is not None:
+        raise UsageOperationCompleted(feature, idempotency_key)
+    held = (await session.execute(
+        select(BetaUsageReservation.id, BetaUsageReservation.expires_at).where(
+            BetaUsageReservation.account_id == account_id,
+            BetaUsageReservation.feature == feature,
+            BetaUsageReservation.idempotency_key == idempotency_key,
+        )
+    )).first()
+    if held is None:
+        return
+    if held.expires_at > now:
+        raise UsageOperationInProgress(feature, idempotency_key)
+    await session.execute(delete(BetaUsageReservation).where(BetaUsageReservation.id == held.id))
+
+
+async def reserve_usage(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    feature: str,
+    quantity: int = 1,
+    idempotency_key: str | None = None,
+    now: datetime | None = None,
+) -> UsageReservation | None:
+    """Take ``quantity`` units of ``feature`` now, or raise ``UsageExceeded``.
+
+    The check and the take are one step. A transaction-scoped advisory lock
+    keyed by account, feature and period serialises every reservation for that
+    budget, and under it successful usage plus live reservations plus this one
+    must fit the limit — so of any number of simultaneous requests for the last
+    unit, exactly one gets it. Returns ``None`` for an untracked feature.
+
+    **One logical operation, once.** With an ``idempotency_key``, a second lock
+    keyed by account, feature and key is taken first — period-free, so two
+    requests for the same operation serialise even either side of an hour or
+    month boundary — and :func:`_claim_operation` decides, before any budget
+    is read, whether the operation already completed
+    (:class:`UsageOperationCompleted`), is in progress
+    (:class:`UsageOperationInProgress`) or may run. The reservation carries the
+    key, and the partial unique index allows one per operation.
+
+    **The caller commits before spending.** The lock ends with that commit, and
+    the unit stays held by the row, not by a transaction: nothing is locked or
+    left open while a provider is called. A database failure raises here, so
+    no provider is ever called without a reservation — the budget fails closed.
+    """
+    now = now or _now()
+    tracked = _tracked(feature, now)
+    if tracked is None:
+        return None
+    limit, period, period_key = tracked
+
+    if idempotency_key is not None:
+        await _advisory_xact_lock(session, f"beta-usage-operation:{account_id}:{feature}:{idempotency_key}")
+        await _claim_operation(
+            session, account_id=account_id, feature=feature, idempotency_key=idempotency_key, now=now,
+        )
+    await _advisory_xact_lock(session, f"beta-usage:{account_id}:{feature}:{period_key}")
+    used = await _current_usage(
+        session, account_id=account_id, feature=feature, period_key=period_key
+    )
+    held = await _held_quantity(
+        session, account_id=account_id, feature=feature, period_key=period_key, now=now,
+    )
+    if used + held + quantity > limit:
+        raise UsageExceeded(feature=feature, limit=limit, period=period)
+
+    # Opportunistic tidy-up, under the same lock: this budget's expired holds.
+    await session.execute(
+        delete(BetaUsageReservation).where(
+            BetaUsageReservation.account_id == account_id,
+            BetaUsageReservation.feature == feature,
+            BetaUsageReservation.expires_at <= now,
+        )
+    )
+    row = BetaUsageReservation(
+        account_id=account_id, feature=feature, period_key=period_key,
+        quantity=quantity, idempotency_key=idempotency_key,
+        created_at=now, expires_at=now + RESERVATION_TTL,
+    )
+    session.add(row)
+    await session.flush()
+    return UsageReservation(
+        id=row.id, account_id=account_id, feature=feature,
+        period_key=period_key, quantity=quantity, idempotency_key=idempotency_key,
+    )
+
+
+async def settle_usage(
+    session: AsyncSession,
+    reservation: UsageReservation,
+    *,
+    idempotency_key: str | None = None,
+) -> None:
+    """The work succeeded: count it, and let go of the hold, in one transaction.
+
+    The event is written to the period the unit was reserved from, and keeps
+    ``record_usage``'s idempotency: a key already counted is not counted twice,
+    and the reservation is released either way. The caller commits — in the
+    same transaction as whatever durable result the work produced, so a
+    counted success and its result exist together or not at all.
+
+    A reservation taken for an operation settles under that operation's key;
+    ``idempotency_key`` is for one that was not (the gateway keys by run id,
+    which exists only after the call).
+    """
+    key = reservation.idempotency_key
+    if key is None:
+        key = idempotency_key
+    elif idempotency_key is not None and idempotency_key != key:
+        raise ValueError("a reservation settles under the operation key it was taken for")
+    stmt = pg_insert(BetaUsageEvent).values(
+        account_id=reservation.account_id,
+        feature=reservation.feature,
+        idempotency_key=key,
+        period_key=reservation.period_key,
+        quantity=reservation.quantity,
+        created_at=_now(),
+    )
+    if key is not None:
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["account_id", "feature", "idempotency_key"]
+        )
+    await session.execute(stmt)
+    await session.execute(
+        delete(BetaUsageReservation).where(BetaUsageReservation.id == reservation.id)
+    )
+
+
+async def release_usage(session: AsyncSession, reservation: UsageReservation) -> None:
+    """The work failed without a result: give the unit back. The caller commits.
+
+    A failed run never consumes an allowance, and nothing is counted here. A
+    release that itself fails leaves the reservation to expire.
+    """
+    await session.execute(
+        delete(BetaUsageReservation).where(BetaUsageReservation.id == reservation.id)
+    )
 
 
 async def record_usage(

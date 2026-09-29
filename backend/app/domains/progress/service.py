@@ -37,6 +37,7 @@ from app.domains.progress.models import (
     Streak,
 )
 from app.domains.progress.schemas import (
+    TARGET_BEFORE_START,
     FeedbackInput,
     GoalCreate,
     GoalPatch,
@@ -228,6 +229,10 @@ async def create_goal(
     session: AsyncSession, account_id: uuid.UUID, body: GoalCreate, *, today: date | None = None
 ) -> dict[str, Any]:
     day = today or clock.local_today(clock.DEFAULT_TIMEZONE)
+    # With no stated start the goal starts on the customer's today, and only
+    # here is that date known. The schema checks a stated start itself.
+    if body.starts_on is None and body.target_date and body.target_date < day:
+        raise ValidationFailedError(TARGET_BEFORE_START, field="target_date")
     starting: float | None = None
     if body.metric_key:
         result = await metrics.compute(session, account_id, body.metric_key, today=day)

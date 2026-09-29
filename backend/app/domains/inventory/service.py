@@ -9,7 +9,7 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import String, cast, exists, func, or_, select
+from sqlalchemy import String, cast, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.inventory.models import (
@@ -47,6 +47,19 @@ DETAIL_MODELS = {
     "beauty": BeautyProductDetail, "hair": HairProductDetail, "perfumes": PerfumeDetail,
     "supplements": SupplementDetail,
 }
+
+
+def has_detail_authority(category: str) -> bool:
+    """Whether ``category`` is a current shelf category with a detail model.
+
+    Rows from the retired wardrobe, shoe and accessory surfaces stay in the
+    database as history, and their categories are deliberately absent here.
+    A reader asks this rather than indexing ``DETAIL_MODELS``, so one retained
+    row is a category the current product does not read, not a ``KeyError``.
+    """
+    return category in DETAIL_MODELS
+
+
 LIST_SORTS = {
     "newest": InventoryItem.created_at.desc(), "oldest": InventoryItem.created_at.asc(),
     "name": InventoryItem.display_name.asc(), "most_used": InventoryItem.usage_count.desc(),
@@ -97,6 +110,9 @@ async def owned_item(
 
 
 async def _detail_row(session: AsyncSession, item: InventoryItem, *, create: bool = False):
+    if not has_detail_authority(item.category):
+        # A retained legacy row: no current detail model, and none is invented.
+        return None
     model = DETAIL_MODELS[item.category]
     row = (await session.execute(select(model).where(model.item_id == item.id))).scalar_one_or_none()
     if row is None and create:
@@ -251,9 +267,53 @@ async def confirm_item(session: AsyncSession, item: InventoryItem) -> InventoryI
     await session.flush(); return item
 
 
+#: Why a pending duplicate pair stopped being a question. Both are terminal:
+#: an archived item is no longer on the shelf to be compared, and a pair that
+#: no longer resolves to two of this account's current items cannot be shown.
+DUPLICATE_RESOLUTION_ITEM_ARCHIVED = "item_archived"
+DUPLICATE_RESOLUTION_ITEM_UNAVAILABLE = "item_unavailable"
+
+
+async def _retire_pending_duplicates(
+    session: AsyncSession, account_id: uuid.UUID, *, resolution: str,
+    item_ids: Iterable[uuid.UUID] = (), candidate_ids: Iterable[uuid.UUID] = (),
+    except_candidate_id: uuid.UUID | None = None,
+) -> None:
+    """Resolve this account's pending pairs naming these items, or these rows.
+
+    Scoped to the account and to ``pending`` in SQL, so a row already resolved
+    keeps the answer it was given and another account's row is never touched.
+    """
+    item_ids, candidate_ids = list(item_ids), list(candidate_ids)
+    conditions = []
+    if item_ids:
+        conditions += [DuplicateCandidate.item_a_id.in_(item_ids), DuplicateCandidate.item_b_id.in_(item_ids)]
+    if candidate_ids:
+        conditions.append(DuplicateCandidate.id.in_(candidate_ids))
+    if not conditions:
+        return
+    stmt = update(DuplicateCandidate).where(
+        DuplicateCandidate.account_id == account_id,
+        DuplicateCandidate.status == "pending",
+        or_(*conditions),
+    )
+    if except_candidate_id is not None:
+        stmt = stmt.where(DuplicateCandidate.id != except_candidate_id)
+    await session.execute(
+        stmt.values(status="resolved", resolution=resolution, resolved_at=utcnow())
+        .execution_options(synchronize_session="fetch")
+    )
+
+
 async def archive_item(session: AsyncSession, item: InventoryItem) -> None:
     item.status = "archived"; item.version += 1; item.updated_at = utcnow()
     await record_event(session, item, "archived")
+    # An archived item is off the shelf, so every question still open about it
+    # is answered now. Left pending, the pair named an item ``duplicates()``
+    # no longer loads, and one archived duplicate took the whole summary down.
+    await _retire_pending_duplicates(
+        session, item.account_id, item_ids=[item.id], resolution=DUPLICATE_RESOLUTION_ITEM_ARCHIVED,
+    )
 
 
 async def log_usage(session: AsyncSession, item: InventoryItem, used_on: date, quantity: int, note: str | None) -> None:
@@ -284,13 +344,15 @@ def effective_expiry_from_details(details: dict[str, Any]) -> date | None:
     return min(v for v in [explicit, computed] if v is not None) if explicit or computed else None
 
 
-def is_low_use(item: InventoryItem, today: date | None = None) -> bool:
-    now = today or date.today(); created = item.created_at.date() if item.created_at else now
+def is_low_use(item: InventoryItem, today: date) -> bool:
+    # ``today`` is the customer's date (``planning.context.account_today``),
+    # never the server's.
+    now = today; created = item.created_at.date() if item.created_at else now
     return item.status == "active" and (now - created).days >= 30 and item.usage_count <= 2 and (item.last_used_at is None or (now - item.last_used_at).days >= 30)
 
 
-def value_to_recover(item: InventoryItem, details: dict[str, Any], today: date | None = None) -> dict[str, Any]:
-    now = today or date.today(); expiry = effective_expiry_from_details(details)
+def value_to_recover(item: InventoryItem, details: dict[str, Any], today: date) -> dict[str, Any]:
+    now = today; expiry = effective_expiry_from_details(details)
     remaining = details.get("remaining_percent")
     remaining_ratio = Decimal(str(remaining / 100 if remaining is not None else max(0.1, 1 - min(item.usage_count, 30) / 30)))
     condition_factor = Decimal(str({"excellent": 1, "good": .8, "fair": .55, "worn": .3, "needs_attention": .4}.get(item.condition, .7)))
@@ -322,7 +384,7 @@ async def details_for(session: AsyncSession, item: InventoryItem) -> dict[str, A
     return _plain_details(await _detail_row(session, item))
 
 
-def _item_body(item: InventoryItem, details: dict[str, Any], attributes: Sequence[Any], images: Sequence[Any]) -> dict[str, Any]:
+def _item_body(item: InventoryItem, details: dict[str, Any], attributes: Sequence[Any], images: Sequence[Any], today: date) -> dict[str, Any]:
     """Shape one item for the API.
 
     The single place an item becomes a response body. :func:`serialize_item`
@@ -337,7 +399,7 @@ def _item_body(item: InventoryItem, details: dict[str, Any], attributes: Sequenc
         "usage_count": item.usage_count, "last_used_at": item.last_used_at.isoformat() if item.last_used_at else None,
         "condition": item.condition, "replacement_priority": item.replacement_priority, "version": item.version,
         "details": details, "effective_expiry": effective_expiry_from_details(details).isoformat() if effective_expiry_from_details(details) else None,
-        "low_use": is_low_use(item), "image_ids": [str(link.media_asset_id) for link in images],
+        "low_use": is_low_use(item, today), "image_ids": [str(link.media_asset_id) for link in images],
         "attributes": [{"key": row.key, "value": row.value, "source": row.source, "confidence": row.confidence, "verification_state": row.verification_state, "model_version": row.model_version, "prompt_version": row.prompt_version, "schema_version": row.schema_version, "source_ai_run_id": str(row.source_ai_run_id) if row.source_ai_run_id else None} for row in attributes],
         "created_at": item.created_at.isoformat() if item.created_at else None, "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
@@ -348,11 +410,18 @@ async def details_for_many(session: AsyncSession, items: Sequence[InventoryItem]
 
     The per-item :func:`details_for` is a query each, and the callers that
     matter run over every item an account owns.
+
+    Only items in a category with current detail authority
+    (:func:`has_detail_authority`) are in the result. A retained legacy row —
+    wardrobe, shoes, accessories — is left out rather than given details it
+    does not have: readers of the current shelf select governed categories
+    before they get here, and this is the second line, not the first.
     """
     if not items:
         return {}
+    governed = [item for item in items if has_detail_authority(item.category)]
     ids_by_category: dict[str, list[uuid.UUID]] = defaultdict(list)
-    for item in items:
+    for item in governed:
         ids_by_category[item.category].append(item.id)
 
     rows: dict[uuid.UUID, Any] = {}
@@ -361,10 +430,10 @@ async def details_for_many(session: AsyncSession, items: Sequence[InventoryItem]
         found = (await session.execute(select(model).where(model.item_id.in_(ids)))).scalars().all()
         for row in found:
             rows[row.item_id] = row
-    return {item.id: _plain_details(rows.get(item.id)) for item in items}
+    return {item.id: _plain_details(rows.get(item.id)) for item in governed}
 
 
-async def serialize_items(session: AsyncSession, items: Sequence[InventoryItem]) -> list[dict[str, Any]]:
+async def serialize_items(session: AsyncSession, items: Sequence[InventoryItem], *, today: date) -> list[dict[str, Any]]:
     """Serialise many items in a fixed number of queries.
 
     :func:`serialize_item` costs three queries per item — the detail row, the
@@ -406,16 +475,16 @@ async def serialize_items(session: AsyncSession, items: Sequence[InventoryItem])
         images[row.item_id].append(row)
 
     return [
-        _item_body(item, details[item.id], attributes[item.id], images[item.id])
+        _item_body(item, details[item.id], attributes[item.id], images[item.id], today)
         for item in items
     ]
 
 
-async def serialize_item(session: AsyncSession, item: InventoryItem, *, include_history: bool = False) -> dict[str, Any]:
+async def serialize_item(session: AsyncSession, item: InventoryItem, *, today: date, include_history: bool = False) -> dict[str, Any]:
     details = await details_for(session, item)
     attributes = (await session.execute(select(InventoryAttribute).where(InventoryAttribute.item_id == item.id).order_by(InventoryAttribute.key))).scalars().all()
     images = (await session.execute(select(InventoryItemImage).where(InventoryItemImage.item_id == item.id).order_by(InventoryItemImage.position))).scalars().all()
-    body = _item_body(item, details, attributes, images)
+    body = _item_body(item, details, attributes, images, today)
     if include_history:
         events = (await session.execute(select(InventoryEvent).where(InventoryEvent.item_id == item.id).order_by(InventoryEvent.created_at.desc()).limit(100))).scalars().all()
         body["history"] = [{"event_type": event.event_type, "actor": event.actor, "payload": event.payload, "created_at": event.created_at.isoformat() if event.created_at else None} for event in events]
@@ -426,7 +495,7 @@ def _attr_filter(key: str, value: str):
     return exists(select(InventoryAttribute.id).where(InventoryAttribute.item_id == InventoryItem.id, InventoryAttribute.key == key, cast(InventoryAttribute.value, String).ilike(f"%{value}%")))
 
 
-async def list_items(session: AsyncSession, account_id: uuid.UUID, *, page: int = 1, page_size: int = 24, q: str | None = None, category: str | None = None, brand: str | None = None, colour: str | None = None, ingredient: str | None = None, occasion: str | None = None, season: str | None = None, condition: str | None = None, expiry_status: str | None = None, usage_level: str | None = None, verification_state: str | None = None, sort: str = "newest") -> dict[str, Any]:
+async def list_items(session: AsyncSession, account_id: uuid.UUID, *, today: date, page: int = 1, page_size: int = 24, q: str | None = None, category: str | None = None, brand: str | None = None, colour: str | None = None, ingredient: str | None = None, occasion: str | None = None, season: str | None = None, condition: str | None = None, expiry_status: str | None = None, usage_level: str | None = None, verification_state: str | None = None, sort: str = "newest") -> dict[str, Any]:
     if category is not None and category not in CATEGORIES:
         raise ValidationFailedError("That product category is not available in your shelf.", field="category")
     stmt = select(InventoryItem).where(
@@ -448,7 +517,7 @@ async def list_items(session: AsyncSession, account_id: uuid.UUID, *, page: int 
     elif usage_level == "regular": stmt = stmt.where(InventoryItem.usage_count >= 3)
     ordered = stmt.order_by(LIST_SORTS.get(sort, LIST_SORTS["newest"]))
     if expiry_status:
-        candidates = list((await session.execute(ordered)).scalars().all()); today = date.today(); rows = []
+        candidates = list((await session.execute(ordered)).scalars().all()); rows = []
         # Every candidate is inspected before the page is cut, so this ran one
         # query per item the account owns just to render one page of it.
         candidate_details = await details_for_many(session, candidates)
@@ -460,15 +529,15 @@ async def list_items(session: AsyncSession, account_id: uuid.UUID, *, page: int 
     else:
         total = int((await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one())
         rows = (await session.execute(ordered.offset((page - 1) * page_size).limit(page_size))).scalars().all()
-    return {"items": await serialize_items(session, list(rows)), "pagination": {"page": page, "page_size": page_size, "total": total, "pages": (total + page_size - 1) // page_size}}
+    return {"items": await serialize_items(session, list(rows), today=today), "pagination": {"page": page, "page_size": page_size, "total": total, "pages": (total + page_size - 1) // page_size}}
 
 
-async def expiring_items(session: AsyncSession, account_id: uuid.UUID, days: int = 90) -> list[dict[str, Any]]:
+async def expiring_items(session: AsyncSession, account_id: uuid.UUID, days: int = 90, *, today: date) -> list[dict[str, Any]]:
     rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived", InventoryItem.category.in_(CATEGORIES)))).scalars().all()
-    details_by_item = await details_for_many(session, rows); today = date.today()
+    details_by_item = await details_for_many(session, rows)
     dated = [(item, effective_expiry_from_details(details_by_item[item.id])) for item in rows]
     due = [(item, expiry) for item, expiry in dated if expiry and (expiry - today).days <= days]
-    bodies = await serialize_items(session, [item for item, _ in due])
+    bodies = await serialize_items(session, [item for item, _ in due], today=today)
     result = []
     for body, expiry in zip(bodies, [expiry for _, expiry in due], strict=True):
         body["days_to_expiry"] = (expiry - today).days
@@ -477,22 +546,22 @@ async def expiring_items(session: AsyncSession, account_id: uuid.UUID, days: int
     return sorted(result, key=lambda row: row["effective_expiry"])
 
 
-async def low_use_items(session: AsyncSession, account_id: uuid.UUID) -> list[dict[str, Any]]:
+async def low_use_items(session: AsyncSession, account_id: uuid.UUID, *, today: date) -> list[dict[str, Any]]:
     rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived", InventoryItem.category.in_(CATEGORIES)))).scalars().all()
-    return await serialize_items(session, [item for item in rows if is_low_use(item)])
+    return await serialize_items(session, [item for item in rows if is_low_use(item, today)], today=today)
 
 
-async def value_report(session: AsyncSession, account_id: uuid.UUID, *, record: bool = False) -> dict[str, Any]:
+async def value_report(session: AsyncSession, account_id: uuid.UUID, *, today: date, record: bool = False) -> dict[str, Any]:
     rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived", InventoryItem.category.in_(CATEGORIES)))).scalars().all(); estimates = []
     details_by_item = await details_for_many(session, rows)
     for item in rows:
-        estimate = value_to_recover(item, details_by_item[item.id]); estimates.append(estimate)
+        estimate = value_to_recover(item, details_by_item[item.id], today); estimates.append(estimate)
         if record: session.add(InventoryValueEvent(item_id=item.id, metric_version="v1", estimated_value=estimate["estimated_value"], currency=item.currency, inputs=estimate["inputs"], explanation=estimate["explanation"]))
     known = [Decimal(str(row["estimated_value"])) for row in estimates if row["estimated_value"] is not None]
     return {"label": "Value to Recover", "estimated_total": float(sum(known, Decimal("0"))), "currency": "INR", "is_estimate": True, "metric_version": "v1", "items": estimates, "explanation": "A transparent estimate using only entered price, remaining amount or usage, condition, inactivity and expiry. Missing prices are excluded; this is never exact."}
 
 
-async def duplicates(session: AsyncSession, account_id: uuid.UUID) -> list[dict[str, Any]]:
+async def duplicates(session: AsyncSession, account_id: uuid.UUID, *, today: date) -> list[dict[str, Any]]:
     rows = (await session.execute(select(DuplicateCandidate).where(DuplicateCandidate.account_id == account_id, DuplicateCandidate.status == "pending").order_by(DuplicateCandidate.created_at.desc()))).scalars().all()
     if not rows:
         return []
@@ -509,14 +578,23 @@ async def duplicates(session: AsyncSession, account_id: uuid.UUID) -> list[dict[
             InventoryItem.category.in_(CATEGORIES),
         )
     )).scalars().all()
-    bodies = {item.id: body for item, body in zip(items, await serialize_items(session, items), strict=True)}
-    missing = wanted - set(bodies)
-    if missing:
-        raise NotFoundError("We could not find one of the items in a duplicate pair.")
+    bodies = {item.id: body for item, body in zip(items, await serialize_items(session, items, today=today), strict=True)}
+    # A pair that no longer resolves to two of this account's current items —
+    # one side archived before archiving retired its pairs, or a malformed row
+    # naming someone else's item — is not a question anybody can answer. It
+    # used to raise here, and because ``summary()`` reads this list, one stale
+    # pair made the whole inventory summary unavailable. It is retired instead,
+    # never shown, and the valid pairs are still returned. The caller commits.
+    stale = [row.id for row in rows if row.item_a_id not in bodies or row.item_b_id not in bodies]
+    if stale:
+        await _retire_pending_duplicates(
+            session, account_id, candidate_ids=stale, resolution=DUPLICATE_RESOLUTION_ITEM_UNAVAILABLE,
+        )
     return [
         {"id": str(row.id), "confidence": row.confidence, "reason": row.reason, "status": row.status,
          "item_a": bodies[row.item_a_id], "item_b": bodies[row.item_b_id]}
         for row in rows
+        if row.item_a_id in bodies and row.item_b_id in bodies
     ]
 
 
@@ -527,12 +605,18 @@ async def resolve_duplicate(session: AsyncSession, account_id: uuid.UUID, candid
         if canonical_item_id not in {row.item_a_id, row.item_b_id}: raise ValidationFailedError("Choose one of the candidate items to keep.", field="canonical_item_id")
         other_id = row.item_b_id if canonical_item_id == row.item_a_id else row.item_a_id; other = await owned_item(session, account_id, other_id); other.status = "archived"
         session.add(ItemRelationship(account_id=account_id, from_item_id=other_id, to_item_id=canonical_item_id, relationship_type="merged_into"))
+        # Merging archives the other item, so its other open pairs close too.
+        await _retire_pending_duplicates(
+            session, account_id, item_ids=[other_id], resolution=DUPLICATE_RESOLUTION_ITEM_ARCHIVED,
+            except_candidate_id=row.id,
+        )
     row.status = "resolved"; row.resolution = resolution; row.resolved_at = utcnow(); return row
 
 
-async def summary(session: AsyncSession, account_id: uuid.UUID) -> dict[str, Any]:
+async def summary(session: AsyncSession, account_id: uuid.UUID, *, today: date) -> dict[str, Any]:
+    """Every count here is for the customer's ``today``, the one date every report shares."""
     rows = (await session.execute(select(InventoryItem).where(InventoryItem.account_id == account_id, InventoryItem.status != "archived", InventoryItem.category.in_(CATEGORIES)))).scalars().all(); counts = {key: 0 for key in CATEGORIES}
     for item in rows: counts[item.category] += 1
-    low = sum(1 for item in rows if is_low_use(item)); expiring = len(await expiring_items(session, account_id)); dupes = len(await duplicates(session, account_id)); values = await value_report(session, account_id)
+    low = sum(1 for item in rows if is_low_use(item, today)); expiring = len(await expiring_items(session, account_id, today=today)); dupes = len(await duplicates(session, account_id, today=today)); values = await value_report(session, account_id, today=today)
     known_prices = sum(1 for item in rows if item.purchase_price is not None); used = sum(1 for item in rows if item.usage_count > 0)
     return {"total_items": len(rows), "categories": counts, "low_use_products": low, "products_expiring_soon": expiring, "products_needing_attention": low + expiring + dupes, "duplicate_candidates": dupes, "at_risk_value": values["estimated_total"], "currency": "INR", "inventory_balance": {"metric_version": "v1", "visible_inputs": counts, "explanation": "Category counts show where your inventory is concentrated; no universal score is assigned."}, "purchase_efficiency": {"metric_version": "v1", "items_used": used, "items_with_price": known_prices, "explanation": "Shows how many catalogued items have been used and how complete price data is; it is not a judgement."}}

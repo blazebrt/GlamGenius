@@ -1065,7 +1065,7 @@ async def test_give_back_is_offered_for_the_managers_pause_and_not_for_your_own(
                 session, principal_account_id=account_id, decision_subject=None,
             )
             context = await shelf_domain.gather(
-                session, account_id=account_id, decision_subject=checked,
+                session, account_id=account_id, decision_subject=checked, today=TODAY,
             )
             products = {
                 product.id: product

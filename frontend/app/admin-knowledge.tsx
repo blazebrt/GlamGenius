@@ -19,6 +19,7 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useUserStore } from '../src/store/userStore';
+import { PRODUCT_HOME_ROUTE, SIGNED_OUT_ROUTE } from '../src/navigation/authRoutes';
 import {
   KnowledgeEntry, KnowledgeEntryInput, KnowledgeVocabulary,
   approveKnowledgeEntry, createKnowledgeEntry, editKnowledgeEntry,
@@ -81,8 +82,10 @@ export default function AdminKnowledgeScreen() {
 
   useEffect(() => {
     if (!initialized) return;
-    if (registrationState !== 'registered') { router.replace('/(auth)/welcome'); return; }
-    if (!isAdmin) { router.replace('/(tabs)/today'); return; }
+    // A signed-in identity whose account is still being checked: wait.
+    if (registrationState === 'resolving') return;
+    if (registrationState !== 'registered') { router.replace(SIGNED_OUT_ROUTE); return; }
+    if (!isAdmin) { router.replace(PRODUCT_HOME_ROUTE); return; }
     void load();
   }, [initialized, isAdmin, load, registrationState, router]);
 

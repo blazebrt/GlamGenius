@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.family.decision_subject import DecisionSubject, canonicalize_decision_subject
 from app.domains.inventory import service as inventory_service
 from app.domains.inventory.models import InventoryItem
+from app.domains.inventory.taxonomy import CATEGORIES
 from app.domains.profile import service as profile_service
 from app.domains.profile.identity import resolve_self_profile_for_read, resolve_subject_profile_for_read
 from app.domains.recommendation.context import OwnedItem
@@ -43,6 +44,13 @@ from app.shared.errors.exceptions import ValidationFailedError
 # inventory with their own, narrower handling.
 ROUTINE_CATEGORIES = ("beauty", "hair")
 
+# Categories the shelf context reads at all: the governed body-product
+# taxonomy. Perfume ranking reads perfumes from the same context, so this is
+# wider than ``ROUTINE_CATEGORIES`` — but never wider than the taxonomy. Rows
+# kept from the retired wardrobe, shoe and accessory surfaces are history for
+# the export and for database integrity; they never enter the current Care
+# product, and a retained one must not be able to take the shelf down.
+SHELF_CATEGORIES = tuple(CATEGORIES)
 
 
 @dataclass
@@ -142,14 +150,20 @@ async def gather(
     *,
     account_id: uuid.UUID,
     climate: str | None = None,
-    today: date | None = None,
+    today: date,
     decision_subject: DecisionSubject | None = None,
 ) -> ShelfContext:
-    """Read every confirmed fact the shelf engine may use."""
+    """Read every confirmed fact the shelf engine may use.
+
+    ``today`` is the customer's date, resolved by the caller
+    (``planning.context.account_today``). Expiry, low use and value to recover
+    all read it from this context, so a shelf never mixes two dates.
+    """
     rows = (await session.execute(
         select(InventoryItem).where(
             InventoryItem.account_id == account_id,
             InventoryItem.status == "active",
+            InventoryItem.category.in_(SHELF_CATEGORIES),
         )
     )).scalars().all()
 
@@ -183,7 +197,7 @@ async def gather(
 
     return ShelfContext(
         account_id=account_id,
-        today=today or date.today(),
+        today=today,
         owned=owned,
         draft_count=drafts,
         allergies=[str(row) for row in allergies],

@@ -16,6 +16,7 @@ suppressed ones, so "why didn't I hear about X" is answerable:
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import uuid
 from collections.abc import Sequence
@@ -38,12 +39,25 @@ from app.domains.planning.models import (
     NotificationPreference,
 )
 from app.shared.database.base import utcnow
+from app.shared.errors.exceptions import NotFoundError, ValidationFailedError
+
+logger = logging.getLogger(__name__)
 
 SUPPRESSED_DUPLICATE = "duplicate"
 SUPPRESSED_CAP = "daily_cap_reached"
 SUPPRESSED_QUIET = "quiet_hours"
 SUPPRESSED_DISABLED = "disabled"
 SUPPRESSED_MODULE_OFF = "module_disabled"
+#: Settled by the worker's final send-authority gate: the account stopped being
+#: active after this delivery was claimed and before the provider was called.
+#: Nothing was sent. The row is terminal, so it is never claimed again.
+SUPPRESSED_ACCOUNT_INACTIVE = "account_inactive"
+#: A Product Watch delivery whose watch epoch ended before it reached the
+#: provider: the customer stopped, restarted or re-anchored the watch. The
+#: watch lifecycle settles it in that same transaction; recovery and the final
+#: gate settle it too, if they find one. Nothing was sent, and the row is
+#: terminal.
+SUPPRESSED_WATCH_ENDED = "watch_ended"
 STATUS_SUPPRESSED = "suppressed"
 STATUS_QUEUED = "queued"
 STATUS_SENDING = "sending"
@@ -51,6 +65,29 @@ STATUS_PROVIDER_ACCEPTED = "provider_accepted"
 STATUS_PROVIDER_FAILED = "provider_failed"
 STATUS_RECEIPT_OK = "receipt_ok"
 STATUS_RECEIPT_FAILED = "receipt_failed"
+
+#: How long a ``sending`` claim is owned before another cycle may treat it as
+#: abandoned. The lease is wall-clock time, so it is always read from
+#: :func:`utcnow`, never from the local moment a cycle is deciding for.
+CLAIM_LEASE_SECONDS = 300
+
+#: Suppression reasons that speak for one candidate only. Each is the
+#: customer's own choice about one kind of notification: that choice is
+#: recorded for the candidate, and the day's single chance passes on to the
+#: next candidate. Every other reason — the master switch, quiet hours, the
+#: daily cap, an inactive account, and any reason not listed here — applies to
+#: every notification this account could get at this moment, so the worker
+#: stops there. Unknown reasons stop: the safe mistake is one missed
+#: notification, never a second one.
+CANDIDATE_SUPPRESSIONS = frozenset({SUPPRESSED_MODULE_OFF})
+
+
+def is_candidate_opt_out(delivery: Any) -> bool:
+    """Whether this decision was suppressed for this candidate alone."""
+    return (
+        getattr(delivery, "status", None) == STATUS_SUPPRESSED
+        and getattr(delivery, "suppressed_reason", None) in CANDIDATE_SUPPRESSIONS
+    )
 
 #: Modules a new account is notified about by default. Maintenance sits here
 #: like any other module: its real gate is the per-kind ``reminders_enabled``
@@ -184,14 +221,31 @@ def in_quiet_hours(hour: int, start: int, end: int) -> bool:
     return hour >= start or hour < end
 
 
-async def _sent_today(session: AsyncSession, account_id: uuid.UUID, plan_date: date) -> int:
-    return int((await session.execute(
-        select(func.count()).select_from(NotificationDelivery).where(
-            NotificationDelivery.account_id == account_id,
-            NotificationDelivery.plan_date == plan_date,
-            NotificationDelivery.status.in_((STATUS_QUEUED, STATUS_SENDING, STATUS_PROVIDER_ACCEPTED, STATUS_PROVIDER_FAILED)),
-        )
-    )).scalar_one())
+async def _sent_today(
+    session: AsyncSession, account_id: uuid.UUID, plan_date: date,
+    *, excluding: uuid.UUID | None = None,
+) -> int:
+    """How many of today's deliveries count against the daily cap.
+
+    ``excluding`` leaves one row out: a delivery being recovered must not be
+    refused because it is itself one of today's ``sending`` rows.
+    """
+    statement = select(func.count()).select_from(NotificationDelivery).where(
+        NotificationDelivery.account_id == account_id,
+        NotificationDelivery.plan_date == plan_date,
+        NotificationDelivery.status.in_((STATUS_QUEUED, STATUS_SENDING, STATUS_PROVIDER_ACCEPTED, STATUS_PROVIDER_FAILED)),
+    )
+    if excluding is not None:
+        statement = statement.where(NotificationDelivery.id != excluding)
+    return int((await session.execute(statement)).scalar_one())
+
+
+async def cap_permits(
+    session: AsyncSession, preference: NotificationPreference, plan_date: date,
+    *, excluding: uuid.UUID | None = None,
+) -> bool:
+    """Whether the daily cap leaves room for one more delivery today."""
+    return await _sent_today(session, preference.account_id, plan_date, excluding=excluding) < preference.daily_cap
 
 
 async def queue(
@@ -458,8 +512,21 @@ async def queue_for_deferred_purchase_relevance(
                 session, account_id=account_id, account_id_str=str(account_id),
                 candidate_id=row.candidate_id, plan_date=plan_date,
             )
-        except Exception:  # A removed/untrusted candidate is never a prompt.
+        except (NotFoundError, ValidationFailedError):
+            # The two governed refusals that mean "this candidate cannot be
+            # revisited": it is gone (``NotFoundError``), or it is no longer a
+            # trusted Care candidate — unconfirmed label facts, a category
+            # outside Care (``ValidationFailedError``). Neither is ever a
+            # prompt, and the next waiting decision may still be.
             continue
+        except Exception as exc:
+            # Anything else — a database failure, a broken invariant, a bug —
+            # is not a reason to stay quiet. One generic line, with the type
+            # only: no candidate, snapshot or exception text, which can carry
+            # the customer's own words. Re-raised so the worker fails this
+            # account's cycle and records it.
+            logger.error("deferred_purchase_relevance_failed error_type=%s", type(exc).__name__)
+            raise
         current_environment = (current.get("verdict") or {}).get("environment") or {}
         if current_environment.get("currently_deferred"):
             continue
@@ -541,20 +608,230 @@ async def queue_for_agenda(
     )
 
 
-async def claim_delivery(session: AsyncSession, delivery_id: uuid.UUID, *, lease_seconds: int = 300) -> str | None:
-    """Atomically claim a queued outbox row before any provider request."""
+def _lease_expired_before(lease_seconds: int) -> datetime:
+    now = utcnow()
+    return datetime.fromtimestamp(now.timestamp() - lease_seconds, tz=now.tzinfo)
+
+
+async def claim_delivery(
+    session: AsyncSession, delivery_id: uuid.UUID, *, lease_seconds: int = CLAIM_LEASE_SECONDS,
+) -> str | None:
+    """Atomically claim an outbox row: the right to attempt it, nothing more.
+
+    A claim is not an attempt. It sets ``status = sending``, a fresh
+    ``claim_token`` and ``claimed_at``, and leaves ``attempted_at`` empty.
+    ``attempted_at`` is written separately, and only by
+    :func:`mark_attempt_started`, immediately before the provider is called.
+    That keeps two states apart that look alike from the outside:
+
+    * claimed, never attempted (``attempted_at IS NULL``): the provider was
+      certainly not reached, so once the lease expires the row may be claimed
+      again;
+    * attempted (``attempted_at IS NOT NULL``): the provider may have accepted
+      it. The outcome is unknown, so the row is never claimed again, however
+      old its lease. A missed notification is preferred to a duplicate.
+    """
     now = utcnow()
     token = uuid.uuid4().hex
-    stale = now.timestamp() - lease_seconds
     result = await session.execute(update(NotificationDelivery).where(
         NotificationDelivery.id == delivery_id,
         or_(NotificationDelivery.status == STATUS_QUEUED,
-            and_(NotificationDelivery.status == STATUS_SENDING, NotificationDelivery.claimed_at < datetime.fromtimestamp(stale, tz=now.tzinfo))),
-    ).values(status=STATUS_SENDING, claim_token=token, claimed_at=now, attempted_at=now))
+            and_(NotificationDelivery.status == STATUS_SENDING,
+                 NotificationDelivery.attempted_at.is_(None),
+                 NotificationDelivery.claimed_at < _lease_expired_before(lease_seconds))),
+    ).values(status=STATUS_SENDING, claim_token=token, claimed_at=now))
     if not result.rowcount:
         return None
     await session.flush()
     return token
+
+
+async def mark_attempt_started(session: AsyncSession, delivery_id: uuid.UUID, claim_token: str) -> bool:
+    """Record that the provider is about to be called for this claim.
+
+    The durable line between "certainly not sent" and "may have been sent".
+    It succeeds only for the exact claim that owns the row, and only once:
+    ``status = sending``, the same ``claim_token``, and no attempt recorded
+    yet. The caller commits it before the provider request, and holds no
+    transaction or lock across that request.
+    """
+    result = await session.execute(update(NotificationDelivery).where(
+        NotificationDelivery.id == delivery_id,
+        NotificationDelivery.status == STATUS_SENDING,
+        NotificationDelivery.claim_token == claim_token,
+        NotificationDelivery.attempted_at.is_(None),
+    ).values(attempted_at=utcnow()))
+    return bool(result.rowcount)
+
+
+async def abandoned_claims(
+    session: AsyncSession, *, account_id: uuid.UUID, plan_date: date, source_kind: str,
+    lease_seconds: int = CLAIM_LEASE_SECONDS,
+) -> list[NotificationDelivery]:
+    """Today's ``sending`` rows of one source whose claim lease has expired.
+
+    Attempted and unattempted alike, oldest first; the caller tells them apart
+    by ``attempted_at``. Only ``plan_date`` is searched, so an abandoned claim
+    from an earlier day is never found here and never sent late.
+    """
+    return list((await session.execute(
+        select(NotificationDelivery).where(
+            NotificationDelivery.account_id == account_id,
+            NotificationDelivery.plan_date == plan_date,
+            NotificationDelivery.source_kind == source_kind,
+            NotificationDelivery.status == STATUS_SENDING,
+            NotificationDelivery.claimed_at < _lease_expired_before(lease_seconds),
+        ).order_by(NotificationDelivery.created_at, NotificationDelivery.id)
+        .execution_options(populate_existing=True)
+    )).scalars().all())
+
+
+def _still_abandoned(row: NotificationDelivery, lease_seconds: int):
+    """The exact abandoned, never-attempted claim ``row`` was read as."""
+    return and_(
+        NotificationDelivery.id == row.id,
+        NotificationDelivery.status == STATUS_SENDING,
+        NotificationDelivery.attempted_at.is_(None),
+        NotificationDelivery.claim_token.is_(None) if row.claim_token is None
+        else NotificationDelivery.claim_token == row.claim_token,
+        NotificationDelivery.claimed_at < _lease_expired_before(lease_seconds),
+    )
+
+
+async def requeue_abandoned_claim(
+    session: AsyncSession, row: NotificationDelivery, *, lease_seconds: int = CLAIM_LEASE_SECONDS,
+) -> bool:
+    """Return a re-proved, never-attempted abandoned claim to ``queued``.
+
+    Only if it is still exactly the claim it was read as. The caller then
+    claims it through :func:`claim_delivery` in the same transaction, so the
+    row is never committed as ``queued`` and a crash before that commit leaves
+    it abandoned and recoverable, as before. Two cycles recovering the same
+    row serialise on it: the second finds the first one's fresh claim, which
+    is no longer abandoned, and changes nothing.
+    """
+    result = await session.execute(
+        update(NotificationDelivery).where(_still_abandoned(row, lease_seconds))
+        .values(status=STATUS_QUEUED, claim_token=None, claimed_at=None)
+        .execution_options(synchronize_session=False)
+    )
+    if not result.rowcount:
+        return False
+    await session.refresh(row)
+    return True
+
+
+async def settle_abandoned_claim(
+    session: AsyncSession, row: NotificationDelivery, reason: str,
+    *, lease_seconds: int = CLAIM_LEASE_SECONDS,
+) -> bool:
+    """Close a never-attempted abandoned claim that may no longer be sent.
+
+    Terminal and unclaimed, with the reason written down, so it stops counting
+    against the day's cap and is never looked at again. Only if it is still
+    exactly the claim it was read as.
+    """
+    result = await session.execute(
+        update(NotificationDelivery).where(_still_abandoned(row, lease_seconds))
+        .values(status=STATUS_SUPPRESSED, suppressed_reason=reason, claim_token=None, claimed_at=None)
+        .execution_options(synchronize_session=False)
+    )
+    if not result.rowcount:
+        return False
+    await session.refresh(row)
+    return True
+
+
+async def withdraw_unattempted(
+    session: AsyncSession, account_id: uuid.UUID, *, source_kind: str, reason: str,
+    source_id: str | None = None,
+) -> int:
+    """Settle, as not sent, every delivery of one source that has not reached the provider.
+
+    For a customer decision that takes away the authority to send, in the same
+    transaction as that decision and with the caller already holding the lock
+    that decision is made under:
+
+    * an opt-out, under the preference lock — every delivery of the source;
+    * a watch leaving its epoch (stopped, reactivated, re-anchored), under the
+      watch row's lock — only the deliveries for that one ``source_id``.
+
+    A row is withdrawn only while nothing can have been sent: ``queued``, or
+    ``sending`` with no attempt recorded. Its claim lease does not matter — a
+    claim made a moment ago is withdrawn too, because once this commits the
+    worker's final gate finds the row no longer its own and does not reach the
+    provider. It becomes terminal, unclaimed, with the reason written down, so
+    nothing that happens afterwards can revive it.
+
+    An attempted row (``attempted_at IS NOT NULL``) is never touched, nor is
+    any row the provider already answered for. The provider may already have
+    it; a decision after that moment can stop what comes next, but it cannot
+    prove this one was not sent.
+    """
+    conditions = [
+        NotificationDelivery.account_id == account_id,
+        NotificationDelivery.source_kind == source_kind,
+        NotificationDelivery.status.in_((STATUS_QUEUED, STATUS_SENDING)),
+        NotificationDelivery.attempted_at.is_(None),
+    ]
+    if source_id is not None:
+        conditions.append(NotificationDelivery.source_id == source_id)
+    result = await session.execute(
+        update(NotificationDelivery).where(*conditions)
+        .values(status=STATUS_SUPPRESSED, suppressed_reason=reason, claim_token=None, claimed_at=None)
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0)
+
+
+async def withdraw_claim(
+    session: AsyncSession, delivery_id: uuid.UUID, claim_token: str, reason: str,
+) -> bool:
+    """Settle one claim, before its attempt, as not sent.
+
+    Only the exact claim that owns the row, still ``sending`` and never
+    attempted. Terminal and unclaimed, so it is never claimed again.
+    """
+    result = await session.execute(
+        update(NotificationDelivery).where(
+            NotificationDelivery.id == delivery_id,
+            NotificationDelivery.status == STATUS_SENDING,
+            NotificationDelivery.claim_token == claim_token,
+            NotificationDelivery.attempted_at.is_(None),
+        ).values(status=STATUS_SUPPRESSED, suppressed_reason=reason, claim_token=None, claimed_at=None)
+        .execution_options(synchronize_session=False)
+    )
+    return bool(result.rowcount)
+
+
+async def locked_preference(session: AsyncSession, account_id: uuid.UUID) -> NotificationPreference | None:
+    """This account's preference row, locked, as committed now. Never creates one.
+
+    ``populate_existing``: a row this session loaded earlier is overwritten
+    with what the lock returned, so a change committed in between is what the
+    caller decides on.
+    """
+    return (await session.execute(
+        select(NotificationPreference).where(NotificationPreference.account_id == account_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
+
+
+async def devices_for_attempt(session: AsyncSession, account_id: uuid.UUID) -> list[NotificationDevice]:
+    """This account's active devices as they are now, held until the caller commits.
+
+    ``FOR SHARE``: removing a device — an unregister, or another account taking
+    over the same push token — either commits before this read, and is seen,
+    or waits until the caller's transaction ends. ``populate_existing``, so a
+    token rotated since this session first loaded the row is the token used.
+    """
+    return list((await session.execute(
+        select(NotificationDevice).where(
+            NotificationDevice.account_id == account_id, NotificationDevice.status == "active",
+            NotificationDevice.disabled_at.is_(None),
+        ).order_by(NotificationDevice.id)
+        .with_for_update(read=True).execution_options(populate_existing=True)
+    )).scalars().all())
 
 
 async def register_device(

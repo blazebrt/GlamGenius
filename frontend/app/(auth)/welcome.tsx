@@ -15,6 +15,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useUserStore } from '../../src/store/userStore';
 import { supabase } from '../../src/services/supabase';
+import {
+  FIRST_REGISTRATION_ROUTE,
+  PRODUCT_HOME_ROUTE,
+  REGISTRATION_INCOMPLETE_ROUTE,
+} from '../../src/navigation/authRoutes';
 import { COLORS, FONTS, SPACING, RADIUS } from '../../src/theme/colors';
 
 function notify(title: string, message: string) {
@@ -33,12 +38,9 @@ export default function AuthWelcome() {
   const [inviteCode, setInviteCode] = useState('');
   const [resetSent, setResetSent] = useState(false);
 
+  // An existing, registered account: straight to the product home.
   const goHome = () => {
-    try {
-      router.replace('/(tabs)/today');
-    } catch {
-      router.replace('/');
-    }
+    router.replace(PRODUCT_HOME_ROUTE);
   };
 
   const handlePasswordReset = async () => {
@@ -76,7 +78,7 @@ export default function AuthWelcome() {
         const result = await login(email.trim(), password);
         if (result.ok) goHome();
         else if (result.code === 'invite_required') {
-          router.replace('/(auth)/registration-incomplete');
+          router.replace(REGISTRATION_INCOMPLETE_ROUTE);
         } else notify('Sign in failed', result.message ?? 'Check your email and password.');
       } else {
         if (!name.trim()) {
@@ -92,11 +94,13 @@ export default function AuthWelcome() {
         }
         const result = await reserveAndRegister(name.trim(), email.trim(), password, inviteCode.trim());
         if (result.ok) {
-          router.replace('/onboarding');
+          // A new account: onboarding, once. Nothing else routes this person
+          // while the registration flow runs (see authGeneration.ts).
+          router.replace(FIRST_REGISTRATION_ROUTE);
         } else if (result.needsEmailConfirmation) {
           // Supabase requires email confirmation. Route to a screen that
           // explains what to do; the deep-link callback will finalise.
-          router.replace('/(auth)/registration-incomplete');
+          router.replace(REGISTRATION_INCOMPLETE_ROUTE);
         } else {
           notify(
             'Could not register',

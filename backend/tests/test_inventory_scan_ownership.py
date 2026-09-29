@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import date
 
 import pytest
 from app.domains.ai_gateway.models import AIRun
@@ -15,6 +16,7 @@ from app.domains.off.store import get_off_sessionmaker
 from app.domains.privacy import deletion_service
 from app.domains.product.devices import _hash
 from app.domains.product.models import LabelSnapshot, ProductRecord, ScanDecisionEvent, ScanDevice, ScanEvent
+from app.domains.product.service import label_content_fingerprint
 from app.shared.database.sql import get_sessionmaker
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -24,7 +26,18 @@ from tests.conftest import auth
 pytestmark = pytest.mark.asyncio
 
 
-async def _chain(account_id, *, barcode="8901234567890", version=1, fingerprint="a" * 64, facts=None, product_id=None):
+def _facts(name="Verified Cleanser"):
+    """Confirmed Store-B facts. A different name is a different formula version."""
+    return {"product_category": "beauty", "product_name": name, "brand": "Verified Brand"}
+
+
+async def _chain(account_id, *, barcode="8901234567890", version=1, fingerprint=None, facts=None, product_id=None):
+    """A confirmed capture and the snapshot it wrote, as the confirmation route writes them.
+
+    The snapshot's fingerprint is the canonical fingerprint of the capture's
+    own facts, because Shelf authority recomputes it from the current capture.
+    ``fingerprint`` is only for tests that deliberately forge a mismatch.
+    """
     raw = f"device-token-{uuid.uuid4().hex}"
     async with get_sessionmaker()() as s:
         d = ScanDevice(device_key=f"step10a-{uuid.uuid4().hex}", token_hash=_hash(raw), claimed_by_account_id=account_id)
@@ -37,7 +50,8 @@ async def _chain(account_id, *, barcode="8901234567890", version=1, fingerprint=
         s.add(d); await s.flush()
         run = AIRun(account_id=account_id, feature="label_capture", provider="test", model="test", prompt_version="test", schema_version="test", status="succeeded", validation_passed=True)
         s.add(run); await s.flush()
-        f = facts if facts is not None else {"product_category": "beauty", "product_name": "Verified Cleanser", "brand": "Verified Brand"}
+        f = facts if facts is not None else _facts()
+        fingerprint = fingerprint if fingerprint is not None else label_content_fingerprint(f)
         e = ScanEvent(device_id=d.id, account_id=account_id, barcode=barcode, outcome="label_captured", client_scan_id=uuid.uuid4().hex, label_facts=f, ai_run_id=run.id)
         s.add(e); await s.flush()
         snap = LabelSnapshot(barcode=barcode, device_id=d.id, scan_event_id=e.id, facts=f, confidence="unverified", content_fingerprint=fingerprint, version_number=version, changed_fields=[], completeness="complete_for_grading")
@@ -62,7 +76,7 @@ async def test_add_and_exact_status(app_client: AsyncClient, db_clean, registere
     added = await app_client.post("/api/v2/inventory/from-scan", headers=headers, json=body)
     assert added.status_code == 200 and added.json()["status"] == "owned"
     items, links = await _rows(account); assert len(items) == len(links) == 1
-    assert links[0].product_record_id == product_id and links[0].label_snapshot_id == snap.id and links[0].content_fingerprint == "a" * 64
+    assert links[0].product_record_id == product_id and links[0].label_snapshot_id == snap.id and links[0].content_fingerprint == label_content_fingerprint(_facts())
     after = await app_client.get(f"/api/v2/inventory/from-scan/{body['barcode']}/status", headers=headers, params={k: body[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
     assert after.json()["status"] == "owned" and after.json()["inventory_item_id"] == added.json()["inventory_item_id"]
 
@@ -110,12 +124,13 @@ async def test_same_key_replays_and_changed_identity_conflicts(app_client: Async
 async def test_later_formula_version_does_not_inherit_owned_status(app_client: AsyncClient, db_clean, registered_supabase_user):
     token, account = await registered_supabase_user(); device1, product_id, first = await _chain(account)
     first_body = _body(first); assert (await app_client.post("/api/v2/inventory/from-scan", headers=_headers(token, device1), json=first_body)).status_code == 200
-    device2, _, second = await _chain(account, version=2, fingerprint="b" * 64, product_id=product_id)
+    device2, _, second = await _chain(account, version=2, facts=_facts("Reformulated Cleanser"), product_id=product_id)
     second_body = _body(second, "second-version-key")
     status = await app_client.get(f"/api/v2/inventory/from-scan/{second.barcode}/status", headers=_headers(token, device2), params={k: second_body[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
     assert status.status_code == 200 and status.json()["status"] == "eligible_not_owned"
     _, links = await _rows(account); assert len(links) == 1
-    assert links[0].label_snapshot_id == first.id and links[0].label_version == 1 and links[0].content_fingerprint == "a" * 64
+    assert links[0].label_snapshot_id == first.id and links[0].label_version == 1 and links[0].content_fingerprint == first.content_fingerprint
+    assert first.content_fingerprint != second.content_fingerprint
 
 
 @pytest.mark.parametrize("change", ["barcode", "snapshot", "version", "fingerprint"])
@@ -150,7 +165,7 @@ async def test_status_is_account_scoped_for_shared_global_product(app_client: As
     token_a, account_a = await registered_supabase_user(); token_b, account_b = await registered_supabase_user()
     device_a, product_id, snapshot_a = await _chain(account_a)
     assert (await app_client.post("/api/v2/inventory/from-scan", headers=_headers(token_a, device_a), json=_body(snapshot_a))).status_code == 200
-    device_b, _, snapshot_b = await _chain(account_b, version=2, fingerprint="b" * 64, product_id=product_id)
+    device_b, _, snapshot_b = await _chain(account_b, version=2, facts=_facts("Reformulated Cleanser"), product_id=product_id)
     body_b = _body(snapshot_b, "account-b-status")
     response = await app_client.get(f"/api/v2/inventory/from-scan/{snapshot_b.barcode}/status", headers=_headers(token_b, device_b), params={k: body_b[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
     assert response.status_code == 200
@@ -272,7 +287,7 @@ async def test_truly_interleaved_same_key_inserts_resolve_to_one_row(
 async def test_concurrent_same_key_different_identity_conflicts_without_hybrid_link(app_client: AsyncClient, db_clean, registered_supabase_user, monkeypatch):
     token, account = await registered_supabase_user()
     device_a, product_a, snapshot_a = await _chain(account, barcode="8901234567890")
-    device_b, product_b, snapshot_b = await _chain(account, barcode="8901234567891", fingerprint="b" * 64)
+    device_b, product_b, snapshot_b = await _chain(account, barcode="8901234567891", facts=_facts("Other Barcode Cleanser"))
     original = scan_ownership.inventory_service.create_item
     arrived = 0; lock = asyncio.Lock(); open_gate = asyncio.Event()
 
@@ -304,7 +319,7 @@ async def test_manual_inventory_remains_valid_without_product_link(db_clean, reg
     async with get_sessionmaker()() as session:
         item = await create_item(session, account, ItemCreate(category="beauty", display_name="Manual cleanser", client_mutation_id="manual-without-link"))
         await session.commit()
-        payload = await serialize_item(session, item)
+        payload = await serialize_item(session, item, today=date.today())
     items, links = await _rows(account)
     assert payload["id"] == str(item.id) and len(items) == 1 and links == []
 
@@ -367,7 +382,7 @@ async def test_exact_shelf_link_exports_and_deletion_anonymises_pack_authority(
     # same route A used. A manual item would leave the interesting question
     # unasked: a manual item has no InventoryProductLink, so it cannot show
     # whether *B's link* survives A's deletion.
-    device_b, product_b_id, snapshot_b = await _chain(account_b, barcode="8901234567891", fingerprint="b" * 64)
+    device_b, product_b_id, snapshot_b = await _chain(account_b, barcode="8901234567891", facts=_facts("Other Barcode Cleanser"))
     added_b = await app_client.post(
         "/api/v2/inventory/from-scan", headers=_headers(token_b, device_b), json=_body(snapshot_b, "privacy-link-b"),
     )
@@ -507,7 +522,7 @@ async def test_one_device_cannot_claim_a_pack_proven_only_on_another_device(
     """
     token, account = await registered_supabase_user()
     device_a, _, snapshot_a = await _chain(account, barcode="8901234567890")
-    _, _, snapshot_b = await _chain(account, barcode="8901234567891", fingerprint="b" * 64)
+    _, _, snapshot_b = await _chain(account, barcode="8901234567891", facts=_facts("Other Barcode Cleanser"))
 
     # Every field is snapshot B's own; only the device authority is A's.
     response = await app_client.post(
@@ -520,7 +535,7 @@ async def test_one_device_cannot_claim_a_pack_proven_only_on_another_device(
     # The same submission on B's own device is accepted, which is what makes
     # the refusal above about authority rather than a malformed request.
     device_b_token, _, snapshot_b_again = await _chain(
-        account, barcode="8901234567892", fingerprint="c" * 64,
+        account, barcode="8901234567892", facts=_facts("Third Barcode Cleanser"),
     )
     accepted = await app_client.post(
         "/api/v2/inventory/from-scan",
@@ -539,7 +554,7 @@ async def test_status_also_refuses_a_pack_proven_only_on_another_device(
     """The read side must enforce the same authority as the write side."""
     token, account = await registered_supabase_user()
     device_a, _, _ = await _chain(account, barcode="8901234567890")
-    _, _, snapshot_b = await _chain(account, barcode="8901234567891", fingerprint="b" * 64)
+    _, _, snapshot_b = await _chain(account, barcode="8901234567891", facts=_facts("Other Barcode Cleanser"))
     body = _body(snapshot_b, "wrong-pack-status")
     response = await app_client.get(
         f"/api/v2/inventory/from-scan/{snapshot_b.barcode}/status",

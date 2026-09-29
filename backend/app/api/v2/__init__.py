@@ -21,6 +21,7 @@ from app.api.v2 import (
     maintenance,
     me,
     media,
+    notification_settings,
     personal_applicability_admin,
     personal_decision_release_admin,
     privacy,
@@ -60,6 +61,10 @@ router.include_router(integrations.router, tags=["v2-integrations"])
 router.include_router(shelf.router, tags=["v2-shelf"])
 router.include_router(maintenance.router, tags=["v2-maintenance"])
 router.include_router(routines.router, tags=["v2-routines"])
+# Notification settings and device registration. Their paths keep a
+# ``/today/`` segment for the installed app; the retired Today product is
+# still not mounted, and these routes do not depend on its feature flag.
+router.include_router(notification_settings.router, tags=["v2-notifications"])
 router.include_router(growth.router, tags=["v2-growth"])
 router.include_router(admin.router, tags=["v2-admin"])
 # Not a customer surface: a shared-secret door for the external scheduler.

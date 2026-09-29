@@ -2,10 +2,18 @@
 
 Authentication is handled in ``app.shared.security.supabase_auth`` — that
 module verifies the Supabase JWT and produces a ``SupabaseUser``. This module
-adds the second gate: a verified Supabase identity is **not** on its own a
-GlamGenius account. Protected routes must call ``get_current_account``, which
-looks up the ``accounts`` row and refuses (403 REGISTRATION_REQUIRED) if the
-caller has never completed invite-gated registration.
+adds two more gates, and they are two different questions:
+
+* ``get_registered_account`` — does this verified Supabase identity have a
+  GlamGenius ``accounts`` row at all? If not, 403 ``REGISTRATION_REQUIRED``.
+  Whatever the account's lifecycle status. Used only by the account-deletion
+  lifecycle routes, which must still recognise the owner of a pending
+  deletion.
+* ``get_current_account`` — is it an **active** account? Everything above,
+  and ``accounts.status == 'active'``; otherwise 403 ``ACCOUNT_INACTIVE``.
+  Every ordinary product route uses this, so an account whose deletion has
+  been requested stops reading and writing product data at once, from one
+  place, without a status check in each route.
 
 The only route that accepts a raw ``SupabaseUser`` is
 ``POST /api/v2/access/register``, which is where the ``accounts`` row is
@@ -21,7 +29,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.identity import service as identity
-from app.domains.identity.models import Account
+from app.domains.identity.models import ACCOUNT_STATUS_ACTIVE, Account
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import FeatureUnavailableError
 from app.shared.flags import service as flags
@@ -50,6 +58,30 @@ class RegistrationRequiredError(HTTPException):
                     "Your Supabase account is authenticated, but you have not "
                     "yet completed the GlamGenius invite-only registration. "
                     "Redeem your invite to continue."
+                ),
+                "retryable": False,
+            },
+        )
+
+
+class AccountInactiveError(HTTPException):
+    """403 raised when a registered account is not ``active``.
+
+    In practice the account has asked to be deleted. It is registered, so
+    ``REGISTRATION_REQUIRED`` would send the client down the wrong path. The
+    body says nothing about the deletion job: the owner reads that from the
+    privacy status route.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "ACCOUNT_INACTIVE",
+                "message": (
+                    "This GlamGenius account is not active. If you asked for "
+                    "it to be deleted, its deletion status is still available "
+                    "in your privacy settings."
                 ),
                 "retryable": False,
             },
@@ -86,11 +118,11 @@ class CurrentAccount:
         return self.supabase_user.is_admin
 
 
-async def get_current_account(
+async def get_registered_account(
     supabase_user: SupabaseUser = Depends(get_current_supabase_user),
     session: AsyncSession = Depends(get_session),
 ) -> CurrentAccount:
-    """Resolve the caller's GlamGenius account.
+    """Resolve the caller's GlamGenius account, whatever its lifecycle status.
 
     **Does not auto-create.** A valid Supabase token without a matching
     ``accounts`` row is refused with 403 ``REGISTRATION_REQUIRED``. The only
@@ -98,6 +130,11 @@ async def get_current_account(
     ``POST /api/v2/access/register`` (through
     ``domains.identity.service.register_account``), and it does so atomically
     with invite redemption.
+
+    Not for product routes. It is for the narrow account-deletion lifecycle
+    only — request, status, cancel — where the owner of a pending deletion
+    must still be recognised. Everything else uses
+    :func:`get_current_account`.
     """
     account = await identity.get_account(session, supabase_user.id)
     if account is None:
@@ -105,10 +142,19 @@ async def get_current_account(
     return CurrentAccount(account=account, supabase_user=supabase_user)
 
 
-# Kept for symmetry with the spec §1 wording. The FastAPI dependency object
-# is the same callable — renaming the import site is optional and does not
-# change semantics.
-get_registered_account = get_current_account
+async def get_current_account(
+    registered: CurrentAccount = Depends(get_registered_account),
+) -> CurrentAccount:
+    """Resolve the caller's **active** GlamGenius account.
+
+    A registered account whose status is not ``active`` — in practice one
+    whose deletion has been requested — is refused with 403
+    ``ACCOUNT_INACTIVE``, so no ordinary route can read or write product data
+    for it, and none can create new data while the deletion runs.
+    """
+    if registered.account.status != ACCOUNT_STATUS_ACTIVE:
+        raise AccountInactiveError()
+    return registered
 
 
 async def get_optional_account(
@@ -121,13 +167,15 @@ async def get_optional_account(
     per-person context when somebody is signed in. Absence is the only thing
     that makes a caller anonymous: a token that is presented is verified
     exactly as :func:`get_current_account` verifies it, so an invalid or
-    expired token is still a 401 and a registered-less identity is still a 403
-    — never a silent downgrade to anonymous.
+    expired token is still a 401, a registered-less identity is still a 403,
+    and an account that is not active is still a 403 ``ACCOUNT_INACTIVE`` —
+    never a silent downgrade to anonymous.
     """
     if credentials is None or not credentials.credentials:
         return None
     supabase_user = await get_current_supabase_user(credentials)
-    return await get_current_account(supabase_user, session)
+    registered = await get_registered_account(supabase_user, session)
+    return await get_current_account(registered)
 
 
 def require_flag(key: str):
@@ -145,6 +193,7 @@ def require_flag(key: str):
 
 
 __all__ = [
+    "AccountInactiveError",
     "CurrentAccount",
     "RegistrationRequiredError",
     "client_ip",

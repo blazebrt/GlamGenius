@@ -76,7 +76,10 @@ class ItemPatch(BaseModel):
 
 class UsageCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    used_on: date = Field(default_factory=date.today)
+    #: Omitted means the customer's own today, which the route resolves. A
+    #: default here could only be the server's date — yesterday, in India,
+    #: until 05:30.
+    used_on: date | None = None
     quantity: int = Field(default=1, ge=1, le=100)
     note: str | None = Field(default=None, max_length=240)
 

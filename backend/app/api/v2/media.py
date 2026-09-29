@@ -21,6 +21,7 @@ from app.domains.media.models import MEDIA_PURPOSE_INVENTORY
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import MediaTooLargeError, ValidationFailedError
 from app.shared.security.deps import (
+    AccountInactiveError,
     CurrentAccount,
     client_ip,
     get_current_account,
@@ -71,15 +72,22 @@ async def upload_media(
 
     data = await _read_capped(file)
 
-    asset = await media_service.upload(
-        session,
-        account_id=current.account_id,
-        data=data,
-        declared_type=file.content_type,
-        purpose=purpose,
-        original_filename=file.filename,
-        client_ip=client_ip(request),
-    )
+    try:
+        asset = await media_service.upload(
+            session,
+            account_id=current.account_id,
+            data=data,
+            declared_type=file.content_type,
+            purpose=purpose,
+            original_filename=file.filename,
+            client_ip=client_ip(request),
+        )
+    except media_service.AccountNotActive:
+        # Authenticated as active, then deletion was requested before the
+        # bytes were written. Nothing was stored.
+        raise AccountInactiveError() from None
+    # Ends the lifecycle hold taken inside upload(). A deletion request that
+    # arrived meanwhile has been waiting for this.
     await session.commit()
     return media_service.to_public_dict(asset)
 

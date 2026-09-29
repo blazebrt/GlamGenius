@@ -15,8 +15,9 @@ the scheduler and this service know.
 
 What that buys, precisely:
 
-* the secret is compared with :func:`hmac.compare_digest`, so a wrong guess
-  takes the same time as any other wrong guess;
+* the secret is compared with :func:`hmac.compare_digest` over UTF-8 bytes,
+  so a wrong guess takes the same time as any other wrong guess, and a guess
+  in any script is a refusal rather than an error;
 * every refusal is the same 401 with the same body, so the response cannot be
   used to learn whether the scheme, the header shape or the value was the
   problem;
@@ -96,8 +97,21 @@ def require_scheduler_token(
     presented = presented.strip()
     if not presented:
         raise _denied()
-    if not hmac.compare_digest(presented, configured):
+    # Bytes, never ``str``: ``compare_digest`` refuses a ``str`` holding any
+    # non-ASCII character with a ``TypeError``, so a Unicode guess — or a
+    # Unicode configured value — was a 500 rather than this refusal. UTF-8
+    # (passing lone surrogates through) encodes every string, and the
+    # comparison stays constant-time.
+    if not _same_credential(_utf8(presented), _utf8(configured)):
         raise _denied()
+
+
+def _utf8(value: str) -> bytes:
+    return value.encode("utf-8", "surrogatepass")
+
+
+def _same_credential(presented: bytes, configured: bytes) -> bool:
+    return hmac.compare_digest(presented, configured)
 
 
 @router.post("/account-deletion")

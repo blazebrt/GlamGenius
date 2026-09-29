@@ -309,10 +309,12 @@ async def _same_slot_conflicts(
     match is category *and* canonical slot, so two categories that happen to
     name a slot the same way stay apart.
     """
+    from app.domains.planning import context as planning_context
     from app.domains.routines import shelf as shelf_domain
 
     context = await shelf_domain.gather(
         session, account_id=principal_account_id, decision_subject=subject,
+        today=await planning_context.account_today(session, principal_account_id),
     )
     placed: dict[uuid.UUID, tuple[str, str]] = {}
     for category in ("beauty", "hair"):
