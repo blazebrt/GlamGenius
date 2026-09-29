@@ -62,7 +62,7 @@ async def export_data(
 
     Shape::
 
-        {"schema_version": "1.5", "generated_at": "...", "account": {...},
+        {"schema_version": "1.6", "generated_at": "...", "account": {...},
          "domains": {...}, "registry_summary": {...}}
 
     ``200`` means complete: every table the registry classifies ``INCLUDED``

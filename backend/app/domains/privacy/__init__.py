@@ -70,7 +70,12 @@ from enum import StrEnum
 # ``registry_summary`` gains ``exported_tables`` and ``export_locations``,
 # derived from that contract; and a label-error report states
 # ``photo_attached`` instead of carrying its internal ``photo_key``.
-EXPORT_SCHEMA_VERSION = "1.5"
+# 1.6 — Step 15. A ``growth`` domain with the account's consumer referral
+# history (``growth.referral``, from ``consumer_referral_invites``), without
+# codes, invite ids or invitee identity. ``app_events`` stays where Lane E put
+# it (``ai_and_ops.app_events``); its new ``client_event_id`` retry id is
+# withheld there.
+EXPORT_SCHEMA_VERSION = "1.6"
 
 
 class Classification(StrEnum):
@@ -94,6 +99,11 @@ REGISTRY: dict[str, Classification] = {
     "invites": Classification.NOT_USER_OWNED,
     "invite_redemptions": Classification.INCLUDED,
     "invite_registration_reservations": Classification.OPERATIONAL,
+    # Step 15. Which invites this account was issued to share. Theirs: exported
+    # as ``growth.referral`` (without the code, which is a live access
+    # capability), and cascaded away with the account after every invite it
+    # names has been switched off.
+    "consumer_referral_invites": Classification.INCLUDED,
     # --- Consent ---
     "consents": Classification.INCLUDED,
     # --- Profile + onboarding ---

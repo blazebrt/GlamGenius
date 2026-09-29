@@ -1,0 +1,107 @@
+"""consumer growth for Step 15
+
+Revision ID: l0m1n2o3p4
+Revises: lf1a2b3c4d
+
+Re-parented in place during Step 15 requalification: this revision was written
+on ``k9l0m1n2o3`` and is unmerged and undeployed, so it now follows Lane F's
+``lf1a2b3c4d`` (current ``main``) directly rather than through a repair
+migration. Its schema changes and its downgrade are unchanged.
+
+Two narrow changes and nothing else.
+
+1. ``consumer_referral_invites`` — the one genuinely new fact: which account an
+   invite was issued to share. Code, use count, ceiling, expiry and the on/off
+   switch stay on ``invites`` and are not copied here.
+
+   * ``inviter_account_id`` CASCADE — erasing the account erases the binding.
+     The deletion worker switches every bound invite off *before* this cascade
+     runs, so no capability outlives the person it was issued to.
+   * ``invite_id`` RESTRICT and UNIQUE — one invite has at most one inviter,
+     and invites are never deleted; a delete that tried should be refused
+     rather than orphan the lifetime ceiling this row counts toward.
+
+   Every foreign key carries its delete rule explicitly: Alembic's
+   autogenerate does not compare ``ondelete``, so leaving one implicit passes
+   ``alembic check`` and leaves rows behind at account deletion.
+
+2. ``app_events.client_event_id`` — an opaque client-minted operation UUID,
+   with a partial unique index over ``(account_id, name, client_event_id)``, so
+   a retried telemetry write is recognised rather than counted twice. Existing
+   rows keep ``NULL`` and are unaffected. It is never a device or advertising
+   identifier.
+
+Downgrade first switches off every invite the binding names, then drops the
+binding. A rollback must not leave behind an admission capability whose owning
+feature, and whose record of being a referral, has just been removed.
+"""
+from __future__ import annotations
+
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects import postgresql
+
+revision = "l0m1n2o3p4"
+down_revision = "lf1a2b3c4d"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "consumer_referral_invites",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column("inviter_account_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("invite_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("program_version", sa.String(32), nullable=False),
+        sa.ForeignKeyConstraint(["inviter_account_id"], ["accounts.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["invite_id"], ["invites.id"], ondelete="RESTRICT"),
+        sa.CheckConstraint(
+            "program_version IN ('consumer-referral-v1')",
+            name="ck_consumer_referral_invites_program",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("invite_id"),
+    )
+    op.create_index(
+        "ix_consumer_referral_invites_inviter",
+        "consumer_referral_invites",
+        ["inviter_account_id", "created_at"],
+    )
+
+    op.add_column(
+        "app_events",
+        sa.Column("client_event_id", postgresql.UUID(as_uuid=True), nullable=True),
+    )
+    op.create_index(
+        "uq_app_events_account_name_client_event",
+        "app_events",
+        ["account_id", "name", "client_event_id"],
+        unique=True,
+        postgresql_where=sa.text("client_event_id IS NOT NULL"),
+    )
+
+
+def downgrade() -> None:
+    # A referral code is an ordinary live invite, and ``/access/reserve`` below
+    # this revision would keep admitting people with it. The binding is the
+    # only record of which invites were referrals, so switch every one of them
+    # off while it still exists — in the same transaction that then drops it.
+    # Only bound invites are touched; no invite, redemption or reservation row
+    # is deleted. A reservation already held against one stays, and can no
+    # longer finalise: ``consume_reservation`` only counts a use on an active
+    # invite, and rolls the registration back otherwise.
+    op.execute(
+        """
+        UPDATE invites
+        SET active = false, updated_at = now()
+        WHERE active IS TRUE
+          AND id IN (SELECT invite_id FROM consumer_referral_invites)
+        """
+    )
+    op.drop_index("uq_app_events_account_name_client_event", table_name="app_events")
+    op.drop_column("app_events", "client_event_id")
+    op.drop_index("ix_consumer_referral_invites_inviter", table_name="consumer_referral_invites")
+    op.drop_table("consumer_referral_invites")

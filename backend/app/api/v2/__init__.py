@@ -13,6 +13,7 @@ from app.api.v2 import (
     config,
     consent,
     family,
+    growth,
     integrations,
     internal_scheduler,
     inventory,
@@ -64,6 +65,7 @@ router.include_router(routines.router, tags=["v2-routines"])
 # ``/today/`` segment for the installed app; the retired Today product is
 # still not mounted, and these routes do not depend on its feature flag.
 router.include_router(notification_settings.router, tags=["v2-notifications"])
+router.include_router(growth.router, tags=["v2-growth"])
 router.include_router(admin.router, tags=["v2-admin"])
 # Not a customer surface: a shared-secret door for the external scheduler.
 router.include_router(internal_scheduler.router)

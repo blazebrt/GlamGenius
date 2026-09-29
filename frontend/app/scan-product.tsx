@@ -58,6 +58,7 @@ import { PURCHASE_OS } from '../src/strings/purchaseOs';
 import { transcribeProductLabel, transcribeSkinCareLabel, uploadMedia } from '../src/services/apiV2';
 import { errorMessage } from '../src/services/api';
 import { useUserStore } from '../src/store/userStore';
+import { consumeFreshScanRequest } from '../src/services/scanSession';
 
 /** Shown when this barcode's plain scan event cannot be proven to have landed. */
 const SCAN_NOT_SETTLED_MESSAGE =
@@ -375,6 +376,14 @@ export default function ScanProductScreen() {
       setLabelBusy(false);
     }
   }, [labelBusy, result, skinDraft]);
+
+  // Step 15. "Scan another product" on a Product Result asks for a fresh
+  // scanner rather than the last result, once.
+  useFocusEffect(
+    useCallback(() => {
+      if (consumeFreshScanRequest()) scanAgain();
+    }, [scanAgain]),
+  );
 
   /**
    * Re-ask Step 8K when this screen regains focus.
