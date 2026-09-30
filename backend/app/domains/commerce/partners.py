@@ -3,7 +3,7 @@
 A partner is a literal row in :data:`PARTNERS`, reviewed like code, because it
 is code. There is no merchant table, no remote configuration and no address a
 client can supply. An operator chooses **at most one** registered partner with
-``COMMERCE_PARTNER`` and may give that partner's own affiliate tag with
+``COMMERCE_PARTNER`` and gives that partner's affiliate tag with
 ``COMMERCE_AFFILIATE_TAG``. Nothing else chooses it: not the product, its grade
 or decision, its category, the alternative, a price, a payout, a commission or
 how often people follow a link. None of those is an input here.
@@ -32,6 +32,22 @@ The partner's identifier for GlamGenius as the referring source, set once by
 an operator. It never carries anything about a person: no account, device,
 household, subject, scan, label snapshot, inventory or AI run id, no email or
 phone, no trait. There is no per-person sub-id in V1.
+
+A partner that pays a commission is an affiliate relationship, and the app
+discloses it as one. So a partner whose registry row says
+``affiliate_tag_required`` cannot be enabled without its tag, and its tag must
+have the partner's own shape. Every V1 partner requires one: V1 has no
+non-affiliate mode, and adding one would be a reviewed contract change, not a
+configuration.
+
+Amazon India
+------------
+``amazon_in`` takes an Amazon India Associates Store/Tracking ID: lower-case
+letters and digits (inner hyphens allowed) followed by the India suffix
+``-21``. The shape check refuses a random string; it cannot prove the ID is the
+one Amazon assigned to the approved GlamGenius mobile application. That, and
+whether Amazon permits this exact link for that app, are owner checks before
+enabling (``docs/architecture/COMMERCE_HANDOFF.md``, "Before enabling").
 """
 from __future__ import annotations
 
@@ -57,12 +73,18 @@ class Partner:
     query_parameter: str
     #: The query parameter that carries the partner's affiliate tag, if any.
     affiliate_parameter: str | None
+    #: The partner cannot be enabled without its affiliate tag.
+    affiliate_tag_required: bool
+    #: The full shape of this partner's affiliate tag, on top of :data:`AFFILIATE_TAG`.
+    affiliate_tag_shape: re.Pattern[str] | None
 
 
-#: Every partner V1 knows. Enabling one is an operator's decision, taken after
-#: confirming the partner's current programme terms (disclosure wording, use
-#: in an app) and that its search page answers an exact barcode. See
-#: ``docs/architecture/COMMERCE_HANDOFF.md``.
+#: An Amazon India Associates Store/Tracking ID: the India suffix ``-21``.
+AMAZON_IN_TRACKING_ID = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?-21")
+
+#: Every partner V1 knows. Enabling one is an operator's decision, and stays
+#: off until every activation condition in ``docs/architecture/COMMERCE_HANDOFF.md``
+#: ("Before enabling") holds.
 PARTNERS: MappingProxyType[str, Partner] = MappingProxyType({
     "amazon_in": Partner(
         key="amazon_in",
@@ -71,6 +93,8 @@ PARTNERS: MappingProxyType[str, Partner] = MappingProxyType({
         search_path="/s",
         query_parameter="k",
         affiliate_parameter="tag",
+        affiliate_tag_required=True,
+        affiliate_tag_shape=AMAZON_IN_TRACKING_ID,
     ),
 })
 PARTNER_KEYS: tuple[str, ...] = tuple(PARTNERS)
@@ -96,7 +120,7 @@ class UnsafeDestination(ValueError):
 
 @dataclass(frozen=True)
 class ActivePartner:
-    """The one partner an operator enabled, with its optional affiliate tag."""
+    """The one partner an operator enabled, with its affiliate tag."""
 
     partner: Partner
     affiliate_tag: str | None
@@ -113,18 +137,29 @@ def is_exact_gtin(value: object) -> bool:
 
 
 def configuration_errors(partner_key: str, affiliate_tag: str) -> list[str]:
-    """What is wrong with this operator configuration, in words an operator can act on."""
-    errors: list[str] = []
-    if partner_key and partner_key not in PARTNERS:
-        errors.append("COMMERCE_PARTNER must be empty or one of: " + ", ".join(PARTNER_KEYS) + ".")
-    if affiliate_tag:
-        if not partner_key:
-            errors.append("COMMERCE_AFFILIATE_TAG is set but COMMERCE_PARTNER is not.")
-        elif not AFFILIATE_TAG.fullmatch(affiliate_tag):
-            errors.append("COMMERCE_AFFILIATE_TAG must be 1-64 letters, digits or inner hyphens.")
-        elif partner_key in PARTNERS and PARTNERS[partner_key].affiliate_parameter is None:
-            errors.append("COMMERCE_AFFILIATE_TAG is set for a partner that takes no affiliate tag.")
-    return errors
+    """What is wrong with this operator configuration, in words an operator can act on.
+
+    Both empty is valid and means Commerce is off. Anything else must name a
+    registered partner and satisfy that partner's own tag rule.
+    """
+    if not partner_key:
+        if affiliate_tag:
+            return ["COMMERCE_AFFILIATE_TAG is set but COMMERCE_PARTNER is not."]
+        return []
+    partner = PARTNERS.get(partner_key)
+    if partner is None:
+        return ["COMMERCE_PARTNER must be empty or one of: " + ", ".join(PARTNER_KEYS) + "."]
+    if not affiliate_tag:
+        if partner.affiliate_tag_required:
+            return [f"COMMERCE_AFFILIATE_TAG is required for COMMERCE_PARTNER={partner.key}."]
+        return []
+    if partner.affiliate_parameter is None:
+        return ["COMMERCE_AFFILIATE_TAG is set for a partner that takes no affiliate tag."]
+    if not AFFILIATE_TAG.fullmatch(affiliate_tag) or (
+        partner.affiliate_tag_shape is not None and not partner.affiliate_tag_shape.fullmatch(affiliate_tag)
+    ):
+        return [f"COMMERCE_AFFILIATE_TAG is not a valid {partner.display_name} affiliate tag."]
+    return []
 
 
 def _configured() -> tuple[str, str]:
@@ -142,6 +177,10 @@ def active_partner() -> ActivePartner | None:
 
 
 def _expected_query(active: ActivePartner, barcode: str) -> list[tuple[str, str]]:
+    # A partner that requires its tag never gets an address without one, even
+    # from an ``ActivePartner`` built by hand rather than by ``active_partner``.
+    if active.partner.affiliate_tag_required and not active.affiliate_tag:
+        raise UnsafeDestination("affiliate_tag_missing")
     pairs = [(active.partner.query_parameter, barcode)]
     if active.affiliate_tag and active.partner.affiliate_parameter:
         pairs.append((active.partner.affiliate_parameter, active.affiliate_tag))
@@ -203,6 +242,7 @@ def search_url(active: ActivePartner, barcode: str) -> str:
 
 __all__ = [
     "AFFILIATE_TAG",
+    "AMAZON_IN_TRACKING_ID",
     "ActivePartner",
     "MAX_URL_LENGTH",
     "PARTNERS",

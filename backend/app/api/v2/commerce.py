@@ -2,8 +2,10 @@
 
 * ``GET  /api/v2/scan/verdict/{barcode}/commerce-handoff`` — whether this pack's
   finished decision supports one outbound partner search link, and for which
-  product. The same device authority as the Product Result and the Purchase
-  OS: ``X-Device-Token``, no weaker path. Read-only.
+  product. When a partner is enabled, the same device authority as the Product
+  Result and the Purchase OS: ``X-Device-Token`` through ``current_device``
+  itself, no weaker path. When none is, nothing at all is read — not even the
+  device. Read-only.
 * ``POST /api/v2/commerce/events`` — one whitelisted ``commerce.outbound_open``
   event. Signed-in accounts only; fire and forget.
 * ``GET  /api/v2/admin/commerce/metrics`` — aggregates only, admins only.
@@ -22,14 +24,13 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v2.product import BARCODE_PATH, current_device, read_product_verdict
 from app.domains.commerce import analytics, handoff, metrics, partners
 from app.domains.growth.analytics import prune_opportunistically
-from app.domains.product.models import ScanDevice
 from app.domains.purchase import operating_system
 from app.shared.database.sql import get_session
 from app.shared.security.deps import CurrentAccount, get_current_account
@@ -53,20 +54,27 @@ _event_limiter = FixedWindowLimiter(
 async def read_commerce_handoff(
     barcode: str = BARCODE_PATH,
     physical_pack_context: bool = True,
-    device: ScanDevice = Depends(current_device),
+    x_device_token: str | None = Header(default=None, alias="X-Device-Token"),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """One ``commerce-handoff-v1`` answer for the pack this device holds.
 
-    With no partner enabled the answer is ``unavailable`` and nothing is read.
-    Otherwise the Product Result and the Purchase OS are built as their own
-    routes build them — same pack ceiling, same official-record envelope — and
-    the finished answer decides whether a link exists. ``physical_pack_context``
-    is a ceiling, as everywhere else: ``false`` can only withhold.
+    With no partner enabled the answer is ``unavailable`` and nothing is read:
+    no device, no Product Result, no Purchase OS, no database. That is why the
+    token arrives as a raw header rather than through ``Depends(current_device)``,
+    which FastAPI would resolve before this body runs.
+
+    Otherwise the device goes through ``current_device`` itself — the same
+    lookup and the same ``401 DEVICE_UNKNOWN`` as the Product Result — and the
+    Product Result and the Purchase OS are built as their own routes build
+    them: same pack ceiling, same official-record envelope. The finished answer
+    decides whether a link exists. ``physical_pack_context`` is a ceiling, as
+    everywhere else: ``false`` can only withhold.
     """
     active = partners.active_partner()
     if active is None:
         return handoff.partner_not_configured()
+    device = await current_device(x_device_token=x_device_token, session=session)
     product_result = await read_product_verdict(
         barcode=barcode, physical_pack_context=physical_pack_context, device=device, session=session,
     )

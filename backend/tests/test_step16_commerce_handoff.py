@@ -37,8 +37,8 @@ from app.domains.commerce import analytics, handoff, metrics, partners
 from app.domains.privacy import REGISTRY, Classification, deletion_service
 from app.domains.purchase import operating_system as purchase_os
 from app.shared.database.base import Base
-from app.shared.database.sql import get_sessionmaker
-from sqlalchemy import func, select
+from app.shared.database.sql import get_engine, get_sessionmaker
+from sqlalchemy import event, func, select
 
 from tests.conftest import alembic_head_revision, auth
 from tests.test_official_records_api import (
@@ -78,6 +78,7 @@ AMAZON = partners.PARTNERS["amazon_in"]
 
 
 def _active(tag: str | None = TAG) -> partners.ActivePartner:
+    """An enabled partner built by hand. ``tag=None`` is exactly what ``active_partner`` refuses."""
     return partners.ActivePartner(partner=AMAZON, affiliate_tag=tag)
 
 
@@ -331,13 +332,71 @@ async def test_b_a_wait_pack_links_the_one_canonical_alternative(
 
 
 async def test_b_commerce_off_reads_nothing_at_all(app_client, db_clean, monkeypatch, partner_off):
-    async def refuse(**_kwargs):
-        raise AssertionError("the Product Result must not be built when Commerce is off")
+    """Off means off: no device lookup, no Product Result, no Purchase OS, no SQL at all.
 
-    monkeypatch.setattr(commerce_api, "read_product_verdict", refuse)
-    device = await _device(app_client)
-    answer = await _handoff(app_client, device)
-    assert (answer["state"], answer["reason_code"]) == ("unavailable", "partner_not_configured")
+    Then, with a partner on, the same route goes back through the Product
+    Result's own device authority, with its own ``401 DEVICE_UNKNOWN``.
+    """
+    from app.domains.product import devices
+
+    def refuse(name):
+        async def _refuse(*_args, **_kwargs):
+            raise AssertionError(f"{name} must not run while Commerce is off")
+        return _refuse
+
+    monkeypatch.setattr(commerce_api, "current_device", refuse("current_device"))
+    monkeypatch.setattr(devices, "resolve", refuse("devices.resolve"))
+    monkeypatch.setattr(commerce_api, "read_product_verdict", refuse("read_product_verdict"))
+    monkeypatch.setattr(purchase_os, "scan_purchase_check", refuse("scan_purchase_check"))
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, *_rest):
+        statements.append(statement)
+
+    engine = get_engine().sync_engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        for headers in ({}, {"X-Device-Token": "not-a-real-device-token"}):
+            response = await app_client.get(f"/api/v2/scan/verdict/{BARCODE}/commerce-handoff", headers=headers)
+            assert response.status_code == 200, response.text
+            assert response.json() == handoff.partner_not_configured()
+            assert (response.json()["state"], response.json()["reason_code"]) == ("unavailable", "partner_not_configured")
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    assert statements == [], "Commerce off read the database"
+
+    # Partner on: the real authority, and the same refusal as the Product Result.
+    monkeypatch.undo()
+    monkeypatch.setattr(config, "COMMERCE_PARTNER", "amazon_in")
+    monkeypatch.setattr(config, "COMMERCE_AFFILIATE_TAG", TAG)
+    calls: list[str | None] = []
+    real = commerce_api.current_device
+
+    async def spy(*, x_device_token, session):
+        calls.append(x_device_token)
+        return await real(x_device_token=x_device_token, session=session)
+
+    monkeypatch.setattr(commerce_api, "current_device", spy)
+    for headers in ({}, {"X-Device-Token": "not-a-real-device-token"}):
+        response = await app_client.get(f"/api/v2/scan/verdict/{BARCODE}/commerce-handoff", headers=headers)
+        assert response.status_code == 401
+        assert response.json()["detail"]["code"] == "DEVICE_UNKNOWN"
+        product = await app_client.get(f"/api/v2/scan/verdict/{BARCODE}", headers=headers)
+        assert (product.status_code, product.json()["detail"]) == (401, response.json()["detail"])
+    assert calls == [None, "not-a-real-device-token"]
+
+
+def test_b_the_route_resolves_no_device_before_it_knows_commerce_is_on():
+    """``Depends(current_device)`` would run before the body; the route takes the raw header."""
+    tree = ast.parse(COMMERCE_API.read_text())
+    route = next(node for node in ast.walk(tree) if isinstance(node, ast.AsyncFunctionDef)
+                 and node.name == "read_commerce_handoff")
+    defaults = [ast.unparse(default) for default in route.args.defaults]
+    assert not any("current_device" in default for default in defaults), defaults
+    body = [ast.unparse(statement) for statement in route.body[1:]]  # after the docstring
+    assert body[0] == "active = partners.active_partner()"
+    assert body[1].startswith("if active is None:") and "partner_not_configured" in body[1]
+    assert body[2] == "device = await current_device(x_device_token=x_device_token, session=session)"
 
 
 async def test_b_the_same_device_authority_as_the_product_result(app_client, db_clean, partner_on):
@@ -493,7 +552,7 @@ def test_d_the_route_asks_for_the_canonical_answer_with_no_person_at_all():
     route = next(node for node in ast.walk(tree) if isinstance(node, ast.AsyncFunctionDef)
                  and node.name == "read_commerce_handoff")
     arguments = {arg.arg for arg in route.args.args}
-    assert arguments == {"barcode", "physical_pack_context", "device", "session"}, "no account, no subject"
+    assert arguments == {"barcode", "physical_pack_context", "x_device_token", "session"}, "no account, no subject"
     call = next(node for node in ast.walk(route) if isinstance(node, ast.Call)
                 and getattr(node.func, "attr", "") == "scan_purchase_check")
     keywords = {kw.arg: ast.unparse(kw.value) for kw in call.keywords}
@@ -621,12 +680,19 @@ async def test_e_changing_the_affiliate_configuration_changes_no_byte_of_product
         return verdict.text, check.text, signed.text
 
     observed = []
-    for partner_key, tag in (("", ""), ("amazon_in", ""), ("amazon_in", "partner-a-21"), ("amazon_in", "other-tag-21")):
+    for partner_key, tag, state in (
+        ("", "", "unavailable"),
+        ("amazon_in", "", "unavailable"),  # malformed: the tag is required
+        ("amazon_in", "partner-a-21", "available"),
+        ("amazon_in", "other-tag-21", "available"),
+    ):
         monkeypatch.setattr(config, "COMMERCE_PARTNER", partner_key)
         monkeypatch.setattr(config, "COMMERCE_AFFILIATE_TAG", tag)
         observed.append(await truth())
         handoff_answer = await _handoff(app_client, device)
-        assert handoff_answer["state"] == ("available" if partner_key else "unavailable")
+        assert handoff_answer["state"] == state
+        if state == "available":
+            assert handoff_answer["partner"]["url"].endswith(f"&tag={tag}")
     assert all(item == observed[0] for item in observed), "Product Truth must be byte-identical"
 
 
@@ -676,7 +742,13 @@ def test_f_only_the_exact_registry_address_is_accepted(url):
 def test_f_the_registry_address_is_accepted_and_deterministic():
     assert partners.search_url(_active(), "8901058000191") == _url("8901058000191")
     assert partners.search_url(_active(), "8901058000191") == partners.search_url(_active(), "8901058000191")
-    assert partners.search_url(_active(None), "8901058000191") == _url("8901058000191", None)
+    # Amazon requires its tag: no untagged address is ever built or accepted.
+    with pytest.raises(partners.UnsafeDestination) as refused:
+        partners.search_url(_active(None), "8901058000191")
+    assert refused.value.code == "affiliate_tag_missing"
+    for untagged in (_active(None), _active()):
+        with pytest.raises(partners.UnsafeDestination):
+            partners.verify_destination(_url("8901058000191", None), untagged, "8901058000191")
     assert partners.verify_destination(_url("8901058000191"), _active(), "8901058000191") == _url("8901058000191")
     # The address for one barcode never verifies for another.
     with pytest.raises(partners.UnsafeDestination):
@@ -726,48 +798,138 @@ def test_g_the_registry_is_a_closed_literal_table():
     assert partners.PARTNER_KEYS == ("amazon_in",)
     assert AMAZON.host == "www.amazon.in" and AMAZON.search_path == "/s"
     fields = set(partners.Partner.__dataclass_fields__)
-    assert fields == {"key", "display_name", "host", "search_path", "query_parameter", "affiliate_parameter"}
+    assert fields == {
+        "key", "display_name", "host", "search_path", "query_parameter", "affiliate_parameter",
+        "affiliate_tag_required", "affiliate_tag_shape",
+    }
+    # V1 has no non-affiliate partner: every row requires its tag.
+    assert all(partner.affiliate_tag_required for partner in partners.PARTNERS.values())
+    assert AMAZON.affiliate_tag_shape is partners.AMAZON_IN_TRACKING_ID
     for banned in ("commission", "payout", "rate", "rank", "score", "priority", "weight", "conversion", "price"):
         assert not any(banned in field for field in fields), banned
 
 
-@pytest.mark.parametrize(("partner_key", "tag", "enabled"), [
-    ("", "", False),
-    ("amazon_in", "", True),
-    ("amazon_in", "glamgenius-21", True),
-    ("AMAZON_IN", "glamgenius-21", True),
-    ("flipkart", "", False),
-    ("https://evil.example", "", False),
-    ("amazon_in", "bad tag", False),
-    ("amazon_in", "-lead", False),
-    ("amazon_in", "a&b=c", False),
-    ("amazon_in", "x" * 65, False),
-    ("", "orphan-tag", False),
-])
-def test_g_a_malformed_configuration_enables_nothing(monkeypatch, partner_key, tag, enabled):
-    monkeypatch.setattr(config, "COMMERCE_PARTNER", partner_key)
+VALID_CONFIGURATIONS = [
+    ("", ""),                       # Commerce off
+    ("amazon_in", "glamgenius-21"),
+    ("AMAZON_IN", "glamgenius-21"),
+    ("amazon_in", "gg0mobile-21"),
+    ("amazon_in", "glam-genius-app-21"),
+]
+INVALID_CONFIGURATIONS = [
+    ("amazon_in", ""),              # Amazon without its tag
+    ("amazon_in", "random"),
+    ("amazon_in", "anything"),
+    ("amazon_in", "not-india-20"),  # another marketplace's suffix
+    ("amazon_in", "glamgenius-22"),
+    ("amazon_in", "-21"),
+    ("amazon_in", "glamgenius--21x"),
+    ("amazon_in", "GlamGenius-21"),
+    ("amazon_in", "bad tag"),
+    ("amazon_in", "bad tag-21"),
+    ("amazon_in", "a&b=c-21"),
+    ("amazon_in", "glamgenius-21&ref=x"),
+    ("amazon_in", "glam%2Dgenius-21"),
+    ("amazon_in", "-lead-21"),
+    ("amazon_in", "x" * 62 + "-21"),
+    ("", "orphan-21"),              # a tag without a partner
+    ("unknown", "anything-21"),
+    ("flipkart", ""),
+    ("https://evil.example", ""),
+]
+
+
+@pytest.mark.parametrize(("partner_key", "tag"), VALID_CONFIGURATIONS)
+def test_g_a_valid_configuration(monkeypatch, partner_key, tag):
+    monkeypatch.setattr(config, "COMMERCE_PARTNER", partner_key.strip().lower())
     monkeypatch.setattr(config, "COMMERCE_AFFILIATE_TAG", tag)
+    assert partners.configuration_errors(partner_key.strip().lower(), tag) == []
     active = partners.active_partner()
-    assert (active is not None) is enabled
-    if enabled:
-        assert active.partner is AMAZON and active.affiliate_tag == (tag or None)
+    if not partner_key:
+        assert active is None, "both empty means Commerce off"
+    else:
+        assert active.partner is AMAZON and active.affiliate_tag == tag
+    for environment in ("development", "test", "staging", "production"):
+        monkeypatch.setattr(config, "APP_ENV", environment)
+        try:
+            config.validate_production_configuration()
+        except RuntimeError as exc:
+            assert "COMMERCE_" not in str(exc), exc
 
 
-@pytest.mark.parametrize(("partner_key", "tag"), [
-    ("flipkart", ""), ("amazon_in", "bad tag"), ("", "orphan-tag"),
-])
-def test_g_startup_refuses_a_malformed_configuration_in_every_environment(monkeypatch, partner_key, tag):
-    monkeypatch.setattr(config, "COMMERCE_PARTNER", partner_key)
+@pytest.mark.parametrize(("partner_key", "tag"), INVALID_CONFIGURATIONS)
+def test_g_a_malformed_configuration_enables_nothing(monkeypatch, partner_key, tag):
+    monkeypatch.setattr(config, "COMMERCE_PARTNER", partner_key.strip().lower())
     monkeypatch.setattr(config, "COMMERCE_AFFILIATE_TAG", tag)
-    monkeypatch.setattr(config, "APP_ENV", "development")
+    assert partners.configuration_errors(partner_key.strip().lower(), tag)
+    assert partners.active_partner() is None
+
+
+@pytest.mark.parametrize("environment", ["development", "test", "staging", "production"])
+@pytest.mark.parametrize(("partner_key", "tag"), INVALID_CONFIGURATIONS)
+def test_g_startup_refuses_a_malformed_configuration_in_every_environment(monkeypatch, partner_key, tag, environment):
+    monkeypatch.setattr(config, "COMMERCE_PARTNER", partner_key.strip().lower())
+    monkeypatch.setattr(config, "COMMERCE_AFFILIATE_TAG", tag)
+    monkeypatch.setattr(config, "APP_ENV", environment)
     with pytest.raises(RuntimeError, match="COMMERCE_"):
         config.validate_production_configuration()
+
+
+def test_g_amazon_cannot_activate_without_its_tag(monkeypatch):
+    monkeypatch.setattr(config, "COMMERCE_PARTNER", "amazon_in")
+    monkeypatch.setattr(config, "COMMERCE_AFFILIATE_TAG", "")
+    assert partners.configuration_errors("amazon_in", "") == [
+        "COMMERCE_AFFILIATE_TAG is required for COMMERCE_PARTNER=amazon_in.",
+    ]
+    assert partners.active_partner() is None
+    assert handoff.build_handoff(_check(verdict="buy"), partners.active_partner()) == handoff.partner_not_configured()
+    # Even a partner assembled by hand, past the configuration check, builds no untagged link.
+    answer = handoff.build_handoff(_check(verdict="buy"), _active(None))
+    assert (answer["state"], answer["reason_code"], answer["partner"]) == ("unavailable", "unsafe_destination", None)
+
+
+@pytest.mark.parametrize("check", [
+    _check(verdict="buy"),
+    _check(verdict="wait", alternative=_alternative()),
+    _check(verdict="skip", alternative=_alternative()),
+])
+@pytest.mark.parametrize("tag", ["glamgenius-21", "gg0mobile-21"])
+def test_g_every_available_amazon_handoff_is_a_disclosed_affiliate_link(check, tag):
+    answer = handoff.build_handoff(check, partners.ActivePartner(partner=AMAZON, affiliate_tag=tag))
+    assert answer["state"] == "available"
+    assert answer["partner"]["key"] == "amazon_in"
+    assert answer["partner"]["affiliate"] is True
+    assert answer["partner"]["url"].endswith(f"&tag={tag}")
 
 
 def test_g_commerce_is_off_by_default():
     assert "COMMERCE_PARTNER=\n" in (REPO / "env.example").read_text()
     assert "COMMERCE_AFFILIATE_TAG=\n" in (REPO / "env.example").read_text()
     assert "COMMERCE" not in (REPO / "render.yaml").read_text()
+
+
+def test_g_the_amazon_activation_gate_is_written_down_and_claims_no_approval():
+    """Seven owner conditions before ``amazon_in`` may be set, in the doc and beside the variable."""
+    doc = (REPO / "docs" / "architecture" / "COMMERCE_HANDOFF.md").read_text()
+    env = (REPO / "env.example").read_text()
+    gate = doc[doc.index("**Before enabling — the Amazon mobile-app activation gate.**"):doc.index("## 8.")]
+    flat = re.sub(r"\s+", " ", gate.replace("**", ""))
+    for condition in (
+        "Mobile Application Policy", "Approved Mobile Application", "Associates Central",
+        "not merely a website tracking tag", "link mechanism", "Special Link", "Search-by-GTIN",
+    ):
+        assert condition in flat, condition
+    assert [line[:2] for line in gate.splitlines() if re.match(r"^[1-7]\. ", line)] == [
+        "1.", "2.", "3.", "4.", "5.", "6.", "7.",
+    ]
+    assert "If any one is unresolved, `COMMERCE_PARTNER` must remain empty." in flat
+    assert "Not established." in flat
+    for condition in ("Mobile Application Policy", "Approved Mobile Application", "Associates Central",
+                      "not merely a website tracking tag", "Special Link", "Search-by-GTIN"):
+        assert condition in " ".join(line.lstrip("# ").strip() for line in env.splitlines()), condition
+    assert "amazon_in MUST STAY EMPTY until ALL of these are true" in env
+    for claim in (r"Amazon (has )?approved", r"approved by Amazon", r"link (format )?is approved"):
+        assert not re.search(claim, doc + env, re.I), claim
 
 
 def test_g_the_affiliate_parameter_never_carries_a_person():
@@ -823,6 +985,8 @@ async def test_h_one_open_is_one_closed_row(app_client, db_clean, registered_sup
     {**OPEN, "partner": "https://evil.example"},
     {**OPEN, "affiliate": 1},
     {**OPEN, "affiliate": "true"},
+    {**OPEN, "affiliate": False},
+    {**OPEN, "target": "alternative", "decision": "skip", "affiliate": False},
     {**OPEN, "target": "current_product", "decision": "skip"},
     {**OPEN, "target": "current_product", "decision": "wait"},
     {**OPEN, "target": "alternative", "decision": "buy"},
@@ -859,8 +1023,17 @@ async def test_h_growth_telemetry_does_not_accept_commerce_events(app_client, db
 @pytest.mark.parametrize(("target", "decision"), [("alternative", "wait"), ("alternative", "skip")])
 async def test_h_alternative_opens_are_recorded(app_client, db_clean, registered_supabase_user, target, decision):
     token, _ = await registered_supabase_user()
-    response = await _event(app_client, token, properties={**OPEN, "target": target, "decision": decision, "affiliate": False})
+    response = await _event(app_client, token, properties={**OPEN, "target": target, "decision": decision})
     assert response.json() == {"recorded": True}
+
+
+def test_h_an_amazon_open_is_always_an_affiliate_open():
+    [schema] = analytics.EVENT_SCHEMAS.values()
+    assert schema["affiliate"] == (True,)
+    assert analytics.validate_event("commerce.outbound_open", OPEN) == OPEN
+    for refused in (False, 0, None, "false"):
+        with pytest.raises(analytics.InvalidCommerceEvent):
+            analytics.validate_event("commerce.outbound_open", {**OPEN, "affiliate": refused})
 
 
 async def test_h_anonymous_opens_are_not_recorded(app_client, db_clean):
@@ -989,11 +1162,11 @@ async def test_j_an_alternative_open_writes_no_barcode_name_or_brand(app_client,
 AS_OF = datetime(2026, 9, 30, 12, 0, tzinfo=UTC)
 
 
-async def _seed_open(account_id, *, at, target="current_product", decision="buy", affiliate=True):
+async def _seed_open(account_id, *, at, target="current_product", decision="buy"):
     async with get_sessionmaker()() as session:
         await analytics.record_event(
             session, account_id=account_id, name="commerce.outbound_open", client_event_id=uuid.uuid4(),
-            properties={**OPEN, "target": target, "decision": decision, "affiliate": affiliate}, now=at,
+            properties={**OPEN, "target": target, "decision": decision}, now=at,
         )
         await session.commit()
 
@@ -1003,7 +1176,7 @@ async def test_k_metrics_are_aggregates_with_definitions_and_no_invented_money(d
     _, second = await registered_supabase_user()
     await _seed_open(first, at=AS_OF - timedelta(days=1))
     await _seed_open(first, at=AS_OF - timedelta(days=2), target="alternative", decision="skip")
-    await _seed_open(second, at=AS_OF - timedelta(days=3), target="alternative", decision="wait", affiliate=False)
+    await _seed_open(second, at=AS_OF - timedelta(days=3), target="alternative", decision="wait")
     await _seed_open(second, at=AS_OF - timedelta(days=40))  # outside the window
     async with get_sessionmaker()() as session:
         report = await metrics.commerce_metrics(session, now=AS_OF, window_days=30)

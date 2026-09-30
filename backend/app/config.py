@@ -157,7 +157,7 @@ GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonl
 
 # --- Step 16: Commerce V1 (disclosed outbound handoff) ---------------------
 # Off unless an operator names exactly one partner from the closed registry in
-# ``app/domains/commerce/partners.py``. The optional affiliate tag identifies
+# ``app/domains/commerce/partners.py``. Its affiliate tag is required and identifies
 # GlamGenius to that partner; it never identifies a person. Neither value is a
 # secret, and neither can change a product decision.
 COMMERCE_PARTNER = _env_str("COMMERCE_PARTNER").strip().lower()

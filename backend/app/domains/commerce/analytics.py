@@ -7,7 +7,9 @@ partner paid is not known here, and no field pretends otherwise.
 
 * **One event name.** Anything else is refused.
 * **Every property listed, required and an enum.** ``surface``, ``target``,
-  ``decision``, ``partner`` (a registry key) and ``affiliate`` (a boolean).
+  ``decision``, ``partner`` (a registry key) and ``affiliate`` (always
+  ``true`` in V1: every registered partner requires its affiliate tag, so an
+  open that claims otherwise did not come from a V1 handoff).
   There is no string a client chooses, so there is nowhere to put a barcode,
   a product name or brand, an address, an affiliate URL, a search phrase, an
   account, device, household or subject id, an order, a basket, an amount, a
@@ -48,7 +50,9 @@ EVENT_SCHEMAS: dict[str, dict[str, tuple[Any, ...]]] = {
         "target": ("current_product", "alternative"),
         "decision": ("buy", "wait", "skip"),
         "partner": PARTNER_KEYS,
-        "affiliate": (True, False),
+        # V1 has no non-affiliate partner (``affiliate_tag_required`` on every
+        # registry row). Accepting ``false`` would be a reviewed contract change.
+        "affiliate": (True,),
     },
 }
 EVENT_NAMES: tuple[str, ...] = tuple(EVENT_SCHEMAS)
