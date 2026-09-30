@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from app.api.v2 import (
     access,
     admin,
+    commerce,
     community,
     config,
     consent,
@@ -66,6 +67,9 @@ router.include_router(routines.router, tags=["v2-routines"])
 # still not mounted, and these routes do not depend on its feature flag.
 router.include_router(notification_settings.router, tags=["v2-notifications"])
 router.include_router(growth.router, tags=["v2-growth"])
+# Step 16. A disclosed outbound handoff read after the decision, and its own
+# telemetry. Mounted separately from growth: two contracts, one table.
+router.include_router(commerce.router, tags=["v2-commerce"])
 router.include_router(admin.router, tags=["v2-admin"])
 # Not a customer surface: a shared-secret door for the external scheduler.
 router.include_router(internal_scheduler.router)

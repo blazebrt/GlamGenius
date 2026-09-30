@@ -155,6 +155,14 @@ GOOGLE_OAUTH_REVOCATION_ENDPOINT = "https://oauth2.googleapis.com/revoke"
 GOOGLE_CALENDAR_EVENTS_ENDPOINT = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly"
 
+# --- Step 16: Commerce V1 (disclosed outbound handoff) ---------------------
+# Off unless an operator names exactly one partner from the closed registry in
+# ``app/domains/commerce/partners.py``. The optional affiliate tag identifies
+# GlamGenius to that partner; it never identifies a person. Neither value is a
+# secret, and neither can change a product decision.
+COMMERCE_PARTNER = _env_str("COMMERCE_PARTNER").strip().lower()
+COMMERCE_AFFILIATE_TAG = _env_str("COMMERCE_AFFILIATE_TAG").strip()
+
 # Live environment context.  The provider is deliberately opt-in: disabled is
 # the safe default for local/test deployments, and commercial mode requires a
 # non-empty key before a staging/production process can start.
@@ -640,6 +648,13 @@ def validate_production_configuration() -> None:
         raise RuntimeError("CRITICAL: OPEN_METEO_MODE must be disabled, evaluation, or commercial.")
     if LIVE_ENVIRONMENT_PROVIDER and LIVE_ENVIRONMENT_PROVIDER != "open_meteo":
         raise RuntimeError("CRITICAL: LIVE_ENVIRONMENT_PROVIDER must be open_meteo or empty.")
+    # A malformed Commerce configuration is refused in every environment,
+    # rather than silently turning the handoff off where nobody would notice.
+    from app.domains.commerce.partners import configuration_errors as commerce_configuration_errors
+
+    commerce_errors = commerce_configuration_errors(COMMERCE_PARTNER, COMMERCE_AFFILIATE_TAG)
+    if commerce_errors:
+        raise RuntimeError("CRITICAL: " + " ".join(commerce_errors))
     if APP_ENV not in ("production", "staging"):
         return
     if PUBLIC_CONFIGURATION_ERRORS:
