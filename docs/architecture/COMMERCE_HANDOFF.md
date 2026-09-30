@@ -26,7 +26,9 @@ does not fetch that page, does not check what it lists, does not see what the
 person does there, and says so.
 
 Commerce V1 is **off by default**. Nothing appears anywhere until an operator
-names one partner (§7).
+names one partner, with its required affiliate tag, after the activation gate
+in §7 is met. While it is off, the handoff route reads nothing at all — not
+even the device.
 
 ## 2. Audit (before Step 16)
 
@@ -143,33 +145,69 @@ route never passes an account or subject to the Purchase OS, and
 | `host` (exact) | `www.amazon.in` |
 | `search_path` | `/s` |
 | `query_parameter` | `k` (the barcode) |
-| `affiliate_parameter` | `tag` (optional) |
+| `affiliate_parameter` | `tag` |
+| `affiliate_tag_required` | `true` |
+| `affiliate_tag_shape` | an Amazon India Store/Tracking ID: `[a-z0-9]`, inner hyphens, ending `-21` |
 
 There is no ranking, score, priority, weight, commission, payout or conversion
 field (test G). There is no database table, no remote configuration and no
 client-supplied partner.
 
+**Every V1 partner requires its affiliate tag.** A partner that pays a
+commission is an affiliate relationship and the app discloses it as one, so
+there is no untagged or "non-affiliate" Amazon mode: an enabled `amazon_in`
+always carries its tag, every available handoff says `affiliate: true`, and the
+app and the telemetry route refuse `amazon_in` with `affiliate: false`. A
+genuinely non-affiliate partner would be a new, reviewed contract change.
+
 **Configuration** (both empty by default, see `env.example`):
 
-```text
-COMMERCE_PARTNER=amazon_in          # exactly one registry key, or empty
-COMMERCE_AFFILIATE_TAG=<your-tag>   # optional; identifies GlamGenius, never a person
-```
+| `COMMERCE_PARTNER` | `COMMERCE_AFFILIATE_TAG` | Result |
+| --- | --- | --- |
+| empty | empty | valid — Commerce off |
+| `amazon_in` | an Amazon India tracking ID ending `-21` (e.g. `glamgenius-21`) | valid — Commerce on |
+| `amazon_in` | empty | **invalid** — the tag is required |
+| `amazon_in` | anything else (`random`, `not-india-20`, `bad tag`, upper case, …) | **invalid** |
+| empty | any tag (e.g. `orphan-21`) | **invalid** — a tag without a partner |
+| any other value | anything | **invalid** — not a registry key |
 
-A malformed value (unknown partner, tag without partner, malformed tag) is
-refused at start-up **in every environment**, rather than silently turning the
-handoff off where nobody would notice.
+An invalid combination enables nothing (`active_partner()` returns `None`) and
+is refused at start-up by `validate_production_configuration()` **in every
+environment**, rather than silently turning the handoff off where nobody would
+notice. The shape check refuses a random string; it cannot prove that the ID is
+the one Amazon assigned to the approved GlamGenius app — that is condition 4
+below.
 
-**Before enabling — operator checklist.** The partner's own programme pages
-could not be read from the build environment, so none of these has been
-verified by this change:
+**Before enabling — the Amazon mobile-app activation gate.** `amazon_in`
+stays disabled (`COMMERCE_PARTNER=` empty) until **all seven** of these are
+true. If any one is unresolved, `COMMERCE_PARTNER` must remain empty.
 
-1. The partner programme's current operating agreement permits links from a
-   mobile app, and to a search results page.
-2. The programme's required disclosure wording is met by the keyed disclosure
-   (§9), or the copy is updated through `commerce-copy.v1` → `v2`.
-3. Searching the partner for a real barcode returns that product.
-4. The affiliate tag is GlamGenius's own account tag.
+1. GlamGenius is available through an eligible app store, as Amazon's current
+   Mobile Application Policy requires.
+2. GlamGenius itself has been accepted by Amazon as an **Approved Mobile
+   Application**.
+3. The GlamGenius mobile-app / store URL is registered in Associates Central,
+   as required.
+4. The configured Associates Store/Tracking ID is the ID intended for, or
+   assigned to, the approved GlamGenius mobile application — not merely a
+   website tracking tag.
+5. The exact link mechanism this implementation uses (a manually constructed
+   outbound search link, opened by the phone's own browser) is permitted for
+   that approved mobile app.
+6. The exact Amazon.in address format — `https://www.amazon.in/s?k=<GTIN>&tag=<id>` —
+   has been verified as a valid Special Link / linking method for that mobile
+   app.
+7. Search-by-GTIN has been checked by hand with representative real products,
+   and returns those products.
+
+**Not established.** Nothing in this change shows that Amazon approves the
+manually constructed `/s?k=<GTIN>&tag=<id>` link, for this app or any other.
+The partner's programme pages could not be read from the build environment.
+This implementation makes the dormant integration internally truthful and
+safe to switch on *after* the owner has the approval and has verified the link
+format; it does not make it approved. It calls no Amazon API (no PA API,
+Creators API or AMA API), stores no Amazon credential, and never contacts
+Amazon from the server.
 
 ## 8. The pack and the listing are different things
 
@@ -185,12 +223,20 @@ recommended seller (frontend guards).
 Upfront, in the same block as the action, above it, and never hidden after a
 tap:
 
-> **Affiliate · GlamGenius may earn a commission. This does not affect our decisions.**
+> **Affiliate · As an Amazon Associate I earn from qualifying purchases. This does not affect GlamGenius decisions.**
+
+Three facts, in this order: the **Affiliate** label, upfront; Amazon's
+required Associate identification statement, word for word; and the
+independence of every GlamGenius decision. The disclosure is keyed by partner
+(`COMMERCE.disclosure.amazon_in`) because its middle sentence is Amazon's
+wording, not ours. It is never moved into Settings, Terms, an icon, a tooltip
+or a later screen.
 
 All Step 16 text lives in `frontend/src/strings/commerce.ts`
-(`commerce-copy.v1`). Static guards fail if a Step 16 file grows its own
-sentence, if the disclosure changes, or if the copy says anything about stock,
-price, deals, sellers, urgency, baskets or growth.
+(`commerce-copy.v2`; v1 had no Associate identification). Static guards fail
+if a Step 16 file grows its own sentence, if the disclosure changes or loses
+Amazon's sentence, or if the copy says anything about stock, price, deals,
+sellers, urgency, baskets or growth.
 
 **Placement.** BUY: "Find this product" after the decision, the purchase
 context, the evidence and the community observations, before the alternative
@@ -208,7 +254,7 @@ the one address the registry would build:
 - `https://` exactly (the raw prefix too, since URL parsing lower-cases the
   scheme); the exact host, so no user-info, port, suffix or subdomain trick;
   the exact path; no fragment;
-- exactly `k=<barcode>` and optionally `&tag=<tag>`, in that order, encoded
+- exactly `k=<barcode>` and then the required `&tag=<tag>`, in that order, encoded
   exactly as the registry encodes them: no extra, repeated, reordered,
   alternatively encoded or double-encoded parameter;
 - every character printable ASCII, no backslash, 256 characters at most.
@@ -232,14 +278,15 @@ commerce.outbound_open
   target    = current_product | alternative
   decision  = buy | wait | skip        (consistent with target)
   partner   = a registry key
-  affiliate = true | false
+  affiliate = true                     (every V1 partner requires its tag)
 ```
 
 No other key, no free text — so no barcode, product, brand, address, tag,
 search, account, device, household or subject id, order, amount or commission
 can be stored. `client_event_id` (a random operation UUID) makes retries
 idempotent. **Account-only**: an anonymous device still gets its link, and its
-open is not recorded. Recorded only after the link actually opened.
+open is not recorded. Recorded only after the link actually opened. An
+`amazon_in` open claiming `affiliate: false` is refused.
 
 `POST /api/v2/commerce/events` is separate from growth telemetry (growth
 refuses this name, this route refuses growth's), authenticated, rate-limited
@@ -276,8 +323,10 @@ attribution; the card that shows those already renders the attribution.
 
 | Situation | Result |
 | --- | --- |
-| No partner configured | `unavailable` / `partner_not_configured`; nothing is read |
-| No device / unknown device | 401, the Product Result's own refusal |
+| No partner configured | `unavailable` / `partner_not_configured`; nothing is read — no device, no Product Result, no Purchase OS, no SQL |
+| `amazon_in` without its tag, or a malformed tag | start-up refused; `active_partner()` is `None`; no link |
+| Partner on, no device / unknown device | 401 `DEVICE_UNKNOWN`, through the Product Result's own `current_device` |
+| `amazon_in` answer with `affiliate: false` | refused by the app; the event is refused by the server |
 | Any precondition missing | `not_applicable` with its reason; no link |
 | Address fails the registry check | `unavailable` / `unsafe_destination`; no link |
 | Handoff read fails in the app | nothing shown; the decision is untouched |
@@ -312,8 +361,9 @@ partner's public search page, opened by the person's own device.
 
 ## 17. Rollback
 
-Operationally: unset `COMMERCE_PARTNER` and restart. The route then returns
-`partner_not_configured` without reading anything, and the app shows nothing.
+Operationally: unset `COMMERCE_PARTNER` and `COMMERCE_AFFILIATE_TAG` and
+restart. The route then returns `partner_not_configured` without reading
+anything — not even the device — and the app shows nothing.
 
 In code: revert the Step 16 commits. There is no migration, no table and no
 Commerce-owned state. Opens already recorded are ordinary `app_events` rows
