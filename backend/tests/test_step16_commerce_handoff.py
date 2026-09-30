@@ -386,6 +386,31 @@ async def test_b_commerce_off_reads_nothing_at_all(app_client, db_clean, monkeyp
     assert calls == [None, "not-a-real-device-token"]
 
 
+async def test_b_the_route_is_public_only_while_commerce_is_off(app_client, db_clean, monkeypatch):
+    """Why the route-ownership sweep lists this route, and the only reason it may.
+
+    Off: every stranger, for any barcode, gets one constant body that names no
+    row. On: a stranger is refused exactly as by every other device route.
+    """
+    from tests.test_route_ownership_surface import PUBLIC_BY_ID_ROUTES
+
+    assert frozenset({("GET", "/api/v2/scan/verdict/{barcode}/commerce-handoff")}) == PUBLIC_BY_ID_ROUTES
+    monkeypatch.setattr(config, "COMMERCE_PARTNER", "")
+    monkeypatch.setattr(config, "COMMERCE_AFFILIATE_TAG", "")
+    bodies = set()
+    for barcode in (BARCODE, OTHER_BARCODE, "8901234567890", "12345678"):
+        response = await app_client.get(f"/api/v2/scan/verdict/{barcode}/commerce-handoff")
+        assert response.status_code == 200
+        bodies.add(response.text)
+    assert len(bodies) == 1 and json.loads(bodies.pop()) == handoff.partner_not_configured()
+    monkeypatch.setattr(config, "COMMERCE_PARTNER", "amazon_in")
+    monkeypatch.setattr(config, "COMMERCE_AFFILIATE_TAG", TAG)
+    for barcode in (BARCODE, "8901234567890"):
+        response = await app_client.get(f"/api/v2/scan/verdict/{barcode}/commerce-handoff")
+        assert response.status_code == 401
+        assert response.json()["detail"]["code"] == "DEVICE_UNKNOWN"
+
+
 def test_b_the_route_resolves_no_device_before_it_knows_commerce_is_on():
     """``Depends(current_device)`` would run before the body; the route takes the raw header."""
     tree = ast.parse(COMMERCE_API.read_text())
